@@ -46,6 +46,7 @@ import { SystemPromptPlugin } from "@ycoding-ai/core/plugin/system-prompt"
 import { describe, expect } from "bun:test"
 import { eq } from "drizzle-orm"
 import { Effect, Layer } from "effect"
+import { FetchHttpClient, HttpClient } from "effect/unstable/http"
 import path from "node:path"
 import { testEffect } from "./lib/effect"
 import { agentHost, catalogHost, host } from "./plugin/host"
@@ -63,7 +64,7 @@ if (process.env.RECORD === "true") {
   if (process.env.CI !== undefined) throw new Error("Unset CI before recording HTTP cassettes")
   HttpRecorder.removeCassetteSync(cassetteName, { directory: cassetteDirectory })
 }
-const cassette = HttpRecorder.layerFetch(cassetteName, {
+const cassette = HttpRecorder.layer(cassetteName, {
   directory: cassetteDirectory,
   match: (incoming, recorded) => {
     const expected = JSON.parse(recorded.body)
@@ -82,7 +83,10 @@ const cassette = HttpRecorder.layerFetch(cassetteName, {
     expect(incomingBody).toEqual(expected)
     return incoming.method === recorded.method && incoming.url === recorded.url
   },
-})
+}).pipe(Layer.provide(process.env.RECORD === "true" ? FetchHttpClient.layer : Layer.succeed(
+  HttpClient.HttpClient,
+  HttpClient.make(() => Effect.die("Recorded runner tests cannot access the network")),
+)))
 const executor = RequestExecutor.layer.pipe(Layer.provide(cassette))
 const client = LLMClient.layer.pipe(Layer.provide(executor))
 const permission = Layer.succeed(
@@ -134,6 +138,8 @@ const promptCatalog = Layer.mock(Catalog.Service, {
 const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
   [Snapshot.node, Snapshot.noopLayer],
   [LayerNodePlatform.llmClient, client],
+  [LayerNodePlatform.requestExecutor, executor],
+  [LayerNodePlatform.httpClient, cassette],
   [SessionRunnerModel.node, models],
   [InstructionBuiltIns.node, systemContext],
   [InstructionDiscovery.node, instructionContext],
@@ -186,6 +192,8 @@ const it = testEffect(
     ]),
     [
       [LayerNodePlatform.llmClient, client],
+      [LayerNodePlatform.requestExecutor, executor],
+      [LayerNodePlatform.httpClient, cassette],
       [Permission.node, permission],
       [Catalog.node, promptCatalog],
       [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],

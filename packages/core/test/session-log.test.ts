@@ -195,6 +195,28 @@ describe("Session.log", () => {
     }),
   )
 
+  it.effect("decision requests remain unpriced even when a chat catalog model has the same identity", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const events = yield* EventRuntime.Service
+      const created = yield* session.create({ location })
+      yield* events.publish(SessionEvent.ProviderRequestRecorded, {
+        id: ProviderRequest.ID.make("prq_decision_unpriced"), sessionID: created.id, source: "decision",
+        agent: Agent.ID.make("build"), model: CatalogModel.Ref.make({ providerID: Provider.ID.make("openai"), id: CatalogModel.ID.make("provider-priced") }),
+        routeID: "openai-decisions", promptCacheKey: "decision", systemDigest: "system", toolDigest: "tools",
+        request: 1, attempts: 1, invalidation: "cache-disabled", continuation: "full",
+        tokens: { input: 1000, output: 100, reasoning: 0, cache: { read: 0, write: 0 } }, time: yield* DateTime.now,
+      })
+      const usage = yield* session.usage(created.id)
+      expect(usage.logical).toBe(1)
+      expect(usage.cost).toBeUndefined()
+      expect(usage.models?.[0].cost).toBeUndefined()
+      const report = yield* session.usageReport({ sessionID: created.id, group: "model" })
+      expect(report.total.cost).toBeUndefined()
+      expect(report.rows[0].cost).toBeUndefined()
+    }),
+  )
+
   it.effect("reports family usage by model, agent, session, and project without leaking ledger internals", () =>
     Effect.gen(function* () {
       const session = yield* Session.Service

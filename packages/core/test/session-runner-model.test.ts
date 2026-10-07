@@ -645,7 +645,7 @@ describe("SessionRunnerModel", () => {
   );
 
   it.effect(
-    "loads Anthropic through AISDK when a Claude Code source is configured",
+    "fails a catalog-only Claude Code source without a selected managed credential",
     () =>
       Effect.gen(function* () {
         const fallback = yield* SessionRunnerModel.fromCatalogModel(
@@ -655,7 +655,7 @@ describe("SessionRunnerModel", () => {
         );
         let runtime: CatalogModel.Info | undefined;
 
-        yield* SessionRunnerModel.fromCatalogModel(
+        const result = yield* SessionRunnerModel.fromCatalogModel(
           model(Provider.aisdk("@ai-sdk/anthropic"), {
             settings: {
               apiKey: "claude-code",
@@ -670,14 +670,28 @@ describe("SessionRunnerModel", () => {
               return Effect.succeed(fallback);
             },
           },
-        );
+        ).pipe(Effect.exit);
 
-        expect(runtime?.settings).toMatchObject({
-          apiKey: "claude-code",
-          claudeCodeSource: "file",
-        });
-        expect(runtime?.settings).not.toHaveProperty("authToken");
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") expect(String(result.cause)).toContain("ClaudeCodeReconnectError");
+        expect(runtime).toBeUndefined();
       }),
+  );
+
+  it.effect("does not borrow catalog Claude source when the selected connection needs reconnect", () =>
+    Effect.gen(function* () {
+      const missing = Credential.OAuth.make({ type: "oauth", methodID: claudeCodeMethodID, access: "", refresh: "", expires: 0,
+        metadata: { authKind: "claude-code", requiresLogin: true } })
+      let loaded = false
+      const result = yield* SessionRunnerModel.fromCatalogModel(
+        model(Provider.aisdk("@ai-sdk/anthropic"), { settings: { apiKey: "claude-code", claudeCodeSource: "22222222-2222-4222-8222-222222222222" } }),
+        missing,
+        { loadAISDK: () => { loaded = true; return Effect.die("selected missing profile cannot load") } },
+      ).pipe(Effect.exit)
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") expect(String(result.cause)).toContain("ClaudeCodeReconnectError")
+      expect(loaded).toBe(false)
+    }),
   );
 
   it.effect("routes Anthropic API keys through native Messages auth", () =>
@@ -739,10 +753,10 @@ describe("SessionRunnerModel", () => {
           Credential.OAuth.make({
             type: "oauth",
             methodID: claudeCodeMethodID,
-            access: "keychain-source",
+            access: "11111111-1111-4111-8111-111111111111",
             refresh: "",
             expires: Number.MAX_SAFE_INTEGER,
-            metadata: { authKind: "claude-code", source: "keychain-source" },
+            metadata: { authKind: "claude-code", source: "11111111-1111-4111-8111-111111111111", managed: true },
           }),
           {
             loadAISDK: (input) => {
@@ -754,7 +768,7 @@ describe("SessionRunnerModel", () => {
 
         expect(runtime?.settings).toMatchObject({
           apiKey: "claude-code",
-          claudeCodeSource: "keychain-source",
+          claudeCodeSource: "11111111-1111-4111-8111-111111111111",
         });
         expect(runtime?.settings).not.toHaveProperty("authToken");
         expect(runtime?.headers?.["Anthropic-Beta"]).toBe("custom-feature");

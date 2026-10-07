@@ -5,6 +5,8 @@ import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigGuardrail } from "@ycoding-ai/core/config/guardrail"
+import { ConfigDecisions } from "@ycoding-ai/core/config/decisions"
+import { Decision } from "@ycoding-ai/core/decision"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
@@ -54,6 +56,8 @@ function harness(input?: {
   readonly entries?: ReadonlyArray<Config.Entry>
   readonly documents?: ReadonlyMap<string, string>
   readonly autoGuardrail?: boolean
+  readonly decisions?: ConfigDecisions.Info
+  readonly choose?: Decision.Service["Service"]["choose"]
   readonly replyGate?: {
     readonly entered: PromiseWithResolvers<void>
     readonly release: PromiseWithResolvers<void>
@@ -61,6 +65,7 @@ function harness(input?: {
 }) {
   const documents = new Map(input?.documents)
   const scans: Array<{ readonly pattern: string; readonly cwd: string | undefined }> = []
+  const choices: Array<Parameters<Decision.Service["Service"]["choose"]>[0]> = []
   let replyGated = false
   const filesystem = Layer.effect(
     FSUtil.Service,
@@ -78,6 +83,13 @@ function harness(input?: {
     }),
   ).pipe(Layer.provide(FSUtil.layer), Layer.provide(NodeFileSystem.layer))
   const dependencies = Layer.mergeAll(
+    Layer.mock(Decision.Service, {
+      settings: () => Effect.succeed(input?.decisions),
+      choose: (request) => {
+        choices.push(request)
+        return input?.choose?.(request) ?? Effect.succeed({ choice: "allow", probability: 1, refused: false })
+      },
+    }),
     Layer.mock(Config.Service, { entries: () => Effect.succeed([...(input?.entries ?? [])]) }),
     filesystem,
     Global.layerWith({ home: "/home/user", data: "/data", config: "/global" }),
@@ -126,11 +138,171 @@ function harness(input?: {
   return {
     documents,
     scans,
+    choices,
     it: testEffect(SessionGuardrail.layer.pipe(Layer.provide(dependencies))),
   }
 }
 
 const exact = harness()
+
+const semanticSettings = new ConfigDecisions.Info({
+  guardrails: new ConfigDecisions.Policy({ provider: "openai", min_probability: 0.9 }),
+})
+const semanticInput = {
+  sessionID: parentID,
+  action: "shell",
+  resources: ["task-runner execute"],
+  metadata: { workdir: "/workspace/project" },
+} satisfies SessionGuardrail.EvaluateInput
+
+describe("SessionGuardrail semantic decisions", () => {
+  const safe = harness({
+    decisions: semanticSettings,
+    choose: () => Effect.succeed({ choice: "allow", probability: 0.9, refused: false }),
+  })
+  safe.it.effect("keeps a confident semantic allow and sends only bounded action state", () =>
+    Effect.gen(function* () {
+      const service = yield* SessionGuardrail.Service
+      expect(yield* service.evaluate(semanticInput)).toMatchObject({ decision: "allow" })
+      expect(safe.choices).toHaveLength(1)
+      expect(safe.choices[0]).toMatchObject({
+        context: { sessionID: parentID },
+        provider: "openai",
+        state: { action: semanticInput.action, resources: semanticInput.resources, metadata: semanticInput.metadata },
+      })
+      expect(safe.choices[0].state).toEqual({
+        action: semanticInput.action,
+        resources: semanticInput.resources,
+        metadata: semanticInput.metadata,
+      })
+      expect(Object.keys(safe.choices[0].choices)).toEqual(["allow", "review"])
+    }),
+  )
+
+  for (const [name, result] of [
+    ["meaningful risk", Effect.succeed({ choice: "review", probability: 1, refused: false })],
+    ["low confidence", Effect.succeed({ choice: "allow", probability: 0.89, refused: false })],
+    ["unreported probability", Effect.succeed({ choice: "allow", refused: false })],
+    ["refusal", Effect.succeed({ choice: "allow", probability: 1, refused: true })],
+    ["unknown choice", Effect.succeed({ choice: "other", probability: 1, refused: false })],
+    ["provider error", Effect.fail(new Decision.Error({ reason: "provider-failed" }))],
+  ] as const) {
+    const uncertain = harness({ decisions: semanticSettings, choose: () => result })
+    uncertain.it.effect(`requires ordinary review for semantic ${name}`, () =>
+      Effect.gen(function* () {
+        const service = yield* SessionGuardrail.Service
+        expect(yield* service.evaluate(semanticInput)).toMatchObject({
+          decision: "ask",
+          hardReview: false,
+          ruleIDs: ["semantic.review.risk"],
+          reason: expect.any(String),
+        })
+      }),
+    )
+  }
+
+  for (const [name, failure] of [
+    ["defects", Effect.die("decision defect")],
+    ["interruption", Effect.interrupt],
+  ] as const) {
+    const failed = harness({ decisions: semanticSettings, choose: () => failure })
+    failed.it.effect(`propagates semantic ${name} without creating a review`, () =>
+      Effect.gen(function* () {
+        const service = yield* SessionGuardrail.Service
+        const exit = yield* service.assert(semanticInput).pipe(Effect.exit)
+        expect(Exit.isFailure(exit)).toBe(true)
+        expect(yield* service.forSession(parentID)).toEqual([])
+      }),
+    )
+  }
+
+  const bypass = harness({
+    decisions: semanticSettings,
+    documents: new Map([
+      ["/global/guardrails/deny.md", markdown({ id: "custom-deny", decision: "deny", resource: "custom denied" })],
+      ["/global/guardrails/ask.md", markdown({ id: "custom-ask", decision: "ask", resource: "custom reviewed" })],
+      ["/global/guardrails/hard.md", markdown({ id: "custom-hard", decision: "hard_review", resource: "custom hard" })],
+    ]),
+  })
+  bypass.it.effect("never infers for deterministic deny, ordinary review, hard review, or skipped review", () =>
+    Effect.gen(function* () {
+      const service = yield* SessionGuardrail.Service
+      for (const input of [
+        { ...semanticInput, resources: ["rm -rf /"] },
+        { ...semanticInput, resources: ["git reset --hard HEAD~1"] },
+        { ...semanticInput, resources: ["rm -rf ."] },
+        { ...semanticInput, resources: ["custom denied"] },
+        { ...semanticInput, resources: ["custom reviewed"] },
+        { ...semanticInput, resources: ["custom hard"] },
+        { ...semanticInput, skipReview: true },
+        { ...semanticInput, action: "browser", skipReview: true },
+        { ...semanticInput, action: "computer", skipReview: true },
+      ])
+        yield* service.evaluate(input)
+      expect(bypass.choices).toEqual([])
+    }),
+  )
+
+  for (const [name, disabledSettings] of [
+    ["omitted policy", undefined],
+    ["disabled guardrails", new ConfigGuardrail.Info({ enabled: false })],
+  ] as const) {
+    const inactive = harness(
+      disabledSettings
+        ? {
+            decisions: semanticSettings,
+            entries: [
+              new Config.Document({ type: "document", info: new Config.Info({ guardrails: disabledSettings }) }),
+            ],
+          }
+        : {},
+    )
+    inactive.it.effect(`does not infer with ${name}`, () =>
+      Effect.gen(function* () {
+        const service = yield* SessionGuardrail.Service
+        expect(yield* service.evaluate(semanticInput)).toMatchObject({ decision: "allow" })
+        expect(inactive.choices).toEqual([])
+      }),
+    )
+  }
+
+  const human = harness({
+    decisions: semanticSettings,
+    choose: () => Effect.succeed({ choice: "review", probability: 1, refused: false }),
+  })
+  human.it.effect("requires human authorization for semantic review and preserves exact Always reuse", () =>
+    Effect.gen(function* () {
+      const service = yield* SessionGuardrail.Service
+      const pending = yield* waitForRequest(service, semanticInput)
+      expect(pending.request).toMatchObject({ ruleIDs: ["semantic.review.risk"] })
+      expect(pending.request.hardReview).toBeUndefined()
+      expect(pending.fiber.pollUnsafe()).toBeUndefined()
+      yield* service.reply({ sessionID: parentID, requestID: pending.request.id, reply: "always" })
+      yield* (yield* Fiber.join(pending.fiber)).release
+      yield* (yield* service.assert({ ...semanticInput, sessionID: childID })).release
+      expect(yield* service.forSession(parentID)).toEqual([])
+      yield* reject(service, { ...semanticInput, metadata: { workdir: "/other" } })
+    }),
+  )
+
+  const yolo3 = harness({
+    decisions: semanticSettings,
+    autoGuardrail: true,
+    choose: () => Effect.succeed({ choice: "review", probability: 1, refused: false }),
+  })
+  yolo3.it.effect("allows YOLO 3 admission of ordinary semantic review without changing hard review", () =>
+    Effect.gen(function* () {
+      const service = yield* SessionGuardrail.Service
+      yield* (yield* service.assert(semanticInput)).release
+      expect(yield* service.forSession(parentID)).toEqual([])
+      const pending = yield* waitForRequest(service, { ...semanticInput, resources: ["rm -rf ."] })
+      expect(pending.request.hardReview).toBe(true)
+      yield* service.reply({ sessionID: parentID, requestID: pending.request.id, reply: "reject" })
+      expect(Exit.isFailure(yield* Fiber.await(pending.fiber))).toBe(true)
+      expect(yolo3.choices).toHaveLength(1)
+    }),
+  )
+})
 
 const destructive = {
   sessionID: parentID,

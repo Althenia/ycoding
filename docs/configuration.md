@@ -7,7 +7,7 @@ This document is the canonical configuration reference for the current YCoding r
 | Task                                      | Read                                                                                                                                     |
 | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | Choose which configuration wins           | [Discovery and precedence](#runtime-configuration-discovery-and-precedence), [JSON/JSONC](#json-and-jsonc-behavior).                     |
-| Connect an account and choose a model     | [Providers and models](#providers-and-models), [profiles](#provider-profiles), [model selectors](#model-selectors).                      |
+| Connect an account and choose a model     | [Providers and models](#providers-and-models), [profiles](#provider-profiles), [Claude Code accounts](#claude-code-account-profiles), [model selectors](#model-selectors). |
 | Control agent authority                   | [Permissions](#permissions), [agents](#agents), [guardrails](#guardrail-configuration-and-custom-files).                                 |
 | Extend repository behavior                | [Commands](#commands), [skills and instructions](#skills-and-ambient-instructions), [plugins](#plugins-and-hooks), [MCP](#mcp).          |
 | Manage context and knowledge              | [Compaction](#compaction-and-experimental-settings), [workspace memory](#workspace-memory), [provider efficiency](#provider-efficiency). |
@@ -827,6 +827,45 @@ does not remove the others, and removing the active profile promotes the remaini
 The Session header names the active profile as its own segment immediately after the agent, keeping
 the plain `provider/model` label beside it. A provider with a single stored profile shows no profile
 segment. Context keeps the Provider and Model identity rows and never carries the profile.
+
+### Claude Code account profiles
+
+The Anthropic integration offers **Claude Code account** as an OAuth method alongside the separate `ANTHROPIC_API_KEY` method. Claude Code account profiles require the `claude` executable on `PATH`. Start from `/connect`, the command palette's **Connect integration**, or the model selector's connect action; choose **Anthropic**, then **Claude Code account**, and name the profile. YCoding runs `claude auth login --claudeai` with `CLAUDE_CONFIG_DIR` set to an isolated profile directory under `<YCoding data directory>/claude-code/profiles/`. The ordinary Claude CLI login and its default configuration remain separate.
+
+The Claude CLI opens the browser; the TUI shows the authorization URL and polls the automatic sign-in attempt. If the pending attempt advertises manual code entry, press `e` and enter the code; the same attempt continues polling until it settles. In the Anthropic integration's profile menu, **Add profile** starts another sign-in, **Use <name>** activates an existing profile, and **Disconnect <name>** removes one. Reusing a profile name replaces that profile's sign-in and activates it; new names retain their own account. The first available name is `default`, and when that name is taken, the prompt offers the next unused `profile-<number>` name.
+
+The isolated Claude CLI profile owns its OAuth credentials. On macOS, Claude Code stores credentials in a Keychain service scoped to that profile; on other platforms, the profile uses its own `.credentials.json`. YCoding does not expose the profile's internal source identifier or Keychain service name. Existing named Claude profiles remain listed, but a profile without its corresponding isolated CLI credentials requires a fresh sign-in; YCoding cannot infer separate account identities from shared CLI credentials. A missing selected profile, or expired credentials that refresh cannot restore, requires reconnect before its model request proceeds. API-key authentication remains separate and is not converted into a Claude Code account profile.
+
+## Native decisions
+
+The `decisions` runtime object configures OpenAI Decisions and TypeSafe Jev independently of the working model. `timeout_ms` defaults to `10000` and accepts positive integers up to `60000`. `providers.openai` and `providers.typesafe` accept `api_key` and an HTTP(S) `base_url`. OpenAI uses `gpt-6-luna`; `providers.typesafe.model` selects the automatic-flow model, defaulting to `jev-1.13.0`. Native TypeSafe tool requests supply their own model.
+
+Authentication precedence is the configured `api_key`, the selected active API-key credential for the `openai` or `typesafe` integration, then `OPENAI_API_KEY` or `TYPESAFE_API_KEY`. Codex OAuth and subscription credentials are not native decision API keys. Keys belong in configuration or credential storage, never tool inputs or results.
+
+All three automatic policies are disabled when omitted. Each requires `provider` (`openai` or `typesafe`) and an explicit `min_probability` in `[0, 1]`; thresholds are inclusive and apply to the chosen option's probability, not the separate confidence field. This example deliberately sets thresholds without a calibration guarantee. Its route changes only the agent, using the available default model.
+
+```jsonc
+{
+  "decisions": {
+    "timeout_ms": 10000,
+    "providers": {
+      "openai": { "api_key": "{env:OPENAI_API_KEY}" },
+      "typesafe": { "api_key": "{env:TYPESAFE_API_KEY}", "model": "jev-1.13.0" }
+    },
+    "guardrails": { "provider": "openai", "min_probability": 0.95 },
+    "routing": {
+      "provider": "typesafe",
+      "min_probability": 0.9,
+      "candidates": [
+        { "id": "delivery", "description": "Complete a bounded repository implementation", "agent": "GSD" }
+      ]
+    },
+    "goal": { "provider": "openai", "min_probability": 0.95 }
+  }
+}
+```
+
+Routing accepts 1–254 candidates with unique nonempty IDs and descriptions; `keep-current` is reserved for the runtime's baseline choice. Candidates select an agent, a normal model selector, or both; entries selecting neither are not offered. Only known selectable agents allowed by the current agent's effective `agent` permission and available supported models/variants are offered. See [runtime policies](./runtime.md#automatic-decision-policies) and the [native decision contract](../specs/decisions.md) for disclosure, failure, safety, and usage boundaries.
 
 ### Cursor
 

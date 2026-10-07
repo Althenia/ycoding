@@ -75,6 +75,7 @@ export type OAuthAuthorization = {
   | {
       readonly mode: "auto"
       readonly callback: Effect.Effect<Credential.OAuth, unknown>
+      readonly submitCode?: (code: string) => Effect.Effect<void, unknown>
     }
   | {
       readonly mode: "code"
@@ -201,7 +202,6 @@ export interface Interface extends State.Transformable<Draft> {
       readonly integrationID: ID
       readonly attemptID: AttemptID
     }) => Effect.Effect<AttemptStatus>
-    /** Completes the attempt and stores its credential. */
     readonly complete: (input: {
       readonly integrationID: ID
       readonly attemptID: AttemptID
@@ -235,6 +235,7 @@ type PendingAttempt = {
   status: "pending"
   completing: boolean
   persisting: boolean
+  manualSubmitted?: boolean
   authorization: OAuthAuthorization
   integrationID: ID
   methodID: MethodID
@@ -596,6 +597,7 @@ const layer = Layer.effect(
         url: authorization.url,
         instructions: authorization.instructions,
         mode: authorization.mode,
+        ...(authorization.mode === "auto" && authorization.submitCode ? { manualCode: true } : {}),
         time,
       })
     })
@@ -757,12 +759,32 @@ const layer = Layer.effect(
           const attempt = yield* SynchronizedRef.modify(attempts, (current) => {
             const match = current.get(input.attemptID)
             if (!match || match.integrationID !== input.integrationID) return [undefined, current]
+            if (match.status === "pending" && !match.persisting && match.authorization.mode === "auto" && match.authorization.submitCode && input.code !== undefined) {
+              if (!input.code.trim() || match.manualSubmitted) return [match, current]
+              return [match, new Map(current).set(input.attemptID, { ...match, manualSubmitted: true })]
+            }
             if (match.status !== "pending" || match.completing) return [match, current]
             if (match.authorization.mode === "code" && input.code === undefined) return [match, current]
             return [match, new Map(current).set(input.attemptID, { ...match, completing: true })]
           })
           if (!attempt) return yield* Effect.die(new Error(`OAuth attempt not found: ${input.attemptID}`))
-          if (attempt.status !== "pending") return
+          if (attempt.status !== "pending") return yield* Effect.void
+          if (attempt.authorization.mode === "auto" && attempt.authorization.submitCode) {
+            if (!input.code?.trim()) return yield* new CodeRequiredError({ attemptID: input.attemptID })
+            if (attempt.persisting || attempt.manualSubmitted)
+              return yield* authorize(Effect.fail(new Error("Authorization code already submitted")))
+            const submitCode = attempt.authorization.submitCode
+            const code = input.code
+            const submission = yield* Effect.suspend(() => submitCode(code)).pipe(
+              Effect.forkIn(attempt.scope),
+              Effect.flatMap(Fiber.await),
+            )
+            if (Exit.isFailure(submission)) {
+              yield* settle(input.attemptID, Exit.failCause(submission.cause))
+              return yield* authorize(Effect.failCause(submission.cause))
+            }
+            return yield* Effect.void
+          }
           if (attempt.authorization.mode === "code" && input.code === undefined) {
             return yield* new CodeRequiredError({ attemptID: input.attemptID })
           }

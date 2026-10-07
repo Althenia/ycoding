@@ -116,18 +116,21 @@ export const layer = Layer.effect(
         .map((part) => part.text)
         .join("")
       const goals = yield* SessionGoal.Service.pipe(Effect.provide(locations.get(session.location)))
-      const steer = yield* goals.steer({
+      const continuation = yield* goals.continuation({
         session,
         goal: snapshot.state.goal,
-        phase: "continue",
         latestAssistantText,
       })
+      if (continuation.action === "stop") {
+        yield* autonomy.stopGoalIfCurrent({ sessionID, expectedSequence: snapshot.sequence })
+        return undefined
+      }
       const advanced = yield* autonomy.advanceIfCurrent({ sessionID, expectedSequence: snapshot.sequence })
       if (!advanced.applied || !advanced.state.goal || advanced.state.goal.status !== "active") return undefined
       return {
         goal: advanced.state.goal,
         yolo: SessionAutonomy.yoloLevel(advanced.state),
-        steer,
+        steer: continuation.steer,
       }
     })
 

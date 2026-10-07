@@ -753,7 +753,7 @@ const layer = Layer.effect(
       session: SessionSchema.Info,
       records: ReadonlyArray<ProviderRequest.Record>,
     ) {
-      if (records.every((record) => record.cost !== undefined)) return records
+      if (records.every((record) => record.cost !== undefined || record.source === "decision")) return records
       const catalog = yield* Catalog.Service.pipe(
         Effect.provide(locations.get(session.location)),
         Effect.catchCause((cause) =>
@@ -762,7 +762,7 @@ const layer = Layer.effect(
       )
       if (catalog === undefined) return records
       return yield* Effect.forEach(records, (record) => {
-        if (record.cost !== undefined) return Effect.succeed(record)
+        if (record.cost !== undefined || record.source === "decision") return Effect.succeed(record)
         return Effect.gen(function* () {
           const provider = yield* catalog.model.get(record.model.providerID, record.model.id)
           const openrouter = yield* catalog.model.get(

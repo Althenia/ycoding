@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test"
-import { LLMError, TransportReason } from "@ycoding-ai/ai"
+import { LLMClient, LLMError, TransportReason } from "@ycoding-ai/ai"
+import { llmClient } from "@ycoding-ai/core/effect/app-node-platform"
+import { Decision } from "@ycoding-ai/core/decision"
+import { ConfigDecisions } from "@ycoding-ai/core/config/decisions"
+import { Config } from "@ycoding-ai/core/config"
+import { SessionHelperPolicy, localTitle } from "@ycoding-ai/core/session/helper-policy"
+import { SessionProviderRequest } from "@ycoding-ai/core/session/provider-request"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
@@ -24,7 +30,7 @@ import { SessionRestart } from "@ycoding-ai/core/session/execution/restart"
 import { AppProcess } from "@ycoding-ai/core/process"
 import { UserInterruptedError } from "@ycoding-ai/core/session/error"
 import { SessionRunner } from "@ycoding-ai/core/session/runner"
-import { SessionMessageTable, SessionTable, SessionTaskTable } from "@ycoding-ai/core/session/sql"
+import { SessionMessageTable, SessionTable, SessionTaskTable, SessionPendingTable } from "@ycoding-ai/core/session/sql"
 import { EventTable } from "@ycoding-ai/core/event/sql"
 import { Hash } from "@ycoding-ai/core/util/hash"
 import { SessionStore } from "@ycoding-ai/core/session/store"
@@ -36,7 +42,7 @@ import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
 import { Shell } from "@ycoding-ai/core/shell"
 import { ID, Info } from "@ycoding-ai/schema/shell"
-import { Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, LayerMap, Logger, Schema, Scope } from "effect"
+import { Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, LayerMap, Logger, Schema, Scope, Stream } from "effect"
 import { eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
@@ -44,6 +50,165 @@ const it = testEffect(AppNodeBuilder.build(LayerNode.group([AppProcess.node, Dat
 const completionIt = testEffect(AppNodeBuilder.build(LayerNode.group([
   AppProcess.node, Database.node, EventRuntime.node, SessionStore.node, SessionProjector.node, Job.node,
 ])))
+
+const decisionIt = testEffect(AppNodeBuilder.build(LayerNode.group([
+  AppProcess.node, Database.node, EventRuntime.node, SessionStore.node, Job.node, SessionGoal.node,
+  Agent.node, Config.node, SessionHelperPolicy.node, SessionProviderRequest.node, llmClient,
+]), [
+  [Config.node, Layer.mock(Config.Service)({ entries: () => Effect.succeed([]) })],
+  [SessionHelperPolicy.node, Layer.mock(SessionHelperPolicy.Service)({ settings: { titleMode: "local", models: {} }, localTitle, resolveModel: () => Effect.die("configured continuation must not resolve a text model") })],
+  [llmClient, Layer.mock(LLMClient.Service)({ stream: () => Stream.die("configured continuation must not generate text") })],
+  [Decision.node, Layer.mock(Decision.Service)({
+    settings: () => Effect.succeed(new ConfigDecisions.Info({ goal: new ConfigDecisions.Policy({ provider: "openai", min_probability: 0.8 }) })),
+    choose: () => Effect.die("provide decision boundary per test"),
+  })],
+]))
+
+function configuredGoals(choose: Decision.Interface["choose"]) {
+  return SessionGoal.layer().pipe(
+    Layer.provide(Layer.succeed(Decision.Service, Decision.Service.of({
+      settings: () => Effect.succeed(new ConfigDecisions.Info({ goal: new ConfigDecisions.Policy({ provider: "openai", min_probability: 0.8 }) })),
+      evaluate: () => Effect.die("unused"),
+      choose,
+    }))),
+    Layer.build,
+    Effect.map((context) => Context.get(context, SessionGoal.Service)),
+  )
+}
+
+for (const scenario of [
+  { result: { choice: "stop", probability: 0.8, refused: false }, stopped: true },
+  { result: { choice: "stop", probability: 0.79, refused: false }, stopped: false },
+  { result: { choice: "stop", probability: 1, refused: true }, stopped: false },
+  { result: { choice: "continue", probability: 1, refused: false }, stopped: false },
+  { result: { choice: "stop", refused: false }, stopped: false },
+  { result: { refused: false }, stopped: false },
+] as const) {
+  decisionIt.effect(`configured goal continuation applies ${JSON.stringify(scenario.result)} through durable execution`, () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const sessionID = Session.ID.make("ses_decision_flow")
+      yield* seedSessions(database, [sessionID])
+      const autonomy = SessionAutonomy.make({ db: database.db })
+      yield* autonomy.setGoal({ sessionID, text: "Ship the fix" })
+      yield* autonomy.report({ sessionID })
+      const calls: Decision.ChoiceInput[] = []
+      const goals = yield* configuredGoals((input) => Effect.sync(() => { calls.push(input); return scenario.result }))
+      let drains = 0
+      const scope = yield* Scope.make()
+      const context = yield* buildExecution(scope, () => Effect.gen(function* () {
+        drains += 1
+        yield* recordAssistant(database, sessionID, drains, [{ type: "text", text: "Verified focused tests." }])
+        if (drains > 1) yield* autonomy.stop(sessionID).pipe(Effect.orDie)
+      }), undefined, undefined, undefined, undefined, undefined, goals)
+      const execution = Context.get(context, SessionExecution.Service)
+      yield* execution.resume(sessionID)
+      yield* execution.awaitIdle(sessionID)
+      expect(drains).toBe(scenario.stopped ? 1 : 2)
+      expect(yield* autonomy.get(sessionID)).toMatchObject({ goal: {
+        text: "Ship the fix", status: "stopped", iteration: scenario.stopped ? 0 : 1, noProgress: 1,
+      } })
+      expect(yield* admittedInputTexts(database)).toEqual(scenario.stopped ? [] : [
+        "Active goal: Ship the fix\nCurrent iteration: 0\nLatest assistant response: Verified focused tests.\nContinue toward the unchanged active goal; preserve its objective.",
+      ])
+      expect(calls).toHaveLength(1)
+      expect(calls[0]?.state).toEqual({ objective: "Ship the fix", iteration: 0, latestAssistantText: "Verified focused tests." })
+      expect(Object.keys(calls[0].choices)).toEqual(["continue", "stop"])
+      const history = yield* database.db.select().from(EventTable).all().pipe(Effect.orDie)
+      expect(history.filter((row) => row.type === "session.work.completed.1")).toEqual([])
+      const pending = yield* database.db.select().from(SessionPendingTable).where(eq(SessionPendingTable.session_id, sessionID)).all().pipe(Effect.orDie)
+      expect(pending).toHaveLength(0)
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+}
+
+for (const change of ["stop", "replace", "resume"] as const) {
+  decisionIt.effect(`fences a pending stop decision after user ${change}`, () => Effect.gen(function* () {
+    const database = yield* Database.Service
+    const sessionID = Session.ID.make("ses_decision_stale")
+    yield* seedSessions(database, [sessionID])
+    const autonomy = SessionAutonomy.make({ db: database.db })
+    yield* autonomy.setGoal({ sessionID, text: "Ship the fix" })
+    const entered = yield* Deferred.make<void>()
+    const release = yield* Deferred.make<void>()
+    const goals = yield* configuredGoals(() => Deferred.succeed(entered, undefined).pipe(
+      Effect.andThen(Deferred.await(release)), Effect.as({ choice: "stop", probability: 1, refused: false }),
+    ))
+    const scope = yield* Scope.make()
+    const context = yield* buildExecution(scope, () => Effect.void, undefined, undefined, undefined, undefined, undefined, goals)
+    const execution = Context.get(context, SessionExecution.Service)
+    const running = yield* execution.resume(sessionID).pipe(Effect.forkScoped)
+    yield* Deferred.await(entered)
+    if (change === "replace") yield* autonomy.setGoal({ sessionID, text: "New user objective" })
+    if (change !== "replace") yield* autonomy.stop(sessionID)
+    if (change === "resume") {
+      const snapshot = yield* autonomy.snapshot(sessionID)
+      yield* autonomy.resumeGoalIfCurrent({ sessionID, expectedSequence: snapshot.sequence })
+    }
+    const updated = yield* autonomy.snapshot(sessionID)
+    yield* Deferred.succeed(release, undefined)
+    yield* Fiber.join(running)
+    yield* execution.awaitIdle(sessionID)
+    expect(yield* autonomy.snapshot(sessionID)).toEqual(updated)
+    expect(yield* admittedInputs(database)).toEqual([])
+    yield* Scope.close(scope, Exit.void)
+  }))
+}
+
+decisionIt.effect("halts continuation on decision provider error without spending budget or claiming completion", () => Effect.gen(function* () {
+  const database = yield* Database.Service
+  const sessionID = Session.ID.make("ses_decision_error")
+  yield* seedSessions(database, [sessionID])
+  const autonomy = SessionAutonomy.make({ db: database.db })
+  yield* autonomy.setGoal({ sessionID, text: "Ship the fix" })
+  let calls = 0
+  const goals = yield* configuredGoals(() => Effect.sync(() => { calls += 1 }).pipe(
+    Effect.andThen(Effect.fail(new Decision.Error({ reason: "provider-failed" }))),
+  ))
+  const store = yield* SessionStore.Service
+  const session = yield* store.get(sessionID).pipe(Effect.flatMap((value) => value ? Effect.succeed(value) : Effect.die("missing session")))
+  const error = yield* goals.continuation({ session, goal: SessionAutonomy.makeGoal({ text: "Ship the fix" }) }).pipe(Effect.flip)
+  expect(error.code).toBe("goal.calculation_failed")
+  calls = 0
+  const scope = yield* Scope.make()
+  const context = yield* buildExecution(scope, () => Effect.void, undefined, undefined, undefined, undefined, undefined, goals)
+  const execution = Context.get(context, SessionExecution.Service)
+  yield* execution.resume(sessionID)
+  yield* execution.awaitIdle(sessionID)
+  expect(calls).toBe(1)
+  expect(yield* autonomy.get(sessionID)).toMatchObject({ goal: { text: "Ship the fix", status: "active", iteration: 0, noProgress: 0 } })
+  expect(yield* admittedInputs(database)).toEqual([])
+  const history = yield* database.db.select().from(EventTable).all().pipe(Effect.orDie)
+  expect(history.filter((row) => row.type === "session.work.completed.1")).toEqual([])
+  yield* Scope.close(scope, Exit.void)
+}))
+
+for (const blocker of ["child", "shell", "exhausted"] as const) {
+  decisionIt.effect(`does not call the decision provider while ${blocker} blocks continuation`, () => Effect.gen(function* () {
+    const database = yield* Database.Service
+    const sessionID = Session.ID.make("ses_decision_blocked")
+    const childID = Session.ID.make("ses_decision_child")
+    yield* seedSessions(database, [sessionID, childID])
+    const autonomy = SessionAutonomy.make({ db: database.db })
+    yield* autonomy.setGoal({ sessionID, text: "Ship the fix", maxNoProgress: 1 })
+    if (blocker === "exhausted") yield* autonomy.report({ sessionID })
+    if (blocker === "child") yield* seedTask(database, { parentID: sessionID, childID, state: "running" })
+    let calls = 0
+    const goals = yield* configuredGoals(() => Effect.sync(() => { calls += 1; return { choice: "stop", probability: 1, refused: false } }))
+    const scope = yield* Scope.make()
+    const context = yield* buildExecution(scope, () => Effect.void, undefined, undefined, () => Effect.succeed(blocker === "shell" ? [Info.make({
+      id: ID.make("sh_decision"), status: "running", command: "work", cwd: "/project", shell: "/bin/sh", file: "/tmp/decision.log", metadata: { sessionID }, time: { started: 1 },
+    })] : []), undefined, undefined, goals)
+    const execution = Context.get(context, SessionExecution.Service)
+    yield* execution.resume(sessionID)
+    yield* execution.awaitIdle(sessionID)
+    expect(calls).toBe(0)
+    expect(yield* autonomy.get(sessionID)).toMatchObject({ goal: { text: "Ship the fix", status: blocker === "exhausted" ? "exhausted" : "active", iteration: 0 } })
+    expect(yield* admittedInputs(database)).toEqual([])
+    yield* Scope.close(scope, Exit.void)
+  }))
+}
 
 completionIt.effect("records verified work once after an explicit declaration and the final response settle", () =>
   Effect.gen(function* () {
@@ -606,6 +771,31 @@ describe("SessionExecution lifecycle", () => {
     }),
   )
 
+  it.effect("durably stops a goal at idle without admitting a continuation or claiming completion", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const sessionID = Session.ID.make("ses_goal_decision_stop")
+      yield* seedSessions(database, [sessionID])
+      const autonomy = SessionAutonomy.make({ db: database.db })
+      yield* autonomy.setGoal({ sessionID, text: "Ship the fix" })
+      let drains = 0
+      const scope = yield* Scope.make()
+      const context = yield* buildExecution(scope, () => Effect.gen(function* () {
+        drains += 1
+        if (drains > 1) yield* autonomy.stop(sessionID).pipe(Effect.orDie)
+      }), undefined, undefined, undefined, undefined, () => Effect.succeed({ action: "stop" }))
+      const execution = Context.get(context, SessionExecution.Service)
+      yield* execution.resume(sessionID)
+      yield* execution.awaitIdle(sessionID)
+      expect(drains).toBe(1)
+      expect(yield* autonomy.get(sessionID)).toMatchObject({
+        goal: { text: "Ship the fix", status: "stopped", iteration: 0, noProgress: 0 },
+      })
+      expect(yield* admittedInputs(database)).toEqual([])
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+
   it.effect("stops goal continuations after three unresolved-blocker reports", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
@@ -1145,6 +1335,9 @@ function buildExecution(
     readonly phase: "start" | "continue"
     readonly latestAssistantText?: string
   }) => Effect.Effect<string, SessionGoal.Error> = ({ goal }) => Effect.succeed(`Continue work on ${goal.text}`),
+  continuation: SessionGoal.Interface["continuation"] = (input) =>
+    steer({ ...input, phase: "continue" }).pipe(Effect.map((text) => ({ action: "continue" as const, steer: text }))),
+  goalService?: SessionGoal.Interface,
 ) {
   return Effect.gen(function* () {
     const database = yield* Database.Service
@@ -1163,9 +1356,10 @@ function buildExecution(
     const shell = Layer.mock(Shell.Service, { list: shells })
     const goals = Layer.succeed(
       SessionGoal.Service,
-      SessionGoal.Service.of({
+      SessionGoal.Service.of(goalService ?? {
         synthesize: () => Effect.die("unused"),
         steer,
+        continuation,
       }),
     )
     const locations = Layer.effect(

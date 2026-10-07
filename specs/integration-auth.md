@@ -1,0 +1,7 @@
+# Integration authorization
+
+An OAuth connection begins with `integration.oauth.connect` and returns an attempt ID, authorization URL, instructions, mode, and expiry. `auto` attempts run their provider callback in the background and expose pending, complete, failed, or expired status through `integration.oauth.status`. `code` attempts await `integration.oauth.complete` with an authorization code. Cancelling either attempt releases its resources; a completed attempt stores one integration credential.
+
+An automatic attempt advertises `manualCode: true` only when its provider can accept a pasted authorization code while automatic browser authorization is pending. The client can submit that code through the existing `integration.oauth.complete` request. Submission feeds the same running attempt; a successful submission does not mean authentication has completed. Continue polling status until the automatic callback settles and the credential is stored. One attempt accepts at most one manual submission; an empty code or duplicate is rejected, a submission failure fails the attempt, and cancelled, failed, expired, or completed attempts cannot submit a code. Attempts without this capability do not offer manual entry.
+
+The terminal's automatic OAuth dialog shows manual entry only for an advertised capable attempt. Opening its code prompt retains the attempt and its status polling. Closing the dialog cancels the pending attempt; successful settlement does not cancel it.

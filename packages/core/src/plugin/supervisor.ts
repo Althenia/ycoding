@@ -23,6 +23,7 @@ import { Computer } from "../computer";
 import { Config } from "../config";
 import { ConfigPlugin } from "../config/plugin";
 import { Credential } from "../credential";
+import { Decision } from "../decision";
 import { makeLocationNode } from "../effect/app-node";
 import { httpClient } from "../effect/app-node-platform";
 import { EventRuntime } from "../event";
@@ -381,6 +382,7 @@ export const node = makeLocationNode({
     Computer.node,
     Config.node,
     Credential.node,
+    Decision.node,
     EventRuntime.node,
     FileMutation.node,
     FileSystem.node,

@@ -97,6 +97,51 @@ describe("ProviderUsageCache", () => {
 })
 
 describe("ProviderUsageRuntime", () => {
+  test("keeps Claude response observations bound to their account when the active profile changes", async () => {
+    const id = Provider.ID.make("anthropic")
+    const sources = ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"]
+    let active = 0
+    const service = ProviderUsageRuntime.make({
+      credentials: { all: () => Effect.succeed(sources.map((source, index) => new Credential.Info({
+        id: Credential.ID.make(`cred_claude_${index}`), integrationID: Integration.ID.make("anthropic"),
+        label: index === 0 ? "Personal" : "Work", active: index === active,
+        value: { type: "oauth", methodID: Integration.MethodID.make("claude-code"), access: source, refresh: "", expires: Number.MAX_SAFE_INTEGER,
+          metadata: { authKind: "claude-code", managed: true, source } },
+      }))) },
+      providers: { available: () => Effect.succeed([{ id }]) },
+      adapters: { anthropic: (input) => Effect.succeed(new ProviderUsage.Snapshot({
+        providerID: id, label: "Claude", status: "available", source: "provider_internal_api", stability: "best_effort", updatedAt: 1,
+        windows: [new ProviderUsage.Window({ id: "session", label: "Session", unit: "percent", used: input.credential.label === "Personal" ? 15 : 75 })],
+      })) },
+      now: () => 1,
+    })
+    await Effect.runPromise(service.observe(new ProviderUsage.Observation({
+      providerID: id, label: "Claude", source: "response_headers", stability: "observed", observedAt: 2,
+      windows: [new ProviderUsage.Window({ id: "session", label: "Session", unit: "percent", used: 15 })],
+    }), sources[0]))
+    expect((await Effect.runPromise(service.get({ providerID: id }))).windows[0]?.used).toBe(15)
+    active = 1
+    expect(await Effect.runPromise(service.get({ providerID: id }))).toMatchObject({ profile: "Work", windows: [{ used: 75 }] })
+    expect(await Effect.runPromise(service.get({ providerID: id, credentialID: Credential.ID.make("cred_claude_0") })))
+      .toMatchObject({ profile: "Personal", windows: [{ used: 15 }] })
+  })
+
+  test("replacing a named profile's credentials does not reuse the previous account's quota", async () => {
+    let generation = 0
+    const service = ProviderUsageRuntime.make({
+      credentials: { all: () => Effect.succeed([new Credential.Info({
+        id: Credential.ID.make("cred_reconnected"), integrationID: Integration.ID.make("test-provider"), label: "Work", active: true, generation,
+        value: { type: "key", key: generation === 0 ? "first-account" : "second-account" },
+      })]) },
+      providers: { available: () => Effect.succeed([{ id: providerID }]) },
+      adapters: { [providerID]: (input) => Effect.succeed(snapshot(input.credential.generation === 0 ? 10 : 80, 1)) },
+      now: () => 1,
+    })
+    expect((await Effect.runPromise(service.get({ providerID }))).windows[0]?.used).toBe(10)
+    generation = 1
+    expect((await Effect.runPromise(service.get({ providerID }))).windows[0]?.used).toBe(80)
+  })
+
   test("reports only measured YCoding-local daily spend separately from account quotas", () => {
     const now = new Date(2026, 8, 27, 12).getTime()
     const values = ProviderUsageRuntime.localSpendSnapshots([

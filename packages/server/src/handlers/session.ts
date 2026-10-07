@@ -494,6 +494,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 "SessionRunnerModel.VariantUnavailableError": () => modelSwitchFailure(ctx.params.sessionID, "variant-unavailable", "Target model variant is unavailable. Select a supported variant."),
                 "SessionRunnerModel.UnsupportedPackageError": () => modelSwitchFailure(ctx.params.sessionID, "unsupported-provider", "Target model uses an unsupported provider package. Check provider configuration."),
                 "Integration.Authorization": () => modelSwitchFailure(ctx.params.sessionID, "provider-authorization", "Provider authorization failed. Reconnect the provider and retry the model switch."),
+                "SessionRunnerModel.ClaudeCodeReconnectError": () => modelSwitchFailure(ctx.params.sessionID, "provider-authorization", "Claude profile requires reconnect. Sign in to the selected profile and retry the model switch."),
                 "Session.CompactionConflictError": () => modelSwitchFailure(ctx.params.sessionID, "compaction-failed", "Context compaction could not complete the model switch. The prior model remains selected; inspect compaction status before retrying."),
               }),
               Effect.catchTag("Session.NotFoundError", (error) =>

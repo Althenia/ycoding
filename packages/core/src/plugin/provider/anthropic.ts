@@ -16,14 +16,12 @@ import {
   claudeCodeBillingSample,
   createClaudeCodeCredentialStore,
   createClaudeCodeFetch,
-  createSystemClaudeCodeCredentialSource,
-  loadClaudeCodeAccountSource,
-  saveClaudeCodeAccountSource,
   writeClaudeCodeDebugEvent,
   type ClaudeCodeAccount,
   type ClaudeCodeCredentialSource,
   type ClaudeCodeRequestEvent,
 } from "../provider/anthropic-claude-code";
+import { authorizeClaudeCodeProfile, createManagedClaudeCodeCredentialSource } from "./anthropic-claude-code-login";
 
 export const claudeCodeMethodID = Integration.MethodID.make("claude-code");
 const legacySetupTokenMethodID =
@@ -61,19 +59,24 @@ export function claudeCodeCredentialSource(
 ) {
   if (
     credential?.type !== "oauth" ||
-    credential.methodID !== claudeCodeMethodID
+    credential.methodID !== claudeCodeMethodID ||
+    credential.metadata?.authKind !== "claude-code" ||
+    credential.metadata?.managed !== true ||
+    credential.metadata?.requiresLogin === true
   )
     return undefined;
   const source = credential.metadata?.source;
-  return typeof source === "string" && source.length > 0
-    ? source
-    : credential.access;
+  return typeof source === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(source) &&
+    source === credential.access && credential.expires === Number.MAX_SAFE_INTEGER
+    ? source : undefined;
 }
 
 export interface AnthropicPluginOptions {
   readonly credentialSource?: ClaudeCodeCredentialSource;
+  readonly directory?: string;
+  readonly authorize?: typeof authorizeClaudeCodeProfile;
   readonly fetch?: typeof fetch;
-  readonly accountStateFile?: string;
   readonly debugFile?: string;
 }
 
@@ -81,12 +84,8 @@ export function makeAnthropicPlugin(options: AnthropicPluginOptions = {}) {
   return define({
     id: "ycoding.provider.anthropic",
     effect: Effect.fn(function* (ctx) {
-      const source =
-        options.credentialSource ??
-        createSystemClaudeCodeCredentialSource({ home: Global.Path.home });
-      const accountStateFile =
-        options.accountStateFile ??
-        join(Global.Path.data, "claude-account-source.txt");
+      const directory = options.directory ?? join(Global.Path.data, "claude-code", "profiles");
+      const source = options.credentialSource ?? createManagedClaudeCodeCredentialSource({ directory });
       const debug = process.env.CLAUDE_AUTH_DEBUG;
       const debugFile =
         options.debugFile ??
@@ -116,6 +115,19 @@ export function makeAnthropicPlugin(options: AnthropicPluginOptions = {}) {
             : Effect.void,
         { discard: true },
       );
+      yield* Effect.forEach(
+        yield* credentials.list(Integration.ID.make("anthropic")),
+        (profile) => profile.value.type === "oauth" &&
+          profile.value.methodID === claudeCodeMethodID &&
+          profile.value.metadata?.managed !== true &&
+          profile.value.metadata?.requiresLogin !== true
+          ? credentials.update(profile.id, { value: Credential.OAuth.make({
+              type: "oauth", methodID: claudeCodeMethodID, access: "", refresh: "", expires: 0,
+              metadata: { authKind: "claude-code", requiresLogin: true },
+            }) })
+          : Effect.void,
+        { discard: true },
+      );
       const loading = Semaphore.makeUnsafe(1);
       let accounts: ClaudeCodeAccount[] = [];
       let activeSource: string | undefined;
@@ -131,10 +143,6 @@ export function makeAnthropicPlugin(options: AnthropicPluginOptions = {}) {
               return Effect.succeed([]);
             }),
           );
-          const persisted = loadClaudeCodeAccountSource(accountStateFile);
-          activeSource =
-            accounts.find((account) => account.source === persisted)?.source ??
-            accounts[0]?.source;
         },
       );
 
@@ -147,10 +155,7 @@ export function makeAnthropicPlugin(options: AnthropicPluginOptions = {}) {
                 .resolve(connection)
                 .pipe(Effect.catch(() => Effect.succeed(undefined)))
             : undefined;
-          if (credential?.type === "key") {
-            activeSource = undefined;
-            return;
-          }
+          activeSource = undefined;
           const selected = claudeCodeCredentialSource(credential);
           if (
             selected &&
@@ -167,67 +172,27 @@ export function makeAnthropicPlugin(options: AnthropicPluginOptions = {}) {
             id: claudeCodeMethodID,
             type: "oauth" as const,
             label: "Claude Code account",
-            prompts:
-              accounts.length <= 1
-                ? undefined
-                : [
-                    {
-                      type: "select" as const,
-                      key: "account",
-                      message: "Select a Claude Code account",
-                      options: accounts.map((account) => ({
-                        label: account.label,
-                        value: account.source,
-                        hint:
-                          account.source === activeSource
-                            ? `${account.source} (active)`
-                            : account.source,
-                      })),
-                    },
-                  ],
+            prompts: undefined,
           },
-          authorize: (inputs: Integration.Inputs) =>
-            Effect.tryPromise(() => store.accounts()).pipe(
-              Effect.flatMap((latest) => {
-                accounts = latest;
-                const source =
-                  inputs.account ??
-                  activeSource ??
-                  loadClaudeCodeAccountSource(accountStateFile);
-                const selected =
-                  accounts.find((account) => account.source === source) ??
-                  accounts[0];
-                if (!selected)
-                  return Effect.fail(
-                    new Error(
-                      "Claude Code credentials were not found. Run `claude auth login`.",
-                    ),
-                  );
-                return Effect.succeed({
-                  mode: "auto" as const,
-                  url: "",
-                  instructions: `Using ${selected.label} from ${selected.source}.`,
-                  callback: Effect.sync(() => {
-                    activeSource = selected.source;
-                    saveClaudeCodeAccountSource(
-                      accountStateFile,
-                      selected.source,
-                    );
-                    return Credential.OAuth.make({
-                      type: "oauth",
-                      methodID: claudeCodeMethodID,
-                      access: selected.source,
-                      refresh: "",
-                      expires: Number.MAX_SAFE_INTEGER,
-                      metadata: {
-                        authKind: "claude-code",
-                        source: selected.source,
-                      },
-                    });
-                  }),
-                });
-              }),
+          authorize: (_inputs: Integration.Inputs) =>
+            (options.authorize ?? authorizeClaudeCodeProfile)({ directory, credentialSource: source }).pipe(
+              Effect.map((attempt) => ({
+                mode: "auto" as const,
+                url: attempt.url,
+                instructions: attempt.instructions,
+                submitCode: attempt.submitCode,
+                callback: attempt.callback.pipe(Effect.map(() => Credential.OAuth.make({
+                  type: "oauth", methodID: claudeCodeMethodID, access: attempt.source,
+                  refresh: "", expires: Number.MAX_SAFE_INTEGER,
+                  metadata: { authKind: "claude-code", source: attempt.source, managed: true },
+                }))),
+              })),
             ),
+          refresh: (credential) => Effect.fail(new Error(
+            claudeCodeCredentialSource(credential)
+              ? "Managed Claude profile requires reconnect. Sign in again."
+              : "Claude profile requires reconnect. Sign in to this profile again.",
+          )),
           label: (credential: Credential.OAuth) => {
             const source = claudeCodeCredentialSource(credential);
             return accounts.find((account) => account.source === source)?.label;
@@ -254,7 +219,13 @@ export function makeAnthropicPlugin(options: AnthropicPluginOptions = {}) {
             continue;
           evt.provider.update(item.provider.id, (provider) => {
             provider.headers = mergeBetaHeaders(provider.headers, featureBetas);
-            if (!activeSource) return;
+            if (!activeSource) {
+              if (provider.settings?.apiKey === claudeCodeSentinel) {
+                delete provider.settings.apiKey;
+                delete provider.settings[claudeCodeSourceSetting];
+              }
+              return;
+            }
             provider.settings = Provider.mergeOverlay(provider.settings, {
               apiKey: claudeCodeSentinel,
               [claudeCodeSourceSetting]: activeSource,
@@ -328,7 +299,7 @@ export function makeAnthropicPlugin(options: AnthropicPluginOptions = {}) {
                       stability: snapshot.stability,
                       observedAt: snapshot.updatedAt,
                       windows: snapshot.windows,
-                    }),
+                    }), source,
                   ),
                 );
               },

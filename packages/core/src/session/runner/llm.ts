@@ -31,6 +31,7 @@ import { SessionContext } from "../context"
 import { SessionCompactionJob } from "../compaction-job"
 import { SessionContextPressure } from "../context-pressure"
 import { SessionEvent } from "../event"
+import { SessionDecisionRouting } from "../decision-routing"
 import { SessionPending } from "../pending"
 import { SessionProviderRequest } from "../provider-request"
 import { SessionModelRequest } from "../model-request"
@@ -108,6 +109,7 @@ const layer = Layer.effect(
     const permission = yield* Permission.Service
     const accounting = yield* ProjectArtifactAccounting.Service
     const artifactSource = yield* ProjectArtifactSource.Service
+    const routing = yield* SessionDecisionRouting.Service
     const resolveRequestedSkills = Effect.fn("SessionRunner.resolveRequestedSkills")(function* (
       selected: SessionContext.Selection,
       ids: ReadonlyArray<Skill.ID>,
@@ -313,6 +315,7 @@ const layer = Layer.effect(
       recoveryMode: RecoveryMode = "normal",
       onPromotion?: () => void,
     ) {
+      yield* routing.route(sessionID, promotion)
       const selected = yield* context.select(sessionID)
       // Establish what the model knows before admitting what the user said, so
       // a blocked first step leaves pending inputs untouched.
@@ -1212,6 +1215,7 @@ export const node = makeLocationNode({
     Permission.node,
     ProjectArtifactAccounting.node,
     ProjectArtifactSource.node,
+    SessionDecisionRouting.node,
   ],
 })
 

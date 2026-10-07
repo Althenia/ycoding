@@ -11,6 +11,7 @@ import { Command } from "../command";
 import { Config } from "../config";
 import { Computer } from "../computer";
 import { Credential } from "../credential";
+import { Decision } from "../decision";
 import { ConfigAgentPlugin } from "../config/plugin/agent";
 import { ConfigCommandPlugin } from "../config/plugin/command";
 import { ConfigProviderPlugin } from "../config/plugin/provider";
@@ -59,6 +60,7 @@ import { SubagentControlTool } from "../tool/subagent-control";
 import { SubagentReportTool } from "../tool/subagent-report";
 import { TodoWriteTool } from "../tool/todowrite";
 import { GoalTool } from "../tool/goal";
+import { DecisionTool } from "../tool/decision";
 import { TaskCompleteTool } from "../tool/task-complete";
 import { MemoryTool } from "../tool/memory";
 import { ProjectArtifactTool } from "../tool/project-artifact";
@@ -88,6 +90,7 @@ const services = Effect.fn("PluginInternal.services")(function* () {
   const config = yield* Config.Service;
   const computer = yield* Computer.Service;
   const credential = yield* Credential.Service;
+  const decision = yield* Decision.Service;
   const events = yield* EventRuntime.Service;
   const mutation = yield* FileMutation.Service;
   const filesystem = yield* FileSystem.Service;
@@ -130,6 +133,7 @@ const services = Effect.fn("PluginInternal.services")(function* () {
     Context.make(Config.Service, config),
     Context.make(Computer.Service, computer),
     Context.make(Credential.Service, credential),
+    Context.make(Decision.Service, decision),
     Context.make(EventRuntime.Service, events),
     Context.make(FileMutation.Service, mutation),
     Context.make(FileSystem.Service, filesystem),
@@ -203,6 +207,7 @@ const pre = [
   WebSearchTool.Plugin,
   WriteTool.Plugin,
   GoalTool.Plugin,
+  DecisionTool.Plugin,
   BrowserTool.Plugin,
 ] as const satisfies readonly InternalPlugin[];
 

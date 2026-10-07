@@ -2,14 +2,17 @@ import { HttpRecorder } from "@ycoding-ai/http-recorder";
 import { CacheHint, LLM, type Usage } from "@ycoding-ai/ai";
 import { LLMClient, RequestExecutor } from "@ycoding-ai/ai/route";
 import { AISDK } from "@ycoding-ai/core/aisdk";
+import { Credential } from "@ycoding-ai/core/credential";
+import { Global } from "@ycoding-ai/core/global";
+import { Integration } from "@ycoding-ai/core/integration";
 import { CatalogModel } from "@ycoding-ai/core/model";
 import { PluginRegistry } from "@ycoding-ai/core/plugin";
 import { PluginHost } from "@ycoding-ai/core/plugin/host";
-import { makeAnthropicPlugin } from "@ycoding-ai/core/plugin/provider/anthropic";
+import { claudeCodeMethodID, makeAnthropicPlugin } from "@ycoding-ai/core/plugin/provider/anthropic";
 import {
-  createSystemClaudeCodeCredentialSource,
   type ClaudeCodeCredentialSource,
 } from "@ycoding-ai/core/plugin/provider/anthropic-claude-code";
+import { createManagedClaudeCodeCredentialSource } from "@ycoding-ai/core/plugin/provider/anthropic-claude-code-login";
 import { Provider } from "@ycoding-ai/core/provider";
 import { expect } from "bun:test";
 import { Effect, Layer } from "effect";
@@ -21,18 +24,20 @@ import { PluginTestLayer } from "./fixture";
 const cassette = "anthropic-oauth/claude-code-cache";
 const directory = path.resolve(import.meta.dir, "../fixtures/recordings");
 const recording = process.env.RECORD === "true";
-const systemSource = createSystemClaudeCodeCredentialSource();
-const systemAccounts = recording
-  ? await systemSource.list().catch(() => [])
+const managedDirectory = path.join(Global.Path.data, "claude-code", "profiles");
+const managedSource = createManagedClaudeCodeCredentialSource({ directory: managedDirectory });
+const liveSource = process.env.YCODING_CLAUDE_RECORD_SOURCE;
+const managedAccounts = recording && liveSource
+  ? await managedSource.list().catch(() => [])
   : [];
 const replaying =
   !recording && HttpRecorder.hasCassetteSync(cassette, { directory });
-const enabled = replaying || (recording && systemAccounts.length > 0);
+const enabled = replaying || (recording && managedAccounts.some((account) => account.source === liveSource));
 const fixtureSource = {
   list: async () => [
     {
       label: "Claude",
-      source: "fixture",
+      source: "11111111-1111-4111-8111-111111111111",
       credentials: {
         accessToken: "fixture",
         refreshToken: "fixture-refresh",
@@ -46,10 +51,9 @@ const fixtureSource = {
     expiresAt: Number.MAX_SAFE_INTEGER,
   }),
   write: async () => true,
-  refreshWithCli: async () => undefined,
 } satisfies ClaudeCodeCredentialSource;
-const credentialSource = recording ? systemSource : fixtureSource;
-const selectedSource = recording ? systemAccounts[0]?.source : "fixture";
+const credentialSource = recording ? managedSource : fixtureSource;
+const selectedSource = recording ? liveSource : "11111111-1111-4111-8111-111111111111";
 
 if (recording && enabled)
   HttpRecorder.removeCassetteSync(cassette, { directory });
@@ -68,6 +72,14 @@ recorded("reads the provider prompt cache through Claude Code OAuth", () =>
     const http = yield* HttpClient.HttpClient;
     const aisdk = yield* AISDK.Service;
     const host = yield* PluginHost.make(yield* PluginRegistry.Service);
+    if (!selectedSource) throw new Error("Select a signed-in managed Claude profile to record");
+    const credentials = yield* Credential.Service;
+    yield* credentials.create({
+      integrationID: Integration.ID.make("anthropic"),
+      value: Credential.OAuth.make({ type: "oauth", methodID: claudeCodeMethodID,
+        access: selectedSource, refresh: "", expires: Number.MAX_SAFE_INTEGER,
+        metadata: { authKind: "claude-code", source: selectedSource, managed: true } }),
+    });
     let bearer = false;
     let apiKey = false;
     let beta = false;
@@ -101,10 +113,9 @@ recorded("reads the provider prompt cache through Claude Code OAuth", () =>
 
     yield* makeAnthropicPlugin({
       credentialSource,
+      directory: managedDirectory,
       fetch: recordedFetch,
     }).effect(host);
-    if (!selectedSource)
-      throw new Error("No Claude Code account source is available");
     const runtime = CatalogModel.Info.make({
       ...CatalogModel.Info.empty(
         Provider.ID.anthropic,

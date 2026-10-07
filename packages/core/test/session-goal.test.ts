@@ -4,6 +4,7 @@ import { OpenAIChat } from "@ycoding-ai/ai/protocols"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigEfficiency } from "@ycoding-ai/core/config/efficiency"
+import { Decision } from "@ycoding-ai/core/decision"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { llmClient } from "@ycoding-ai/core/effect/app-node-platform"
@@ -130,6 +131,7 @@ const it = testEffect(
       [SessionRunnerModel.node, models],
       [SessionHelperPolicy.node, helperPolicy],
       [Config.node, config],
+      [Decision.node, Layer.mock(Decision.Service)({ settings: () => Effect.succeed(undefined), choose: () => Effect.die("unconfigured goal must not call Decision") })],
     ],
   ),
 )
@@ -160,6 +162,7 @@ const locations = Layer.effect(
       Layer.succeed(
         SessionGoal.Service,
         SessionGoal.Service.of({
+          continuation: () => Effect.die("unused"),
           synthesize: ({ text }) => {
             synthesisCalls.push(text)
             if (text === "Delayed goal") return Effect.gen(function* () {
@@ -269,6 +272,24 @@ it.effect("synthesizes the goal through the configured goal model without a loca
         .where(eq(SessionProviderRequestTable.session_id, sessionID))
         .get(),
     ).toMatchObject({ cost: 0.0000248 })
+  }),
+)
+
+it.effect("keeps the existing text steer path when goal decisions are omitted", () =>
+  Effect.gen(function* () {
+    requests = []
+    modelAvailable = true
+    yield* configureGoalAgent
+    const sessionID = Session.ID.make("ses_goal_unconfigured_continuation")
+    yield* insertSession(sessionID)
+    const store = yield* SessionStore.Service
+    const session = yield* store.get(sessionID).pipe(Effect.flatMap((value) => value ? Effect.succeed(value) : Effect.die("missing session")))
+    const goals = yield* SessionGoal.Service
+    expect(yield* goals.continuation({ session, goal: SessionAutonomy.makeGoal({ text: "Repair the migration" }), latestAssistantText: "Migration fails." })).toEqual({
+      action: "continue", steer: "Inspect the SQLite migration failure next and verify the focused suite.",
+    })
+    expect(requests).toHaveLength(1)
+    expect(JSON.stringify(requests[0]?.messages)).toContain("Migration fails.")
   }),
 )
 

@@ -122,6 +122,10 @@ export interface Interface {
     yolo?: number | boolean
   }) => Effect.Effect<{ readonly state: State; readonly applied: boolean }, NotFoundError>
   readonly clearGoal: (sessionID: SessionSchema.ID) => Effect.Effect<State, NotFoundError>
+  readonly stopGoalIfCurrent: (input: {
+    sessionID: SessionSchema.ID
+    expectedSequence: number
+  }) => Effect.Effect<{ readonly state: State; readonly applied: boolean }, NotFoundError>
   readonly set: (input: {
     sessionID: SessionSchema.ID
     yolo?: number | boolean
@@ -355,6 +359,16 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
       expectedSequence,
     )
 
+  const stopGoalIfCurrent: Interface["stopGoalIfCurrent"] = ({ sessionID, expectedSequence }) =>
+    mutate(
+      sessionID,
+      (state) =>
+        state.goal?.status === "active"
+          ? { ...state, goal: { ...state.goal, status: "stopped" as const } }
+          : undefined,
+      expectedSequence,
+    )
+
   const clearGoal: Interface["clearGoal"] = (sessionID) =>
     apply(sessionID, (state) => {
       // Persist stop intent to fence calculations even before the first goal exists.
@@ -419,6 +433,7 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
     setGoalIfCurrent,
     resumeGoalIfCurrent,
     clearGoal,
+    stopGoalIfCurrent,
     set,
     stop: (sessionID) => clearGoal(sessionID),
     report: ({ sessionID }) =>

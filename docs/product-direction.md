@@ -84,6 +84,8 @@ Priorities include stable prompt prefixes, provider-specific cache controls, acc
 
 OpenCode Zen and OpenCode Go remain named as such only because they are external provider identities.
 
+OpenAI Decisions and TypeSafe Jev provide native structured judgments through the `decision` tool and explicitly configured guardrail, initial routing, and goal-continuation policies. These API-key integrations are separate from conversational models and subscription authentication. Decisions do not grant permission, certify completion, or change the user's goal objective; explicit autonomy and human-only hard reviews remain enforced. See [configuration](./configuration.md#native-decisions).
+
 ### 8. Documentation and distribution
 
 The terminal executable is distributed as native release archives with SHA-256 checksums; each release also attaches the `LICENSE` and `NOTICE` files as separate assets listed in the checksum file, never as archive entries. Source archives are provided by GitHub Releases. A `v<version>` tag verifies the TUI and web application, builds and smoke-tests native artifacts, deploys web to Cloudflare after required checks, and publishes one TUI GitHub Release only after deployment succeeds. Deployment requires a `CLOUDFLARE_API_TOKEN` GitHub Actions secret. A manual workflow run prepares artifacts without publishing or deploying. Each release ships one shared note at `docs/releases/v<version>.md`, which is also attached to the GitHub Release.

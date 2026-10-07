@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Cause, Clock, Duration, Effect, Exit, Fiber, Layer, Scope, Stream } from "effect"
+import { Cause, Clock, Deferred, Duration, Effect, Exit, Fiber, Layer, Scope, Stream } from "effect"
 import * as TestClock from "effect/testing/TestClock"
 import { Credential } from "@ycoding-ai/core/credential"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -329,12 +329,154 @@ describe("Integration", () => {
       )
 
       const attempt = yield* integrations.oauth.connect({ integrationID, methodID, inputs: {} })
+      expect(attempt.manualCode).toBeUndefined()
       yield* Effect.yieldNow
       expect(yield* integrations.oauth.status({ integrationID, attemptID: attempt.attemptID })).toEqual({
         status: "complete",
         time: attempt.time,
       })
       expect(yield* credentials.list(integrationID)).toHaveLength(1)
+    }),
+  )
+
+  it.effect("submits one manual code to an auto attempt without settling before its callback", () =>
+    Effect.gen(function* () {
+      const integrations = yield* Integration.Service
+      const credentials = yield* Credential.Service
+      const integrationID = Integration.ID.make("openai")
+      const methodID = Integration.MethodID.make("browser-manual")
+      const finished = yield* Deferred.make<void>()
+      const submissionStarted = yield* Deferred.make<void>()
+      const submissionRelease = yield* Deferred.make<void>()
+      const submitted: string[] = []
+      yield* integrations.transform((editor) =>
+        editor.method.update({
+          integrationID,
+          method: { id: methodID, type: "oauth", label: "Browser" },
+          authorize: () => Effect.succeed({
+            mode: "auto" as const,
+            url: "https://example.com/authorize",
+            instructions: "Sign in or enter the code",
+            submitCode: (code: string) => Effect.gen(function* () {
+              submitted.push(code)
+              yield* Deferred.succeed(submissionStarted, undefined)
+              yield* Deferred.await(submissionRelease)
+            }),
+            callback: Deferred.await(finished).pipe(Effect.as(Credential.OAuth.make({ type: "oauth", methodID, access: "access", refresh: "refresh", expires: 1 }))),
+          }),
+        }),
+      )
+
+      const attempt = yield* integrations.oauth.connect({ integrationID, methodID, inputs: {} })
+      expect(attempt.manualCode).toBe(true)
+      expect(yield* integrations.oauth.status({ integrationID, attemptID: attempt.attemptID })).toMatchObject({ status: "pending" })
+      const submission = yield* integrations.oauth.complete({ integrationID, attemptID: attempt.attemptID, code: "code#state" }).pipe(Effect.forkChild)
+      yield* Deferred.await(submissionStarted)
+      expect(submitted).toEqual(["code#state"])
+      expect(yield* credentials.list(integrationID)).toEqual([])
+      expect(yield* integrations.oauth.status({ integrationID, attemptID: attempt.attemptID })).toMatchObject({ status: "pending" })
+      expect(yield* integrations.oauth.complete({ integrationID, attemptID: attempt.attemptID, code: "second" }).pipe(Effect.exit)).toMatchObject({ _tag: "Failure" })
+      expect(submitted).toEqual(["code#state"])
+      yield* Deferred.succeed(submissionRelease, undefined)
+      yield* Fiber.join(submission)
+      yield* Deferred.succeed(finished, undefined)
+      yield* eventually(integrations.oauth.status({ integrationID, attemptID: attempt.attemptID }), (value) => value.status === "complete")
+      expect(yield* credentials.list(integrationID)).toHaveLength(1)
+      expect(yield* integrations.oauth.complete({ integrationID, attemptID: attempt.attemptID, code: "late" }).pipe(Effect.exit)).toMatchObject({ _tag: "Success" })
+      expect(submitted).toEqual(["code#state"])
+    }),
+  )
+
+  it.effect("rejects missing or malformed manual codes and never submits after cancellation", () =>
+    Effect.gen(function* () {
+      const integrations = yield* Integration.Service
+      const integrationID = Integration.ID.make("openai")
+      const methodID = Integration.MethodID.make("browser-manual")
+      const submitted: string[] = []
+      yield* integrations.transform((editor) => editor.method.update({
+        integrationID,
+        method: { id: methodID, type: "oauth", label: "Browser" },
+        authorize: () => Effect.succeed({
+          mode: "auto" as const,
+          url: "https://example.com/authorize",
+          instructions: "Sign in",
+          submitCode: (code: string) => Effect.sync(() => { submitted.push(code) }),
+          callback: Effect.never,
+        }),
+      }))
+      const attempt = yield* integrations.oauth.connect({ integrationID, methodID, inputs: {} })
+      for (const code of [undefined, "", "  "]) {
+        expect(yield* integrations.oauth.complete({ integrationID, attemptID: attempt.attemptID, code }).pipe(Effect.flip)).toBeInstanceOf(Integration.CodeRequiredError)
+      }
+      expect(submitted).toEqual([])
+      yield* integrations.oauth.cancel({ integrationID, attemptID: attempt.attemptID })
+      expect(yield* integrations.oauth.complete({ integrationID, attemptID: attempt.attemptID, code: "late" }).pipe(Effect.exit)).toMatchObject({ _tag: "Failure" })
+      expect(submitted).toEqual([])
+    }),
+  )
+
+  it.effect("fails an auto attempt when its manual submission is rejected", () =>
+    Effect.gen(function* () {
+      const integrations = yield* Integration.Service
+      const credentials = yield* Credential.Service
+      const integrationID = Integration.ID.make("openai")
+      const methodID = Integration.MethodID.make("browser-manual")
+      let closed = false
+      yield* integrations.transform((editor) => editor.method.update({
+        integrationID,
+        method: { id: methodID, type: "oauth", label: "Browser" },
+        authorize: () => Effect.addFinalizer(() => Effect.sync(() => { closed = true })).pipe(Effect.as({
+          mode: "auto" as const,
+          url: "https://example.com/authorize",
+          instructions: "Sign in",
+          submitCode: () => Effect.fail(new Error("Submission refused")),
+          callback: Effect.never,
+        })),
+      }))
+      const attempt = yield* integrations.oauth.connect({ integrationID, methodID, inputs: {} })
+      const failure = yield* integrations.oauth.complete({ integrationID, attemptID: attempt.attemptID, code: "code#state" }).pipe(Effect.flip)
+      expect(failure).toBeInstanceOf(Integration.AuthorizationError)
+      expect(yield* integrations.oauth.status({ integrationID, attemptID: attempt.attemptID })).toEqual({ status: "failed", message: "Submission refused", time: attempt.time })
+      expect(closed).toBe(true)
+      expect(yield* credentials.list(integrationID)).toEqual([])
+    }),
+  )
+
+  it.effect("interrupts an in-flight manual submission when its auto attempt is cancelled", () =>
+    Effect.gen(function* () {
+      const integrations = yield* Integration.Service
+      const credentials = yield* Credential.Service
+      const integrationID = Integration.ID.make("openai")
+      const methodID = Integration.MethodID.make("browser-manual")
+      const started = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const closed = yield* Deferred.make<void>()
+      const submitted: string[] = []
+      yield* integrations.transform((editor) => editor.method.update({
+        integrationID,
+        method: { id: methodID, type: "oauth", label: "Browser" },
+        authorize: () => Effect.addFinalizer(() => Deferred.succeed(closed, undefined).pipe(Effect.asVoid)).pipe(Effect.as({
+          mode: "auto" as const,
+          url: "https://example.com/authorize",
+          instructions: "Sign in",
+          submitCode: (code: string) => Effect.gen(function* () {
+            yield* Deferred.succeed(started, undefined)
+            yield* Deferred.await(release)
+            submitted.push(code)
+          }),
+          callback: Effect.never,
+        })),
+      }))
+      const attempt = yield* integrations.oauth.connect({ integrationID, methodID, inputs: {} })
+      const submission = yield* integrations.oauth.complete({ integrationID, attemptID: attempt.attemptID, code: "code#state" }).pipe(Effect.exit, Effect.forkChild)
+      yield* Deferred.await(started)
+      yield* integrations.oauth.cancel({ integrationID, attemptID: attempt.attemptID })
+      expect(yield* integrations.oauth.status({ integrationID, attemptID: attempt.attemptID }).pipe(Effect.exit)).toMatchObject({ _tag: "Failure" })
+      yield* Deferred.await(closed)
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.join(submission)
+      expect(submitted).toEqual([])
+      expect(yield* credentials.list(integrationID)).toEqual([])
     }),
   )
 

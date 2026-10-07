@@ -22,6 +22,19 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.9.4",
+    date: "2026-10-07",
+    title: "Independent Claude accounts and native decisions",
+    tags: ["Added", "Changed"],
+    changes: [
+      { tag: "Added", text: "Connect several Claude accounts as independent named profiles. Model requests, token refresh, and subscription usage stay with the selected account, while the ordinary Claude CLI login remains separate." },
+      { tag: "Added", text: "Use native OpenAI Decisions or TypeSafe Jev for bounded classification and scoring through the decision tool, with native answers, probabilities, and reported usage. These integrations require API keys rather than subscription authentication." },
+      { tag: "Added", text: "Opt into decision policies for guardrail risk classification, initial agent/model routing, and goal continuation. Explicit selections, deterministic denials, and human-only hard reviews remain authoritative; automatic goal stopping records stopped, never completed." },
+      { tag: "Changed", text: "Reconnect existing linked Claude profiles after upgrading to sign in to each account independently; profile names remain available. Claude account sign-in requires the claude executable on PATH." },
+      { tag: "Added", text: "Enter an authorization code in the terminal while a capable browser sign-in attempt keeps polling. Each attempt accepts one manual submission; Escape cancels the pending attempt." },
+    ],
+  },
+  {
     version: "0.9.3",
     date: "2026-10-07",
     title: "Session navigation and attachment fixes",

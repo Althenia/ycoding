@@ -5389,6 +5389,7 @@ export type IntegrationOauthConnectOutput = {
     url: string
     instructions: string
     mode: "auto" | "code"
+    manualCode?: boolean
     time: { created: number | "Infinity" | "-Infinity" | "NaN"; expires: number | "Infinity" | "-Infinity" | "NaN" }
   }
 }

@@ -257,6 +257,27 @@ it.effect("applies a guarded goal calculation only at the expected autonomy revi
   }),
 )
 
+it.effect("compare-and-set stop preserves the objective and rejects changed or terminal autonomy", () =>
+  Effect.gen(function* () {
+    const service = yield* setup
+    yield* service.setYolo({ sessionID, yolo: 2 })
+    yield* service.setGoal({ sessionID, text: "Verified objective", rawText: "User request" })
+    yield* service.report({ sessionID })
+    const before = yield* service.snapshot(sessionID)
+    const stopped = yield* service.stopGoalIfCurrent({ sessionID, expectedSequence: before.sequence })
+    expect(stopped).toEqual({ applied: true, state: {
+      ...before.state, goal: { ...before.state.goal!, status: "stopped" },
+    } })
+    const after = yield* service.snapshot(sessionID)
+    expect(after.sequence).toBe(before.sequence + 1)
+    expect((yield* service.stopGoalIfCurrent({ sessionID, expectedSequence: after.sequence })).applied).toBe(false)
+    expect(yield* service.snapshot(sessionID)).toEqual(after)
+    yield* service.setGoal({ sessionID, text: "New objective" })
+    expect((yield* service.stopGoalIfCurrent({ sessionID, expectedSequence: before.sequence })).applied).toBe(false)
+    expect((yield* service.get(sessionID)).goal).toMatchObject({ text: "New objective", status: "active" })
+  }),
+)
+
 it.effect("uses every report as one no-progress retry attempt", () =>
   Effect.gen(function* () {
     const service = yield* setup

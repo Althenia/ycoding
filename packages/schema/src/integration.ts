@@ -124,6 +124,7 @@ export class Attempt extends Schema.Class<Attempt>("Integration.Attempt")({
   url: Schema.String,
   instructions: Schema.String,
   mode: Schema.Literals(["auto", "code"]),
+  manualCode: Schema.Boolean.pipe(optional),
   time: AttemptTime,
 }) {}
 

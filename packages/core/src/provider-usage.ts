@@ -15,8 +15,9 @@ import { Global } from "./global"
 import { InstallationVersion } from "./installation/version"
 import {
   createClaudeCodeCredentialStore,
-  createSystemClaudeCodeCredentialSource,
 } from "./plugin/provider/anthropic-claude-code-account"
+import { createManagedClaudeCodeCredentialSource } from "./plugin/provider/anthropic-claude-code-login"
+import { join } from "node:path"
 import { CopilotUsage } from "./provider-usage/copilot"
 import { ClaudeUsage } from "./provider-usage/claude"
 import { CodexUsage } from "./provider-usage/codex"
@@ -49,7 +50,7 @@ export interface GetInput {
 export interface Interface {
   readonly get: (input: GetInput) => Effect.Effect<ProviderUsage.Snapshot>
   readonly list: (input?: { readonly refresh?: boolean }) => Effect.Effect<ReadonlyArray<ProviderUsage.Snapshot>>
-  readonly observe: (observation: ProviderUsage.Observation) => Effect.Effect<void>
+  readonly observe: (observation: ProviderUsage.Observation, profileSource?: string) => Effect.Effect<void>
 }
 
 export interface AdapterInput {
@@ -109,7 +110,7 @@ export class Service extends Context.Service<Service, Interface>()("@ycoding/Pro
 export function make(input: MakeInput): Interface {
   const now = input.now ?? Date.now
   const cache = input.cache ?? ProviderUsageCache.make({ now })
-  const observations = new Map<Provider.ID, ProviderUsage.Snapshot>()
+  const observations = new Map<string, ProviderUsage.Snapshot>()
 
   const unavailable = (
     providerID: Provider.ID,
@@ -141,7 +142,11 @@ export function make(input: MakeInput): Interface {
     const primary = candidates.find((item) => item.active) ?? candidates[0]
     const selected = credentialID ? candidates.find((item) => item.id === credentialID) : primary
     // Response-header observations come from Session requests, which run as the active profile.
-    const observed = () => (selected === primary ? observations.get(providerID) : undefined)
+    const profileSource = selected?.value.type === "oauth" && selected.value.metadata?.managed === true &&
+      typeof selected.value.metadata.source === "string" ? selected.value.metadata.source : undefined
+    const observed = () => profileSource !== undefined
+      ? observations.get(`${providerID}:${profileSource}`)
+      : selected === primary ? observations.get(`${providerID}:`) : undefined
     const profiled = (snapshot: ProviderUsage.Snapshot) =>
       candidates.length > 1 && selected?.label ? new ProviderUsage.Snapshot({
         providerID: snapshot.providerID, label: snapshot.label, profile: selected.label,
@@ -160,7 +165,7 @@ export function make(input: MakeInput): Interface {
     const updatedAt = Math.max(0, Math.trunc(now()))
     const snapshot = yield* cache
       .get({
-        key: `${providerID}:${selected.id}`,
+        key: `${providerID}:${selected.id}:${selected.generation}`,
         ttlMs: input.ttlMs?.[providerID] ?? minute,
         refresh,
         load: adapter({
@@ -226,7 +231,7 @@ export function make(input: MakeInput): Interface {
       const available = new Set(providers.map((provider) => provider.id))
       return [...snapshots, ...local.filter((snapshot) => available.has(snapshot.providerID))]
     }),
-    observe: Effect.fn("ProviderUsage.observe")((observation) =>
+    observe: Effect.fn("ProviderUsage.observe")((observation, profileSource) =>
       Effect.sync(() => {
         const snapshot = new ProviderUsage.Snapshot({
           providerID: observation.providerID,
@@ -237,8 +242,9 @@ export function make(input: MakeInput): Interface {
           updatedAt: observation.observedAt,
           windows: observation.windows,
         })
-        const current = observations.get(observation.providerID)
-        if (!current || snapshot.updatedAt >= current.updatedAt) observations.set(observation.providerID, snapshot)
+        const key = `${observation.providerID}:${profileSource ?? ""}`
+        const current = observations.get(key)
+        if (!current || snapshot.updatedAt >= current.updatedAt) observations.set(key, snapshot)
       }),
     ),
   }
@@ -255,7 +261,7 @@ const layer = Layer.effect(
     const database = yield* Database.Service
     const providerUsage = Config.latest(yield* config.entries(), "provider_usage")
     const claude = createClaudeCodeCredentialStore({
-      source: createSystemClaudeCodeCredentialSource({ home: global.home }),
+      source: createManagedClaudeCodeCredentialSource({ directory: join(global.data, "claude-code", "profiles") }),
     })
     return Service.of(
       make({
@@ -294,7 +300,8 @@ const claudeOAuth = (
   input: AdapterInput,
 ) =>
   Effect.gen(function* () {
-    if (input.credential.value.type !== "oauth" || input.credential.value.metadata?.authKind !== "claude-code")
+    if (input.credential.value.type !== "oauth" || input.credential.value.metadata?.authKind !== "claude-code" ||
+      input.credential.value.metadata.managed !== true || typeof input.credential.value.metadata.source !== "string")
       return new ProviderUsage.Snapshot({
         providerID: input.providerID,
         label: "Claude",
@@ -305,10 +312,7 @@ const claudeOAuth = (
         windows: [],
         message: "Claude subscription usage requires a Claude Code OAuth account",
       })
-    const source =
-      typeof input.credential.value.metadata.source === "string"
-        ? input.credential.value.metadata.source
-        : input.credential.value.access
+    const source = input.credential.value.metadata.source
     return yield* Effect.tryPromise({
       try: () =>
         ClaudeUsage.loadOAuth({

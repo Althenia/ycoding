@@ -80,11 +80,21 @@ export class UnsupportedPackageError extends Schema.TaggedErrorClass<Unsupported
   }
 }
 
+export class ClaudeCodeReconnectError extends Schema.TaggedErrorClass<ClaudeCodeReconnectError>()(
+  "SessionRunnerModel.ClaudeCodeReconnectError",
+  { providerID: Provider.ID, modelID: CatalogModel.ID },
+) {
+  override get message() {
+    return `Claude profile requires reconnect for ${this.providerID}/${this.modelID}. Sign in to this profile again.`;
+  }
+}
+
 export type Error =
   | ModelNotSelectedError
   | ModelUnavailableError
   | VariantUnavailableError
   | UnsupportedPackageError
+  | ClaudeCodeReconnectError
   | Integration.AuthorizationError;
 
 export interface Resolved {
@@ -234,19 +244,22 @@ export const fromCatalogModel = (
   credential?: Credential.Value,
   dependencies: Dependencies = {},
   _connection?: IntegrationConnection.Info,
-): Effect.Effect<Model, UnsupportedPackageError> => {
+): Effect.Effect<Model, UnsupportedPackageError | ClaudeCodeReconnectError> => {
   const packageName = Provider.packageName(model.package);
-  const configuredSource =
-    model.settings?.apiKey === claudeCodeSentinel &&
-    typeof model.settings?.[claudeCodeSourceSetting] === "string"
-      ? model.settings[claudeCodeSourceSetting]
-      : undefined;
   const source =
-    packageName === "@ai-sdk/anthropic" && credential?.type !== "key"
-      ? (claudeCodeCredentialSource(credential) ?? configuredSource)
+    packageName === "@ai-sdk/anthropic"
+      ? claudeCodeCredentialSource(credential)
       : undefined;
+  if (packageName === "@ai-sdk/anthropic" && !source && (
+    credential?.type === "oauth" && credential.methodID === Integration.MethodID.make("claude-code") ||
+    model.settings?.apiKey === claudeCodeSentinel && credential?.type !== "key"
+  )) return Effect.fail(new ClaudeCodeReconnectError({ providerID: model.providerID, modelID: model.id }));
   const resolved = produce(model, (draft) => {
     if (draft.settings?.apiKey === "") delete draft.settings.apiKey;
+    if (draft.settings?.apiKey === claudeCodeSentinel) {
+      delete draft.settings.apiKey;
+      delete draft.settings[claudeCodeSourceSetting];
+    }
     if (credential?.type === "key" && credential.metadata !== undefined)
       draft.body = Provider.mergeOverlay(draft.body, credential.metadata);
     if (source)

@@ -32,6 +32,7 @@ export type IntegrationOAuthAuthorization = {
   | {
       readonly mode: "auto"
       readonly callback: Effect.Effect<CredentialOAuth, unknown>
+      readonly submitCode?: (code: string) => Effect.Effect<void, unknown>
     }
   | {
       readonly mode: "code"

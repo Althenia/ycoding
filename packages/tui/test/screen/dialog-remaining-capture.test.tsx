@@ -53,6 +53,9 @@ const state = "/tmp/ycoding/dialog-remaining-capture"
 const sessionID = "ses_dialog_capture"
 const location = { directory, project: { id: "proj_test", directory: worktree } }
 const oauthCancelled: string[] = []
+const oauthSubmitted: string[] = []
+let oauthManualCode = false
+let oauthStatus: "pending" | "complete" = "pending"
 const viewports = [
   { width: 189, height: 69 },
   { width: 220, height: 69 },
@@ -129,6 +132,8 @@ test("the variant dialog renders only Grok's four offered effort IDs", async () 
 
 test("OAuth authorization details remain visible in a short, narrow terminal", async () => {
   oauthCancelled.length = 0
+  oauthManualCode = false
+  oauthStatus = "pending"
   function OAuthFixture() {
     const dialog = useDialog()
     onMount(() => void beginOAuth(integrations[2], { id: "github", type: "oauth", label: "Login with GitHub Copilot" }, dialog))
@@ -163,6 +168,118 @@ test("OAuth authorization details remain visible in a short, narrow terminal", a
     } finally {
       app.renderer.destroy()
     }
+  }
+})
+
+test("auto OAuth keeps polling while accepting a manual code and cancels only when closed", async () => {
+  oauthCancelled.length = 0
+  oauthSubmitted.length = 0
+  oauthManualCode = true
+  oauthStatus = "pending"
+  function OAuthFixture() {
+    const dialog = useDialog()
+    onMount(() => void beginOAuth(integrations[2], { id: "github", type: "oauth", label: "Login with GitHub Copilot" }, dialog))
+    return null
+  }
+  const app = await testRender(() => <DialogProviders><OAuthFixture /></DialogProviders>, { width: 80, height: 18, kittyKeyboard: true })
+  app.renderer.start()
+  try {
+    await app.waitForFrame((frame) => frame.includes("Waiting for authorization") && frame.includes("enter authorization code"))
+    app.mockInput.pressKey("e")
+    await app.waitForFrame((frame) => frame.includes("Authorization code"))
+    expect(oauthCancelled).toEqual([])
+    await app.mockInput.typeText("code#state")
+    app.mockInput.pressEnter()
+    await app.waitForFrame(() => oauthSubmitted.length === 1)
+    expect(oauthSubmitted).toEqual(["code#state"])
+    expect(oauthCancelled).toEqual([])
+    await app.waitForFrame((frame) => frame.includes("Code submitted"))
+    app.mockInput.pressKey("e")
+    await app.renderOnce()
+    expect(app.captureCharFrame()).not.toContain("Paste authorization code")
+    expect(app.captureCharFrame()).toContain("Code submitted")
+    oauthStatus = "complete"
+    await app.waitForFrame((frame) => !frame.includes("Waiting for authorization"))
+    expect(oauthCancelled).toEqual([])
+  } finally {
+    app.renderer.destroy()
+    oauthManualCode = false
+    oauthStatus = "pending"
+  }
+})
+
+test("auto OAuth without manual capability has no code action", async () => {
+  oauthManualCode = false
+  oauthStatus = "pending"
+  function OAuthFixture() {
+    const dialog = useDialog()
+    onMount(() => void beginOAuth(integrations[2], { id: "github", type: "oauth", label: "Login with GitHub Copilot" }, dialog))
+    return null
+  }
+  const app = await testRender(() => <DialogProviders><OAuthFixture /></DialogProviders>, { width: 80, height: 18, kittyKeyboard: true })
+  app.renderer.start()
+  try {
+    await app.waitForFrame((frame) => frame.includes("Waiting for authorization"))
+    expect(app.captureCharFrame()).not.toContain("enter authorization code")
+    app.mockInput.pressKey("e")
+    expect(app.captureCharFrame()).not.toContain("Authorization code")
+    app.mockInput.pressEscape()
+    await app.waitForFrame(() => oauthCancelled.includes("attempt_layout"))
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("automatic completion while manual code entry is open settles without cancellation", async () => {
+  oauthCancelled.length = 0
+  oauthSubmitted.length = 0
+  oauthManualCode = true
+  oauthStatus = "pending"
+  function OAuthFixture() {
+    const dialog = useDialog()
+    onMount(() => void beginOAuth(integrations[2], { id: "github", type: "oauth", label: "Login with GitHub Copilot" }, dialog))
+    return null
+  }
+  const app = await testRender(() => <DialogProviders><OAuthFixture /></DialogProviders>, { width: 80, height: 18, kittyKeyboard: true })
+  app.renderer.start()
+  try {
+    await app.waitForFrame((frame) => frame.includes("enter authorization code"))
+    app.mockInput.pressKey("e")
+    await app.waitForFrame((frame) => frame.includes("Paste authorization code"))
+    oauthStatus = "complete"
+    await app.waitForFrame((frame) => !frame.includes("Authorization code"))
+    expect(oauthSubmitted).toEqual([])
+    expect(oauthCancelled).toEqual([])
+  } finally {
+    app.renderer.destroy()
+    oauthManualCode = false
+    oauthStatus = "pending"
+  }
+})
+
+test("escape from manual code entry cancels its one owned attempt", async () => {
+  oauthCancelled.length = 0
+  oauthSubmitted.length = 0
+  oauthManualCode = true
+  oauthStatus = "pending"
+  function OAuthFixture() {
+    const dialog = useDialog()
+    onMount(() => void beginOAuth(integrations[2], { id: "github", type: "oauth", label: "Login with GitHub Copilot" }, dialog))
+    return null
+  }
+  const app = await testRender(() => <DialogProviders><OAuthFixture /></DialogProviders>, { width: 80, height: 18, kittyKeyboard: true })
+  app.renderer.start()
+  try {
+    await app.waitForFrame((frame) => frame.includes("enter authorization code"))
+    app.mockInput.pressKey("e")
+    await app.waitForFrame((frame) => frame.includes("Paste authorization code"))
+    app.mockInput.pressEscape()
+    await app.waitForFrame(() => oauthCancelled.length === 1)
+    expect(oauthCancelled).toEqual(["attempt_layout"])
+    expect(oauthSubmitted).toEqual([])
+  } finally {
+    app.renderer.destroy()
+    oauthManualCode = false
   }
 })
 
@@ -329,11 +446,17 @@ function expectAt(rows: string[], row: number, column: number, text: string) {
   expect(rows[row]?.slice(column, column + text.length)).toBe(text)
 }
 
-function route(url: URL, request: Request) {
+async function route(url: URL, request: Request) {
   if (url.pathname === "/api/integration/github-copilot/connect/oauth")
-    return json({ location, data: { attemptID: "attempt_layout", url: "https://auth.example.test/authorize?client_id=synthetic-client&scope=profile", instructions: "Enter code: TEST-ONLY", mode: "auto", time: { created: 1, expires: 2 } } })
+    return json({ location, data: { attemptID: "attempt_layout", url: "https://auth.example.test/authorize?client_id=synthetic-client&scope=profile", instructions: "Enter code: TEST-ONLY", mode: "auto", ...(oauthManualCode ? { manualCode: true } : {}), time: { created: 1, expires: 2 } } })
   if (url.pathname === "/api/integration/github-copilot/connect/oauth/attempt_layout" && request.method === "GET")
-    return json({ location, data: { status: "pending", time: { created: 1, expires: 2 } } })
+    return json({ location, data: { status: oauthStatus, time: { created: 1, expires: 2 } } })
+  if (url.pathname === "/api/integration/github-copilot/connect/oauth/attempt_layout/complete" && request.method === "POST") {
+    const input: unknown = await request.json()
+    if (input && typeof input === "object" && "code" in input && typeof input.code === "string")
+      oauthSubmitted.push(input.code)
+    return new Response(null, { status: 204 })
+  }
   if (url.pathname === "/api/integration/github-copilot/connect/oauth/attempt_layout" && request.method === "DELETE") {
     oauthCancelled.push("attempt_layout")
     return new Response(null, { status: 204 })

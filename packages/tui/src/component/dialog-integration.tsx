@@ -531,11 +531,18 @@ function OAuthAuto(props: {
   const client = useClient()
   const toast = useToast()
   const clipboard = useClipboard()
+  const { theme } = useTheme().contextual("elevated")
+  const [enteringCode, setEnteringCode] = createSignal(false)
+  const [codeBusy, setCodeBusy] = createSignal(false)
+  const [codeSent, setCodeSent] = createSignal(false)
+  const [codeError, setCodeError] = createSignal<string>()
   let timer: ReturnType<typeof setTimeout> | undefined
   let settled = false
+  let active = true
 
   Keymap.createLayer(() => ({
     mode: "modal",
+    enabled: !enteringCode(),
     commands: [
       {
         bind: "c",
@@ -549,6 +556,12 @@ function OAuthAuto(props: {
             .catch(toast.error)
         },
       },
+      ...(props.attempt.manualCode === true && !codeSent() ? [{
+        bind: "e",
+        title: "Enter authorization code",
+        group: "Dialog",
+        run: () => setEnteringCode(true),
+      }] : []),
     ],
   }))
 
@@ -556,6 +569,7 @@ function OAuthAuto(props: {
     void client.api.integration.oauth
       .status({ integrationID: props.integration.id, attemptID: props.attempt.attemptID, location: location(data) })
       .then((result) => {
+        if (!active) return
         const status = result.data
         if (status.status === "pending") {
           timer = setTimeout(poll, 500)
@@ -570,6 +584,7 @@ function OAuthAuto(props: {
         dialog.clear()
       })
       .catch((cause) => {
+        if (!active) return
         settled = true
         toast.show({ variant: "error", message: message(cause) })
         dialog.clear()
@@ -578,6 +593,7 @@ function OAuthAuto(props: {
 
   onMount(poll)
   onCleanup(() => {
+    active = false
     if (timer) clearTimeout(timer)
     if (settled) return
     void client.api.integration.oauth.cancel({
@@ -588,13 +604,52 @@ function OAuthAuto(props: {
   })
 
   return (
-    <OAuthView
-      title={props.title}
-      url={props.attempt.url}
-      instructions={props.attempt.instructions}
-      message="Waiting for authorization..."
-      copy
-    />
+    <Show when={enteringCode()} fallback={
+      <OAuthView
+        title={props.title}
+        url={props.attempt.url}
+        instructions={props.attempt.instructions}
+        message={codeSent() ? "Code submitted. Waiting for authorization..." : "Waiting for authorization..."}
+        copy
+        manualCode={props.attempt.manualCode === true && !codeSent()}
+      />
+    }>
+      <DialogPrompt
+        title="Authorization code"
+        placeholder="Paste authorization code"
+        busy={codeBusy()}
+        onConfirm={(code) => {
+          if (!code.trim()) {
+            setCodeError("Enter an authorization code")
+            return
+          }
+          setCodeBusy(true)
+          void client.api.integration.oauth.complete({
+            integrationID: props.integration.id,
+            attemptID: props.attempt.attemptID,
+            location: location(data),
+            code,
+          }).then(() => {
+            if (!active) return
+            setCodeSent(true)
+            setEnteringCode(false)
+            dialog.setSize("large")
+            dialog.setCentered(true)
+          }).catch((cause) => {
+            if (active) setCodeError(message(cause))
+          }).finally(() => {
+            if (active) setCodeBusy(false)
+          })
+        }}
+        description={() => (
+          <box gap={1}>
+            <text fg={theme.text.subdued}>{props.attempt.instructions}</text>
+            <Link href={props.attempt.url} fg={theme.markdown.link} />
+            <Show when={codeError()}>{(value) => <text fg={theme.text.feedback.error.default}>{value()}</text>}</Show>
+          </box>
+        )}
+      />
+    </Show>
   )
 }
 
@@ -651,7 +706,7 @@ function OAuthCode(props: {
   )
 }
 
-function OAuthView(props: { title: string; url?: string; instructions?: string; message: string; copy?: boolean }) {
+function OAuthView(props: { title: string; url?: string; instructions?: string; message: string; copy?: boolean; manualCode?: boolean }) {
   const dialog = useDialog()
   const { theme } = useTheme().contextual("elevated")
   onMount(() => dialog.setCentered(true))
@@ -679,6 +734,11 @@ function OAuthView(props: { title: string; url?: string; instructions?: string; 
       <Show when={props.copy}>
         <text fg={theme.text.default}>
           c <span style={{ fg: theme.text.subdued }}>copy</span>
+        </text>
+      </Show>
+      <Show when={props.manualCode}>
+        <text fg={theme.text.default}>
+          e <span style={{ fg: theme.text.subdued }}>enter authorization code</span>
         </text>
       </Show>
     </box>

@@ -20,6 +20,7 @@ import { AbsolutePath, PositiveInt } from "./schema"
 import { ConfigAgent } from "./config/agent"
 import { ConfigAttachments } from "./config/attachments"
 import { ConfigCompaction } from "./config/compaction"
+import { ConfigDecisions } from "./config/decisions"
 import { ConfigCommand } from "./config/command"
 import { ConfigEfficiency } from "./config/efficiency"
 import { ConfigExperimental } from "./config/experimental"
@@ -60,6 +61,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   default_agent: Schema.String.pipe(Schema.optional).annotate({
     description: "Default primary agent to use when no session agent is selected",
+  }),
+  decisions: ConfigDecisions.Info.pipe(Schema.optional).annotate({
+    description: "Typed decision providers and opt-in guardrail, routing, and goal policies",
   }),
   autoupdate: Schema.Union([Schema.Boolean, Schema.Literal("notify")])
     .pipe(Schema.optional)

@@ -9,6 +9,7 @@ import { Catalog } from "./catalog"
 import { Computer } from "./computer"
 import { Command } from "./command"
 import { Config } from "./config"
+import { Decision } from "./decision"
 import { LayerNode } from "./effect/layer-node"
 import { Node } from "./effect/app-node"
 import { FileMutation } from "./file-mutation"
@@ -68,6 +69,7 @@ const locationServiceNodes = [
   Location.node,
   Policy.node,
   Config.node,
+  Decision.node,
   Agent.node,
   Command.node,
   Reference.node,

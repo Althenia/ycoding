@@ -1,5 +1,7 @@
 export { LLMClient } from "./route/client"
 export { ImageClient } from "./image-client"
+export { OpenAIDecisions } from "./openai-decisions"
+export { TypeSafeDecisions } from "./typesafe-decisions"
 export { Auth } from "./route/auth"
 export { Provider } from "./provider"
 export { ProviderPackage } from "./provider-package"

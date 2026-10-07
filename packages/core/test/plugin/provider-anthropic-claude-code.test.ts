@@ -2,7 +2,7 @@ import {
   buildClaudeCodeHeaders,
   buildClaudeCodeKeychainUpdate,
   createClaudeCodeCredentialStore,
-  createSystemClaudeCodeCredentialSource,
+  createManagedClaudeCodeCredentialSource,
   createClaudeCodeFetch,
   parseClaudeCodeCredentials,
   parseClaudeCodeOAuthResponse,
@@ -102,7 +102,6 @@ describe("Claude Code credentials", () => {
         throw new Error("Keychain temporarily unavailable")
       },
       write: async () => true,
-      refreshWithCli: async () => undefined,
     }
     const store = createClaudeCodeCredentialStore({ source, now: () => 1_000 })
 
@@ -122,7 +121,6 @@ describe("Claude Code credentials", () => {
         return discovered
       },
       write: async () => true,
-      refreshWithCli: async () => undefined,
     }
     const store = createClaudeCodeCredentialStore({ source, now: () => now })
     await store.accounts()
@@ -132,7 +130,7 @@ describe("Claude Code credentials", () => {
     expect((await store.resolve("keychain"))?.accessToken).toBe("discovered")
   })
 
-  test("keeps discovered accounts when a transient reload returns no accounts", async () => {
+  test("retires a managed account and its cached token when discovery confirms its removal", async () => {
     let empty = false
     const accounts = [
       {
@@ -145,13 +143,14 @@ describe("Claude Code credentials", () => {
       list: async () => (empty ? [] : accounts),
       read: async () => null,
       write: async () => true,
-      refreshWithCli: async () => undefined,
     }
     const store = createClaudeCodeCredentialStore({ source, now: () => 1_000 })
 
     expect(await store.accounts()).toEqual(accounts)
+    expect((await store.resolve("keychain"))?.accessToken).toBe("discovered")
     empty = true
-    expect(await store.accounts()).toEqual(accounts)
+    expect(await store.accounts()).toEqual([])
+    expect(await store.resolve("keychain")).toBeNull()
   })
 
   test("deduplicates direct OAuth refresh and writes the rotated refresh token", async () => {
@@ -167,7 +166,6 @@ describe("Claude Code credentials", () => {
         written = value
         return true
       },
-      refreshWithCli: async () => undefined,
     }
     const request = Object.assign(
       async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
@@ -218,7 +216,6 @@ describe("Claude Code credentials", () => {
       list: async () => [],
       read: async () => current,
       write: async () => true,
-      refreshWithCli: async () => undefined,
     }
     const request = Object.assign(
       async () => {
@@ -233,9 +230,8 @@ describe("Claude Code credentials", () => {
     expect(requests).toBe(1)
   })
 
-  test("falls back to Claude CLI refresh when direct OAuth refresh fails", async () => {
+  test("does not borrow a default Claude CLI login when the selected profile's OAuth refresh fails", async () => {
     let reads = 0
-    let cliRefreshes = 0
     const source: ClaudeCodeCredentialSource = {
       list: async () => [],
       read: async () => {
@@ -243,9 +239,6 @@ describe("Claude Code credentials", () => {
         return reads === 1 ? credentials("expired", 61_000) : credentials("cli-rotated", 100_000)
       },
       write: async () => true,
-      refreshWithCli: async () => {
-        cliRefreshes += 1
-      },
     }
     const request = Object.assign(async () => new Response("rejected", { status: 400 }), {
       preconnect: fetch.preconnect,
@@ -256,9 +249,8 @@ describe("Claude Code credentials", () => {
       now: () => 1_000,
     })
 
-    expect((await store.resolve("file"))?.accessToken).toBe("cli-rotated")
-    expect(cliRefreshes).toBe(1)
-    expect(reads).toBe(2)
+    expect(await store.resolve("file")).toBeNull()
+    expect(reads).toBe(1)
   })
 
   test("keeps Keychain credential material out of process arguments and plaintext stdin", () => {
@@ -280,7 +272,8 @@ describe("Claude Code credentials", () => {
 
   test("reads and updates the Claude credentials file with restrictive permissions", async () => {
     const home = await mkdtemp(join(tmpdir(), "ycoding-claude-home-"))
-    const directory = join(home, ".claude")
+    const profile = "11111111-1111-4111-8111-111111111111"
+    const directory = join(home, profile)
     const file = join(directory, ".credentials.json")
     await mkdir(directory, { recursive: true })
     await writeFile(
@@ -296,8 +289,8 @@ describe("Claude Code credentials", () => {
       }),
       { mode: 0o644 },
     )
-    const source = createSystemClaudeCodeCredentialSource({
-      home,
+    const source = createManagedClaudeCodeCredentialSource({
+      directory: home,
       platform: "linux",
     })
 
@@ -305,7 +298,7 @@ describe("Claude Code credentials", () => {
       expect(await source.list()).toEqual([
         {
           label: "Claude Max",
-          source: "file",
+          source: profile,
           credentials: {
             accessToken: "old-access",
             refreshToken: "old-refresh",
@@ -315,7 +308,7 @@ describe("Claude Code credentials", () => {
         },
       ])
       expect(
-        await source.write("file", {
+        await source.write(profile, {
           accessToken: "new-access",
           refreshToken: "new-refresh",
           expiresAt: 200_000,
@@ -347,7 +340,6 @@ describe("Claude Code credentials", () => {
         return current
       },
       write: async () => true,
-      refreshWithCli: async () => undefined,
     }
     const store = createClaudeCodeCredentialStore({ source, now: () => now })
 

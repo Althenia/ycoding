@@ -1,7 +1,3 @@
-import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
 
 export interface ClaudeCodeCredentials {
   readonly accessToken: string;
@@ -23,7 +19,6 @@ export interface ClaudeCodeCredentialSource {
     source: string,
     credentials: ClaudeCodeCredentials,
   ) => Promise<boolean>;
-  readonly refreshWithCli: () => Promise<void>;
 }
 
 export interface ClaudeCodeCredentialStore {
@@ -38,7 +33,6 @@ export interface ClaudeCodeRequestEvent {
   readonly data?: Readonly<Record<string, unknown>>;
 }
 
-const primaryService = "Claude Code-credentials";
 const oauthURL = "https://claude.ai/v1/oauth/token";
 const oauthClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const expiryBuffer = 60_000;
@@ -108,152 +102,6 @@ export function buildClaudeCodeKeychainUpdate(
   };
 }
 
-export function createSystemClaudeCodeCredentialSource(
-  input: {
-    readonly home?: string;
-    readonly platform?: NodeJS.Platform;
-  } = {},
-): ClaudeCodeCredentialSource {
-  const home = input.home ?? homedir();
-  const platform = input.platform ?? process.platform;
-  const file = join(home, ".claude", ".credentials.json");
-
-  const readKeychain = (service: string) => {
-    try {
-      return execFileSync(
-        "/usr/bin/security",
-        ["find-generic-password", "-s", service, "-w"],
-        {
-          timeout: 2_000,
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      ).trim();
-    } catch (cause) {
-      const error = record(cause) ? cause : {};
-      const status =
-        typeof error.status === "number" ? error.status : undefined;
-      const code = typeof error.code === "string" ? error.code : undefined;
-      if (status === 44) return null;
-      if (error.killed === true || code === "ETIMEDOUT")
-        throw new Error("Claude Code Keychain read timed out", { cause });
-      if (status === 36) throw new Error("macOS Keychain is locked", { cause });
-      if (status === 128)
-        throw new Error("macOS Keychain access was denied", { cause });
-      throw new Error(`Failed to read Claude Code Keychain entry ${service}`, {
-        cause,
-      });
-    }
-  };
-
-  const readFile = () => {
-    try {
-      return readFileSync(file, "utf8");
-    } catch {
-      return null;
-    }
-  };
-
-  const services = () => {
-    if (platform !== "darwin") return [];
-    try {
-      const output = execFileSync("/usr/bin/security", ["dump-keychain"], {
-        timeout: 5_000,
-        maxBuffer: 10 * 1024 * 1024,
-        encoding: "utf8",
-      });
-      const found = [
-        ...output.matchAll(/"(Claude Code-credentials(?:-[0-9a-f]+)?)"/g),
-      ].map((match) => match[1]);
-      const unique = [...new Set(found)];
-      return unique.toSorted((left, right) => {
-        if (left === primaryService) return -1;
-        if (right === primaryService) return 1;
-        return left.localeCompare(right);
-      });
-    } catch {
-      return [primaryService];
-    }
-  };
-
-  const read = async (source: string) =>
-    parseClaudeCodeCredentials(
-      source === "file" ? (readFile() ?? "") : (readKeychain(source) ?? ""),
-    );
-
-  return {
-    list: async () => {
-      const keychain = await Promise.all(
-        services().map(async (source) => {
-          const credentials = await read(source);
-          return credentials ? { source, credentials } : undefined;
-        }),
-      );
-      const available = keychain.filter(
-        (item): item is NonNullable<typeof item> => item !== undefined,
-      );
-      if (available.length === 0) {
-        const credentials = await read("file");
-        if (credentials) available.push({ source: "file", credentials });
-      }
-      const labels = buildClaudeCodeAccountLabels(
-        available.map((item) => item.credentials),
-      );
-      return available.map((item, index) => ({
-        ...item,
-        label: labels[index] ?? "Claude",
-      }));
-    },
-    read,
-    write: async (source, credentials) => {
-      if (source === "file") {
-        try {
-          const updated = updateCredentialBlob(
-            readFileSync(file, "utf8"),
-            credentials,
-          );
-          if (!updated) return false;
-          writeFileSync(file, updated, { encoding: "utf8", mode: 0o600 });
-          if (platform !== "win32") chmodSync(file, 0o600);
-          return true;
-        } catch {
-          return false;
-        }
-      }
-      if (platform !== "darwin") return false;
-      try {
-        const raw = readKeychain(source);
-        if (!raw) return false;
-        const updated = updateCredentialBlob(raw, credentials);
-        if (!updated) return false;
-        const command = buildClaudeCodeKeychainUpdate(
-          source,
-          keychainAccount(source) ?? source,
-          updated,
-        );
-        execFileSync(command.command, command.args, {
-          input: command.input,
-          timeout: 2_000,
-          stdio: ["pipe", "ignore", "ignore"],
-        });
-        return true;
-      } catch {
-        return false;
-      }
-    },
-    refreshWithCli: async () => {
-      try {
-        execFileSync("claude", ["-p", ".", "--model", "haiku"], {
-          timeout: 60_000,
-          encoding: "utf8",
-          env: { ...process.env, TERM: "dumb" },
-          stdio: "ignore",
-          cwd: tmpdir(),
-        });
-      } catch {}
-    },
-  };
-}
 
 export function createClaudeCodeCredentialStore(input: {
   readonly source: ClaudeCodeCredentialSource;
@@ -270,7 +118,6 @@ export function createClaudeCodeCredentialStore(input: {
     { readonly credentials: ClaudeCodeCredentials; readonly cachedAt: number }
   >();
   const refreshing = new Map<string, Promise<ClaudeCodeCredentials | null>>();
-  let knownAccounts: ClaudeCodeAccount[] = [];
   const fresh = (value: ClaudeCodeCredentials) =>
     value.expiresAt > now() + expiryBuffer;
   const remember = (source: string, credentials: ClaudeCodeCredentials) => {
@@ -300,11 +147,7 @@ export function createClaudeCodeCredentialStore(input: {
           return remember(source, next);
         }
       }
-      await input.source.refreshWithCli();
-      const next = await input.source.read(source);
-      if (!next || !fresh(next)) return null;
-      input.onEvent?.({ event: "cli-refresh", data: { source } });
-      return remember(source, next);
+      return null;
     })().finally(() => refreshing.delete(source));
     refreshing.set(source, operation);
     return operation;
@@ -336,8 +179,7 @@ export function createClaudeCodeCredentialStore(input: {
       return cached.credentials;
     let current: ClaudeCodeCredentials | null;
     try {
-      current =
-        (await input.source.read(source)) ?? cached?.credentials ?? null;
+      current = await input.source.read(source);
     } catch {
       current = cached?.credentials ?? null;
     }
@@ -352,21 +194,21 @@ export function createClaudeCodeCredentialStore(input: {
   return {
     accounts: async () => {
       const discovered = await input.source.list();
-      if (discovered.length === 0 && knownAccounts.length > 0)
-        return knownAccounts;
-      knownAccounts = discovered;
+      for (const source of cache.keys()) {
+        if (!discovered.some((account) => account.source === source)) cache.delete(source);
+      }
       discovered.forEach((account) => {
         if (fresh(account.credentials))
           remember(account.source, account.credentials);
       });
-      return knownAccounts;
+      return discovered;
     },
     resolve,
     reload,
     refresh: async (source) => {
       let current: ClaudeCodeCredentials | null;
       try {
-        current = (await input.source.read(source)) ?? cache.get(source)?.credentials ?? null;
+        current = await input.source.read(source);
       } catch {
         current = cache.get(source)?.credentials ?? null;
       }
@@ -408,19 +250,6 @@ export function parseClaudeCodeOAuthResponse(
   };
 }
 
-export function loadClaudeCodeAccountSource(file: string) {
-  try {
-    return readFileSync(file, "utf8").trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-export function saveClaudeCodeAccountSource(file: string, source: string) {
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, source, { encoding: "utf8", mode: 0o600 });
-  if (process.platform !== "win32") chmodSync(file, 0o600);
-}
 
 async function refreshOAuth(
   refreshToken: string,
@@ -448,37 +277,6 @@ async function refreshOAuth(
   }
 }
 
-function updateCredentialBlob(raw: string, credentials: ClaudeCodeCredentials) {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (!record(parsed)) return null;
-  const target = record(parsed.claudeAiOauth) ? parsed.claudeAiOauth : parsed;
-  target.accessToken = credentials.accessToken;
-  target.refreshToken = credentials.refreshToken;
-  target.expiresAt = credentials.expiresAt;
-  return JSON.stringify(parsed);
-}
-
-function keychainAccount(service: string) {
-  try {
-    const output = execFileSync(
-      "/usr/bin/security",
-      ["find-generic-password", "-s", service],
-      {
-        timeout: 2_000,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      },
-    );
-    return /"acct"<blob>="([^"]*)"/.exec(output)?.[1];
-  } catch {
-    return undefined;
-  }
-}
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
