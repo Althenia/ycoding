@@ -22,6 +22,21 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.9.3",
+    date: "2026-10-07",
+    title: "Session navigation and attachment fixes",
+    tags: ["Changed", "Fixed"],
+    changes: [
+      { tag: "Changed", text: "Use five remote destinations—Sessions, Conversation for the logo and new-session landing, Session for the selected transcript, Usage, and Settings. Session links use `/remote/session?session_id=<id>&device_id=<id>`; project plus buttons keep their repository and origin in the URL and lock repository choice, while Conversation lets you choose a repository. The Session breadcrumb has no New conversation action; drafts and reader position remain available when moving between routes." },
+      { tag: "Fixed", text: "Keep first-prompt image and command file uploads intact when opening a newly created Session; opening the selected Session does not repeat the selection." },
+      { tag: "Fixed", text: "Open System alerts on the owning active online machine, even without a notice ID; an unknown, revoked, or offline machine is unavailable and never falls back to the currently selected machine. Sign-in redirects retain the Session and device query." },
+      { tag: "Fixed", text: "Match the Running and recent loading skeletons to the Session cards they replace, preserving the carousel's reserved layout." },
+      { tag: "Fixed", text: "Ignore an older Session snapshot without a warning while preserving the live reply; report genuine snapshot read failures." },
+      { tag: "Fixed", text: "Refresh cached connector attention after execution succeeds, fails, or is interrupted so resolved requests do not leave a Session marked Waiting for you; update the connected machine to apply the change." },
+      { tag: "Fixed", text: "Center terminal OAuth authorization details so the authorization URL, instructions or code, waiting status, copy hint, and Escape control remain visible in short, narrow terminals." },
+    ],
+  },
+  {
     version: "0.9.2",
     date: "2026-10-06",
     title: "Keep submitted prompts visible",
