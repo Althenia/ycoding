@@ -1,6 +1,6 @@
 import { isAlertTitle } from "@ycoding-ai/remote"
 import { CACHE_NAME, CACHE_PREFIX, OFFLINE_FALLBACK_URL, PRECACHE_URLS, shouldCacheStaticAsset, shouldHandleNavigation } from "./pwa/offline"
-import { alertCopy, alertHash, isAlertDeviceID, overflowCopy } from "./remote/alert"
+import { alertCopy, isAlertDeviceID, overflowCopy, sessionURL } from "./remote/alert"
 
 /**
  * Static shell service worker.
@@ -78,15 +78,17 @@ scope.addEventListener("notificationclick", (event: { notification: { data?: unk
       await scope.clients.openWindow("/remote")
       return
     }
-    const notice = isAlertDeviceID(data.deviceID) && isNoticeID(data.noticeID) ? { deviceID: data.deviceID, noticeID: data.noticeID } : undefined
+    const deviceID = isAlertDeviceID(data.deviceID) ? data.deviceID : undefined
+    const noticeID = deviceID !== undefined && isNoticeID(data.noticeID) ? data.noticeID : undefined
     if (current) {
       const delivered = await current.focus().then(() => {
-        current.postMessage({ type: "ycoding:open-session", sessionID: data.sessionID, ...notice })
+        current.postMessage({ type: "ycoding:open-session", sessionID: data.sessionID,
+          ...(deviceID === undefined ? {} : { deviceID }), ...(noticeID === undefined ? {} : { noticeID }) })
         return true
       }).catch(() => false)
       if (delivered) return
     }
-    await scope.clients.openWindow(`/remote#${alertHash(data.sessionID, notice)}`)
+    await scope.clients.openWindow(sessionURL(data.sessionID, deviceID, noticeID))
   })())
 })
 
@@ -143,7 +145,7 @@ function pushAlert(value: unknown): { readonly title: string; readonly options: 
     body: copy.body,
     tag: value.noticeID === undefined ? `ycoding-${value.sessionID}-${value.category}` : `ycoding-${value.deviceID}-${value.noticeID}`,
     ...(value.repeat === true ? { renotify: true } : {}),
-    data: { sessionID: value.sessionID, ...(value.noticeID === undefined ? {} : { deviceID: value.deviceID, noticeID: value.noticeID }) },
+    data: { sessionID: value.sessionID, deviceID: value.deviceID, ...(value.noticeID === undefined ? {} : { noticeID: value.noticeID }) },
   } }
 }
 

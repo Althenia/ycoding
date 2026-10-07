@@ -146,13 +146,13 @@ describe("responsive contract", () => {
     expect(columnSteps(remote, ".defs__row")).toEqual([{ min: 1024, tracks: 2 }])
   })
 
-  test("keeps compact navigation to one row of four centered icon targets above the bottom safe area", async () => {
+  test("keeps compact navigation to one row of five centered icon targets above the bottom safe area", async () => {
     const remote = await readStylesheet("remote.css")
     const nav = base(remote, ".bottom-nav")
     const item = base(remote, ".bottom-nav__item")
     expect(nav).toMatchObject({
       display: "grid",
-      "grid-template-columns": "repeat(4, minmax(0, 1fr))",
+      "grid-template-columns": "repeat(5, minmax(0, 1fr))",
       "padding-block-end": "env(safe-area-inset-bottom)",
     })
     expect(item).toMatchObject({

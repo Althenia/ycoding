@@ -9,10 +9,10 @@ import { Icon } from "../../ui/icon"
 import { LoadingPlaceholder } from "./loading"
 
 export function NewSessionButton(props: { readonly disabled: boolean; readonly onClick: () => void }): JSX.Element {
-  return <button type="button" class="button button--primary button--small new-session__trigger" aria-label="New session" title="New session" disabled={props.disabled} onClick={props.onClick}><Icon name="plus" size={18} /></button>
+  return <button type="button" class="button button--primary button--small new-session__trigger" aria-label="New session" title="New session" disabled={props.disabled} onClick={() => props.onClick()}><Icon name="plus" size={18} /></button>
 }
 
-export function NewSessionComposer(props: { readonly onCreated: (sessionID: string) => void }): JSX.Element {
+export function NewSessionComposer(props: { readonly workspaceID?: string; readonly onCreated: (sessionID: string) => void }): JSX.Element {
   const remote = useRemote()
   const [workspaceID, setWorkspaceID] = createSignal("")
   const [text, setText] = createSignal("")
@@ -29,6 +29,7 @@ export function NewSessionComposer(props: { readonly onCreated: (sessionID: stri
   const labels = () => workspaceLabels(workspaces())
 
   createEffect(() => {
+    if (props.workspaceID !== undefined) { setWorkspaceID(props.workspaceID); return }
     if (!workspaces().some((item) => item.id === workspaceID())) setWorkspaceID(workspaces()[0]?.id ?? "")
   })
   const create = async (submission: ComposerSubmission) => {
@@ -50,7 +51,8 @@ export function NewSessionComposer(props: { readonly onCreated: (sessionID: stri
     <Show when={!connected()}><p role="status">Connect to an online machine to create a session.</p></Show>
     <Show when={workspaceStatus() === "error"}><p role="alert">{listed().error?.message ?? "Repositories could not be loaded."}</p></Show>
     <Show when={workspaceStatus() === "ready" && !workspaces().length}><p role="status">No previously opened repositories are available. Open a repository locally once, then refresh.</p></Show>
-    <div class="new-session-composer__repository"><Show when={workspaceStatus() === "loading"} fallback={<ComposerPicker label="Repository" icon="folder" placeholder="Choose repository" value={workspaceID()} options={workspaces().map((item) => ({ value: item.id, label: labels().get(item.id) ?? item.name ?? "Repository" }))} disabled={!connected()} onChange={setWorkspaceID} />}><LoadingPlaceholder kind="repository" label="Loading previously opened repositories…" /></Show>
+    <Show when={props.workspaceID !== undefined && workspaceStatus() === "ready" && !workspace()}><p role="alert">The originating repository is unavailable on this machine. Open Conversation to choose another repository.</p></Show>
+    <div class="new-session-composer__repository"><Show when={workspaceStatus() === "loading"} fallback={<ComposerPicker label="Repository" icon="folder" placeholder="Choose repository" value={workspaceID()} options={workspaces().map((item) => ({ value: item.id, label: labels().get(item.id) ?? item.name ?? "Repository" }))} disabled={!connected() || props.workspaceID !== undefined} onChange={setWorkspaceID} />}><LoadingPlaceholder kind="repository" label="Loading previously opened repositories…" /></Show>
       <button type="button" class="new-session-composer__refresh" aria-label="Refresh repositories" title="Refresh repositories" disabled={!connected() || workspaceStatus() === "loading"} onClick={() => void listed().refetch()}><Icon name="refresh" /></button>
     </div>
     <Show when={creation()?.status === "creating"}><p role="status">Creating session…</p></Show>

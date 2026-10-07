@@ -634,7 +634,7 @@ describe("remote responsive state behavior", () => {
     expect(deviceState.account).toContain("account_fixture")
     expect(deviceState.account).not.toContain("[account name]")
     expect(deviceState.revokedActions).toBe(1)
-    expect(deviceState.selected).toBe(true)
+    expect(deviceState.selected).toBe(false)
     await devices.close()
   }, 30_000)
 
@@ -796,7 +796,7 @@ describe("remote responsive state behavior", () => {
     await workspace.pressEscape()
     expect(await workspace.evaluate<boolean>(`document.querySelector('[aria-label="Machine"]')?.getAttribute('aria-expanded') === 'false' && document.activeElement?.getAttribute('aria-label') === 'Machine'`)).toBe(true)
 
-    await workspace.evaluate(`document.querySelector('a[href="/remote"]')?.click()`)
+    await workspace.evaluate(`document.querySelector('a[href^="/remote/session?"]')?.click()`)
     for (let attempt = 0; attempt < 40 && !await workspace.evaluate<boolean>(`document.querySelector('.composer__delivery-toggle') !== null`); attempt += 1) await Bun.sleep(50)
 
     await workspace.evaluate(`document.querySelector('.composer__delivery-toggle')?.focus()`)

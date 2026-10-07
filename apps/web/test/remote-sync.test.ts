@@ -586,7 +586,7 @@ describe("snapshot synchronization", () => {
     }
   })
 
-  test("ignores a stale snapshot below the applied watermark", async () => {
+  test("silently ignores a stale background snapshot below the applied watermark", async () => {
     let watermark = 10
     const test = await harness({
       snapshot: (sessionID) => ({
@@ -611,8 +611,9 @@ describe("snapshot synchronization", () => {
       })
       await test.flush()
       await test.store.reloadMessages()
-      expect(test.store.state().view?.watermark).toBeGreaterThanOrEqual(11)
-      expect(textOf(test.store.state().view).join("")).toContain("LIVE")
+      expect(test.store.state().view?.watermark).toBe(11)
+      expect(textOf(test.store.state().view)).toEqual(["LIVE!"])
+      expect(test.store.state().notice).toBeUndefined()
     } finally {
       await test.stop()
     }

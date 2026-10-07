@@ -640,6 +640,95 @@ describe("remote bridge", () => {
     } finally { await test.bridge.close() }
   })
 
+  for (const terminal of ["succeeded", "failed", "interrupted"] as const) {
+    test(`${terminal} execution refreshes silently cancelled attention while keeping another Location's request`, async () => {
+      let running = ["ses_1", "ses_2"]
+      let ownRequest = true
+      const elsewhere = { ...second, directory: "/elsewhere" }
+      const test = harness({ sessions: [entry, elsewhere], results: {
+        getSession: async (id: string) => sessionInfo(id, { title: id === "ses_1" ? "One" : "Two",
+          directory: id === "ses_1" ? "/work" : "/elsewhere" }),
+        outstandingSessions: () => ({ data: running, running, failed: [], lost: [] }),
+        permissionRequests: (location: { directory: string }) => location.directory === "/elsewhere"
+          ? [{ id: "per_other", sessionID: "ses_2" }]
+          : ownRequest ? [{ id: "per_cancelled", sessionID: "ses_1" }] : [],
+      } })
+      await test.bridge.connect()
+      try {
+        await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "status" && frame.attention.length === 2))
+        test.calls.length = 0
+        test.streams[0].stream.onEvent({ type: "session.step.started.1", data: { sessionID: "ses_1" } })
+        await waitFor(() => test.calls.some((call) => call.method === "outstandingSessions") ? true : undefined)
+        expect(test.calls.filter((call) => ["permissionRequests", "formRequests", "guardrailRequestList"].includes(call.method))).toEqual([])
+
+        test.calls.length = 0
+        ownRequest = false
+        running = ["ses_2"]
+        test.streams[0].stream.onEvent({ type: `session.execution.${terminal}.1`, data: { sessionID: "ses_1" } })
+        const status = await waitFor(() => sentFrames(test.records[0]).findLast((frame) => frame.type === "status" &&
+          frame.running.join() === "ses_2"))
+        expect(status).toEqual({ type: "status", running: ["ses_2"], attention: terminal === "failed" ? ["ses_1", "ses_2"] : ["ses_2"],
+          ...(terminal === "failed" ? { failed: ["ses_1"] } : {}),
+          details: terminal === "failed"
+            ? [{ sessionID: "ses_1", title: "One" }, { sessionID: "ses_2", title: "Two", need: "permission" }]
+            : [{ sessionID: "ses_2", title: "Two", need: "permission" }] })
+        expect(test.calls.filter((call) => call.method === "permissionRequests").map((call) => call.args[0])).toEqual([{ directory: "/elsewhere" }])
+        expect(test.calls.filter((call) => call.method === "formRequests")).toHaveLength(1)
+        expect(test.calls.filter((call) => call.method === "guardrailRequestList")).toHaveLength(1)
+      } finally { await test.bridge.close() }
+    })
+  }
+
+  test("a child request replaces cancelled root attention after its execution settles", async () => {
+    let running = ["ses_1", "ses_child"]
+    let ownRequest = true
+    const child = { ...sessionInfo("ses_child"), parentID: "ses_1" } as SessionInfo
+    const test = harness({ results: {
+      listPage: async () => ({ data: [sessionInfo("ses_1", { title: "One" }), child] }),
+      getSession: async (id: string) => id === "ses_child" ? child : sessionInfo(id, { title: "One" }),
+      outstandingSessions: () => ({ data: running, running, failed: [], lost: [] }),
+      permissionRequests: () => ownRequest ? [{ id: "per_cancelled", sessionID: "ses_1" }] : [],
+      formRequests: () => [{ id: "frm_child", sessionID: "ses_child" }],
+    } })
+    await test.bridge.connect()
+    try {
+      await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "status" && frame.details?.[0]?.need === "permission"))
+      test.calls.length = 0
+      ownRequest = false
+      running = ["ses_child"]
+      test.streams[0].stream.onEvent({ type: "session.execution.succeeded.1", data: { sessionID: "ses_1" } })
+      const status = await waitFor(() => sentFrames(test.records[0]).findLast((frame) => frame.type === "status" && frame.details?.[0]?.need === "question"))
+      expect(status).toEqual({ type: "status", running: ["ses_1"], attention: ["ses_1"],
+        details: [{ sessionID: "ses_1", title: "One", need: "question" }] })
+      expect(test.calls.filter((call) => call.method === "permissionRequests")).toHaveLength(1)
+      expect(test.calls.filter((call) => call.method === "formRequests")).toHaveLength(1)
+      expect(test.calls.filter((call) => call.method === "guardrailRequestList")).toHaveLength(1)
+    } finally { await test.bridge.close() }
+  })
+
+  test("lost shell attention survives terminal refresh without claiming a cancelled permission", async () => {
+    let running = ["ses_1"]
+    let lost: string[] = []
+    let ownRequest = true
+    const test = harness({ results: {
+      getSession: async (id: string) => sessionInfo(id, { title: "One" }),
+      outstandingSessions: () => ({ data: running, running, failed: [], lost }),
+      permissionRequests: () => ownRequest ? [{ id: "per_cancelled", sessionID: "ses_1" }] : [],
+    } })
+    await test.bridge.connect()
+    try {
+      await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "status" && frame.details?.[0]?.need === "permission"))
+      test.calls.length = 0
+      ownRequest = false
+      running = []
+      lost = ["ses_1"]
+      test.streams[0].stream.onEvent({ type: "session.execution.interrupted.1", data: { sessionID: "ses_1" } })
+      const status = await waitFor(() => sentFrames(test.records[0]).findLast((frame) => frame.type === "status" && frame.running.length === 0))
+      expect(status).toEqual({ type: "status", running: [], attention: ["ses_1"], details: [{ sessionID: "ses_1", title: "One" }] })
+      expect(test.calls.filter((call) => ["permissionRequests", "formRequests", "guardrailRequestList"].includes(call.method))).toEqual([])
+    } finally { await test.bridge.close() }
+  })
+
   test("a replaced connection sends its initial status while its predecessor read is held", async () => {
     const held = Promise.withResolvers<unknown>()
     let first = true

@@ -19,19 +19,24 @@ export function overflowCopy(category: RemoteNoticeCategory, count: number): { r
   return { title: "YCoding — more sessions need you", body: `${sessions} ${count === 1 ? "is" : "are"} waiting for you. Open YCoding to see them.` }
 }
 
-export function alertHash(sessionID: string, notice?: AlertNotice): string {
-  return new URLSearchParams({ session: sessionID, ...(notice === undefined ? {} : { device: notice.deviceID, notice: notice.noticeID }) }).toString()
+export function sessionSearch(sessionID: string, deviceID?: string, noticeID?: string): { session_id: string; device_id?: string; notice_id?: string } {
+  return { session_id: sessionID, ...(deviceID === undefined ? {} : { device_id: deviceID }), ...(noticeID === undefined ? {} : { notice_id: noticeID }) }
 }
 
-export function readAlertHash(fragment: string): { readonly sessionID: string; readonly notice?: AlertNotice } | undefined {
-  const params = new URLSearchParams(fragment)
-  const sessionID = params.get("session")
-  if (sessionID === null || !isSessionID(sessionID)) return undefined
-  const deviceID = params.get("device")
-  const noticeID = params.get("notice")
-  return deviceID !== null && isAlertDeviceID(deviceID) && noticeID !== null && noticeSequence(noticeID) !== undefined
-    ? { sessionID, notice: { deviceID, noticeID } }
-    : { sessionID }
+export function readSessionSearch(search: unknown): { sessionID: string; deviceID?: string; noticeID?: string } | undefined {
+  if (typeof search !== "object" || search === null || Array.isArray(search)) return undefined
+  const sessionID = "session_id" in search ? search.session_id : undefined
+  if (!isSessionID(sessionID)) return undefined
+  if (!("device_id" in search)) return { sessionID }
+  const deviceID = search.device_id
+  const noticeID = "notice_id" in search ? search.notice_id : undefined
+  if (!isAlertDeviceID(deviceID)) return undefined
+  return { sessionID, deviceID, ...(typeof noticeID === "string" && noticeSequence(noticeID) !== undefined ? { noticeID } : {}) }
+}
+
+export function sessionURL(sessionID: string, deviceID?: string, noticeID?: string): string {
+  return `/remote/session?${new URLSearchParams({ session_id: sessionID, ...(deviceID === undefined ? {} : { device_id: deviceID }),
+    ...(noticeID === undefined ? {} : { notice_id: noticeID }) })}`
 }
 
 export function isAlertDeviceID(value: unknown): value is string {

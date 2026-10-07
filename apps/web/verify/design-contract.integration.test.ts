@@ -68,7 +68,7 @@ describe("web design contract inventory", () => {
 
   test("renders every live remote fixture state within its route and viewport", async () => {
     const remoteRoutes: readonly string[] = REMOTE_ROUTE_PATHS
-    const fixtureViews = new Set(REMOTE_SCENARIOS.map((scenario) => fixturePath(scenario.view)))
+    const fixtureViews = new Set(REMOTE_SCENARIOS.map((scenario) => fixturePath(scenario)))
     expect([...fixtureViews].filter((path) => !remoteRoutes.includes(path))).toEqual([])
     expect(remoteRoutes.filter((path) => !fixtureViews.has(path))).toEqual([])
 
@@ -77,12 +77,15 @@ describe("web design contract inventory", () => {
       await page.setViewport(scenario.viewport, 900)
       await page.navigate(`${url("/verify/remote.html")}?scenario=${scenario.name}-${scenario.viewport}`)
       for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.documentElement.dataset.theme === ${JSON.stringify(scenario.theme)} && (document.querySelector('.app') !== null || document.querySelector('main.sign-in') !== null)`); attempt += 1) await Bun.sleep(50)
-      const state = await page.evaluate<{ readonly theme: string; readonly background: string; readonly ink: string; readonly overflow: boolean; readonly path: string; readonly signIn: boolean }>(`(() => ({
+      const state = await page.evaluate<{ readonly theme: string; readonly background: string; readonly ink: string; readonly overflow: boolean; readonly path: string; readonly pathname: string; readonly sessionID: string | null; readonly deviceID: string | null; readonly signIn: boolean }>(`(() => ({
         theme: document.documentElement.dataset.theme ?? "",
         background: getComputedStyle(document.documentElement).getPropertyValue("--yc-bg").trim(),
         ink: getComputedStyle(document.documentElement).getPropertyValue("--yc-text").trim(),
         overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
         path: document.querySelector(".app")?.className ?? "",
+        pathname: location.pathname,
+        sessionID: new URLSearchParams(location.search).get("session_id"),
+        deviceID: new URLSearchParams(location.search).get("device_id"),
         signIn: document.querySelector("main.sign-in") !== null,
       }))()`)
       expect({ id: scenario.id, theme: state.theme }).toEqual({ id: scenario.id, theme: scenario.theme })
@@ -91,12 +94,15 @@ describe("web design contract inventory", () => {
       expect({ id: scenario.id, overflow: state.overflow }).toEqual({ id: scenario.id, overflow: false })
       // A signed-out browser sees only the sign-in screen, on every remote route.
       expect({ id: scenario.id, signIn: state.signIn }).toEqual({ id: scenario.id, signIn: scenario.account === "signedout" })
-      if (!state.signIn) expect(state.path).toContain(`app--${scenario.view === "chat" ? "conversation" : scenario.view}`)
+      if (!state.signIn) expect(state.pathname).toBe(fixturePath(scenario))
+      if (!state.signIn) expect(state.path).toContain(`app--${scenario.view === "chat" ? scenario.noSelection ? "conversation" : "selected" : scenario.view}`)
+      if (!state.signIn && scenario.view === "chat" && !scenario.noSelection) expect({ sessionID: state.sessionID, deviceID: state.deviceID }).toEqual({ sessionID: "ses_fixture", deviceID: "dev_studio" })
       if (!state.signIn && scenario.view !== "chat") {
         expect(await page.evaluate<string>(`document.querySelector('.remote-nav a[aria-current="page"]')?.textContent?.trim() ?? ""`)).toBe(
           scenario.view === "sessions" ? "Sessions" : scenario.view === "usage" ? "Usage" : "Settings",
         )
       }
+      if (!state.signIn && scenario.view === "chat") expect(await page.evaluate<string>(`document.querySelector('.remote-nav a[aria-current="page"]')?.textContent?.trim() ?? ""`)).toBe(scenario.noSelection ? "Conversation" : "Session")
       const settled = `${JSON.stringify(scenario.expectedText)}.every((text) => document.body.innerText.includes(text))`
       for (let attempt = 0; attempt < 50 && !(await page.evaluate<boolean>(settled)); attempt += 1) await Bun.sleep(100)
       const visibleText = await page.evaluate<string>("document.body.innerText")
@@ -241,8 +247,9 @@ function missingRoutePatterns(paths: readonly string[], patterns: readonly strin
   return paths.filter((path) => !patterns.some((pattern) => pattern === path || (pattern.endsWith("/*slug") && path.startsWith(pattern.slice(0, -"*slug".length)))))
 }
 
-function fixturePath(view: string): string {
-  return view === "chat" ? "/remote" : `/remote/${view}`
+function fixturePath(scenario: { readonly view: string; readonly noSelection?: boolean }): string {
+  if (scenario.view === "chat") return scenario.noSelection ? "/remote" : "/remote/session"
+  return `/remote/${scenario.view}`
 }
 
 function requireBrowser() {

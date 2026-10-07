@@ -28,7 +28,7 @@ beforeAll(async () => {
 
 afterAll(async () => { await page?.close(); await browser?.close(); server?.kill(); if (server) await server.exited })
 
-type Probe = { readonly pathname: string; readonly hash: string; readonly routes: readonly string[]; readonly params: readonly (readonly [string, string])[] }
+type Probe = { readonly pathname: string; readonly hash: string; readonly search: Readonly<Record<string, unknown>>; readonly routes: readonly string[]; readonly params: readonly (readonly [string, string])[] }
 type Rendered = { readonly notFound: boolean; readonly marketing: boolean; readonly docs: boolean; readonly docsIndex: boolean; readonly title: string }
 const probe = (url: string) => page.evaluate<Probe>(`window.routerProbe.probe(${JSON.stringify(url)})`)
 const rendered = (url: string) => page.evaluate<Rendered>(`window.routerProbe.rendered(${JSON.stringify(url)})`)
@@ -36,13 +36,14 @@ const leaf = (result: Probe) => result.routes.at(-1)
 const splat = (result: Probe) => result.params.find(([name]) => name === "_splat")?.[1]
 
 test("every public URL matches its own route", async () => {
-  const leaves = await Promise.all(["/", "/docs", "/changelog", "/remote", "/remote/sessions", "/remote/usage", "/remote/settings", "/remote/invite"].map(async (url) => [url, leaf(await probe(url))] as const))
+  const leaves = await Promise.all(["/", "/docs", "/changelog", "/remote", "/remote/sessions", "/remote/session", "/remote/usage", "/remote/settings", "/remote/invite"].map(async (url) => [url, leaf(await probe(url))] as const))
   expect(leaves).toEqual([
     ["/", "/_marketing/"],
     ["/docs", "/_marketing/docs/"],
     ["/changelog", "/_marketing/changelog"],
     ["/remote", "/remote/"],
     ["/remote/sessions", "/remote/sessions"],
+    ["/remote/session", "/remote/session"],
     ["/remote/usage", "/remote/usage"],
     ["/remote/settings", "/remote/settings"],
     ["/remote/invite", "/remote/invite"],
@@ -60,17 +61,22 @@ test("docs pages capture the whole slug and decode its segments", async () => {
 test("trailing slashes never change the pathname a view compares against", async () => {
   expect((await probe("/remote/")).pathname).toBe("/remote")
   expect((await probe("/remote/sessions/")).pathname).toBe("/remote/sessions")
+  expect((await probe("/remote/session/")).pathname).toBe("/remote/session")
   expect((await probe("/docs//usage")).pathname).toBe("/docs/usage")
 })
 
-test("query strings never select a route and the hash survives decoding", async () => {
+test("query strings preserve remote Session identity without changing route matching", async () => {
   const withQuery = await probe("/docs/installation?token=abc#fragment")
   expect(withQuery.pathname).toBe("/docs/installation")
   expect(withQuery.hash).toBe("fragment")
-  const session = await probe("/remote#session=ses_abc123")
-  expect(leaf(session)).toBe("/remote/")
-  expect(session.hash).toBe("session=ses_abc123")
-  expect((await probe("/remote#new-session")).hash).toBe("new-session")
+  const landing = await probe("/remote?workspace_id=workspace_fixture&source=sidebar&device_id=dev_studio")
+  expect(leaf(landing)).toBe("/remote/")
+  expect(landing.hash).toBe("")
+  const session = await probe("/remote/session?session_id=ses_abc123&device_id=dev_studio#fragment")
+  expect(leaf(session)).toBe("/remote/session")
+  expect(session.pathname).toBe("/remote/session")
+  expect(session.search).toMatchObject({ session_id: "ses_abc123", device_id: "dev_studio" })
+  expect(session.hash).toBe("fragment")
   expect((await probe("/remote/sessions#panel%20one")).hash).toBe("panel one")
 })
 
@@ -90,19 +96,22 @@ test("unknown remote paths render not found inside the remote branch, except the
   expect(await rendered("/remote/invite")).toMatchObject({ notFound: false, marketing: false })
 })
 
-test("locations build with the selected hash and no other state", async () => {
+test("locations build Session query identity and document anchors", async () => {
   const build = (to: string, hash?: string) => page.evaluate<string>(`window.routerProbe.build(${JSON.stringify(to)}, ${JSON.stringify(hash)})`)
-  expect(await build("/remote", "new-session")).toBe("/remote#new-session")
-  expect(await build("/remote", "session=ses_1")).toBe("/remote#session=ses_1")
+  const sessionURL = new URL(await page.evaluate<string>(`window.routerProbe.buildSession('ses_1', 'dev_1')`), "http://ycoding.test")
+  expect(sessionURL.pathname).toBe("/remote/session")
+  expect(sessionURL.searchParams.get("session_id")).toBe("ses_1")
+  expect(sessionURL.searchParams.get("device_id")).toBe("dev_1")
   expect(await build("/docs/usage/tui", "installation")).toBe("/docs/usage/tui#installation")
   expect(await build("/docs")).toBe("/docs")
 })
 
-test("navigation pushes by default, replaces on request, and follows back", async () => {
-  type Step = { added: number; url: string; view: string }
-  const result = await page.evaluate<{ pushed: Step; pushedHash: Step; replaced: Step; back: Step }>(`window.routerProbe.browserHistory()`)
-  expect(result.pushed).toEqual({ added: 1, url: "/docs", view: "/docs#" })
-  expect(result.pushedHash).toEqual({ added: 2, url: "/remote#new-session", view: "/remote#new-session" })
-  expect(result.replaced).toEqual({ added: 2, url: "/remote", view: "/remote#" })
-  expect(result.back).toMatchObject({ url: "/docs", view: "/docs#" })
+test("navigation pushes Session and landing query state, replaces on request, and follows back", async () => {
+  type Step = { readonly added: number; readonly pathname: string; readonly search: Readonly<Record<string, string>>; readonly view: string }
+  const result = await page.evaluate<{ readonly pushed: Step; readonly landing: Step; readonly selected: Step; readonly replaced: Step; readonly back: Step }>(`window.routerProbe.browserHistory()`)
+  expect(result.pushed).toEqual({ added: 1, pathname: "/docs", search: {}, view: "/docs" })
+  expect(result.landing).toMatchObject({ added: 2, pathname: "/remote", search: { workspace_id: "workspace_fixture", source: "sidebar", device_id: "dev_studio" }, view: "/remote" })
+  expect(result.selected).toMatchObject({ added: 3, pathname: "/remote/session", search: { session_id: "ses_1", device_id: "dev_studio" }, view: "/remote/session" })
+  expect(result.replaced).toEqual({ added: 3, pathname: "/remote/sessions", search: {}, view: "/remote/sessions" })
+  expect(result.back).toMatchObject({ added: 3, pathname: "/remote", search: { workspace_id: "workspace_fixture", source: "sidebar", device_id: "dev_studio" }, view: "/remote" })
 })

@@ -3,9 +3,10 @@ import { REMOTE_SCENARIOS, remoteScenario } from "./remote-scenarios"
 
 describe("remote product-state scenarios", () => {
   test("defines product states on the handoff viewport matrix with unique IDs", () => {
-    expect(REMOTE_SCENARIOS).toHaveLength(24)
-    expect(new Set(REMOTE_SCENARIOS.map((scenario) => scenario.id)).size).toBe(24)
+    expect(REMOTE_SCENARIOS).toHaveLength(25)
+    expect(new Set(REMOTE_SCENARIOS.map((scenario) => scenario.id)).size).toBe(25)
     expect(REMOTE_SCENARIOS.map((scenario) => scenario.name)).toContain("conversation-workspace")
+    expect(REMOTE_SCENARIOS.map((scenario) => scenario.name)).toContain("conversation-landing")
     expect(REMOTE_SCENARIOS.map((scenario) => scenario.name)).toContain("session-list")
     expect(REMOTE_SCENARIOS.map((scenario) => scenario.name)).toContain("conversation-tool-terminal-output")
     expect(REMOTE_SCENARIOS.map((scenario) => scenario.name)).toContain("permission-guardrail-hard-review-form-requests")
@@ -23,8 +24,13 @@ describe("remote product-state scenarios", () => {
       openControl: "device",
       expectedText: expect.arrayContaining(["Session bound to Studio Mac in auth.", "Studio Mac"]),
     })
-    expect(remoteScenario(new URLSearchParams("scenario=empty-backend-1440"))).toMatchObject({ account: "ok", connection: "open", emptyBackend: true })
-    expect(remoteScenario(new URLSearchParams("scenario=selected-machine-offline-768"))).toMatchObject({ account: "ok", connection: "offline" })
+    expect(remoteScenario(new URLSearchParams("scenario=conversation-landing-390"))).toMatchObject({
+      view: "chat",
+      noSelection: true,
+      expectedText: ["New session", "Default agent"],
+    })
+    expect(remoteScenario(new URLSearchParams("scenario=empty-backend-1440"))).toMatchObject({ account: "ok", connection: "open", emptyBackend: true, noSelection: true })
+    expect(remoteScenario(new URLSearchParams("scenario=selected-machine-offline-768"))).toMatchObject({ account: "ok", connection: "offline", noSelection: true })
     expect(remoteScenario(new URLSearchParams("scenario=signed-out-390"))).toMatchObject({ account: "signedout" })
   })
 

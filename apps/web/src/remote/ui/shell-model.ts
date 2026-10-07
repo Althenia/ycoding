@@ -12,13 +12,13 @@ import {
   type SessionChip,
 } from "../view-model"
 
-export const views = ["/remote", "/remote/sessions", "/remote/usage", "/remote/settings"] as const
+export const views = ["/remote", "/remote/sessions", "/remote/session", "/remote/usage", "/remote/settings"] as const
 
 export type RemoteView = (typeof views)[number]
 
 /** The rail and composer belong only to an active conversation, never every remote screen. */
 export function remoteSurfaceComposition(path: RemoteView, hasSession: boolean) {
-  const selectedConversation = path === "/remote" && hasSession
+  const selectedConversation = path === "/remote/session" && hasSession
   return { showSessionRail: selectedConversation, showComposer: selectedConversation }
 }
 

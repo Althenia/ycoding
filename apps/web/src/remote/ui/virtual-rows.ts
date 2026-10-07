@@ -194,6 +194,7 @@ export function createRowVirtualizer(input: RowVirtualizerInput) {
     rendered,
     indexByKey,
     margin,
+    measureLayout,
     write,
     writing: () => writing,
     reveal: setRevealed,

@@ -46,6 +46,18 @@ async function setup(handler?: RelayRequestHandler, sessionGroups?: () => readon
 }
 
 describe("remote workspace session creation", () => {
+  test("opens a created Session from its validated response without rereading its metadata", async () => {
+    const h = await setup((request) => request.operation === "session.snapshot" && request.sessionID === created.id
+      ? { ok: true, value: { sourceEpoch: "epoch_1", session: created, messages: [], watermark: { type: "log.synced", aggregateID: created.id, seq: 0 } } }
+      : "default", () => [workspace])
+    try {
+      await loadWorkspaces(h.store)
+      expect(await h.store.createSession({ workspaceID: workspace.id })).toBe(created.id)
+      expect(h.store.state().selectedSessionInfo).toMatchObject({ id: created.id, title: created.title, directory: workspace.directory })
+      expect(h.relay.requests.filter((request) => request.operation === "session.get" && request.sessionID === created.id)).toEqual([])
+    } finally { await h.stop() }
+  })
+
   test("uploads a file after creating the Session and sends its first prompt with the completed reference", async () => {
     const h = await setup((request) => {
       if (request.operation !== "session.attachment.upload") return "default"

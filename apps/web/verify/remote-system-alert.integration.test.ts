@@ -97,7 +97,7 @@ describe("System alerts in the remote workspace", () => {
       await page.evaluate(`window.dispatchEvent(new CustomEvent('ycoding:open-session', { detail: { sessionID: 'ses_fixture', deviceID: '${match?.[1]}', noticeID: '${match?.[2]}' } }))`)
       for (let attempt = 0; attempt < 60 && await page.evaluate<number>(unread) === before; attempt += 1) await Bun.sleep(50)
       expect(await page.evaluate<number>(unread)).toBe(before - 1)
-      expect(await page.evaluate<string>(`location.pathname`)).toBe("/remote")
+      expect(await page.evaluate<string>(`location.pathname`)).toBe("/remote/session")
     } finally { await page.close() }
   }, 30_000)
 })

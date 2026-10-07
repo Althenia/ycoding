@@ -121,7 +121,7 @@ describe("remote route transitions with a slow relay", () => {
       expect(cold.map((entry) => entry.operation).filter((operation) => operation.startsWith("usage.") || operation === "machine.keepAwake.get").sort(),
         "the idle warm-up read Usage and keep-awake once").toEqual(["machine.keepAwake.get", "usage.providers", "usage.report", "usage.report", "usage.report", "usage.summary"])
       const tour = []
-      for (const route of [usage, settings, { href: "/remote", frame: `${panel}?.querySelector(".transcript-message")`, content: `${panel}?.querySelector(".transcript-message")` }, usage]) {
+      for (const route of [usage, settings, { href: "/remote/session?session_id=ses_fixture&device_id=dev_studio", frame: `${panel}?.querySelector(".transcript-message")`, content: `${panel}?.querySelector(".transcript-message")` }, usage]) {
         await follow(page, route)
         await Bun.sleep(700)
         tour.push(...await drain(page))
@@ -144,7 +144,7 @@ async function openConversation(page: Page, latency: number) {
 
 async function follow(page: Page, route: { readonly href: string; readonly frame: string; readonly content: string }) {
   return page.evaluate<Frame[]>(`(async () => {
-    const link = [...document.querySelectorAll("a.remote-nav__link")].find((anchor) => (anchor.getAttribute("href") || "").replace(/[?#].*/, "") === ${JSON.stringify(route.href)})
+    const link = [...document.querySelectorAll("a.remote-nav__link")].find((anchor) => anchor.getAttribute("href") === ${JSON.stringify(route.href)})
     const start = performance.now()
     const frames = []
     link.click()

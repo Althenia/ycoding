@@ -182,4 +182,28 @@ describe("running Sessions across workspaces", () => {
       }
     } finally { await page.close() }
   }, 30_000)
+
+  test("matches loading skeleton geometry and card styling across themes and viewport sizes", async () => {
+    const page = await browser!.openPage()
+    try {
+      for (const theme of ["light", "dark"] as const) for (const [width, height] of [[390, 844], [820, 900], [1440, 900]]) for (const reduced of [false, true]) {
+        await page.setViewport(width!, height!)
+        await page.setColorScheme(theme)
+        await page.setReducedMotion(reduced)
+        await page.navigate(`http://127.0.0.1:${port}/verify/running-sessions-fixture.html?dynamic=1&count=2&theme=${theme}`)
+        const revealed = `(() => { const placeholders = [...document.querySelectorAll('.running-sessions--loading .loading-placeholder')]; return placeholders.length === 3 && placeholders.every(item => getComputedStyle(item).visibility === 'visible'); })()`
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(revealed); attempt++) await Bun.sleep(20)
+        expect(await page.evaluate<boolean>(revealed)).toBe(true)
+        const pending = await page.evaluate<readonly { readonly width: number; readonly height: number; readonly radius: string; readonly padding: string; readonly border: string; readonly background: string }[]>(`[...document.querySelectorAll('.running-sessions__list li')].map(item => { const skeleton = item.querySelector('.loading-placeholder__shape'); const box = skeleton.getBoundingClientRect(); const style = getComputedStyle(skeleton); return { width: box.width, height: box.height, radius: style.borderRadius, padding: style.padding, border: style.border, background: style.backgroundColor } })`)
+        await page.evaluate(`window.runningSetCount(2)`)
+        for (let attempt = 0; attempt < 40 && await page.evaluate<number>(`document.querySelectorAll('.running-sessions__item').length`) !== 2; attempt++) await Bun.sleep(20)
+        const cards = await page.evaluate<readonly { readonly width: number; readonly height: number; readonly radius: string; readonly padding: string; readonly border: string; readonly background: string }[]>(`[...document.querySelectorAll('.running-sessions__item')].map(card => { const box = card.getBoundingClientRect(); const style = getComputedStyle(card); return { width: box.width, height: box.height, radius: style.borderRadius, padding: style.padding, border: style.border, background: style.backgroundColor } })`)
+        expect(pending).toHaveLength(3)
+        expect(cards).toHaveLength(2)
+        expect(pending[0]).toEqual(cards[0])
+        expect(pending[1]).toEqual(cards[1])
+        if (theme === "light" && width === 390 && !reduced) console.info("carousel card geometry", JSON.stringify({ skeleton: pending[0], card: cards[0] }))
+      }
+    } finally { await page.close() }
+  }, 30_000)
 })

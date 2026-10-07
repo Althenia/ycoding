@@ -1,6 +1,6 @@
 import type { RemoteDeviceInfo } from "@ycoding-ai/remote"
 
-type RemoteScenarioName = "conversation-workspace" | "session-list" | "conversation-tool-terminal-output" | "permission-guardrail-hard-review-form-requests" | "empty-backend" | "selected-machine-offline" | "signed-out" | "devices-enrollment" | "autonomy-goal-notification-settings" | "usage-quotas"
+type RemoteScenarioName = "conversation-workspace" | "conversation-landing" | "session-list" | "conversation-tool-terminal-output" | "permission-guardrail-hard-review-form-requests" | "empty-backend" | "selected-machine-offline" | "signed-out" | "devices-enrollment" | "autonomy-goal-notification-settings" | "usage-quotas"
 type RemoteScenarioViewport = 1440 | 768 | 390
 type RemoteScenarioView = "chat" | "sessions" | "usage" | "settings"
 
@@ -31,6 +31,7 @@ export type RemoteScenario = {
   readonly name: RemoteScenarioName
   readonly viewport: RemoteScenarioViewport
   readonly view: RemoteScenarioView
+  readonly noSelection?: boolean
   readonly theme: "dark" | "light"
   readonly account: "ok" | "signedout"
   readonly accountID: string
@@ -309,6 +310,12 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
     sessions: sessionListSessions,
     expectedText: ["Async Auth Token Revocation Migration", "auth-gate"],
   }
+  if (name === "conversation-landing") return {
+    ...common,
+    view: "chat",
+    noSelection: true,
+    expectedText: ["New session", "Default agent"],
+  }
   if (name === "conversation-tool-terminal-output") return {
     ...common,
     view: "chat",
@@ -346,6 +353,7 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
   if (name === "empty-backend") return {
       ...common,
       view: "chat",
+      noSelection: true,
       emptyBackend: true,
       sessions: [],
       expectedText: ["New session", "Default agent"],
@@ -353,6 +361,7 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
   if (name === "selected-machine-offline") return {
       ...common,
       view: "chat",
+      noSelection: true,
       connection: "offline",
       devices: [studio(false)],
       sessions: [],
@@ -403,6 +412,7 @@ const viewports: readonly RemoteScenarioViewport[] = [1440, 768, 390]
 
 export const REMOTE_SCENARIOS = [
   ...scenarioNames.flatMap((name) => viewports.map((viewport) => scenario(name, viewport))),
+  scenario("conversation-landing", 390),
   scenario("empty-backend", 1440),
   scenario("selected-machine-offline", 768),
   scenario("signed-out", 390),

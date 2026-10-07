@@ -195,7 +195,7 @@ test("background snapshot, todos, captured changes, and status preserve an expan
           `Promise.allSettled(document.getAnimations().filter(animation=>animation.effect?.getComputedTiming().iterations!==Infinity).map(animation=>animation.finished))`,
         )
         await page.evaluate(
-          `(() => { document.querySelector('.file-change-card__summary').click(); const button=document.querySelector('.file-change-card__file-toggle'); button.click(); const root=document.querySelector('.workspace__scroll'); root.dispatchEvent(new WheelEvent('wheel',{bubbles:true,deltaY:-200})); window.anchor=document.querySelector('[data-message-id="probe_reply_4"]'); root.scrollTop+=window.anchor.getBoundingClientRect().top-root.getBoundingClientRect().top-16; root.dispatchEvent(new Event('scroll')); button.focus({preventScroll:true}); window.fileButton=button; window.fileRow=button.closest('li'); window.todoRow=document.querySelector('.todo-panel__item'); window.anchorBefore={top:window.anchor.getBoundingClientRect().top,height:window.anchor.getBoundingClientRect().height,scroll:root.scrollTop}; })()`,
+          `(() => { document.querySelector('.file-change-card__summary').click(); const button=document.querySelector('.file-change-card__file-toggle'); button.click(); const root=document.querySelector('.workspace__scroll'); root.dispatchEvent(new WheelEvent('wheel',{bubbles:true,deltaY:-200})); window.anchor=document.querySelector('[data-message-id="probe_reply_4"]'); root.scrollTop+=window.anchor.getBoundingClientRect().top-root.getBoundingClientRect().top-16; root.dispatchEvent(new Event('scroll')); button.focus({preventScroll:true}); window.fileButton=button; window.fileRow=button.closest('li'); window.todoRow=document.querySelector('.todo-panel__item'); window.anchorBefore={top:window.anchor.getBoundingClientRect().top,height:window.anchor.getBoundingClientRect().height,scroll:root.scrollTop,breadcrumb:document.querySelector('.conversation-breadcrumb').getBoundingClientRect().height}; })()`,
         )
         await page.evaluate(
           `window.transcriptDelta('\\nconst other = 3'); window.remoteStatus(['ses_fixture'], []); window.transcriptRefresh()`,
@@ -210,9 +210,10 @@ test("background snapshot, todos, captured changes, and status preserve an expan
           top: number
           height: number
           scroll: number
-          before: { top: number; height: number; scroll: number }
+          breadcrumb: number
+          before: { top: number; height: number; scroll: number; breadcrumb: number }
         }>(
-          `({same:window.fileRow===document.querySelector('.file-change-card__file'),expanded:document.querySelector('.file-change-card__file-toggle').getAttribute('aria-expanded'),focus:document.activeElement===window.fileButton,todo:window.todoRow===document.querySelector('.todo-panel__item'),top:window.anchor.getBoundingClientRect().top,height:window.anchor.getBoundingClientRect().height,scroll:document.querySelector('.workspace__scroll').scrollTop,before:window.anchorBefore})`,
+          `({same:window.fileRow===document.querySelector('.file-change-card__file'),expanded:document.querySelector('.file-change-card__file-toggle').getAttribute('aria-expanded'),focus:document.activeElement===window.fileButton,todo:window.todoRow===document.querySelector('.todo-panel__item'),top:window.anchor.getBoundingClientRect().top,height:window.anchor.getBoundingClientRect().height,scroll:document.querySelector('.workspace__scroll').scrollTop,breadcrumb:document.querySelector('.conversation-breadcrumb').getBoundingClientRect().height,before:window.anchorBefore})`,
         )
         expect(after.same).toBe(true)
         expect(after.expanded).toBe("true")
@@ -220,7 +221,7 @@ test("background snapshot, todos, captured changes, and status preserve an expan
         expect(after.todo).toBe(true)
         expect(Math.abs(after.top - after.before.top)).toBeLessThanOrEqual(1)
         expect(Math.abs(after.height - after.before.height)).toBeLessThanOrEqual(1)
-        expect(Math.abs(after.scroll - after.before.scroll)).toBeLessThanOrEqual(1)
+        expect(Math.abs(after.scroll - after.before.scroll - (after.breadcrumb - after.before.breadcrumb))).toBeLessThanOrEqual(1)
         await Bun.write(
           new URL(`../../../.cache/tmp/transcript-stability-${width}-${theme}.png`, import.meta.url),
           Buffer.from(await page.screenshot(), "base64"),

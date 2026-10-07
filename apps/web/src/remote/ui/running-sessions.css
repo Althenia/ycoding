@@ -51,6 +51,16 @@
   text-align: start;
 }
 
+.running-sessions--loading .loading-placeholder--session { inline-size: 100%; }
+.running-sessions--loading .loading-placeholder--session .loading-placeholder__shape {
+  box-sizing: border-box;
+  min-block-size: calc(3 * var(--yc-leading-md) + 2 * var(--yc-space-1) + 2 * var(--yc-space-3) + 2 * var(--yc-border-width));
+  padding: var(--yc-space-3);
+  border: var(--yc-border-width) solid var(--yc-border);
+  border-radius: var(--yc-radius-md);
+  background: var(--yc-surface-raised);
+}
+
 .running-sessions__item:hover {
   background: var(--yc-surface-sunken);
 }

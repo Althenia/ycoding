@@ -167,7 +167,7 @@ describe("remote Office presentation", () => {
       expect(await until(page, `document.querySelector('.office-roster__row[data-session-id="ses_child"]')?.getAttribute('aria-current') === 'true'`)).toBe(true)
       expect(await page.evaluate<number>(`document.querySelectorAll('.office-roster__row[aria-current="true"]').length`)).toBe(1)
       expect(await page.evaluate<boolean>(`!!document.querySelector('.office-roster__row[data-session-id="ses_fixture"]')`)).toBe(true)
-      expect(await page.evaluate<string>(`location.pathname`)).toBe("/remote")
+      expect(await page.evaluate<string>(`location.pathname`)).toBe("/remote/session")
       expect(await page.evaluate<boolean>(`document.querySelector('.presentation-switch [aria-checked="true"]').textContent.trim() === 'Office'`)).toBe(true)
       expect(await officeHidesComposerAndInspector(page)).toBe(true)
     } finally {
@@ -468,7 +468,7 @@ describe("remote Office presentation", () => {
       expect(await until(page, `window.__officeGame?.scene.getScene('office').latestFrames.length===3&&window.__officeGame.scene.getScene('office').latestFrames.every(frame=>!frame.moving)`, 150)).toBe(true)
       const before = await page.evaluate<readonly { readonly id: string; readonly x: number; readonly y: number; readonly moving: boolean }[]>(placements)
       await page.evaluate<void>(`(() => {window.__entrances=[];const tick=()=>{for(const frame of window.__officeGame?.scene.getScene('office')?.latestFrames??[]){const y=Math.floor(frame.position.y/32);if(frame.moving||y>=37)window.__entrances.push({id:frame.actor.sessionID,moving:frame.moving,y})}requestAnimationFrame(tick)};tick()})()`)
-      for (const [away, back] of [["/remote/settings", "/remote"], ["/remote/usage", "/remote"]] as const) {
+      for (const [away, back] of [["/remote/settings", "/remote/session?session_id=ses_fixture&device_id=dev_studio"], ["/remote/usage", "/remote/session?session_id=ses_fixture&device_id=dev_studio"]] as const) {
         const mounts = await page.evaluate<number>(`window.__officeMounts`)
         await page.evaluate<void>(`document.querySelector('.remote-nav__link[href=${JSON.stringify(away)}]').click()`)
         expect(await until(page, `document.querySelectorAll('.office-canvas-host canvas').length===0`, 100)).toBe(true)

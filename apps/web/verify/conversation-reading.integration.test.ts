@@ -73,16 +73,22 @@ test("all screen entries choose their position before paint without resetting sa
     await page.setViewport(width, 900)
     await page.setReducedMotion(true)
     await open(page)
-    for (const route of ["/remote/usage", "/remote/settings", "/remote/sessions", "/remote"]) {
-      await page.evaluate(`(() => { window.entryPositions=[]; window.entryRoute=${JSON.stringify(route)}; window.entrySampling=true; const tick=()=>{ if(!window.entrySampling) return; const panel=[...document.querySelectorAll('.workspace__scroll > .route-panel')].find(panel=>!panel.inert); if(location.pathname===window.entryRoute && panel && panel.children.length && getComputedStyle(panel).opacity!=='0') { const root=document.querySelector('.workspace__scroll'); window.entryPositions.push(${route === "/remote" ? "root.scrollHeight-root.clientHeight-root.scrollTop" : "root.scrollTop"}); } requestAnimationFrame(tick); }; requestAnimationFrame(tick); document.querySelector('${width < 768 ? ".bottom-nav" : ".remote-nav"} a[href="${route}"]').click(); })()`)
+    for (const route of [
+      { href: "/remote/usage", pathname: "/remote/usage", bottom: false },
+      { href: "/remote/settings", pathname: "/remote/settings", bottom: false },
+      { href: "/remote/sessions", pathname: "/remote/sessions", bottom: false },
+      { href: "/remote", pathname: "/remote", bottom: false },
+      { href: "/remote/session?session_id=ses_fixture&device_id=dev_studio", pathname: "/remote/session", bottom: true },
+    ]) {
+      await page.evaluate(`(() => { window.entryPositions=[]; window.entryRoute=${JSON.stringify(route.pathname)}; window.entryBottom=${route.bottom}; window.entrySampling=true; const tick=()=>{ if(!window.entrySampling) return; const panel=[...document.querySelectorAll('.workspace__scroll > .route-panel')].find(panel=>!panel.inert); if(location.pathname===window.entryRoute && panel && panel.children.length && getComputedStyle(panel).opacity!=='0') { const root=document.querySelector('.workspace__scroll'); window.entryPositions.push(window.entryBottom ? root.scrollHeight-root.clientHeight-root.scrollTop : root.scrollTop); } requestAnimationFrame(tick); }; requestAnimationFrame(tick); document.querySelector('${width < 768 ? ".bottom-nav" : ".remote-nav"} a[href="${route.href}"]').click(); })()`)
       await wait(page, `window.entryPositions.length>=4`)
       const samples = await page.evaluate<number[]>(`(() => {window.entrySampling=false; return window.entryPositions})()`)
-      expect(Math.max(...samples), route).toBeLessThanOrEqual(1)
+      expect(Math.max(...samples), route.pathname).toBeLessThanOrEqual(1)
       await page.evaluate(`(() => { const root=document.querySelector('.workspace__scroll'); root.dispatchEvent(new WheelEvent('wheel',{deltaY:300,bubbles:true})); root.scrollTop=200; root.dispatchEvent(new Event('scroll')); })()`)
       await frames(page, 2)
       const top = await page.evaluate<number>(`document.querySelector('.workspace__scroll').scrollTop`)
       await frames(page, 8)
-      expect(await page.evaluate<number>(`document.querySelector('.workspace__scroll').scrollTop`), route).toBe(top)
+      expect(await page.evaluate<number>(`document.querySelector('.workspace__scroll').scrollTop`), route.pathname).toBe(top)
     }
     }
   } finally { await page.close() }
@@ -211,7 +217,7 @@ test("reading the last message above pending decisions does not enable virtual-l
   } finally { await page.close() }
 }, 60_000)
 
-test("selected Conversation offers New conversation landing without creating a Session or losing its draft", async () => {
+test("Conversation opens the new-session landing while selected Session and landing drafts remain resident", async () => {
   const page = await browser.openPage()
   try {
     for (const width of [320, 390, 820, 1440]) {
@@ -219,20 +225,19 @@ test("selected Conversation offers New conversation landing without creating a S
     await page.setCoarsePointer(width < 768)
     await open(page)
     await page.evaluate(`(() => { const field=document.querySelector('.composer-resident textarea'); field.value='Keep my unsent draft'; field.dispatchEvent(new Event('input',{bubbles:true})); })()`)
-    expect(await page.evaluate<boolean>(`!!document.querySelector('.conversation-breadcrumb [aria-label="New conversation"]')`)).toBe(true)
+    expect(await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb [aria-label="New conversation"]') === null`)).toBe(true)
     expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth>innerWidth`)).toBe(false)
-    await page.evaluate(`document.querySelector('.conversation-breadcrumb [aria-label="New conversation"]').focus({preventScroll:true})`)
-    expect(await page.evaluate<string>(`document.activeElement?.getAttribute('aria-label')??document.activeElement?.tagName`), `${width} keyboard focus`).toBe("New conversation")
-    await page.pressKey("Enter", "Enter", 13, "\r")
+    await page.evaluate(`[...document.querySelectorAll('a[href="/remote"]')].find(link => link.getBoundingClientRect().width > 0)?.click()`)
     await wait(page, `!!document.querySelector('.route-panel:not([inert]) .new-session-composer__brand')`)
+    expect(await page.evaluate<string>(`location.pathname`)).toBe("/remote")
     expect(await page.evaluate<number>(`window.requestLog.filter(row=>row.operation==='session.create').length`)).toBe(0)
     await page.evaluate(`(() => { const field=document.querySelector('.new-session-composer textarea'); window.newConversationDraft=field; field.value='Keep the new-conversation draft too'; field.dispatchEvent(new Event('input',{bubbles:true})); })()`)
-    await page.evaluate(`document.querySelector('${width < 768 ? ".bottom-nav" : ".remote-nav"} a[href="/remote"]').click()`)
-    await wait(page, `!!document.querySelector('.remote-conversation-view:not([inert]) .conversation-breadcrumb')`)
+    await page.evaluate(`document.querySelector('${width < 768 ? ".bottom-nav" : ".remote-nav"} a[href^="/remote/session?"]').click()`)
+    await wait(page, `location.pathname === '/remote/session' && !!document.querySelector('.remote-conversation-view:not([inert]) .conversation-pane')`)
     expect(await page.evaluate<string>(`document.querySelector('.composer-resident textarea').value`)).toBe("Keep my unsent draft")
     await wait(page, `!document.querySelector('.workspace__scroll > .route-panel--exiting')`)
     expect(await page.evaluate<boolean>(`document.querySelector('.new-session-composer').closest('.route-panel').getClientRects().length===0`)).toBe(true)
-    await page.evaluate(`document.querySelector('.conversation-breadcrumb [aria-label="New conversation"]').click()`)
+    await page.evaluate(`[...document.querySelectorAll('a[href="/remote"]')].find(link => link.getBoundingClientRect().width > 0)?.click()`)
     await wait(page, `!!document.querySelector('.route-panel:not([inert]) .new-session-composer textarea')`)
     expect(await page.evaluate<string>(`document.querySelector('.new-session-composer textarea').value`)).toBe("Keep the new-conversation draft too")
     expect(await page.evaluate<boolean>(`document.querySelector('.new-session-composer textarea')===window.newConversationDraft`)).toBe(true)
@@ -270,7 +275,8 @@ test("a new-conversation attachment draft survives an uncertain creation outcome
   const page = await browser.openPage()
   try {
     await open(page, "creation=unknown")
-    await page.evaluate(`document.querySelector('.conversation-breadcrumb [aria-label="New conversation"]').click()`)
+    await page.evaluate(`[...document.querySelectorAll('a[href="/remote"]')].find(link => link.getBoundingClientRect().width > 0)?.click()`)
+    await wait(page, `location.pathname === '/remote' && !!document.querySelector('.new-session-composer [aria-label="Create session"]:not([disabled])')`)
     await wait(page, `!!document.querySelector('.new-session-composer [aria-label="Create session"]:not([disabled])')`)
     await page.evaluate(`(() => {const transfer=new DataTransfer(); transfer.items.add(new File(['A scoped draft'], 'scope.txt', {type:'text/plain'})); document.querySelector('.new-session-composer .composer__row').dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}));})()`)
     await wait(page, `!!document.querySelector('.new-session-composer .composer__attachment-name')`)
@@ -336,7 +342,7 @@ test("completed output and snapshot refresh leave trusted typing, agent/model co
     await click('[aria-label="Close model picker"]')
     await click('.remote-nav [href="/remote/sessions"]')
     await wait(page, `!!document.querySelector('.route-panel--active .sessions-page')`)
-    await click('.remote-nav [href="/remote"]')
+    await click('.remote-nav [href^="/remote/session?"]')
     await wait(page, `!!document.querySelector('.remote-conversation-view.route-panel--active')`)
     expect(await page.evaluate<string>(`document.querySelector('.composer-resident .composer__input').value`)).toBe("x")
   } finally { await page.close() }

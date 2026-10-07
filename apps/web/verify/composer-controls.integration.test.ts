@@ -357,9 +357,7 @@ test("Goal is visibly off after completion and other terminal states while its c
 test("managed subagents keep a read-only context bar without autonomy actions", async () => {
   const page = await browser!.openPage()
   try {
-    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat`)
-    await wait(page, `document.querySelector('.conversation-breadcrumb strong') !== null`)
-    await page.evaluate(`location.hash='#session=ses_child'`)
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&session_id=ses_child&device_id=dev_studio`)
     await wait(page, `document.querySelector('.subagent-bar') !== null`)
     expect(await page.evaluate<boolean>(`document.querySelector('.subagent-bar .session-status__yolo-trigger,.subagent-bar .session-status__goal-trigger') === null && [...document.querySelectorAll('.workspace__main .composer')].every((element) => element.getClientRects().length === 0 || element.closest('[inert]') !== null)`)).toBe(true)
   } finally { await page.close() }
@@ -410,8 +408,8 @@ test("Conversation autonomy controls issue Session-scoped relay operations", asy
     try {
       await active.setViewport(width, 844)
       await active.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=autonomy-goal-notification-settings-${width === 390 ? 390 : 1440}`)
-      await wait(active, `document.querySelector('a[href="/remote"]') !== null`)
-      await active.evaluate(`document.querySelector('a[href="/remote"]')?.click()`)
+      await wait(active, `document.querySelector('a[href^="/remote/session?"]') !== null`)
+      await active.evaluate(`document.querySelector('a[href^="/remote/session?"]')?.click()`)
       await wait(active, `document.querySelector('.workspace__main .session-status__goal-trigger')?.textContent?.includes('Goal') === true`)
       await active.evaluate(`document.querySelector('.workspace__main .session-status__goal-trigger')?.click()`)
       await wait(active, `document.querySelector('.session-status__goal-popover button')?.textContent === 'Stop goal'`)
@@ -794,6 +792,7 @@ test("keyboard and mouse autocomplete, pending identity, and creation work acros
       const page = await browser!.openPage()
       try {
         await page.setViewport(width!, height!)
+        await page.injectOnNewDocument(`localStorage.removeItem('ycoding.remote.recent-models'); localStorage.removeItem('ycoding.remote.preferred-model')`)
         await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
         await wait(page, `document.querySelectorAll('.composer textarea').length === 2`)
         await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
@@ -837,7 +836,7 @@ test("keyboard and mouse autocomplete, pending identity, and creation work acros
         if (width! < 480) expect(await page.evaluate<boolean>(`(() => { const item=document.querySelector('.model-control__switch'), rect=item.getBoundingClientRect(); return item.contains(document.elementFromPoint((rect.left+rect.right)/2,(rect.top+rect.bottom)/2)); })()`)).toBe(true)
         await page.evaluate(`document.querySelector('.model-control__switch')?.click()`)
         await wait(page, `document.querySelector('.mini-picker__search') !== null`)
-        expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.mini-picker__group')].map(item => item.textContent.trim())`)).toEqual(["Anthropic", "OpenAI"])
+        expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.mini-picker__group')].map(item => item.textContent.trim())`)).toEqual(["OpenAI", "Anthropic"])
         await page.evaluate(`(() => { const field = document.querySelector('.mini-picker__search'); field.value = 'Claude'; field.dispatchEvent(new InputEvent('input', { bubbles: true })); })()`)
         await page.evaluate(`document.querySelector('.model-control__surface [role="option"]')?.click()`)
         await wait(page, `document.querySelector('[role="slider"][aria-label="Reasoning effort"]') !== null`)

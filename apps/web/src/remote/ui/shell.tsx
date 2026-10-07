@@ -10,7 +10,7 @@ import { Icon, type IconName } from "../../ui/icon"
 import { Modal } from "../../ui/modal"
 import { CustomSelect } from "../../ui/custom-select"
 import { BrandMark, ThemeToggle } from "../../ui/site"
-import { alertHash, isAlertDeviceID, readAlertHash } from "../alert"
+import { isAlertDeviceID, readSessionSearch, sessionSearch } from "../alert"
 import { useRemote } from "../context"
 import { preloadKeepAwake, preloadUsage, preloadWorkspaces } from "../preload"
 import { SIGN_IN_PROVIDERS } from "../http"
@@ -71,7 +71,6 @@ import {
   type RemoteView,
 } from "./shell-model"
 
-const newSessionHash = "new-session"
 const sessionRailKey = "ycoding.remote.desktopRailCollapsed"
 
 const settingsSupport = "Machine, account, devices, app, appearance, office view, and notifications for this workspace."
@@ -79,7 +78,11 @@ const settingsSupport = "Machine, account, devices, app, appearance, office view
 export function RemoteShell(props: { readonly path: () => string }): JSX.Element {
   const remote = useRemote()
   const navigate = useNavigate()
-  const hash = useLocation({ select: (location) => location.hash })
+  const search = useLocation({ select: (location): Readonly<Record<string, unknown>> => location.search })
+  const originWorkspaceID = () => {
+    const workspaceID = search().workspace_id
+    return typeof workspaceID === "string" ? workspaceID : undefined
+  }
   const [navOpen, setNavOpen] = createSignal(false)
   const [navClosing, setNavClosing] = createSignal(false)
   const [navGeneration, setNavGeneration] = createSignal(1)
@@ -163,11 +166,11 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
     const routeChanged = previousScrollContext.route !== route
     previousScrollContext = { route, sessionID }
     setPendingAnchor(undefined)
-    if (routeChanged && route !== "/remote" && scrollHost) queueMicrotask(() => { if (view() === route) scrollTo(0) })
-    if (routeChanged || route !== "/remote" || sessionID === undefined || !anchors.has(sessionID)) return
+    if (routeChanged && route !== "/remote/session" && scrollHost) queueMicrotask(() => { if (view() === route) scrollTo(0) })
+    if (routeChanged || route !== "/remote/session" || sessionID === undefined || !anchors.has(sessionID)) return
     setPendingAnchor({ sessionID, position: anchors.get(sessionID)! })
   })
-  const officeShown = () => view() === "/remote" && !phoneLayout() && office.presentation() === "office"
+  const officeShown = () => view() === "/remote/session" && ownsSessionDevice() && !phoneLayout() && office.presentation() === "office"
   const activeSession = () => state().selectedSessionInfo ?? state().sessions.find((session) => session.id === state().activeSessionID)
   const selected = () => activeSession() !== undefined
   const selectedLoading = () => selected() && state().history === undefined && state().notice === undefined &&
@@ -193,8 +196,8 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   const siblingTasks = () => state().team?.rootID === childParentID() ? state().team?.tasks ?? [] : []
   const currentTask = () => siblingTasks().find((task) => task.sessionID === activeSession()?.id)
   const siblingNavigation = () => siblingTargets(siblingTasks(), activeSession()?.id ?? "")
-  const composition = () => remoteSurfaceComposition(view(), selected())
-  const viewClass = () => view() === "/remote" ? "conversation" : view().slice("/remote/".length)
+  const composition = () => remoteSurfaceComposition(view(), selected() && ownsSessionDevice())
+  const viewClass = () => view() === "/remote" || view() === "/remote/session" ? "conversation" : view().slice("/remote/".length)
   const entry = () => remoteEntryView(accountReadState({ connection: state().connection, owner: state().owner }))
   const tabletRailToggle = () => tabletLayout() && composition().showSessionRail
   const navExpanded = () => tabletRailToggle() ? !railCollapsed() : navOpen() && !navClosing()
@@ -218,14 +221,15 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
     }
     setNavOpen(true)
   }
-  const newSessionOpen = () => view() === "/remote" && hash() === newSessionHash
-  const showNewSession = () => canCreateSession() && (newSessionOpen() || state().activeSessionID === undefined && listedGeneration() === state().generation)
+  const newSessionOpen = () => view() === "/remote"
+  const firstInventoryLoading = () => state().sessionListStatus === "loading" && listedGeneration() !== state().generation
+  const showNewSession = () => newSessionOpen() && !firstInventoryLoading()
   createEffect(() => { if (newSessionOpen()) setNewSessionVisited(true) })
-  const conversationHidden = () => view() !== "/remote" || showNewSession() || (officeShown() && selected())
-  const openNewSession = () => {
+  const conversationHidden = () => view() !== "/remote/session" || !ownsSessionRoute() || routeError() !== undefined || (officeShown() && selected())
+  const openNewSession = (source: "sessions" | "sidebar" = "sidebar") => {
     if (!canCreateSession()) return
     closeNav()
-    navigate({ to: "/remote", hash: newSessionHash })
+    navigate({ to: "/remote", search: { ...(state().selectedWorkspaceID === undefined ? {} : { workspace_id: state().selectedWorkspaceID }), source, device_id: state().activeDeviceID } })
   }
   let focusAfterSelection: string | undefined
   const openSession = (sessionID: string) => {
@@ -238,44 +242,65 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
         anchors.set(current, { top: lastScroll.top, ...(row && bounds ? { key: row.dataset.messageId, offset: row.getBoundingClientRect().top - bounds.top } : {}) })
       }
     }
-    focusAfterSelection = newSessionOpen() ? sessionID : undefined
+    focusAfterSelection = view() !== "/remote/session" ? sessionID : undefined
     closeNav()
-    void remote.store.selectSession(sessionID)
-    navigate({ to: "/remote", replace: view() === "/remote" && hash().length > 0 })
+    if (current !== sessionID) void remote.store.selectSession(sessionID)
+    navigate({ to: "/remote/session", search: sessionSearch(sessionID, state().activeDeviceID), replace: newSessionOpen() })
   }
   createEffect(() => {
     const route = view()
     const activeSessionID = state().activeSessionID
     const loading = selectedLoading()
     const opening = newSessionOpen()
-    if (focusAfterSelection !== undefined && route !== "/remote") { focusAfterSelection = undefined; return }
+    if (focusAfterSelection !== undefined && route !== "/remote/session" && route !== "/remote" && !loading) { focusAfterSelection = undefined; return }
     if (focusAfterSelection === undefined || focusAfterSelection !== activeSessionID || loading || opening) return
     const sessionID = focusAfterSelection
     queueMicrotask(() => {
       if (focusAfterSelection !== sessionID || state().activeSessionID !== sessionID || newSessionOpen()) return
       const target = document.querySelector<HTMLElement>(".remote-conversation-view:not([inert]) .conversation-breadcrumb")
-      target?.focus()
+      target?.focus({ preventScroll: true })
       if (document.activeElement === target) focusAfterSelection = undefined
     })
   })
   const openFromTeam = (sessionID: string) => { closeTeam(); openSession(sessionID) }
   const openCreatedSession = (sessionID: string) => { setNewSessionVisited(false); openSession(sessionID) }
-  const requested = () => view() === "/remote" ? readAlertHash(hash()) : undefined
+  const requested = () => view() === "/remote/session" ? readSessionSearch(search()) : undefined
+  const ownsSessionRoute = () => {
+    const target = requested()
+    return target === undefined ? state().activeSessionID === undefined : target.sessionID === state().activeSessionID &&
+      (target.deviceID === undefined || target.deviceID === state().activeDeviceID)
+  }
+  const [routeError, setRouteError] = createSignal<string>()
+  const ownsSessionDevice = () => {
+    const deviceID = requested()?.deviceID
+    return routeError() === undefined && (deviceID === undefined || deviceID === state().activeDeviceID)
+  }
   let readAlert: string | undefined
   createEffect(() => {
     const target = requested()
-    if (target === undefined || state().transport.kind !== "open" || state().connection.kind !== "connected") return
-    const notice = target.notice
-    if (notice !== undefined && notice.deviceID === state().activeDeviceID && readAlert !== `${notice.deviceID}:${notice.noticeID}`) {
-      readAlert = `${notice.deviceID}:${notice.noticeID}`
-      void remote.store.readNotification(notice.noticeID)
+    setRouteError(undefined)
+    if (target === undefined) {
+      if (view() === "/remote/session" && search().session_id !== undefined) setRouteError("The Session link is invalid. Select a Session from Sessions.")
+      return
     }
-    untrack(() => openSession(target.sessionID))
+    if (state().owner === undefined) return
+    if (target.deviceID !== undefined) {
+      const device = state().devices.find((item) => item.id === target.deviceID)
+      if (device === undefined || device.status !== "active") { setRouteError("The machine for this Session is unavailable to this account."); return }
+      if (!device.online) { setRouteError("The machine for this Session is offline. Reconnect that machine to open its Session."); return }
+      if (target.deviceID !== state().activeDeviceID) { untrack(() => remote.store.connect(target.deviceID!)); return }
+    }
+    if (state().transport.kind !== "open" || state().connection.kind !== "connected") return
+    if (target.noticeID !== undefined && target.deviceID === state().activeDeviceID && readAlert !== `${target.deviceID}:${target.noticeID}`) {
+      readAlert = `${target.deviceID}:${target.noticeID}`
+      untrack(() => { void remote.store.readNotification(target.noticeID!) })
+    }
+    if (state().activeSessionID !== target.sessionID) untrack(() => { void remote.store.selectSession(target.sessionID) })
   })
   createEffect(() => {
     if (managedChild() && state().team?.status === "ready" && currentTask()?.tokens === undefined) void remote.store.loadSelectedSubagentEconomics()
   })
-  createEffect(() => remote.store.watchTeam(view() === "/remote" && state().activeSessionID !== undefined))
+  createEffect(() => remote.store.watchTeam(view() === "/remote/session" && state().activeSessionID !== undefined))
   onCleanup(() => remote.store.watchTeam(false))
   createEffect(() => {
     const team = state().team
@@ -314,8 +339,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
     const deviceID = Reflect.get(Object(value), "deviceID")
     const noticeID = Reflect.get(Object(value), "noticeID")
     if (typeof sessionID !== "string" || !isSessionID(sessionID)) return
-    const notice = isAlertDeviceID(deviceID) && typeof noticeID === "string" && noticeSequence(noticeID) !== undefined ? { deviceID, noticeID } : undefined
-    navigate({ to: "/remote", hash: alertHash(sessionID, notice) })
+    navigate({ to: "/remote/session", search: sessionSearch(sessionID, isAlertDeviceID(deviceID) ? deviceID : undefined, typeof noticeID === "string" && noticeSequence(noticeID) !== undefined ? noticeID : undefined) })
   }
   const alertEvent = (event: Event) => openFromAlert(event instanceof CustomEvent ? event.detail : undefined)
   const workerMessage = (event: MessageEvent) => {
@@ -335,7 +359,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
 
   return (
     <Show when={entry() === "workspace"} fallback={<SignInScreen />}>
-      <div class={`app app--${viewClass()}${selected() ? " app--selected" : view() === "/remote" ? " app--empty" : ""}${managedChild() ? " app--managed-child" : ""}${selectedLoading() ? " app--selected-loading" : ""}${railCollapsed() ? " app--rail-collapsed" : ""}${officeShown() ? " app--office" : ""}${showNewSession() ? " app--new-session" : ""}`}>
+      <div class={`app app--${viewClass()}${view() === "/remote/session" && selected() && ownsSessionDevice() ? " app--selected" : view() === "/remote" ? " app--empty" : ""}${view() === "/remote/session" && managedChild() ? " app--managed-child" : ""}${view() === "/remote/session" && selectedLoading() ? " app--selected-loading" : ""}${railCollapsed() ? " app--rail-collapsed" : ""}${officeShown() ? " app--office" : ""}${showNewSession() ? " app--new-session" : ""}`}>
         <a class="skip-link" href="#remote-main">Skip to content</a>
         <RemoteHeader
           navExpanded={navExpanded()}
@@ -343,7 +367,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
           navControls={tabletRailToggle() ? "session-rail" : undefined}
           onOpenNav={openSessionsNavigation}
           onOpenSession={openSession}
-          team={view() === "/remote" && selected() && !newSessionOpen() ? {
+          team={view() === "/remote/session" && selected() && ownsSessionDevice() ? {
             count: state().team === undefined ? undefined : teamActiveCount(state().team!),
             activity: state().team === undefined ? "Activity unreported" : teamActivityLabel(state().team!),
             expanded: teamOpen() && !teamClosing(),
@@ -367,7 +391,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
           </Show>
 
           <main id="remote-main" tabindex="-1" class="workspace__main">
-            <Show when={view() === "/remote" && selected() && !newSessionOpen() && !phoneLayout()}>
+            <Show when={view() === "/remote/session" && selected() && ownsSessionDevice() && !phoneLayout()}>
               <div class="workspace__topbar" data-toast-clearance aria-hidden={selectedLoading() ? "true" : undefined} inert={selectedLoading()}>
                 <PresentationSwitch
                   value={office.presentation()}
@@ -388,12 +412,14 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
                       <ConversationView title={activeSession()?.title ?? noSessionTitle} active={!conversationHidden()} position={pendingAnchor()?.sessionID === state().activeSessionID ? pendingAnchor()?.position : undefined} onPositioned={() => setPendingAnchor(undefined)} canCreateSession={canCreateSession()} onNewSession={openNewSession} />
                     </Show>
                   </RoutePanel>
-                  <RoutePanel active={view() === "/remote" && showNewSession()} preserve={newSessionVisited()} onInteract={() => setNewSessionVisited(true)}><Show when={showNewSession() || newSessionVisited() ? state().activeDeviceID : undefined} keyed><NewSessionComposer onCreated={openCreatedSession} /></Show></RoutePanel>
-                  <RoutePanel active={view() === "/remote" && !showNewSession() && officeShown() && selected()}><OfficePresentation office={office} onSelectSession={openSession} /></RoutePanel>
+                  <RoutePanel active={view() === "/remote" && firstInventoryLoading()}><LoadingPlaceholder kind="screen" label="Loading sessions…" /></RoutePanel>
+                  <RoutePanel active={view() === "/remote" && showNewSession()} preserve={newSessionVisited()} onInteract={() => setNewSessionVisited(true)}><For each={showNewSession() || newSessionVisited() ? [state().activeDeviceID] : []}>{() => <NewSessionComposer workspaceID={originWorkspaceID()} onCreated={openCreatedSession} />}</For></RoutePanel>
+                  <RoutePanel active={view() === "/remote/session" && routeError() !== undefined}><p class="notice-strip" role="alert">{routeError()}</p></RoutePanel>
+                  <RoutePanel active={view() === "/remote/session" && officeShown() && selected()}><OfficePresentation office={office} onSelectSession={openSession} /></RoutePanel>
                   <RoutePanel active={view() === "/remote/sessions"}>
                     <SessionsPage
                       canCreateSession={canCreateSession()}
-                      onNewSession={openNewSession}
+                      onNewSession={() => openNewSession("sessions")}
                       onSelectSession={openSession}
                     />
                   </RoutePanel>
@@ -412,7 +438,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
               <TodoPanel todos={state().todos} />
             </Show>
             <Show when={selected()}>
-                <RoutePanel active={!managedChild()} preserve class="composer-resident"><Composer
+                <RoutePanel active={!managedChild() && (view() !== "/remote/session" || ownsSessionRoute())} preserve class="composer-resident"><Composer
                   sessionID={composerSessionID()}
                   running={state().view?.status === "running"}
                   canSend={
@@ -441,7 +467,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
 
         </div>
 
-        <Show when={(phoneLayout() ? teamOpen() : teamVisible()) && view() === "/remote" && state().team !== undefined && selected()}>
+        <Show when={(phoneLayout() ? teamOpen() : teamVisible()) && view() === "/remote/session" && state().team !== undefined && selected()}>
           <aside ref={teamLayer} class={`${phoneLayout() ? "team-control__phone" : "team-control__panel"}${teamEntering() ? " team-control--entering" : ""}${!teamOpen() ? " team-control--exiting" : ""}`} aria-label="Team controls" aria-hidden={!teamOpen() || teamClosing() ? "true" : undefined} inert={!teamOpen() || teamClosing()}
             onClick={(event) => { if (phoneLayout() && event.target === teamLayer?.querySelector("dialog.team-view__sheet")) closeTeam() }}>
             {phoneLayout() ? <Show when={teamGeneration()} keyed>{(generation) => <Modal class="overlay--sheet team-view__sheet" label="Team" header={<TeamHeading data={() => state().team!} />} returnFocus={teamTrigger!} requestClose={(close) => { closeTeamSheet = close }}
@@ -642,11 +668,10 @@ function RemoteHeader(props: {
             to="/remote"
             class={`remote-nav__link${props.view === "/remote" ? " remote-nav__link--active" : ""}`}
             ariaCurrent={props.view === "/remote" ? "page" : undefined}
-            ariaLabel={attention().conversation ? "Conversation, waiting for your decision" : undefined}
           >
             Conversation
-            <AttentionMark show={attention().conversation} />
           </Link>
+          <Link to="/remote/session" search={() => state().activeSessionID === undefined ? {} : sessionSearch(state().activeSessionID!, state().activeDeviceID)} class={`remote-nav__link${props.view === "/remote/session" ? " remote-nav__link--active" : ""}`} ariaCurrent={props.view === "/remote/session" ? "page" : undefined} ariaLabel={attention().conversation ? "Session, waiting for your decision" : undefined}>Session<AttentionMark show={attention().conversation} /></Link>
           <Link to="/remote/usage" class={`remote-nav__link${props.view === "/remote/usage" ? " remote-nav__link--active" : ""}`} ariaCurrent={props.view === "/remote/usage" ? "page" : undefined}>Usage</Link>
           <Link to="/remote/settings" class={`remote-nav__link${props.view === "/remote/settings" ? " remote-nav__link--active" : ""}`} ariaCurrent={props.view === "/remote/settings" ? "page" : undefined}>Settings</Link>
         </nav>
@@ -1138,7 +1163,7 @@ function ConversationView(props: {
       when={state().activeSessionID !== undefined}
       fallback={
         <Show
-          when={props.canCreateSession && !blocked()}
+          when={props.canCreateSession && !blocked() && state().sessionListStatus === "loading"}
           fallback={
             <div class="empty-conversation">
               <div class="page-head">
@@ -1178,7 +1203,6 @@ function ConversationView(props: {
             </span>
           )}
         </Show>
-        <button type="button" class="button button--secondary button--small conversation-breadcrumb__new" aria-label="New conversation" disabled={!props.canCreateSession} onClick={props.onNewSession}><Icon name="plus" size={16} />New conversation</button>
       </div>
       <div class="pane conversation-pane">
         <Show
@@ -1615,21 +1639,24 @@ function SettingsPage(props: { readonly office: OfficeSettingsStore; readonly ph
 }
 
 function BottomNav(props: { readonly view: RemoteView }): JSX.Element {
+  const remote = useRemote()
   const attention = useNavigationAttention()
   const items: readonly { readonly view: RemoteView; readonly label: string; readonly icon: IconName }[] = [
     { view: "/remote/sessions", label: "Sessions", icon: "sessions" },
     { view: "/remote", label: "Conversation", icon: "chat" },
+    { view: "/remote/session", label: "Session", icon: "terminal" },
     { view: "/remote/usage", label: "Usage", icon: "usage" },
     { view: "/remote/settings", label: "Settings", icon: "settings" },
   ]
   const flagged = (view: RemoteView) =>
-    (view === "/remote" && attention().conversation) || (view === "/remote/sessions" && attention().sessions)
+    (view === "/remote/session" && attention().conversation) || (view === "/remote/sessions" && attention().sessions)
   return (
     <nav class="bottom-nav" aria-label="Workspace">
       <For each={items}>
         {(item) => (
           <Link
             to={item.view}
+            search={() => item.view === "/remote/session" && remote.state().activeSessionID !== undefined ? sessionSearch(remote.state().activeSessionID!, remote.state().activeDeviceID) : {}}
             class={`bottom-nav__item${props.view === item.view ? " bottom-nav__item--active" : ""}`}
             ariaLabel={flagged(item.view) ? `${item.label}, waiting for your decision` : item.label}
             ariaCurrent={props.view === item.view ? "page" : undefined}

@@ -146,6 +146,7 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
       props.onPositioned?.()
       return
     }
+    virtual.measureLayout()
     const row = position.key ? list?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(position.key)}"]`) : undefined
     if (position.key && !row) { virtual.reveal(position.key); return }
     setFollowing(false)

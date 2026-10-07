@@ -3,7 +3,7 @@ import { PUBLIC_DOC_PATHS, findDocPage } from "../content/docs/registry"
 import { SITE } from "../content/site"
 import { headMetadata, resolveRouteMetadata, type HeadTag } from "./metadata"
 
-const REMOTE_ROUTES = ["/remote", "/remote/sessions", "/remote/usage", "/remote/settings"] as const
+const REMOTE_ROUTES = ["/remote", "/remote/sessions", "/remote/session", "/remote/usage", "/remote/settings"] as const
 
 function attrsFor(tags: readonly HeadTag[], key: { readonly name?: string; readonly property?: string; readonly rel?: string }) {
   return tags.filter((tag) => {

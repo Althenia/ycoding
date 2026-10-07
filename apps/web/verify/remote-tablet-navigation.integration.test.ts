@@ -90,7 +90,7 @@ describe("tablet remote navigation", () => {
             overflow: document.documentElement.scrollWidth > innerWidth,
           };
         })()`)
-        expect(state.links).toEqual(["Sessions", "Conversation", "Usage", "Settings"])
+        expect(state.links).toEqual(["Sessions", "Conversation", "Session", "Usage", "Settings"])
         expect(state.railVisible).toBe(true)
         expect(state.toggleVisible).toBe(width < 1024)
         if (state.toggleVisible) {
@@ -151,6 +151,7 @@ describe("tablet remote navigation", () => {
         await page.setViewport(width, 844)
         const state = await page.evaluate<{
           readonly labels: readonly string[]
+          readonly widths: readonly number[]
           readonly heights: readonly number[]
           readonly clipped: boolean
           readonly overflow: boolean
@@ -158,12 +159,15 @@ describe("tablet remote navigation", () => {
           const items = [...document.querySelectorAll(".bottom-nav__item")];
           return {
             labels: items.map(item => item.textContent.trim()),
+            widths: items.map(item => item.getBoundingClientRect().width),
             heights: items.map(item => item.getBoundingClientRect().height),
             clipped: items.some(item => item.scrollWidth > item.clientWidth + 1),
             overflow: document.documentElement.scrollWidth > innerWidth,
           };
         })()`)
-        expect(state.labels).toEqual(["Sessions", "Conversation", "Usage", "Settings"])
+        expect(state.labels).toEqual(["Sessions", "Conversation", "Session", "Usage", "Settings"])
+        expect(state.widths.every((width) => width >= 44)).toBe(true)
+        expect(Math.max(...state.widths) - Math.min(...state.widths)).toBeLessThanOrEqual(1)
         expect(state.heights.every((height) => height >= 44)).toBe(true)
         expect(state.clipped).toBe(false)
         expect(state.overflow).toBe(false)
@@ -188,7 +192,7 @@ describe("tablet remote navigation", () => {
         return toggle instanceof HTMLElement && getComputedStyle(toggle).display !== "none" && toggle.getBoundingClientRect().width > 0;
       })()`)).toBe(false)
       expect(await page.evaluate<boolean>(`document.querySelector(".workspace__rail") === null`)).toBe(true)
-      expect(await page.evaluate<readonly string[]>(`[...document.querySelectorAll(".remote-nav a")].filter(link => link.getBoundingClientRect().width > 0).map(link => link.textContent.trim())`)).toEqual(["Sessions", "Conversation", "Usage", "Settings"])
+      expect(await page.evaluate<readonly string[]>(`[...document.querySelectorAll(".remote-nav a")].filter(link => link.getBoundingClientRect().width > 0).map(link => link.textContent.trim())`)).toEqual(["Sessions", "Conversation", "Session", "Usage", "Settings"])
     } finally {
       await page.close()
     }

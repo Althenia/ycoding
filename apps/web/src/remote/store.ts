@@ -216,7 +216,7 @@ export type RemoteStoreState = {
   readonly sessionCreation?: SessionCreation
   readonly activeSessionID?: string
   readonly view?: SessionView
-  readonly history?: { readonly status: "idle" | "loading" | "error"; readonly before?: string; readonly error?: string }
+  readonly history?: { readonly status: "idle" | "loading" | "error" | "stale"; readonly before?: string; readonly error?: string }
   readonly todos?: readonly TodoView[]
   readonly team?: TeamView
   readonly familyActivity?: { readonly rootID: string; readonly status: "loading" | "ready" | "unsupported" | "error"; readonly members: readonly RemoteFamilyActivity[] }
@@ -1777,7 +1777,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         return "refused"
       }
       if (applied === "stale") {
-        setState({ notice: "An older session snapshot arrived and was ignored." })
         return "refused"
       }
       sealed = { sessionID, parts: new Set(applied.sealedKeys), covered: new Set(applied.coveredAssistantIDs) }
@@ -2142,10 +2141,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     if (previous !== undefined && previous !== sessionID) releaseSubscription(active, previous)
     const owned: HydrationWindow = { sessionID, events: [], replayed: new Set(), streamed: streamedPartText(container.state.view?.id === sessionID ? container.state.view.messages : []) }
     hydration = owned
-    const continueWithoutHistory = async (notice: string) => {
+    const continueWithoutHistory = async (notice?: string) => {
       if (hydration === owned) hydration = undefined
       selectionReadyToken = token
-      setState({ notice, ...(teamWatching && !sameFamily ? { team: emptyTeam(rootID, "loading") } : {}) })
+      setState({ ...(notice === undefined ? { history: { status: "stale" } as const } : { notice }),
+        ...(teamWatching && !sameFamily ? { team: emptyTeam(rootID, "loading") } : {}) })
       if (teamWatching && !sameFamily) void loadTeam(active, token, rootID)
       if (sameFamily && activityWatching) void loadFamilyActivity(active, rootID)
       void loadCapturedChanges(active, sessionID, token)
@@ -2162,7 +2162,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         return await continueWithoutHistory("The session snapshot was not readable, so the current history is kept.")
       }
       if (applied === "stale") {
-        return await continueWithoutHistory("An older session snapshot arrived and was ignored.")
+        return await continueWithoutHistory()
       }
       sealed = { sessionID, parts: new Set(applied.sealedKeys), covered: new Set(applied.coveredAssistantIDs) }
       let view = applied.view
@@ -2243,7 +2243,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         setState({ selectedWorkspaceID: attempt.workspace.id, sessions: [session], advertised: [session.id], sessionListStatus: "ready", sessionHasNext: false, sessionHasPrevious: false,
           selectedSessionInfo: session })
       }
-      await api.selectSession(session.id)
+      await selectSession(session.id, session)
       if (!owns() || container.state.activeSessionID !== session.id) return undefined
       if (attempt.prompt !== undefined) {
         const sent = "command" in attempt.prompt

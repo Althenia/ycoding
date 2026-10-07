@@ -551,7 +551,9 @@ export class RemoteAgent {
             if (!this.failuresHydrated) this.failureChanges.set(root, failed)
           }
         }
-        if (type.startsWith("permission.") || type.startsWith("form.") || type.startsWith("guardrail.")) {
+        if (type.startsWith("permission.") || type.startsWith("form.") || type.startsWith("guardrail.") ||
+          type.startsWith("session.execution.succeeded") || type.startsWith("session.execution.failed") ||
+          type.startsWith("session.execution.interrupted")) {
           this.attentionStatus = undefined
           this.attentionGeneration++
         }

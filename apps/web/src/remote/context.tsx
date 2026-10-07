@@ -68,7 +68,7 @@ export function RemoteProvider(props: { readonly children: JSX.Element; readonly
     scope,
     queries: session.queries,
     // Return to the route the reader opened, so signing in from Settings lands on Settings.
-    signIn: (provider) => window.location.assign(store.signInURL(provider, window.location.pathname)),
+    signIn: (provider) => window.location.assign(store.signInURL(provider, window.location.pathname + window.location.search)),
     authError,
   }
   return (

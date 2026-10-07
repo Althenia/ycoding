@@ -1180,7 +1180,6 @@ body:has(.app) {
   font-size: var(--yc-size-xs);
 }
 
-.conversation-breadcrumb__new { flex: none; margin-inline-start: auto; }
 
 .conversation-breadcrumb strong {
   min-inline-size: 0;
@@ -1710,7 +1709,7 @@ body:has(.app) {
 
 .bottom-nav {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   border-block-start: var(--yc-border-width) solid var(--yc-border);
   background: color-mix(in srgb, var(--yc-bg) 92%, transparent);
   backdrop-filter: blur(12px);

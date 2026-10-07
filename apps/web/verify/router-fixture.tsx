@@ -20,6 +20,7 @@ async function probe(url: string) {
   return {
     pathname: location.pathname,
     hash: location.hash,
+    search: location.search,
     routes: router.matchRoutes(location.pathname).map((match) => match.routeId),
     params: router.state.matches.flatMap((match) => Object.entries(match.params)),
   }
@@ -51,19 +52,21 @@ async function browserHistory() {
   const settle = () => new Promise((resolve) => setTimeout(resolve, 200))
   await settle()
   const start = window.history.length
-  const at = () => ({ added: window.history.length - start, url: window.location.pathname + window.location.hash, view: router.state.location.pathname + "#" + router.state.location.hash })
+  const at = () => ({ added: window.history.length - start, pathname: window.location.pathname, search: Object.fromEntries(new URLSearchParams(window.location.search)), view: router.state.location.pathname })
   await router.navigate({ to: "/docs" })
   const pushed = at()
-  await router.navigate({ to: "/remote", hash: "new-session" })
-  const pushedHash = at()
-  await router.navigate({ to: "/remote", replace: true })
+  await router.navigate({ to: "/remote", search: { workspace_id: "workspace_fixture", source: "sidebar", device_id: "dev_studio" } })
+  const landing = at()
+  await router.navigate({ to: "/remote/session", search: { session_id: "ses_1", device_id: "dev_studio" } })
+  const selected = at()
+  await router.navigate({ to: "/remote/sessions", replace: true })
   const replaced = at()
   window.history.back()
   await settle()
   const back = at()
   dispose()
   host.remove()
-  return { pushed, pushedHash, replaced, back }
+  return { pushed, landing, selected, replaced, back }
 }
 
 async function build(to: string, hash?: string) {
@@ -71,4 +74,9 @@ async function build(to: string, hash?: string) {
   return router.buildLocation({ to, hash }).href
 }
 
-Object.assign(window, { routerProbe: { probe, rendered, browserHistory, build } })
+async function buildSession(sessionID: string, deviceID: string) {
+  const router = await open("/")
+  return router.buildLocation({ to: "/remote/session", search: { session_id: sessionID, device_id: deviceID } }).href
+}
+
+Object.assign(window, { routerProbe: { probe, rendered, browserHistory, build, buildSession } })

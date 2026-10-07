@@ -67,11 +67,11 @@ test("service worker shows one notification per push including malformed and foc
     const payload = { category: "approval-requested", sessionID: "ses_1", deviceID: "dev_1" }
     await emit("push", { data: { json: () => payload } })
     expect(shown).toHaveLength(3)
-    expect(shown[2]).toMatchObject({ title: "YCoding — needs your attention", options: { tag: "ycoding-ses_1-approval-requested", data: { sessionID: "ses_1" } } })
+    expect(shown[2]).toMatchObject({ title: "YCoding — needs your attention", options: { tag: "ycoding-ses_1-approval-requested", data: { sessionID: "ses_1", deviceID: "dev_1" } } })
     windowClients.length = 0
     await emit("push", { data: { json: () => payload } })
     expect(shown).toHaveLength(4)
-    expect(shown[3]).toMatchObject({ title: "YCoding — needs your attention", options: { tag: "ycoding-ses_1-approval-requested", data: { sessionID: "ses_1" } } })
+    expect(shown[3]).toMatchObject({ title: "YCoding — needs your attention", options: { tag: "ycoding-ses_1-approval-requested", data: { sessionID: "ses_1", deviceID: "dev_1" } } })
     await emit("push", { data: { json: () => ({ category: "agent-completed", sessionID: "ses_1", deviceID: "dev_1" }) } })
     expect(shown[4]).toMatchObject({ title: "YCoding — work finished", options: { body: "A session finished all its work.", tag: "ycoding-ses_1-agent-completed" } })
     expect(shown[3]).toMatchObject({ title: "YCoding — needs your attention", options: { body: "A session is waiting for you." } })
@@ -89,8 +89,8 @@ test("service worker shows one notification per push including malformed and foc
     await emit("push", { data: { json: () => ({ category: "agent-completed", sessionID: "ses_1", deviceID: "dev_1", noticeID: "ntc_0" }) } })
     await emit("push", { data: { json: () => ({ category: "machine-offline", deviceID: "dev_1" }) } })
     expect(shown.slice(9).map((entry) => entry.title)).toEqual(["YCoding — update", "YCoding — update"])
-    await emit("notificationclick", { notification: { data: { sessionID: "ses_1" }, close: () => undefined } })
-    expect(opened).toBe("/remote#session=ses_1")
+    await emit("notificationclick", { notification: { data: shown[3]?.options.data, close: () => undefined } })
+    expect(opened).toBe("/remote/session?session_id=ses_1&device_id=dev_1")
     const specific = shown.length
     for (const need of ["permission", "question", "review", "failed", "blocked", undefined])
       await emit("push", { data: { json: () => ({ category: "approval-requested", sessionID: "ses_1", deviceID: "dev_1", noticeID: "ntc_9", title: "Fix login", need }) } })
@@ -112,7 +112,7 @@ test("service worker shows one notification per push including malformed and foc
     const noticeData = shown.at(-2)?.options.data
     expect(noticeData).toEqual({ sessionID: "ses_1", deviceID: "dev_1", noticeID: "ntc_10" })
     await emit("notificationclick", { notification: { data: noticeData, close: () => undefined } })
-    expect(opened).toBe("/remote#session=ses_1&device=dev_1&notice=ntc_10")
+    expect(opened).toBe("/remote/session?session_id=ses_1&device_id=dev_1&notice_id=ntc_10")
     windowClients.push(windowClient)
     await emit("notificationclick", { notification: { data: noticeData, close: () => undefined } })
     expect(posted.at(-1)).toEqual({ type: "ycoding:open-session", sessionID: "ses_1", deviceID: "dev_1", noticeID: "ntc_10" })
@@ -127,19 +127,19 @@ test("service worker shows one notification per push including malformed and foc
       ["YCoding — update", "Open YCoding to check your work.", "ycoding-update", undefined],
     ])
     shown.splice(overflowStart)
-    await emit("notificationclick", { notification: { data: { sessionID: "ses_1" }, close: () => undefined } })
-    expect(posted).toEqual([{ type: "ycoding:open-session", sessionID: "ses_1" }])
+    await emit("notificationclick", { notification: { data: shown[3]?.options.data, close: () => undefined } })
+    expect(posted).toEqual([{ type: "ycoding:open-session", sessionID: "ses_1", deviceID: "dev_1" }])
     focusFails = true
     opened = ""
-    await emit("notificationclick", { notification: { data: { sessionID: "ses_1" }, close: () => undefined } })
-    expect(opened).toBe("/remote#session=ses_1")
+    await emit("notificationclick", { notification: { data: shown[3]?.options.data, close: () => undefined } })
+    expect(opened).toBe("/remote/session?session_id=ses_1&device_id=dev_1")
     focusFails = false
     opened = ""
     posted.length = 0
     windowClients.splice(0, windowClients.length, { ...windowClient, url: "https://relay.test/docs" })
-    await emit("notificationclick", { notification: { data: { sessionID: "ses_1" }, close: () => undefined } })
+    await emit("notificationclick", { notification: { data: shown[3]?.options.data, close: () => undefined } })
     expect(posted).toEqual([])
-    expect(opened).toBe("/remote#session=ses_1")
+    expect(opened).toBe("/remote/session?session_id=ses_1&device_id=dev_1")
     const paused = { title: "YCoding — alerts paused", options: { body: "Push alerts to this device stopped. Open YCoding to turn them back on.",
       tag: "ycoding-push-renewal", icon: "/icons/icon-256.png", badge: "/icons/icon-256.png" } }
     const beforeChange = shown.length

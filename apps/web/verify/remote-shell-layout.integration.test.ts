@@ -802,23 +802,30 @@ describe("remote shell layout", () => {
           await page.evaluate(`document.querySelector('.overlay--sessions-sheet .pane__head button')?.click()`)
         } else await page.evaluate(`document.querySelector('.workspace__rail .pane__head button')?.click()`)
         for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.route-panel:not([inert]) .new-session-composer') !== null`); attempt += 1) await Bun.sleep(50)
-        expect(await page.evaluate<string>(`location.hash`)).toBe("#new-session")
+        expect(await page.evaluate<{ readonly pathname: string; readonly workspaceID: string | null; readonly source: string | null; readonly deviceID: string | null }>(`({ pathname: location.pathname, workspaceID: new URLSearchParams(location.search).get('workspace_id'), source: new URLSearchParams(location.search).get('source'), deviceID: new URLSearchParams(location.search).get('device_id') })`)).toEqual({ pathname: "/remote", workspaceID: "workspace_fixture", source: "sidebar", deviceID: "dev_studio" })
         if (width === 390) {
           await page.evaluate(`document.querySelector('.app-header__menu')?.click()`)
           for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.overlay--sessions-sheet[open] .session-row') !== null`); attempt += 1) await Bun.sleep(50)
           await page.evaluate(`[...document.querySelectorAll('.overlay--sessions-sheet .session-row')].find(row => row.textContent.includes('Archived: release notes'))?.click()`)
-        } else await page.evaluate(`[...document.querySelectorAll('.workspace__rail .session-row')].find(row => row.textContent.includes('Archived: release notes'))?.click()`)
+        } else {
+          await page.evaluate(`document.querySelector('.remote-nav__link[href="/remote/sessions"]')?.click()`)
+          for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.route-panel:not([inert]) .sessions-page') !== null`); attempt += 1) await Bun.sleep(50)
+          await page.evaluate(`[...document.querySelectorAll('.sessions-table__row')].find(row => row.querySelector('.sessions-table__name')?.textContent.trim() === 'Archived: release notes')?.querySelector('.sessions-table__select')?.click()`)
+        }
         for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb strong')?.textContent?.includes('Archived: release notes') ?? false`); attempt += 1) await Bun.sleep(50)
         for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.activeElement === document.querySelector('.remote-conversation-view .conversation-breadcrumb')`); attempt += 1) await Bun.sleep(50)
         expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('.remote-conversation-view .conversation-breadcrumb')`)).toBe(true)
-        expect(await page.evaluate<{ readonly hash: string; readonly closed: boolean; readonly title: string }>(`(() => { const composer=document.querySelector('.new-session-composer'), panel=composer?.closest('.route-panel'); return { hash: location.hash, closed: !composer || panel?.inert === true && panel?.getAttribute('aria-hidden') === 'true', title: document.querySelector('.conversation-breadcrumb strong')?.textContent?.trim() ?? '' } })()`)).toEqual({ hash: "", closed: true, title: "Archived: release notes" })
+        expect(await page.evaluate<{ readonly pathname: string; readonly sessionID: string | null; readonly deviceID: string | null; readonly closed: boolean; readonly title: string }>(`(() => { const composer=document.querySelector('.new-session-composer'), panel=composer?.closest('.route-panel'), search=new URLSearchParams(location.search); return { pathname: location.pathname, sessionID: search.get('session_id'), deviceID: search.get('device_id'), closed: !composer || panel?.inert === true && panel?.getAttribute('aria-hidden') === 'true', title: document.querySelector('.conversation-breadcrumb strong')?.textContent?.trim() ?? '' } })()`)).toEqual({ pathname: "/remote/session", sessionID: "ses_archived", deviceID: "dev_studio", closed: true, title: "Archived: release notes" })
         for (let attempt = 0; attempt < 20 && !await page.evaluate<boolean>(newSessionComposerRetainedClosed); attempt += 1) await Bun.sleep(50)
         expect(await page.evaluate<boolean>(newSessionComposerRetainedClosed)).toBe(true)
         await page.evaluate(`history.back()`)
-        await Bun.sleep(100)
+        const backRoute = width === 1440
+          ? `location.pathname === '/remote/sessions' && document.querySelector('.route-panel:not([inert]) .sessions-page') !== null`
+          : `location.pathname === '/remote/session' && new URLSearchParams(location.search).get('session_id') === 'ses_fixture'`
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(backRoute); attempt += 1) await Bun.sleep(50)
         expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.new-session-composer')].every((element) => element.closest('[inert]') !== null)`)).toBe(true)
         for (let attempt = 0; attempt < 20 && !await page.evaluate<boolean>(newSessionComposerRetainedClosed); attempt += 1) await Bun.sleep(50)
-        expect(await page.evaluate<boolean>(`location.hash === '' && ${newSessionComposerRetainedClosed} &&document.querySelector('.conversation-breadcrumb strong')?.textContent?.includes('Archived: release notes') === true`)).toBe(true)
+        expect(await page.evaluate<boolean>(`${backRoute} && ${newSessionComposerRetainedClosed} && ${width === 1440 ? "document.querySelector('.route-panel:not([inert]) .new-session-composer') === null" : "document.querySelector('.conversation-breadcrumb strong')?.textContent?.includes('Stream remote output safely') === true"}`)).toBe(true)
       } finally { await page.close() }
     }
   }, 30_000)
@@ -827,9 +834,7 @@ describe("remote shell layout", () => {
     const page = await browser!.openPage()
     try {
       await page.setViewport(1440, 900)
-      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=conversation-workspace-1440`)
-      for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb strong') !== null`); attempt += 1) await Bun.sleep(50)
-      await page.evaluate(`location.hash = '#session=ses_indexer'`)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=conversation-workspace-1440&session_id=ses_indexer&device_id=dev_studio`)
       for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb strong')?.textContent?.includes('Query batch indexer') ?? false`); attempt += 1) await Bun.sleep(50)
       for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.workspace__rail .session-panel__workspace h3')?.textContent?.trim() === 'indexer' && document.querySelector('.workspace__rail .session-row--active .session-row__name')?.textContent?.trim() === 'Query batch indexer'`); attempt += 1) await Bun.sleep(50)
       const state = await page.evaluate<{ readonly heading: string; readonly active: string; readonly selector: boolean }>(`(() => ({ heading: document.querySelector('.workspace__rail .session-panel__workspace h3')?.textContent?.trim() ?? '', active: document.querySelector('.workspace__rail .session-row--active .session-row__name')?.textContent?.trim() ?? '', selector: Boolean(document.querySelector('.workspace__rail .workspace-select .custom-select__trigger')) }))()`)
@@ -841,9 +846,8 @@ describe("remote shell layout", () => {
     const page = await browser!.openPage()
     try {
       await page.setViewport(1440, 900)
-      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat`)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&session_id=ses_child&device_id=dev_studio`)
       for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb strong') !== null`); attempt += 1) await Bun.sleep(50)
-      await page.evaluate(`location.hash = '#session=ses_child'`)
       for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb strong')?.textContent?.includes('Child: fix flaky suite') ?? false`); attempt += 1) await Bun.sleep(50)
       const result = await page.evaluate<{ readonly heading: string; readonly active: string; readonly dropdown: boolean }>(`(() => ({ heading: document.querySelector('.workspace__rail .session-panel__workspace h3')?.textContent?.trim() ?? '', active: document.querySelector('.workspace__rail .session-row--active .session-row__name')?.textContent?.trim() ?? '', dropdown: Boolean(document.querySelector('.workspace__rail .workspace-select .custom-select__trigger')) }))()`)
       expect(result).toEqual({ heading: "ycoding", active: "Stream remote output safely", dropdown: false })
@@ -855,8 +859,8 @@ describe("remote shell layout", () => {
     try {
       await page.setViewport(1440, 900)
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat`)
-      for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.workspace__rail .pane__head--sessions button') !== null`); attempt += 1) await Bun.sleep(50)
-      await page.evaluate(`document.querySelector('.workspace__rail .pane__head--sessions button').click()`)
+      for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.remote-nav__link[href="/remote"]') !== null`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`document.querySelector('.remote-nav__link[href="/remote"]').click()`)
       for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.new-session-composer .mini-picker__trigger[aria-label="Repository"]') !== null`); attempt += 1) await Bun.sleep(50)
       await page.evaluate(`document.querySelector('.new-session-composer .mini-picker__trigger[aria-label="Repository"]').click()`)
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`[...document.querySelectorAll('.mini-picker__option')].some(option => option.textContent.includes('Other repository'))`); attempt += 1) await Bun.sleep(50)
@@ -1333,7 +1337,7 @@ describe("remote shell layout", () => {
         };
       })()`)
       expect(state.brandVisible).toBe(true)
-      expect(state.tabs).toEqual(["Sessions", "Conversation", "Usage", "Settings"])
+      expect(state.tabs).toEqual(["Sessions", "Conversation", "Session", "Usage", "Settings"])
       expect(state.sheet.bottom).toBeCloseTo(620, 0)
       expect(state.sheet.top).toBeLessThan(state.sheet.bottom)
       expect(state.options.map((option) => option.label)).toEqual(["Studio Mac", "Dev Linux"])
@@ -1399,7 +1403,7 @@ describe("remote shell layout", () => {
         }))()`)
         expect(workspaceState.overflow).toBe(false)
         expect(workspaceState.headerPickerAbsent && workspaceState.statusVisible).toBe(true)
-        expect(workspaceState.tabs).toBe(width < 768 ? 4 : 0)
+        expect(workspaceState.tabs).toBe(width < 768 ? 5 : 0)
         expect(await workspace.evaluate<string>(`document.documentElement.dataset.theme`)).toBe(theme)
         await workspace.close()
 

@@ -49,6 +49,10 @@ const accountParams = new URLSearchParams(window.location.search)
 const requestLatencyMs = Number(accountParams.get("latency") ?? 0)
 const requestLog: { readonly at: number; readonly operation: string; readonly input?: unknown }[] = []
 Object.assign(window, { requestLog })
+const deviceRequests: { readonly deviceID: string; readonly operation: string; readonly sessionID?: string }[] = []
+Object.assign(window, { remoteDeviceRequests: deviceRequests })
+const attachmentGate = Promise.withResolvers<void>()
+Object.assign(window, { remoteReleaseAttachments: () => attachmentGate.resolve() })
 let inventoryHeld = accountParams.get("inventoryGate") === "1"
 const inventoryWaiters: (() => void)[] = []
 Object.assign(window, { remoteReleaseInventory: () => { inventoryHeld = false; inventoryWaiters.splice(0).forEach((release) => release()) } })
@@ -669,6 +673,10 @@ function createFixtureStore(): Fixture {
       return { status: "ok", value: null }
     }
     operationCounts.set(operation, (operationCounts.get(operation) ?? 0) + 1)
+    if (operation === "session.attachment.upload") {
+      const uploaded: RemoteRequestOutcome = { status: "ok", value: input?.last ? { uri: `ycoding-upload://${String(input.uploadID)}` } : {} }
+      return accountParams.get("attachmentGate") === "1" ? attachmentGate.promise.then(() => uploaded) : uploaded
+    }
     if (operation === "machine.latency.list") {
       const offset = typeof input?.before === "string" ? Number(atob(input.before)) : 0
       const limit = typeof input?.limit === "number" ? input.limit : 60
@@ -943,7 +951,7 @@ function createFixtureStore(): Fixture {
       const timer = setTimeout(callback, ms >= 1_000 ? 1 : ms)
       return () => clearTimeout(timer)
     } } : {}),
-    createTransport: (_deviceID, transportHandlers) => {
+    createTransport: (deviceID, transportHandlers) => {
       transportsCreated += 1
       handlers = transportHandlers
       if (relayAddress !== undefined) {
@@ -958,7 +966,10 @@ function createFixtureStore(): Fixture {
           },
         }
       }
-      return transport
+      return { ...transport, request: (operation, request) => {
+        deviceRequests.push({ deviceID, operation, ...(request?.sessionID === undefined ? {} : { sessionID: request.sessionID }) })
+        return transport.request(operation, request)
+      } }
     },
     deviceName: () => "Studio Mac",
   })
@@ -1111,6 +1122,7 @@ function createFixtureStore(): Fixture {
 const fixture = createFixtureStore()
 Object.assign(window, { transcriptDelta: fixture.transcriptDelta, transcriptRefresh: fixture.transcriptRefresh, responseSnapshot: fixture.responseSnapshot, responseStatus: () => fixture.store.state().view?.status })
 Object.assign(window, { remoteReadingTail: fixture.readingTail })
+Object.assign(window, { remoteReloadMessages: fixture.store.reloadMessages })
 Object.assign(window, { remoteInventoryReport: () => ({ requests: fixture.inventoryRequests(), rows: fixture.store.state().sessions.length,
   groups: fixture.store.state().sessionGroups.length, next: fixture.store.state().sessionHasNext,
   first: fixture.store.state().sessions[0]?.id, last: fixture.store.state().sessions.at(-1)?.id, inputs: fixture.inventoryInputs(),
@@ -1121,11 +1133,12 @@ Object.assign(window, { remoteInventoryReport: () => ({ requests: fixture.invent
 /** Picks the device and session a user would pick, so the fixture opens on a live workspace. */
 async function openFixtureWorkspace(store: RemoteStore) {
   await store.load()
-  if (store.state().activeDeviceID !== "dev_studio") store.connect("dev_studio")
+  const requestedDevice = accountParams.get("device_id") ?? "dev_studio"
+  if (devices.some((device) => device.id === requestedDevice && device.status === "active" && device.online) && store.state().activeDeviceID !== requestedDevice) store.connect(requestedDevice)
   for (let attempt = 0; attempt < 40 && store.state().sessions.length === 0; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 50))
   }
-  if (!accountParams.has("noSelection") && store.state().activeSessionID === undefined) await store.selectSession(sessionID)
+  if (!accountParams.has("noSelection") && !remoteScenarioData?.noSelection && !accountParams.has("session_id") && store.state().activeSessionID === undefined) await store.selectSession(sessionID)
   if (transcriptProbe) fixture.transcriptDelta("")
 }
 
@@ -1258,8 +1271,14 @@ function remoteMutationReport() {
 ;(window as typeof window & { remoteMissTerminal?: typeof fixture.missTerminal }).remoteMissTerminal = fixture.missTerminal
 
 const fixtureView = remoteScenarioData?.view ?? new URLSearchParams(window.location.search).get("view") ?? "chat"
-const fixturePath = fixtureView === "chat" ? "/remote" : `/remote/${fixtureView}`
-window.history.replaceState(null, "", `${fixturePath}${window.location.search}`)
+const fixtureSelection = fixtureView === "chat" && !accountParams.has("noSelection") && !remoteScenarioData?.noSelection && !emptyBackend
+const fixturePath = fixtureView === "chat" ? fixtureSelection ? "/remote/session" : "/remote" : `/remote/${fixtureView}`
+const fixtureSearch = new URLSearchParams(window.location.search)
+if (fixtureSelection) {
+  if (!fixtureSearch.has("session_id")) fixtureSearch.set("session_id", sessionID)
+  if (!fixtureSearch.has("device_id")) fixtureSearch.set("device_id", "dev_studio")
+}
+window.history.replaceState(null, "", `${fixturePath}?${fixtureSearch}`)
 
 function FixturePage() {
   onMount(() => {

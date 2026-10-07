@@ -15,12 +15,157 @@ beforeAll(async () => {
 })
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 
+test("Conversation stays reachable separately from the selected Session and the URL retains its identity", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat`)
+    await wait(page, `document.querySelector('.conversation-breadcrumb strong') !== null`)
+    expect(await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb [aria-label="New conversation"]') === null`)).toBe(true)
+    await page.evaluate(`document.querySelector('.remote-nav a[href="/remote"]').click()`)
+    await wait(page, `document.querySelector('.route-panel:not([inert]) .new-session-composer textarea') !== null`)
+    expect(await page.evaluate<string>(`new URL(location.href).pathname`)).toBe("/remote")
+    await page.evaluate(`document.querySelector('.remote-nav a[href^="/remote/session?"]').click()`)
+    await wait(page, `document.querySelector('.remote-conversation-view:not([inert]) .conversation-breadcrumb strong') !== null`)
+    expect(await page.evaluate<string>(`new URL(location.href).pathname`)).toBe("/remote/session")
+    expect(await page.evaluate<string>(`new URL(location.href).searchParams.get('session_id')`)).toBe("ses_fixture")
+    expect(await page.evaluate<string>(`new URL(location.href).searchParams.get('device_id')`)).toBe("dev_studio")
+    expect(await page.evaluate<number>(`window.requestLog.filter(item => item.operation === 'session.create').length`)).toBe(0)
+  } finally { await page.close() }
+}, 30_000)
+
+test("Session without a selected ID settles to its empty state rather than loading forever", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=session&noSelection=1`)
+    await wait(page, `window.remoteInventoryReport().listStatus === 'ready'`)
+    expect(await page.evaluate<boolean>(`document.querySelector('.remote-conversation-view:not([inert]) .empty-conversation') !== null`)).toBe(true)
+    expect(await page.evaluate<boolean>(`document.querySelector('.remote-conversation-view:not([inert]) .loading-placeholder--screen') === null`)).toBe(true)
+    expect(await page.evaluate<number>(`window.requestLog.filter(item => item.operation === 'session.create').length`)).toBe(0)
+  } finally { await page.close() }
+}, 30_000)
+
+test("choosing a Session from Sessions hands focus to its selected workspace heading", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions`)
+    await wait(page, `document.querySelector('.sessions-table__select') !== null`)
+    await page.evaluate(`[...document.querySelectorAll('.sessions-table__select')].find(item => item.textContent.includes('Archived: release notes')).click()`)
+    await wait(page, `document.querySelector('.remote-conversation-view:not([inert]) .conversation-breadcrumb strong')?.textContent?.includes('Archived: release notes') === true`)
+    expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('.remote-conversation-view:not([inert]) .conversation-breadcrumb')`)).toBe(true)
+  } finally { await page.close() }
+}, 30_000)
+
+test("the first inventory read holds a named loading frame before Conversation reveals its landing", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&noSelection=1&inventoryGate=1`)
+    await wait(page, `window.requestLog.some(item => item.operation === 'workspace.list' && item.input?.sessionsOnly === true)`)
+    expect(await page.evaluate<boolean>(`document.querySelector('.route-panel:not([inert]) .loading-placeholder--screen') !== null`)).toBe(true)
+    expect(await page.evaluate<boolean>(`document.querySelector('.route-panel:not([inert]) .new-session-composer') === null`)).toBe(true)
+    await page.evaluate(`window.remoteReleaseInventory()`)
+    await wait(page, `document.querySelector('.route-panel:not([inert]) .new-session-composer') !== null`)
+  } finally { await page.evaluate(`window.remoteReleaseInventory?.()`); await page.close() }
+}, 30_000)
+
+test("a workspace plus button locks its source repository instead of choosing the first repository", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions&inventoryCount=20`)
+    await wait(page, `document.querySelector('.workspace-nav button') !== null`)
+    await page.evaluate(`[...document.querySelectorAll('.workspace-nav button')].find(item => item.textContent.includes('Other repository')).click()`)
+    await wait(page, `document.querySelector('.sessions-page__toolbar .new-session__trigger:not([disabled])') !== null`)
+    await page.evaluate(`document.querySelector('.sessions-page__toolbar .new-session__trigger').click()`)
+    await wait(page, `document.querySelector('.new-session-composer button[aria-label="Repository"]') !== null`)
+    expect(await page.evaluate<{ label: string; locked: boolean; workspace: string | null; source: string | null }>(`(() => { const repository = document.querySelector('.new-session-composer button[aria-label="Repository"]'); const params = new URL(location.href).searchParams; return { label: repository.textContent.trim(), locked: repository.disabled, workspace: params.get('workspace_id'), source: params.get('source') } })()`)).toMatchObject({ label: "Other repository", locked: true, workspace: "workspace_other", source: "sessions" })
+    await type(page, ".new-session-composer textarea", "Stay in this repository")
+    await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="Create session"]').click()`)
+    await wait(page, `window.remoteMutationReport().some(item => item.operation === 'session.create')`)
+    expect(await page.evaluate<unknown>(`window.remoteMutationReport().find(item => item.operation === 'session.create').input`)).toMatchObject({ workspace: "workspace_other" })
+  } finally { await page.close() }
+}, 30_000)
+
+for (const notice of [false, true]) test(`notification selects its owning machine before opening its Session${notice ? " and reading its notice" : " without a notice ID"}`, async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat`)
+    await wait(page, `document.querySelector('.conversation-breadcrumb strong') !== null`)
+    await page.evaluate(`window.remoteDeviceRequests.length = 0; window.dispatchEvent(new CustomEvent('ycoding:open-session', { detail: { sessionID: 'ses_fixture', deviceID: 'dev_laptop'${notice ? ", noticeID: 'ntc_3'" : ""} } }))`)
+    await wait(page, `window.remoteDeviceRequests.some(item => item.operation === 'session.subscribe' && item.deviceID === 'dev_laptop')`)
+    expect(await page.evaluate<unknown>(`window.remoteDeviceRequests.filter(item => item.operation === 'session.subscribe').map(item => ({ deviceID: item.deviceID, sessionID: item.sessionID }))`)).toEqual([{ deviceID: "dev_laptop", sessionID: "ses_fixture" }])
+    expect(await page.evaluate<string>(`new URL(location.href).searchParams.get('device_id')`)).toBe("dev_laptop")
+    expect(await page.evaluate<string>(`new URL(location.href).searchParams.get('session_id')`)).toBe("ses_fixture")
+    if (notice) {
+      await wait(page, `window.remoteDeviceRequests.some(item => item.operation === 'notice.read')`)
+      expect(await page.evaluate<unknown>(`window.remoteDeviceRequests.filter(item => item.operation === 'notice.read').map(item => item.deviceID)`)).toEqual(["dev_laptop"])
+    }
+  } finally { await page.close() }
+}, 30_000)
+
+test("an unavailable notification machine never opens its Session on the selected machine", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat`)
+    await wait(page, `document.querySelector('.conversation-breadcrumb strong') !== null`)
+    await page.evaluate(`window.remoteDeviceRequests.length = 0; window.dispatchEvent(new CustomEvent('ycoding:open-session', { detail: { sessionID: 'ses_fixture', deviceID: 'dev_unknown' } }))`)
+    await wait(page, `document.body.innerText.includes('unavailable to this account')`)
+    expect(await page.evaluate<unknown>(`window.remoteDeviceRequests.filter(item => item.operation === 'session.subscribe')`)).toEqual([])
+    expect(await page.evaluate<boolean>(`document.querySelector('.remote-conversation-view:not([inert])') === null`)).toBe(true)
+  } finally { await page.close() }
+}, 30_000)
+
+test("a malformed device in a Session URL cannot fall back to the selected machine", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&session_id=ses_fixture&device_id=${encodeURIComponent(JSON.stringify(["dev_laptop"]))}`)
+    await wait(page, `document.body.innerText.includes('Session link is invalid')`)
+    expect(await page.evaluate<unknown>(`window.remoteDeviceRequests.filter(item => item.operation === 'session.subscribe')`)).toEqual([])
+  } finally { await page.close() }
+}, 30_000)
+
+test("a Session link preserves its machine and Session through the sign-in redirect", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&account=signedout&session_id=ses_fixture&device_id=dev_laptop`)
+    await wait(page, `document.querySelector('.sign-in__provider') !== null`)
+    await page.evaluate(`document.querySelector('.sign-in__provider').click()`)
+    await wait(page, `location.pathname === '/api/auth/google/start'`)
+    const destination = await page.evaluate<string>(`new URL(location.href).searchParams.get('redirect_after')`)
+    expect(new URL(destination, "https://example.invalid").searchParams.get("session_id")).toBe("ses_fixture")
+    expect(new URL(destination, "https://example.invalid").searchParams.get("device_id")).toBe("dev_laptop")
+  } finally { await page.close() }
+}, 30_000)
+
+test("an unavailable origin repository blocks creation instead of replacing it", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&noSelection=1&workspace_id=workspace_missing&source=sessions`)
+    await wait(page, `document.body.innerText.includes('originating repository is unavailable')`)
+    expect(await page.evaluate<boolean>(`document.querySelector('.new-session-composer button[aria-label="Repository"]').disabled`)).toBe(true)
+    expect(await page.evaluate<boolean>(`document.querySelector('.new-session-composer button[aria-label="Create session"]').disabled`)).toBe(true)
+    expect(await page.evaluate<number>(`window.requestLog.filter(item => item.operation === 'session.create').length`)).toBe(0)
+  } finally { await page.close() }
+}, 30_000)
+
+test("rejecting an older snapshot preserves the displayed live reply without a warning banner", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat`)
+    await wait(page, `document.querySelector('.conversation-breadcrumb strong') !== null`)
+    await page.evaluate(`[...document.querySelectorAll('.fixture__controls button')].find(item => item.textContent.includes('Simulate streaming step')).click()`)
+    await wait(page, `document.body.innerText.includes('Streaming through the relay with bounded tool output.')`)
+    await page.evaluate(`window.remoteReloadMessages()`)
+    expect(await page.evaluate<string>(`document.body.innerText`)).toContain("Streaming through the relay with bounded tool output.")
+    expect(await page.evaluate<string>(`document.body.innerText`)).not.toContain("An older session snapshot arrived and was ignored.")
+    expect(await page.evaluate<boolean>(`document.querySelector('.remote-conversation-view:not([inert]) .loading-placeholder--screen') === null`)).toBe(true)
+  } finally { await page.close() }
+}, 30_000)
+
 test("new session opens in the main area with repository names, selected model and prompt", async () => {
   const page = await browser!.openPage()
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions`)
     await wait(page, `document.querySelector('.sessions-page__toolbar .new-session__trigger:not([disabled])') !== null`)
-    await page.evaluate(`document.querySelector('.sessions-page__toolbar .new-session__trigger')?.click()`)
+    await page.evaluate(`document.querySelector('.remote-nav a[href="/remote"]')?.click()`)
     await wait(page, `document.querySelector('.workspace__main .new-session-composer textarea') !== null`)
     expect(await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="New session"]') === null`)).toBe(true)
     await wait(page, `document.querySelector('.new-session-composer button[aria-label="Repository"]:not([disabled])') !== null`)
@@ -52,6 +197,28 @@ test("unknown creation retries the same admission without a second create", asyn
     await wait(page, `document.querySelector('.conversation-breadcrumb strong')?.textContent?.trim() === 'New session'`)
     expect(await page.evaluate<number>(`window.remoteMutationReport().filter(item => item.operation === 'session.create').length`)).toBe(1)
   } finally { await page.close() }
+}, 30_000)
+
+for (const command of [false, true]) test(`first ${command ? "command" : "prompt"} keeps its attachment upload when the created Conversation opens`, async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&noSelection=1&attachmentGate=1`)
+    await wait(page, `document.querySelector('.new-session-composer button[aria-label="Create session"]:not([disabled])') !== null`)
+    await type(page, ".new-session-composer textarea", command ? "/plan Inspect screenshot" : "Inspect screenshot")
+    await page.evaluate(`(() => { const transfer = new DataTransfer(); transfer.items.add(new File([new Uint8Array(30_000)], 'capture.png', { type: 'image/png' })); document.querySelector('.new-session-composer .composer__row').dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer })); })()`)
+    await wait(page, `document.querySelector('.new-session-composer .composer__attachment') !== null`)
+    await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="Create session"]').click()`)
+    await wait(page, `document.querySelector('.remote-conversation-view:not([inert]) .conversation-breadcrumb strong')?.textContent?.trim() === 'New session'`)
+    expect(await page.evaluate<number>(`window.requestLog.filter(item => item.operation === 'session.subscribe').length`)).toBe(1)
+    expect(await page.evaluate<string>(`document.querySelector('.composer-resident:not([inert]) .composer__upload')?.textContent ?? ''`)).toContain("capture.png · 0%")
+    await page.evaluate(`window.remoteReleaseAttachments()`)
+    const operation = command ? "session.command" : "session.prompt"
+    await wait(page, `window.remoteMutationReport().some(item => item.operation === '${operation}')`)
+    const sent = await page.evaluate<readonly { readonly input: { readonly files: readonly { readonly uri: string; readonly name: string }[] } }[]>(`window.remoteMutationReport().filter(item => item.operation === '${operation}')`)
+    expect(sent).toHaveLength(1)
+    expect(sent[0]?.input.files).toEqual([{ uri: expect.stringMatching(/^ycoding-upload:\/\//), name: "capture.png" }])
+    expect(await page.evaluate<string>(`document.body.innerText`)).not.toContain("cancelled by Session selection")
+  } finally { await page.evaluate(`window.remoteReleaseAttachments?.()`); await page.close() }
 }, 30_000)
 
 test("new-session hero centers in both Conversation placements and remains top-scrollable on a short phone", async () => {

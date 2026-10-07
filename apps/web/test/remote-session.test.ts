@@ -1999,6 +1999,58 @@ describe("remote store integration", () => {
     }
   })
 
+  test("settles a selection with a newer streamed event without announcing its older snapshot", async () => {
+    const gate = Promise.withResolvers<void>()
+    let reads = 0
+    const test = await harness({ handler: async (request) => {
+      if (request.operation !== "session.snapshot") return "default" as const
+      reads += 1
+      if (reads === 1) await gate.promise
+      return { ok: true, value: {
+        sourceEpoch: "epoch_1", session: { id: "ses_a" },
+        messages: [{ id: reads === 1 ? "msg_old" : "msg_fresh", type: "assistant", agent: "god",
+          content: [{ type: "text", text: reads === 1 ? "OLD" : "FRESH" }], time: { created: 1 } }],
+        watermark: { type: "log.synced", aggregateID: "ses_a", seq: reads === 1 ? 1 : 3 },
+      } }
+    } })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.length > 0)
+      const selection = test.store.selectSession("ses_a")
+      await waitFor(() => test.relay.requests.some((request) => request.operation === "session.snapshot"))
+      test.relay.pushEvent("ses_a", { type: "session.text.delta", data: { assistantMessageID: "msg_live", ordinal: 0, delta: "LATEST" },
+        durable: { aggregateID: "ses_a", seq: 2, version: 1 }, sourceEpoch: "epoch_1" })
+      await test.runUntil(() => test.store.state().view?.watermark === 2)
+      gate.resolve()
+      await selection
+      expect(test.store.state().activeSessionID).toBe("ses_a")
+      expect(test.store.state().view?.watermark).toBe(2)
+      expect(test.store.state().view?.messages.map((message) => message.id)).toEqual(["msg_live"])
+      expect(test.store.state().history).toEqual({ status: "stale" })
+      expect(test.store.state().notice).toBeUndefined()
+      expect(test.relay.requests.some((request) => request.operation === "session.pending.list")).toBe(true)
+
+      await test.store.reloadMessages()
+      expect(reads).toBe(2)
+      expect(test.store.state().view?.watermark).toBe(3)
+      expect(test.store.state().view?.messages.map((message) => message.id)).toEqual(["msg_fresh"])
+      expect(test.store.state().history).toEqual({ status: "idle" })
+      expect(test.store.state().notice).toBeUndefined()
+    } finally { gate.resolve(); await test.stop() }
+  })
+
+  test("reports an actual initial snapshot read failure", async () => {
+    const test = await harness({ handler: (request) => request.operation === "session.snapshot"
+      ? { ok: false, code: "internal_error", message: "snapshot read failed" } : "default" })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      expect(test.store.state().notice).toContain("snapshot read failed")
+      expect(test.store.state().history).toBeUndefined()
+    } finally { await test.stop() }
+  })
+
   test("keeps a replaced connection's snapshot failure out of the new connection", async () => {
     const test = await harness({
       handler: async (request) => {

@@ -40,7 +40,8 @@ const view = (patch: Partial<SessionView> = {}): SessionView => ({
 
 describe("screen-specific workspace composition", () => {
   test("keeps the session rail and composer only on a selected conversation", () => {
-    expect(remoteSurfaceComposition("/remote", true)).toEqual({ showSessionRail: true, showComposer: true })
+    expect(remoteSurfaceComposition("/remote/session", true)).toEqual({ showSessionRail: true, showComposer: true })
+    expect(remoteSurfaceComposition("/remote", true)).toEqual({ showSessionRail: false, showComposer: false })
     expect(remoteSurfaceComposition("/remote", false)).toEqual({ showSessionRail: false, showComposer: false })
     expect(remoteSurfaceComposition("/remote/sessions", true)).toEqual({ showSessionRail: false, showComposer: false })
     expect(remoteSurfaceComposition("/remote/settings", true)).toEqual({ showSessionRail: false, showComposer: false })

@@ -37,6 +37,13 @@ export function createAppRouter(options: { readonly createRemoteStore?: () => Re
   const remoteRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: "/remote",
+    validateSearch: (search: Record<string, unknown>) => ({
+      ...(typeof search.session_id === "string" ? { session_id: search.session_id } : {}),
+      ...(typeof search.device_id === "string" ? { device_id: search.device_id } : {}),
+      ...(typeof search.notice_id === "string" ? { notice_id: search.notice_id } : {}),
+      ...(typeof search.workspace_id === "string" ? { workspace_id: search.workspace_id } : {}),
+      ...(search.source === "sessions" || search.source === "sidebar" ? { source: search.source } : {}),
+    }),
     beforeLoad: ({ preload }) => {
       if (session === undefined && !preload) session = createRemoteSession(options.createRemoteStore)
       return { remote: session }
@@ -58,7 +65,7 @@ export function createAppRouter(options: { readonly createRemoteStore?: () => Re
       )
     },
   })
-  const preloads = { usage: preloadUsage, settings: preloadKeepAwake, sessions: undefined }
+  const preloads = { usage: preloadUsage, settings: preloadKeepAwake, sessions: undefined, session: undefined }
   return createRouter({
     history: options.history,
     caseSensitive: true,
@@ -135,4 +142,10 @@ function RootShell(): JSX.Element {
 
 export function App(props: { readonly createRemoteStore?: () => RemoteStore }): JSX.Element {
   return <RouterProvider router={createAppRouter({ createRemoteStore: props.createRemoteStore })} />
+}
+
+declare module "@tanstack/solid-router" {
+  interface Register {
+    router: ReturnType<typeof createAppRouter>
+  }
 }
