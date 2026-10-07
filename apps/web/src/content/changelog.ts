@@ -22,6 +22,19 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.9.5",
+    date: "2026-10-08",
+    title: "Model-powered decisions and resilient remote access",
+    tags: ["Added", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Use an existing configured model for classification, fixed-option choices, and rubric scores through the decision tool. Select its helper model with agents.decision.model or efficiency.helper_models.decision; results use validated TOON and estimated confidence, not native probabilities." },
+      { tag: "Added", text: "Opt into model-based guardrail classification, initial agent/model routing, and goal continuation with min_confidence. Native OpenAI Decisions and TypeSafe Jev retain min_probability; deterministic denials, explicit selections, and human-only reviews remain authoritative." },
+      { tag: "Fixed", text: "Keep enabled remote access recovering after startup failures, connector-lock contention, socket outages, and failed credential rotation. Authentication and connection attempts have 30-second deadlines; rejected credentials still require attention. Update the connected machine to apply these recovery changes." },
+      { tag: "Fixed", text: "Turn Remote connection off while connecting, errored, or waiting for enablement. Disabling aborts pending authentication and cancels recovery; late replies cannot turn it back on." },
+      { tag: "Fixed", text: "Read failure messages in expanded generic tool responses while sensitive response details remain redacted." },
+    ],
+  },
+  {
     version: "0.9.4",
     date: "2026-10-07",
     title: "Independent Claude accounts and native decisions",

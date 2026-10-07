@@ -4,10 +4,39 @@ import { SubagentCursor } from "@ycoding-ai/protocol/groups/session"
 import { Effect, Schema } from "effect"
 import { sessionHttp } from "./session-http"
 import { SessionCompaction } from "../../schema/src/session-compaction"
+import { Agent } from "@ycoding-ai/core/agent"
+import { AgentNotSelectableError } from "@ycoding-ai/core/session/error"
 
 const parentID = Session.ID.make("ses_http_parent")
 const otherID = Session.ID.make("ses_http_other")
 const anchor = { rank: 0, updated: 0, sessionID: otherID, direction: "next" } as const
+
+test("internal decision helper rejection maps to HTTP 400 for creation and switching", async () => {
+  const rejected = new AgentNotSelectableError({ agent: Agent.ID.make("decision") })
+  await using http = sessionHttp({
+    create: () => Effect.fail(rejected),
+    switchAgent: () => Effect.fail(rejected),
+  })
+  for (const path of ["/api/session", `/api/session/${parentID}/agent`]) {
+    const response = await http.json(path, "POST", { agent: "decision" })
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({
+      _tag: "InvalidRequestError", field: "agent", message: rejected.message,
+    })
+  }
+})
+
+test("missing Sessions retain HTTP 404 during creation and agent switching", async () => {
+  await using http = sessionHttp({
+    create: () => Effect.fail(new Session.NotFoundError({ sessionID: parentID })),
+    switchAgent: () => Effect.fail(new Session.NotFoundError({ sessionID: parentID })),
+  })
+  for (const path of ["/api/session", `/api/session/${parentID}/agent`]) {
+    const response = await http.json(path, "POST", { agent: "build", parentID })
+    expect(response.status).toBe(404)
+    expect(await response.json()).toMatchObject({ _tag: "SessionNotFoundError", sessionID: parentID })
+  }
+})
 
 test("subagent list rejects malformed and cross-parent cursors before the paged read", async () => {
   const pages: unknown[] = []

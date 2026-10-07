@@ -21,6 +21,7 @@ export class CompactionHelperModels extends Schema.Class<CompactionHelperModels>
 export class HelperModels extends Schema.Class<HelperModels>("ConfigEfficiency.HelperModels")({
   title: HelperModel.pipe(Schema.optional),
   goal: HelperModel.pipe(Schema.optional),
+  decision: HelperModel.pipe(Schema.optional),
   compaction: CompactionHelperModels.pipe(Schema.optional),
 }) {}
 

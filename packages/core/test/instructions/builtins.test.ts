@@ -26,6 +26,8 @@ const taskCompletion =
   "Call task_complete once after all accepted work is finished and verified, immediately before your final reply. Do not call it for ordinary replies, idle, partial results, blockers, or unfinished pending, subagent, or background work. In goal mode, first complete the achieved goal with the goal tool; goal completion alone is not work-completion evidence. If new input or unfinished work intervenes, finish and verify it before declaring completion again."
 const humanInput =
   "When progress requires user input, a decision, or review, call question with the blocker and the minimum actionable request; do not end with a prose-only request for the user to act. Use options for decisions and an empty options array for free-text input. Continue after the reply; do not call task_complete while blocked. Keep permission and guardrail approvals on their native request paths. Do not ask for routine progress, optional acknowledgement, or information you can obtain yourself. Preserve autonomy and permission rules; if question is unavailable or denied, report that blocker without bypassing it."
+const decisionUse =
+  "Prefer the decision tool for bounded classification, fixed-option selection, or rubric scoring when it materially helps the task; use deterministic checks for verifiable facts. Provider agent uses the configured hidden decision helper and model to return validated TOON with uncalibrated confidence estimates; automate only through explicitly configured min_confidence policies. OpenAI Decisions and TypeSafe Jev require separate API-key access and use native min_probability policies. Do not infer native API access from a ChatGPT/Codex subscription. Respect tool permissions and authorized disclosure to the selected model or provider. Treat refusals and low scores as uncertainty; never use judgments to bypass guardrails, grant approval, certify completion, or change the objective. Report unavailable or denied evaluation without repeated probes, silent provider switching, or enabling paid access."
 const locationLayer = Layer.succeed(
   Location.Service,
   Location.Service.of(
@@ -78,6 +80,8 @@ describe("InstructionBuiltIns", () => {
           gitAttribution,
           "",
           humanInput,
+          "",
+          decisionUse,
           "",
           taskCompletion,
         ].join("\n"),
@@ -137,6 +141,21 @@ describe("InstructionBuiltIns", () => {
       const refreshed = yield* readUpdate(yield* context.load(sessionID), initialized)
 
       expect(refreshed.text).toBe(`Today's date is now: ${localDate(timestamp + 24 * 60 * 60 * 1000)}`)
+    }),
+  )
+
+  it.effect("admits decision-use guidance once into an existing Session's model-visible instructions", () =>
+    Effect.gen(function* () {
+      const builtins = yield* InstructionBuiltIns.Service
+      const initialized = yield* readInitial(yield* builtins.load(sessionID))
+      expect(initialized.values["core/decision-use"]).toBe(decisionUse)
+      const previous = {
+        values: Object.fromEntries(Object.entries(initialized.values).filter(([key]) => key !== "core/decision-use")),
+      }
+      const updated = yield* readUpdate(yield* builtins.load(sessionID), previous)
+      expect(updated.changed).toBe(true)
+      expect(updated.text).toBe(decisionUse)
+      expect((yield* readUpdate(yield* builtins.load(sessionID), updated)).changed).toBe(false)
     }),
   )
 

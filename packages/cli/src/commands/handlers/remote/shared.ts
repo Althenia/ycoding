@@ -3,12 +3,13 @@ import { Effect } from "effect"
 import { ServerConnection } from "../../../services/server-connection"
 import { RemoteCredentials } from "../../../remote-credentials"
 import { RemoteLocal } from "../../../remote-local"
+import { RemoteSetupError } from "../../../remote-error"
 
 export const requireIdentity = Effect.fn("cli.remote.identity")(function* () {
   const identity = yield* RemoteCredentials.read()
   if (identity === undefined)
     return yield* Effect.fail(
-      new Error("This machine is not enrolled; run `ycoding remote enroll <enrollmentID>` first"),
+      new RemoteSetupError("This machine is not enrolled; run `ycoding remote enroll <enrollmentID>` first"),
     )
   return identity
 })

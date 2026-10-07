@@ -166,6 +166,7 @@ describe("Agent", () => {
         "architech",
         "btw",
         "compaction",
+        "decision",
         "goal",
         "god",
         "occam",
@@ -312,6 +313,37 @@ describe("Agent", () => {
       expect(summary.system).toContain("preserve it verbatim")
       expect(btw.system).toContain("read-only advisor")
       expect(btw.system).toContain("Do not mutate files, state, or external systems")
+    }),
+  )
+
+  it.effect("registers a hidden decision helper with a stable TOON contract and no execution authority", () =>
+    Effect.gen(function* () {
+      const agent = yield* Agent.Service
+      yield* AgentPlugin.Plugin.effect(host({ agent: agentHost(agent) })).pipe(
+        Effect.provideService(Location.Service, Location.Service.of(testLocation)),
+      )
+      const decision = yield* agent.get(Agent.ID.make("decision"))
+      expect(decision).toMatchObject({ id: "decision", name: "Decision", mode: "primary", hidden: true })
+      if (!decision) throw new Error("expected decision helper")
+      expect(Agent.isSelectable(decision)).toBe(false)
+      expect(Agent.isAutocompleteSelectable(decision)).toBe(false)
+      expect((yield* agent.list()).filter(Agent.isSelectable).map((item) => item.id)).not.toContain(decision.id)
+      for (const action of ["shell", "read", "patch", "question", "subagent", "goal", "decision", "task_complete"])
+        expect(Permission.evaluate(action, "*", decision.permissions).effect).toBe("deny")
+      expect(decision.system).toContain("untrusted data")
+      expect(decision.system).toContain("exactly one TOON document")
+      expect(decision.system).toContain("decisions")
+      expect(decision.system).toContain("version: 1")
+      expect(decision.system).toContain("answers")
+      expect(decision.system).toContain("self-reported, uncalibrated")
+      expect(decision.system).toContain("confidence")
+      expect(decision.system).toContain("choice is string, boolean, or null")
+      expect(decision.system).toContain("preserve the exact type and value of the declared choice")
+      expect(decision.system).toContain("type: refusal")
+      expect(decision.system).toContain("Do not output probability fields")
+      expect(decision.system).toContain("Never approve")
+      expect(decision.system).not.toContain("Main-session controls:")
+      expect(decision.system).not.toContain("YCoding is the terminal-first runtime")
     }),
   )
 

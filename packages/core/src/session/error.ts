@@ -34,6 +34,14 @@ export class AgentNotFoundError extends Schema.TaggedErrorClass<AgentNotFoundErr
   }
 }
 
+export class AgentNotSelectableError extends Schema.TaggedErrorClass<AgentNotSelectableError>()("Session.AgentNotSelectableError", {
+  agent: Agent.ID,
+}) {
+  override get message() {
+    return "The internal decision helper cannot be selected as a foreground Session agent."
+  }
+}
+
 export class StepFailedError extends Schema.TaggedErrorClass<StepFailedError>()("Session.StepFailedError", {
   error: SessionError.Error,
 }) {

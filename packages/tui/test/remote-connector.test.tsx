@@ -106,11 +106,62 @@ test("palette selection toggles the shared server switch in both directions", as
       await view.app.waitForFrame((frame) => !frame.includes("Commands"))
     }
     await select("off")
+    expect(server.writes).toEqual([true])
     await view.app.waitForFrame((frame) => frame.includes("Remote fixture: on"))
     await select("on")
     await view.app.waitForFrame((frame) => frame.includes("Remote fixture: off"))
     expect(server.writes).toEqual([true, false])
   } finally {
+    view.app.renderer.destroy()
+  }
+})
+
+test.each(["connecting", "error"] as const)("remote toggle disables the enabled connector while %s", async (state) => {
+  const server = fakeServer()
+  const view = await renderRemote(server)
+  try {
+    server.change({ state, ...(state === "error" ? { message: "Connection needs attention" } : {}) })
+    await awaitFrame(view.app, (frame) => frame.includes(`Remote fixture: ${state}`))
+    view.dispatch("remote.toggle")
+    await view.app.waitForFrame((frame) => frame.includes("Remote fixture: off"))
+    expect(server.writes).toEqual([false])
+  } finally {
+    view.app.renderer.destroy()
+  }
+}, 10_000)
+
+test("a second toggle cancels pending enable intent and ignores its late reply", async () => {
+  const started = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  const settled = Promise.withResolvers<void>()
+  const fixture = fakeServer()
+  const server = {
+    ...fixture,
+    set: async (enabled: boolean): Promise<RemoteStatus> => {
+      fixture.writes.push(enabled)
+      if (!enabled) {
+        fixture.change({ state: "off" })
+        return { state: "off" }
+      }
+      started.resolve()
+      await release.promise
+      settled.resolve()
+      return { state: "connecting" }
+    },
+  }
+  const view = await renderRemote(server)
+  try {
+    view.dispatch("remote.toggle")
+    await started.promise
+    view.dispatch("remote.toggle")
+    await view.app.waitForFrame((frame) => frame.includes("Remote fixture: off"))
+    expect(fixture.writes).toEqual([true, false])
+    release.resolve()
+    await settled.promise
+    await view.app.renderOnce()
+    expect(view.status()).toEqual({ state: "off" })
+  } finally {
+    release.resolve()
     view.app.renderer.destroy()
   }
 })

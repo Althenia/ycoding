@@ -125,6 +125,44 @@ describe("Session.create", () => {
     }),
   )
 
+  it.effect("rejects creation with the internal decision helper before projecting a Session", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const store = yield* SessionStore.Service
+      const database = yield* Database.Service
+      const sessionID = Session.ID.create()
+
+      expect(yield* session.create({ id: sessionID, location, agent: Agent.ID.make("decision") }).pipe(Effect.flip))
+        .toMatchObject({ _tag: "Session.AgentNotSelectableError", agent: "decision" })
+      expect(yield* store.get(sessionID)).toBeUndefined()
+      expect((yield* session.list()).data).toEqual([])
+      expect(yield* database.db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all()
+        .pipe(Effect.orDie)).toEqual([])
+    }),
+  )
+
+  it.effect("adopts an existing Session before validating a retried decision-helper selection", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const created = yield* session.create({ location, agent: Agent.ID.make("custom-reviewer") })
+
+      expect(yield* session.create({ id: created.id, location, agent: Agent.ID.make("decision") })).toEqual(created)
+      expect(Array.from(yield* Stream.runCollect(logEvents(session, created.id)))).toHaveLength(1)
+    }),
+  )
+
+  it.effect("preserves creation with historical hidden helpers and custom agents", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+
+      for (const id of ["title", "custom-reviewer"]) {
+        const created = yield* session.create({ location, agent: Agent.ID.make(id) })
+        expect(created.agent).toBe(Agent.ID.make(id))
+        expect((yield* session.get(created.id)).agent).toBe(Agent.ID.make(id))
+      }
+    }),
+  )
+
   it.effect("persists only deny rules in the session permission ceiling", () =>
     Effect.gen(function* () {
       const session = yield* Session.Service
@@ -725,6 +763,33 @@ describe("Session.create", () => {
           Effect.map((error) => error._tag),
         ),
       ).toBe("Session.NotFoundError")
+    }),
+  )
+
+  it.effect("rejects switching to the internal decision helper without a selection event", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const created = yield* session.create({ location, agent: Agent.ID.make("custom-reviewer") })
+
+      expect(yield* session.switchAgent({ sessionID: created.id, agent: Agent.ID.make("decision") }).pipe(Effect.flip))
+        .toMatchObject({ _tag: "Session.AgentNotSelectableError", agent: "decision" })
+      expect(yield* session.get(created.id)).toEqual(created)
+      expect(Array.from(yield* Stream.runCollect(logEvents(session, created.id)))).toHaveLength(1)
+      expect(yield* session.pending(created.id)).toEqual([])
+    }),
+  )
+
+  it.effect("preserves switching to historical hidden helpers", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const created = yield* session.create({ location })
+
+      yield* session.switchAgent({ sessionID: created.id, agent: Agent.ID.make("title") })
+      expect((yield* session.get(created.id)).agent).toBe(Agent.ID.make("title"))
+      expect(Array.from(yield* Stream.runCollect(logEvents(session, created.id)))).toMatchObject([
+        { type: "session.created" },
+        { type: "session.agent.selected", data: { agent: "title" } },
+      ])
     }),
   )
 

@@ -475,7 +475,9 @@ const layer = Layer.effect(
                 parent.permissionCeiling,
                 prepared.caller.permissions,
               ),
-            })
+            }).pipe(Effect.catchTag("Session.AgentNotSelectableError", (error) =>
+              Effect.fail(new InvalidRequestError({ message: error.message })),
+            ))
             yield* publish(
               ids.childID,
               {

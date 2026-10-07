@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { LLM, LLMClient } from "@ycoding-ai/ai"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
 import { CatalogModel } from "@ycoding-ai/core/model"
@@ -68,6 +69,68 @@ test("helper policy reads independent role models", () => {
       main: ref("anthropic", "claude-opus-5"),
     },
   })
+})
+
+test("decision helper settings retain model variants and the explicit session selection", () => {
+  for (const selected of ["openai/decision-model#low", { providerID: "openai", model: "decision-model", variant: "low" }, "session"]) {
+    const info = Schema.decodeUnknownSync(Config.Info)({ efficiency: { helper_models: { decision: selected } } })
+    expect(settings([new Config.Document({ type: "document", info })]).models).toEqual({
+      decision: selected === "session" ? "session" : ref("openai", "decision-model", "low"),
+    })
+    expect(Schema.encodeSync(Config.Info)(info)).toMatchObject({ efficiency: { helper_models: {
+      decision: selected === "session" ? "session" : { providerID: "openai", model: "decision-model", variant: "low" },
+    } } })
+  }
+  expect(() => Schema.decodeUnknownSync(Config.Info)({ efficiency: { helper_models: { decision: 42 } } })).toThrow()
+})
+
+test("decision helper resolution preserves agent, configured, session, and default model precedence with native routes", async () => {
+  const pinned = ref("fixture", "pinned", "high")
+  const configured = ref("fixture", "configured", "low")
+  const owner = ref("fixture", "owner", "medium")
+  const defaultModel = ref("fixture", "default")
+  const session = SessionSchema.Info.make({
+    id: SessionSchema.ID.make("ses_decision_owner"),
+    projectID: Project.ID.global,
+    cost: Money.USD.zero,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    time: { created: DateTime.makeUnsafe(1), updated: DateTime.makeUnsafe(1) },
+    title: "Decision owner",
+    location: { directory: AbsolutePath.make("/project") },
+  })
+  const agent = Agent.Info.make({ ...Agent.Info.empty(Agent.ID.make("decision")), hidden: true, mode: "primary", model: pinned })
+  for (const scenario of [
+    { configured, owner, agent, expected: pinned },
+    { configured: "session" as const, owner, agent, expected: pinned },
+    { configured, owner, expected: configured },
+    { configured: "session" as const, owner, expected: owner },
+    { owner, expected: owner },
+    { configured: "session" as const, expected: defaultModel },
+    { expected: defaultModel },
+  ]) {
+    const policy = make({ titleMode: "local", models: { decision: scenario.configured } }, {
+      resolve: (selected) => Effect.gen(function* () {
+        const identity = selected.model ?? defaultModel
+        const catalog = CatalogModel.Info.make({
+          id: identity.id, providerID: identity.providerID, modelID: CatalogModel.ID.make(`api-${identity.id}`),
+          name: "Decision fixture", package: "@ycoding-ai/ai/providers/openai", settings: { apiKey: "fixture-key" }, headers: {}, body: {},
+          capabilities: { tools: false, input: ["text"], output: ["text"] },
+          variants: ["high", "low", "medium"].map((variant) => ({ id: CatalogModel.VariantID.make(variant), body: { reasoning: { effort: variant } } })),
+          time: { released: 0 }, cost: [], status: "active", enabled: true, limit: { context: 100, output: 20 },
+        })
+        const model = yield* SessionRunnerModel.resolve(selected, catalog)
+        return { ...SessionRunnerModel.resolved(model, identity.variant), ref: identity }
+      }),
+    })
+    const resolved = await Effect.runPromise(policy.resolveModel({ ...session, model: scenario.owner }, "decision", scenario.agent))
+    expect(resolved?.ref).toEqual(scenario.expected)
+    expect(String(resolved?.model.id)).toBe(`api-${scenario.expected.id}`)
+    expect(resolved?.model.route.id).toBe("openai-responses")
+    if (!resolved) throw new Error("expected a resolved decision model")
+    const prepared = await Effect.runPromise(LLMClient.prepare(LLM.request({ model: resolved.model, prompt: "Evaluate the supplied decision state." })))
+    expect(prepared.body).toMatchObject({ model: `api-${scenario.expected.id}` })
+    expect(resolved.model.route.defaults.http?.body?.reasoning).toEqual(scenario.expected.variant ? { effort: scenario.expected.variant } : undefined)
+  }
 })
 
 test("compaction model selection uses the owner Session scope before the hidden helper child exists", async () => {

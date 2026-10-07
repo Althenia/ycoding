@@ -1,20 +1,24 @@
 import { acquireRemoteLock } from "./lock"
+import { DeviceAuthorizationError } from "../../../remote-credentials"
+import { RemoteSetupError } from "../../../remote-error"
 
 export type RemoteConnectorStatus = {
   state: "off" | "connecting" | "on" | "other-process" | "error"
   message?: string
   notice?: string
+  retryable?: boolean
 }
 
 export type RemoteConnectorBridge = {
   connect: () => Promise<void>
   close: () => Promise<void>
+  subscribe?: (listener: (connected: boolean) => void) => () => void
 }
 
 export function createRemoteConnector(input: {
   directory: string
   notice: string
-  makeBridge: (hooks: { onDiagnostic: (message: string) => void; onTerminal: (message: string) => void }) => RemoteConnectorBridge
+  makeBridge: (hooks: { onDiagnostic: (message: string) => void; onTerminal: (message: string, retryable?: boolean) => void }) => RemoteConnectorBridge
   onDiagnostic?: (message: string) => void
 }) {
   const listeners = new Set<(status: RemoteConnectorStatus) => void>()
@@ -24,6 +28,20 @@ export function createRemoteConnector(input: {
   let starting: Promise<void> | undefined
   let settlement: Promise<void> = Promise.resolve()
   let generation = 0
+  let unsubscribe: (() => void) | undefined
+
+  async function cleanup() {
+    unsubscribe?.()
+    unsubscribe = undefined
+    const previous = bridge
+    bridge = undefined
+    try {
+      await previous?.close()
+    } finally {
+      if (lock?.owned) await lock.release()
+      lock = undefined
+    }
+  }
 
   function setStatus(next: RemoteConnectorStatus) {
     current = next
@@ -36,6 +54,8 @@ export function createRemoteConnector(input: {
     const cycle = ++generation
     setStatus({ state: "connecting", notice: input.notice })
     starting = (async () => {
+      await settlement
+      if (cycle !== generation) return
       lock = await acquireRemoteLock(input.directory)
       if (cycle !== generation) {
         if (lock.owned) await lock.release()
@@ -48,36 +68,32 @@ export function createRemoteConnector(input: {
       }
       bridge = input.makeBridge({
         onDiagnostic: (message) => input.onDiagnostic?.(message),
-        onTerminal: (message) => {
+        onTerminal: (message, retryable = false) => {
           if (cycle !== generation) return
-          setStatus({ state: "error", message })
-          settlement = (async () => {
-            try {
-              await bridge?.close()
-            } finally {
-              if (lock?.owned) await lock.release()
-              bridge = undefined
-              lock = undefined
-            }
-          })().catch(() => {
+          setStatus({ state: "error", message, retryable })
+          settlement = cleanup().catch(() => {
             input.onDiagnostic?.("Could not close terminal remote connection")
           })
         },
       })
-      await bridge.connect()
+      const next = bridge
+      unsubscribe = next.subscribe?.((connected) => {
+        if (cycle !== generation || current.state === "error") return
+        setStatus({ state: connected ? "on" : "connecting", notice: input.notice })
+      })
+      await next.connect()
       if (cycle !== generation || current.state === "error") return
-      setStatus({ state: "on", notice: input.notice })
+      if (!next.subscribe) setStatus({ state: "on", notice: input.notice })
     })().catch(async (error: unknown) => {
       try {
-        await bridge?.close()
+        await cleanup()
       } catch {
         input.onDiagnostic?.("Could not close failed remote connection")
-      } finally {
-        if (lock?.owned) await lock.release()
-        bridge = undefined
-        lock = undefined
       }
-      if (cycle === generation) setStatus({ state: "error", message: error instanceof Error ? error.message : String(error) })
+      if (cycle === generation && current.state !== "error") {
+        const terminal = error instanceof DeviceAuthorizationError || error instanceof RemoteSetupError
+        setStatus({ state: "error", message: terminal ? error.message : "Could not start remote connection", retryable: !terminal })
+      }
     }).finally(() => {
       starting = undefined
     })
@@ -86,12 +102,9 @@ export function createRemoteConnector(input: {
 
   async function stop() {
     generation++
-    await bridge?.close()
+    await cleanup()
     await starting
     await settlement
-    if (lock?.owned) await lock.release()
-    bridge = undefined
-    lock = undefined
     setStatus({ state: "off" })
   }
 

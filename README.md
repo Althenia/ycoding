@@ -8,7 +8,7 @@ Work on repositories from your terminal, with durable sessions and explicit cont
 
 - **Durable work:** preserve session history, pending prompts, and orchestration state.
 - **Background subagents:** delegate work with inherited permission limits.
-- **Native decisions:** use OpenAI Decisions or TypeSafe Jev through a permission-scoped tool and opt-in guardrail classification, initial agent/model routing, and goal-continuation policies. See [configuration](./docs/configuration.md#native-decisions).
+- **Structured decisions:** use native OpenAI Decisions, TypeSafe Jev, or a hidden decision agent through a permission-scoped tool and opt-in guardrail classification, initial agent/model routing, and goal-continuation policies. Agent confidence is an uncalibrated model estimate, separate from native probabilities. See [configuration](./docs/configuration.md#native-decisions).
 - **Repository-native customization:** configure agents, commands, skills, hooks, and MCP tools.
 - **Local browser and computer control:** use [paired Chrome-profile tabs, including the active tab, or agent-owned tabs](./docs/browser-extension.md) and [scoped macOS windows](./docs/computer-use.md) with per-site and `computer` permissions.
 - **On-demand knowledge:** save and search linked workspace Markdown with an [offline graph and reader](./docs/memory.md), which agents search before substantive work, without automatic transcript extraction or prompt injection.

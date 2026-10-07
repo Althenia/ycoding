@@ -1,12 +1,15 @@
 import { RemoteConnection } from "@ycoding-ai/server/remote-connection"
 import type { createRemoteConnector } from "./commands/handlers/remote/connector"
 import { createRemotePreferenceRepository } from "./remote-preference"
+import { RemoteSetupError } from "./remote-error"
+import { DeviceAuthorizationError } from "./remote-credentials"
 
 type Connector = ReturnType<typeof createRemoteConnector>
 
 export async function createRemoteHost(input: {
   file: string
   create: () => Promise<Connector>
+  scheduleRetry?: (retry: () => void, delayMs: number) => () => void
 }): Promise<RemoteConnection.Interface> {
   const repository = createRemotePreferenceRepository(input.file)
   let current: Awaited<ReturnType<RemoteConnection.Interface["status"]>> = { state: "off" }
@@ -14,33 +17,77 @@ export async function createRemoteHost(input: {
   let unsubscribe: (() => void) | undefined
   let generation = 0
   let transition = Promise.resolve()
+  let desired = false
+  const pending = new Set<Promise<void>>()
+  let cancelRetry: (() => void) | undefined
+  let retryAttempt = 0
+
+  function retry(cycle: number, message: string) {
+    if (!desired || cycle !== generation || cancelRetry) return
+    const delay = Math.min(1_000 * 2 ** retryAttempt, 30_000)
+    if (delay < 30_000) retryAttempt++
+    current = { state: "connecting", message: `${message}; retrying in ${delay / 1_000}s` }
+    const callback = () => {
+      cancelRetry = undefined
+      if (desired && cycle === generation) run(cycle)
+    }
+    if (input.scheduleRetry) cancelRetry = input.scheduleRetry(callback, delay)
+    else {
+      const timer = setTimeout(callback, delay)
+      cancelRetry = () => clearTimeout(timer)
+    }
+  }
 
   function start() {
-    if (current.state === "on" || current.state === "connecting") return current
+    if (desired && current.state !== "error") return current
+    const previous = connector
+    unsubscribe?.()
+    unsubscribe = undefined
+    connector = undefined
+    desired = true
+    retryAttempt = 0
     const cycle = ++generation
     current = { state: "connecting" }
-    void (async () => {
+    run(cycle, previous)
+    return current
+  }
+
+  function run(cycle: number, previous?: Connector) {
+    const running = (async () => {
       try {
+        await previous?.stop()
+        if (cycle !== generation) return
         const next = connector ?? await input.create()
         if (cycle !== generation) { await next.stop(); return }
         connector = next
         unsubscribe ??= next.subscribe((status) => {
           if (cycle !== generation || (status.state === "off" && current.state === "connecting")) return
-          current = status.state === "other-process"
-            ? { state: "error", message: status.message ?? "Another server holds the remote connector lock" }
-            : { state: status.state, ...(status.message ? { message: status.message } : {}) }
+          if (status.state === "other-process" || (status.state === "error" && status.retryable)) {
+            retry(cycle, status.message ?? "Remote connection failed")
+            return
+          }
+          if (status.state === "on") retryAttempt = 0
+          current = { state: status.state, ...(status.message ? { message: status.message } : {}) }
         })
+        await next.settled()
+        if (cycle !== generation) return
         await next.start()
         if (cycle !== generation) await next.stop()
       } catch (error) {
-        if (cycle === generation) current = { state: "error", message: error instanceof Error ? error.message : String(error) }
+        if (cycle !== generation) return
+        if (error instanceof RemoteSetupError || error instanceof DeviceAuthorizationError) current = { state: "error", message: error.message }
+        else retry(cycle, "Could not start remote connector")
       }
     })()
-    return current
+    pending.add(running)
+    void running.finally(() => { pending.delete(running) })
   }
 
   async function stop() {
+    desired = false
     generation++
+    cancelRetry?.()
+    cancelRetry = undefined
     unsubscribe?.()
     unsubscribe = undefined
     await connector?.stop()
@@ -49,7 +96,7 @@ export async function createRemoteHost(input: {
   }
 
   const enabled = await repository.load().catch((error: unknown) => {
-    current = { state: "error", message: error instanceof SyntaxError ? "Invalid remote preference JSON" : error instanceof Error ? error.message : String(error) }
+    current = { state: "error", message: error instanceof SyntaxError ? "Invalid remote preference JSON" : "Could not read remote connection preference" }
     return false
   })
   if (enabled) start()
@@ -65,6 +112,6 @@ export async function createRemoteHost(input: {
       transition = next.then(() => undefined, () => undefined)
       return next
     },
-    shutdown: async () => { await transition; await stop() },
+    shutdown: async () => { await transition; await stop(); await Promise.all(pending) },
   }
 }

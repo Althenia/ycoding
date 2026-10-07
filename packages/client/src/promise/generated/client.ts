@@ -635,7 +635,7 @@ export function make(options: ClientOptions) {
               location: input?.["location"],
             },
             successStatus: 200,
-            declaredStatuses: [404, 401, 400],
+            declaredStatuses: [404, 400, 401],
             empty: false,
           },
           requestOptions,

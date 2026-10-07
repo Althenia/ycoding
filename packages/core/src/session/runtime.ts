@@ -43,7 +43,7 @@ import { fromRow } from "./info"
 import { SessionRunner } from "./runner/index"
 import { SessionStore } from "./store"
 import { SessionExecution } from "./execution"
-import { AgentNotFoundError, AttachmentReadError, InvalidCursorError, MessageDecodeError, NotFoundError } from "./error"
+import { AgentNotFoundError, AgentNotSelectableError, AttachmentReadError, InvalidCursorError, MessageDecodeError, NotFoundError } from "./error"
 import { makeGlobalNode } from "../effect/app-node"
 import { LocationServiceMap } from "../location-service-map"
 import { SessionEvent } from "./event"
@@ -235,6 +235,7 @@ export type MessageNotFoundError = SessionRevert.MessageNotFoundError
 export type Error =
   | NotFoundError
   | AgentNotFoundError
+  | AgentNotSelectableError
   | MessageDecodeError
   | OperationUnavailableError
   | PromptConflictError
@@ -255,7 +256,7 @@ export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<{
     readonly data: SessionSchema.Info[]
   }>
-  readonly create: (input: CreateInput) => Effect.Effect<SessionSchema.Info, NotFoundError>
+  readonly create: (input: CreateInput) => Effect.Effect<SessionSchema.Info, NotFoundError | AgentNotSelectableError>
   readonly fork: (input: ForkInput) => Effect.Effect<SessionSchema.Info, NotFoundError | MessageNotFoundError>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info, NotFoundError>
   readonly snapshot: (sessionID: SessionSchema.ID, options?: { readonly limit?: number; readonly before?: string }) => Effect.Effect<
@@ -318,7 +319,7 @@ export interface Interface {
   readonly switchAgent: (input: {
     sessionID: SessionSchema.ID
     agent: Agent.ID
-  }) => Effect.Effect<void, NotFoundError>
+  }) => Effect.Effect<void, NotFoundError | AgentNotSelectableError>
   readonly switchModel: (input: {
     sessionID: SessionSchema.ID
     model: CatalogModel.Ref
@@ -837,6 +838,7 @@ const layer = Layer.effect(
         const sessionID = input.id ?? SessionSchema.ID.create()
         const recorded = yield* store.get(sessionID)
         if (recorded) return recorded
+        if (input.agent === Agent.ID.make("decision")) return yield* new AgentNotSelectableError({ agent: input.agent })
         const parent = input.parentID ? yield* store.get(input.parentID) : undefined
         if (input.parentID && parent === undefined) return yield* new NotFoundError({ sessionID: input.parentID })
         const location = parent?.location ?? input.location
@@ -1422,10 +1424,13 @@ const layer = Layer.effect(
             command: input.command,
             message: `Command not found: ${input.command}`,
           })
-        const evaluated = yield* commands.evaluate({ name: input.command, arguments: input.arguments })
-
         // TODO(v2 commands): decide whether command-level subtask/background execution belongs in v2 commands.
         const agent = command.agent ?? input.agent
+        if (agent === Agent.ID.make("decision")) return yield* new Command.EvaluationError({
+          command: input.command,
+          message: new AgentNotSelectableError({ agent }).message,
+        })
+        const evaluated = yield* commands.evaluate({ name: input.command, arguments: input.arguments })
         const commandAgent = yield* Effect.gen(function* () {
           if (!command.agent) return undefined
           const agents = yield* Agent.Service.pipe(Effect.provide(locations.get(session.location)))
@@ -1433,7 +1438,11 @@ const layer = Layer.effect(
         })
         const model = command.model ?? commandAgent?.model ?? input.model
         if (agent !== undefined && session.agent !== Agent.ID.make(agent))
-          yield* result.switchAgent({ sessionID: input.sessionID, agent: Agent.ID.make(agent) })
+          yield* result.switchAgent({ sessionID: input.sessionID, agent: Agent.ID.make(agent) }).pipe(
+            Effect.catchTag("Session.AgentNotSelectableError", (error) =>
+              Effect.fail(new Command.EvaluationError({ command: input.command, message: error.message })),
+            ),
+          )
         // A requested command model must be selected before the command is admitted. A failed
         // selection is an explicit command evaluation failure rather than a silent run on the
         // previous model. Transcript corruption is a defect and fails loudly.
@@ -1594,10 +1603,11 @@ const layer = Layer.effect(
       }),
       switchAgent: Effect.fn("Session.switchAgent")(function* (input) {
         const session = yield* result.get(input.sessionID)
+        if (input.agent === Agent.ID.make("decision")) return yield* new AgentNotSelectableError({ agent: input.agent })
         const source = yield* projectArtifactSource(session.location)
         const provenance = source ? yield* source.provenance("agent", input.agent) : undefined
         const activatedAt = ProjectArtifact.TimestampMillis.make(Date.now())
-        yield* events.publish(
+        return yield* events.publish(
           SessionEvent.AgentSelected,
           {
             sessionID: input.sessionID,
@@ -1629,7 +1639,7 @@ const layer = Layer.effect(
                       .pipe(Effect.orDie)
                 : undefined,
           },
-        )
+        ).pipe(Effect.asVoid)
       }),
       switchModel: Effect.fn("Session.switchModel")(function* (input) {
         return yield* execution.withTransition(

@@ -49,6 +49,15 @@ const routing = Schema.decodeUnknownSync(ConfigDecisions.Info)({
       model: { providerID, model: selectedID } }],
   },
 })
+const agentRouting = Schema.decodeUnknownSync(ConfigDecisions.Info)({
+  routing: {
+    provider: "agent",
+    min_confidence: 0.8,
+    candidates: [
+      { id: "design", description: "Design systems", agent: selectedAgent, model: { providerID, model: selectedID } },
+    ],
+  },
+})
 
 function run(input: {
   settings?: ConfigDecisions.Info
@@ -167,6 +176,49 @@ test("routes the real first pending input and runner request to the validated ag
   expect(result.choices[0]?.state).toMatchObject({ text: "Design a distributed scheduler" })
   expect(result.choices[0]?.choices).toEqual({ "keep-current": "Keep the current default agent and model", design: "Design systems" })
   expect(result.history.slice(0, 3).map((message) => message.type)).toEqual(["agent-switched", "model-switched", "user"])
+})
+
+test("routes the real first pending input at the agent estimated-confidence threshold", async () => {
+  const result = await run({
+    settings: agentRouting,
+    choose: () => Effect.succeed({ choice: "design", confidence: 0.8, refused: false }),
+  })
+  expect(result.session).toMatchObject({ agent: selectedAgent, model: { providerID, id: selectedID } })
+  expect(result.history.find((message) => message.type === "assistant")).toMatchObject({
+    agent: selectedAgent,
+    model: { providerID, id: selectedID },
+  })
+  expect(String(result.requests[0]?.model.id)).toBe(selectedID)
+  expect(result.choices).toHaveLength(1)
+  expect(result.choices[0]?.provider).toBe("agent")
+  expect(result.history.slice(0, 3).map((message) => message.type)).toEqual([
+    "agent-switched",
+    "model-switched",
+    "user",
+  ])
+})
+
+test("keeps real runner defaults for uncertain or refused agent estimates and wrong metrics", async () => {
+  for (const answer of [
+    { confidence: 0.79 },
+    { probability: 1 },
+    { confidence: Infinity },
+    { confidence: 1.01 },
+    { confidence: -0.1 },
+    { confidence: 1, refused: true },
+  ]) {
+    const result = await run({
+      settings: agentRouting,
+      choose: () => Effect.succeed({ choice: "design", refused: false, ...answer }),
+    })
+    expect(result.choices).toHaveLength(1)
+    expect(result.session?.agent).toBeUndefined()
+    expect(result.session?.model).toBeUndefined()
+    expect(String(result.requests[0]?.model.id)).toBe(baselineID)
+    expect(
+      result.history.some((message) => message.type === "agent-switched" || message.type === "model-switched"),
+    ).toBe(false)
+  }
 })
 
 test("uses configured agent-only and model-only candidates without persisting omitted defaults", async () => {

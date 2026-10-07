@@ -104,7 +104,9 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                       location: ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) },
                     },
               )
-              .pipe(Effect.mapError(mapSessionNotFound)),
+              .pipe(Effect.mapError((error) => error._tag === "Session.AgentNotSelectableError"
+                ? new InvalidRequestError({ message: error.message, field: "agent" })
+                : mapSessionNotFound(error))),
           }
         }),
       )
@@ -470,14 +472,9 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         "session.switchAgent",
         Effect.fn(function* (ctx) {
           yield* session.switchAgent({ sessionID: ctx.params.sessionID, agent: ctx.payload.agent }).pipe(
-            Effect.catchTag("Session.NotFoundError", (error) =>
-              Effect.fail(
-                new SessionNotFoundError({
-                  sessionID: error.sessionID,
-                  message: `Session not found: ${error.sessionID}`,
-                }),
-              ),
-            ),
+            Effect.mapError((error) => error._tag === "Session.AgentNotSelectableError"
+              ? new InvalidRequestError({ message: error.message, field: "agent" })
+              : mapSessionNotFound(error)),
           )
           return HttpApiSchema.NoContent.make()
         }),

@@ -41,3 +41,21 @@ test("rejects unbounded timeouts, invalid thresholds, and ambiguous routes", () 
     })) } },
   ]) expect(() => decode({ decisions })).toThrow()
 })
+
+test("retains model-agent confidence policies independently of native probabilities", () => {
+  const policy = { provider: "agent", min_confidence: 0.8 }
+  const decisions = { guardrails: policy, goal: policy, routing: { ...policy, candidates: [
+    { id: "review", agent: "GSD", description: "Review" },
+  ] } }
+  expect(decode({ decisions }).decisions).toMatchObject(decisions)
+})
+
+test("rejects missing, invalid, or mixed confidence/probability thresholds", () => {
+  for (const guardrails of [
+    { provider: "agent", min_probability: 0.8 },
+    { provider: "agent", min_confidence: 1.1 },
+    { provider: "agent", min_confidence: -0.1 },
+    { provider: "agent", min_confidence: 0.8, min_probability: 0.9 },
+    { provider: "openai", min_probability: 0.8, min_confidence: 0.9 },
+  ]) expect(() => decode({ decisions: { guardrails } })).toThrow()
+})

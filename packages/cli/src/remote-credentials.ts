@@ -5,6 +5,7 @@ import { deviceSignaturePayload, enrollmentCodePattern } from "@ycoding-ai/remot
 import { Effect, FileSystem, Option, Schema } from "effect"
 import fs from "node:fs/promises"
 import path from "node:path"
+import { RemoteSetupError } from "./remote-error"
 
 // Local device enrollment for the remote relay. The P-256 private key never
 // leaves this machine and lives outside the repository under the global state
@@ -53,10 +54,10 @@ export const read = Effect.fn("cli.remote-credentials.read")(function* () {
   const target = yield* file
   const info = yield* lstat(target)
   if (Option.isNone(info)) return undefined
-  if (info.value.isSymbolicLink()) return yield* Effect.fail(new Error(symlinkError(target)))
+  if (info.value.isSymbolicLink()) return yield* Effect.fail(new RemoteSetupError(symlinkError(target)))
   const text = yield* fs.readFileString(target)
   return yield* decodeIdentity(text).pipe(
-    Effect.mapError(() => new Error(`Malformed remote device credentials at ${target}; re-enroll this device`)),
+    Effect.mapError(() => new RemoteSetupError(`Malformed remote device credentials at ${target}; re-enroll this device`)),
   )
 })
 
@@ -94,14 +95,14 @@ const write = Effect.fnUntraced(function* (identity: Identity, target: string) {
 /** Read-only symlink probe: `FileSystem.stat` follows links, which is unsafe here. */
 const lstat = (target: string) =>
   Effect.tryPromise({
-    try: async () => {
-      const info = await fs.lstat(target)
-      return {
-        isSymbolicLink: () => info.isSymbolicLink(),
-      }
-    },
-    catch: () => undefined,
-  }).pipe(Effect.orElseSucceed(() => undefined), Effect.map(Option.fromNullishOr))
+    try: () => fs.lstat(target),
+    catch: (error) => error,
+  }).pipe(
+    Effect.catch((error) => typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT"
+      ? Effect.succeed(undefined)
+      : Effect.fail(error)),
+    Effect.map(Option.fromNullishOr),
+  )
 
 function symlinkError(target: string) {
   return `Refusing to use ${target} because it is a symbolic link; remove it and enroll this device again`
@@ -176,22 +177,24 @@ export async function enroll(input: {
 
 export const credentials = Effect.fn("cli.remote-credentials.credentials")(function* (
   identity: Identity,
-  options: { readonly fetcher?: FetchLike; readonly now?: () => number } = {},
+  options: { readonly fetcher?: FetchLike; readonly now?: () => number; readonly signal?: AbortSignal } = {},
 ) {
   const now = options.now ?? Date.now
   const current = now()
+  const deadline = AbortSignal.timeout(30_000)
+  const signal = options.signal === undefined ? deadline : AbortSignal.any([options.signal, deadline])
   const rotated =
     identity.refreshToken !== undefined && identity.refreshExpiresAt !== undefined && identity.refreshExpiresAt > current
-      ? yield* refresh(identity, options.fetcher)
-      : yield* challenge(identity, options.fetcher)
+      ? yield* refresh(identity, options.fetcher, signal)
+      : yield* challenge(identity, options.fetcher, signal)
   yield* update({ ...identity, refreshToken: rotated.refreshToken, refreshExpiresAt: rotated.refreshExpiresAt })
   return { accessToken: rotated.accessToken, accessExpiresAt: rotated.accessExpiresAt }
 })
 
-const challenge = Effect.fnUntraced(function* (identity: Identity, fetcher?: FetchLike) {
+const challenge = Effect.fnUntraced(function* (identity: Identity, fetcher: FetchLike | undefined, signal: AbortSignal) {
   const minted = yield* Effect.tryPromise({
     try: () =>
-      post(identity.relayURL, "/api/devices/challenge", fetcher, { deviceID: identity.deviceID }),
+      post(identity.relayURL, "/api/devices/challenge", fetcher, { deviceID: identity.deviceID }, signal),
     catch: (cause) => authenticationError(cause, "Could not start device authentication with the relay"),
   })
   const challengeID = requireStringField(minted, "challengeID")
@@ -202,19 +205,19 @@ const challenge = Effect.fnUntraced(function* (identity: Identity, fetcher?: Fet
   })
   const tokens = yield* Effect.tryPromise({
     try: () =>
-      post(identity.relayURL, "/api/devices/token", fetcher, { deviceID: identity.deviceID, challengeID, signature }),
+      post(identity.relayURL, "/api/devices/token", fetcher, { deviceID: identity.deviceID, challengeID, signature }, signal),
     catch: (cause) => authenticationError(cause, "The relay rejected this device"),
   })
   return requireTokens(tokens)
 })
 
-const refresh = Effect.fnUntraced(function* (identity: Identity, fetcher?: FetchLike) {
+const refresh = Effect.fnUntraced(function* (identity: Identity, fetcher: FetchLike | undefined, signal: AbortSignal) {
   const tokens = yield* Effect.tryPromise({
     try: () =>
       post(identity.relayURL, "/api/devices/refresh", fetcher, {
         deviceID: identity.deviceID,
         refreshToken: identity.refreshToken,
-      }),
+      }, signal),
     catch: (cause) => authenticationError(cause, "The relay rejected this device credential"),
   })
   return requireTokens(tokens)
@@ -225,7 +228,7 @@ function authenticationError(cause: unknown, message: string) {
   return new Error(message, { cause })
 }
 
-async function post(relayURL: string, route: string, fetcher: FetchLike | undefined, body: unknown) {
+async function post(relayURL: string, route: string, fetcher: FetchLike | undefined, body: unknown, signal?: AbortSignal) {
   const url = new URL(route, withTrailingSlash(relayURL))
   if (url.search !== "") throw new Error("Device credentials are never sent as URL parameters")
   const response = await (fetcher ?? globalThis.fetch)(url, {
@@ -233,6 +236,7 @@ async function post(relayURL: string, route: string, fetcher: FetchLike | undefi
     headers: { "content-type": "application/json" },
     // A redirect could carry the credential body to another origin.
     redirect: "error",
+    signal,
     body: JSON.stringify(body),
   })
   if (response.status === 401 || response.status === 403 || response.status === 410)

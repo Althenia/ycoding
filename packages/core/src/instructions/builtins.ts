@@ -104,6 +104,14 @@ const layer = Layer.effect(
               render: { initial: (instruction) => instruction, changed: (_previous, instruction) => instruction },
             }),
             Instructions.make({
+              key: Instructions.Key.make("core/decision-use"),
+              codec: Schema.toCodecJson(Schema.String),
+              read: Effect.succeed(
+                "Prefer the decision tool for bounded classification, fixed-option selection, or rubric scoring when it materially helps the task; use deterministic checks for verifiable facts. Provider agent uses the configured hidden decision helper and model to return validated TOON with uncalibrated confidence estimates; automate only through explicitly configured min_confidence policies. OpenAI Decisions and TypeSafe Jev require separate API-key access and use native min_probability policies. Do not infer native API access from a ChatGPT/Codex subscription. Respect tool permissions and authorized disclosure to the selected model or provider. Treat refusals and low scores as uncertainty; never use judgments to bypass guardrails, grant approval, certify completion, or change the objective. Report unavailable or denied evaluation without repeated probes, silent provider switching, or enabling paid access.",
+              ),
+              render: { initial: (instruction) => instruction, changed: (_previous, instruction) => instruction },
+            }),
+            Instructions.make({
               key: Instructions.Key.make("core/task-completion"),
               codec: Schema.toCodecJson(Schema.String),
               read: Effect.succeed(

@@ -5,6 +5,7 @@ import { TestClock } from "effect/testing"
 import { eq } from "drizzle-orm"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Decision } from "@ycoding-ai/core/decision"
+import { DecisionAgent } from "@ycoding-ai/core/decision-agent"
 import { Config } from "@ycoding-ai/core/config"
 import { Credential } from "@ycoding-ai/core/credential"
 import { Database } from "@ycoding-ai/core/database/database"
@@ -58,6 +59,7 @@ const executor = Layer.mock(RequestExecutor.Service, { execute: (request) => Eff
 ))) })
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, Decision.node, SessionProjector.node, SessionProviderRequest.node, ToolRegistry.node, ToolRegistry.toolsNode, Permission.node, Credential.node, EventRuntime.node, Agent.node, SessionStore.node]), [
   [requestExecutor, executor],
+  [DecisionAgent.node, Layer.mock(DecisionAgent.Service, { evaluate: () => Effect.die("Native decisions must not invoke the helper agent") })],
   [Config.node, Layer.mock(Config.Service, { entries: () => Effect.succeed([{
     type: "document", path: "fixture", info: Schema.decodeUnknownSync(Config.Info)({ decisions: {
       providers: { openai: { api_key: "fixture-openai-key" }, typesafe: { api_key: "fixture-typesafe-key" } },
@@ -125,8 +127,7 @@ it.effect("decision usage preserves native totals while normalizing non-overlapp
   const result = yield* decisions.evaluate({ provider: "openai", request: {
     model: "gpt-6-luna", input: "Classify risk", questions: [{ type: "choice", name: "decision", instructions: "Risk", choices: [{ value: "allow" }, { value: "review" }] }],
   } }, { sessionID })
-  expect(result.response.usage.input_tokens).toBe(12)
-  expect(result.response.usage.output_tokens).toBe(5)
+  expect(result.response).toMatchObject({ usage: { input_tokens: 12, output_tokens: 5 } })
   const records = yield* requests.list(sessionID)
   expect(records[0].cacheReadReported).toBe(true)
   expect(records[0].tokens).toEqual({ input: 6, output: 3, reasoning: 2, cache: { read: 4, write: 2 } })

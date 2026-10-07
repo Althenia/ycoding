@@ -3,7 +3,6 @@ export * as SessionHelperPolicy from "./helper-policy"
 import { Context, Effect, Layer } from "effect"
 import { Agent } from "../agent"
 import { Config } from "../config"
-import { ConfigEfficiency } from "../config/efficiency"
 import { makeLocationNode } from "../effect/app-node"
 import { CatalogModel } from "../model"
 import { Provider } from "../provider"
@@ -11,7 +10,7 @@ import { SessionRunnerModel } from "./runner/model"
 import { SessionSchema } from "./schema"
 
 export type TitleMode = "local" | "model" | "off"
-export type Role = "title" | "goal" | "compaction"
+export type Role = "title" | "goal" | "decision" | "compaction"
 export type CompactionScope = "main" | "subagent"
 export type ModelSelection = CatalogModel.Ref | "session"
 
@@ -88,6 +87,7 @@ export const settings = (entries: readonly Config.Entry[]): Settings => {
   const efficiency = Config.latest(entries, "efficiency")
   const title = configuredModel(efficiency?.helper_models?.title)
   const goal = configuredModel(efficiency?.helper_models?.goal)
+  const decision = configuredModel(efficiency?.helper_models?.decision)
   const compactionMain = configuredModel(efficiency?.helper_models?.compaction?.main)
   const compactionSubagent = configuredModel(efficiency?.helper_models?.compaction?.subagent)
   return {
@@ -95,6 +95,7 @@ export const settings = (entries: readonly Config.Entry[]): Settings => {
     models: {
       ...(title === undefined ? {} : { title }),
       ...(goal === undefined ? {} : { goal }),
+      ...(decision === undefined ? {} : { decision }),
     },
     compactionScopes: {
       ...(compactionMain === undefined ? {} : { main: compactionMain }),

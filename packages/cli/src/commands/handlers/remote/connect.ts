@@ -12,6 +12,7 @@ import type { Endpoint } from "@ycoding-ai/client/effect/service"
 import { Service } from "@ycoding-ai/client/effect/service"
 import { YCoding } from "@ycoding-ai/client/promise"
 import { ServerConnection } from "../../../services/server-connection"
+import { RemoteSetupError } from "../../../remote-error"
 
 export function privateLocalServer(endpoint: Endpoint) {
   RemoteLocal.assertPrivateEndpoint(endpoint)
@@ -23,11 +24,17 @@ export const makeRemoteConnector = Effect.fn("cli.remote.connector")(function* (
   onDiagnostic?: (message: string) => void
 }) {
   const identity = yield* requireIdentity()
-  const relayURL = yield* Effect.try(() => RemoteConfig.assertEnrolledRelay({
-    requested: process.env[RemoteConfig.envVar] ?? identity.relayURL,
-    enrolled: identity.relayURL,
-  }))
-  const local = yield* Effect.try(() => privateLocalServer(input.endpoint))
+  const relayURL = yield* Effect.try({
+    try: () => RemoteConfig.assertEnrolledRelay({
+      requested: RemoteConfig.normalizeRelayURL(process.env[RemoteConfig.envVar] ?? identity.relayURL),
+      enrolled: RemoteConfig.normalizeRelayURL(identity.relayURL),
+    }),
+    catch: (error) => new RemoteSetupError(error instanceof Error ? error.message : "Invalid enrolled relay origin"),
+  })
+  const local = yield* Effect.try({
+    try: () => privateLocalServer(input.endpoint),
+    catch: (error) => new RemoteSetupError(error instanceof Error ? error.message : "Invalid local remote backend"),
+  })
   const services = yield* Effect.context<FileSystem.FileSystem | Global.Service>()
   const run = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem | Global.Service>) =>
     Effect.runPromise(effect.pipe(Effect.provide(services)))
@@ -40,10 +47,10 @@ export const makeRemoteConnector = Effect.fn("cli.remote.connector")(function* (
     makeBridge: (hooks) => new RemoteAgent({
       relayURL,
       local,
-      credentials: () => run(Effect.gen(function* () {
+      credentials: (signal) => run(Effect.gen(function* () {
         const current = yield* RemoteCredentials.read()
-        if (current === undefined) return yield* Effect.fail(new Error("The device identity disappeared"))
-        return yield* RemoteCredentials.credentials(current)
+        if (current === undefined) return yield* Effect.fail(new RemoteSetupError("The device identity disappeared; enroll this device again"))
+        return yield* RemoteCredentials.credentials(current, { signal })
       })),
       onDiagnostic: hooks.onDiagnostic,
       onTerminal: hooks.onTerminal,

@@ -265,13 +265,7 @@ const make = (dependencies: Dependencies) => {
         stop: "Stop automatic execution without claiming that the objective was achieved.",
       },
     }).pipe(Effect.catchTag("Decision.Error", () => Effect.fail(new Error({ code: "goal.calculation_failed" }))))
-    if (
-      !result.refused &&
-      result.choice === "stop" &&
-      result.probability !== undefined &&
-      result.probability >= policy.min_probability
-    )
-      return { action: "stop" as const }
+    if (result.choice === "stop" && Decision.confident(policy, result)) return { action: "stop" as const }
     return {
       action: "continue" as const,
       steer: [

@@ -316,13 +316,7 @@ export const layer = Layer.effect(
           },
         })
         .pipe(Effect.catchTag("Decision.Error", () => Effect.succeed<Decision.Choice>({ refused: true })))
-      if (
-        !choice.refused &&
-        choice.choice === "allow" &&
-        choice.probability !== undefined &&
-        choice.probability >= policy.min_probability
-      )
-        return result
+      if (choice.choice === "allow" && Decision.confident(policy, choice)) return result
       return {
         rootSessionID,
         decision: "ask" as const,

@@ -84,7 +84,7 @@ Priorities include stable prompt prefixes, provider-specific cache controls, acc
 
 OpenCode Zen and OpenCode Go remain named as such only because they are external provider identities.
 
-OpenAI Decisions and TypeSafe Jev provide native structured judgments through the `decision` tool and explicitly configured guardrail, initial routing, and goal-continuation policies. These API-key integrations are separate from conversational models and subscription authentication. Decisions do not grant permission, certify completion, or change the user's goal objective; explicit autonomy and human-only hard reviews remain enforced. See [configuration](./configuration.md#native-decisions).
+OpenAI Decisions, TypeSafe Jev, and a hidden decision agent provide structured judgments through the `decision` tool and explicitly configured guardrail, initial routing, and goal-continuation policies. Native APIs require their own API-key access; the hidden agent uses a configured helper or Session model through its normal authentication route, including supported subscription routes. Agent confidence is a self-reported, uncalibrated estimate, not a native probability. Decisions do not grant permission, certify completion, or change the user's goal objective; explicit autonomy and human-only hard reviews remain enforced. See [configuration](./configuration.md#native-decisions).
 
 ### 8. Documentation and distribution
 

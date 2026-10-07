@@ -76,7 +76,8 @@ function harness(options: {
   sessions?: readonly AllowlistSession[]
   failStatusOnce?: boolean
   results?: Partial<Record<keyof LocalServer, unknown>>
-  credentials?: () => Promise<BridgeCredentials>
+  credentials?: (signal?: AbortSignal) => Promise<BridgeCredentials>
+  disconnect?: () => Promise<void>
   reloadSessions?: () => Promise<readonly AllowlistSession[]>
 }) {
   const { local, calls, streams } = fakeLocal({
@@ -92,6 +93,7 @@ function harness(options: {
   const records: ConnectionRecord[] = []
   const diagnostics: string[] = []
   const terminal: string[] = []
+  const recoverable: boolean[] = []
   let clock = 1_000
   let tokens = 0
   let failStatus = options.failStatusOnce ?? false
@@ -127,6 +129,7 @@ function harness(options: {
         },
         disconnect: async () => {
           state.disconnected = true
+          await options.disconnect?.()
         },
       }
       Object.defineProperty(record, "disconnected", { get: () => state.disconnected })
@@ -148,7 +151,7 @@ function harness(options: {
     eventRetryMaxMs: 10,
     now: () => clock,
     onDiagnostic: (message) => diagnostics.push(message),
-    onTerminal: (message) => terminal.push(message),
+    onTerminal: (message, retryable) => { terminal.push(message); recoverable.push(retryable ?? false) },
   })
   return {
     bridge,
@@ -157,6 +160,7 @@ function harness(options: {
     streams,
     diagnostics,
     terminal,
+    recoverable,
     advance: (ms: number) => {
       clock += ms
     },
@@ -1108,9 +1112,9 @@ describe("remote bridge", () => {
     await bridge.close()
   })
 
-  test("stops on an expired credential when rotation cannot mint a new one", async () => {
+  test("hands a failed credential rotation back to the host for recovery instead of stranding a live bridge", async () => {
     let calls = 0
-    const { bridge, records, diagnostics, terminal } = harness({
+    const { bridge, records, diagnostics, terminal, recoverable } = harness({
       credentials: async () => {
         calls++
         if (calls > 1) throw new Error("network down")
@@ -1121,10 +1125,82 @@ describe("remote bridge", () => {
     records[0].input.onClose(RemoteCloseCode.unauthorized)
     await Bun.sleep(5)
 
-    expect(bridge.currentState).toBe("live")
+    expect(bridge.currentState).toBe("terminal")
     expect(diagnostics.some((message) => message.startsWith("could not rotate"))).toBe(true)
-    expect(terminal).toEqual([])
+    expect(terminal).toEqual(["Could not reconnect to the relay; retrying"])
+    expect(recoverable).toEqual([true])
     await bridge.close()
+  })
+
+  test("closing while startup reads credentials never creates a relay connection afterward", async () => {
+    const entered = Promise.withResolvers<void>()
+    const credential = Promise.withResolvers<BridgeCredentials>()
+    const test = harness({ credentials: () => { entered.resolve(); return credential.promise } })
+    const connecting = test.bridge.connect()
+    await entered.promise
+    await test.bridge.close()
+    credential.resolve({ accessToken: "synthetic", accessExpiresAt: 1_000_000 })
+    await connecting
+    expect(test.bridge.currentState).toBe("closed")
+    expect(test.records).toHaveLength(0)
+  })
+
+  test("closing while startup reads inventory never starts device authentication afterward", async () => {
+    const entered = Promise.withResolvers<void>()
+    const inventory = Promise.withResolvers<{ data: SessionInfo[] }>()
+    let credentials = 0
+    const test = harness({
+      results: { listPage: () => { entered.resolve(); return inventory.promise } },
+      credentials: async () => { credentials++; return { accessToken: "synthetic", accessExpiresAt: 1_000_000 } },
+    })
+    const connecting = test.bridge.connect()
+    await entered.promise
+    await test.bridge.close()
+    inventory.resolve({ data: [] })
+    await connecting
+    expect(test.bridge.currentState).toBe("closed")
+    expect(credentials).toBe(0)
+    expect(test.records).toHaveLength(0)
+  })
+
+  test("closing during credential rotation's disconnect cannot open a successor connection", async () => {
+    const entered = Promise.withResolvers<void>()
+    const disconnected = Promise.withResolvers<void>()
+    const test = harness({ disconnect: () => { entered.resolve(); return disconnected.promise } })
+    await test.bridge.connect()
+    test.records[0].input.onClose(RemoteCloseCode.unauthorized)
+    await entered.promise
+    await test.bridge.close()
+    disconnected.resolve()
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(test.records).toHaveLength(1)
+    expect(test.bridge.currentState).toBe("closed")
+  })
+
+  test("closing aborts pending startup authentication so its owner can settle promptly", async () => {
+    const entered = Promise.withResolvers<void>()
+    const credential = Promise.withResolvers<BridgeCredentials>()
+    let signal: AbortSignal | undefined
+    const test = harness({ credentials: (next) => {
+      signal = next
+      next?.addEventListener("abort", () => credential.reject(next.reason), { once: true })
+      entered.resolve()
+      return credential.promise
+    } })
+    const connecting = test.bridge.connect().catch((error: unknown) => error)
+    try {
+      await entered.promise
+      expect(signal).toBeInstanceOf(AbortSignal)
+      await test.bridge.close()
+      await connecting
+      expect(signal?.aborted).toBe(true)
+      expect(test.records).toHaveLength(0)
+      expect(test.bridge.currentState).toBe("closed")
+    } finally {
+      credential.reject(new Error("test cleanup"))
+      await connecting
+      await test.bridge.close()
+    }
   })
 
   test("never replays an indeterminate mutation across reconnects", async () => {

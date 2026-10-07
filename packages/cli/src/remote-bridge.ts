@@ -14,6 +14,7 @@ import {
   serializeCompletions,
 } from "@ycoding-ai/remote"
 import { DeviceAuthorizationError } from "./remote-credentials"
+import { RemoteSetupError } from "./remote-error"
 import { agentURL } from "./remote-config"
 import {
   createSessionRegistry,
@@ -62,7 +63,7 @@ export type RemoteBridgeOptions = {
   readonly relayURL: string
   readonly local: LocalServer
   /** Mints or rotates the device access credential. */
-  readonly credentials: () => Promise<BridgeCredentials>
+  readonly credentials: (signal?: AbortSignal) => Promise<BridgeCredentials>
   /** Test seam; production dials the Cloudflare relay over WSS. */
   readonly createConnection?: (input: ConnectionInput) => RelayConnection
   readonly refreshIntervalMs?: number
@@ -72,7 +73,7 @@ export type RemoteBridgeOptions = {
   readonly conflictRetryMs?: number
   readonly now?: () => number
   readonly onDiagnostic?: (message: string) => void
-  readonly onTerminal?: (message: string) => void
+  readonly onTerminal?: (message: string, retryable?: boolean) => void
 }
 
 const defaults = {
@@ -104,6 +105,10 @@ export class RemoteAgent {
 
   private connection?: RelayConnection
   private state: BridgeState = "idle"
+  private generation = 0
+  private readonly lifetime = new AbortController()
+  private connected = false
+  private readonly listeners = new Set<(connected: boolean) => void>()
   private accessExpiresAt = 0
   private lastAuthAttempt = Number.NEGATIVE_INFINITY
   private refreshTimer?: ReturnType<typeof setTimeout>
@@ -160,6 +165,17 @@ export class RemoteAgent {
     return this.terminalReason
   }
 
+  subscribe(listener: (connected: boolean) => void) {
+    this.listeners.add(listener)
+    listener(this.connected)
+    return () => { this.listeners.delete(listener) }
+  }
+
+  private setConnected(connected: boolean) {
+    this.connected = connected
+    this.listeners.forEach((listener) => listener(connected))
+  }
+
   /** Session IDs from the latest complete backend inventory refresh. */
   get advertised(): readonly string[] {
     return this.registry.ids()
@@ -167,7 +183,9 @@ export class RemoteAgent {
 
   async connect(): Promise<void> {
     if (this.state === "live" || this.state === "closed") return
+    const cycle = this.generation
     await this.registry.refresh()
+    if (cycle !== this.generation) return
     await this.openConnection()
     this.scheduleRefresh()
   }
@@ -175,13 +193,20 @@ export class RemoteAgent {
   async close(code = RemoteCloseCode.normal, reason = "YCoding stopped") {
     if (this.state === "closed") return
     this.state = "closed"
+    this.generation++
+    this.lifetime.abort()
+    this.setConnected(false)
     this.clearTimers()
     this.scheduler.reset()
     this.abortRequests()
     this.uploads.clear()
-    await this.stopEventStream()
-    await this.connection?.disconnect(code, reason)
+    const connection = this.connection
     this.connection = undefined
+    try {
+      await this.stopEventStream()
+    } finally {
+      await connection?.disconnect(code, reason)
+    }
   }
 
   /** Refresh backend state and notify clients to page the current Session list. */
@@ -191,13 +216,17 @@ export class RemoteAgent {
   }
 
   private async openConnection() {
-    const credentials = await this.options.credentials()
+    if (this.state === "closed" || this.state === "terminal") return
+    const cycle = this.generation
+    const credentials = await this.options.credentials(this.lifetime.signal)
+    if (cycle !== this.generation) return
     this.accessExpiresAt = credentials.accessExpiresAt
     const connection = (this.options.createConnection ?? createRelayConnection)({
       url: agentURL(this.options.relayURL),
       accessToken: credentials.accessToken,
       onOpen: () => {
-        if (this.connection !== connection) return
+        if (this.connection !== connection || cycle !== this.generation) return
+        this.setConnected(true)
         this.resetStatusRetry()
         this.resetCompletionRetry()
         this.statusOwner = {}
@@ -231,8 +260,12 @@ export class RemoteAgent {
     try {
       await connection.connect()
     } catch (error) {
-      this.state = "idle"
-      this.connection = undefined
+      if (this.connection === connection && cycle === this.generation) {
+        this.state = "idle"
+        this.connection = undefined
+        this.setConnected(false)
+        await connection.disconnect().catch(() => this.diagnostic("could not close the failed relay connection"))
+      }
       throw error
     }
   }
@@ -601,16 +634,25 @@ export class RemoteAgent {
   }
 
   private scheduleRefresh() {
+    if (this.state !== "live") return
     this.refreshTimer = setTimeout(() => {
       this.refreshTimer = undefined
       if (this.state !== "live") return
       const rotate = this.accessExpiresAt - this.now() < defaults.rotateBeforeExpiryMs
-      void (rotate ? this.rotateConnection() : this.republish()).then(() => { this.scheduleStatus(); this.scheduleCompletions(); this.scheduleRefresh() })
+      void (rotate ? this.rotateConnection() : this.republish())
+        .then(() => { this.scheduleStatus(); this.scheduleCompletions(); this.scheduleRefresh() })
+        .catch((error: unknown) => this.stopForTerminal(error))
     }, this.refreshIntervalMs)
   }
 
   private onConnectionClosed(code: number | undefined, reason?: string) {
     if (this.state !== "live") return
+    const opened = this.connected
+    this.setConnected(false)
+    if (!opened && code !== undefined && terminalCloseCodes.includes(code)) {
+      this.terminal("The relay rejected the device credential; enroll this device again")
+      return
+    }
     this.statusOwner = undefined
     this.resetStatusRetry()
     this.resetCompletionRetry()
@@ -650,7 +692,7 @@ export class RemoteAgent {
     this.conflictTimer = setTimeout(() => {
       this.conflictTimer = undefined
       if (this.state !== "live" || this.connection !== undefined) return
-      void this.openConnection().catch((error: unknown) => this.diagnostic(`could not reconnect to the relay: ${describe(error)}`))
+      void this.openConnection().catch((error: unknown) => this.stopForTerminal(error))
     }, this.options.conflictRetryMs ?? defaults.conflictRetryMs)
   }
 
@@ -714,9 +756,12 @@ export class RemoteAgent {
     }
   }
 
-  private terminal(message: string) {
+  private terminal(message: string, retryable = false) {
     if (this.state === "terminal" || this.state === "closed") return
     this.state = "terminal"
+    this.generation++
+    this.lifetime.abort()
+    this.setConnected(false)
     this.terminalReason = message
     this.clearTimers()
     this.scheduler.reset()
@@ -726,18 +771,21 @@ export class RemoteAgent {
       this.diagnostic(`could not stop the local event stream: ${describe(error)}`),
     )
     const connection = this.connection
+    this.connection = undefined
     if (connection !== undefined)
       void connection
-        .disconnect(RemoteCloseCode.unauthorized, "Device credential rejected")
+        .disconnect(retryable ? RemoteCloseCode.normal : RemoteCloseCode.unauthorized, retryable ? "Remote connection failed" : "Device credential rejected")
         .catch((error) => this.diagnostic(`could not close the rejected relay connection: ${describe(error)}`))
-    this.connection = undefined
-    this.options.onTerminal?.(message)
+    this.options.onTerminal?.(message, retryable)
     this.diagnostic(message)
   }
 
   private stopForTerminal(error: unknown) {
-    if (error instanceof DeviceAuthorizationError) this.terminal(error.message)
-    else this.diagnostic(`could not rotate the device credential: ${describe(error)}`)
+    if (error instanceof DeviceAuthorizationError || error instanceof RemoteSetupError) this.terminal(error.message)
+    else {
+      this.diagnostic(`could not rotate the device credential: ${describe(error)}`)
+      this.terminal("Could not reconnect to the relay; retrying", true)
+    }
   }
 
   private clearTimers() {

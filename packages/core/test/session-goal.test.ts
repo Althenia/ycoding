@@ -4,6 +4,7 @@ import { OpenAIChat } from "@ycoding-ai/ai/protocols"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigEfficiency } from "@ycoding-ai/core/config/efficiency"
+import { ConfigDecisions } from "@ycoding-ai/core/config/decisions"
 import { Decision } from "@ycoding-ai/core/decision"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -28,7 +29,7 @@ import { SessionProviderRequestTable, SessionTable } from "@ycoding-ai/core/sess
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { Session } from "@ycoding-ai/core/session"
 import { Money } from "@ycoding-ai/schema/money"
-import { Deferred, Effect, Fiber, Layer, LayerMap, Stream } from "effect"
+import { Deferred, Effect, Fiber, Layer, LayerMap, Schema, Stream } from "effect"
 import { eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
@@ -114,27 +115,94 @@ const config = Layer.succeed(
       ]),
   }),
 )
-const it = testEffect(
-  AppNodeBuilder.build(
-    LayerNode.group([
-      Database.node,
-      EventRuntime.node,
-      SessionProjector.node,
-      SessionStore.node,
-      Agent.node,
-      SessionAutonomy.node,
-      SessionHelperPolicy.node,
-      SessionGoal.node,
-    ]),
-    [
-      [llmClient, client],
-      [SessionRunnerModel.node, models],
-      [SessionHelperPolicy.node, helperPolicy],
-      [Config.node, config],
-      [Decision.node, Layer.mock(Decision.Service)({ settings: () => Effect.succeed(undefined), choose: () => Effect.die("unconfigured goal must not call Decision") })],
-    ],
-  ),
+function goalTests(
+  settings?: ConfigDecisions.Info,
+  choose: Decision.Interface["choose"] = () => Effect.die("unconfigured goal must not call Decision"),
+) {
+  return testEffect(
+    AppNodeBuilder.build(
+      LayerNode.group([
+        Database.node,
+        EventRuntime.node,
+        SessionProjector.node,
+        SessionStore.node,
+        Agent.node,
+        SessionAutonomy.node,
+        SessionHelperPolicy.node,
+        SessionGoal.node,
+      ]),
+      [
+        [llmClient, client],
+        [SessionRunnerModel.node, models],
+        [SessionHelperPolicy.node, helperPolicy],
+        [Config.node, config],
+        [Decision.node, Layer.mock(Decision.Service)({ settings: () => Effect.succeed(settings), choose })],
+      ],
+    ),
+  )
+}
+const it = goalTests()
+const agentGoalSettings = new ConfigDecisions.Info({
+  goal: new ConfigDecisions.AgentPolicy({ provider: "agent", min_confidence: 0.8 }),
+})
+
+const agentStop = goalTests(agentGoalSettings, () =>
+  Effect.succeed({ choice: "stop", confidence: 0.8, refused: false }),
 )
+agentStop.effect("accepts an agent goal stop at the estimated-confidence threshold without certifying completion", () =>
+  Effect.gen(function* () {
+    requests = []
+    const sessionID = Session.ID.make("ses_goal_agent_stop")
+    yield* insertSession(sessionID)
+    const store = yield* SessionStore.Service
+    const session = yield* store
+      .get(sessionID)
+      .pipe(Effect.flatMap((value) => (value ? Effect.succeed(value) : Effect.die("missing session"))))
+    const autonomy = yield* SessionAutonomy.Service
+    yield* autonomy.setGoal({ sessionID, text: "Repair the migration" })
+    const before = yield* autonomy.snapshot(sessionID)
+    const goal = Schema.decodeUnknownSync(SessionAutonomy.Goal)(before.state.goal)
+    const goals = yield* SessionGoal.Service
+    expect(yield* goals.continuation({ session, goal })).toEqual({ action: "stop" })
+    expect(yield* autonomy.snapshot(sessionID)).toEqual(before)
+    expect(before.state.goal?.status).toBe("active")
+    expect(requests).toHaveLength(0)
+  }),
+)
+
+for (const [name, answer] of [
+  ["low estimate", { confidence: 0.79 }],
+  ["wrong metric", { probability: 1 }],
+  ["nonfinite estimate", { confidence: Infinity }],
+  ["out-of-range estimate", { confidence: 1.01 }],
+  ["negative estimate", { confidence: -0.1 }],
+  ["refused estimate", { confidence: 1, refused: true }],
+] as const) {
+  const uncertain = goalTests(agentGoalSettings, () => Effect.succeed({ choice: "stop", refused: false, ...answer }))
+  uncertain.effect(`continues an active goal for agent ${name}`, () =>
+    Effect.gen(function* () {
+      requests = []
+      const sessionID = Session.ID.make("ses_goal_agent_uncertain")
+      yield* insertSession(sessionID)
+      const store = yield* SessionStore.Service
+      const session = yield* store
+        .get(sessionID)
+        .pipe(Effect.flatMap((value) => (value ? Effect.succeed(value) : Effect.die("missing session"))))
+      const autonomy = yield* SessionAutonomy.Service
+      yield* autonomy.setGoal({ sessionID, text: "Repair the migration" })
+      const before = yield* autonomy.snapshot(sessionID)
+      const goal = Schema.decodeUnknownSync(SessionAutonomy.Goal)(before.state.goal)
+      const goals = yield* SessionGoal.Service
+      expect(yield* goals.continuation({ session, goal, latestAssistantText: "Migration still fails." })).toEqual({
+        action: "continue",
+        steer:
+          "Active goal: Repair the migration\nCurrent iteration: 0\nLatest assistant response: Migration still fails.\nContinue toward the unchanged active goal; preserve its objective.",
+      })
+      expect(yield* autonomy.snapshot(sessionID)).toEqual(before)
+      expect(requests).toHaveLength(0)
+    }),
+  )
+}
 
 const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
 const projects = Layer.succeed(

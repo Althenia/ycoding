@@ -3180,6 +3180,7 @@ function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean }
             ...((state.status === "completed" || state.status === "error") && state.result !== undefined
               ? { result: state.result }
               : {}),
+            ...(state.status === "error" ? { error: state.error.message } : {}),
           }
     return {
       tool,

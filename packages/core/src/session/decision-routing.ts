@@ -94,8 +94,7 @@ const layer = Layer.effect(Service, Effect.gen(function* () {
         ...candidates.map((candidate) => [candidate.id, candidate.description]),
       ]),
     }).pipe(Effect.mapError((error) => new StepFailedError({ error: { type: "decision.routing.failed", message: error.message } })))
-    if (answer.refused || answer.probability === undefined || !Number.isFinite(answer.probability) ||
-      answer.probability < policy.min_probability || answer.probability > 1 || answer.choice === "keep-current") return
+    if (!Decision.confident(policy, answer) || answer.choice === "keep-current") return
     const candidate = candidates.find((candidate) => candidate.id === answer.choice)
     if (!candidate) return
     const model = candidate.model ? CatalogModel.Ref.make({ providerID: candidate.model.providerID,

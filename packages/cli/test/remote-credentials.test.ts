@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
 import { NodeFileSystem } from "@effect/platform-node"
 import { Global } from "@ycoding-ai/core/global"
 import { deviceSignaturePayload, parsePublicKey } from "@ycoding-ai/remote"
@@ -17,6 +17,8 @@ import {
   update,
   Identity,
 } from "../src/remote-credentials"
+import { RemoteSetupError } from "../src/remote-error"
+import { makeRemoteConnector } from "../src/commands/handlers/remote/connect"
 
 const enrollmentIdentity = {
   deviceID: "dev_1",
@@ -110,6 +112,7 @@ describe("device identity persistence", () => {
       await fs.writeFile(target, JSON.stringify(enrollmentIdentity))
       await fs.symlink(target, path.join(state, "remote-device.json"))
 
+      expect(await provide(root)(read()).catch((error: unknown) => error)).toBeInstanceOf(RemoteSetupError)
       await expect(provide(root)(read())).rejects.toThrow(/symbolic link/)
       const { privateKey, publicKey } = await generateDeviceKey()
       await expect(provide(root)(update({ ...enrollmentIdentity, publicKey, privateKey }))).rejects.toThrow(/symbolic link/)
@@ -126,6 +129,77 @@ describe("device identity persistence", () => {
       expect(await provide(root)(read())).toMatchObject({ refreshToken: "refresh_1", refreshExpiresAt: 10 })
       expect(await fs.readdir(path.join(root, "state"))).toEqual(["remote-device.json"])
     })
+  })
+
+  test("temporary credential filesystem failures remain recoverable instead of becoming missing enrollment", async () => {
+    await withHome(async (root) => {
+      const failure = Object.assign(new Error("temporary filesystem failure"), { code: "EMFILE" })
+      const stat = spyOn(fs, "lstat").mockImplementation(async () => { throw failure })
+      try {
+        expect(await provide(root)(read()).catch((error: unknown) => error)).toBe(failure)
+      } finally {
+        stat.mockRestore()
+      }
+    })
+  })
+
+  test("connector setup classifies missing and malformed identity as terminal without contacting a relay", async () => {
+    await withHome(async (root) => {
+      expect(await provide(root)(makeRemoteConnector({ endpoint: { url: "http://127.0.0.1:1" } })).catch((error: unknown) => error))
+        .toBeInstanceOf(RemoteSetupError)
+      await fs.mkdir(path.join(root, "state"), { recursive: true })
+      await fs.writeFile(path.join(root, "state", "remote-device.json"), "{not-json")
+      expect(await provide(root)(makeRemoteConnector({ endpoint: { url: "http://127.0.0.1:1" } })).catch((error: unknown) => error))
+        .toBeInstanceOf(RemoteSetupError)
+      expect(await fs.readFile(path.join(root, "state", "remote-device.json"), "utf8")).toBe("{not-json")
+    })
+  })
+
+  test("connector setup rejects a non-loopback backend and an invalid stored relay origin as terminal", async () => {
+    await withHome(async (root) => {
+      const keys = await generateDeviceKey()
+      await provide(root)(create({ ...enrollmentIdentity, ...keys }))
+      expect(await provide(root)(makeRemoteConnector({ endpoint: { url: "http://192.0.2.1:4096" } })).catch((error: unknown) => error))
+        .toBeInstanceOf(RemoteSetupError)
+      await provide(root)(update({ ...enrollmentIdentity, ...keys, relayURL: "http://192.0.2.1" }))
+      expect(await provide(root)(makeRemoteConnector({ endpoint: { url: "http://127.0.0.1:1" } })).catch((error: unknown) => error))
+        .toBeInstanceOf(RemoteSetupError)
+    })
+  })
+})
+
+test.each(["disable", "deadline"] as const)("device authentication handles %s without replacing stored credentials", async (boundary) => {
+  await withHome(async (root) => {
+    const keys = await generateDeviceKey()
+    const identity = Identity.make({ ...enrollmentIdentity, ...keys, refreshToken: "refresh_old", refreshExpiresAt: 9_000 })
+    await provide(root)(create(identity))
+    const controller = new AbortController()
+    const deadline = new AbortController()
+    const timeout = spyOn(AbortSignal, "timeout").mockImplementation(() => deadline.signal)
+    const entered = Promise.withResolvers<void>()
+    const pending = Promise.withResolvers<Response>()
+    let signal: AbortSignal | null | undefined
+    const fetcher: typeof fetch = Object.assign(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      signal = init?.signal
+      signal?.addEventListener("abort", () => pending.reject(signal?.reason), { once: true })
+      entered.resolve()
+      return pending.promise
+    }, { preconnect: fetch.preconnect })
+    const authenticating = provide(root)(credentials(identity, { fetcher, now: () => 1_000, signal: controller.signal })).catch((error: unknown) => error)
+    try {
+      await entered.promise
+      expect(signal).toBeInstanceOf(AbortSignal)
+      expect(timeout).toHaveBeenCalledWith(30_000)
+      if (boundary === "disable") controller.abort()
+      if (boundary === "deadline") deadline.abort()
+      expect(await authenticating).toBeInstanceOf(Error)
+      expect(signal?.aborted).toBe(true)
+      expect(await provide(root)(read())).toMatchObject({ refreshToken: "refresh_old" })
+    } finally {
+      pending.reject(new Error("test cleanup"))
+      await authenticating
+      timeout.mockRestore()
+    }
   })
 })
 

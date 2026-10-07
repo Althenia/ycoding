@@ -148,6 +148,9 @@ const exact = harness()
 const semanticSettings = new ConfigDecisions.Info({
   guardrails: new ConfigDecisions.Policy({ provider: "openai", min_probability: 0.9 }),
 })
+const agentSemanticSettings = new ConfigDecisions.Info({
+  guardrails: new ConfigDecisions.AgentPolicy({ provider: "agent", min_confidence: 0.9 }),
+})
 const semanticInput = {
   sessionID: parentID,
   action: "shell",
@@ -156,6 +159,46 @@ const semanticInput = {
 } satisfies SessionGuardrail.EvaluateInput
 
 describe("SessionGuardrail semantic decisions", () => {
+  const agentSafe = harness({
+    decisions: agentSemanticSettings,
+    choose: () => Effect.succeed({ choice: "allow", confidence: 0.9, refused: false }),
+  })
+  agentSafe.it.effect("keeps an agent semantic allow at the estimated-confidence threshold", () =>
+    Effect.gen(function* () {
+      const service = yield* SessionGuardrail.Service
+      expect(yield* service.evaluate(semanticInput)).toMatchObject({ decision: "allow" })
+      expect(agentSafe.choices).toHaveLength(1)
+      expect(agentSafe.choices[0]?.provider).toBe("agent")
+      yield* (yield* service.assert(semanticInput)).release
+      expect(yield* service.forSession(parentID)).toEqual([])
+    }),
+  )
+
+  for (const [name, answer] of [
+    ["low estimate", { confidence: 0.89 }],
+    ["missing estimate", {}],
+    ["wrong metric", { probability: 1 }],
+    ["nonfinite estimate", { confidence: Infinity }],
+    ["out-of-range estimate", { confidence: 1.01 }],
+    ["negative estimate", { confidence: -0.1 }],
+    ["refused estimate", { confidence: 1, refused: true }],
+  ] as const) {
+    const uncertainAgent = harness({
+      decisions: agentSemanticSettings,
+      choose: () => Effect.succeed({ choice: "allow", refused: false, ...answer }),
+    })
+    uncertainAgent.it.effect(`requires ordinary review for agent semantic ${name}`, () =>
+      Effect.gen(function* () {
+        const service = yield* SessionGuardrail.Service
+        expect(yield* service.evaluate(semanticInput)).toMatchObject({
+          decision: "ask",
+          hardReview: false,
+          ruleIDs: ["semantic.review.risk"],
+        })
+      }),
+    )
+  }
+
   const safe = harness({
     decisions: semanticSettings,
     choose: () => Effect.succeed({ choice: "allow", probability: 0.9, refused: false }),

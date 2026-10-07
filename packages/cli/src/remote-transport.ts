@@ -38,6 +38,7 @@ type Options = {
   readonly heartbeatIntervalMs?: number
   readonly reconnectInitialDelayMs?: number
   readonly reconnectMaxDelayMs?: number
+  readonly connectTimeoutMs?: number
   /** Called on every successful (re)open, before any frame is sent. */
   readonly onOpen?: () => void
   /** Called when an established connection drops and a reconnect is scheduled. */
@@ -50,6 +51,7 @@ export class CloudflareRemoteTransport implements RemoteTransport {
   private socket?: RemoteSocket
   private reconnectTimer?: ReturnType<typeof setTimeout>
   private heartbeatTimer?: ReturnType<typeof setInterval>
+  private openingTimer?: ReturnType<typeof setTimeout>
   private reconnectAttempt = 0
   private awaitingPong = false
   private stopped = true
@@ -116,6 +118,7 @@ export class CloudflareRemoteTransport implements RemoteTransport {
       if (this.socket !== socket || this.stopped) return
       this.reconnectAttempt = 0
       this.awaitingPong = false
+      this.clearOpeningTimer()
       this.startHeartbeat(socket)
       this.resolveInitial?.()
       this.resolveInitial = undefined
@@ -144,7 +147,14 @@ export class CloudflareRemoteTransport implements RemoteTransport {
       socket.removeEventListener("error", errored)
       if (this.socket !== socket) return
       this.socket = undefined
+      this.clearOpeningTimer()
       this.clearHeartbeat()
+      if (this.rejectInitial) {
+        this.stopped = true
+        this.rejectInitial(new Error("Remote relay closed before opening"))
+        this.resolveInitial = undefined
+        this.rejectInitial = undefined
+      }
       this.options.onClose?.({ code: event.code, reason: event.reason })
       this.scheduleReconnect()
     }
@@ -153,17 +163,34 @@ export class CloudflareRemoteTransport implements RemoteTransport {
     socket.addEventListener("message", message)
     socket.addEventListener("close", closed)
     socket.addEventListener("error", errored)
+    this.openingTimer = setTimeout(() => {
+      this.openingTimer = undefined
+      if (this.socket !== socket || this.stopped) return
+      if (this.rejectInitial) {
+        this.stopped = true
+        this.rejectInitial(new Error("Remote connection timed out"))
+        this.resolveInitial = undefined
+        this.rejectInitial = undefined
+      }
+      socket.close(1011, "Remote connection timed out")
+    }, this.options.connectTimeoutMs ?? 30_000)
   }
 
   private scheduleReconnect() {
     if (this.stopped || this.reconnectTimer) return
     const initial = this.options.reconnectInitialDelayMs ?? 1_000
     const maximum = this.options.reconnectMaxDelayMs ?? 30_000
-    const delay = Math.min(initial * 2 ** this.reconnectAttempt++, maximum)
+    const delay = Math.min(initial * 2 ** this.reconnectAttempt, maximum)
+    if (delay < maximum) this.reconnectAttempt++
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined
       const factory = this.options.createSocket ?? this.factory
-      if (factory !== undefined) this.open(factory)
+      if (factory === undefined) return
+      try {
+        this.open(factory)
+      } catch {
+        this.scheduleReconnect()
+      }
     }, delay)
   }
 
@@ -187,9 +214,15 @@ export class CloudflareRemoteTransport implements RemoteTransport {
   }
 
   private clearTimers() {
+    this.clearOpeningTimer()
     this.clearHeartbeat()
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
     this.reconnectTimer = undefined
+  }
+
+  private clearOpeningTimer() {
+    if (this.openingTimer !== undefined) clearTimeout(this.openingTimer)
+    this.openingTimer = undefined
   }
 }
 

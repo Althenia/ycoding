@@ -99,6 +99,40 @@ const fixture = Effect.gen(function* () {
 })
 
 describe("Session.command retry admission", () => {
+  for (const source of ["command", "input"] as const)
+    it.effect(`rejects the internal decision helper from ${source} before command evaluation or admission`, () =>
+      Effect.gen(function* () {
+        const input = yield* fixture
+        yield* input.commands.transform((draft) => draft.update("counted", (command) => {
+          command.agent = source === "command" ? Agent.ID.make("decision") : undefined
+        }))
+
+        expect(yield* input.sessions.command({
+          sessionID: input.session.id,
+          command: "counted",
+          ...(source === "input" ? { agent: Agent.ID.make("decision") } : {}),
+        }).pipe(Effect.flip)).toMatchObject({ _tag: "Command.EvaluationError", command: "counted" })
+        expect(yield* Effect.promise(() => Bun.file(input.counter).text())).toBe("seed\n")
+        expect(yield* input.sessions.get(input.session.id)).toEqual(input.session)
+        expect(yield* input.sessions.pending(input.session.id)).toEqual([])
+        expect(yield* input.sessions.messages({ sessionID: input.session.id })).toEqual([])
+        expect(wakes).toEqual([])
+      }),
+    )
+
+  it.effect("preserves command-agent precedence over an unused decision-helper input", () =>
+    Effect.gen(function* () {
+      const input = yield* fixture
+
+      yield* input.sessions.command({ sessionID: input.session.id, command: "counted",
+        agent: Agent.ID.make("decision"), resume: false })
+      expect((yield* input.sessions.get(input.session.id)).agent).toBe(Agent.ID.make("reviewer"))
+      expect(yield* input.sessions.pending(input.session.id)).toHaveLength(1)
+      expect(yield* Effect.promise(() => Bun.file(input.counter).text())).toBe("seed\nevaluation\n")
+      expect(wakes).toEqual([])
+    }),
+  )
+
   for (const promoted of [false, true])
     it.effect(
       `reconciles ${promoted ? "promoted" : "pending"} command IDs before shell effects or selection changes`,

@@ -317,7 +317,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           location: Location.Ref.pipe(Schema.optional),
         }),
         success: Schema.Struct({ data: Session.Info }),
-        error: SessionNotFoundError,
+        error: [SessionNotFoundError, InvalidRequestError],
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "session.create",
@@ -642,7 +642,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         params: { sessionID: Session.ID },
         payload: Schema.Struct({ agent: Agent.ID }),
         success: HttpApiSchema.NoContent,
-        error: SessionNotFoundError,
+        error: [SessionNotFoundError, InvalidRequestError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(

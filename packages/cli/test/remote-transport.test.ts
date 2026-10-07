@@ -56,6 +56,50 @@ async function waitFor(check: () => boolean, timeout = 1_000) {
 }
 
 describe("CloudflareRemoteTransport", () => {
+  test("bounds a stalled initial upgrade and closes it for supervisor recovery", async () => {
+    const socket = new FakeSocket()
+    const transport = new CloudflareRemoteTransport({
+      url: "wss://relay.invalid/ws/v4/agent", createSocket: () => socket, connectTimeoutMs: 10,
+    })
+    let failure: unknown
+    const connected = transport.connect().catch((error: unknown) => { failure = error })
+    try {
+      await waitFor(() => failure !== undefined)
+      expect(failure).toMatchObject({ message: "Remote connection timed out" })
+      expect(socket.readyState).toBe(3)
+    } finally {
+      await transport.disconnect()
+      await connected
+    }
+  })
+
+  test("a socket factory failure during reconnect is retried instead of escaping its timer", async () => {
+    const sockets: FakeSocket[] = []
+    let attempts = 0
+    const transport = new CloudflareRemoteTransport({
+      url: "wss://relay.invalid/ws/v4/agent", reconnectInitialDelayMs: 5, reconnectMaxDelayMs: 10,
+      createSocket: () => {
+        if (++attempts === 2) throw new Error("temporary socket failure")
+        const socket = new FakeSocket()
+        sockets.push(socket)
+        return socket
+      },
+    })
+    try {
+      const connected = transport.connect()
+      sockets[0].open()
+      await connected
+      sockets[0].close(1012)
+      await waitFor(() => sockets.length === 2)
+      sockets[1].open()
+      await transport.send("ready")
+      expect(sockets[1].sent).toEqual(["ready"])
+      expect(attempts).toBe(3)
+    } finally {
+      await transport.disconnect()
+    }
+  })
+
   test("requires a secure remote URL and rejects sends before opening", async () => {
     expect(() => new CloudflareRemoteTransport({ url: "ws://example.com/ws/v4/agent" })).toThrow(
       "Remote transport requires WSS",

@@ -11,6 +11,8 @@ import { Agent } from "./agent"
 import { Config } from "./config"
 import { ConfigDecisions } from "./config/decisions"
 import { Credential } from "./credential"
+import { DecisionAgent } from "./decision-agent"
+import { DecisionJudgment } from "./decision-judgment"
 import { makeLocationNode } from "./effect/app-node"
 import { requestExecutor } from "./effect/app-node-platform"
 import { EventRuntime } from "./event"
@@ -28,17 +30,20 @@ import { Hash } from "./util/hash"
 export const Input = Schema.Union([
   Schema.Struct({ provider: Schema.Literal("openai"), request: OpenAIDecisions.Request }),
   Schema.Struct({ provider: Schema.Literal("typesafe"), request: TypeSafeDecisions.Request }),
+  Schema.Struct({ provider: Schema.Literal("agent"), request: DecisionJudgment.Request }),
 ])
 export type Input = typeof Input.Type
 
 export const Output = Schema.Union([
   Schema.Struct({ provider: Schema.Literal("openai"), response: OpenAIDecisions.Response }),
   Schema.Struct({ provider: Schema.Literal("typesafe"), response: TypeSafeDecisions.Response }),
+  Schema.Struct({ provider: Schema.Literal("agent"), response: DecisionAgent.Response }),
 ])
 export type Output = typeof Output.Type
+type NativeOutput = Exclude<Output, { readonly provider: "agent" }>
 
 export class Error extends Schema.TaggedErrorClass<Error>()("Decision.Error", {
-  reason: Schema.Literals(["unavailable", "invalid-request", "provider-failed", "timeout", "input-too-large"]),
+  reason: Schema.Literals(["unavailable", "invalid-request", "provider-failed", "timeout", "input-too-large", "invalid-output"]),
 }) {
   override get message() {
     return `Decision request failed (${this.reason}). Check the selected decision provider and configuration.`
@@ -53,7 +58,7 @@ export interface Invocation {
 
 export interface ChoiceInput {
   readonly context: Invocation
-  readonly provider: typeof ConfigDecisions.Provider.Type
+  readonly provider: typeof ConfigDecisions.Provider.Type | "agent"
   readonly state: Schema.Json
   readonly instructions: string
   readonly choices: Readonly<Record<string, string>>
@@ -62,7 +67,14 @@ export interface ChoiceInput {
 export interface Choice {
   readonly choice?: string
   readonly probability?: number
+  readonly confidence?: number
   readonly refused: boolean
+}
+
+export const confident = (policy: ConfigDecisions.Policy | ConfigDecisions.AgentPolicy, answer: Choice) => {
+  const score = policy.provider === "agent" ? answer.confidence : answer.probability
+  const threshold = policy.provider === "agent" ? policy.min_confidence : policy.min_probability
+  return !answer.refused && score !== undefined && Number.isFinite(score) && score >= 0 && score <= 1 && score >= threshold
 }
 
 export interface Interface {
@@ -82,6 +94,7 @@ export function make(input: {
   readonly requests: SessionProviderRequest.Interface
   readonly events: EventRuntime.Interface
   readonly environment?: Readonly<Record<string, string | undefined>>
+  readonly agent?: DecisionAgent.Interface
 }): Interface {
   const evaluate = Effect.fn("Decision.evaluate")(function* (value: Input, context: Invocation) {
     const decoded = yield* Schema.decodeUnknownEffect(Input)(value).pipe(
@@ -89,6 +102,13 @@ export function make(input: {
     )
     if (Buffer.byteLength(JSON.stringify(decoded)) > 1_048_576)
       return yield* new Error({ reason: "input-too-large" })
+    if (decoded.provider === "agent") {
+      if (!input.agent) return yield* new Error({ reason: "unavailable" })
+      return yield* input.agent.evaluate(decoded.request, context).pipe(
+        Effect.map((response): Output => ({ provider: "agent", response })),
+        Effect.mapError((error) => new Error({ reason: error.reason })),
+      )
+    }
     const settings = yield* input.settings()
     const connection = settings?.providers?.[decoded.provider]
     const selected = (yield* input.credentials.list(Integration.ID.make(decoded.provider))).find((credential) => credential.active)
@@ -114,10 +134,10 @@ export function make(input: {
     })
     const operation = decoded.provider === "openai"
       ? OpenAIDecisions.evaluate(decoded.request, { apiKey, baseURL: connection?.base_url }).pipe(
-          Effect.map((response): Output => ({ provider: "openai", response })),
+          Effect.map((response): NativeOutput => ({ provider: "openai", response })),
         )
       : TypeSafeDecisions.evaluate(decoded.request, { apiKey, baseURL: connection?.base_url }).pipe(
-          Effect.map((response): Output => ({ provider: "typesafe", response })),
+          Effect.map((response): NativeOutput => ({ provider: "typesafe", response })),
         )
     const failed = tracker.complete({
       continuation: "full", invalidation: "cache-disabled", cacheReadReported: false,
@@ -157,6 +177,17 @@ export function make(input: {
     evaluate,
     choose: Effect.fn("Decision.choose")(function* (value) {
       const settings = yield* input.settings()
+      if (value.provider === "agent") {
+        const result = yield* evaluate({ provider: "agent", request: { state: value.state, questions: [
+          { type: "choice", name: "decision", instructions: value.instructions,
+            choices: Object.entries(value.choices).map(([choice, description]) => ({ value: choice, description })),
+          },
+        ] } }, value.context)
+        if (result.provider !== "agent") return { refused: true }
+        const answer = result.response.answers[0]
+        if (answer?.type !== "choice" || typeof answer.choice !== "string") return { refused: true }
+        return { choice: answer.choice, confidence: answer.confidence, refused: false }
+      }
       const result = yield* evaluate(value.provider === "openai" ? {
         provider: "openai",
         request: {
@@ -174,6 +205,7 @@ export function make(input: {
         if (answer?.type !== "choice" || typeof answer.choice !== "string") return { refused: true }
         return { choice: answer.choice, probability: answer.probabilities.find((option) => option.value === answer.choice)?.probability, refused: false }
       }
+      if (result.provider !== "typesafe") return { refused: true }
       const answer = result.response.answers.decision
       if (answer?.type !== "choice") return { refused: true }
       return { choice: answer.choice, probability: answer.probabilities[answer.choice], refused: false }
@@ -189,13 +221,14 @@ export const layer = Layer.effect(Service, Effect.gen(function* () {
   const executor = yield* RequestExecutor.Service
   const requests = yield* SessionProviderRequest.Service
   const events = yield* EventRuntime.Service
+  const agent = yield* DecisionAgent.Service
   return Service.of(make({
     settings: () => config.entries().pipe(Effect.map((entries) => Config.latest(entries, "decisions"))),
-    credentials, agents, store, executor, requests, events,
+    credentials, agents, store, executor, requests, events, agent,
   }))
 }))
 
 export const node = makeLocationNode({
   service: Service, layer,
-  deps: [Config.node, Credential.node, Agent.node, SessionStore.node, requestExecutor, SessionProviderRequest.node, EventRuntime.node],
+  deps: [Config.node, Credential.node, Agent.node, SessionStore.node, requestExecutor, SessionProviderRequest.node, EventRuntime.node, DecisionAgent.node],
 })

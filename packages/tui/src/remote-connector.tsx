@@ -40,22 +40,25 @@ export function RemoteProvider(props: ParentProps<{ server?: RemoteServer }>) {
   const [status, setStatus] = createSignal<RemoteStatus>({ state: "off" })
   let generation = 0
   let disposed = false
+  let requested: boolean | undefined
   let poll: ReturnType<typeof setInterval> | undefined
 
   async function refresh() {
+    if (requested !== undefined) return
     const cycle = generation
     try {
       const next = await server.get()
-      if (!disposed && cycle === generation) setStatus(next)
+      if (!disposed && cycle === generation && requested === undefined) setStatus(next)
     } catch (error) {
-      if (!disposed && cycle === generation)
+      if (!disposed && cycle === generation && requested === undefined)
         setStatus({ state: "error", message: error instanceof Error ? error.message : String(error) })
     }
   }
 
   async function toggle() {
     const cycle = ++generation
-    const enabled = status().state !== "on"
+    const enabled = requested === undefined ? status().state === "off" : !requested
+    requested = enabled
     try {
       const next = await server.set(enabled)
       if (!disposed && cycle === generation) {
@@ -68,6 +71,8 @@ export function RemoteProvider(props: ParentProps<{ server?: RemoteServer }>) {
       const message = error instanceof Error ? error.message : String(error)
       setStatus({ state: "error", message })
       toast.show({ variant: "error", title: "Remote connection", message, duration: 6000 })
+    } finally {
+      if (cycle === generation) requested = undefined
     }
   }
 
