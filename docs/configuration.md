@@ -900,29 +900,7 @@ Authentication precedence is the configured `api_key`, the selected active API-k
 
 OpenAI Decisions uses API Platform billing, separate from a ChatGPT subscription; a subscription alone supplies neither a decision API key nor included API usage. See [OpenAI billing](https://help.openai.com/en/articles/9039756-managing-billing-for-chatgpt-and-the-api-platform). Shared agent guidance directs proactive `decision` tool use for bounded classification, option choice, grading, ranking, unverifiable predicates, and calibrating a recommendation before `question`, only with configured access and authorized evidence; it does not enable billing or automatic policies.
 
-The automatic `guardrails`, `routing`, `goal`, `questions`, and `advisory` policies are disabled when omitted. Native policies require `provider` (`openai` or `typesafe`) and an explicit `min_probability` in `[0, 1]`; thresholds are inclusive and apply to the chosen option's probability, not the separate confidence field. Agent policies instead require `provider: "agent"` and `min_confidence` in `[0, 1]`. Wrong or mixed metric fields are rejected. A refusal, a missing choice, or a missing, non-finite, or out-of-range score is uncertain at every threshold; scores are never clamped. This native example deliberately sets thresholds without a calibration guarantee. Its route changes only the agent, using the available default model.
-
-```jsonc
-{
-  "decisions": {
-    "timeout_ms": 10000,
-    "providers": {
-      "openai": { "api_key": "{env:OPENAI_API_KEY}" },
-      "typesafe": { "api_key": "{env:TYPESAFE_API_KEY}", "model": "jev-1.13.0" }
-    },
-    "guardrails": { "provider": "openai", "min_probability": 0.95 },
-    "routing": {
-      "provider": "typesafe",
-      "min_probability": 0.9,
-      "candidates": [
-        { "id": "delivery", "description": "Complete a bounded repository implementation", "agent": "GSD" }
-      ]
-    },
-    "goal": { "provider": "openai", "min_probability": 0.95 },
-    "questions": { "provider": "openai", "min_probability": 0.8 }
-  }
-}
-```
+The automatic `guardrails`, `routing`, `goal`, `questions`, and `advisory` policies are disabled when omitted. Native policies require `provider` (`openai` or `typesafe`) and an explicit `min_probability` in `[0, 1]`; thresholds are inclusive and apply to the chosen option's probability, not the separate confidence field. Agent policies instead require `provider: "agent"` and `min_confidence` in `[0, 1]`. Wrong or mixed metric fields are rejected. A refusal, a missing choice, or a missing, non-finite, or out-of-range score is uncertain at every threshold; scores are never clamped.
 
 Routing accepts 1–254 candidates with unique nonempty IDs and descriptions; `keep-current` is reserved for the runtime's baseline choice. Candidates select an agent, a normal model selector, or both; entries selecting neither are not offered. Only known selectable agents allowed by the current agent's effective `agent` permission and available supported models/variants are offered.
 
