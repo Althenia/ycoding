@@ -25,8 +25,8 @@
  */
 
 /** Envelope revision. Bump only with a coordinated relay/agent/client release. */
-import { parseProviderAuthInput, providerAuthOperations } from "./provider-auth"
-export { parseProviderAuthInput, providerAuthOperations, isProviderAuthorizationURL, type ProviderAuthOperation, type ProviderAuthInput, type ProviderAuthTarget, type ProviderAuthInfo, type ProviderAuthAttempt, type ProviderAuthStatus, type ProviderAuthPrompt } from "./provider-auth"
+import { parseProviderAuthInput, providerAuthOperations } from "./provider-auth.ts"
+export { parseProviderAuthInput, providerAuthOperations, isProviderAuthorizationURL, type ProviderAuthOperation, type ProviderAuthInput, type ProviderAuthTarget, type ProviderAuthInfo, type ProviderAuthAttempt, type ProviderAuthStatus, type ProviderAuthPrompt } from "./provider-auth.ts"
 
 export const RemoteProtocolVersion = 4
 
