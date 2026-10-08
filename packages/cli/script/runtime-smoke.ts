@@ -689,6 +689,10 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     await client.session.wait({ sessionID: openAISession.id })
     const openAIDiagnostics = await client.session.diagnostics({ sessionID: openAISession.id })
     if (openAIDiagnostics?.requests?.fallback !== 1) {
+      for await (const event of client.session.log({ sessionID: openAISession.id, follow: false })) {
+        if (event.type === "session.execution.failed")
+          throw new Error(`OpenAI execution failed: ${event.data.error.type}: ${event.data.error.message}`)
+      }
       const observed = requests.slice(openAIRequestsStart).map((request) => ({
         pathname: request.pathname,
         store: request.body.store,

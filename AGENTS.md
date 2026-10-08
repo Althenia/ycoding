@@ -225,6 +225,7 @@ const table = sqliteTable("session", {
 - Run `bun run check:cloudflare` after changing `infra/cloudflare`, its generated Worker types, Wrangler configuration, or Cloudflare validation scripts. Regenerate `infra/cloudflare/worker-configuration.d.ts` only with `bun run generate:cloudflare-types`.
 - TUI-visible changes require a TUI render, component, integration, or smoke test that proves the actual displayed behavior.
 - Before claiming completion, inspect `git diff`, run the relevant tests, and report exact commands and outcomes.
+- Before pushing a release tag, build a fresh native TUI artifact and run both `smoke:tui` and `smoke:runtime` against that artifact. Source verification and compilation do not replace packaged-runtime validation; inspect durable Session failure events when a smoke scenario produces no provider requests.
 
 ## Session core
 

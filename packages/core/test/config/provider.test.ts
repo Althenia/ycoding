@@ -11,7 +11,10 @@ import { PluginRegistry } from "@ycoding-ai/core/plugin"
 import { PluginHost } from "@ycoding-ai/core/plugin/host"
 import { Provider } from "@ycoding-ai/core/provider"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
-import { LLM, LLMClient } from "@ycoding-ai/ai"
+import { LLM, LLMClient, Message } from "@ycoding-ai/ai"
+import { RequestExecutor } from "@ycoding-ai/ai/route"
+import { HttpClient, HttpClientResponse } from "effect/unstable/http"
+import { OpenAIPlugin } from "@ycoding-ai/core/plugin/provider/openai"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "../plugin/fixture"
 
@@ -60,6 +63,289 @@ const waitFor = Effect.fnUntraced(function* (condition: () => Effect.Effect<bool
 })
 
 describe("ConfigProviderPlugin.Plugin", () => {
+  it.effect(
+    "preserves configured native OpenAI routing after account snapshots without sending outside the mocked transport",
+    () =>
+      Effect.gen(function* () {
+        const catalog = yield* Catalog.Service
+        const credentials = yield* Credential.Service
+        const integrations = yield* Integration.Service
+        const registry = yield* PluginRegistry.Service
+        const host = yield* PluginHost.make(registry)
+        const providerID = Provider.ID.openai
+        const modelID = CatalogModel.ID.make("gpt-5.6")
+        yield* catalog.transform((draft) => {
+          draft.provider.update(providerID, (provider) => {
+            provider.package = Provider.aisdk("@ai-sdk/openai")
+          })
+          draft.model.update(providerID, modelID, (model) => {
+            model.variants = [{ id: CatalogModel.VariantID.make("high"), body: { reasoning: { effort: "high" } } }]
+          })
+        })
+        const profiles = yield* Effect.forEach(["Work", "Personal"], (label) =>
+          credentials.create({
+            integrationID: Integration.ID.make(providerID),
+            label,
+            value: { type: "key", key: `fixture-${label}` },
+          }),
+        )
+        yield* OpenAIPlugin.effect(host).pipe(
+          Effect.provideService(
+            HttpClient.HttpClient,
+            HttpClient.make((request) =>
+              Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ models: [] }))),
+            ),
+          ),
+        )
+        yield* addPlugin(
+          Config.Service.of({
+            reload: () => Effect.void,
+            entries: () =>
+              Effect.succeed([
+                new Config.Document({
+                  type: "document",
+                  info: decode({
+                    providers: {
+                      openai: {
+                        package: "@ycoding-ai/ai/providers/openai",
+                        settings: {
+                          baseURL: "http://127.0.0.1:45678/v1",
+                          providerOptions: { openai: { store: true } },
+                        },
+                        headers: { "x-provider": "configured" },
+                        body: { metadata: { provider: "configured" } },
+                        models: {
+                          [modelID]: {
+                            settings: { organization: "fixture-org" },
+                            headers: { "x-model": "configured" },
+                            body: { metadata: { model: "configured" } },
+                            limit: { context: 100000, output: 4096 },
+                          },
+                        },
+                      },
+                    },
+                  }),
+                }),
+              ]),
+          }),
+        )
+        const captured: {
+          url: string
+          authorization?: string
+          headers: Readonly<Record<string, string>>
+          body: unknown
+        }[] = []
+        yield* Effect.forEach(profiles, (profile) =>
+          Effect.gen(function* () {
+            const definition = required(yield* catalog.model.get(providerID, modelID, profile.label))
+            const snapshot = yield* integrations.connection.snapshot({
+              type: "credential",
+              id: profile.id,
+              label: profile.label,
+              active: profile.active,
+            })
+            const selected = required(yield* catalog.model.forConnection(definition, snapshot))
+            expect(selected.package).toBe("@ycoding-ai/ai/providers/openai")
+            expect(selected.settings).toMatchObject({
+              baseURL: "http://127.0.0.1:45678/v1",
+              organization: "fixture-org",
+              providerOptions: { openai: { store: true } },
+            })
+            const model = yield* SessionRunnerModel.fromCatalogModel(
+              yield* SessionRunnerModel.withVariant(selected, CatalogModel.VariantID.make("high")),
+              snapshot.value,
+            )
+            yield* LLMClient.generate(
+              LLM.request({ model, messages: [Message.user("Offline endpoint regression")] }),
+            ).pipe(
+              Effect.provide(LLMClient.configured()),
+              Effect.provideService(RequestExecutor.Service, {
+                execute: (request) =>
+                  Effect.sync(() => {
+                    if (request.body._tag !== "Uint8Array") throw new Error("Expected encoded JSON body")
+                    captured.push({
+                      url: request.url,
+                      authorization: request.headers.authorization,
+                      headers: request.headers,
+                      body: JSON.parse(new TextDecoder().decode(request.body.body)),
+                    })
+                    return HttpClientResponse.fromWeb(request, new Response("offline fixture", { status: 400 }))
+                  }),
+              }),
+              Effect.exit,
+            )
+          }),
+        )
+        expect(captured.map((request) => request.url)).toEqual([
+          "http://127.0.0.1:45678/v1/responses",
+          "http://127.0.0.1:45678/v1/responses",
+        ])
+        expect(captured.map((request) => request.authorization)).toEqual([
+          "Bearer fixture-Work",
+          "Bearer fixture-Personal",
+        ])
+        for (const request of captured) {
+          expect(request.headers).toMatchObject({
+            "x-provider": "configured",
+            "x-model": "configured",
+            "openai-organization": "fixture-org",
+          })
+          expect(request.body).toMatchObject({
+            store: true,
+            metadata: { provider: "configured", model: "configured" },
+            reasoning: { effort: "high" },
+          })
+        }
+      }),
+  )
+
+  it.effect(
+    "overlays explicit configuration on existing account inventories without importing another account's fields or eligibility",
+    () =>
+      Effect.gen(function* () {
+        const catalog = yield* Catalog.Service
+        const credentials = yield* Credential.Service
+        const integrations = yield* Integration.Service
+        const providers = ["cursor", "github-copilot", "account-service", "configured-discovery"]
+        const modelID = CatalogModel.ID.make("shared")
+        const accounts = yield* Effect.forEach(providers, (id) =>
+          Effect.gen(function* () {
+            const providerID = Provider.ID.make(id)
+            const profiles = yield* Effect.forEach(["Work", "Personal"], (label) =>
+              credentials.create({
+                integrationID: Integration.ID.make(id),
+                label,
+                value: { type: "key", key: `fixture-${id}-${label}` },
+              }),
+            )
+            yield* catalog.transform((draft) => {
+              draft.provider.update(providerID, (provider) => {
+                provider.integrationID = Integration.ID.make(id)
+                provider.package = "account-package"
+              })
+              draft.model.update(providerID, modelID, (model) => {
+                model.settings = { privateInventory: "global-must-not-leak" }
+                model.variants = [{ id: CatalogModel.VariantID.make("global-only") }]
+              })
+              for (const profile of profiles) {
+                const work = profile.label === "Work"
+                const definition = {
+                  ...CatalogModel.Info.empty(providerID, modelID),
+                  package: "account-package",
+                  settings: { privateInventory: profile.label, nested: { retained: profile.label } },
+                  headers: { "x-account": profile.label },
+                  body: { nested: { retained: profile.label } },
+                  variants: [
+                    {
+                      id: CatalogModel.VariantID.make(work ? "high" : "low"),
+                      body: { nested: { variant: profile.label } },
+                    },
+                  ],
+                }
+                draft.model.account.update(profile, providerID, [
+                  definition,
+                  { ...definition, id: CatalogModel.ID.make(work ? "work-only" : "personal-only") },
+                ])
+              }
+            })
+            return { providerID, profiles }
+          }),
+        )
+        yield* addPlugin(
+          Config.Service.of({
+            reload: () => Effect.void,
+            entries: () =>
+              Effect.succeed([
+                new Config.Document({
+                  type: "document",
+                  info: decode({
+                    providers: Object.fromEntries(
+                      providers.map((id) => [
+                        id,
+                        {
+                          package: "@ycoding-ai/ai/providers/openai",
+                          settings: { baseURL: "http://127.0.0.1:45678/v1", nested: { provider: "configured" } },
+                          headers: { "x-provider": "configured" },
+                          body: { nested: { provider: "configured" } },
+                          models: {
+                            shared: {
+                              settings: { nested: { model: "configured", precedence: "model" } },
+                              headers: { "x-precedence": "model" },
+                              body: { nested: { model: "configured", precedence: "model" } },
+                            },
+                            "work-only": { name: "Configured Work only" },
+                            inaccessible: { name: "Must not become eligible" },
+                          },
+                        },
+                      ]),
+                    ),
+                  }),
+                }),
+                new Config.Document({
+                  type: "document",
+                  info: decode({
+                    providers: Object.fromEntries(
+                      providers.map((id) => [
+                        id,
+                        {
+                          settings: { nested: { precedence: "later-provider" } },
+                          headers: { "x-precedence": "later-provider" },
+                          body: { nested: { precedence: "later-provider" } },
+                        },
+                      ]),
+                    ),
+                  }),
+                }),
+              ]),
+          }),
+        )
+        for (const account of accounts) {
+          for (const profile of account.profiles) {
+            const selected = required(yield* catalog.model.get(account.providerID, modelID, profile.label))
+            const snapshot = yield* integrations.connection.snapshot({
+              type: "credential",
+              id: profile.id,
+              label: profile.label,
+              active: profile.active,
+            })
+            const contextual = required(yield* catalog.model.forConnection(selected, snapshot))
+            expect(contextual).toMatchObject({
+              package: "@ycoding-ai/ai/providers/openai",
+              settings: {
+                baseURL: "http://127.0.0.1:45678/v1",
+                privateInventory: profile.label,
+                nested: { retained: profile.label, provider: "configured", model: "configured", precedence: "model" },
+              },
+              headers: { "x-account": profile.label, "x-provider": "configured", "x-precedence": "model" },
+              body: {
+                nested: { retained: profile.label, provider: "configured", model: "configured", precedence: "model" },
+              },
+            })
+            expect(contextual.variants?.map((variant) => variant.id)).toEqual([
+              CatalogModel.VariantID.make(profile.label === "Work" ? "high" : "low"),
+            ])
+            const variant = yield* SessionRunnerModel.withVariant(contextual, contextual.variants?.[0]?.id)
+            expect(variant.body?.nested).toEqual({
+              retained: profile.label,
+              provider: "configured",
+              model: "configured",
+              variant: profile.label,
+              precedence: "model",
+            })
+            expect(
+              yield* catalog.model.get(account.providerID, CatalogModel.ID.make("inaccessible"), profile.label),
+            ).toBeUndefined()
+          }
+          expect((yield* catalog.model.get(account.providerID, CatalogModel.ID.make("work-only"), "Work"))?.name).toBe(
+            "Configured Work only",
+          )
+          expect(
+            yield* catalog.model.get(account.providerID, CatalogModel.ID.make("work-only"), "Personal"),
+          ).toBeUndefined()
+        }
+      }),
+  )
+
   it.live("discovers custom models for every named account and keeps exact profile metadata isolated", () =>
     Effect.acquireUseRelease(
       Effect.sync(() => {

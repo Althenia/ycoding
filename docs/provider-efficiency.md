@@ -269,6 +269,8 @@ OpenAI fallback: logical 2, physical 3, fallback 1, input 1200, cache read 900, 
 
 The smoke command fails if the namespace changes after the MCP catalog reload, if continued input resends represented history, if the fallback omits canonical history, or if request/token/cost accounting changes.
 
+When the OpenAI scenario lacks the expected fallback diagnostics, the smoke command reports a durable Session execution error when present before reporting missing request accounting.
+
 For provider-backed measurements, compare runs only when provider, model, variant, system, permissions, tools, prompt sequence, and timing window are identical. Record raw read/write/input categories separately; do not infer a cache miss from telemetry the provider did not report.
 
 ## Source ownership

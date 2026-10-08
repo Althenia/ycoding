@@ -22,6 +22,8 @@ TUI and web selectors distinguish **Use provider default**, explicit profiles, a
 
 Model and effort choices use the selected profile's advertised inventory, including models unavailable to the provider default. An explicit profile's variant list is authoritative; absent variants do not inherit another account's effort choices. Same-provider model and fast-mode changes retain an unavailable profile as blocked rather than clearing it implicitly. Authenticated custom-provider discovery stores separate inventories per profile.
 
+Runtime resolution applies configured provider and model overlays to the selected account's inventory. An account snapshot must preserve configured endpoints and request options without importing another account's discovered fields.
+
 The TUI Usage overview labels model rows with their recorded named profile selection. Unnamed historical records remain unnamed, and provider-wide local spend remains separate from account billing; a profile label is not a historical account-identity claim.
 
 ### Session timestamps

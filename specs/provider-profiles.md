@@ -50,4 +50,6 @@ Remote model entries carry profile-specific variant IDs and may carry `enabled: 
 
 Account-dependent model eligibility and provider request options must come from the selected account, not another account's active-default catalog state. Response observations belong to the dispatched profile. Quota data retains its source, stability, and unknown-value semantics. Provider-wide local spend must not be presented as historical per-profile billing.
 
+Apply provider and model configuration overlays to each account-specific model before runtime selection. Preserve configured package, endpoint, settings, headers, body, and variant precedence for both default and explicitly named profiles without copying discovered fields from another account.
+
 See [provider usage](./provider-usage.md), [provider configuration](../docs/configuration.md#provider-profiles), and [runtime behavior](../docs/runtime.md).

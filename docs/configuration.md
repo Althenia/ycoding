@@ -833,6 +833,11 @@ only by another named profile stays selectable with that profile; it is not usab
 ineligible provider default. Authenticated custom-provider discovery maintains each stored profile's
 own inventory and request settings.
 
+Provider and model configuration overlays apply to every eligible profile, including the active
+default. Configured packages, endpoints, headers, request bodies, and effort variants remain
+authoritative after account-specific discovery; selecting a profile does not discard them or
+borrow another account's discovered settings.
+
 The public model reference carries the user-chosen `profile` name. Structured configuration selectors
 accept it too; string shorthand keeps its `provider/model#variant` form:
 

@@ -49,6 +49,7 @@ export type Draft = {
     account: {
       update: (credential: Credential.Info, providerID: Provider.ID, models: readonly CatalogModel.Info[]) => void
       clear: (providerID: Provider.ID) => void
+      configure: (providerID: Provider.ID, update: (model: CatalogModel.MutableInfo) => void) => void
     }
     default: {
       get: () => DefaultModel | undefined
@@ -137,6 +138,17 @@ const layer = Layer.effect(
           },
           model: {
             account: {
+              configure: (providerID, update) => {
+                for (const account of draft.accounts.values()) {
+                  const models = account.providers.get(providerID)
+                  if (!models) continue
+                  for (const [id, model] of models) {
+                    const configured = structuredClone(model) as CatalogModel.MutableInfo
+                    update(configured)
+                    models.set(id, configured)
+                  }
+                }
+              },
               update: (credential, providerID, models) => {
                 draft.contextualProviders.add(providerID)
                 const existing = draft.accounts.get(credential.id)

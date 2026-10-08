@@ -282,6 +282,23 @@ export const Plugin = define({
           }
         }
       }
+      for (const id of new Set(files.flatMap((file) => Object.keys(file.info.providers ?? {})))) {
+        catalog.model.account.configure(Provider.ID.make(id), (model) => {
+          for (const file of files) {
+            const item = file.info.providers?.[id]
+            if (!item) continue
+            if (item.package !== undefined) model.package = item.package
+            if (item.settings !== undefined)
+              model.settings = mutable(Provider.mergeOverlay(model.settings, item.settings))
+            if (item.headers !== undefined) model.headers = Provider.mergeHeaders(model.headers, item.headers)
+            if (item.body !== undefined) model.body = mutable(Provider.mergeOverlay(model.body, item.body))
+          }
+          for (const file of files) {
+            const config = file.info.providers?.[id]?.models?.[model.id]
+            if (config) applyModelConfig(model, config)
+          }
+        })
+      }
       for (const [id, scopes] of loaded.discovered) {
         const providerID = Provider.ID.make(id)
         const provider = catalog.provider.get(providerID)?.provider
