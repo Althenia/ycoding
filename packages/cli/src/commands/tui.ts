@@ -45,7 +45,7 @@ export const TuiCommand = Spec.make(typeof YCODING_CLI_NAME === "string" ? YCODI
       Flag.optional,
     ),
     model: Flag.string("model").pipe(
-      Flag.withDescription("Run a prompt directly with provider/model when a positional prompt is present"),
+      Flag.withDescription("Run a prompt directly with [profile#]provider/model[#variant] when a positional prompt is present"),
       Flag.optional,
     ),
   },

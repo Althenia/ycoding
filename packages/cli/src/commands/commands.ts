@@ -26,7 +26,7 @@ export const Commands = Spec.make(typeof YCODING_CLI_NAME === "string" ? YCODING
       Flag.optional,
     ),
     model: Flag.string("model").pipe(
-      Flag.withDescription("Run a prompt directly with provider/model when a positional prompt is present"),
+      Flag.withDescription("Run a prompt directly with [profile#]provider/model[#variant] when a positional prompt is present"),
       Flag.optional,
     ),
   },
@@ -143,7 +143,7 @@ export const Commands = Spec.make(typeof YCODING_CLI_NAME === "string" ? YCODING
         ),
         model: Flag.string("model").pipe(
           Flag.withAlias("m"),
-          Flag.withDescription("Model to use in the format provider/model"),
+          Flag.withDescription("Model to use in the format [profile#]provider/model[#variant]"),
           Flag.optional,
         ),
         agent: Flag.string("agent").pipe(Flag.withDescription("Agent to use"), Flag.optional),

@@ -296,7 +296,7 @@ export const gettingStartedPages: readonly DocPage[] = [
             kind: "table",
             head: ["Option", "Purpose"],
             rows: [
-              ["`--model <provider/model#variant>`", "Choose a model, optionally with a model variant."],
+              ["`--model <[profile#]provider/model[#variant]>`", "Choose a model, optionally with a named profile and a model variant."],
               ["`--continue` or `-c`", "Continue the last Session."],
               ["`--session <id>` or `-s <id>`", "Continue a specific Session."],
               ["`--file <path>` or `-f <path>`", "Attach a file to the prompt; repeat for more files."],

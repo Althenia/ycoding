@@ -49,7 +49,7 @@ Upgrading an existing installation? Back up session data and review the [SQLite 
 With an installed binary and a configured provider, run a prompt directly using your chosen model:
 
 ```sh
-ycoding --model <provider/model> "Explain this repository"
+ycoding --model <[profile#]provider/model[#variant]> "Explain this repository"
 ```
 
 Run `ycoding run --help` for options. See [runtime behavior](./docs/runtime.md) for sessions and autonomy, or [repository resources](./docs/repository-resources.md) for customization.

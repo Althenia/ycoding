@@ -223,7 +223,7 @@ export const configurationPages: readonly DocPage[] = [
             head: ["Field", "Type", "Default", "Description"],
             rows: [
               ["`$schema`", "string", "unset", "Editor schema metadata only."],
-              ["`model`", "model selector", "unset", "Default `provider/model#variant` when no Session or agent model is selected."],
+              ["`model`", "model selector", "unset", "Default `[profile#]provider/model[#variant]` when no Session or agent model is selected; an omitted profile uses the provider default."],
               ["`default_agent`", "string", "`god`", "Primary agent for a new Session."],
               ["`username`", "string", "unset", "Display and telemetry identity."],
               ["`shell`", "string", "unset", "Shell for terminal and shell-tool execution."],
@@ -376,7 +376,7 @@ export const configurationPages: readonly DocPage[] = [
             kind: "table",
             head: ["Field", "Type", "Default", "Description"],
             rows: [
-              ["`model`", "model selector", "Session or `model` fallback", "Agent-specific `provider/model#variant`."],
+              ["`model`", "model selector", "Session or `model` fallback", "Agent-specific `[profile#]provider/model[#variant]`."],
               ["`description`", "string", "unset", "Text shown in pickers and status."],
               ["`mode`", "`primary` | `subagent` | `all`", "built-in mode, or runtime default for a new agent", "`primary` is selectable for the foreground Session; `subagent` only runs as a child; `all` is both."],
               ["`hidden`", "boolean", "unset", "Hide from normal selection."],
@@ -645,7 +645,7 @@ Report concrete defects with file and symbol evidence.`,
         blocks: [
           {
             kind: "paragraph",
-            text: "Open the model picker in the TUI: a declared model appears under its provider, and a variant appears in the variant cycle. The Session header shows the active `provider/model`. A selector that fails the grammar, such as `gpt-5` without a provider, makes the whole file fail validation.",
+            text: "Open the model picker in the TUI: a declared model appears under its provider, and a variant appears in the variant cycle. The Session header shows the active `provider/model` and, for a named profile, the profile. A selector that fails the grammar, such as `gpt-5` without a provider, makes the whole file fail validation.",
           },
           { kind: "related", slugs: ["configuration/providers", "configuration/agents", "usage/sessions"] },
         ],
@@ -1724,6 +1724,38 @@ Confirm the account, cluster, namespace, and change plan.`,
     },
     "goal": { "provider": "agent", "min_confidence": 0.95 },
     "questions": { "provider": "agent", "min_confidence": 0.8 },
+  },
+}`,
+          },
+          {
+            kind: "table",
+            head: ["Field", "Required", "Purpose"],
+            rows: [
+              ["`decisions.advisory.provider`", "yes", "`agent`, `openai`, or `typesafe`; selects the judgment source and its threshold field."],
+              ["`decisions.advisory.min_confidence` or `.min_probability`", "yes", "Inclusive threshold from `0` to `1`: `min_confidence` for `agent`, `min_probability` for native providers; mixed fields are rejected."],
+              ["`decisions.advisory.candidates`", "yes", "1–254 unique model candidates, each with `id`, `description`, and a `model` selector `[profile#]provider/model[#variant]` or structured selector."],
+              ["`decisions.advisory.directions`", "yes", "1–254 unique task directions, each with `id` and `description`. `keep-current` is reserved."],
+            ],
+          },
+          {
+            kind: "code",
+            language: "jsonc",
+            label: "Opt-in task advice",
+            code: `{
+  "decisions": {
+    "advisory": {
+      "provider": "agent",
+      "min_confidence": 0.9,
+      "candidates": [
+        { "id": "bounded", "description": "Settled bounded implementation", "model": "openai/gpt-6-luna#medium" },
+        { "id": "expert", "description": "Unresolved architecture or difficult diagnosis", "model": "openai/gpt-6.1-sol#high" },
+      ],
+      "directions": [
+        { "id": "inspect", "description": "Inspect evidence needed to resolve a material unknown" },
+        { "id": "implement", "description": "Implement the accepted bounded change with a regression test" },
+        { "id": "verify", "description": "Run focused acceptance checks for the completed change" },
+      ],
+    },
   },
 }`,
           },

@@ -134,7 +134,7 @@ Use the generated YCoding schema endpoint rather than a different product's sche
 
 After the public site and a native release are published, `curl -fsSL https://ycoding.althenia.app/install.sh | sh` installs a checksum-verified release executable in `~/.local/bin`. Installation does not require a separate Bun runtime. The installer applies the same archive checks as `ycoding update`. It checks the shell configuration and adds the binary directory to PATH only when needed; unsupported shells receive manual PATH guidance.
 
-`ycoding` opens the interactive terminal interface. `ycoding --model <provider/model> "prompt"` executes a direct non-interactive run instead. `ycoding run --help` lists the explicit run command's options. These paths share the existing durable Session execution and permission handling.
+`ycoding` opens the interactive terminal interface. `ycoding --model <[profile#]provider/model[#variant]> "prompt"` executes a direct non-interactive run instead. `ycoding run --help` lists the explicit run command's options. These paths share the existing durable Session execution and permission handling.
 
 The installed executable includes `ycoding service start`, `restart`, `status`, `stop`, `get`, `set`, and `unset` for the managed background server. `ycoding service --help` lists these controls. `status` reports the running endpoint or `stopped` without starting a server. `restart` interrupts executing Sessions; let their work finish before restarting to apply an update.
 
@@ -450,7 +450,7 @@ Configuration:
 
 ```jsonc
 {
-  // Preferred selector string (provider/model#variant)
+  // Preferred selector string ([profile#]provider/model[#variant])
   "image_analyzer": {
     "enabled": true,
     "model": "anthropic/claude-sonnet-4",
