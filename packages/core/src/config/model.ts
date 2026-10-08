@@ -15,7 +15,7 @@ const Explicit = Schema.Struct({
   profile: Model.ProfileName.pipe(Schema.optional),
 })
 
-const Short = Schema.String.check(Schema.isPattern(/^[^/#]+\/[^#]+(?:#[^#]+)?$/))
+const Short = Schema.String.check(Schema.isPattern(/^(?:[^/#]+#)?[^/#]+\/[^#]+(?:#[^#]+)?$/))
 
 export interface Selection extends Schema.Schema.Type<typeof Explicit> {}
 export const Selection = Schema.Union([Short, Explicit])
@@ -33,5 +33,6 @@ function parse(input: string): Selection {
     providerID: ref.providerID,
     model: ref.id,
     ...(ref.variant ? { variant: ref.variant } : {}),
+    ...(ref.profile ? { profile: ref.profile } : {}),
   }
 }

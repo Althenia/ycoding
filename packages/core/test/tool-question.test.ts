@@ -397,7 +397,7 @@ describe("QuestionTool", () => {
       suggest(
         new ConfigDecisions.Info({
           timeout_ms: 100,
-          questions: new ConfigDecisions.AgentPolicy({ provider: "agent", min_confidence: 0.7 }),
+          questions: new ConfigDecisions.Policy({ provider: "openai", min_probability: 0.7 }),
         }),
         (input) =>
           Effect.gen(function* () {
@@ -464,6 +464,33 @@ describe("QuestionTool", () => {
       expect(Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause)).toBe(true)
       yield* Deferred.await(interrupted)
       expect(yield* forms.list({ sessionID })).toEqual([])
+    }),
+  )
+
+  it.effect("agent question suggestions wait beyond the native budget and retain their result", () =>
+    Effect.gen(function* () {
+      captured = undefined
+      reject = false
+      deny = false
+      yield* Effect.addFinalizer(() => Effect.sync(() => { suggestions.settings = undefined }))
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      suggest(new ConfigDecisions.Info({ timeout_ms: 100,
+        questions: new ConfigDecisions.AgentPolicy({ provider: "agent", min_confidence: 0.7 }),
+      }), () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)),
+        Effect.as({ choice: "Careful", confidence: 0.9, refused: false })))
+      const registry = yield* ToolRegistry.Service
+      const fiber = yield* settleTool(registry, { sessionID, ...toolIdentity, call: {
+        type: "tool-call", id: "call-agent-question-no-deadline", name: "question", input: { questions: [plan] },
+      } }).pipe(Effect.forkScoped)
+      yield* Deferred.await(entered)
+      yield* TestClock.adjust("1 minute")
+      expect(fiber.pollUnsafe()).toBeUndefined()
+      expect(capturedInput()).toBeUndefined()
+      yield* Deferred.succeed(release, undefined)
+      const result = yield* Fiber.join(fiber)
+      expect(result.output?.structured).toMatchObject({ suggestions: [{ label: "Careful", metric: "confidence", value: 0.9 }] })
+      expect(suggestions.calls).toHaveLength(1)
     }),
   )
 

@@ -95,7 +95,6 @@ import { SessionModelSwitch } from "./model-switch"
 import { SessionHistory } from "./history"
 import { SessionContextBudget } from "./context-budget"
 import { SessionRunnerModel } from "./runner/model"
-import { SessionHelperPolicy } from "./helper-policy"
 import { Catalog } from "../catalog"
 import { Config } from "../config"
 import { ConfigCompaction } from "../config/compaction"
@@ -914,7 +913,7 @@ const layer = Layer.effect(
         const now = Date.now()
         const permissionCeiling = SessionPermissionCeiling.inherit(parent?.permissionCeiling, input.permissionCeiling)
         const relative = path.relative(project.directory, location.directory).replaceAll("\\", "/")
-        const chosen = SessionHelperPolicy.inheritProfile(input.model ?? parent?.model, parent?.model)
+        const chosen = input.model ?? parent?.model
         const selection =
           chosen ??
           (yield* Catalog.Service.pipe(
@@ -924,7 +923,7 @@ const layer = Layer.effect(
         const inheritedBinding =
           input.profileBinding ??
           (parent &&
-          input.model?.profile === undefined &&
+          input.model === undefined &&
           selection?.providerID === parent.model?.providerID &&
           selection?.profile === parent.model?.profile
             ? ((yield* db

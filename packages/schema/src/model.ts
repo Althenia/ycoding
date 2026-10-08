@@ -24,18 +24,30 @@ export const Ref = Schema.Struct({
   .pipe(
     statics((schema) => ({
       parse: (input: string) => {
-        const providerEnd = input.indexOf("/")
+        const profileEnd = input.indexOf("#")
+        const firstSlash = input.indexOf("/")
+        const hasProfile = profileEnd >= 0 && profileEnd < firstSlash
+        const providerStart = hasProfile ? profileEnd + 1 : 0
+        const providerEnd = input.indexOf("/", providerStart)
         if (providerEnd <= 0) throw new Error(`Invalid model reference: ${input}`)
-        const providerID = input.slice(0, providerEnd)
+        const providerID = input.slice(providerStart, providerEnd)
         const variantStart = input.indexOf("#", providerEnd + 1)
         const id = input.slice(providerEnd + 1, variantStart === -1 ? undefined : variantStart)
         const variant = variantStart === -1 ? undefined : input.slice(variantStart + 1)
-        if (!id || providerID.includes("#") || (variant !== undefined && (!variant || variant.includes("#"))))
+        const profile = hasProfile ? input.slice(0, profileEnd) : undefined
+        if (
+          !id ||
+          !providerID ||
+          (hasProfile && !profile) ||
+          providerID.includes("#") ||
+          (variant !== undefined && (!variant || variant.includes("#")))
+        )
           throw new Error(`Invalid model reference: ${input}`)
         return schema.make({
           providerID: Provider.ID.make(providerID),
           id: ID.make(id),
           ...(variant ? { variant: VariantID.make(variant) } : {}),
+          ...(profile ? { profile: ProfileName.make(profile) } : {}),
         })
       },
     })),

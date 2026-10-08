@@ -95,7 +95,7 @@ export const Plugin = {
         })
         .pipe(Effect.orDie)
       if (access === "deny") return []
-      const suggested = yield* Effect.forEach(
+      const operation = Effect.forEach(
         questions,
         (question, index): Effect.Effect<ReadonlyArray<Suggestion>> => {
           const labels = question.options.map((option) => option.label)
@@ -125,7 +125,10 @@ export const Plugin = {
             )
         },
         { concurrency: 4 },
-      ).pipe(Effect.timeoutOrElse({ duration: settings?.timeout_ms ?? 10_000, orElse: () => Effect.succeed([]) }))
+      )
+      const suggested = yield* policy.provider === "agent" ? operation : operation.pipe(
+        Effect.timeoutOrElse({ duration: settings?.timeout_ms ?? 10_000, orElse: () => Effect.succeed([]) }),
+      )
       return suggested.flat()
     })
 

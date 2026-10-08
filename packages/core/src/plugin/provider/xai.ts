@@ -122,6 +122,7 @@ const device = {
     id: deviceMethodID,
     type: "oauth",
     label: "xAI Grok OAuth (Headless / Remote / VPS)",
+    remote: true,
   },
   authorize: () =>
     request(

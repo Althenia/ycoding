@@ -154,6 +154,7 @@ export function makeAnthropicPlugin(options: AnthropicPluginOptions = {}) {
             id: claudeCodeMethodID,
             type: "oauth" as const,
             label: "Claude Code account",
+            remote: true,
             prompts: undefined,
           },
           authorize: (_inputs: Integration.Inputs) =>

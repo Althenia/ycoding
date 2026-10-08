@@ -38,6 +38,17 @@ describe("Model.Ref", () => {
     expect(standard.variant).toBeUndefined()
   })
 
+  test("parses profile-qualified references with optional variants", () => {
+    const expected = Model.Ref.parse("openai/gpt-6-luna#high")
+    expect(Model.Ref.parse("Work#openai/gpt-6-luna#high")).toMatchObject({ ...expected, profile: "Work" })
+    expect(Model.Ref.parse("Work#openrouter/openai/gpt-5")).toMatchObject({
+      providerID: "openrouter",
+      id: "openai/gpt-5",
+      profile: "Work",
+    })
+    expect(Model.Ref.parse("openai/gpt-6-luna")).not.toHaveProperty("profile")
+  })
+
   test("preserves profile-specific Daybreak eligibility without admitting unknown programs", () => {
     const profile = { name: "Work", active: false, daybreak: ["daybreak_blue"] } as const
     expect(Schema.decodeUnknownSync(Model.Profile)(profile)).toEqual(profile)
@@ -56,5 +67,7 @@ describe("Model.Ref", () => {
     expect(() => Model.Ref.parse("gpt-5")).toThrow()
     expect(() => Model.Ref.parse("openai/gpt-5#")).toThrow()
     expect(() => Model.Ref.parse("openai/gpt-5#high#extra")).toThrow()
+    expect(() => Model.Ref.parse("#openai/gpt-5")).toThrow()
+    expect(() => Model.Ref.parse("Work#openai/gpt-5#")).toThrow()
   })
 })

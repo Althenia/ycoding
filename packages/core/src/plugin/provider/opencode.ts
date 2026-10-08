@@ -40,6 +40,7 @@ function oauth(http: HttpClient.HttpClient) {
       id: methodID,
       type: "oauth",
       label: "OpenCode Console account",
+      remote: true,
     },
     authorize: (inputs) =>
       Effect.gen(function* () {

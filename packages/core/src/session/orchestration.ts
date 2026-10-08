@@ -29,7 +29,6 @@ import { SessionMessage } from "./message"
 import { SessionPermissionCeiling } from "./permission-ceiling"
 import { SessionOrchestrationIdentity } from "./orchestration-identity"
 import { SessionRunnerModel } from "./runner/model"
-import { SessionHelperPolicy } from "./helper-policy"
 import { SessionSchema } from "./schema"
 import { SessionPendingTable, SessionTable, SessionTaskTable } from "./sql"
 import { isTerminal, readTeamView, renderTeamView, taskFromRow } from "./orchestration-view"
@@ -44,7 +43,7 @@ export const selectModel = (
   spawn: Model.Ref | undefined,
   agent: Model.Ref | undefined,
   parent: Model.Ref | undefined,
-) => SessionHelperPolicy.inheritProfile(spawn ?? agent ?? parent, parent)
+) => spawn ?? agent ?? parent
 
 const taskRank = (state: State): ListAnchor["rank"] => {
   if (state === "waiting") return 0

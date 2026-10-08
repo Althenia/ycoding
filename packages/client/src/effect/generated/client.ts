@@ -843,30 +843,36 @@ const Endpoint9_0 = (raw: RawClient["server.generate"]) => (input: Endpoint9_0In
 
 const adaptGroup9 = (raw: RawClient["server.generate"]) => ({ text: Endpoint9_0(raw) })
 
-type Endpoint10_0Request = Parameters<RawClient["server.provider"]["provider.list"]>[0]
+type Endpoint10_0Request = Parameters<RawClient["server.provider"]["provider.integrations"]>[0]
 type Endpoint10_0Input = { readonly location?: Endpoint10_0Request["query"]["location"] }
 const Endpoint10_0 = (raw: RawClient["server.provider"]) => (input?: Endpoint10_0Input) =>
-  raw["provider.list"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError))
+  raw["provider.integrations"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError))
 
-type Endpoint10_1Request = Parameters<RawClient["server.provider"]["provider.refresh"]>[0]
+type Endpoint10_1Request = Parameters<RawClient["server.provider"]["provider.list"]>[0]
 type Endpoint10_1Input = { readonly location?: Endpoint10_1Request["query"]["location"] }
 const Endpoint10_1 = (raw: RawClient["server.provider"]) => (input?: Endpoint10_1Input) =>
+  raw["provider.list"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint10_2Request = Parameters<RawClient["server.provider"]["provider.refresh"]>[0]
+type Endpoint10_2Input = { readonly location?: Endpoint10_2Request["query"]["location"] }
+const Endpoint10_2 = (raw: RawClient["server.provider"]) => (input?: Endpoint10_2Input) =>
   raw["provider.refresh"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError))
 
-type Endpoint10_2Request = Parameters<RawClient["server.provider"]["provider.get"]>[0]
-type Endpoint10_2Input = {
-  readonly providerID: Endpoint10_2Request["params"]["providerID"]
-  readonly location?: Endpoint10_2Request["query"]["location"]
+type Endpoint10_3Request = Parameters<RawClient["server.provider"]["provider.get"]>[0]
+type Endpoint10_3Input = {
+  readonly providerID: Endpoint10_3Request["params"]["providerID"]
+  readonly location?: Endpoint10_3Request["query"]["location"]
 }
-const Endpoint10_2 = (raw: RawClient["server.provider"]) => (input: Endpoint10_2Input) =>
+const Endpoint10_3 = (raw: RawClient["server.provider"]) => (input: Endpoint10_3Input) =>
   raw["provider.get"]({ params: { providerID: input["providerID"] }, query: { location: input["location"] } }).pipe(
     Effect.mapError(mapClientError),
   )
 
 const adaptGroup10 = (raw: RawClient["server.provider"]) => ({
-  list: Endpoint10_0(raw),
-  refresh: Endpoint10_1(raw),
-  get: Endpoint10_2(raw),
+  integrations: Endpoint10_0(raw),
+  list: Endpoint10_1(raw),
+  refresh: Endpoint10_2(raw),
+  get: Endpoint10_3(raw),
 })
 
 type Endpoint11_0Request = Parameters<RawClient["server.providerUsage"]["providerUsage.list"]>[0]

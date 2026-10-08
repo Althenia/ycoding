@@ -611,7 +611,7 @@ describe("per-session profiles", () => {
   )
 
   runtimeIt.effect(
-    "inherits the same-provider private binding and never silently rebinds a child after replacement",
+    "uses the provider default for an explicitly selected child model without a profile",
     () =>
       Effect.gen(function* () {
         const fixture = yield* runtimeSetup
@@ -621,15 +621,13 @@ describe("per-session profiles", () => {
           model: session("Work").model,
         })
         const child = yield* sessions.create({ parentID: root.id, model: session().model })
-        expect(child.model?.profile).toBe("Work")
-        expect((yield* fixture.models.resolve(child)).profileBinding).toEqual(
+        expect(child.model?.profile).toBeUndefined()
+        expect((yield* fixture.models.resolve(child)).profileBinding).not.toEqual(
           (yield* fixture.models.resolve(root)).profileBinding,
         )
         const work = fixture.profiles[0]!
         yield* fixture.credentials.create({ integrationID: work.integrationID, label: work.label, value: work.value })
-        expect((yield* sessions.create({ parentID: root.id, model: session().model }).pipe(Effect.flip))._tag).toBe(
-          "SessionRunnerModel.ProfileUnavailableError",
-        )
+        expect((yield* sessions.create({ parentID: root.id, model: session().model })).model?.profile).toBeUndefined()
       }),
   )
 

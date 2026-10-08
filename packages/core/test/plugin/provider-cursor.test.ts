@@ -112,7 +112,7 @@ describe("CursorPlugin", () => {
       expect(integration?.name).toBe("Cursor")
       expect(integration?.methods).toEqual(
         expect.arrayContaining([
-          { id: Integration.MethodID.make("browser"), type: "oauth", label: "Cursor account (browser login)" },
+          { id: Integration.MethodID.make("browser"), type: "oauth", label: "Cursor account (browser login)", remote: true },
           { type: "key", label: "Cursor API key (crsr_…)" },
           { type: "env", names: ["CURSOR_API_KEY"] },
         ]),

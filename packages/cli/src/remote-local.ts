@@ -24,6 +24,11 @@ import {
   type SessionCompletionsOutput,
   type SessionMessageInfo,
   type YCodingClient,
+  type IntegrationInfo,
+  type ProviderIntegrationRef,
+  type IntegrationAttemptStatus,
+  type IntegrationCommandAttempt,
+  type IntegrationCommandAttemptStatus,
 } from "@ycoding-ai/client/promise"
 import { createHash } from "node:crypto"
 import { Service, type Endpoint } from "@ycoding-ai/client/effect/service"
@@ -72,6 +77,16 @@ export type LocalEventStream = {
 }
 
 export type LocalServer = {
+  readonly integrationList: (location: LocalLocation) => Promise<readonly IntegrationInfo[]>
+  readonly providerIntegrations: (location: LocalLocation) => Promise<readonly ProviderIntegrationRef[]>
+  readonly integrationKey: (location: LocalLocation, integrationID: string, key: string, label: string) => Promise<void>
+  readonly integrationOAuthBegin: (location: LocalLocation, integrationID: string, methodID: string, inputs: Readonly<Record<string, string>>, label: string) => Promise<Awaited<ReturnType<YCodingClient["integration"]["oauth"]["connect"]>>["data"]>
+  readonly integrationOAuthStatus: (location: LocalLocation, integrationID: string, attemptID: string) => Promise<IntegrationAttemptStatus>
+  readonly integrationOAuthComplete: (location: LocalLocation, integrationID: string, attemptID: string, code: string) => Promise<void>
+  readonly integrationOAuthCancel: (location: LocalLocation, integrationID: string, attemptID: string) => Promise<void>
+  readonly integrationCommandBegin: (location: LocalLocation, integrationID: string, methodID: string, label: string) => Promise<IntegrationCommandAttempt>
+  readonly integrationCommandStatus: (location: LocalLocation, integrationID: string, attemptID: string) => Promise<IntegrationCommandAttemptStatus>
+  readonly integrationCommandCancel: (location: LocalLocation, integrationID: string, attemptID: string) => Promise<void>
   readonly latencyAppend: (samples: readonly RemoteLatencySample[]) => Promise<{ readonly accepted: number }>
   readonly latencyList: (input: { readonly limit?: number; readonly before?: string }) => Promise<Telemetry.Page>
   readonly keepAwakeGet: () => Promise<KeepAwakeStatus>
@@ -365,6 +380,16 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
       call(async () => {
         await client.form.cancel({ sessionID, formID }, request(location, timeoutMs))
       }),
+    integrationList: (location) => call(async () => (await client.integration.list({}, request(location, timeoutMs))).data),
+    providerIntegrations: (location) => call(async () => (await client.provider.integrations({}, request(location, timeoutMs))).data),
+    integrationKey: (location, integrationID, key, label) => call(async () => { await client.integration.connect.key({ integrationID, key, label }, request(location, timeoutMs)) }),
+    integrationOAuthBegin: (location, integrationID, methodID, inputs, label) => call(async () => (await client.integration.oauth.connect({ integrationID, methodID, inputs: { ...inputs }, label }, request(location, timeoutMs))).data),
+    integrationOAuthStatus: (location, integrationID, attemptID) => call(async () => (await client.integration.oauth.status({ integrationID, attemptID }, request(location, timeoutMs))).data),
+    integrationOAuthComplete: (location, integrationID, attemptID, code) => call(async () => { await client.integration.oauth.complete({ integrationID, attemptID, code }, request(location, timeoutMs)) }),
+    integrationOAuthCancel: (location, integrationID, attemptID) => call(async () => { await client.integration.oauth.cancel({ integrationID, attemptID }, request(location, timeoutMs)) }),
+    integrationCommandBegin: (location, integrationID, methodID, label) => call(async () => (await client.integration.command.connect({ integrationID, methodID, label }, request(location, timeoutMs))).data),
+    integrationCommandStatus: (location, integrationID, attemptID) => call(async () => (await client.integration.command.status({ integrationID, attemptID }, request(location, timeoutMs))).data),
+    integrationCommandCancel: (location, integrationID, attemptID) => call(async () => { await client.integration.command.cancel({ integrationID, attemptID }, request(location, timeoutMs)) }),
     keepAwakeGet: () => call(() => client.keepAwake.get({ signal: AbortSignal.timeout(timeoutMs) })),
     keepAwakeSet: (enabled) => call(() => client.keepAwake.set({ enabled }, { signal: AbortSignal.timeout(timeoutMs) })),
     autonomySet: (sessionID, location, payload) => {

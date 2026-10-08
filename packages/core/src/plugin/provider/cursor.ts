@@ -36,7 +36,7 @@ export const reconcileInterval = "60 seconds"
 
 export const oauth = {
   integrationID,
-  method: { id: methodID, type: "oauth", label: "Cursor account (browser login)" },
+  method: { id: methodID, type: "oauth", label: "Cursor account (browser login)", remote: true },
   authorize: () =>
     Effect.gen(function* () {
       const pkce = generatePkceParams()

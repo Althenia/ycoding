@@ -2,6 +2,8 @@ import { expect, test } from "bun:test"
 import { LLMClient, LLMEvent, type LLMRequest } from "@ycoding-ai/ai"
 import { Agent } from "../src/agent"
 import { Catalog } from "../src/catalog"
+import { Credential } from "../src/credential"
+import { Integration } from "../src/integration"
 import { Config } from "../src/config"
 import { ConfigDecisions } from "../src/config/decisions"
 import { Database } from "../src/database/database"
@@ -33,6 +35,8 @@ import { SessionStore } from "../src/session/store"
 import { SkillInstructions } from "../src/skill/instructions"
 import { Snapshot } from "../src/snapshot"
 import { ToolOutputStore } from "../src/tool-output-store"
+import { ToolRegistry } from "../src/tool/registry"
+import { Tool } from "../src/tool/tool"
 import { Effect, Exit, Layer, Schema, Scope, Stream } from "effect"
 import { Permission } from "../src/permission"
 
@@ -62,22 +66,26 @@ const agentRouting = Schema.decodeUnknownSync(ConfigDecisions.Info)({
 function run(input: {
   settings?: ConfigDecisions.Info
   choose?: (input: Decision.ChoiceInput) => Effect.Effect<Decision.Choice, Decision.Error, EventRuntime.Service | Catalog.Service | Agent.Service | Scope.Scope>
+  evaluate?: (input: Decision.Input) => Effect.Effect<Decision.Output, Decision.Error>
   agent?: Agent.ID
   model?: CatalogModel.Ref
   parentID?: SessionSchema.ID
   permissionCeiling?: Permission.Ruleset
   fails?: boolean
+  failsAfterPromotion?: boolean
   delivery?: SessionPending.Delivery
-  before?: (sessionID: SessionSchema.ID) => Effect.Effect<void, never, Agent.Service | Database.Service | EventRuntime.Service | Scope.Scope>
+  text?: string
+  before?: (sessionID: SessionSchema.ID) => Effect.Effect<void, never, Agent.Service | Catalog.Service | Credential.Service | Integration.Service | Database.Service | EventRuntime.Service | ToolRegistry.Service | Scope.Scope>
   after?: (services: { runner: SessionRunner.Interface; store: SessionStore.Interface;
     db: Database.Interface["db"]; sessionID: SessionSchema.ID; requests: LLMRequest[];
     choices: Decision.ChoiceInput[]; events: EventRuntime.Interface }) => Effect.Effect<void, SessionRunner.RunError>
 }) {
   const requests: LLMRequest[] = []
   const choices: Decision.ChoiceInput[] = []
+  const evaluations: Decision.Input[] = []
   const layer = AppNodeBuilder.build(LayerNode.group([
     Database.node, EventRuntime.node, SessionStore.node, Agent.node, Catalog.node,
-    SessionProjector.node, SessionRunnerLLM.node,
+    SessionProjector.node, SessionRunnerLLM.node, ToolRegistry.node, Credential.node, Integration.node,
   ]), [
     [Location.node, Location.boundNode({ directory })],
     [Snapshot.node, Snapshot.noopLayer],
@@ -97,7 +105,7 @@ function run(input: {
       const scope = yield* Scope.Scope
       return Decision.Service.of({
         settings: () => Effect.succeed(input.settings),
-        evaluate: () => Effect.die("unused direct decision transport"),
+        evaluate: (value) => Effect.sync(() => evaluations.push(value)).pipe(Effect.andThen(input.evaluate?.(value) ?? Effect.die("unused direct decision transport"))),
         choose: (value) => Effect.sync(() => choices.push(value)).pipe(Effect.andThen(
           (input.choose?.(value) ?? Effect.succeed({ choice: "design", probability: 0.95, refused: false }))
             .pipe(Effect.provideService(EventRuntime.Service, events),
@@ -150,20 +158,21 @@ function run(input: {
     })
     const pending = yield* SessionPending.admit(db, events, {
       id: SessionMessage.ID.create(), sessionID,
-      input: { type: "user", delivery: input.delivery ?? "steer", data: { text: "Design a distributed scheduler" } },
+      input: { type: "user", delivery: input.delivery ?? "steer", data: { text: input.text ?? "Design a distributed scheduler" } },
     })
     if (input.before) yield* input.before(sessionID)
     const exit = yield* runner.drain({ sessionID, force: false }).pipe(Effect.exit)
     expect(Exit.isFailure(exit)).toBe(input.fails ?? false)
     if (input.fails) {
-      expect(yield* SessionPending.find(db, pending.id)).toMatchObject({ id: pending.id, type: "user" })
+      if (input.failsAfterPromotion) expect(yield* SessionPending.find(db, pending.id)).toBeUndefined()
+      if (!input.failsAfterPromotion) expect(yield* SessionPending.find(db, pending.id)).toMatchObject({ id: pending.id, type: "user" })
       expect(requests).toHaveLength(0)
     }
     if (!input.fails) expect(yield* SessionPending.find(db, pending.id)).toBeUndefined()
     const history = yield* store.context(sessionID)
-    if (!input.fails) expect(history.find((message) => message.id === pending.id)).toMatchObject({ type: "user", text: "Design a distributed scheduler" })
+    if (!input.fails) expect(history.find((message) => message.id === pending.id)).toMatchObject({ type: "user", text: input.text ?? "Design a distributed scheduler" })
     if (input.after) yield* input.after({ runner, store, db, sessionID, requests, choices, events })
-    return { session: yield* store.get(sessionID), history, requests, choices }
+    return { session: yield* store.get(sessionID), history: yield* store.context(sessionID), requests, choices, evaluations }
   }).pipe(Effect.provide(layer), Effect.scoped, Effect.runPromise)
 }
 
@@ -377,4 +386,201 @@ test("revalidates selectable agents after inference before committing the pair",
   expect(result.session?.agent).toBeUndefined()
   expect(result.session?.model).toBeUndefined()
   expect(String(result.requests[0]?.model.id)).toBe(baselineID)
+})
+
+const advisoryPolicy = {
+  provider: "agent", min_confidence: 0.8,
+  candidates: [{ id: "careful", description: "Difficult tasks", model: { providerID, model: selectedID, variant: "high" } }],
+  directions: [{ id: "inspect", description: "Inspect evidence before editing" }],
+}
+const advisory = Schema.decodeUnknownSync(ConfigDecisions.Info)({ advisory: advisoryPolicy })
+const advice = (confidence = 0.9): Decision.Output => ({ provider: "agent", response: {
+  model: CatalogModel.Ref.make({ providerID, id: baselineID }), semantics: "model-estimate", version: 1,
+  answers: [
+    { name: "model", type: "choice", choice: "careful", answer: null, score: null, confidence },
+    { name: "direction", type: "choice", choice: "inspect", answer: null, score: null, confidence },
+    { name: "tool", type: "choice", choice: "tool:read", answer: null, score: null, confidence },
+  ],
+} })
+const advisorySetup = () => Effect.gen(function* () {
+  const agents = yield* Agent.Service
+  yield* agents.transform((draft) => draft.update(Agent.defaultID, (agent) => {
+    agent.steps = 3
+    agent.permissions.push({ action: "shell", resource: "*", effect: "deny" })
+  }))
+  const catalog = yield* Catalog.Service
+  yield* catalog.transform((draft) => draft.model.update(providerID, selectedID, (model) => {
+    model.variants = [{ id: CatalogModel.VariantID.make("high"), body: { secretOverlay: "must-not-disclose" } }]
+    model.settings = { apiKey: "must-not-disclose" }
+    model.capabilities = { tools: true, input: ["text"], output: ["text"] }
+  }))
+  const registry = yield* ToolRegistry.Service
+  yield* registry.register(Object.fromEntries(["read", "shell"].map((name) => [name, Tool.make({
+    description: `Use ${name}`, input: Schema.Struct({}), output: Schema.Struct({}),
+    execute: () => Effect.die("Advice must never execute a tool"),
+  })])), { codemode: false }).pipe(Effect.orDie)
+})
+
+test("batches model variant, direction and available tool advice into the real runner without selecting or executing", async () => {
+  const result = await run({ settings: advisory, before: advisorySetup, evaluate: () => Effect.succeed(advice()),
+    model: CatalogModel.Ref.make({ providerID, id: baselineID }), after: ({ runner, sessionID }) => runner.drain({ sessionID, force: true }),
+  })
+  expect(result.evaluations).toHaveLength(1)
+  expect(result.evaluations[0]).toMatchObject({ provider: "agent", request: { questions: [
+    { name: "model" }, { name: "direction" }, { name: "tool", choices: [{ value: "keep-current" }, { value: "tool:read" }] },
+  ] } })
+  expect(JSON.stringify(result.evaluations[0])).toContain('"high"')
+  expect(JSON.stringify(result.evaluations[0])).not.toContain("must-not-disclose")
+  expect(JSON.stringify(result.evaluations[0])).not.toContain("tool:shell")
+  expect(result.session?.model?.id).toBe(baselineID)
+  expect(result.history.filter((message) => message.type === "synthetic" && message.description === "Decision advisory")).toHaveLength(1)
+  expect(JSON.stringify(result.requests[0]?.messages)).toContain("Decision advisory")
+  expect(JSON.stringify(result.requests[0]?.messages)).toContain("high")
+  expect(result.requests[0]?.system).toEqual(result.requests[1]?.system)
+  expect(result.history.some((message) => message.type === "model-switched" || message.type === "agent-switched")).toBe(false)
+})
+
+test("unconfigured or denied advisory performs no helper inference", async () => {
+  for (const settings of [undefined, advisory]) {
+    const result = await run({ settings, permissionCeiling: [{ action: "decision", resource: "agent", effect: "deny" }] })
+    expect(result.evaluations).toEqual([])
+    expect(result.history.some((message) => message.type === "synthetic" && message.description === "Decision advisory")).toBe(false)
+  }
+})
+
+test("uncertain advice and helper errors preserve the actual user input and main execution", async () => {
+  for (const evaluate of [() => Effect.succeed(advice(0.79)), () => Effect.fail(new Decision.Error({ reason: "unavailable" }))]) {
+    const result = await run({ settings: advisory, before: advisorySetup, evaluate })
+    expect(result.evaluations).toHaveLength(1)
+    expect(result.requests).toHaveLength(1)
+    expect(result.history.some((message) => message.type === "user" && message.text === "Design a distributed scheduler")).toBe(true)
+    expect(JSON.stringify(result.requests[0]?.messages)).not.toContain("Recommended model")
+  }
+})
+
+test("each subsequently promoted queued user input gets one batch and synthetic inputs get none", async () => {
+  const result = await run({ settings: advisory, before: advisorySetup, evaluate: () => Effect.succeed(advice()),
+    after: ({ runner, sessionID, db, events }) => Effect.gen(function* () {
+      yield* SessionPending.admit(db, events, { id: SessionMessage.ID.create(), sessionID,
+        input: { type: "synthetic", delivery: "steer", data: { text: "Runtime observation", description: "Observation" } },
+      })
+      yield* SessionPending.admit(db, events, { id: SessionMessage.ID.create(), sessionID,
+        input: { type: "user", delivery: "queue", data: { text: "Now verify the design" } },
+      })
+      yield* runner.drain({ sessionID, force: false })
+    }),
+  })
+  expect(result.evaluations).toHaveLength(2)
+  expect(JSON.stringify(result.evaluations[1])).toContain("Now verify the design")
+  expect(result.history.filter((message) => message.type === "synthetic" && message.description === "Decision advisory")).toHaveLength(2)
+})
+
+test("a durable advisory fact fences the admitted input ID without another evaluation", async () => {
+  const result = await run({ settings: advisory, before: (sessionID) => Effect.gen(function* () {
+    const db = (yield* Database.Service).db
+    const events = yield* EventRuntime.Service
+    const input = (yield* SessionPending.list(db, sessionID))[0]
+    yield* events.publish(SessionEvent.Synthetic, { sessionID, text: "Existing helper recommendation", description: "Decision advisory",
+      metadata: { decisionInputID: input.id },
+    })
+  }) })
+  expect(result.evaluations).toEqual([])
+  expect(result.history.filter((message) => message.type === "synthetic" && message.description === "Decision advisory")).toHaveLength(1)
+})
+
+test("advisory caller cancellation propagates without main execution or fabricated observation", async () => {
+  const result = await run({ settings: advisory, before: advisorySetup, evaluate: () => Effect.interrupt,
+    fails: true, failsAfterPromotion: true,
+  })
+  expect(result.evaluations).toHaveLength(1)
+  expect(result.requests).toEqual([])
+  expect(result.history.some((message) => message.type === "synthetic" && message.description === "Decision advisory")).toBe(false)
+})
+
+test("native batch advice uses selected probabilities instead of confidence", async () => {
+  const result = await run({ settings: Schema.decodeUnknownSync(ConfigDecisions.Info)({ advisory: {
+    ...advisoryPolicy, provider: "openai", min_confidence: undefined, min_probability: 0.8,
+  } }), before: advisorySetup, evaluate: () => Effect.succeed({ provider: "openai", response: {
+    model: "gpt-6-luna", usage: { input_tokens: 3, output_tokens: 0, total_tokens: 3 },
+    answers: [
+      { name: "model", type: "choice", choice: "careful", confidence: 0.01, probabilities: [{ value: "keep-current", probability: 0.2 }, { value: "careful", probability: 0.8 }] },
+      { name: "direction", type: "choice", choice: "inspect", confidence: 1, probabilities: [{ value: "keep-current", probability: 0.21 }, { value: "inspect", probability: 0.79 }] },
+      { name: "tool", type: "refusal" },
+    ],
+  } }) })
+  expect(result.evaluations).toHaveLength(1)
+  expect(JSON.stringify(result.requests[0]?.messages)).toContain("native probability 0.80")
+  expect(JSON.stringify(result.requests[0]?.messages)).not.toContain("Recommended direction")
+  expect(JSON.stringify(result.requests[0]?.messages)).not.toContain("Recommended tool")
+})
+
+const profileSetup = () => Effect.gen(function* () {
+  const catalog = yield* Catalog.Service
+  const integrations = yield* Integration.Service
+  const credentials = yield* Credential.Service
+  yield* integrations.transform((draft) => draft.update(Integration.ID.make(providerID), (item) => { item.name = "Fixture" }))
+  const work = yield* credentials.create({ integrationID: Integration.ID.make(providerID), label: "Work", value: Credential.Key.make({ type: "key", key: "profile-fixture" }) }).pipe(Effect.orDie)
+  const personal = yield* credentials.create({ integrationID: Integration.ID.make(providerID), label: "Personal", value: Credential.Key.make({ type: "key", key: "personal-fixture" }) }).pipe(Effect.orDie)
+  const baseline = yield* catalog.model.get(providerID, baselineID)
+  if (!baseline) return yield* Effect.die("Missing baseline fixture")
+  return yield* catalog.transform((draft) => {
+    draft.model.account.update(work, providerID, [{ ...baseline, id: selectedID, variants: [{ id: CatalogModel.VariantID.make("high") }] }])
+    draft.model.account.update(personal, providerID, [baseline])
+  })
+})
+
+test("advisory offers an inactive explicit profile's own model and variant, not the default account's inventory", async () => {
+  const settings = Schema.decodeUnknownSync(ConfigDecisions.Info)({ advisory: {
+    ...advisoryPolicy,
+    candidates: [
+      { id: "work", description: "Work route", model: { providerID, model: selectedID, profile: "Work", variant: "high" } },
+      { id: "default", description: "Unavailable default", model: { providerID, model: selectedID, variant: "high" } },
+      { id: "wrong", description: "Wrong profile variant", model: { providerID, model: selectedID, profile: "Work", variant: "low" } },
+    ],
+  } })
+  const result = await run({ settings, evaluate: () => Effect.succeed(advice()), before: profileSetup })
+  expect(result.evaluations).toHaveLength(1)
+  const request = result.evaluations[0]
+  if (request.provider !== "agent") throw new Error("Expected agent advice")
+  expect(request.request.questions[0]).toMatchObject({ name: "model", choices: [{ value: "keep-current" }, { value: "work" }] })
+  expect(JSON.stringify(request)).toContain('"profile":"Work"')
+  expect(JSON.stringify(request)).not.toContain("profile-fixture")
+  expect(JSON.stringify(request)).not.toContain("personal-fixture")
+})
+
+test("initial routing validates explicit inactive-profile inventory and variants before inference", async () => {
+  const result = await run({ settings: Schema.decodeUnknownSync(ConfigDecisions.Info)({ routing: {
+    provider: "openai", min_probability: 0.8, candidates: [
+      { id: "work", description: "Work", model: { providerID, model: selectedID, profile: "Work", variant: "high" } },
+      { id: "default", description: "Unavailable default", model: { providerID, model: selectedID, variant: "high" } },
+      { id: "wrong", description: "Wrong Work variant", model: { providerID, model: selectedID, profile: "Work", variant: "low" } },
+    ],
+  } }), before: profileSetup, choose: () => Effect.succeed({ choice: "work", probability: 0.9, refused: false }) })
+  expect(result.choices).toHaveLength(1)
+  expect(result.choices[0].choices).toEqual({ "keep-current": "Keep the current default agent and model", work: "Work" })
+  expect(result.session?.model).toEqual(CatalogModel.Ref.make({ providerID, id: selectedID, profile: "Work", variant: CatalogModel.VariantID.make("high") }))
+  expect(result.history.find((message) => message.type === "assistant")).toMatchObject({ model: { providerID, id: selectedID, profile: "Work", variant: "high" } })
+})
+
+test("initial routing never publishes selection after its selected profile variant disappears", async () => {
+  const result = await run({ settings: Schema.decodeUnknownSync(ConfigDecisions.Info)({ routing: {
+    provider: "openai", min_probability: 0.8, candidates: [
+      { id: "work", description: "Work", model: { providerID, model: selectedID, profile: "Work", variant: "high" } },
+    ],
+  } }), before: profileSetup, fails: true, choose: () => Effect.gen(function* () {
+    const catalog = yield* Catalog.Service
+    yield* catalog.transform((draft) => draft.model.account.configure(providerID, (model) => { model.variants = [] }))
+    return { choice: "work", probability: 0.9, refused: false }
+  }) })
+  expect(result.choices).toHaveLength(1)
+  expect(result.session?.model).toBeUndefined()
+  expect(result.history).toHaveLength(0)
+})
+
+test("advisory bounds current request evidence without changing the durable user message", async () => {
+  const text = "bounded request ".repeat(1500)
+  const result = await run({ settings: advisory, before: advisorySetup, text, evaluate: () => Effect.succeed(advice()) })
+  expect(result.evaluations).toHaveLength(1)
+  expect(result.evaluations[0]).toMatchObject({ provider: "agent", request: { state: { request: text.slice(0, 16384) } } })
+  expect(result.history.find((message) => message.type === "user")).toMatchObject({ text })
 })

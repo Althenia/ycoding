@@ -25,6 +25,9 @@
  */
 
 /** Envelope revision. Bump only with a coordinated relay/agent/client release. */
+import { parseProviderAuthInput, providerAuthOperations } from "./provider-auth"
+export { parseProviderAuthInput, providerAuthOperations, isProviderAuthorizationURL, type ProviderAuthOperation, type ProviderAuthInput, type ProviderAuthTarget, type ProviderAuthInfo, type ProviderAuthAttempt, type ProviderAuthStatus, type ProviderAuthPrompt } from "./provider-auth"
+
 export const RemoteProtocolVersion = 4
 
 /** Versioned WebSocket routes derived from the envelope revision. */
@@ -35,6 +38,7 @@ export const RemoteWebSocketPath = {
 
 /** Operations the relay proxies. Every other operation is rejected. */
 export const remoteOperations = [
+  ...providerAuthOperations,
   "workspace.list",
   "session.list",
   "session.active",
@@ -620,7 +624,7 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
   if (frame.sessionID !== undefined && !isSessionID(frame.sessionID)) return invalid()
   if (requireSession(operation) && frame.sessionID === undefined)
     return failRequest("session_required", "Operation requires a session")
-  if ((operation === "session.status" || operation === "workspace.catalog" || operation === "workspace.file.find" ||
+  if ((operation.startsWith("provider.auth.") || operation === "session.status" || operation === "workspace.catalog" || operation === "workspace.file.find" ||
     operation === "usage.providers" || operation === "usage.summary" || operation === "usage.report" ||
     operation === "machine.keepAwake.get" || operation === "machine.keepAwake.set" ||
     operation === "machine.latency.append" || operation === "machine.latency.list") && frame.sessionID !== undefined)
@@ -645,6 +649,7 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
 }
 
 function validOperationInput(operation: RemoteOperation, input: unknown): boolean {
+  if (operation.startsWith("provider.auth.")) return parseProviderAuthInput(operation, input) !== undefined
   if (operation === "machine.latency.append") return isRecord(input) && Object.keys(input).length === 1 &&
     Array.isArray(input.samples) && input.samples.length >= 1 && input.samples.length <= RemoteLimits.maxLatencyBatch &&
     input.samples.every(isRemoteLatencySample)

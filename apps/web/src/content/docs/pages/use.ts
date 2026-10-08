@@ -264,7 +264,7 @@ export const usePages: readonly DocPage[] = [
             kind: "table",
             head: ["Option", "Argument / alias", "Default", "Effect"],
             rows: [
-              ["--model", "<provider/model#variant>; alias -m", "Unset", "Select a model and optional variant; resolved Session or agent default applies when omitted."],
+              ["--model", "<[profile#]provider/model[#variant]>; alias -m", "Unset", "Select a model and optional profile and variant; an omitted profile uses the provider default."],
               ["--agent", "<name>", "Unset", "Select an agent; default agent selection applies when omitted."],
               ["--format", "default or json", "default", "Choose output format."],
               ["--file", "<path>; alias -f; repeatable up to 100", "None", "Attach files to the message."],
@@ -384,6 +384,7 @@ export const usePages: readonly DocPage[] = [
         heading: "Command palette",
         blocks: [
           { kind: "paragraph", text: "Inside the workspace, choose Open command palette in the header or press Ctrl+K or Cmd+K. Ctrl+P also opens it outside text fields; Cmd+P keeps browser printing. Search actions by name, slash command, or skill ID, then use the arrow keys and Enter or tap a result. Available Session actions, configured commands, skills, navigation, appearance, notifications, and account actions follow your current view and connection state." },
+          { kind: "paragraph", text: "Select provider and model opens the current composer's model, profile, and effort controls without changing the draft. Connect provider adds or replaces a named profile on the selected machine and makes it that provider's default; it does not replace a Session's explicit profile selection. Keys and manual authorization codes pass through the authenticated relay to the machine. Methods that need a local browser say so. Failed or uncertain authentication is not automatically retried; check status or refresh profiles first." },
           { kind: "paragraph", text: "Commands that need text fill the composer for editing while preserving your draft; they do not send automatically. Escape returns focus to the opener. On phones, the palette fills the visible screen above the on-screen keyboard. The terminal palette uses Ctrl+P and also searches slash names and aliases." },
         ],
       },

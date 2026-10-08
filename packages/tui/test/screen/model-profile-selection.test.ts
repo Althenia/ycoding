@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test"
+import { mkdtemp, rm } from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
 import { json } from "../fixture/tui-client"
 import { renderScreen } from "./harness"
 
@@ -36,6 +39,29 @@ function session(sessionID: string, profile?: string) {
 
 const workSession = session("ses_profile_work", "Work")
 const personalSession = session("ses_profile_personal", "Personal")
+
+test("interactive --model selects its named profile and variant in the rendered Home composer", async () => {
+  const state = await mkdtemp(path.join(os.tmpdir(), "ycoding-model-argument-"))
+  const screen = await renderScreen({
+    width: 140,
+    height: 48,
+    state,
+    args: { model: "Work#anthropic/claude-opus-5#high" },
+    settle: "Message YCoding…",
+    route: (url, request) => route({ requests: [], integrationWrites: [] })(url, request),
+  })
+  try {
+    await waitFor(
+      () => screen.frame().includes("Work · anthropic/Claude Opus 5") && screen.frame().includes("high"),
+      "the CLI-selected Work/high model identity",
+    )
+    expect(screen.frame()).toContain("Work · anthropic/Claude Opus 5")
+    expect(screen.frame()).toContain("high")
+  } finally {
+    await screen.dispose()
+    await rm(state, { recursive: true, force: true })
+  }
+}, 30_000)
 
 function route(input: {
   readonly sessions?: readonly ReturnType<typeof session>[]
@@ -149,9 +175,9 @@ test("a disabled provider default blocks the rendered prompt and retains its dra
   }
 })
 
-async function waitFor(predicate: () => boolean, label: string, frame?: () => string) {
+async function waitFor(predicate: () => boolean | Promise<boolean>, label: string, frame?: () => string) {
   for (let attempt = 0; attempt < 1000; attempt++) {
-    if (predicate()) return
+    if (await predicate()) return
     await new Promise<void>((resolve) => setImmediate(resolve))
   }
   throw new Error(`Timed out waiting for ${label}${frame ? `:\n${frame()}` : ""}`)

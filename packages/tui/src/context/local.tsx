@@ -10,7 +10,7 @@ import { RGBA } from "@opentui/core"
 import { rm } from "fs/promises"
 import { readJson } from "../util/persistence"
 import { errorMessage } from "../util/error"
-import { modelVariantIDs } from "../util/model"
+import { modelVariantIDs, parse } from "../util/model"
 import { useClient } from "./client"
 import {
   createModelPreferenceRepository,
@@ -24,14 +24,6 @@ import { useToast } from "../ui/toast"
 import { useRoute } from "./route"
 import { useData } from "./data"
 import { useLocation } from "./location"
-
-export function parseModel(model: string) {
-  const [providerID, ...rest] = model.split("/")
-  return {
-    providerID: providerID,
-    modelID: rest.join("/"),
-  }
-}
 
 export function recentModels(model: ModelPreferenceModel, recent: ModelPreferenceModel[]) {
   const seen = new Set<string>()
@@ -211,13 +203,8 @@ export const {
 
       const fallbackModel = createMemo(() => {
         if (args.model) {
-          const { providerID, modelID } = parseModel(args.model)
-          if (isModelValid({ providerID, modelID })) {
-            return {
-              providerID,
-              modelID,
-            }
-          }
+          const model = parse(args.model)
+          if (model && isModelValid(model)) return model
         }
 
         const recent = modelStore.recent.find((item) => item.profile !== undefined || isModelValid(item))
@@ -432,7 +419,7 @@ export const {
           if (!agent.current()) return Promise.resolve()
           return this.select(next, { sessionID })
         },
-        set(model: ModelPreferenceModel, options?: { recent?: boolean }) {
+        set(model: ModelPreferenceModel & { variant?: string }, options?: { recent?: boolean }) {
           batch(() => {
             if (!isModelValid(model)) {
               toast.show({
@@ -445,6 +432,7 @@ export const {
             const a = agent.current()
             if (!a) return
             setModelStore("model", a.id, { providerID: model.providerID, modelID: model.modelID, ...(model.profile === undefined ? {} : { profile: model.profile }) })
+            if (model.variant !== undefined) setModelStore("variant", modelPreferenceKey(model), model.variant)
             if (options?.recent) {
               setModelStore("recent", recentModels(model, modelStore.recent))
               save()

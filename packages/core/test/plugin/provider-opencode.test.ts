@@ -86,6 +86,7 @@ describe("OpencodePlugin", () => {
           id: Integration.MethodID.make("device"),
           type: "oauth",
           label: "OpenCode Console account",
+          remote: true,
         },
         { type: "key", label: "API key (service account)" },
       ])

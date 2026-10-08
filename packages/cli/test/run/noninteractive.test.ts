@@ -205,6 +205,9 @@ function failedTool(inputID: string): ServerEvent[] {
 async function run(input: {
   turn: (inputID: string) => ServerEvent[]
   files?: Array<{ url: string; filename: string; mime: string }>
+  model?: { providerID: string; modelID: string }
+  variant?: string
+  profile?: string
   pendingForms?: FormInfo[]
   pendingGuardrails?: GuardrailInfo[]
   attached?: boolean
@@ -239,6 +242,7 @@ async function run(input: {
   spyOn(sdk.guardrail.request, "list").mockImplementation(() => ok(input.pendingGuardrails ?? []) as never)
   spyOn(sdk.guardrail.request, "reply").mockImplementation(() => ok(undefined) as never)
   spyOn(sdk.session, "interrupt").mockImplementation(() => ok(undefined) as never)
+  spyOn(sdk.session, "switchModel").mockImplementation(() => ok(undefined) as never)
   spyOn(sdk.form, "list").mockImplementation(
     (request) => ok(input.pendingForms?.filter((item) => item.sessionID === request.sessionID) ?? []) as never,
   )
@@ -264,6 +268,9 @@ async function run(input: {
     location,
     message: "hello",
     files: input.files ?? [],
+    model: input.model,
+    variant: input.variant,
+    profile: input.profile,
     thinking: false,
     format: input.format ?? "default",
     attached: input.attached ?? false,
@@ -300,6 +307,20 @@ afterEach(() => {
 })
 
 describe("runNonInteractivePrompt", () => {
+  test("forwards explicit profile-qualified model selections to the Session", async () => {
+    const sdk = await run({
+      model: { providerID: "openai", modelID: "gpt-6-luna" },
+      variant: "high",
+      profile: "Work",
+      turn: (messageID) => [prompted(messageID), settled()],
+    })
+
+    expect(sdk.session.switchModel).toHaveBeenCalledWith({
+      sessionID: "ses_1",
+      model: { providerID: "openai", id: "gpt-6-luna", variant: "high", profile: "Work" },
+    })
+  })
+
   test("reports skill-load execution failure before prompt promotion instead of waiting for a model", async () => {
     const output = await capture({
       format: "json",

@@ -24,7 +24,7 @@ export async function renderScreen(input: {
   width: number
   height: number
   route?: FetchHandler
-  args?: { sessionID?: string }
+  args?: { sessionID?: string; model?: string }
   pluginStatus?: ReadonlyArray<TuiPluginStatus>
   clipboard?: ClipboardService
   /** The real renderer enables the kitty keyboard protocol; modifier sequences need it. */

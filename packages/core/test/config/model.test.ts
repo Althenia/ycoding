@@ -15,6 +15,12 @@ describe("ConfigModel.Selection", () => {
       profile: "Work",
     })
     expect(decode("openai/gpt-6.1-sol")).not.toHaveProperty("profile")
+    expect(decode("Work#openai/gpt-6.1-sol#high")).toEqual({
+      providerID: Provider.ID.make("openai"),
+      model: Model.ID.make("gpt-6.1-sol"),
+      variant: Model.VariantID.make("high"),
+      profile: "Work",
+    })
     expect(() => decode({ providerID: "openai", model: "gpt-6.1-sol", profile: "" })).toThrow()
   })
 
@@ -34,6 +40,7 @@ describe("ConfigModel.Selection", () => {
   test("rejects malformed selections and reserved fragments", () => {
     expect(() => decode("gpt-5")).toThrow()
     expect(() => decode("openai/gpt-5#")).toThrow()
+    expect(() => decode("#openai/gpt-5")).toThrow()
     expect(() => decode({ providerID: "openai", model: "gpt-5#high" })).toThrow()
   })
 })

@@ -37,6 +37,7 @@ const oauth = {
     id: methodID,
     type: "oauth",
     label: "Login with GitHub Copilot",
+    remote: true,
     prompts: [
       {
         type: "select",

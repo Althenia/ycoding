@@ -36,7 +36,7 @@ export const RunCommand = Spec.make("run", {
     ),
     model: Flag.string("model").pipe(
       Flag.withAlias("m"),
-      Flag.withDescription("Model to use in the format provider/model#variant"),
+      Flag.withDescription("Model to use in the format [profile#]provider/model[#variant]"),
       Flag.optional,
     ),
     agent: Flag.string("agent").pipe(Flag.withDescription("Agent to use"), Flag.optional),

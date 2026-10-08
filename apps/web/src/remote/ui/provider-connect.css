@@ -1,0 +1,11 @@
+.overlay--provider-connect .overlay__body {
+  padding: var(--yc-space-4);
+}
+
+.overlay--provider-connect .field__hint {
+  overflow-wrap: anywhere;
+}
+
+.overlay--provider-connect .input {
+  max-inline-size: 100%;
+}

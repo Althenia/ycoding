@@ -545,7 +545,7 @@ Configure the goal pre-prompt with `agents.goal.system`. This helper synthesizes
 
 An unavailable configured model, failed provider request, or empty calculation leaves the prior goal unchanged. The runtime does not fall back to raw input or another model on that failure. The user replaces objectives explicitly; ordinary chat and agent goal-tool calls cannot rewrite them.
 
-For titles, goals, and decision judgments, an explicit model on the matching hidden agent takes precedence over `efficiency.helper_models.<role>`; a missing value or `session` uses the current Session model. Local selective-compaction manifests resolve `helper_models.compaction.main` for main chats and `.subagent` for child Sessions before creating the helper child. An explicit configured compaction model takes precedence over the agent-pinned model; a missing value or `session` retains the existing `agent model`, then owner-Session-model precedence. A subagent owner's `session` value means that subagent's own model. Local jobs reuse a deterministic taskless child Session with the hidden primary `compaction` agent, the selected model, and provider/cache identity isolated from the owner. On a ChatGPT/Codex Responses route, remote compaction uses the owner Session's model regardless of the helper selection; if remote compaction fails, the same job uses the configured local helper. Direct OpenAI and eligible Copilot Responses can compact inline on their Session model without calling a helper. This changes no configuration shape.
+For titles, goals, and decision judgments, an explicit model on the matching hidden agent takes precedence over `efficiency.helper_models.<role>`; a missing value or `session` uses the current Session model. Local selective-compaction manifests resolve `helper_models.compaction.main` for main chats and `.subagent` for child Sessions before creating the helper child. An explicit configured compaction model takes precedence over the agent-pinned model; a missing value or `session` retains the existing `agent model`, then owner-Session-model precedence. A subagent owner's `session` value means that subagent's own model. An explicitly selected helper model without a profile uses that provider's default profile, even when the helper owner selected another profile; inheriting the whole Session model retains its profile. Local jobs reuse a deterministic taskless child Session with the hidden primary `compaction` agent, the selected model, and provider/cache identity isolated from the owner. On a ChatGPT/Codex Responses route, remote compaction uses the owner Session's model regardless of the helper selection; if remote compaction fails, the same job uses the configured local helper. Direct OpenAI and eligible Copilot Responses can compact inline on their Session model without calling a helper. This changes no configuration shape.
 
 ## Permissions
 
@@ -819,8 +819,19 @@ behavior. The dialog highlights the selected catalog source and API type with a 
 
 A provider may hold several named profiles: multiple accounts or multiple API keys for the same
 provider. A profile is the stored credential's user-facing name. Connecting asks for that name
-(`/connect`, the command palette's `Connect integration`, or the model selector's connect action),
+(`/connect`, the TUI command palette's `Connect integration`, its model selector's connect action, or the web palette's `Connect provider`),
 and re-using a name updates that profile instead of replacing the provider's credentials.
+
+In the web, **Connect provider** uses the selected machine and current Session or landing repository.
+API keys and manual authorization codes pass through the authenticated relay and are stored only by
+the machine's credential owner. A successful connection creates or replaces the named profile and
+makes it that provider's global default; it does not reselect an existing Session's explicit profile.
+The dialog offers registered key, remote-capable OAuth, and command methods. Loopback-only or
+undeclared OAuth methods state that sign-in must happen on the backend machine. A registered command
+runs on that machine and may still require local browser interaction. Failed or unknown outcomes
+require checking authentication status or refreshing profiles before an explicit retry; writes are
+never automatically replayed. Model/profile selection uses **Select provider and model** and retains
+the composer's existing pending-selection and draft behavior.
 
 One profile per provider is the active default. A Session can select an eligible named profile alongside
 its model independently of that default, so two Sessions or subagents can use different accounts for
@@ -839,12 +850,20 @@ authoritative after account-specific discovery; selecting a profile does not dis
 borrow another account's discovered settings.
 
 The public model reference carries the user-chosen `profile` name. Structured configuration selectors
-accept it too; string shorthand keeps its `provider/model#variant` form:
+accept it too. String shorthand uses `[profile#]provider/model[#variant]`; omitting the profile uses
+the provider's default profile:
+
+```text
+Work#openai/gpt-6-luna#high
+openai/gpt-6-luna#high
+```
+
+Use structured selectors for profile names containing `/` or `#`.
 
 ```jsonc
 {
   "model": {
-    "provider": "openai",
+    "providerID": "openai",
     "model": "gpt-6-luna",
     "variant": "high",
     "profile": "Work"
@@ -859,9 +878,10 @@ change the selected account. Reusing a Session or admitted-input ID retains its 
 
 Model controls and the Session header distinguish explicit profiles from the provider default. Pending
 changes apply before prompt admission; failure preserves the draft. An unavailable saved selection
-stays visible with a recovery action. Helpers and subagents keep their existing model precedence and
-inherit an omitted profile only when the chosen provider matches the owning Session. Explicit profiles
-override that inheritance; profile names are not copied across providers. See the
+stays visible with a recovery action. Helpers and subagents keep their existing model precedence. An
+explicitly chosen helper model with no profile uses the chosen provider's default profile; only
+inheriting the whole owning Session model retains its profile. Explicit profile names select accounts
+only within their provider. See the
 [profile isolation contract](../specs/provider-profiles.md).
 
 ### Claude Code account profiles
@@ -874,13 +894,13 @@ The isolated Claude CLI profile owns its OAuth credentials. On macOS, Claude Cod
 
 ## Native decisions
 
-The `decisions` runtime object configures native OpenAI Decisions and TypeSafe Jev judgments and hidden decision-agent judgments. `timeout_ms` defaults to `10000` and accepts positive integers up to `60000`. `providers.openai` and `providers.typesafe` accept `api_key` and an HTTP(S) `base_url`. OpenAI uses `gpt-6-luna`; `providers.typesafe.model` selects the automatic-flow model, defaulting to `jev-1.13.0`. Native TypeSafe tool requests supply their own model. Agent configuration is described [below](#decision-agent).
+The `decisions` runtime object configures native OpenAI Decisions and TypeSafe Jev judgments and hidden decision-agent judgments. `timeout_ms` bounds native OpenAI/TypeSafe calls and their question-suggestion batches; it defaults to `10000` and accepts positive integers up to `60000`. Hidden decision-agent calls have no YCoding wall-clock deadline and remain explicitly cancellable; provider or network failures can still terminate them. `providers.openai` and `providers.typesafe` accept `api_key` and an HTTP(S) `base_url`. OpenAI uses `gpt-6-luna`; `providers.typesafe.model` selects the automatic-flow model, defaulting to `jev-1.13.0`. Native TypeSafe tool requests supply their own model. Agent configuration is described [below](#decision-agent).
 
 Authentication precedence is the configured `api_key`, the selected active API-key credential for the `openai` or `typesafe` integration, then `OPENAI_API_KEY` or `TYPESAFE_API_KEY`. Codex OAuth and subscription credentials are not native decision API keys. Keys belong in configuration or credential storage, never tool inputs or results.
 
 OpenAI Decisions uses API Platform billing, separate from a ChatGPT subscription; a subscription alone supplies neither a decision API key nor included API usage. See [OpenAI billing](https://help.openai.com/en/articles/9039756-managing-billing-for-chatgpt-and-the-api-platform). Shared agent guidance directs proactive `decision` tool use for bounded classification, option choice, grading, ranking, unverifiable predicates, and calibrating a recommendation before `question`, only with configured access and authorized evidence; it does not enable billing or automatic policies.
 
-The automatic `guardrails`, `routing`, `goal`, and `questions` policies are disabled when omitted. Native policies require `provider` (`openai` or `typesafe`) and an explicit `min_probability` in `[0, 1]`; thresholds are inclusive and apply to the chosen option's probability, not the separate confidence field. Agent policies instead require `provider: "agent"` and `min_confidence` in `[0, 1]`. Wrong or mixed metric fields are rejected. A refusal, a missing choice, or a missing, non-finite, or out-of-range score is uncertain at every threshold; scores are never clamped. This native example deliberately sets thresholds without a calibration guarantee. Its route changes only the agent, using the available default model.
+The automatic `guardrails`, `routing`, `goal`, `questions`, and `advisory` policies are disabled when omitted. Native policies require `provider` (`openai` or `typesafe`) and an explicit `min_probability` in `[0, 1]`; thresholds are inclusive and apply to the chosen option's probability, not the separate confidence field. Agent policies instead require `provider: "agent"` and `min_confidence` in `[0, 1]`. Wrong or mixed metric fields are rejected. A refusal, a missing choice, or a missing, non-finite, or out-of-range score is uncertain at every threshold; scores are never clamped. This native example deliberately sets thresholds without a calibration guarantee. Its route changes only the agent, using the available default model.
 
 ```jsonc
 {
@@ -906,7 +926,47 @@ The automatic `guardrails`, `routing`, `goal`, and `questions` policies are disa
 
 Routing accepts 1–254 candidates with unique nonempty IDs and descriptions; `keep-current` is reserved for the runtime's baseline choice. Candidates select an agent, a normal model selector, or both; entries selecting neither are not offered. Only known selectable agents allowed by the current agent's effective `agent` permission and available supported models/variants are offered.
 
-`questions` requests an option suggestion for single-select `question` prompts with at least two unique labels. It skips multiselect, free-text, and prompts already containing an explicit `(Recommended)` option. An effective `decision` permission deny, including an inherited ceiling, skips the helper; policy configuration never overrides that deny. The evidence is only the prompt's header, question text, and option labels and descriptions. A suggestion at or above the threshold becomes the form's preselected default, its option description gains `(Suggested by the decision helper: native probability 0.91)` or `(Suggested by the decision helper: model confidence 0.82, uncalibrated)`, and the agent's tool result lists it separately from the answers. Normal mode still waits for the user's answer and permits a different choice. Under YOLO 1–3 or an active goal, the existing form auto-answerer uses the suggested default. Uncertain, refused, or failed evaluations leave the prompt unchanged. At most four evaluations run concurrently within one overall `timeout_ms` budget; expiration discards suggestions, interrupts unfinished evaluations, and opens the original form. This timeout does not establish provider-side cancellation or billing cancellation.
+`questions` requests an option suggestion for single-select `question` prompts with at least two unique labels. It skips multiselect, free-text, and prompts already containing an explicit `(Recommended)` option. An effective `decision` permission deny, including an inherited ceiling, skips the helper; policy configuration never overrides that deny. The evidence is only the prompt's header, question text, and option labels and descriptions. A suggestion at or above the threshold becomes the form's preselected default, its option description gains `(Suggested by the decision helper: native probability 0.91)` or `(Suggested by the decision helper: model confidence 0.82, uncalibrated)`, and the agent's tool result lists it separately from the answers. Normal mode still waits for the user's answer and permits a different choice. Under YOLO 1–3 or an active goal, the existing form auto-answerer uses the suggested default. Uncertain, refused, or failed evaluations leave the prompt unchanged. At most four evaluations run concurrently. Native evaluations share one overall `timeout_ms` budget; expiration discards suggestions, interrupts unfinished evaluations, and opens the original form. Agent evaluations have no local wall-clock deadline; explicit interruption still cancels the tool call. Cancellation does not establish provider-side or billing cancellation.
+
+### Task advice in the harness
+
+`decisions.advisory` batches three bounded recommendations once per promoted nonempty user input:
+a configured model/profile/variant for task planning or delegation, a configured next direction,
+and a tool from the permission-filtered runtime registry. It does not run a classifier on every
+model step. Model candidates and directions each require 1–254 unique nonempty IDs and descriptions;
+each model candidate also requires a normal model selector. `keep-current` is reserved. Only available,
+enabled, supported model/profile/variant combinations are offered. Tool advice must be checked
+against the actual current tool schema before use.
+
+```jsonc
+{
+  "decisions": {
+    "advisory": {
+      "provider": "agent",
+      "min_confidence": 0.9,
+      "candidates": [
+        { "id": "bounded", "description": "Settled bounded implementation", "model": "openai/gpt-6-luna#medium" },
+        { "id": "expert", "description": "Unresolved architecture or difficult diagnosis", "model": "openai/gpt-6.1-sol#high" }
+      ],
+      "directions": [
+        { "id": "inspect", "description": "Inspect evidence needed to resolve a material unknown" },
+        { "id": "implement", "description": "Implement the accepted bounded change with a regression test" },
+        { "id": "verify", "description": "Run focused acceptance checks for the completed change" }
+      ]
+    }
+  }
+}
+```
+
+Configure only models and variants your connected provider offers. For native decision APIs, use
+`provider: "openai"` or `"typesafe"` with `min_probability` instead of `min_confidence` and configure
+authorized API-key access separately. The evidence includes bounded user text, active goal and latest
+assistant text, selected-model identity, safe catalog capability/limit fields, and tool descriptions.
+It excludes provider settings, headers, request bodies, and credentials. A durable advisory reports
+only sufficiently confident offered choices; it never executes tools, changes explicit selections,
+grants permission, or changes the goal. A deny skips evaluation. Refusal, uncertainty, and sanitized
+errors yield no actionable recommendation and do not fabricate one. No policy is enabled by installing
+the feature or by opening the web client.
 
 See [runtime policies](./runtime.md#automatic-decision-policies) and the [native decision contract](../specs/decisions.md) for disclosure, failure, safety, and usage boundaries.
 

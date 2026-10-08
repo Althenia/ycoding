@@ -140,7 +140,6 @@ const layer = Layer.effect(Service, Effect.gen(function* () {
           return Effect.void
         }),
         Effect.mapError(() => new Error({ reason: "provider-failed" })),
-        Effect.timeoutOrElse({ duration: Config.latest(entries, "decisions")?.timeout_ms ?? 10_000, orElse: () => Effect.fail(new Error({ reason: "timeout" })) }),
         Effect.ensuring(complete),
         Effect.exit,
       )

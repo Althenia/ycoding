@@ -5,6 +5,7 @@ import { and, eq } from "drizzle-orm"
 import { ProjectArtifact } from "@ycoding-ai/schema/project-artifact"
 import { Agent } from "../agent"
 import { Catalog } from "../catalog"
+import { ConfigModel } from "../config/model"
 import { Database } from "../database/database"
 import { Decision } from "../decision"
 import { makeLocationNode } from "../effect/app-node"
@@ -45,6 +46,17 @@ const layer = Layer.effect(
     const models = yield* SessionRunnerModel.Service
     const store = yield* SessionStore.Service
     const db = database.db
+
+    const modelAvailable = Effect.fn("SessionDecisionRouting.modelAvailable")(function* (
+      selection: ConfigModel.Selection,
+      available: ReadonlyArray<CatalogModel.Info>,
+    ) {
+      if (!available.some((model) => model.providerID === selection.providerID && model.id === selection.model)) return false
+      const model = yield* catalog.model.get(selection.providerID, selection.model, selection.profile)
+      return model !== undefined && model.enabled && SessionRunnerModel.supported(model) &&
+        (selection.profile === undefined || model.profiles?.some((profile) => profile.name === selection.profile) === true) &&
+        (selection.variant === undefined || model.variants.some((variant) => variant.id === selection.variant))
+    })
 
     const eligible = Effect.fn("SessionDecisionRouting.eligible")(function* (sessionID: SessionSchema.ID) {
       const session = yield* store.get(sessionID)
@@ -104,16 +116,7 @@ const layer = Layer.effect(
               if (access !== "allow") return false
             }
             if (!candidate.model) return true
-            return availableModels.some(
-              (model) =>
-                model.providerID === candidate.model?.providerID &&
-                model.id === candidate.model.model &&
-                SessionRunnerModel.supported(model) &&
-                (candidate.model.profile === undefined ||
-                  model.profiles?.some((profile) => profile.name === candidate.model?.profile)) &&
-                (candidate.model.variant === undefined ||
-                  model.variants?.some((variant) => variant.id === candidate.model?.variant)),
-            )
+            return yield* modelAvailable(candidate.model, availableModels)
           }),
         )
         if (!candidates.length) return
@@ -219,16 +222,8 @@ const layer = Layer.effect(
                 if (access !== "allow") return false
               }
               if (
-                model &&
-                !(yield* catalog.model.available()).some(
-                  (available) =>
-                    available.providerID === model.providerID &&
-                    available.id === model.id &&
-                    (model.variant === undefined ||
-                      available.variants?.some((variant) => variant.id === model.variant)) &&
-                    (model.profile === undefined ||
-                      available.profiles?.some((profile) => profile.name === model.profile)),
-                )
+                candidate.model &&
+                !(yield* modelAvailable(candidate.model, yield* catalog.model.available()))
               )
                 return false
               return true

@@ -118,6 +118,7 @@ const headless = {
     id: headlessMethodID,
     type: "oauth",
     label: "ChatGPT Pro/Plus (headless)",
+    remote: true,
   },
   authorize: () =>
     Effect.gen(function* () {

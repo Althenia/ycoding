@@ -41,6 +41,7 @@ type ProviderStandIn = {
 }
 
 export type IsolatedServerOptions = {
+  readonly plugins?: readonly string[]
   readonly provider?: ProviderFixture
   readonly remote?: RemoteConnection.Interface
 }
@@ -59,7 +60,7 @@ export async function startServer(directory: string, options: IsolatedServerOpti
     config: {
       directory,
       project: false,
-      content: standIn === undefined ? "{}" : providerConfig(standIn),
+      content: JSON.stringify({ ...(standIn === undefined ? {} : JSON.parse(providerConfig(standIn))), ...(options.plugins === undefined ? {} : { plugins: options.plugins }) }),
     },
     models: { fetch: false },
     fs: { filewatcher: false, fff: false },

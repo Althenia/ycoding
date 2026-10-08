@@ -1,7 +1,8 @@
 import { expect } from "bun:test"
 import { LLM, LLMClient, LLMEvent, Model, type LLMRequest } from "@ycoding-ai/ai"
 import { OpenAIChat } from "@ycoding-ai/ai/protocols/openai-chat"
-import { Cause, Effect, Layer, Schema, Stream } from "effect"
+import { Cause, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
+import { TestClock } from "effect/testing"
 import { decode } from "@toon-format/toon"
 import { Image } from "../src/image"
 import { Permission } from "../src/permission"
@@ -37,6 +38,9 @@ import { Money } from "@ycoding-ai/schema/money"
 const requests: LLMRequest[] = []
 const state = { malformed: false, unsettled: false, unavailable: false, denied: false, toolCall: false, cacheRead: undefined as number | undefined, zeroCost: false, noUsage: false }
 const permissions: Permission.AssertInput[] = []
+let entered = Deferred.makeUnsafe<void>()
+let release = Deferred.makeUnsafe<void>()
+let hold = false
 const model = Model.make({ id: "fixture-decision", provider: "test", route: OpenAIChat.route })
 const toon = "decisions:\n  version: 1\n  answers[1]{name,type,answer,choice,score,confidence}:\n    decision,choice,null,review,null,0.8"
 const client = Layer.mock(LLMClient.Service, {
@@ -44,13 +48,13 @@ const client = Layer.mock(LLMClient.Service, {
     requests.push(request)
     const output = LLMEvent.textDelta({ id: "judgment", text: state.malformed ? "{\"probability\":1}" : toon })
     if (state.unsettled) return Stream.make(output)
-    return Stream.make(output,
+    return Stream.fromEffect(Deferred.succeed(entered, undefined).pipe(Effect.andThen(hold ? Deferred.await(release) : Effect.void))).pipe(Stream.flatMap(() => Stream.make(output,
       ...(state.toolCall ? [LLMEvent.toolCall({ id: "injected", name: "shell", input: { command: "untrusted" } })] : []),
       LLMEvent.stepFinish({ index: 0, reason: "stop", ...(state.noUsage ? {} : { usage: { inputTokens: 12, nonCachedInputTokens: 12 - (state.cacheRead ?? 0),
         ...(state.cacheRead === undefined ? {} : { cacheReadInputTokens: state.cacheRead }), outputTokens: 5, reasoningTokens: 2,
       } }) }),
       LLMEvent.finish({ reason: "stop" }),
-    )
+    )))
   },
 })
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([
@@ -71,7 +75,7 @@ const it = testEffect(AppNodeBuilder.build(LayerNode.group([
       ] : []))
     },
   })],
-  [Config.node, Layer.mock(Config.Service, { entries: () => Effect.succeed([]) })],
+  [Config.node, Layer.mock(Config.Service, { entries: () => Effect.succeed([{ type: "document", path: "fixture", info: Schema.decodeUnknownSync(Config.Info)({ decisions: { timeout_ms: 100 } }) }]) })],
   [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
   [Image.node, imagePassthrough],
   [Permission.node, Layer.mock(Permission.Service, {
@@ -94,6 +98,9 @@ const seed = (id: string) => Effect.gen(function* () {
   state.zeroCost = false
   state.noUsage = false
   permissions.length = 0
+  hold = false
+  entered = Deferred.makeUnsafe<void>()
+  release = Deferred.makeUnsafe<void>()
   const database = yield* Database.Service
   yield* database.db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] }).onConflictDoNothing().run().pipe(Effect.orDie)
   const sessionID = SessionSchema.ID.make(id)
@@ -112,6 +119,35 @@ const choice = (sessionID: SessionSchema.ID) => ({
   context: { sessionID }, provider: "agent" as const, state: { action: "read" },
   instructions: "Classify the action", choices: { allow: "Ordinary read", review: "Uncertain effects" },
 })
+
+it.effect("agent decisions stay pending beyond the native timeout and settle once released", () => Effect.gen(function* () {
+  const sessionID = yield* seed("ses_agent_no_deadline")
+  hold = true
+  const decisions = yield* Decision.Service
+  const ledger = yield* SessionProviderRequest.Service
+  const fiber = yield* decisions.choose(choice(sessionID)).pipe(Effect.forkChild)
+  yield* Deferred.await(entered)
+  yield* TestClock.adjust("1 minute")
+  expect(fiber.pollUnsafe()).toBeUndefined()
+  yield* Deferred.succeed(release, undefined)
+  expect(yield* Fiber.join(fiber)).toEqual({ choice: "review", confidence: 0.8, refused: false })
+  expect(requests).toHaveLength(1)
+  expect(yield* ledger.list(sessionID)).toHaveLength(1)
+}))
+
+it.effect("agent decisions remain explicitly interruptible without a retry", () => Effect.gen(function* () {
+  const sessionID = yield* seed("ses_agent_cancel")
+  hold = true
+  const decisions = yield* Decision.Service
+  const ledger = yield* SessionProviderRequest.Service
+  const fiber = yield* decisions.choose(choice(sessionID)).pipe(Effect.forkChild)
+  yield* Deferred.await(entered)
+  yield* Fiber.interrupt(fiber)
+  const exit = yield* Fiber.await(fiber)
+  expect(exit._tag === "Failure" && Cause.hasInterrupts(exit.cause)).toBe(true)
+  expect(requests).toHaveLength(1)
+  expect(yield* ledger.list(sessionID)).toHaveLength(1)
+}))
 
 it.effect("the hidden agent returns confidence estimates without native probabilities or tools", () => Effect.gen(function* () {
   const sessionID = yield* seed("ses_agent_decision")
@@ -205,7 +241,7 @@ it.effect("the callable agent backend preserves provider permission and exposes 
   state.denied = false
   const result = yield* executeTool(registry, call)
   expect(result.type).toBe("text")
-  if (result.type !== "text") throw new Error("Expected a TOON tool result")
+  if (result.type !== "text" || typeof result.value !== "string") throw new Error("Expected a TOON tool result")
   expect(Schema.decodeUnknownSync(Decision.Output)(decode(result.value, { strict: true }))).toMatchObject({
     provider: "agent", response: { semantics: "model-estimate", answers: [{ choice: "review", confidence: 0.8 }] },
   })

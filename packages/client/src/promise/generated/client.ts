@@ -136,6 +136,8 @@ import type {
   ModelDefaultOutput,
   GenerateTextInput,
   GenerateTextOutput,
+  ProviderIntegrationsInput,
+  ProviderIntegrationsOutput,
   ProviderListInput,
   ProviderListOutput,
   ProviderRefreshInput,
@@ -1406,6 +1408,18 @@ export function make(options: ClientOptions) {
         ).then((value) => value.data),
     },
     provider: {
+      integrations: (input?: ProviderIntegrationsInput, requestOptions?: RequestOptions) =>
+        request<ProviderIntegrationsOutput>(
+          {
+            method: "GET",
+            path: `/api/provider/integrations`,
+            query: { location: input?.["location"] },
+            successStatus: 200,
+            declaredStatuses: [503, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
       list: (input?: ProviderListInput, requestOptions?: RequestOptions) =>
         request<ProviderListOutput>(
           {

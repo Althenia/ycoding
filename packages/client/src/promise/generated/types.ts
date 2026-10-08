@@ -8,6 +8,12 @@ export type TelemetryRequestSample = {
   kind: "request"
   at: string
   operation:
+    | "provider.auth.list"
+    | "provider.auth.key"
+    | "provider.auth.begin"
+    | "provider.auth.status"
+    | "provider.auth.complete"
+    | "provider.auth.cancel"
     | "workspace.list"
     | "session.list"
     | "session.active"
@@ -305,6 +311,8 @@ export type MoneyUSDPerMillionTokens = number
 export type ModelAPI = "chat" | "responses"
 
 export type GenerateTextResponse = { data: { text: string } }
+
+export type ProviderIntegrationRef = { providerID: string; integrationID: string }
 
 export type ProviderInfo = {
   id: string
@@ -2485,6 +2493,7 @@ export type IntegrationOAuthMethod = {
   type: "oauth"
   label: string
   prompts?: Array<IntegrationTextPrompt | IntegrationSelectPrompt>
+  remote?: boolean
 }
 
 export type FormField =
@@ -3992,6 +4001,12 @@ export type ServerTelemetryAppendInput = {
           readonly kind: "request"
           readonly at: string
           readonly operation:
+            | "provider.auth.list"
+            | "provider.auth.key"
+            | "provider.auth.begin"
+            | "provider.auth.status"
+            | "provider.auth.complete"
+            | "provider.auth.cancel"
             | "workspace.list"
             | "session.list"
             | "session.active"
@@ -5375,6 +5390,17 @@ export type GenerateTextInput = {
 }
 
 export type GenerateTextOutput = GenerateTextResponse["data"]
+
+export type ProviderIntegrationsInput = {
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+  }["location"]
+}
+
+export type ProviderIntegrationsOutput = {
+  location: { directory: string; workspaceID?: string; project: { id: string; directory: string } }
+  data: Array<ProviderIntegrationRef>
+}
 
 export type ProviderListInput = {
   readonly location?: {

@@ -47,6 +47,7 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   min-block-size: 0;
+  min-inline-size: 0;
   padding-block: var(--yc-space-2);
 }
 
@@ -72,6 +73,7 @@
   align-items: baseline;
   gap: var(--yc-space-3);
   min-block-size: var(--yc-hit-min);
+  min-inline-size: 0;
   padding: var(--yc-space-3) var(--yc-space-4);
   border-inline-start: 3px solid transparent;
   font-size: var(--yc-size-sm);
@@ -83,7 +85,8 @@
 }
 
 .command-palette__title {
-  flex: none;
+  flex: 0 1 auto;
+  min-inline-size: 0;
   max-inline-size: 100%;
   overflow: hidden;
   text-overflow: ellipsis;

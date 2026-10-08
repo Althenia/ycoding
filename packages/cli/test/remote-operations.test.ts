@@ -12,6 +12,7 @@ import { assertPrivateEndpoint, type LocalLocation, type LocalServer } from "../
 import { LocalFailure as LocalFailureClass } from "../src/remote-local"
 import {
   createSessionRegistry,
+  createOperationCache,
   createAttachmentUploads,
   createSubscriptions,
   executeRemoteOperation,
@@ -33,6 +34,70 @@ test("reads admitted pending prompts at their verified Session Location", async 
   expect(errorOf(await executeRemoteOperation({ request: { ...request("session.pending.list"), sessionID: "ses_other" },
     local: fixture.local, sessions: fixture.registry, subscriptions: fixture.subscriptions })).code).toBe("session_not_allowed")
   expect(fixture.calls.filter((call) => call.method === "pendingList")).toHaveLength(1)
+})
+
+test("provider authentication projects safe methods and binds attempts to their initiating Location and integration", async () => {
+  const integrations = [{ id: "test", name: "Test", connections: [{ type: "credential", id: "cred_private", label: "Work", active: true }], methods: [
+    { type: "key" }, { type: "oauth", id: "device", label: "Device", remote: true }, { type: "oauth", id: "browser", label: "Local browser" }, { type: "command", id: "cli", label: "CLI", command: ["private-command"] },
+  ] }]
+  const fixture = await harness({ results: { integrationList: integrations, providerIntegrations: [{ providerID: "test", integrationID: "test" }],
+    integrationOAuthBegin: { attemptID: "con_auth", mode: "auto", url: "https://example.com/auth", instructions: "Enter device code: ABCD", time: { created: 1, expires: Date.now() + 10000 } },
+    integrationOAuthStatus: { status: "failed", message: "private-token", time: { created: 1, expires: 2 } },
+    integrationCommandBegin: { attemptID: "con_cli", time: { created: 1, expires: Date.now() + 10000 } },
+    integrationCommandStatus: { status: "pending", message: "private-token", time: { created: 1, expires: 2 } },
+  } })
+  const cache = createOperationCache()
+  const run = (operation: RemoteRequest["operation"], fields: Record<string, unknown>) => executeRemoteOperation({ request: request(operation, { target: { sessionID: "ses_1" }, ...fields }), local: fixture.local, sessions: fixture.registry, subscriptions: fixture.subscriptions, cache })
+  const listed = JSON.stringify(valueOf(await run("provider.auth.list", {})))
+  expect(listed).toContain('"available":false')
+  expect(listed).toContain('"name":"Work"')
+  expect(listed).not.toMatch(/cred_private|private-command/)
+  expect(valueOf(await run("provider.auth.begin", { integrationID: "test", methodID: "device", label: "New", inputs: {} }))).toMatchObject({ data: { attemptID: "con_auth", type: "oauth" } })
+  expect(valueOf(await run("provider.auth.status", { integrationID: "test", attemptID: "con_auth" }))).toMatchObject({ data: { status: "failed", message: "Authentication failed. Try connecting again." } })
+  expect(errorOf(await run("provider.auth.complete", { integrationID: "other", attemptID: "con_auth", code: "secret-code" })).code).toBe("invalid_message")
+  expect(errorOf(await run("provider.auth.begin", { integrationID: "test", methodID: "browser", label: "New", inputs: {} })).code).toBe("invalid_message")
+  expect(fixture.calls.filter((call) => call.method === "integrationOAuthBegin")).toEqual([{ method: "integrationOAuthBegin", args: [{ directory: "/work" }, "test", "device", {}, "New"] }])
+  expect(valueOf(await run("provider.auth.begin", { integrationID: "test", methodID: "cli", label: "CLI", inputs: {} }))).toMatchObject({ data: { type: "command" } })
+  expect(JSON.stringify(valueOf(await run("provider.auth.status", { integrationID: "test", attemptID: "con_cli" })))).not.toContain("private-token")
+  expect(errorOf(await run("provider.auth.key", { target: { sessionID: "ses_missing" }, integrationID: "test", label: "New", key: "secret-key" })).code).toBe("session_not_allowed")
+  expect(fixture.calls.some((call) => call.method === "integrationKey")).toBe(false)
+})
+
+test("provider authentication reserves its bounded attempt slot before asynchronous authorization starts", async () => {
+  const began = Promise.withResolvers<void>()
+  const secondBegan = Promise.withResolvers<"started">()
+  const release = Promise.withResolvers<{ attemptID: string; mode: "auto"; url: string; instructions: string; time: { created: number; expires: number } }>()
+  let calls = 0
+  const fixture = await harness({ results: { integrationList: [{ id: "test", name: "Test", connections: [], methods: [{ type: "oauth", id: "device", label: "Device", remote: true }] }], providerIntegrations: [{ providerID: "test", integrationID: "test" }],
+    integrationOAuthBegin: () => { calls += 1; began.resolve(); if (calls === 2) secondBegan.resolve("started"); return release.promise },
+  } })
+  const cache = createOperationCache()
+  for (let index = 0; index < 31; index++) cache.providerAuth.set(`con_prior${index}`, { integrationID: "test", target: JSON.stringify({ sessionID: "ses_1" }), location: { directory: "/work" }, type: "oauth", expires: Date.now() + 10000 })
+  const run = () => executeRemoteOperation({ request: request("provider.auth.begin", { target: { sessionID: "ses_1" }, integrationID: "test", methodID: "device", label: "Work", inputs: {} }), local: fixture.local, sessions: fixture.registry, subscriptions: fixture.subscriptions, cache })
+  const first = run()
+  await began.promise
+  const second = run()
+  const outcome = await Promise.race([second.then((frames) => frames[0].ok ? "accepted" : "rejected"), secondBegan.promise])
+  release.resolve({ attemptID: "con_new", mode: "auto", url: "https://example.com/auth", instructions: "Sign in", time: { created: 1, expires: Date.now() + 10000 } })
+  await Promise.all([first, second])
+  expect(outcome).toBe("rejected")
+  expect(calls).toBe(1)
+  expect(cache.providerAuth.size).toBe(32)
+})
+
+test("an unconfirmed provider authentication start retains only its bounded reservation until expiry", async () => {
+  let now = 1000
+  const cache = createOperationCache(() => now)
+  const fixture = await harness({ results: { integrationList: [{ id: "test", name: "Test", connections: [], methods: [{ type: "oauth", id: "device", label: "Device", remote: true }] }], providerIntegrations: [{ providerID: "test", integrationID: "test" }], integrationOAuthBegin: new LocalFailureClass("transport", "synthetic-private-diagnostic") } })
+  const run = (operation: RemoteRequest["operation"], fields: Record<string, unknown>) => executeRemoteOperation({ request: request(operation, { target: { sessionID: "ses_1" }, ...fields }), local: fixture.local, sessions: fixture.registry, subscriptions: fixture.subscriptions, cache })
+  const frames = await run("provider.auth.begin", { integrationID: "test", methodID: "device", label: "Work", inputs: {} })
+  expect(errorOf(frames).code).toBe("outcome_unknown")
+  expect(JSON.stringify(frames)).not.toContain("synthetic-private-diagnostic")
+  expect(cache.providerAuth.size).toBe(1)
+  expect(fixture.calls.filter((call) => call.method === "integrationOAuthBegin")).toHaveLength(1)
+  now += 600001
+  await run("provider.auth.list", {})
+  expect(cache.providerAuth.size).toBe(0)
 })
 
 test("prompt skills are admitted as metadata without activating queued instructions in the connector", async () => {

@@ -5,6 +5,8 @@ const base: PaletteContext = {
   view: "/remote/session",
   connected: true,
   canCreateSession: true,
+  canSelectModel: true,
+  canConnectProvider: true,
   session: { id: "ses_a", running: false, managedChild: false, yolo: 0, goalActive: false },
   commands: [
     { name: "review", description: "Review the working tree" },
@@ -43,6 +45,17 @@ const base: PaletteContext = {
 const ids = (context: PaletteContext) => paletteActions(context).map((action) => action.id)
 
 describe("palette availability", () => {
+  test("provider actions expose the existing selection owner and the explicit connection flow", () => {
+    expect(paletteActions(base).find((action) => action.id === "settings.model")?.intent).toEqual({ type: "model" })
+    expect(paletteActions(base).find((action) => action.id === "settings.provider.connect")?.intent).toEqual({ type: "connectProvider" })
+    expect(ids({ ...base, connected: false })).not.toContain("settings.model")
+    expect(ids({ ...base, connected: false })).not.toContain("settings.provider.connect")
+    expect(ids({ ...base, canSelectModel: false })).not.toContain("settings.model")
+    expect(ids({ ...base, canConnectProvider: false })).not.toContain("settings.provider.connect")
+    expect(ids({ ...base, session: { ...base.session!, managedChild: true } })).not.toContain("settings.model")
+    expect(ids({ ...base, view: "/remote", session: { ...base.session!, managedChild: true } })).toContain("settings.model")
+  })
+
   test("a connected idle Session offers compaction, goal, every other YOLO level, configured commands, and skills", () => {
     expect(ids(base)).toEqual(expect.arrayContaining([
       "session.compact",
@@ -186,6 +199,12 @@ describe("palette search", () => {
 
   test("a dollar prefix finds a skill by id", () => {
     expect(titles("$tdd")).toEqual(["Activate skill: Test-driven development"])
+  })
+
+  test("provider, model, profile and connect searches expose supported controls", () => {
+    expect(titles("/models")).toContain("Select provider and model…")
+    expect(titles("profile")).toContain("Select provider and model…")
+    expect(titles("/connect")[0]).toBe("Connect provider…")
   })
 
   test("title matches outrank keyword and description matches", () => {

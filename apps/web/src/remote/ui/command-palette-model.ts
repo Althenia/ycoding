@@ -23,6 +23,8 @@ export type PaletteIntent =
   | { readonly type: "scheme"; readonly scheme: SchemeID }
   | { readonly type: "readNotifications" }
   | { readonly type: "reconnect" }
+  | { readonly type: "model" }
+  | { readonly type: "connectProvider" }
   | { readonly type: "signOut" }
 
 export type PaletteAction = {
@@ -39,6 +41,8 @@ export type PaletteContext = {
   readonly view: RemoteView
   readonly connected: boolean
   readonly canCreateSession: boolean
+  readonly canSelectModel: boolean
+  readonly canConnectProvider: boolean
   /** Present only while a Session of the connected machine is selected. */
   readonly session?: {
     readonly id: string
@@ -195,6 +199,12 @@ function navigationActions(context: PaletteContext): readonly PaletteAction[] {
 
 function settingsActions(context: PaletteContext): readonly PaletteAction[] {
   return [
+    ...(context.connected && context.canSelectModel && (context.view === "/remote" || !context.session?.managedChild)
+      ? [{ id: "settings.model", title: "Select provider and model…", description: "Choose a model, profile, and reasoning effort", group: "Settings" as const, keywords: "/models /model provider profile variant account", intent: { type: "model" as const } }]
+      : []),
+    ...(context.connected && context.canConnectProvider
+      ? [{ id: "settings.provider.connect", title: "Connect provider…", description: "Add or replace a profile on this machine", group: "Settings" as const, keywords: "/connect integration login account credentials", intent: { type: "connectProvider" as const } }]
+      : []),
     ...themePreferences
       .filter((preference) => preference !== context.theme)
       .map((preference) => ({
@@ -243,6 +253,7 @@ export function filterPaletteActions(actions: readonly PaletteAction[], query: s
   const terms = query.toLowerCase().split(/\s+/).map((term) => term.replace(/^[/$]/, "")).filter((term) => term.length > 0)
   if (terms.length === 0) return actions
   return actions
+    .filter((action) => !query.trimStart().startsWith("$") || action.group === "Skills")
     .map((action, index) => ({ action, index, score: rank(action, terms) }))
     .filter((entry): entry is { action: PaletteAction; index: number; score: number } => entry.score !== undefined)
     .toSorted((left, right) => right.score - left.score || left.index - right.index)

@@ -1,10 +1,20 @@
 import { expect, test } from "bun:test"
-import { parseModel, recentModels } from "../../src/context/local"
+import { parse } from "../../src/util/model"
+import { recentModels } from "../../src/context/local"
 
 test("parses model IDs containing slashes", () => {
-  expect(parseModel("provider/family/model")).toEqual({
+  expect(parse("provider/family/model")).toEqual({
     providerID: "provider",
     modelID: "family/model",
+  })
+})
+
+test("retains profile and variant when parsing CLI model selections", () => {
+  expect(parse("Work#provider/family/model#high")).toEqual({
+    providerID: "provider",
+    modelID: "family/model",
+    profile: "Work",
+    variant: "high",
   })
 })
 

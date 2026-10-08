@@ -12,7 +12,7 @@ export function NewSessionButton(props: { readonly disabled: boolean; readonly o
   return <button type="button" class="button button--primary button--small new-session__trigger" aria-label="New session" title="New session" disabled={props.disabled} onClick={() => props.onClick()}><Icon name="plus" size={18} /></button>
 }
 
-export function NewSessionComposer(props: { readonly workspaceID?: string; readonly onCreated: (sessionID: string) => void }): JSX.Element {
+export function NewSessionComposer(props: { readonly workspaceID?: string; readonly onCreated: (sessionID: string) => void; readonly onWorkspaceChange?: (workspaceID: string | undefined) => void }): JSX.Element {
   const remote = useRemote()
   const [workspaceID, setWorkspaceID] = createSignal("")
   const [text, setText] = createSignal("")
@@ -27,6 +27,9 @@ export function NewSessionComposer(props: { readonly workspaceID?: string; reado
   const workspace = () => workspaces().find((item) => item.id === workspaceID())
   const disabled = () => !connected() || workspaceStatus() !== "ready" || !workspace() || !!creation()
   const labels = () => workspaceLabels(workspaces())
+
+  createEffect(() => props.onWorkspaceChange?.(workspace()?.id))
+  onCleanup(() => props.onWorkspaceChange?.(undefined))
 
   createEffect(() => {
     if (props.workspaceID !== undefined) { setWorkspaceID(props.workspaceID); return }

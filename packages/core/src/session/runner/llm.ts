@@ -32,6 +32,7 @@ import { SessionCompactionJob } from "../compaction-job"
 import { SessionContextPressure } from "../context-pressure"
 import { SessionEvent } from "../event"
 import { SessionDecisionRouting } from "../decision-routing"
+import { SessionDecisionAdvisory } from "../decision-advisory"
 import { SessionPending } from "../pending"
 import { SessionProviderRequest } from "../provider-request"
 import { SessionModelRequest } from "../model-request"
@@ -112,6 +113,7 @@ const layer = Layer.effect(
     const accounting = yield* ProjectArtifactAccounting.Service
     const artifactSource = yield* ProjectArtifactSource.Service
     const routing = yield* SessionDecisionRouting.Service
+    const advisory = yield* SessionDecisionAdvisory.Service
     const resolveRequestedSkills = Effect.fn("SessionRunner.resolveRequestedSkills")(function* (
       selected: SessionContext.Selection,
       ids: ReadonlyArray<Skill.ID>,
@@ -333,6 +335,7 @@ const layer = Layer.effect(
       let currentStep = step
       let promoted = 0
       const inputSkills = new Map<string, ReadonlyArray<Skill.Info>>()
+      const promotedUsers: SessionPending.User[] = []
       const prepareInput = Effect.fn("SessionRunner.prepareInput")(function* (entry: SessionPending.Info) {
         if (entry.type !== "user") return
         const requested = SessionSkill.selected(entry.data.metadata)
@@ -352,6 +355,7 @@ const layer = Layer.effect(
       ) {
         const resolved = inputSkills.get(entry.id)
         if (resolved) yield* activateSkills(selected, resolved)
+        if (entry.type === "user") promotedUsers.push(entry)
       })
       if (promotion) {
         if (promotion === "steer")
@@ -382,6 +386,7 @@ const layer = Layer.effect(
       if (!promotion && requestTrackerState.skills?.length)
         yield* activateRequestedSkills(selected, requestTrackerState.skills, yield* skills.list())
       yield* appendContextObservations(selected, currentStep, recoveryMode === "terminal-response")
+      yield* Effect.forEach(promotedUsers, (entry) => advisory.observe(selected, entry, currentStep), { discard: true })
       const initialContext = yield* context.load(selected)
       const prepare = (loaded: SessionContext.Loaded, fullRebase = false) =>
         modelRequests.prepare({
@@ -1261,6 +1266,7 @@ export const node = makeLocationNode({
     ProjectArtifactAccounting.node,
     ProjectArtifactSource.node,
     SessionDecisionRouting.node,
+    SessionDecisionAdvisory.node,
   ],
 })
 

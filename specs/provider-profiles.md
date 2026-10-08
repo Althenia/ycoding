@@ -2,7 +2,7 @@
 
 ## Selection boundary
 
-The optional `profile` in [Model.Ref](../packages/schema/src/model.ts) selects a named credential within the selected provider's integration. Provider and model identifiers retain their meaning. The structured configuration model selector accepts the same field; the `provider/model#variant` shorthand is unchanged.
+The optional `profile` in [Model.Ref](../packages/schema/src/model.ts) selects a named credential within the selected provider's integration. Provider and model identifiers retain their meaning. The structured configuration model selector accepts the same field; string shorthand uses `[profile#]provider/model[#variant]`. Omitting the profile uses the provider's global default.
 
 Sessions and subagents may select different profiles for the same provider and model concurrently. Explicit selection must not activate a provider-wide profile, rotate through accounts, or fall back to another credential. An omitted profile uses normal default resolution. Catalog profile entries expose eligible user-chosen names, whether each is the provider's active default, and optional account-specific Daybreak programs. The default flag does not describe a Session's selection. An explicit profile uses its own `daybreak` list; an absent list advertises no programs, never another profile's programs.
 
@@ -22,7 +22,7 @@ Session adoption and admitted-input retries retain their existing first-admissio
 
 ## Inheritance and replay
 
-Existing model-precedence rules remain authoritative. An explicit profile on the selected model wins. When the resulting provider matches the owning Session and no profile override is supplied, helpers and subagents inherit its profile binding. A profile name is never inherited across providers.
+Existing model-precedence rules remain authoritative. An explicit profile on the selected model wins. An explicitly selected helper or subagent model with no profile uses that provider's global default, regardless of the owning Session's provider or profile. When model precedence selects the owning Session's complete model reference, its profile remains selected. A profile name is never inherited independently across providers.
 
 Stable account identity and rotating token generation are distinct. Prompt-cache and provider-session namespaces must distinguish accounts without changing merely because an OAuth token refreshes. Provider continuation additionally retains its request, route, options, and credential-snapshot fences.
 
@@ -41,6 +41,22 @@ Migration initializes credential account generation to zero and leaves historica
 User-chosen profile names are display data. Catalogs must not derive them from account emails or expose credentials, credential IDs, managed account-source identifiers, or identity digests as new public model fields.
 
 ## Consumers and usage
+
+### Remote profile connection
+
+The web command palette exposes **Connect provider** for the selected Session or the new-session composer's selected repository. This is provider authentication on the connected backend, distinct from selecting or enrolling a machine. **Select provider and model…** selects existing credentials without activating a provider-wide profile.
+
+Location-scoped `provider.integrations` (`GET /api/provider/integrations`) returns only [Provider.IntegrationRef](../packages/schema/src/provider.ts) mappings. Discovery waits for the plugin generation to initialize, includes providers without credentials, and excludes disabled or policy-denied provider definitions. `provider.list` describes available providers; it is not authentication discovery. Method and named-profile metadata come from the local integration APIs, without exposing credential values or identifiers.
+
+The closed [remote operation set](../packages/remote/src/index.ts) admits `provider.auth.list`, `provider.auth.key`, `provider.auth.begin`, `provider.auth.status`, `provider.auth.complete`, and `provider.auth.cancel`. Inputs name exactly one existing Session or opaque repository workspace; the backend resolves and verifies its Location. Browser input cannot choose a directory, URL, command, or HTTP request. Key connection and attempt start require an explicit profile name. Reusing a name replaces that profile; successful connection makes it the provider's global default. Existing explicitly bound Sessions retain their binding rules.
+
+Keys and manual authorization codes cross the authenticated owner/device relay only for the requested operation and persist on the backend through the existing credential lifecycle. The browser retains no submitted secret in preferences, mutation history, or request diagnostics. Telemetry records anonymous operation names and timings only. Remote profile metadata exposes user-chosen names and active-default flags; it excludes credential IDs, managed CLI account-source IDs, stored tokens, provider settings, and raw command diagnostics. Authentication failures use generic messages rather than provider or command output.
+
+OAuth methods declare the optional [Integration.OAuthMethod](../packages/schema/src/integration.ts) `remote` capability explicitly. A true value asserts that authorization can complete from a different browser device; an absent or false value remains listed with local-sign-in guidance and cannot start remotely. OpenAI headless, xAI device, Copilot device, Cursor token-polling, OpenCode Console device authorization, and Claude Code isolated-account sign-in advertise this capability. Backend-loopback callback methods require sign-in on that machine. Remote authorization links must use HTTPS without embedded credentials or loopback hosts. Registered command methods accept only their existing method ID; they run on the backend, expose no command arguments or output, and may require browser interaction on that machine.
+
+Attempts are bound to the initiating integration, target, and resolved Location in the machine connector. Cross-target, moved-Location, expired, or unknown attempts fail before completion or cancellation reaches the local API. Core owns attempt expiry and resource release; the remote bridge retains no attempt beyond its expiry and bounds its retained attempts. Closing the web dialog cancels a known pending attempt when its original connection remains available. An unconfirmed start without an attempt ID relies on backend expiry and must not be replayed automatically.
+
+The dialog fences reads and actions to its machine connection and fences older status replies against newer settlement. Failed status reads leave an unresolved attempt available only for explicit status checking or cancellation; terminal settlement removes authorization links and code controls. Unknown key, start, completion, or cancellation outcomes never trigger automatic mutation replay. Reconnects do not resume an old dialog's mutations. Catalog refresh after successful connection supplies the existing model/profile picker with the backend's current inventory.
 
 TUI and web model pickers must display explicit and unavailable profile selections, retain them in preferences and pending submissions, and distinguish a profile-only switch. **Use provider default** clears explicit selection. A rejected switch preserves the draft and admits no prompt under another account. Explicit reselection of the same named profile must remain available for binding recovery.
 

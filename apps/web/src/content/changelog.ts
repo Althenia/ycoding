@@ -22,6 +22,21 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.10.1",
+    date: "2026-10-08",
+    title: "Profile selectors, web provider connection, and task advice",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Select a named profile in a model string with profile#provider/model#variant, for example Work#openai/gpt-6-luna#high. An omitted profile uses the provider default, and different Sessions and subagents can use different profiles at the same time." },
+      { tag: "Added", text: "Select a provider, model, and profile from the web command palette, and connect a provider profile on the selected machine with a key or a remote-capable sign-in. Connecting makes the profile that provider's default and does not change a Session's explicit selection; login methods that need a local browser say so." },
+      { tag: "Added", text: "Opt into decisions.advisory to receive one recommendation per new user input for a configured model and variant, a task direction, and an available tool. Advice never runs a tool, changes an explicit selection, or grants permission." },
+      { tag: "Changed", text: "Explicitly selected helper and subagent models without a profile now use the provider default instead of inheriting their parent's profile. Selecting the parent's whole model keeps its profile." },
+      { tag: "Changed", text: "Hidden decision-agent calls no longer stop at the decisions.timeout_ms deadline, which still applies to native OpenAI and TypeSafe requests. Cancellation still works; provider and network timeouts can still occur." },
+      { tag: "Fixed", text: "Keep the web command palette's scroll position, highlighted action, and long labels stable when the palette refreshes or an action list changes." },
+      { tag: "Fixed", text: "Keep a profile and variant when starting the TUI with --model, and name profile and default-profile changes in the transcript." },
+    ],
+  },
+  {
     version: "0.10.0",
     date: "2026-10-08",
     title: "Concurrent profiles and a more capable workspace",

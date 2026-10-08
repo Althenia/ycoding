@@ -15,6 +15,7 @@ import {
   isRemoteLatencySample,
   isSessionID,
   remoteError,
+  parseProviderAuthInput,
   requireSession,
   serializeResponse,
   type RemoteErrorCode,
@@ -38,6 +39,7 @@ import {
   type LocalPrompt,
   type LocalServer,
 } from "./remote-local"
+import { executeProviderAuth, ProviderAuthError, type ProviderAuthEntry } from "./remote-provider-auth"
 
 /** Operations the relay proxies without addressing one session. */
 const unscopedOperations: ReadonlySet<RemoteOperation> = new Set([
@@ -81,13 +83,14 @@ type CapturedEntry = {
 }
 
 export type OperationCache = {
+  readonly providerAuth: Map<string, ProviderAuthEntry>
   readonly now: () => number
   readonly capturedChanges: Map<string, CapturedEntry>
   readonly directories: Map<string, { readonly allowed: boolean; readonly expiresAt: number }>
 }
 
 export function createOperationCache(now: () => number = Date.now): OperationCache {
-  return { now, capturedChanges: new Map(), directories: new Map() }
+  return { now, capturedChanges: new Map(), directories: new Map(), providerAuth: new Map() }
 }
 
 const catalogLimit = { agents: 100, commands: 200, skills: 200, references: 200, resources: 200 }
@@ -624,6 +627,7 @@ export async function executeRemoteOperation(input: OperationInput): Promise<rea
     const value = await run(input)
     return successFrames(request.id, value)
   } catch (cause) {
+    if (cause instanceof ProviderAuthError) return [failureFrame(request.id, "invalid_message", cause.message)]
     if (cause instanceof OperationError) return [failureFrame(request.id, cause.code, cause.message)]
     if (cause instanceof LocalFailure) return [failureFrame(request.id, ...localError(cause, request))]
     return [failureFrame(request.id, "internal_error", "The local agent could not complete the request")]
@@ -632,6 +636,18 @@ export async function executeRemoteOperation(input: OperationInput): Promise<rea
 
 async function run(input: OperationInput) {
   const request = input.request
+  if (request.operation.startsWith("provider.auth.")) {
+    const fields = parseProviderAuthInput(request.operation, request.input)
+    if (!fields || request.sessionID !== undefined) throw new OperationError("invalid_message", "Invalid provider authentication request")
+    const session = "sessionID" in fields.target ? await input.sessions.verify(fields.target.sessionID) : undefined
+    if ("sessionID" in fields.target && !session) throw new OperationError("session_not_allowed", "Session is unavailable at its recorded Location")
+    const workspace = "workspace" in fields.target ? (await workspaceInventory(input)).find((candidate) => "workspace" in fields.target && candidate.info.id === fields.target.workspace) : undefined
+    if ("workspace" in fields.target && !workspace) throw new OperationError("invalid_message", "Workspace is unavailable")
+    const location = session ? locationInfo(session) : workspace?.location
+    if (!location || !input.cache) throw new OperationError("invalid_message", "Provider authentication is unavailable")
+    if (workspace && (await input.local.projectCurrent(location)).id !== workspace.info.projectID) throw new OperationError("invalid_message", "Workspace project changed")
+    return executeProviderAuth({ fields, location, local: input.local, attempts: input.cache.providerAuth, now: input.cache.now })
+  }
   // Validation is complete before any local call, so a malformed request never
   // causes local side effects.
   const validated = validate(request)
@@ -1682,6 +1698,10 @@ function validateFields(request: RemoteRequest): Readonly<Record<string, unknown
 }
 
 const mutations: ReadonlySet<string> = new Set([
+  "provider.auth.key",
+  "provider.auth.begin",
+  "provider.auth.complete",
+  "provider.auth.cancel",
   "machine.latency.append",
   "machine.keepAwake.set",
   "session.compact",

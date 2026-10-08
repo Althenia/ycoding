@@ -3,7 +3,7 @@ import { Portal } from "solid-js/web"
 import { Icon } from "../../ui/icon"
 import { Modal } from "../../ui/modal"
 import { useTheme } from "../../theme/theme-store"
-import { catalogKey } from "../catalog"
+import { catalogKey, type CatalogTarget } from "../catalog"
 import { useRemote } from "../context"
 import { workspaceLabels } from "../view-model"
 import {
@@ -26,6 +26,8 @@ export type PaletteHandlers = {
   readonly openSession: (sessionID: string) => void
   readonly openTeam: () => void
   readonly draft: (text: string) => void
+  readonly selectModel: () => void
+  readonly connectProvider: (target: CatalogTarget, returnFocus: HTMLElement) => void
 }
 
 /**
@@ -41,6 +43,7 @@ export function CommandPalette(props: {
   readonly sessionSelected: boolean
   readonly managedChild: boolean
   readonly hasTeam: boolean
+  readonly workspaceID?: string
   readonly handlers: PaletteHandlers
 }): JSX.Element {
   const remote = useRemote()
@@ -51,6 +54,10 @@ export function CommandPalette(props: {
   let trigger: HTMLButtonElement | undefined
   let opener: HTMLElement | undefined
   let requestClose: (() => void) | undefined
+
+  const target = (): CatalogTarget | undefined => props.view === "/remote"
+    ? props.workspaceID === undefined ? undefined : { workspaceID: props.workspaceID }
+    : props.sessionSelected && remote.state().activeSessionID !== undefined ? { sessionID: remote.state().activeSessionID! } : undefined
 
   const context = createMemo((): PaletteContext => {
     const state = remote.state()
@@ -63,6 +70,8 @@ export function CommandPalette(props: {
       view: props.view,
       connected,
       canCreateSession: props.canCreateSession,
+      canSelectModel: target() !== undefined && state.catalogs[catalogKey(target()!)]?.status === "ready" && (props.view === "/remote" || props.view === "/remote/session"),
+      canConnectProvider: target() !== undefined,
       session: sessionID === undefined ? undefined : {
         id: sessionID,
         running: state.view?.id === sessionID && state.view.status === "running",
@@ -142,6 +151,12 @@ export function CommandPalette(props: {
       case "theme": theme.setPreference(intent.preference); return
       case "scheme": theme.setScheme(intent.scheme); return
       case "readNotifications": void remote.store.readAllNotifications(); return
+      case "model": props.handlers.selectModel(); return
+      case "connectProvider": {
+        const current = target()
+        if (current && trigger) props.handlers.connectProvider(current, trigger)
+        return
+      }
       case "reconnect": {
         const deviceID = remote.state().activeDeviceID
         if (deviceID !== undefined) remote.store.connect(deviceID)
@@ -192,15 +207,30 @@ function PaletteBody(props: {
   readonly onRun: (action: PaletteAction) => void
 }): JSX.Element {
   const [query, setQuery] = createSignal("")
-  const [active, setActive] = createSignal(0)
+  const [activeID, setActiveID] = createSignal<string>()
   const ranked = () => query().trim().length > 0
   const results = createMemo(() => filterPaletteActions(props.actions, query()))
   const sections = createMemo(() => paletteSections(results(), props.view, ranked()))
   const flat = createMemo(() => sections().flatMap((section) => section.actions))
-  const clampedActive = () => Math.min(active(), Math.max(flat().length - 1, 0))
   const optionId = (action: PaletteAction) => `command-palette-option-${action.id}`
-  const activeAction = () => flat()[clampedActive()]
+  const activeAction = () => flat().find((action) => action.id === activeID())
+  const activePosition = () => Math.max(flat().findIndex((action) => action.id === activeID()), 0)
+  let previousActions = props.actions
+  let scrollAnchor: { readonly id: string; readonly top: number } | undefined
   let list: HTMLDivElement | undefined
+
+  const rememberScrollAnchor = () => {
+    if (!list) return
+    const top = list.getBoundingClientRect().top
+    const anchor = [...list.querySelectorAll<HTMLElement>('[role="option"]')].find((row) => row.getBoundingClientRect().bottom > top)
+    if (anchor) scrollAnchor = { id: anchor.id, top: anchor.getBoundingClientRect().top }
+  }
+
+  onMount(rememberScrollAnchor)
+
+  createEffect(() => {
+    if (!flat().some((action) => action.id === activeID())) setActiveID(flat()[0]?.id)
+  })
 
   onMount(() => {
     const viewport = window.visualViewport
@@ -222,14 +252,24 @@ function PaletteBody(props: {
   })
 
   createEffect(() => {
-    const action = activeAction()
-    if (action) list?.querySelector<HTMLElement>(`[id="${optionId(action)}"]`)?.scrollIntoView({ block: "nearest" })
+    const actions = props.actions
+    if (actions === previousActions) return
+    previousActions = actions
+    const previousAnchor = scrollAnchor
+    const anchor = previousAnchor && document.getElementById(previousAnchor.id)
+    if (list && previousAnchor && anchor) list.scrollTop += anchor.getBoundingClientRect().top - previousAnchor.top
+    rememberScrollAnchor()
   })
 
-  const move = (next: number) => setActive(Math.max(0, Math.min(next, flat().length - 1)))
+  const move = (next: number) => {
+    const action = flat()[Math.max(0, Math.min(next, flat().length - 1))]
+    if (!action) return
+    setActiveID(action.id)
+    list?.querySelector<HTMLElement>(`[id="${optionId(action)}"]`)?.scrollIntoView({ block: "nearest" })
+  }
   const keydown = (event: KeyboardEvent) => {
-    if (event.key === "ArrowDown") { event.preventDefault(); move(clampedActive() + 1); return }
-    if (event.key === "ArrowUp") { event.preventDefault(); move(clampedActive() - 1); return }
+    if (event.key === "ArrowDown") { event.preventDefault(); move(activePosition() + 1); return }
+    if (event.key === "ArrowUp") { event.preventDefault(); move(activePosition() - 1); return }
     if (event.key === "Home") { event.preventDefault(); move(0); return }
     if (event.key === "End") { event.preventDefault(); move(flat().length - 1); return }
     if (event.key !== "Enter" || event.isComposing) return
@@ -261,34 +301,40 @@ function PaletteBody(props: {
           enterkeyhint="go"
           autofocus
           value={query()}
-          onInput={(event) => { setQuery(event.currentTarget.value); setActive(0) }}
+          onInput={(event) => { setQuery(event.currentTarget.value); setActiveID(results()[0]?.id); if (list) list.scrollTop = 0 }}
           onKeyDown={keydown}
         />
       </label>
       <p class="visually-hidden" role="status">{flat().length === 0 ? "No matching action" : `${flat().length} ${flat().length === 1 ? "action" : "actions"}`}</p>
-      <div ref={list} id="command-palette-list" class="command-palette__list" role="listbox" aria-label="Actions" tabindex="-1">
+      <div ref={list} id="command-palette-list" class="command-palette__list" role="listbox" aria-label="Actions" tabindex="-1" onScroll={rememberScrollAnchor}>
         <Show when={flat().length > 0} fallback={<p class="command-palette__empty">{props.actions.length === 0 ? "No actions are available." : "No matching action."}</p>}>
-          <For each={sections()}>{(section, index) => (
-            <div class="command-palette__group" role="group" aria-labelledby={section.group === undefined ? undefined : `command-palette-group-${index()}`} aria-label={section.group === undefined ? "Results" : undefined}>
-              <Show when={section.group}>{(group) => <div id={`command-palette-group-${index()}`} class="command-palette__heading">{group()}</div>}</Show>
-              <For each={section.actions}>{(action) => (
+          <For each={sections().map((section) => section.group ?? "Results")}>{(group) => {
+            const section = () => sections().find((item) => (item.group ?? "Results") === group)
+            return (
+            <div class="command-palette__group" role="group" aria-labelledby={group === "Results" ? undefined : `command-palette-group-${group}`} aria-label={group === "Results" ? "Results" : undefined}>
+              <Show when={group !== "Results"}><div id={`command-palette-group-${group}`} class="command-palette__heading">{group}</div></Show>
+              <For each={section()?.actions.map((action) => action.id) ?? []}>{(id) => {
+                const action = () => flat().find((item) => item.id === id)
+                return (
                 <div
-                  id={optionId(action)}
+                  id={`command-palette-option-${id}`}
                   role="option"
-                  aria-selected={activeAction()?.id === action.id}
+                  aria-selected={activeID() === id}
                   class="command-palette__option"
-                  data-active={activeAction()?.id === action.id ? "" : undefined}
+                  data-active={activeID() === id ? "" : undefined}
                   onMouseDown={(event) => event.preventDefault()}
-                  onPointerMove={() => { const position = flat().findIndex((entry) => entry.id === action.id); if (position >= 0 && position !== clampedActive()) setActive(position) }}
-                  onClick={() => props.onRun(action)}
+                  onPointerMove={() => { if (activeID() !== id) setActiveID(id) }}
+                  onClick={() => { const current = action(); if (current) props.onRun(current) }}
                 >
-                  <span class="command-palette__title">{action.title}</span>
-                  <Show when={action.description}>{(description) => <span class="command-palette__description">{description()}</span>}</Show>
-                  <Show when={section.group === undefined}><span class="command-palette__group-tag">{action.group}</span></Show>
+                  <span class="command-palette__title">{action()?.title}</span>
+                  <Show when={action()?.description}>{(description) => <span class="command-palette__description">{description()}</span>}</Show>
+                  <Show when={section()?.group === undefined}><span class="command-palette__group-tag">{action()?.group}</span></Show>
                 </div>
-              )}</For>
+                )
+              }}</For>
             </div>
-          )}</For>
+            )
+          }}</For>
         </Show>
       </div>
     </div>

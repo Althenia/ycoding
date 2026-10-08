@@ -44,6 +44,31 @@ export class AgentRouting extends Schema.Class<AgentRouting>("Config.Decisions.A
   candidates: Candidates,
 }) {}
 
+const AdvisoryCandidates = Schema.Array(Schema.Struct({
+  id: Candidate.fields.id,
+  description: Candidate.fields.description,
+  model: ConfigModel.Selection,
+})).check(Schema.isMinLength(1), Schema.isMaxLength(254),
+  Schema.makeFilter((candidates) => new Set(candidates.map((candidate) => candidate.id)).size === candidates.length))
+
+const Directions = Schema.Array(Schema.Struct({
+  id: Candidate.fields.id,
+  description: Candidate.fields.description,
+})).check(Schema.isMinLength(1), Schema.isMaxLength(254),
+  Schema.makeFilter((directions) => new Set(directions.map((direction) => direction.id)).size === directions.length))
+
+export class Advisory extends Schema.Class<Advisory>("Config.Decisions.Advisory")({
+  ...Policy.fields,
+  candidates: AdvisoryCandidates,
+  directions: Directions,
+}) {}
+
+export class AgentAdvisory extends Schema.Class<AgentAdvisory>("Config.Decisions.AgentAdvisory")({
+  ...AgentPolicy.fields,
+  candidates: AdvisoryCandidates,
+  directions: Directions,
+}) {}
+
 const Connection = Schema.Struct({
   api_key: Schema.NonEmptyString.pipe(Schema.optional),
   base_url: Schema.String.check(Schema.isPattern(/^https?:\/\//)).pipe(Schema.optional),
@@ -59,4 +84,5 @@ export class Info extends Schema.Class<Info>("Config.Decisions")({
   routing: Schema.Union([Routing, AgentRouting]).pipe(Schema.optional),
   goal: Schema.Union([Policy, AgentPolicy]).pipe(Schema.optional),
   questions: Schema.Union([Policy, AgentPolicy]).pipe(Schema.optional),
+  advisory: Schema.Union([Advisory, AgentAdvisory]).pipe(Schema.optional),
 }) {}

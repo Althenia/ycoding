@@ -189,6 +189,7 @@ describe("OpenAIPlugin", () => {
           id: Integration.MethodID.make("chatgpt-headless"),
           type: "oauth",
           label: "ChatGPT Pro/Plus (headless)",
+          remote: true,
         },
       ])
     }),

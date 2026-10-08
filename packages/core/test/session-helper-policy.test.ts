@@ -12,11 +12,12 @@ import { SessionSchema } from "@ycoding-ai/core/session/schema"
 import { Money } from "@ycoding-ai/schema/money"
 import { DateTime, Effect, Schema } from "effect"
 
-const ref = (providerID: string, id: string, variant?: string) =>
+const ref = (providerID: string, id: string, variant?: string, profile?: string) =>
   CatalogModel.Ref.make({
     providerID: Provider.ID.make(providerID),
     id: CatalogModel.ID.make(id),
     ...(variant === undefined ? {} : { variant: CatalogModel.VariantID.make(variant) }),
+    ...(profile === undefined ? {} : { profile }),
   })
 
 test("local title produces one terminal-safe line without a provider call", () => {
@@ -38,15 +39,18 @@ test("helper settings carry no goal mode because goal synthesis is always model-
 })
 
 test("helper model precedence is agent override, role model, then session model", () => {
-  const agent = ref("anthropic", "claude-sonnet", "high")
-  const helper = ref("openai", "gpt-5-mini", "low")
-  const session = ref("openrouter", "openai/gpt-5.6", "medium")
+  const agent = ref("anthropic", "claude-sonnet", "high", "Agent account")
+  const helper = ref("openai", "gpt-5-mini", "low", "Helper account")
+  const session = ref("openrouter", "openai/gpt-5.6", "medium", "Session account")
 
   expect(selectHelperModel({ roleModel: helper, sessionModel: session, agentModel: agent })).toEqual(agent)
   expect(selectHelperModel({ roleModel: helper, sessionModel: session })).toEqual(helper)
   expect(selectHelperModel({ roleModel: "session", sessionModel: session })).toEqual(session)
   expect(selectHelperModel({ sessionModel: session })).toEqual(session)
   expect(selectHelperModel({})).toBeUndefined()
+  expect(selectHelperModel({ roleModel: ref("openai", "gpt-5-mini"), sessionModel: session })).toEqual(
+    ref("openai", "gpt-5-mini"),
+  )
 })
 
 test("helper policy reads independent role models", () => {
@@ -136,7 +140,8 @@ test("decision helper resolution preserves agent, configured, session, and defau
 test("compaction model selection uses the owner Session scope before the hidden helper child exists", async () => {
   const main = ref("openai", "gpt-5.6-main", "high")
   const subagent = ref("openai", "gpt-5.6-subagent", "low")
-  const pinned = ref("anthropic", "claude-pinned")
+  const pinned = ref("openai", "claude-pinned")
+  const ownerModel = ref("openai", "owner", undefined, "Owner account")
   const selected: CatalogModel.Ref[] = []
   const policy = make(
     {
@@ -162,6 +167,7 @@ test("compaction model selection uses the owner Session scope before the hidden 
       time: { created: DateTime.makeUnsafe(1), updated: DateTime.makeUnsafe(1) },
       title: "Compaction owner",
       location: { directory: AbsolutePath.make("/project") },
+      model: ownerModel,
       ...(parentID === undefined ? {} : { parentID }),
     })
   const agent = Agent.Info.make({

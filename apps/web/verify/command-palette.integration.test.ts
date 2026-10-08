@@ -167,6 +167,54 @@ test("on a phone the palette is a full-viewport sheet with touch-sized rows and 
   } finally { await page.close() }
 }, 60_000)
 
+for (const viewport of ["desktop", "phone"] as const) {
+  test(`palette model selection opens the existing ${viewport} composer controls without sending or losing the draft`, async () => {
+    const page = await openChat(viewport)
+    try {
+      await wait(page, `!document.querySelector('.composer-resident .model-control__trigger').disabled`)
+      await page.evaluate(`(() => { const input = document.querySelector('.composer-resident .composer__input'); input.value = 'Keep this draft'; input.dispatchEvent(new InputEvent('input', { bubbles: true })); document.querySelector('.app-header__palette').click() })()`)
+      await wait(page, paletteOpen)
+      await search(page, "/models")
+      expect(await page.evaluate<string[]>(rows)).toContain("Select provider and model…")
+      await page.pressKey("Enter", "Enter", 13)
+      await wait(page, paletteClosed)
+      await wait(page, viewport === "desktop" ? `document.querySelector('[role=dialog][aria-label="Model settings"]') !== null` : `document.querySelector('.composer__selection-sheet') !== null`)
+      expect(await page.evaluate<string>(`document.querySelector('.composer-resident .composer__input').value`)).toBe("Keep this draft")
+      expect(await page.evaluate<boolean>(`window.remoteMutationReport().some((item) => ['session.switchModel','session.prompt','session.command'].includes(item.operation))`)).toBe(false)
+    } finally { await page.close() }
+  }, 60_000)
+}
+
+test("the landing palette selects the landing model without creating a Session", async () => {
+  const page = await openChat("desktop")
+  try {
+    await page.evaluate(`document.querySelector('.remote-nav a[href="/remote"]').click()`)
+    await wait(page, `document.querySelector('.route-panel:not([inert]) .new-session-composer .model-control__trigger:not([disabled])') !== null`)
+    await page.evaluate(`document.querySelector('.app-header__palette').click()`)
+    await wait(page, paletteOpen)
+    await search(page, "/models")
+    expect(await page.evaluate<string[]>(rows)).toContain("Select provider and model…")
+    await page.pressKey("Enter", "Enter", 13)
+    await wait(page, `document.querySelector('.new-session-composer .model-control__trigger[aria-expanded=true]') !== null`)
+    expect(await page.evaluate<boolean>(`document.querySelector('.composer-resident .model-control__trigger[aria-expanded=true]') !== null`)).toBe(false)
+    expect(await page.evaluate<boolean>(`window.requestLog.some((item) => item.operation === 'session.create')`)).toBe(false)
+  } finally { await page.close() }
+}, 60_000)
+
+test("long command labels and descriptions remain inside the palette list", async () => {
+  const page = await openChat("desktop")
+  try {
+    await page.evaluate(`document.querySelector('.app-header__palette').click()`)
+    await wait(page, paletteOpen)
+    await search(page, "/review")
+    await page.evaluate(`(() => { const row = document.querySelector('.command-palette__option'); row.querySelector('.command-palette__title').textContent = '/' + 'long-command-name-'.repeat(20); row.querySelector('.command-palette__description').textContent = 'Long unbroken description ' + 'details'.repeat(120) })()`)
+    expect(await page.evaluate<boolean>(`(() => { const list = document.querySelector('.command-palette__list'); return list.scrollWidth <= list.clientWidth })()`)).toBe(true)
+    await page.setViewport(390, 844)
+    await page.setCoarsePointer(true)
+    expect(await page.evaluate<boolean>(`(() => { const list = document.querySelector('.command-palette__list'); return list.scrollWidth <= list.clientWidth })()`)).toBe(true)
+  } finally { await page.close() }
+}, 60_000)
+
 async function wait(page: Page, expression: string) {
   for (let index = 0; index < 50; index++) {
     if (await page.evaluate<boolean>(expression)) return

@@ -8,6 +8,12 @@ const At = Schema.String.check(Schema.isPattern(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:
 const DurationMs = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(600_000))
 
 export const Operation = Schema.Literals([
+  "provider.auth.list",
+  "provider.auth.key",
+  "provider.auth.begin",
+  "provider.auth.status",
+  "provider.auth.complete",
+  "provider.auth.cancel",
   "workspace.list",
   "session.list",
   "session.active",

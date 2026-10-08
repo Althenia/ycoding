@@ -606,7 +606,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   const link: RemoteLink = {
     request: async (scope, operation, request) => {
       const owner = transport
-      if (owner === undefined || container.state.transport.kind !== "open" || container.state.connection.kind === "offline")
+      if (!inScope(scope) || owner === undefined || container.state.transport.kind !== "open" || container.state.connection.kind === "offline")
         return { status: "unavailable", reason: "not-connected" }
       return owner.request(operation, request)
     },

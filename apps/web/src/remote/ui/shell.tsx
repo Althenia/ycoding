@@ -40,6 +40,8 @@ import { createOfficeSettings, type OfficeSettingsStore, type WorkspacePresentat
 import { Composer } from "./composer"
 import { CommandPalette, focusComposerField, type PaletteHandlers } from "./command-palette"
 import { NewSessionButton, NewSessionComposer } from "./new-session"
+import { ProviderConnect } from "./provider-connect"
+import type { CatalogTarget } from "../catalog"
 import { UsagePage } from "./usage"
 import {
   AccountSettings,
@@ -87,6 +89,8 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   const [navOpen, setNavOpen] = createSignal(false)
   const [navClosing, setNavClosing] = createSignal(false)
   const [navGeneration, setNavGeneration] = createSignal(1)
+  const [newSessionWorkspaceID, setNewSessionWorkspaceID] = createSignal<string>()
+  const [providerConnect, setProviderConnect] = createSignal<{ readonly target: CatalogTarget; readonly returnFocus: HTMLElement; readonly deviceID: string | undefined; readonly generation: number }>()
   let closeSessionsSheet: (() => void) | undefined
   let navTrigger: HTMLButtonElement | undefined
   const closeNav = () => {
@@ -373,7 +377,20 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
     },
     openSession,
     draft: prefillComposer,
+    selectModel: () => {
+      if (office.presentation() === "office") office.present("conversation")
+      const scope = view() === "/remote" ? ".new-session-composer" : ".composer-resident"
+      const trigger = [...document.querySelectorAll<HTMLButtonElement>(`${scope} .model-control__trigger, ${scope} .composer__mobile-trigger`)]
+        .find((button) => !button.disabled && !button.closest("[inert]") && button.getClientRects().length > 0)
+      trigger?.focus({ preventScroll: true })
+      trigger?.click()
+    },
+    connectProvider: (target, returnFocus) => setProviderConnect({ target, returnFocus, deviceID: state().activeDeviceID, generation: state().generation }),
   }
+  createEffect(() => {
+    const current = providerConnect()
+    if (current && (current.deviceID !== state().activeDeviceID || current.generation !== state().generation)) setProviderConnect(undefined)
+  })
   const paletteSessionSelected = () => selected() && (view() !== "/remote/session" || (ownsSessionDevice() && ownsSessionRoute()))
   const teamContent = () => <TeamView
     data={() => state().team!} currentSessionID={state().activeSessionID ?? ""} now={Date.now} sheet={phoneLayout()}
@@ -391,7 +408,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
           navControls={tabletRailToggle() ? "session-rail" : undefined}
           onOpenNav={openSessionsNavigation}
           onOpenSession={openSession}
-          palette={{ canCreateSession: canCreateSession(), sessionSelected: paletteSessionSelected(), managedChild: managedChild(), handlers: paletteHandlers }}
+          palette={{ canCreateSession: canCreateSession(), sessionSelected: paletteSessionSelected(), managedChild: managedChild(), workspaceID: newSessionWorkspaceID(), handlers: paletteHandlers }}
           team={view() === "/remote/session" && selected() && ownsSessionDevice() ? {
             count: state().team === undefined ? undefined : teamActiveCount(state().team!),
             activity: state().team === undefined ? "Activity unreported" : teamActivityLabel(state().team!),
@@ -438,7 +455,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
                     </Show>
                   </RoutePanel>
                   <RoutePanel active={view() === "/remote" && firstInventoryLoading()}><LoadingPlaceholder kind="screen" label="Loading sessions…" /></RoutePanel>
-                  <RoutePanel active={view() === "/remote" && showNewSession()} preserve={newSessionVisited()} onInteract={() => setNewSessionVisited(true)}><For each={showNewSession() || newSessionVisited() ? [state().activeDeviceID] : []}>{() => <NewSessionComposer workspaceID={originWorkspaceID()} onCreated={openCreatedSession} />}</For></RoutePanel>
+                  <RoutePanel active={view() === "/remote" && showNewSession()} preserve={newSessionVisited()} onInteract={() => setNewSessionVisited(true)}><For each={showNewSession() || newSessionVisited() ? [state().activeDeviceID] : []}>{() => <NewSessionComposer workspaceID={originWorkspaceID()} onCreated={openCreatedSession} onWorkspaceChange={setNewSessionWorkspaceID} />}</For></RoutePanel>
                   <RoutePanel active={view() === "/remote/session" && routeError() !== undefined}><p class="notice-strip" role="alert">{routeError()}</p></RoutePanel>
                   <RoutePanel active={view() === "/remote/session" && officeShown() && selected()}><OfficePresentation office={office} onSelectSession={openSession} /></RoutePanel>
                   <RoutePanel active={view() === "/remote/sessions"}>
@@ -492,6 +509,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
 
         </div>
 
+        <Show when={providerConnect()}>{(connection) => <ProviderConnect target={connection().target} returnFocus={connection().returnFocus} onClose={() => setProviderConnect(undefined)} onConnected={() => { void remote.store.loadCatalog(connection().target, { refresh: true }) }} />}</Show>
         <Show when={(phoneLayout() ? teamOpen() : teamVisible()) && view() === "/remote/session" && state().team !== undefined && selected()}>
           <aside ref={teamLayer} class={`${phoneLayout() ? "team-control__phone" : "team-control__panel"}${teamEntering() ? " team-control--entering" : ""}${!teamOpen() ? " team-control--exiting" : ""}`} aria-label="Team controls" aria-hidden={!teamOpen() || teamClosing() ? "true" : undefined} inert={!teamOpen() || teamClosing()}
             onClick={(event) => { if (phoneLayout() && event.target === teamLayer?.querySelector("dialog.team-view__sheet")) closeTeam() }}>
@@ -653,6 +671,7 @@ function RemoteHeader(props: {
     readonly canCreateSession: boolean
     readonly sessionSelected: boolean
     readonly managedChild: boolean
+    readonly workspaceID?: string
     readonly handlers: Omit<PaletteHandlers, "openTeam">
   }
   readonly team?: {
@@ -718,6 +737,7 @@ function RemoteHeader(props: {
             canCreateSession={props.palette.canCreateSession}
             sessionSelected={props.palette.sessionSelected}
             managedChild={props.palette.managedChild}
+            workspaceID={props.palette.workspaceID}
             hasTeam={props.team !== undefined}
             handlers={{ ...props.palette.handlers, openTeam: () => props.team?.onOpen() }}
           />

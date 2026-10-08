@@ -419,10 +419,12 @@ describe("Session orchestration helpers", () => {
     Effect.sync(() => {
       const spawn = CatalogModel.Ref.make({ providerID: Provider.ID.make("p"), id: CatalogModel.ID.make("spawn") })
       const agent = CatalogModel.Ref.make({ providerID: Provider.ID.make("p"), id: CatalogModel.ID.make("agent") })
-      const parent = CatalogModel.Ref.make({ providerID: Provider.ID.make("p"), id: CatalogModel.ID.make("parent") })
+      const parent = CatalogModel.Ref.make({ providerID: Provider.ID.make("p"), id: CatalogModel.ID.make("parent"), profile: "Owner" })
+      const explicitSpawn = CatalogModel.Ref.make({ providerID: Provider.ID.make("p"), id: CatalogModel.ID.make("spawn") })
       expect(SessionOrchestration.selectModel(spawn, agent, parent)).toBe(spawn)
       expect(SessionOrchestration.selectModel(undefined, agent, parent)).toBe(agent)
       expect(SessionOrchestration.selectModel(undefined, undefined, parent)).toBe(parent)
+      expect(SessionOrchestration.selectModel(explicitSpawn, undefined, parent)).toBe(explicitSpawn)
       expect(SessionOrchestration.selectModel(undefined, undefined, undefined)).toBeUndefined()
     }),
   )

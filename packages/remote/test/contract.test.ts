@@ -544,6 +544,12 @@ describe("remote envelope: event, advertisement, heartbeat", () => {
 describe("remote operations", () => {
   test("exposes exactly the session operations the relay proxies", () => {
     expect(remoteOperations).toEqual([
+      "provider.auth.list",
+      "provider.auth.key",
+      "provider.auth.begin",
+      "provider.auth.status",
+      "provider.auth.complete",
+      "provider.auth.cancel",
       "workspace.list",
       "session.list",
       "session.active",

@@ -24,6 +24,7 @@ import type {
 } from "../src/remote/transport"
 import { RemoteLimits, isRemoteLatencySample, noticePageValue, noticeSequence, type RemoteCapturedChangesPage, type RemoteDeviceInfo, type RemoteLatencySample, type RemoteNotice, type RemoteNoticeOperation, type RemoteOperation } from "@ycoding-ai/remote"
 import { remoteScenario } from "./remote-scenarios"
+import { createProviderAuthFixture } from "./provider-auth-fixture"
 import "../src/styles/tokens.css"
 import "../src/styles/base.css"
 import "../src/styles/site.css"
@@ -551,6 +552,8 @@ type Fixture = {
 }
 
 function createFixtureStore(): Fixture {
+  const providerAuth = createProviderAuthFixture()
+  Object.assign(window, { providerAuthFixture: providerAuth })
   let handlers: RemoteTransportHandlers | undefined
   let open = true
   let streamed = false
@@ -655,6 +658,7 @@ function createFixtureStore(): Fixture {
     input?: Readonly<Record<string, unknown>>,
     targetSessionID = sessionID,
   ): RemoteRequestOutcome | Promise<RemoteRequestOutcome> => {
+    if (operation.startsWith("provider.auth.")) return providerAuth.request(operation, input)
     if (inventoryHeld && (operation === "session.list" || operation === "workspace.list" && input?.sessionsOnly === true))
       return new Promise<void>((resolve) => inventoryWaiters.push(resolve)).then(() => outcome(operation, input, targetSessionID))
     if (operation === "notice.subscribe" || operation === "notice.list") {
@@ -939,7 +943,7 @@ function createFixtureStore(): Fixture {
     request: async (operation, request) => {
       if (!open) return { status: "unavailable", reason: "not-connected" }
       if (requestLatencyMs > 0) await new Promise((resolve) => setTimeout(resolve, requestLatencyMs))
-      requestLog.push({ at: Math.round(performance.now()), operation, ...(request?.input === undefined ? {} : { input: request.input }) })
+      requestLog.push({ at: Math.round(performance.now()), operation, ...(request?.input === undefined ? {} : { input: operation.startsWith("provider.auth.") ? Object.fromEntries(Object.entries(request.input).filter(([key]) => key !== "key" && key !== "code" && key !== "inputs")) : request.input }) })
       return outcome(operation, request?.input, request?.sessionID)
     },
   }
@@ -1122,6 +1126,7 @@ function createFixtureStore(): Fixture {
 const fixture = createFixtureStore()
 Object.assign(window, { transcriptDelta: fixture.transcriptDelta, transcriptRefresh: fixture.transcriptRefresh, responseSnapshot: fixture.responseSnapshot, responseStatus: () => fixture.store.state().view?.status })
 Object.assign(window, { remoteReadingTail: fixture.readingTail })
+Object.assign(window, { providerAuthState: () => fixture.store.state() })
 Object.assign(window, { remoteReloadMessages: fixture.store.reloadMessages })
 Object.assign(window, { remoteInventoryReport: () => ({ requests: fixture.inventoryRequests(), rows: fixture.store.state().sessions.length,
   groups: fixture.store.state().sessionGroups.length, next: fixture.store.state().sessionHasNext,

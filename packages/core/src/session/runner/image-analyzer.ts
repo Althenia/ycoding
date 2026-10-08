@@ -13,7 +13,6 @@ import { Credential } from "../../credential"
 import { Integration } from "../../integration"
 import { CatalogModel } from "../../model"
 import { SessionRunnerModel } from "./model"
-import { SessionHelperPolicy } from "../helper-policy"
 import { SessionSchema } from "../schema"
 
 export const IMAGE_ANALYSIS_SCHEMA_VERSION = "1"
@@ -204,15 +203,12 @@ const layer = Layer.effect(
         const resolved = yield* models
           .resolve({
             ...session,
-            model: SessionHelperPolicy.inheritProfile(
-              CatalogModel.Ref.make({
-                providerID: selection.providerID,
-                id: selection.model,
-                variant: selection.variant,
-                profile: selection.profile,
-              }),
-              session.model,
-            ),
+            model: CatalogModel.Ref.make({
+              providerID: selection.providerID,
+              id: selection.model,
+              variant: selection.variant,
+              profile: selection.profile,
+            }),
           })
           .pipe(Effect.orElseSucceed(() => undefined))
         return resolved

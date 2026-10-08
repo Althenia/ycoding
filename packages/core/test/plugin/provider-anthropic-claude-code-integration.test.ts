@@ -212,6 +212,7 @@ it.live("signs in to a new isolated Claude profile without persisting OAuth toke
       id: claudeCodeMethodID,
       type: "oauth",
       label: "Claude Code account",
+      remote: true,
       prompts: undefined,
     })
     expect(info?.methods).toContainEqual({
