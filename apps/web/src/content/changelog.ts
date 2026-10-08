@@ -22,6 +22,16 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.10.2",
+    date: "2026-10-08",
+    title: "Profile selector documentation",
+    tags: ["Fixed"],
+    changes: [
+      { tag: "Fixed", text: "Show the profile#provider/model#variant selector in --model help, configuration tables, and usage pages, and note that an omitted profile uses the provider default." },
+      { tag: "Fixed", text: "Document the decisions.advisory fields with a validated example, and remove the native-provider policy example from the configuration guide." },
+    ],
+  },
+  {
     version: "0.10.1",
     date: "2026-10-08",
     title: "Profile selectors, web provider connection, and task advice",
