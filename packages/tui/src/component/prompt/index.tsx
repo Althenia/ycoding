@@ -62,9 +62,10 @@ import {
   type YoloLevel,
   type SessionSubmissionRetry,
 } from "../../util/session-autonomy"
-import { daybreakPlan, daybreakSuccessLabel, daybreakTitle } from "../../util/session-daybreak"
+import { daybreakPlan, daybreakSuccessLabel, daybreakTitle, modelDaybreak } from "../../util/session-daybreak"
+import { modelVariantIDs } from "../../util/model"
 import { openBtwSession, steerBtwConclusion } from "../../util/session"
-import type { ModelDaybreak, SessionAutonomyState } from "@ycoding-ai/client"
+import type { ModelDaybreak, ModelRef, SessionAutonomyState } from "@ycoding-ai/client"
 
 registerYCodingSpinner()
 
@@ -528,7 +529,7 @@ export function Prompt(props: PromptProps) {
         run: async (_input: string | undefined, event?: KeyEvent) => {
           event?.preventDefault()
           event?.stopPropagation()
-          if (!input.focused) return
+          if (event && !input.focused) return
           const handled = await submit({ steerNow: true })
           if (!handled) return
 
@@ -633,9 +634,15 @@ export function Prompt(props: PromptProps) {
         title: "Interrupt session",
         name: "session.interrupt",
         category: "Session",
-        palette: undefined,
         enabled: status() === "running" || yoloGoalActive(),
-        run: () => {
+        run: (_input: string | undefined, event?: KeyEvent) => {
+          if (!event && props.sessionID) {
+            void client.api.session
+              .interrupt({ sessionID: props.sessionID })
+              .catch((error) => toast.show({ title: "Failed to interrupt", message: errorMessage(error), variant: "error" }))
+            dialog.clear()
+            return
+          }
           if (auto()?.visible) return
           if (!input.focused) return
           // TODO: this should be its own command
@@ -664,11 +671,10 @@ export function Prompt(props: PromptProps) {
         title: "Background blocking tools",
         name: "session.background",
         category: "Session",
-        palette: undefined,
         enabled: status() === "running",
-        run: () => {
+        run: (_input: string | undefined, event?: KeyEvent) => {
           if (auto()?.visible) return
-          if (!input.focused) return
+          if (event && !input.focused) return
           if (!props.sessionID) return
 
           void client.api.session.background({
@@ -755,6 +761,7 @@ export function Prompt(props: PromptProps) {
                     providerID: model.providerID,
                     id: model.modelID,
                     variant: model.variant,
+                    ...(model.profile === undefined ? {} : { profile: model.profile }),
                   },
                 }).then(
                   (session) => route.navigate({ type: "session", sessionID: session.id }),
@@ -859,11 +866,12 @@ export function Prompt(props: PromptProps) {
         run: async (input?: string) => {
           const sessionID = props.sessionID
           const selected = (sessionID ? local.model.pendingTarget(sessionID) : undefined) ?? local.model.current()
-          const advertised = selected
-            ? (data.location.model.list(currentLocation.current)?.find(
+          const info = selected
+            ? data.location.model.list(currentLocation.current)?.find(
                 (item) => item.providerID === selected.providerID && item.id === selected.modelID,
-              )?.daybreak ?? [])
-            : []
+              )
+            : undefined
+          const advertised = modelDaybreak({ model: info, selection: selected })
           const plan = daybreakPlan({
             current: sessionID ? data.session.get(sessionID)?.daybreak : props.landingDaybreak,
             advertised,
@@ -888,7 +896,7 @@ export function Prompt(props: PromptProps) {
       },
       {
         title: "Move session",
-        desc: "Move to another project dir",
+        description: "Move to another project dir",
         name: "session.move",
         category: "Session",
         slash: { name: "move" },
@@ -1667,16 +1675,23 @@ export function Prompt(props: PromptProps) {
     }
     const fixedModel = btwSession()?.model
     const selectedModel = fixedModel
-      ? { providerID: fixedModel.providerID, modelID: fixedModel.id }
+      ? { providerID: fixedModel.providerID, modelID: fixedModel.id, ...(fixedModel.profile === undefined ? {} : { profile: fixedModel.profile }) }
       : local.model.current()
     const variant = fixedModel ? fixedModel.variant : local.model.variant.current()
     const info = selectedModel && data.location.model
       .list(currentLocation.current)
       ?.find((item) => item.providerID === selectedModel.providerID && item.id === selectedModel.modelID)
-    if (!info || variant !== undefined && !info.variants.some((item) => item.id === variant)) {
+    const profileUnavailable = selectedModel?.profile !== undefined && !info?.profiles?.some((item) => item.name === selectedModel.profile)
+    const modelUnavailable = selectedModel?.profile === undefined && info?.enabled === false
+    const variants = modelVariantIDs({ model: info, profile: selectedModel?.profile })
+    if (!selectedModel || !info || profileUnavailable || modelUnavailable || variant !== undefined && !variants.includes(variant)) {
       toast.show({
         title: "Model selection needs attention",
-        message: "The selected model or effort is unavailable in the current catalog. Refresh the catalog or choose an available model and effort; draft retained.",
+        message: profileUnavailable
+          ? `Profile ${selectedModel?.profile} is unavailable for ${info?.name ?? selectedModel?.modelID}. Choose another profile or Use provider default; draft retained.`
+          : modelUnavailable
+            ? `Model ${info?.name ?? selectedModel?.modelID} is unavailable for the provider default; choose an available profile or model; draft retained.`
+            : "The selected model or effort is unavailable in the current catalog. Refresh the catalog or choose an available model and effort; draft retained.",
         variant: "warning",
       })
       return false
@@ -1715,7 +1730,8 @@ export function Prompt(props: PromptProps) {
         providerID: selectedModel.providerID,
         id: selectedModel.modelID,
         variant,
-      },
+        ...(selectedModel.profile === undefined ? {} : { profile: selectedModel.profile }),
+      } satisfies ModelRef,
       modelSelectionPending: !!local.model.pendingTarget(props.sessionID),
       editor: candidateEditorSelection
         ? {
@@ -2112,7 +2128,12 @@ export function Prompt(props: PromptProps) {
           toast.show({ message: "Connect a provider and select a model before setting a goal", variant: "warning", duration: 3000 })
           return false
         }
-        const modelRef = { id: currentModel.modelID, providerID: currentModel.providerID, variant: local.model.variant.current() || undefined }
+        const modelRef = {
+          id: currentModel.modelID,
+          providerID: currentModel.providerID,
+          variant: local.model.variant.current() || undefined,
+          ...(currentModel.profile === undefined ? {} : { profile: currentModel.profile }),
+        }
         const daybreak = props.landingDaybreak
         try {
           const created = await client.api.session.create({
@@ -2161,19 +2182,17 @@ export function Prompt(props: PromptProps) {
     if (action.type === "replace" || action.type === "resume") {
       const pending = local.model.pendingTarget(sessionID)
       if (pending) {
-        const model = { providerID: pending.providerID, id: pending.modelID, variant: pending.variant }
-        const current = data.session.get(sessionID)?.model
-        if (
-          current?.providerID !== model.providerID ||
-          current?.id !== model.id ||
-          current?.variant !== model.variant
-        ) {
-          try {
-            await client.api.session.switchModel({ sessionID, model })
-          } catch (error) {
-            toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" })
-            return false
-          }
+        const model = {
+          providerID: pending.providerID,
+          id: pending.modelID,
+          variant: pending.variant,
+          ...(pending.profile === undefined ? {} : { profile: pending.profile }),
+        }
+        try {
+          await client.api.session.switchModel({ sessionID, model })
+        } catch (error) {
+          toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" })
+          return false
         }
         local.model.commitPending(sessionID, model)
       }

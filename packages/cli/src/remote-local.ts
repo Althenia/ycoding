@@ -7,6 +7,7 @@ import {
   type FormInfo,
   type AgentInfo,
   type ModelInfo,
+  type ModelDefault,
   type ProviderInfo,
   type CommandInfo,
   type SkillInfo,
@@ -82,7 +83,7 @@ export type LocalServer = {
   readonly projectList: () => Promise<readonly Project[]>
   readonly projectDirectories: (projectID: string) => Promise<readonly ProjectDirectory[]>
   readonly projectCurrent: (location: LocalLocation) => Promise<{ readonly id: string; readonly directory: string }>
-  readonly createSession: (id: string, location: LocalLocation, agent?: string, model?: { readonly providerID: string; readonly id: string; readonly variant?: string }) => Promise<SessionInfo>
+  readonly createSession: (id: string, location: LocalLocation, agent?: string, model?: { readonly providerID: string; readonly id: string; readonly variant?: string; readonly profile?: string }) => Promise<SessionInfo>
   readonly getSession: (sessionID: string, location: LocalLocation) => Promise<SessionInfo>
   /** Process-wide running status; the caller filters it to the current inventory. */
   readonly activeSessions: () => Promise<unknown>
@@ -93,7 +94,7 @@ export type LocalServer = {
   readonly usageReport: (input: RemoteUsageReportInput) => Promise<UsageReportOutput>
   readonly agentList: (location: LocalLocation) => Promise<readonly AgentInfo[]>
   readonly modelList: (location: LocalLocation) => Promise<readonly ModelInfo[]>
-  readonly modelDefault: (location: LocalLocation) => Promise<ModelInfo | null>
+  readonly modelDefault: (location: LocalLocation) => Promise<ModelDefault | null>
   readonly providerList: (location: LocalLocation) => Promise<readonly ProviderInfo[]>
   readonly commandList: (location: LocalLocation) => Promise<readonly CommandInfo[]>
   readonly skillList: (location: LocalLocation) => Promise<readonly SkillInfo[]>
@@ -131,7 +132,7 @@ export type LocalServer = {
     input: { readonly cursor?: number; readonly limit: number },
   ) => Promise<unknown>
   readonly prompt: (sessionID: string, location: LocalLocation, input: LocalPrompt) => Promise<unknown>
-  readonly switchModel: (sessionID: string, location: LocalLocation, model: { readonly providerID: string; readonly id: string; readonly variant?: string }) => Promise<void>
+  readonly switchModel: (sessionID: string, location: LocalLocation, model: { readonly providerID: string; readonly id: string; readonly variant?: string; readonly profile?: string }) => Promise<void>
   readonly switchAgent: (sessionID: string, location: LocalLocation, agent: string) => Promise<void>
   readonly command: (sessionID: string, location: LocalLocation, input: { readonly id?: string; readonly command: string; readonly arguments?: string; readonly files?: LocalPrompt["files"]; readonly agents?: LocalPrompt["agents"]; readonly delivery?: LocalPrompt["delivery"] }) => Promise<unknown>
   readonly skill: (sessionID: string, location: LocalLocation, input: { readonly id?: string; readonly skill: string; readonly resume?: boolean }) => Promise<void>

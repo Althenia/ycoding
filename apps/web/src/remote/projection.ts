@@ -15,6 +15,7 @@ export type ModelRefView = {
   readonly id: string
   readonly providerID: string
   readonly variant?: string
+  readonly profile?: string
 }
 
 export function readModelRef(value: unknown): ModelRefView | undefined {
@@ -23,14 +24,16 @@ export function readModelRef(value: unknown): ModelRefView | undefined {
   const id = stringField(record.id)
   const providerID = stringField(record.providerID)
   if (id === undefined || providerID === undefined) return undefined
+  if ("profile" in record && (typeof record.profile !== "string" || record.profile.length === 0)) return undefined
   const variant = stringField(record.variant)
-  return { id, providerID, ...(variant === undefined ? {} : { variant }) }
+  const profile = typeof record.profile === "string" && record.profile.length > 0 ? record.profile : undefined
+  return { id, providerID, ...(variant === undefined ? {} : { variant }), ...(profile === undefined ? {} : { profile }) }
 }
 
 /** Display form of a model reference: `provider/model` plus an optional `#variant`. */
 export function modelLabel(model: ModelRefView | undefined): string | undefined {
   if (model === undefined) return undefined
-  return `${model.providerID}/${model.id}${model.variant === undefined ? "" : `#${model.variant}`}`
+  return `${model.providerID}/${model.id}${model.variant === undefined ? "" : `#${model.variant}`}${model.profile === undefined ? "" : ` · profile ${model.profile}`}`
 }
 
 type GenerationSpeedSampleView = {
@@ -87,7 +90,7 @@ function readAssistantContext(value: unknown): ContextWindowView | undefined {
 
 const sameModel = (left: ModelRefView | undefined, right: ModelRefView | undefined) =>
   left !== undefined && right !== undefined && left.providerID === right.providerID && left.id === right.id &&
-  left.variant === right.variant
+  left.variant === right.variant && left.profile === right.profile
 
 export function generationSpeedDisplay(view: SessionView | undefined, selected: ModelRefView | undefined) {
   const history = view?.generationSpeed

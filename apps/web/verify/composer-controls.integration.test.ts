@@ -1190,6 +1190,161 @@ test("failed catalogs explain disabled selectors and recover through Retry at ph
   }
 }, 30_000)
 
+type Page = Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>
+const stubViewport = (page: Page, height: number, offsetTop: number) => page.evaluate(`(() => {
+  const stub = Object.assign(new EventTarget(), { height: ${height}, width: 390, offsetTop: ${offsetTop}, offsetLeft: 0, scale: 1, pageTop: ${offsetTop}, pageLeft: 0 })
+  Object.defineProperty(window, 'visualViewport', { configurable: true, value: stub }); window.viewportStub = stub })()`)
+const moveViewport = (page: Page, height: number, offsetTop: number) => page.evaluate(`(() => { Object.assign(window.viewportStub, { height: ${height}, offsetTop: ${offsetTop}, pageTop: ${offsetTop} }); window.viewportStub.dispatchEvent(new Event('resize')) })()`)
+const frame = (page: Page, selector: string) => page.evaluate<{ top: number; bottom: number; left: number; right: number; modal: string | null; role: string | null }>(`(async () => { const node = document.querySelector(${JSON.stringify(selector)}); await Promise.all(node.getAnimations().map((animation) => animation.finished)); const rect = node.getBoundingClientRect(); return { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right, modal: node.getAttribute('aria-modal'), role: node.getAttribute('role') } })()`)
+
+test("phone agent and model sheets fill the screen, contain focus, and Escape closes only the innermost sheet", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.setViewport(390, 844)
+    await page.setCoarsePointer(true)
+    await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+    await wait(page, `document.querySelector('.composer__mobile-trigger') !== null`)
+    await page.evaluate(`document.querySelector('.composer__mobile-trigger').click()`)
+    await wait(page, `document.querySelector('.composer__selection-sheet') !== null`)
+    expect(await frame(page, ".composer__selection-sheet")).toMatchObject({ top: 0, bottom: 844, left: 0, right: 390, modal: "true" })
+    for (let index = 0; index < 8; index++) {
+      await page.pressKey("Tab", "Tab", 9)
+      expect(await page.evaluate<boolean>(`document.querySelector('.composer__selection-sheet').contains(document.activeElement)`)).toBe(true)
+    }
+    await page.evaluate(`document.querySelector('.composer__selection-sheet button[aria-label="Agent"]').click()`)
+    await wait(page, `document.querySelector('.mini-picker__surface--sheet [role="option"]') !== null`)
+    expect(await frame(page, ".mini-picker__surface--sheet")).toMatchObject({ top: 0, bottom: 844, left: 0, right: 390, modal: "true", role: "dialog" })
+    expect(await page.evaluate<string>(`document.activeElement?.getAttribute('role')`)).toBe("listbox")
+    expect(await page.evaluate<boolean>(`(() => { const heading = document.querySelector('.mini-picker__surface--sheet .mini-picker__heading').getBoundingClientRect(); return heading.top === 0 && heading.height >= 44 })()`)).toBe(true)
+    for (let index = 0; index < 8; index++) {
+      await page.pressKey("Tab", "Tab", 9)
+      expect(await page.evaluate<boolean>(`document.querySelector('.mini-picker__surface--sheet').contains(document.activeElement)`)).toBe(true)
+    }
+    await page.pressEscape()
+    await wait(page, `document.querySelector('.mini-picker__surface') === null`)
+    expect(await page.evaluate<boolean>(`document.querySelector('.composer__selection-sheet') !== null`)).toBe(true)
+    expect(await page.evaluate<string>(`document.activeElement?.getAttribute('aria-label')`)).toBe("Agent")
+    await page.evaluate(`document.querySelector('.composer__selection-sheet button[aria-label="Model"]').click()`)
+    await wait(page, `document.querySelector('.model-control__surface') !== null`)
+    expect(await frame(page, ".model-control__surface")).toMatchObject({ top: 0, bottom: 844, left: 0, right: 390, modal: "true", role: "dialog" })
+    expect(await page.evaluate<boolean>(`document.activeElement?.classList.contains('model-control__switch') === true`)).toBe(true)
+    await page.pressEscape()
+    expect(await page.evaluate<boolean>(`document.querySelector('.model-control__surface') === null && document.querySelector('.composer__selection-sheet') !== null`)).toBe(true)
+    expect(await page.evaluate<string>(`document.activeElement?.getAttribute('aria-label')`)).toBe("Model")
+    await page.pressEscape()
+    expect(await page.evaluate<boolean>(`document.querySelector('.composer__selection-sheet') === null`)).toBe(true)
+    expect(await page.evaluate<string>(`document.activeElement?.className`)).toBe("composer__mobile-trigger")
+  } finally { await page.close() }
+}, 30_000)
+
+test("phone sheets follow a shrunken visual viewport so the search field and list stay above the keyboard (stubbed VisualViewport, not a real on-screen keyboard)", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.setViewport(390, 844)
+    await page.setCoarsePointer(true)
+    await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+    await wait(page, `document.querySelector('.composer__mobile-trigger') !== null`)
+    await stubViewport(page, 844, 0)
+    await page.evaluate(`document.querySelector('.composer__mobile-trigger').click()`)
+    await wait(page, `document.querySelector('.composer__selection-sheet') !== null`)
+    await page.evaluate(`document.querySelector('.composer__selection-sheet button[aria-label="Model"]').click()`)
+    await wait(page, `document.querySelector('.model-control__switch') !== null`)
+    await page.evaluate(`document.querySelector('.model-control__switch').click()`)
+    await wait(page, `document.querySelector('.model-control__surface input[type="search"]') !== null`)
+    expect(await page.evaluate<string>(`document.activeElement?.getAttribute('aria-label')`)).toBe("Search models")
+    await moveViewport(page, 380, 120)
+    await wait(page, `Math.round(document.querySelector('.model-control__surface').getBoundingClientRect().height) === 380`)
+    const read = () => page.evaluate<{ top: number; bottom: number; searchTop: number; searchBottom: number; headingTop: number; listBottom: number; listScrolls: boolean; sheetTop: number; sheetBottom: number }>(`(() => { const surface = document.querySelector('.model-control__surface').getBoundingClientRect(), search = document.querySelector('.model-control__surface .mini-picker__search').getBoundingClientRect(), heading = document.querySelector('.model-control__surface .mini-picker__heading').getBoundingClientRect(), list = document.querySelector('.model-control__surface .mini-picker__list'), sheet = document.querySelector('.composer__selection-sheet').getBoundingClientRect(); return { top: surface.top, bottom: surface.bottom, searchTop: search.top, searchBottom: search.bottom, headingTop: heading.top, listBottom: list.getBoundingClientRect().bottom, listScrolls: list.scrollHeight > list.clientHeight, sheetTop: sheet.top, sheetBottom: sheet.bottom } })()`)
+    const keyboard = await read()
+    expect(keyboard).toMatchObject({ top: 120, bottom: 500, headingTop: 120, sheetTop: 120, sheetBottom: 500 })
+    expect(keyboard.searchTop).toBeGreaterThanOrEqual(120)
+    expect(keyboard.searchBottom).toBeLessThanOrEqual(500)
+    expect(keyboard.listBottom).toBeLessThanOrEqual(500)
+    expect(keyboard.listScrolls).toBe(true)
+    await page.evaluate(`document.querySelector('.model-control__surface .mini-picker__list').scrollTop = 200`)
+    await moveViewport(page, 300, 0)
+    await wait(page, `Math.round(document.querySelector('.model-control__surface').getBoundingClientRect().height) === 300`)
+    expect(await read()).toMatchObject({ top: 0, bottom: 300, headingTop: 0 })
+    await moveViewport(page, 844, 0)
+    await wait(page, `Math.round(document.querySelector('.model-control__surface').getBoundingClientRect().height) === 844`)
+  } finally { await page.close() }
+}, 30_000)
+
+test("a phone picker closes with its exit motion, survives a breakpoint change while closing, and reopens cleanly", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.setViewport(390, 844)
+    await page.setCoarsePointer(true)
+    await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+    await wait(page, `document.querySelector('.new-session-composer button[aria-label="Repository"]') !== null`)
+    await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="Repository"]').click()`)
+    await wait(page, `document.querySelector('.mini-picker__surface--sheet') !== null`)
+    expect(await frame(page, ".mini-picker__surface--sheet")).toMatchObject({ top: 0, bottom: 844, left: 0, right: 390 })
+    await page.pressEscape()
+    expect(await page.evaluate<boolean>(`document.querySelector('.mini-picker__surface--closing') !== null && document.querySelector('.mini-picker__surface').inert`)).toBe(true)
+    await page.setViewport(1024, 768)
+    await wait(page, `document.querySelector('.mini-picker__surface') === null && document.querySelector('.mini-picker__scrim') === null`)
+    await page.evaluate(`(() => { const trigger = document.querySelector('.new-session-composer button[aria-label="Repository"]'); trigger.focus(); trigger.click() })()`)
+    await wait(page, `document.querySelector('.mini-picker__surface [role="option"]') !== null`)
+    expect(await page.evaluate<boolean>(`document.querySelector('.mini-picker__surface--sheet') === null && document.querySelector('.mini-picker__surface--closing') === null && document.querySelector('.mini-picker__surface').getAttribute('aria-modal') === null`)).toBe(true)
+    await page.pressEscape()
+    await wait(page, `document.querySelector('.mini-picker__surface') === null`)
+    await page.setReducedMotion(true)
+    await page.setViewport(390, 844)
+    await wait(page, `matchMedia('(max-width: 767px)').matches`)
+    await Bun.sleep(150)
+    await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="Repository"]').click()`)
+    await wait(page, `document.querySelector('.mini-picker__surface--sheet') !== null`)
+    await page.pressEscape()
+    expect(await page.evaluate<boolean>(`document.querySelector('.mini-picker__surface') === null`)).toBe(true)
+    expect(await page.evaluate<string>(`document.activeElement?.getAttribute('aria-label')`)).toBe("Repository")
+  } finally { await page.close() }
+}, 30_000)
+
+test("phone suggestions grow past 40% of a keyboard-sized visual viewport yet stay inside it and above the field", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.setViewport(390, 844)
+    await page.setCoarsePointer(true)
+    await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+    await wait(page, `document.querySelector('.mini-composer__mount textarea') !== null`)
+    const rowBottom = await page.evaluate<number>(`(() => { const mount = document.querySelector('.mini-composer__mount'); mount.style.paddingTop = (800 - mount.querySelector('.composer__row').getBoundingClientRect().bottom) + 'px'; return mount.querySelector('.composer__row').getBoundingClientRect().bottom })()`)
+    const height = 400
+    const offsetTop = Math.max(0, Math.ceil(rowBottom) + 4 - height)
+    await stubViewport(page, height, offsetTop)
+    await type(page, ".mini-composer__mount textarea", "$")
+    await wait(page, `document.querySelectorAll('.mini-composer__mount [role="option"]').length === 66`)
+    const read = async () => {
+      await wait(page, `document.querySelector('.mini-composer__suggestions').getAnimations().every(animation => animation.playState === 'finished' || animation.playState === 'idle')`)
+      return page.evaluate<{ top: number; bottom: number; height: number; fieldTop: number; rowBottom: number }>(`(() => { const panel = document.querySelector('.mini-composer__suggestions').getBoundingClientRect(); return { top: panel.top, bottom: panel.bottom, height: panel.height, fieldTop: document.querySelector('.mini-composer__mount textarea').getBoundingClientRect().top, rowBottom: document.querySelector('.mini-composer__mount .composer__row').getBoundingClientRect().bottom } })()`)
+    }
+    const open = await read()
+    const expected = Math.floor(Math.max(54, Math.min(height * 0.75, open.fieldTop - offsetTop - 8)))
+    expect(open.top).toBeGreaterThanOrEqual(offsetTop - 1)
+    expect(open.bottom).toBeLessThanOrEqual(open.fieldTop + 1)
+    expect(open.rowBottom).toBeLessThanOrEqual(offsetTop + height + 5)
+    expect(Math.abs(open.height - expected)).toBeLessThanOrEqual(1)
+    expect(open.height).toBeGreaterThan(height * 0.4)
+    await moveViewport(page, 250, offsetTop + 150)
+    await wait(page, `document.querySelector('.mini-composer__suggestions').getBoundingClientRect().height < ${open.height - 1}`)
+    const shrunk = await read()
+    expect(shrunk.top).toBeGreaterThanOrEqual(offsetTop + 150 - 1)
+    expect(shrunk.height).toBeLessThanOrEqual(Math.max(54, 250 * 0.75) + 1)
+    await page.evaluate(`document.querySelector('.mini-composer__mount [role="option"]').click()`)
+    await moveViewport(page, height, offsetTop)
+    await type(page, ".mini-composer__mount textarea", "one\ntwo\nthree\nfour\nfive\n$")
+    await wait(page, `document.querySelector('.mini-composer__suggestions') !== null`)
+    const grown = await read()
+    expect(grown.top).toBeGreaterThanOrEqual(offsetTop - 1)
+    expect(grown.bottom).toBeLessThanOrEqual(grown.fieldTop + 1)
+    await page.pressKey("ArrowUp", "ArrowUp", 38)
+    expect(await page.evaluate<boolean>(`(() => { const list = document.querySelector('.mini-composer__mount [role="listbox"][aria-label="Suggestions"]'), option = document.getElementById('composer-option-65'), a = option.getBoundingClientRect(), b = list.getBoundingClientRect(); return a.top >= b.top - 1 && a.bottom <= b.bottom + 1 })()`)).toBe(true)
+    await type(page, ".mini-composer__mount textarea", "$s")
+    await wait(page, `document.querySelectorAll('.mini-composer__mount [role="option"]').length > 0`)
+    expect(await page.evaluate<number>(`document.querySelector('.mini-composer__mount [role="listbox"][aria-label="Suggestions"]').scrollTop`)).toBe(0)
+  } finally { await page.close() }
+}, 30_000)
+
 async function wait(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>, expression: string) {
   for (let index = 0; index < 50; index++) {
     if (await page.evaluate<boolean>(expression)) return

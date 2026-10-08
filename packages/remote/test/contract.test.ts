@@ -316,10 +316,12 @@ describe("remote envelope: request", () => {
       ["session.catalog", undefined, "ses_1"],
       ["session.file.find", { query: "src", limit: 1 }, "ses_1"],
       ["session.switchModel", { model: { providerID: "openai", id: "gpt", variant: "high" } }, "ses_1"],
+      ["session.switchModel", { model: { providerID: "openai", id: "gpt", profile: "work" } }, "ses_1"],
       ["session.switchAgent", { agent: "build" }, "ses_1"],
       ["session.command", { command: "test", files: [{ uri: "file:///work/a.ts" }] }, "ses_1"],
       ["session.skill", { skill: "test", resume: false }, "ses_1"],
       ["session.create", { id: "ses_new", workspace: "wsp_1", agent: "build", model: { providerID: "openai", id: "gpt" } }],
+      ["session.create", { id: "ses_new", workspace: "wsp_1", model: { providerID: "openai", id: "gpt", profile: "work" } }],
       ["session.prompt", { text: "test", files: [{ uri: "file:///work/a.ts" }], agents: [{ name: "build" }], resume: false }, "ses_1"],
     ] as const) {
       const request = { type: "request", id: "a", operation, ...(sessionID === undefined ? {} : { sessionID }), ...(input === undefined ? {} : { input }) }
@@ -332,6 +334,8 @@ describe("remote envelope: request", () => {
       ["workspace.file.find", { workspace: "wsp_1", query: "x", limit: 51 }],
       ["session.create", { id: "ses_new", workspace: "wsp_1", model: { providerID: "a", id: "b", secret: "x" } }],
     ] as const) expect(parseClientMessage(JSON.stringify({ type: "request", id: "a", operation, input }))).toMatchObject({ ok: false, error: { code: "invalid_message" } })
+    expect(parseClientMessage(JSON.stringify({ type: "request", id: "a", operation: "session.switchModel", sessionID: "ses_1", input: { model: { providerID: "a", id: "b", profile: "" } } })))
+      .toMatchObject({ ok: false, error: { code: "invalid_message" } })
   })
 
   test("admits only bounded parent-scoped subagent page inputs", () => {

@@ -1,10 +1,11 @@
 import { Duration, Effect, Schema, Semaphore, Stream } from "effect"
-import type { Scope } from "effect"
+import type { DeepMutable } from "../../schema"
 import type { IntegrationOAuthMethodRegistration } from "@ycoding-ai/plugin/effect/integration"
 import { define } from "@ycoding-ai/plugin/effect/plugin"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { EventRuntime } from "../../event"
 import { Credential } from "../../credential"
+import { Catalog } from "../../catalog"
 import { Integration } from "../../integration"
 import { CatalogModel } from "../../model"
 import { Provider } from "../../provider"
@@ -79,28 +80,51 @@ function oauth(http: HttpClient.HttpClient) {
   } satisfies IntegrationOAuthMethodRegistration
 }
 
-export const OpencodePlugin = define<HttpClient.HttpClient | EventRuntime.Service | Scope.Scope>({
+export const OpencodePlugin = define({
   id: "opencode.provider.opencode",
   effect: Effect.fn(function* (ctx) {
     const events = yield* EventRuntime.Service
     const http = yield* HttpClient.HttpClient
+    const catalogService = yield* Catalog.Service
+    const credentials = yield* Credential.Service
+    const integrations = yield* Integration.Service
     const loading = Semaphore.makeUnsafe(1)
     let connected = false
-    let providers: typeof Config.Info.Type.providers | undefined
+    let accounts: readonly {
+      readonly credential: Credential.Info
+      readonly providers: typeof Config.Info.Type.providers
+    }[] = []
 
     const load = Effect.fn("OpencodePlugin.load")(function* () {
-      const connection = yield* ctx.integration.connection.active("opencode")
-      const credential = connection
-        ? yield* ctx.integration.connection.resolve(connection).pipe(Effect.catch(() => Effect.succeed(undefined)))
-        : undefined
-      connected = connection !== undefined
-      providers = credential
-        ? yield* fetchProviders(http, credential).pipe(
-            Effect.catch((cause) =>
-              Effect.logWarning("failed to load OpenCode provider config", { cause }).pipe(Effect.as(undefined)),
-            ),
-          )
-        : undefined
+      const saved = yield* credentials.list(Integration.ID.make("opencode"))
+      connected = (yield* integrations.connection.active(Integration.ID.make("opencode"))) !== undefined
+      const previous = accounts
+      accounts = (yield* Effect.forEach(
+        saved,
+        (credential) =>
+          Effect.gen(function* () {
+            const snapshot = yield* integrations.connection
+              .snapshot({ type: "credential", id: credential.id, label: credential.label, active: credential.active })
+              .pipe(Effect.catch(() => Effect.succeed(undefined)))
+            if (!snapshot?.value || !snapshot.credential) return undefined
+            const providers = yield* fetchProviders(http, snapshot.value).pipe(
+              Effect.catch((cause) =>
+                Effect.logWarning("failed to load OpenCode provider config", { cause }).pipe(Effect.as(undefined)),
+              ),
+            )
+            return {
+              credential: snapshot.credential,
+              providers:
+                providers ??
+                previous.find(
+                  (account) =>
+                    account.credential.id === credential.id &&
+                    account.credential.accountGeneration === credential.accountGeneration,
+                )?.providers,
+            }
+          }),
+        { concurrency: "unbounded" },
+      )).filter((account) => account !== undefined)
     })
 
     yield* ctx.integration.transform((draft) => {
@@ -112,62 +136,99 @@ export const OpencodePlugin = define<HttpClient.HttpClient | EventRuntime.Servic
     })
 
     yield* load()
-    yield* ctx.catalog.transform((catalog) => {
-      for (const [providerID, item] of Object.entries(providers ?? {})) {
-        catalog.provider.update(providerID, (provider) => {
-          provider.integrationID = Integration.ID.make("opencode")
-          if (item.name !== undefined) provider.name = item.name
-          if (item.package !== undefined) provider.package = item.package
-          if (item.settings !== undefined)
-            provider.settings = Provider.mergeOverlay(provider.settings, withoutCredentials(item.settings))
-          if (item.headers !== undefined) provider.headers = Provider.mergeHeaders(provider.headers, item.headers)
-          if (item.body !== undefined) provider.body = Provider.mergeOverlay(provider.body, item.body)
-        })
-
-        for (const [modelID, config] of Object.entries(item.models ?? {})) {
-          catalog.model.update(providerID, modelID, (model) => {
-            if (config.family !== undefined) model.family = config.family
-            if (config.name !== undefined) model.name = config.name
-            if (config.modelID !== undefined) model.modelID = config.modelID
-            if (config.package !== undefined) model.package = config.package
-            if (config.settings !== undefined)
-              model.settings = Provider.mergeOverlay(model.settings, withoutCredentials(config.settings))
-            if (config.headers !== undefined) model.headers = Provider.mergeHeaders(model.headers, config.headers)
-            if (config.body !== undefined) model.body = Provider.mergeOverlay(model.body, config.body)
-            if (config.capabilities?.tools !== undefined) model.capabilities.tools = config.capabilities.tools
-            if (config.capabilities?.input !== undefined) model.capabilities.input = [...config.capabilities.input]
-            if (config.capabilities?.output !== undefined) model.capabilities.output = [...config.capabilities.output]
-            if (config.variants !== undefined) {
-              model.variants ??= []
-              for (const variant of config.variants) {
-                let existing = model.variants.find((candidate) => candidate.id === variant.id)
-                if (!existing) {
-                  existing = { id: variant.id }
-                  model.variants.push(existing)
-                }
-                if (variant.settings !== undefined)
-                  existing.settings = Provider.mergeOverlay(existing.settings, withoutCredentials(variant.settings))
-                if (variant.headers !== undefined)
-                  existing.headers = Provider.mergeHeaders(existing.headers, variant.headers)
-                if (variant.body !== undefined) existing.body = Provider.mergeOverlay(existing.body, variant.body)
-              }
-            }
-            if (config.cost !== undefined) {
-              model.cost = (Array.isArray(config.cost) ? config.cost : [config.cost]).map((cost) => ({
-                tier: cost.tier && { ...cost.tier },
-                input: cost.input,
-                output: cost.output,
-                cache: {
-                  read: cost.cache?.read ?? Money.USDPerMillionTokens.zero,
-                  write: cost.cache?.write ?? Money.USDPerMillionTokens.zero,
-                },
-              }))
-            }
-            if (config.disabled !== undefined) model.enabled = !config.disabled
-            if (config.limit !== undefined) model.limit = { ...model.limit, ...config.limit }
+    yield* catalogService.transform((catalog) => {
+      const baseline = new Map(catalog.provider.list().map((record) => [record.provider.id, structuredClone(record)]))
+      const inventory = new Map<Provider.ID, Map<CatalogModel.ID, CatalogModel.Info>>()
+      for (const record of catalog.provider.list())
+        if (record.provider.integrationID === "opencode" || record.provider.id === "opencode")
+          catalog.model.account.clear(record.provider.id)
+      for (const account of accounts) {
+        for (const [id, item] of Object.entries(account.providers ?? {})) {
+          const providerID = Provider.ID.make(id)
+          const original = baseline.get(providerID)
+          if (original) {
+            catalog.provider.update(providerID, (provider) =>
+              Object.assign(provider, structuredClone(original.provider)),
+            )
+            for (const modelID of catalog.provider.get(providerID)?.models.keys() ?? [])
+              catalog.model.remove(providerID, modelID)
+            for (const model of original.models.values())
+              catalog.model.update(providerID, model.id, (draft) => Object.assign(draft, structuredClone(model)))
+          }
+          catalog.provider.update(providerID, (provider) => {
+            provider.integrationID = Integration.ID.make("opencode")
+            if (item.name !== undefined) provider.name = item.name
+            if (item.package !== undefined) provider.package = item.package
+            if (item.settings !== undefined)
+              provider.settings = mutable(Provider.mergeOverlay(provider.settings, withoutCredentials(item.settings)))
+            if (item.headers !== undefined) provider.headers = Provider.mergeHeaders(provider.headers, item.headers)
+            if (item.body !== undefined) provider.body = mutable(Provider.mergeOverlay(provider.body, item.body))
           })
+
+          for (const [modelID, config] of Object.entries(item.models ?? {})) {
+            catalog.model.update(providerID, CatalogModel.ID.make(modelID), (model) => {
+              if (config.family !== undefined) model.family = config.family
+              if (config.name !== undefined) model.name = config.name
+              if (config.modelID !== undefined) model.modelID = config.modelID
+              if (config.package !== undefined) model.package = config.package
+              if (config.settings !== undefined)
+                model.settings = mutable(Provider.mergeOverlay(model.settings, withoutCredentials(config.settings)))
+              if (config.headers !== undefined) model.headers = Provider.mergeHeaders(model.headers, config.headers)
+              if (config.body !== undefined) model.body = mutable(Provider.mergeOverlay(model.body, config.body))
+              if (config.capabilities?.tools !== undefined) model.capabilities.tools = config.capabilities.tools
+              if (config.capabilities?.input !== undefined) model.capabilities.input = [...config.capabilities.input]
+              if (config.capabilities?.output !== undefined) model.capabilities.output = [...config.capabilities.output]
+              if (config.variants !== undefined) {
+                model.variants ??= []
+                for (const variant of config.variants) {
+                  let existing = model.variants.find((candidate) => candidate.id === variant.id)
+                  if (!existing) {
+                    existing = { id: variant.id }
+                    model.variants.push(existing)
+                  }
+                  if (variant.settings !== undefined)
+                    existing.settings = mutable(
+                      Provider.mergeOverlay(existing.settings, withoutCredentials(variant.settings)),
+                    )
+                  if (variant.headers !== undefined)
+                    existing.headers = Provider.mergeHeaders(existing.headers, variant.headers)
+                  if (variant.body !== undefined)
+                    existing.body = mutable(Provider.mergeOverlay(existing.body, variant.body))
+                }
+              }
+              if (config.cost !== undefined) {
+                model.cost = (Array.isArray(config.cost) ? config.cost : [config.cost]).map((cost) => ({
+                  tier: cost.tier && { ...cost.tier },
+                  input: cost.input,
+                  output: cost.output,
+                  cache: {
+                    read: cost.cache?.read ?? Money.USDPerMillionTokens.zero,
+                    write: cost.cache?.write ?? Money.USDPerMillionTokens.zero,
+                  },
+                }))
+              }
+              if (config.disabled !== undefined) model.enabled = !config.disabled
+              if (config.limit !== undefined) model.limit = { ...model.limit, ...config.limit }
+            })
+          }
+          const projected = catalog.provider.get(providerID)
+          if (!projected) continue
+          const models = [...projected.models.values()].map((model) => ({
+            ...model,
+            package: model.package ?? projected.provider.package,
+            settings: Provider.mergeOverlay(projected.provider.settings, model.settings),
+            headers: Provider.mergeHeaders(projected.provider.headers, model.headers),
+            body: Provider.mergeOverlay(projected.provider.body, model.body),
+          }))
+          catalog.model.account.update(account.credential, providerID, models)
+          const union = inventory.get(providerID) ?? new Map()
+          for (const model of models) union.set(model.id, model)
+          inventory.set(providerID, union)
         }
       }
+      for (const [providerID, models] of inventory)
+        for (const model of models.values())
+          catalog.model.update(providerID, model.id, (draft) => Object.assign(draft, model))
 
       const item = catalog.provider.get(Provider.ID.opencode)
       if (!item) return
@@ -191,6 +252,10 @@ export const OpencodePlugin = define<HttpClient.HttpClient | EventRuntime.Servic
     )
   }),
 })
+
+function mutable<T>(value: T): DeepMutable<T> {
+  return structuredClone(value) as DeepMutable<T>
+}
 
 function fetchProviders(
   http: HttpClient.HttpClient,

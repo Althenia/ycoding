@@ -12,6 +12,7 @@ import everforest from "./assets/everforest.json" with { type: "json" }
 import flexoki from "./assets/flexoki.json" with { type: "json" }
 import github from "./assets/github.json" with { type: "json" }
 import gruvbox from "./assets/gruvbox.json" with { type: "json" }
+import highContrast from "./assets/high-contrast.json" with { type: "json" }
 import kanagawa from "./assets/kanagawa.json" with { type: "json" }
 import lucentOrng from "./assets/lucent-orng.json" with { type: "json" }
 import material from "./assets/material.json" with { type: "json" }
@@ -21,6 +22,7 @@ import monokai from "./assets/monokai.json" with { type: "json" }
 import nightowl from "./assets/nightowl.json" with { type: "json" }
 import nord from "./assets/nord.json" with { type: "json" }
 import oneDark from "./assets/one-dark.json" with { type: "json" }
+import oneDarkPro from "./assets/one-dark-pro.json" with { type: "json" }
 import ycoding from "./assets/ycoding.json" with { type: "json" }
 import orng from "./assets/orng.json" with { type: "json" }
 import osakaJade from "./assets/osaka-jade.json" with { type: "json" }
@@ -47,6 +49,7 @@ export const DEFAULT_THEMES = {
   flexoki,
   github,
   gruvbox,
+  "high-contrast": highContrast,
   kanagawa,
   "lucent-orng": lucentOrng,
   material,
@@ -56,6 +59,7 @@ export const DEFAULT_THEMES = {
   nightowl,
   nord,
   "one-dark": oneDark,
+  "one-dark-pro": oneDarkPro,
   ycoding,
   orng,
   "osaka-jade": osakaJade,

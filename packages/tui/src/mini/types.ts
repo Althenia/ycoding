@@ -31,7 +31,7 @@ export type RunFilePart = {
   mime: string
 }
 
-type PromptModel = { providerID: string; modelID: string }
+type PromptModel = { providerID: string; modelID: string; profile?: string }
 
 export type RunPromptPart =
   | {
@@ -59,7 +59,9 @@ type RunProviderModel = {
     input: number
   }
   status?: string
+  enabled?: boolean
   variants?: Record<string, unknown>
+  profiles?: Record<string, { variants?: Record<string, unknown> }>
 }
 
 export type RunProvider = {

@@ -13,9 +13,7 @@ import { Context, Effect, Layer, Schema } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { Global } from "./global"
 import { InstallationVersion } from "./installation/version"
-import {
-  createClaudeCodeCredentialStore,
-} from "./plugin/provider/anthropic-claude-code-account"
+import { createClaudeCodeCredentialStore } from "./plugin/provider/anthropic-claude-code-account"
 import { createManagedClaudeCodeCredentialSource } from "./plugin/provider/anthropic-claude-code-login"
 import { join } from "node:path"
 import { CopilotUsage } from "./provider-usage/copilot"
@@ -27,6 +25,7 @@ import { OpenRouterUsage } from "./provider-usage/openrouter"
 import { GrokUsage } from "./provider-usage/grok"
 import { ZAIUsage } from "./provider-usage/zai"
 import { CursorUsage } from "./provider-usage/cursor"
+import { SessionRunnerModel } from "./session/runner/model"
 import { GoUsage } from "./provider-usage/go"
 import { ProviderUsageCache } from "./provider-usage/cache"
 import { Database } from "./database/database"
@@ -35,11 +34,7 @@ import { gte } from "drizzle-orm"
 
 const minute = 60_000
 
-// Org login whose billing summary last reported Copilot AI-credit usage, per
-// provider. Steady-state refresh then makes one summary call per cycle and
-// re-discovers through /user/orgs only after the remembered org stops
-// answering or the refresh for another reason reports nothing.
-const copilotOrgLogins = new Map<Provider.ID, string>()
+const copilotOrgLogins = new Map<string, string>()
 
 export interface GetInput {
   readonly providerID: Provider.ID
@@ -72,6 +67,7 @@ export interface MakeInput {
   readonly ttlMs?: Readonly<Record<string, number>>
   readonly now?: () => number
   readonly localSpend?: () => Effect.Effect<ReadonlyArray<LocalSpendRow>, unknown>
+  readonly accountUnknown?: (refresh?: boolean) => Effect.Effect<ReadonlyArray<ProviderUsage.Snapshot>>
 }
 
 interface LocalSpendRow {
@@ -85,19 +81,40 @@ const localSpendProviders = new Set(["anthropic", "openai", "opencode", "opencod
 export function localSpendSnapshots(rows: ReadonlyArray<LocalSpendRow>, now: number) {
   const start = new Date(now).setHours(0, 0, 0, 0)
   const end = new Date(start).setDate(new Date(start).getDate() + 1)
-  const totals = rows.filter((row): row is LocalSpendRow & { readonly cost: number } =>
-    row.cost !== null && Number.isFinite(row.cost) && row.cost >= 0 &&
-    row.timeCreated >= start && row.timeCreated < end && localSpendProviders.has(row.model.providerID),
-  ).reduce((values, row) => values.set(row.model.providerID, (values.get(row.model.providerID) ?? 0) + row.cost), new Map<string, number>())
-  return [...totals].toSorted(([left], [right]) => left.localeCompare(right)).map(([providerID, used]) =>
-    new ProviderUsage.Snapshot({
-      providerID: Provider.ID.make(providerID),
-      label: providerID === "opencode" ? "OpenCode Zen" : providerID === "opencode-go" ? "OpenCode Go" : providerLabel(Provider.ID.make(providerID)),
-      profile: "YCoding local", status: "available", source: "local_session", stability: "stable",
-      updatedAt: Math.max(0, Math.trunc(now)),
-      windows: [new ProviderUsage.Window({ id: "today", label: "Today", unit: "usd", used })],
-    }),
-  )
+  const totals = rows
+    .filter(
+      (row): row is LocalSpendRow & { readonly cost: number } =>
+        row.cost !== null &&
+        Number.isFinite(row.cost) &&
+        row.cost >= 0 &&
+        row.timeCreated >= start &&
+        row.timeCreated < end &&
+        localSpendProviders.has(row.model.providerID),
+    )
+    .reduce(
+      (values, row) => values.set(row.model.providerID, (values.get(row.model.providerID) ?? 0) + row.cost),
+      new Map<string, number>(),
+    )
+  return [...totals]
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(
+      ([providerID, used]) =>
+        new ProviderUsage.Snapshot({
+          providerID: Provider.ID.make(providerID),
+          label:
+            providerID === "opencode"
+              ? "OpenCode Zen"
+              : providerID === "opencode-go"
+                ? "OpenCode Go"
+                : providerLabel(Provider.ID.make(providerID)),
+          profile: "YCoding local",
+          status: "available",
+          source: "local_session",
+          stability: "stable",
+          updatedAt: Math.max(0, Math.trunc(now)),
+          windows: [new ProviderUsage.Window({ id: "today", label: "Today", unit: "usd", used })],
+        }),
+    )
 }
 
 export class RequestError extends Schema.TaggedErrorClass<RequestError>()("ProviderUsage.RequestError", {
@@ -112,11 +129,7 @@ export function make(input: MakeInput): Interface {
   const cache = input.cache ?? ProviderUsageCache.make({ now })
   const observations = new Map<string, ProviderUsage.Snapshot>()
 
-  const unavailable = (
-    providerID: Provider.ID,
-    status: "unsupported" | "unauthorized" | "error",
-    message: string,
-  ) =>
+  const unavailable = (providerID: Provider.ID, status: "unsupported" | "unauthorized" | "error", message: string) =>
     new ProviderUsage.Snapshot({
       providerID,
       label: providerLabel(providerID),
@@ -141,22 +154,45 @@ export function make(input: MakeInput): Interface {
     // falling back to the first row would report another account's usage.
     const primary = candidates.find((item) => item.active) ?? candidates[0]
     const selected = credentialID ? candidates.find((item) => item.id === credentialID) : primary
-    // Response-header observations come from Session requests, which run as the active profile.
-    const profileSource = selected?.value.type === "oauth" && selected.value.metadata?.managed === true &&
-      typeof selected.value.metadata.source === "string" ? selected.value.metadata.source : undefined
-    const observed = () => profileSource !== undefined
-      ? observations.get(`${providerID}:${profileSource}`)
-      : selected === primary ? observations.get(`${providerID}:`) : undefined
-    const profiled = (snapshot: ProviderUsage.Snapshot) =>
-      candidates.length > 1 && selected?.label ? new ProviderUsage.Snapshot({
-        providerID: snapshot.providerID, label: snapshot.label, profile: selected.label,
-        status: snapshot.status, source: snapshot.source, stability: snapshot.stability,
-        updatedAt: snapshot.updatedAt, windows: snapshot.windows,
-        ...(snapshot.message === undefined ? {} : { message: snapshot.message }),
-      }) : snapshot
+    const profileSource =
+      selected?.value.type === "oauth" &&
+      selected.value.metadata?.managed === true &&
+      typeof selected.value.metadata.source === "string"
+        ? SessionRunnerModel.accountIdentityDigest(selected)
+        : undefined
+    const observed = () =>
+      profileSource !== undefined
+        ? observations.get(`${providerID}:${profileSource}`)
+        : credentialID === undefined
+          ? observations.get(`${providerID}:`)
+          : undefined
+    const profiled = Effect.fnUntraced(function* (snapshot: ProviderUsage.Snapshot) {
+      if (!selected) return snapshot
+      const currentCandidates = credentialsFor(yield* input.credentials.all(), providerID)
+      const current = currentCandidates.find(
+        (credential) =>
+          credential.id === selected.id &&
+          credential.integrationID === selected.integrationID &&
+          credential.accountGeneration === selected.accountGeneration,
+      )
+      if (!current) return unavailable(providerID, "unsupported", "Provider usage account changed during refresh")
+      return currentCandidates.length > 1 && current.label
+        ? new ProviderUsage.Snapshot({
+            providerID: snapshot.providerID,
+            label: snapshot.label,
+            profile: current.label,
+            status: snapshot.status,
+            source: snapshot.source,
+            stability: snapshot.stability,
+            updatedAt: snapshot.updatedAt,
+            windows: snapshot.windows,
+            ...(snapshot.message === undefined ? {} : { message: snapshot.message }),
+          })
+        : snapshot
+    })
 
     const current = observed()
-    if (!refresh && current) return profiled(current)
+    if (!refresh && current) return profileSource === undefined ? current : yield* profiled(current)
 
     const adapter = input.adapters[providerID]
     if (!adapter) return unavailable(providerID, "unsupported", "Provider usage is unsupported")
@@ -165,7 +201,7 @@ export function make(input: MakeInput): Interface {
     const updatedAt = Math.max(0, Math.trunc(now()))
     const snapshot = yield* cache
       .get({
-        key: `${providerID}:${selected.id}:${selected.generation}`,
+        key: `${providerID}:${selected.id}:${selected.accountGeneration}:${selected.generation}`,
         ttlMs: input.ttlMs?.[providerID] ?? minute,
         refresh,
         load: adapter({
@@ -193,7 +229,9 @@ export function make(input: MakeInput): Interface {
         ),
       )
     const latest = observed()
-    return profiled(latest && latest.updatedAt >= snapshot.updatedAt ? latest : snapshot)
+    if (latest && latest.updatedAt >= snapshot.updatedAt)
+      return profileSource === undefined ? latest : yield* profiled(latest)
+    return yield* profiled(snapshot)
   })
 
   return {
@@ -229,7 +267,20 @@ export function make(input: MakeInput): Interface {
           )
         : []
       const available = new Set(providers.map((provider) => provider.id))
-      return [...snapshots, ...local.filter((snapshot) => available.has(snapshot.providerID))]
+      const unknown = input.accountUnknown ? yield* input.accountUnknown(request?.refresh) : []
+      const unbound = [...observations].flatMap(([key, snapshot]) =>
+        key.endsWith(":") &&
+        available.has(snapshot.providerID) &&
+        credentialsFor(credentials, snapshot.providerID).length > 1
+          ? [snapshot]
+          : [],
+      )
+      return [
+        ...snapshots,
+        ...unbound,
+        ...unknown.filter((snapshot) => available.has(snapshot.providerID)),
+        ...local.filter((snapshot) => available.has(snapshot.providerID)),
+      ]
     }),
     observe: Effect.fn("ProviderUsage.observe")((observation, profileSource) =>
       Effect.sync(() => {
@@ -260,17 +311,19 @@ const layer = Layer.effect(
     const http = yield* HttpClient.HttpClient
     const database = yield* Database.Service
     const providerUsage = Config.latest(yield* config.entries(), "provider_usage")
+    const cache = ProviderUsageCache.make()
     const claude = createClaudeCodeCredentialStore({
       source: createManagedClaudeCodeCredentialSource({ directory: join(global.data, "claude-code", "profiles") }),
     })
     return Service.of(
       make({
+        cache,
         credentials,
         providers: catalog.provider,
         adapters: {
           anthropic: (input) => claudeOAuth(http, claude, input),
           openrouter: (input) => openRouter(http, input),
-          openai: (input) => openAI(http, input, providerUsage?.codex_app_server),
+          openai: (input) => openAI(http, input),
           meta: (input) => meta(http, input),
           "github-copilot": (input) => githubCopilot(http, input),
           xai: (input) => grok(http, input),
@@ -280,19 +333,53 @@ const layer = Layer.effect(
           "opencode-go": (input) => goUsage(http, input),
         },
         ttlMs: { anthropic: 5 * minute },
-        localSpend: () => database.db.select({
-          model: SessionProviderRequestTable.model,
-          cost: SessionProviderRequestTable.cost,
-          timeCreated: SessionProviderRequestTable.time_created,
-        }).from(SessionProviderRequestTable)
-          .where(gte(SessionProviderRequestTable.time_created, new Date().setHours(0, 0, 0, 0)))
-          .all(),
+        ...(providerUsage?.codex_app_server === undefined
+          ? {}
+          : {
+              accountUnknown: (refresh?: boolean) =>
+                cache
+                  .get({
+                    key: "openai:codex-app-server",
+                    ttlMs: minute,
+                    refresh,
+                    load: Effect.tryPromise(() =>
+                      CodexUsage.loadAppServer({
+                        providerID: Provider.ID.make("openai"),
+                        label: "Codex",
+                        updatedAt: Date.now(),
+                        client: CodexUsage.connectAppServer(providerUsage.codex_app_server!),
+                      }),
+                    ).pipe(
+                      Effect.map(
+                        (snapshot) => new ProviderUsage.Snapshot({ ...snapshot, profile: "Codex app-server" }),
+                      ),
+                    ),
+                  })
+                  .pipe(
+                    Effect.map((snapshot) => [snapshot]),
+                    Effect.catch(() => Effect.succeed([])),
+                  ),
+            }),
+        localSpend: () =>
+          database.db
+            .select({
+              model: SessionProviderRequestTable.model,
+              cost: SessionProviderRequestTable.cost,
+              timeCreated: SessionProviderRequestTable.time_created,
+            })
+            .from(SessionProviderRequestTable)
+            .where(gte(SessionProviderRequestTable.time_created, new Date().setHours(0, 0, 0, 0)))
+            .all(),
       }),
     )
   }),
 )
 
-export const node = makeLocationNode({ service: Service, layer, deps: [Catalog.node, Config.node, Credential.node, Database.node, Global.node, httpClient] })
+export const node = makeLocationNode({
+  service: Service,
+  layer,
+  deps: [Catalog.node, Config.node, Credential.node, Database.node, Global.node, httpClient],
+})
 
 const claudeOAuth = (
   http: HttpClient.HttpClient,
@@ -300,8 +387,12 @@ const claudeOAuth = (
   input: AdapterInput,
 ) =>
   Effect.gen(function* () {
-    if (input.credential.value.type !== "oauth" || input.credential.value.metadata?.authKind !== "claude-code" ||
-      input.credential.value.metadata.managed !== true || typeof input.credential.value.metadata.source !== "string")
+    if (
+      input.credential.value.type !== "oauth" ||
+      input.credential.value.metadata?.authKind !== "claude-code" ||
+      input.credential.value.metadata.managed !== true ||
+      typeof input.credential.value.metadata.source !== "string"
+    )
       return new ProviderUsage.Snapshot({
         providerID: input.providerID,
         label: "Claude",
@@ -345,24 +436,35 @@ export const openRouter = (http: HttpClient.HttpClient, input: AdapterInput) =>
     const key = yield* jsonResponse(http, "https://openrouter.ai/api/v1/key", input.credential.value.key)
     if (key.status !== 401 && key.status !== 403 && (key.status < 200 || key.status >= 300))
       return yield* new RequestError({ status: key.status })
-    const snapshot = key.status === 401 || key.status === 403
-      ? new ProviderUsage.Snapshot({
-          providerID: input.providerID, label: input.label, status: "available", source: "provider_api",
-          stability: "stable", updatedAt: input.updatedAt, windows: [],
-        })
-      : OpenRouterUsage.normalizeKey({
-          providerID: input.providerID, label: input.label, updatedAt: input.updatedAt, response: key.body,
-        })
-    const credits = yield* jsonResponse(http, "https://openrouter.ai/api/v1/credits", input.credential.value.key)
-      .pipe(Effect.option)
+    const snapshot =
+      key.status === 401 || key.status === 403
+        ? new ProviderUsage.Snapshot({
+            providerID: input.providerID,
+            label: input.label,
+            status: "available",
+            source: "provider_api",
+            stability: "stable",
+            updatedAt: input.updatedAt,
+            windows: [],
+          })
+        : OpenRouterUsage.normalizeKey({
+            providerID: input.providerID,
+            label: input.label,
+            updatedAt: input.updatedAt,
+            response: key.body,
+          })
+    const credits = yield* jsonResponse(http, "https://openrouter.ai/api/v1/credits", input.credential.value.key).pipe(
+      Effect.option,
+    )
     if (credits._tag === "None" || credits.value.status < 200 || credits.value.status >= 300) {
       if (key.status === 401 || key.status === 403) return yield* new RequestError({ status: key.status })
       return snapshot
     }
     if (key.status === 401 || key.status === 403)
       return yield* Effect.try(() => OpenRouterUsage.mergeCredits(snapshot, credits.value.body))
-    return yield* Effect.try(() => OpenRouterUsage.mergeCredits(snapshot, credits.value.body))
-      .pipe(Effect.orElseSucceed(() => snapshot))
+    return yield* Effect.try(() => OpenRouterUsage.mergeCredits(snapshot, credits.value.body)).pipe(
+      Effect.orElseSucceed(() => snapshot),
+    )
   })
 
 export const grok = (http: HttpClient.HttpClient, input: AdapterInput) =>
@@ -370,8 +472,13 @@ export const grok = (http: HttpClient.HttpClient, input: AdapterInput) =>
     const credential = input.credential.value
     if (credential.type !== "oauth" || !["browser", "device"].includes(credential.methodID))
       return new ProviderUsage.Snapshot({
-        providerID: input.providerID, label: "Grok", status: "unsupported",
-        source: "provider_internal_api", stability: "best_effort", updatedAt: input.updatedAt, windows: [],
+        providerID: input.providerID,
+        label: "Grok",
+        status: "unsupported",
+        source: "provider_internal_api",
+        stability: "best_effort",
+        updatedAt: input.updatedAt,
+        windows: [],
         message: "Grok Build usage requires a connected xAI subscription account",
       })
     const response = yield* json(http, "https://cli-chat-proxy.grok.com/v1/billing?format=credits", credential.access)
@@ -380,19 +487,30 @@ export const grok = (http: HttpClient.HttpClient, input: AdapterInput) =>
 
 export const zai = (http: HttpClient.HttpClient, input: AdapterInput) =>
   Effect.gen(function* () {
-    if (input.credential.value.type !== "key")
-      return yield* Effect.fail(new Error("Z.ai usage requires an API key"))
+    if (input.credential.value.type !== "key") return yield* Effect.fail(new Error("Z.ai usage requires an API key"))
     const key = input.credential.value.key
     const quota = yield* json(http, "https://api.z.ai/api/monitor/usage/quota/limit", key)
-    if (record(quota) && quota.success === false && typeof quota.msg === "string" && quota.msg.toLowerCase().includes("coding plan"))
+    if (
+      record(quota) &&
+      quota.success === false &&
+      typeof quota.msg === "string" &&
+      quota.msg.toLowerCase().includes("coding plan")
+    )
       return new ProviderUsage.Snapshot({
-        providerID: input.providerID, label: "Z.ai", status: "unsupported",
-        source: "provider_internal_api", stability: "best_effort", updatedAt: input.updatedAt,
-        windows: [], message: "No active GLM Coding Plan",
+        providerID: input.providerID,
+        label: "Z.ai",
+        status: "unsupported",
+        source: "provider_internal_api",
+        stability: "best_effort",
+        updatedAt: input.updatedAt,
+        windows: [],
+        message: "No active GLM Coding Plan",
       })
     const plan = yield* jsonResponse(http, "https://api.z.ai/api/biz/subscription/list", key).pipe(Effect.option)
     return ZAIUsage.normalize({
-      ...input, label: "Z.ai", quota,
+      ...input,
+      label: "Z.ai",
+      quota,
       ...(plan._tag === "Some" && plan.value.status >= 200 && plan.value.status < 300
         ? { subscription: plan.value.body }
         : {}),
@@ -407,14 +525,18 @@ export const cursor = (http: HttpClient.HttpClient, input: AdapterInput) =>
     const token = yield* Effect.tryPromise({
       try: async () => {
         const { resolveBearerToken } = await import("./cursor/provider/auth")
-        return resolveBearerToken(credential.type === "key" ? { apiKey: credential.key } : { accessToken: credential.access })
+        return resolveBearerToken(
+          credential.type === "key" ? { apiKey: credential.key } : { accessToken: credential.access },
+        )
       },
       catch: () => new RequestError({}),
     })
     const usage = yield* cursorRpc(http, "GetCurrentPeriodUsage", token)
     const plan = yield* cursorRpc(http, "GetPlanInfo", token).pipe(Effect.option)
     return CursorUsage.normalize({
-      ...input, label: "Cursor", usage,
+      ...input,
+      label: "Cursor",
+      usage,
       ...(plan._tag === "Some" ? { plan: plan.value } : {}),
     })
   })
@@ -443,11 +565,21 @@ export const goUsage = (http: HttpClient.HttpClient, input: AdapterInput) =>
     if (input.credential.value.type !== "key")
       return yield* Effect.fail(new Error("OpenCode Go usage requires an API key"))
     const response = yield* jsonResponse(http, "https://opencode.ai/zen/go/v1/usage", input.credential.value.key)
-    if (response.status === 403 && record(response.body) && record(response.body.error) && response.body.error.type === "EntitlementError")
+    if (
+      response.status === 403 &&
+      record(response.body) &&
+      record(response.body.error) &&
+      response.body.error.type === "EntitlementError"
+    )
       return new ProviderUsage.Snapshot({
-        providerID: input.providerID, label: "OpenCode Go", status: "unsupported",
-        source: "provider_api", stability: "stable", updatedAt: input.updatedAt,
-        windows: [], message: "No OpenCode Go subscription on this key",
+        providerID: input.providerID,
+        label: "OpenCode Go",
+        status: "unsupported",
+        source: "provider_api",
+        stability: "stable",
+        updatedAt: input.updatedAt,
+        windows: [],
+        message: "No OpenCode Go subscription on this key",
       })
     if (response.status < 200 || response.status >= 300) return yield* new RequestError({ status: response.status })
     return GoUsage.normalize({ ...input, label: "OpenCode Go", response: response.body })
@@ -456,6 +588,7 @@ export const goUsage = (http: HttpClient.HttpClient, input: AdapterInput) =>
 const githubCopilot = (http: HttpClient.HttpClient, input: AdapterInput) =>
   Effect.gen(function* () {
     const credential = input.credential.value
+    const accountKey = JSON.stringify([input.providerID, input.credential.id, input.credential.accountGeneration])
     if (credential.type !== "oauth")
       return yield* Effect.fail(new Error("GitHub Copilot usage requires an OAuth credential"))
     const enterpriseUrl =
@@ -477,7 +610,7 @@ const githubCopilot = (http: HttpClient.HttpClient, input: AdapterInput) =>
           providerID: input.providerID,
           label: input.label,
           updatedAt: input.updatedAt,
-          matchedOrg: copilotOrgLogins.get(input.providerID),
+          matchedOrg: copilotOrgLogins.get(accountKey),
           request: (path) => Effect.runPromise(copilotJson(http, "https://api.github.com", credential.refresh, path)),
         }),
       catch: (cause) =>
@@ -488,8 +621,8 @@ const githubCopilot = (http: HttpClient.HttpClient, input: AdapterInput) =>
             })
           : new Error("GitHub Copilot usage refresh failed"),
     })
-    if (result.matchedOrg === undefined) copilotOrgLogins.delete(input.providerID)
-    else copilotOrgLogins.set(input.providerID, result.matchedOrg)
+    if (result.matchedOrg === undefined) copilotOrgLogins.delete(accountKey)
+    else copilotOrgLogins.set(accountKey, result.matchedOrg)
     return result.snapshot
   })
 
@@ -519,23 +652,8 @@ const copilotJson = Effect.fnUntraced(function* (
   }
 })
 
-const openAI = (
-  http: HttpClient.HttpClient,
-  input: AdapterInput,
-  appServer: CodexUsage.AppServerCommand | undefined,
-) =>
+const openAI = (http: HttpClient.HttpClient, input: AdapterInput) =>
   Effect.gen(function* () {
-    if (appServer) {
-      const snapshot = yield* Effect.tryPromise(() =>
-        CodexUsage.loadAppServer({
-          providerID: input.providerID,
-          label: "Codex",
-          updatedAt: input.updatedAt,
-          client: CodexUsage.connectAppServer(appServer),
-        }),
-      ).pipe(Effect.catch(() => Effect.succeed(undefined)))
-      if (snapshot) return snapshot
-    }
     if (input.credential.value.type === "oauth" && CodexUsage.isChatGPTCredential(input.credential.value)) {
       const response = yield* json(
         http,
@@ -605,11 +723,7 @@ const meta = (http: HttpClient.HttpClient, input: AdapterInput) =>
       `https://api.llama.com/v1/organization/usage/completions?${query}`,
       input.credential.value.key,
     )
-    const costs = yield* pages(
-      http,
-      `https://api.llama.com/v1/organization/costs?${query}`,
-      input.credential.value.key,
-    )
+    const costs = yield* pages(http, `https://api.llama.com/v1/organization/costs?${query}`, input.credential.value.key)
     return MetaUsage.normalize({
       providerID: input.providerID,
       label: input.label,

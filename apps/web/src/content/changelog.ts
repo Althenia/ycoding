@@ -22,6 +22,22 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.10.0",
+    date: "2026-10-08",
+    title: "Concurrent profiles and a more capable workspace",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Run different named provider profiles concurrently in Sessions and subagents without changing the provider-wide default. Authentication, model discovery, effort choices, Daybreak access, quota observations, and provider state follow the selected profile. Choose a profile in the model picker or structured model configuration." },
+      { tag: "Added", text: "Open the web command palette from the header or with Ctrl+K/Cmd+K to search Session actions, configured commands, skills, navigation, and settings. The TUI palette also searches slash names and aliases and exposes more supported actions without requiring prompt focus." },
+      { tag: "Added", text: "Choose One Dark, One Dark Pro, and high-contrast appearance options across the web client and TUI. Web preferences persist locally and respect system contrast with the default system appearance." },
+      { tag: "Added", text: "Opt into question-option suggestions with decisions.questions and an explicit confidence or probability threshold. Suggestions respect permissions, bounded concurrency, and a shared timeout; normal mode keeps human choice authoritative, and agent confidence remains uncalibrated." },
+      { tag: "Changed", text: "Use full-screen agent, model, machine, and workspace selectors on phones. Search and scrollable choices follow the visible viewport, and autocomplete stays above the composer when keyboard space is reduced." },
+      { tag: "Fixed", text: "Reduce repeated backend work for remote Sessions by avoiding full-inventory scans for known Sessions and reusing captured-change summaries until durable events invalidate them. Authorization remains enforced; update the connected machine to apply the improvements." },
+      { tag: "Fixed", text: "Keep usable custom TUI themes when another theme file is malformed, and resolve standalone-theme text roles instead of displaying missing-token colors." },
+      { tag: "Fixed", text: "Report invalid decision requests, authentication failures, and malformed provider output distinctly, and reject empty native decision requests before sending them." },
+    ],
+  },
+  {
     version: "0.9.5",
     date: "2026-10-08",
     title: "Model-powered decisions and resilient remote access",

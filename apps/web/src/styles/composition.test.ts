@@ -197,6 +197,26 @@ describe("responsive contract", () => {
     expect(base(composer, ".mini-composer__autocomplete")).toMatchObject({ overflow: "auto", "min-block-size": "0" })
   })
 
+  test("fills the visual viewport with phone picker sheets whose header stays fixed while the list scrolls", async () => {
+    const composer = await readStylesheet("../remote/ui/composer.css")
+    const phone = (rule: { readonly header: string; readonly conditions: readonly string[] }, header: string) => rule.header === header && rule.conditions.includes("@media (max-width: 767px)")
+    const picker = declarationsWhere(composer, (rule) => phone(rule, ".mini-picker__surface.mini-picker__surface--sheet"))
+    expect(picker).toMatchObject({ "inset-inline": "0", "inset-block": "var(--composer-sheet-top,0px) auto", "block-size": "var(--composer-sheet-height,100dvh)", "max-block-size": "none", "border-radius": "0", overflow: "hidden" })
+    expect(picker["padding-block"]).toBe("env(safe-area-inset-top) env(safe-area-inset-bottom)")
+    expect(declarationsWhere(composer, (rule) => phone(rule, ".mini-picker__surface--sheet > :not(.mini-picker__list)"))).toMatchObject({ flex: "none" })
+    expect(declarationsWhere(composer, (rule) => phone(rule, ".mini-picker__surface--sheet .mini-picker__list"))).toMatchObject({ flex: "1 1 auto", "min-block-size": "0", "overscroll-behavior": "contain" })
+    const selection = base(composer, ".composer__selection-sheet")
+    expect(selection).toMatchObject({ position: "fixed", "inset-block-start": "var(--composer-sheet-top,0px)", "block-size": "var(--composer-sheet-height,100dvh)", overflow: "hidden", "border-radius": "0" })
+    expect(selection["max-block-size"]).toBeUndefined()
+    expect(base(composer, ".composer__selection-options")).toMatchObject({ flex: "1 1 auto", "min-block-size": "0", overflow: "auto" })
+  })
+
+  test("keeps keyboard focus off the sheet outline and never sizes a phone sheet with 100vh", async () => {
+    const composer = await readStylesheet("../remote/ui/composer.css")
+    expect(composer.rules.some((rule) => Object.values(rule.declarations).some((value) => /\d+vh\b/.test(value) && rule.header.includes("sheet")))).toBe(false)
+    expect(declarationsWhere(composer, (rule) => rule.header.includes(".mini-picker__surface--sheet:focus-visible"))).toMatchObject({ outline: "none" })
+  })
+
   test("keeps the header Team control visible in the compact header end group", async () => {
     const remote = await readStylesheet("remote.css")
     const hidden = remote.rules.filter((rule) => rule.header.includes(".app-header__end > :not("))

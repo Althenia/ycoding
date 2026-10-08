@@ -175,6 +175,120 @@ themes:
       sm: "0 1px 2px rgba(0, 0, 0, 0.4)"
       md: "0 10px 30px rgba(0, 0, 0, 0.45)"
       lg: "0 24px 56px rgba(0, 0, 0, 0.55)"
+  onedark-light:
+    colors:
+      green: "#50a14f"
+      green-strong: "#387137"
+      green-soft: "rgba(80, 161, 79, 0.12)"
+      primary-bg: "#387137"
+      primary-fg: "#ffffff"
+      yellow: "#c18401"
+      yellow-strong: "#916301"
+      yellow-soft: "rgba(193, 132, 1, 0.16)"
+      danger: "#ca1243"
+      danger-soft: "rgba(202, 18, 67, 0.1)"
+      focus: "#387137"
+      bg: "#fafafa"
+      surface: "#f5f5f6"
+      surface-sunken: "#f0f0f1"
+      surface-raised: "#ffffff"
+      text: "#202227"
+      text-muted: "#696a70"
+      text-subtle: "#6a6c72"
+      border: "#e5e5e6"
+      border-strong: "#7e7f84"
+  onedark-dark:
+    colors:
+      green: "#98c379"
+      green-strong: "#a2c986"
+      green-soft: "rgba(152, 195, 121, 0.16)"
+      primary-bg: "#a2c986"
+      primary-fg: "#282c34"
+      yellow: "#e5c07b"
+      yellow-strong: "#e5c07b"
+      yellow-soft: "rgba(229, 192, 123, 0.14)"
+      danger: "#e89299"
+      danger-soft: "rgba(224, 108, 117, 0.14)"
+      focus: "#a2c986"
+      bg: "#282c34"
+      surface: "#2c3139"
+      surface-sunken: "#22252c"
+      surface-raised: "#2f343d"
+      text: "#b6bdca"
+      text-muted: "#abb2bf"
+      text-subtle: "#9ba2ae"
+      border: "#3e4451"
+      border-strong: "#8e95a0"
+  onedark-pro-dark:
+    colors:
+      green: "#98c379"
+      green-strong: "#a2c986"
+      green-soft: "rgba(152, 195, 121, 0.16)"
+      primary-bg: "#a2c986"
+      primary-fg: "#282c34"
+      yellow: "#e5c07b"
+      yellow-strong: "#e5c07b"
+      yellow-soft: "rgba(229, 192, 123, 0.14)"
+      danger: "#e89299"
+      danger-soft: "rgba(224, 108, 117, 0.14)"
+      focus: "#a2c986"
+      bg: "#282c34"
+      surface: "#292e36"
+      surface-sunken: "#21252b"
+      surface-raised: "#2a2f37"
+      text: "#d7dae0"
+      text-muted: "#abb2bf"
+      text-subtle: "#9ba2ae"
+      border: "#3e4452"
+      border-strong: "#8e95a0"
+  high-contrast-light:
+    colors:
+      green: "#00632f"
+      green-strong: "#004521"
+      green-soft: "rgba(0, 99, 47, 0.12)"
+      primary-bg: "#004521"
+      primary-fg: "#ffffff"
+      yellow: "#6e5000"
+      yellow-strong: "#533c00"
+      yellow-soft: "rgba(110, 80, 0, 0.16)"
+      danger: "#850000"
+      danger-soft: "rgba(133, 0, 0, 0.1)"
+      focus: "#004521"
+      bg: "#ffffff"
+      surface: "#fafafa"
+      surface-sunken: "#f5f5f5"
+      surface-raised: "#ffffff"
+      text: "#000000"
+      text-muted: "#404040"
+      text-subtle: "#424242"
+      border: "#767676"
+      border-strong: "#5c5c5c"
+      terminal-bg: "#f5f5f5"
+      terminal-fg: "#000000"
+      terminal-dim: "#404040"
+      terminal-accent: "#00632f"
+  high-contrast-dark:
+    colors:
+      green: "#5df0a6"
+      green-strong: "#6df2af"
+      green-soft: "rgba(93, 240, 166, 0.16)"
+      primary-bg: "#6df2af"
+      primary-fg: "#000000"
+      yellow: "#ffd24a"
+      yellow-strong: "#ffd24a"
+      yellow-soft: "rgba(255, 210, 74, 0.14)"
+      danger: "#ffa8a8"
+      danger-soft: "rgba(255, 138, 138, 0.14)"
+      focus: "#6df2af"
+      bg: "#000000"
+      surface: "#080808"
+      surface-sunken: "#000000"
+      surface-raised: "#0e0e0e"
+      text: "#ffffff"
+      text-muted: "#f2f2f2"
+      text-subtle: "#d5d5d5"
+      border: "#9a9a9a"
+      border-strong: "#bdbdbd"
 ---
 
 # YCoding web design rules
@@ -212,7 +326,7 @@ Inherited R1–R8 apply. These web-specific rules are approved binding statement
 | W15 | approved | Office MUST allocate height after visible shell notices, keep its controls and roster reachable, and fit the entire floor. Zoomed views MUST support drag, two-axis wheel/trackpad and focused arrow-key panning within floor bounds. Manual panning MUST suspend following without changing Session selection; browser zoom gestures MUST retain their ordinary behavior. | `verify/office.integration.test.ts`, `verify/office-engine.integration.test.ts` |
 | W16 | approved | Setting a goal MUST NOT disable or block the composer: submitting releases the draft at once, one goal request per Session is in flight, and a second `/goal` is refused with its text kept. The composer status row MUST show one Setting goal indicator — a dot trail with words (the compact Setting… below 480px) in the row, the Goal control marked busy and named Setting goal, and an always-mounted polite live region announcing it — that adds no row and leaves the box of the text field, pickers, and action buttons unchanged. Reduced motion MUST remove its entrance and dot animation. A failed or uncertain request MUST return `/goal <text>` to an empty draft with its outcome toast. | `verify/composer-controls.integration.test.ts`, `test/remote-session.test.ts` |
 | W17 | approved | The monthly provider distribution MUST expose one accessible legend list whose entries each show the provider, its share, and its exact value in the selected Spend or Tokens metric; it MUST NOT add a second visible table or a View table control. The exact total and its metric unit MUST flow as normal text directly below the donut inside its chart column, never inside the fixed donut hole, and MUST NOT be abbreviated or shrunk to fit; the total, provider names, and amounts MUST stay inside their card at phone, tablet, and desktop widths, wrapping within the card rather than overflowing it. Unreported values MUST stay unreported (never zero), each metric MUST keep its own unit, and switching Spend and Tokens MUST keep the selection and its unit. It uses the existing chart, text, and border tokens with no palette change; the daily chart keeps its own table. While the monthly distribution loads below 1280px, where its body is stacked, its placeholder MUST reserve 400px for the chart, total, and legend; from 1280px, where the body is side by side, it keeps the 280px reserve, and no other chart or the shared loading placeholder changes. | `verify/usage-page.integration.test.ts`, `src/remote/ui/usage-model.test.ts` |
-| W18 | approved | Composer suggestions MUST use one anatomy at every width: a panel anchored above the composer field with a visible header titled Suggestions and a named Close control, over one scrolling listbox of options. The panel MUST be bounded by the visual viewport: never taller than the space between the field and the top of the workspace scroll region or visual viewport, 40% of it, or 360px, and never shorter than its 54px header, so Close stays reachable, while an on-screen keyboard cannot leave the panel covering the app or the field. Close and Escape MUST dismiss it and return focus to the field; an outside press MUST dismiss it without taking focus, so the pressed control keeps its focus and its action. Every dismissal MUST leave the draft unchanged, and a dismissed token MUST NOT reopen until its text changes or the cursor moves to another token. A failed file search MUST show the same panel with its error and no options, and MUST dismiss the same way. Choices, file search, and selection MUST behave as before. | `verify/composer-controls.integration.test.ts`, `src/remote/ui/composer-logic.test.ts` |
+| W18 | approved | Composer suggestions MUST use one anatomy at every width: a panel anchored above the composer field with a visible header titled Suggestions and a named Close control, over one scrolling listbox of options. The panel MUST be bounded by the visual viewport: never taller than the space between the field and the top of the workspace scroll region or visual viewport, and below 768px never taller than 75% of the visual viewport height (above 768px, 40% of it or 360px), and never shorter than its 54px header, so Close stays reachable, while an on-screen keyboard cannot leave the panel covering the app or the field. The panel MUST be measured again when the visual viewport resizes or scrolls and when the draft changes, and Arrow-key and typing changes MUST keep the active option visible inside the list. Close and Escape MUST dismiss it and return focus to the field; an outside press MUST dismiss it without taking focus, so the pressed control keeps its focus and its action. Every dismissal MUST leave the draft unchanged, and a dismissed token MUST NOT reopen until its text changes or the cursor moves to another token. A failed file search MUST show the same panel with its error and no options, and MUST dismiss the same way. Choices, file search, and selection MUST behave as before. | `verify/composer-controls.integration.test.ts`, `src/remote/ui/composer-logic.test.ts` |
 | W19 | approved | Jump to top and Jump to latest MUST float as one anchored pill at the conversation column's end edge at every width, reserving no layout row. The pill MUST sit above the Todo panel, composer, and pending decisions without covering them, MUST leave the last transcript content reachable by scroll clearance, MUST appear only while a jump is possible, and its targets MUST be at least 36px, 44px on coarse pointers. Follow and jump behavior MUST be unchanged; reduced motion MUST remove its transition. The Sessions screen MUST show the same pill with only Jump to top, at the Sessions content's end edge above the bottom navigation, while that screen is scrolled from its top; the pill MUST NOT show a Jump to latest there, and a Conversation pill MUST NOT show while another screen is active. | `verify/transcript.integration.test.ts`, `verify/remote-navigation.integration.test.ts`, `src/styles/composition.test.ts` |
 | W20 | approved | The Edited files card MUST be one collapsible summary at every width: a single header control with icon, title, totals, and chevron, named with its full counts, collapsed by default in one row. Expanding MUST list every file with its counts and its full path as the accessible name, each file expanding to its own diffs, side by side from 768px and unified below. Each prompt-to-next-prompt unit with completed edits MUST have its own card after that unit's last assistant message, with one row per path whose counts sum only that unit's recorded patches and its exactly claimed child stretches; totals MUST NOT carry into a later unit's card, and a card MUST NOT be replaced by a ledger or recovery summary. While the Session runs, only the latest unit's card MUST be hidden. Counts, provenance, and empty or unavailable states MUST match the diffs shown. | `verify/file-change-card.integration.test.ts` |
 | W21 | approved | Team MUST be one compact icon control with its active count, named Open Team, beside Notifications in the header at every width. It opens the same Team panel or sheet and returns focus to itself. No Team bar or row exists; the workspace toolbar row appears only where it holds the Conversation and Office switch. | `verify/team.integration.test.ts`, `verify/modal-close.integration.test.ts`, `verify/remote-shell-layout.integration.test.ts` |
@@ -235,10 +349,18 @@ Inherited R1–R8 apply. These web-specific rules are approved binding statement
 | W38 | approved | Initial Sessions inventory reads MUST show named loading content in both Running and recent and the desktop Workspaces rail, NEVER an unexplained empty reserved region after the 140ms reveal. Reuse session-shaped placeholders and existing card/list tokens; expose one status per region and mark decorative duplicates hidden. Running and recent skeletons MUST follow their cards' typography- and spacing-derived dimensions, border, radius, and surface treatment without changing shared session placeholders. A populated carousel MUST retain its 196px initial reserve through settlement; background refresh MUST retain loaded cards and workspace controls without replacing them with skeletons. Empty settled inventory MUST show the existing truthful empty state. | `verify/conversation-reading.integration.test.ts`, `verify/running-sessions.integration.test.ts` |
 | W39 | approved | Settings MUST show a locally held, bounded latency report and an explicitly read, paged report of the selected machine's SQLite samples received within seven days. Both MUST contain only fixed remote operation names, outcome categories, request queue and send-to-settlement durations, and browser long-task durations when supported. The report MUST distinguish queued time from settlement time, state that settlement time includes relay, network, and backend work or a timeout/close, and never imply it measures DOM paint. It MUST omit payloads, identifiers, URLs, errors, and long-task attribution. Local Copy and Clear MUST use the owned `.button`, `.textarea`, and Settings section treatments, remain keyboard operable, and distinguish clearing this tab from persisted rows. Stored reads MUST show loading, empty, unavailable, unsupported, and failure states without claiming unknown values are zero; an earlier machine's result MUST never paint after a switch. | `src/remote/transport.test.ts`, `test/remote-session.test.ts`, `verify/remote-shell-layout.integration.test.ts` |
 | W40 | approved | The existing Choose model list MUST put recent valid model choices first, then models from the currently selected provider, followed by remaining provider groups in stable order. Recent choices MUST identify their provider when displayed outside a provider group, omit models unavailable in the current catalog, and never duplicate a model in a provider group. Search MUST retain all matching models and keyboard selection; changing a Session or selected machine MUST NOT silently change its model to match display order. Reuse the existing picker heading, group, option, focus, and selected-row treatments without adding a new token or dialog. | `src/remote/ui/composer-logic.test.ts`, `verify/model-replay.integration.test.ts` |
+| W42 | approved | Color schemes MUST layer on the light, dark, and system preference as a second stored choice (`ycoding.theme-scheme`): Default, One Dark, One Dark Pro, and High contrast. A scheme is a base16 palette per mode mapped by one function to the semantic color tokens, so adding a scheme adds a palette object and no CSS; `data-theme` MUST remain the resolved light or dark mode and `data-scheme` the painted scheme. One Dark Pro has no light palette and keeps the default light theme. Under System with the Default scheme, a system request for more contrast (`prefers-contrast: more`) MUST paint High contrast; an explicit scheme is never overridden. High contrast MUST hold body text, secondary and tertiary ink, accent, warning, and danger ink to 7:1 on every page surface and soft fill, and its primary label, boundaries, and focus to 7:1, 4.5:1, and 4.5:1. Every other scheme MUST meet the Default theme floors. The stored scheme MUST paint with the first frame from a style tag generated from the palettes, and the theme-color tags MUST follow the painted scheme. | `src/theme/schemes.test.ts`, `src/theme/theme.test.ts`, `src/styles/contrast.test.ts`, `src/styles/design-md.test.ts` |
+| W41 | approved | Below 768px the agent picker, the model control, and the Agent and model sheet MUST open as full-screen modal sheets: a fixed header with the title and a named Close control, the search field when the picker is searchable, and one scrolling list, with no scrim showing, no corner radius, and no `100vh` height. Each sheet MUST be sized to the visual viewport (`offsetTop` and `height`, `100dvh` when unreported) and follow it as it resizes or scrolls, so the search field and list stay above an on-screen keyboard and the header stays put while only the list scrolls. A sheet MUST be `aria-modal`, move focus inside on open (the search field, else the list or first control), keep Tab and Shift+Tab inside, close on Escape and Close, and return focus to its trigger. Escape MUST close only the innermost sheet. A breakpoint change MUST close an open or closing sheet, clear its search query, and leave the next open clean. Exit motion MUST reuse the existing sheet exit and drop under reduced motion. | `verify/composer-controls.integration.test.ts`, `src/styles/composition.test.ts`, `src/remote/ui/composer-logic.test.ts` |
+| W43 | approved | The remote workspace MUST offer one command palette through its named header control, Ctrl+K or Cmd+K, and Ctrl+P outside text fields; Cmd+P MUST retain browser printing. Place its header control before the adjacent Team and Notifications pair required by W21. Show supported actions for the current view and connection state, grouped under Session, Commands, Skills, Navigation, Settings, and Account, with a relevance-ranked list during search. Search MUST match slash names and skill IDs. Keep focus in the modal; arrows, Home, End, and Enter navigate and select, and Escape or Close returns focus to the opener. Argument-taking actions MUST preserve the existing draft and focus the composer. Below 768px and on short coarse-pointer screens, size the sheet to the visual viewport and keep option targets at least `--yc-hit-min`; use existing overlay, input, list, focus, and motion tokens. | `verify/command-palette.integration.test.ts`, `src/remote/ui/command-palette-model.test.ts`, `src/styles/command-palette.test.ts` |
+| W44 | approved | Shared dropdown selectors MUST use full-screen sheets below 768px: size the surface to the visual viewport, keep its heading and confirmation controls reachable, and scroll only the option list. Preserve staged selection, explicit Confirm Selection, cancellation without changing the value, keyboard navigation, and focus return. Desktop selectors MUST retain anchored popovers. Reuse semantic surface, option, focus, and safe-area tokens; do not change unrelated modal dialogs. | `verify/custom-select-fullscreen.integration.test.ts` |
+| W45 | approved | The model control MUST expose eligible named provider profiles using the existing picker, option, focus, and full-screen mobile sheet treatments. Show the pending or selected profile as text; offer a distinct Use provider default action to clear explicit selection. Profile-only changes MUST remain pending until confirmed by the Session operation, preserve drafts on failure, and never activate a provider-wide profile. Unavailable saved profiles MUST remain visible with an actionable warning and block sending instead of silently changing accounts. Model, effort, and fast-mode changes within a provider MUST retain an offered profile; provider changes MUST NOT transfer a profile name. Named-profile effort choices MUST use that profile's advertised variant IDs, never another account's list. Keep account-exclusive models selectable with an eligible profile and block an ineligible provider-default selection. | `src/remote/ui/composer-logic.test.ts`, `verify/model-replay.integration.test.ts` |
 
 ## Colors
 
 Green is the single web accent. `--yc-green-strong` is foreground on page, raised, and soft-green surfaces; primary buttons instead use their dedicated pair because white on the bright dark green is only 1.65:1. `--yc-text-subtle` holds AA on sunken surfaces; `--yc-border-strong` holds 3:1 for active boundaries. Terminal plate inks stay constant across themes; semantic page surfaces and shadows change. Sources: `src/styles/tokens.css`, `src/styles/contrast.test.ts`.
+
+
+Color schemes (W42) replace only the semantic color tokens, and only for the mode they define. One Dark uses the base16 `onedark` and `one-light` palettes; One Dark Pro uses the binaryify/OneDark-Pro dark palette (editor `#282c34`, sidebar `#21252b`, comment `#7f848e`) and has no light mode; High contrast uses black and white pages with saturated accents. Palette slots map as follows: `base00` page, `base01` raised or sunken surface, `base02` border, `base05` secondary ink (with `--yc-text-muted` and `--yc-border-strong` mixed toward the page in light modes so each stays between 3:1 against the terminal plate and 4.5:1 against the page), `base06` primary ink, `base08` danger, `base0A` warning, and `base0B` the green accent (darkened in light modes, lightened in dark modes, until accent text and the primary label reach their floors). The Default scheme keeps `tokens.css`; shadows, type, spacing, and the terminal plate stay as defined there except the High contrast light plate, which is light so scroll thumbs keep 3:1 against it. The `themes.<scheme>-<mode>` entries above list the resolved tokens (`src/styles/design-md.test.ts` compares them with the palettes in `src/theme/schemes.ts`; `src/styles/contrast.test.ts` holds every pair to its floor).
 
 In light mode, the new-session and conversation composer use `--yc-border-strong` for their outline and neutral icon/picker boundaries against white. Dark mode retains its existing raised-surface treatment. The install command remains a dark code block in both themes: its constant terminal ink and surface distinguish executable code from page prose. The public hero's ambient green gradient is dark-theme only (`src/styles/site.css`, `src/styles/base.css`, `src/remote/ui/composer.css`, W9).
 
@@ -300,10 +422,10 @@ The tokens/states below describe current selectors and owners, not a new compone
 | Switches: boolean choice | `src/styles/base.css` `.switch` | Pill radius, border and green checked track; checked/focus states. R8. |
 | Segmented controls: mutually exclusive view choice | `src/styles/remote.css` `.presentation-switch.filters`, `.appearance-segments .filters`, `.filters__option--active` | Surface/green roles and pill controls; selected and keyboard-focus states. R8. |
 | Chips, pills, status: compact state labels | `src/styles/base.css` `.chip`, `.tag`, `.status-dot`; `src/remote/ui/status-bar.css` `.session-status__slot`; `src/remote/view-model.ts` `sessionStateChips` | Green/yellow/danger soft fills, semantic text, pill radius; status also needs words. A Session whose only attention reason is a failed run shows a neutral Failed chip first and no attention dot, until it runs again. R8. |
-| Portalled popovers and panels: local choices/details | `src/remote/ui/status-bar.tsx`, `model-control.tsx`, `composer-picker.tsx`; `status-bar.css` `.session-status__popover`, `src/styles/base.css` `.panel` | Raised surface, border, XL radius, large shadow, overlay layer; enter/exit/inert, anchored to trigger with focus return. R4/W8. |
+| Portalled popovers and panels: local choices/details | `src/remote/ui/status-bar.tsx`, `model-control.tsx`, `composer-picker.tsx`; `status-bar.css` `.session-status__popover`, `src/styles/base.css` `.panel` | Raised surface, border, XL radius, large shadow, overlay layer; enter/exit/inert, anchored to trigger with focus return; full-screen visual-viewport sheet below 768px. R4/W8/W41. |
 | Fast-model toggle: switch to a model's paired fast variant | `src/remote/ui/model-control.tsx` `.model-control__fast[aria-pressed]`; `src/remote/ui/composer.css` | A bare `--yc-hit-min` bolt with no container disc. Off: outline bolt in `--yc-text-muted`. On: the bolt is filled and stroked in `--yc-green-strong`, so the state is readable from the glyph alone without a border or background. No paired fast model: `aria-disabled` at reduced opacity. Focus ring via `--yc-focus`. |
 | Reasoning effort slider: choose an offered effort by touch, pointer, or keyboard | `src/remote/ui/model-control.tsx` `[role="slider"]`; `src/remote/ui/composer.css` `.model-control__track`, `__fill`, `__sparkles`, `__thumb`, `__labels` | One fluid pill track of `--yc-hit-min` height on `--yc-surface-sunken`; only offered variants are stops, while a separately named Clear reasoning effort override action selects omission. The fill is the level's effort gradient and its width follows the pointer live while dragging, then snaps to the nearest stop on release. The thumb is a disk in the theme's lightest neutral (`--yc-bg` in light, `--yc-text` in dark) inset inside the track (never past its ends) with `--yc-shadow-md` and the level's effort color as its ring; it scales up slightly while dragging. Sparkles are points in that same lightest neutral that drift and twinkle inside the fill only; their density and brightness grow with the level and they are absent without an explicit effort. Omission uses `--yc-text-muted`; offered levels use their documented effort colors. Labels stay below in mono `--yc-size-2xs`. Motion uses `--yc-dur-base`/`--yc-ease-standard`; reduced motion removes drift, twinkle, and thumb transitions while keeping the fill, thumb, and sparkle positions. W8. |
-| Sheets and overlays: contained mobile or modal decisions | `src/styles/base.css` `.overlay`, `.overlay--sheet`, `.overlay__close`; `src/remote/ui/composer.css` `.composer__selection-sheet`; `src/ui/modal.tsx`; `src/remote/ui/team-view.tsx` `.team-view__heading`, `team-view.css` `.team-view__sheet` | Raised surface, scrim/overlay layers, large radius, safe-area and `--yc-space-4` Team body padding; one named owning-header title, active count, and close of at least `--yc-hit-min`, scrolling Team body with Load older in flow, Escape, focus return and trapped focus. W8/W11/W13. |
+| Sheets and overlays: contained mobile or modal decisions | `src/styles/base.css` `.overlay`, `.overlay--sheet`, `.overlay__close`; `src/remote/ui/composer.css` `.composer__selection-sheet`, `.mini-picker__surface--sheet`; `src/ui/modal.tsx`; `src/remote/ui/team-view.tsx` `.team-view__heading`, `team-view.css` `.team-view__sheet` | Raised surface, scrim/overlay layers, large radius (composer picker sheets are full-screen with no radius, sized to the visual viewport), safe-area and `--yc-space-4` Team body padding; one named owning-header title, active count, and close of at least `--yc-hit-min`, scrolling Team body with Load older in flow, Escape, focus return and trapped focus. W8/W11/W13. |
 | Image lightbox: full-size inspection of a transcript image | `src/remote/ui/image.tsx`, `image.css` `.transcript-lightbox`, `.overlay__head`, `.overlay__body` | Shared overlay anatomy with the single owning header and close. On phones the sheet spans the full dynamic viewport height with the header in its own grid row and the body as the only scroller; the image fits the body's own height (never viewport units or sticky positioning), so a tall image stays below the header and inside the viewport in every engine. W13. |
 | Settings: responsive Office, notification, and latency diagnostics | `src/remote/ui/shell.tsx` `SettingsPage`; `src/remote/ui/settings.tsx` `.notification-table`, `LatencySettings`; `src/styles/remote.css` `.notification-table`; `src/styles/base.css` `.textarea`, `.button` | Office choices mount only when the same shell layout permits Office. Phone notification headers remain unbroken; switches align with their channel columns, and the shared `.table-scroll` contains overflow. The Machine section's Keep machine awake row is one `.defs__row` with the `.switch`, a text state label, a polite status line, and the idle-sleep caveat (W27). Push to this device holds only the toggle/Re-enable control and one polite `.field__hint` status, with no Send test alert UI. Test pushes are operator-only through the admin Bearer API; browser UI MUST NOT handle admin keys. The in-tab latency report reuses a selectable `.textarea` with Copy and Clear; a distinct Read saved report and Load older control display bounded machine-local rows with explicit state, never conflating Clear with stored deletion (W39). W14/W27. |
 | App installation: Settings mode and manual steps | `src/remote/ui/settings.tsx` `.settings__section`, `.defs__row`, `.defs__key`, `.defs__value`; `src/pwa/install-button.tsx`; shared `.button--secondary`, `src/ui/modal.tsx` `.overlay`, `.overlay__body`; `src/styles/docs.css` `.steps`, `.steps__item`, `.steps__text`; `src/styles/remote.css` `.overlay--pwa-install .overlay__body` | Existing Settings spacing and typography, browser/installed text status, conditional action, numbered steps and token padding, responsive modal/sheet and trapped focus. W9. |
@@ -322,15 +444,29 @@ The tokens/states below describe current selectors and owners, not a new compone
 | Running and recent carousel: cross-workspace roots | `src/remote/ui/running-sessions.tsx`, `running-sessions.css` `.running-sessions` | Card border/radius, green running dot, snap rail/dots; loading/empty/overflow/selection. Idle cards show terminal `time.active` as Last active or Last active not reported when absent. W5. |
 | Transcript bubbles: authored messages | `src/remote/ui/transcript.css` `.transcript-message--user`, `--assistant`, `__bubble`, `__parts` | Raised background, strong border, radius, text/metadata roles; streaming/read/failed/paged states. Assistant parts render inside one `display: contents` container so the agent heading and later parts can appear without detaching an already-mounted part (loaded images stay mounted). W6. |
 | Windowed transcript and Session lists: long scrolling collections | `src/remote/ui/virtual-rows.ts` `createRowVirtualizer`; `src/remote/ui/transcript-nav.tsx` `.transcript`, `.transcript-navigation__item`; `src/remote/ui/shell.tsx` `SessionRailList`, `SessionTableRows`; `src/styles/remote.css` `.session-list`, `.session-list__row`, `.sessions-table__body`, `.workspace__scroll`, `.workspace__rail` | Rows are absolutely positioned from measured offsets inside a list whose height is the measured total, using the existing row classes and tokens with no added chrome; the list gap comes from the list's own `row-gap`; scrollers set `overflow-anchor: none`; settled rows drop the entrance animation; the row holding focus stays mounted. W32. |
+| Command palette: contextual action search | `src/remote/ui/command-palette.tsx`, `command-palette-model.ts`, `command-palette.css`; `.app-header__palette` in `shell.tsx` | Shared modal, input, raised surface, list selection, focus, and motion tokens; grouped or searched actions, keyboard/touch selection, full visual-viewport phone sheet. W43. |
 | File-change card: captured edit/patch diffs grouped by path | `src/remote/ui/file-change-card.tsx`, `file-change-card.css` `.file-change-card`, `__diff` | Raised card filling the conversation column, green/danger counts matching every expanded diff, one card per prompt unit after that unit's last assistant message, sunken headings; one collapsed summary row at every width that expands to every file, each file expanding to split (768px and wider) or unified (narrower) diffs, unavailable patch state. W20. `verify/file-change-card.integration.test.ts`. |
 | Usage provider distribution: month-to-date share by provider | `src/remote/ui/usage.tsx`, `usage.css` `.usage-distribution`, `.usage-donut`, `.usage-provider` | One donut with a Spend/Tokens metric switch and one legend list of provider, share, and exact value; no duplicate table or View table control. The exact total and unit flow in normal text below the donut in its chart column, outside the fixed hole, at the existing `--yc-size-xl` total and `--yc-size-2xs` unit sizes with the 200px chart width unchanged; total and legend text stay inside the card at every width, unknown values render as unreported, and existing tokens supply every color. While loading below 1280px (stacked body) the monthly placeholder reserves 400px for chart, total, and legend, and 280px from 1280px; other charts and the shared placeholder are unchanged. W17. |
-| Composer suggestions: command, file, agent, and skill choices | `src/remote/ui/composer.tsx`, `composer.css` `.mini-composer__autocomplete`, `composer-logic.ts` `autocompleteBound`, `suggestionTrigger` | Raised XL-radius panel with a Suggestions header, Close, and a scrolling listbox anchored above the field; height bounded by the visual viewport, active/hover soft green, 44px option rows on coarse pointers, dismissal that survives an unchanged token; Close and Escape return focus to the field and an outside press leaves focus with the pressed control. W18. |
+| Composer suggestions: command, file, agent, and skill choices | `src/remote/ui/composer.tsx`, `composer.css` `.mini-composer__autocomplete`, `composer-logic.ts` `autocompleteBound`, `suggestionTrigger` | Raised XL-radius panel with a Suggestions header, Close, and a scrolling listbox anchored above the field; height bounded by the visual viewport (up to 75% of it below 768px), active/hover soft green, 44px option rows on coarse pointers, dismissal that survives an unchanged token; Close and Escape return focus to the field and an outside press leaves focus with the pressed control. W18. |
 | Conversation jump controls: return to top or latest | `src/remote/ui/transcript-nav.tsx`, `transcript-nav.css` `.transcript-navigation__controls`; `src/styles/remote.css` `.conversation-jump-slot` | Raised pill with strong border and medium shadow, floating at the column's end edge above Todo and composer with no layout row (on Sessions, the same pill with only Jump to top at the content's end edge); muted ghost arrow buttons, green hover, focus ring, 36px (44px coarse) targets, scroll clearance under the last content. W19. Entry positions for Sessions (top) and Conversation (latest): W22. |
 | Team trigger: open the Team panel or sheet | `src/remote/ui/shell.tsx` `RemoteHeader` `.app-header__team`; `src/ui/icon.tsx` `team` | Ghost icon control with the active count in the header end group, green expanded state, 44px on coarse pointers, `aria-label` Open Team and the count as its description. W21. |
 | Focus ring: keyboard location | `src/styles/base.css` `:focus-visible`, field focus, remote controls | Focus color/halo and 2px outline/offset; visible on each interactive state. R8. |
 | Office floor and navigation | `src/remote/office/OfficeCanvas.tsx`, `office.css`, `OfficeScene.ts` | Flexible remaining-height canvas, fixed illustration palette, existing camera icons and 44px targets, muted navigation hint, inset focus outline, wheel/drag/arrow panning, compact name plates and an independently scrollable DOM roster. Initial loading (a selected Session with no team read yet included) is named and visible, its notice appears 140 ms after renderer readiness while the placeholder geometry is reserved at once, existing members appear in place, background snapshots with unfinished inputs never retarget seated members, idle leisure is decorative with the scene-drawn ball and reused poses, and reduced motion is static. W15/W23. |
 | Icons: action/status symbols | `src/ui/icon.tsx` `Icon` | `currentColor`, rounded stroke, 24-unit viewBox; decorative hidden, icon-only control named. R8. |
 | Scrollbar: owned fine-pointer scroll affordance | `src/styles/base.css` `::-webkit-scrollbar*` and the Firefox standard-property fallback; `src/styles/remote.css` gutter and Conversation grid rules; `.running-sessions__list` and `.transcript-navigation__ticks` hide their rails with alternate pagination/navigation | `--yc-scrollbar-size` 12px; transparent track/corner, no arrows, 4px pill at rest (`--yc-border-strong`) inset by `--yc-space-1`, 8px hover (`--yc-text-muted`) and drag (`--yc-green-strong`), minimum length `--yc-space-8`, every state ≥3:1 on page, surface, raised, sunken, and terminal backgrounds. Chromium and WebKit use the pseudo-elements; Firefox gets thin scrollbars in the rest color on a transparent track because a non-auto `scrollbar-color` would switch the pseudo-elements off elsewhere; coarse pointers keep transient native indicators and forced colors keep system scrollbars. W7. |
+| Color scheme picker: named palette on top of light, dark, and system | `src/theme/schemes.ts`, `src/theme/theme-store.tsx`, `src/remote/ui/settings.tsx` `AppearanceSettings`, `src/styles/remote.css` `.appearance-segments`, `.scheme-select`; `src/ui/custom-select.tsx` | A Color scheme row under Theme using the shared custom select (`.scheme-select`, at most 240px wide): Default, One Dark, One Dark Pro, and High contrast options, the shared trigger and listbox or sheet behavior and 44px coarse targets. The Theme radio group keeps its three options. The header toggle keeps cycling light, dark, and system and never changes the scheme. Scheme rules sit above the default token blocks and set only color tokens. R8/W42. |
+
+### Command palette
+
+`src/remote/ui/command-palette.tsx` renders the header trigger `.app-header__palette` and the modal; `command-palette-model.ts` decides which actions exist and ranks them, so availability and search are tested without a browser. The modal reuses `Modal` (`.overlay`, `.overlay__head`, `.overlay__close`) with the `overlay--command-palette` modifier from `command-palette.css`.
+
+| Part | Selectors | Tokens, states, and rule |
+| --- | --- | --- |
+| Search field | `.command-palette__search`, `.command-palette__input` | Transparent field under the overlay header, `--yc-border` rule, `--yc-focus` rule while focused, `--yc-size-sm` text, `--yc-text-subtle` placeholder, a search icon. Focus stays in the field; the active option is exposed through `aria-activedescendant`. W43. |
+| Group heading | `.command-palette__heading` | `--yc-size-2xs` uppercase, `--yc-weight-semibold`, `--yc-text-muted`. Absent while a query ranks results. W43. |
+| Option row | `.command-palette__option`, `__title`, `__description`, `__group-tag` | At least `--yc-hit-min` tall, semibold title, muted `--yc-size-xs` description on the same line from 768px and on its own line on the phone layout, a muted group tag only in ranked results. The active row uses `--yc-green-soft` with a 3px `--yc-green-strong` start edge, so the active state is not carried by color alone. W43. |
+| Dialog and sheet | `.overlay--command-palette .overlay__surface` | 640px by 520px at most from 768px; below 768px and on short coarse-pointer screens it spans `--command-palette-top` and `--command-palette-height` (the visual viewport, `100dvh` when unreported) with no radius, so the field and list stay above an on-screen keyboard. The list is the only scroller. W43. |
+| Empty and status | `.command-palette__empty`, `[role=status]` | Muted `No matching action.` text and a polite visually hidden count. W43. |
 
 ## Content
 
@@ -356,7 +492,7 @@ Inherit the brand floors. Primary normal-size button text needs 4.5:1; active bo
 
 ## Verification
 
-W1/W3: `bun test src/styles` from `apps/web`, including `design-md.test.ts` and `tokens.test.ts`. W2: `contrast.test.ts`. W4–W8: named `verify/*.integration.test.ts` with a configured Chrome executable; those are not part of `bun run test:web`. W7's thumb contrast runs in `contrast.test.ts`; its rendering runs in `verify/scrollbar.integration.test.ts`, the one suite that launches Chrome with visible scrollbars (`launchBrowser(..., { scrollbars: true })`). The other suites pass `--hide-scrollbars`, which hides custom scrollbars but still reserves `scrollbar-gutter`, so their geometry includes the gutter. Lint this chain with `python3 ~/.agents/skills/daedalus/scripts/design_md.py lint apps/web/DESIGN.md`; `git diff --check` guards whitespace only.
+W1/W3: `bun test src/styles` from `apps/web`, including `design-md.test.ts` and `tokens.test.ts`. W42: `bun test src/theme src/styles/design-md.test.ts src/styles/contrast.test.ts`. W2: `contrast.test.ts`. W4–W8: named `verify/*.integration.test.ts` with a configured Chrome executable; those are not part of `bun run test:web`. W7's thumb contrast runs in `contrast.test.ts`; its rendering runs in `verify/scrollbar.integration.test.ts`, the one suite that launches Chrome with visible scrollbars (`launchBrowser(..., { scrollbars: true })`). The other suites pass `--hide-scrollbars`, which hides custom scrollbars but still reserves `scrollbar-gutter`, so their geometry includes the gutter. Lint this chain with `python3 ~/.agents/skills/daedalus/scripts/design_md.py lint apps/web/DESIGN.md`; `git diff --check` guards whitespace only.
 
 W31: `src/styles/cursors.test.ts` enforces shared cursor ownership, `design-md.test.ts` checks cursor token drift, and `verify/cursors.integration.test.ts` checks both themes, native control states, disabled fieldset legend exceptions, image expansion, sliders, and public/remote consumers. `verify/office-engine.integration.test.ts` checks real floor/actor hover and drag transitions. Browser checks assert computed cursor roles; they do not capture native operating-system cursor artwork.
 

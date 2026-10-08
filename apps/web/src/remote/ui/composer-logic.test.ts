@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { autocompleteBound, modelSelection, optionsForTrigger, applyMention, reconcileMentions, sameModel, submission, suggestionTrigger, tokenKey, triggerAt, orderedVariants, visibleModels, orderedModelOptions, pairedFastModel, switchFastModel, effortLevel, needsCatalogRead } from "./composer-logic"
-import type { CatalogView, ModelOption } from "../catalog"
+import { autocompleteBound, sheetFrame, modelSelection, modelSelectionKey, optionsForTrigger, applyMention, profileForModel, reconcileMentions, sameModel, submission, suggestionTrigger, tokenKey, triggerAt, orderedVariants, visibleModels, orderedModelOptions, pairedFastModel, switchFastModel, effortLevel, needsCatalogRead } from "./composer-logic"
+import { readCatalog, type CatalogView, type ModelOption } from "../catalog"
 
 const models: ModelOption[] = [
   { providerID: "openai", id: "gpt-6-sol", name: "GPT-6 Sol", variants: ["low", "medium", "high"] },
@@ -23,6 +23,9 @@ test("model selection uses only offered effort and explains unsupported incoming
   expect(modelSelection(models, { providerID: "openai", id: "gpt-6-sol" }).model).toEqual({ providerID: "openai", id: "gpt-6-sol" })
   expect(sameModel(incoming, { ...incoming })).toBe(true)
   expect(sameModel(incoming, { ...incoming, variant: "high" })).toBe(false)
+  expect(sameModel({ providerID: "openai", id: "gpt-6-sol", profile: "work" }, { providerID: "openai", id: "gpt-6-sol", profile: "other" })).toBe(false)
+  expect(modelSelection([{ ...models[0]!, profiles: [{ name: "work", active: true }] }], { providerID: "openai", id: "gpt-6-sol", profile: "missing" })).toMatchObject({ blocked: true, model: { profile: "missing" } })
+  expect(modelSelection([{ ...models[0]!, profiles: [{ name: "work", active: true }] }], { providerID: "openai", id: "gpt-6-sol", profile: "work" }).blocked).toBeUndefined()
 })
 
 test("paired fast models hide from the picker and switch model identity without changing an offered effort", () => {
@@ -37,6 +40,61 @@ test("paired fast models hide from the picker and switch model identity without 
   expect(switchFastModel(models, { providerID: "anthropic", id: "claude-opus-5-5-fast", variant: "medium" })).toEqual({ providerID: "anthropic", id: "claude-opus-5-5" })
   expect(pairedFastModel(models, { providerID: "zai", id: "glm-fast-latest" })).toBeUndefined()
   expect(switchFastModel(models, { providerID: "openai", id: "gpt-6-lite" })).toBeUndefined()
+})
+
+test("same-provider changes retain unavailable profile identity and block it while provider changes do not inherit it", () => {
+  const profiled: ModelOption[] = [
+    { providerID: "openai", id: "base", name: "Base", variants: ["low", "high"], profiles: [{ name: "work", active: true }] },
+    { providerID: "openai", id: "base-fast", name: "Base Fast", variants: ["low"], profiles: [{ name: "work", active: false }] },
+    { providerID: "openai", id: "other", name: "Other", variants: [], profiles: [{ name: "private", active: false }] },
+    { providerID: "anthropic", id: "claude", name: "Claude", variants: [], profiles: [{ name: "work", active: true }] },
+  ]
+  const selected = { providerID: "openai", id: "base", variant: "high", profile: "work" }
+  expect(profileForModel(profiled, selected, profiled[2]!)).toBe("work")
+  expect(profileForModel(profiled, selected, profiled[3]!)).toBeUndefined()
+  expect(switchFastModel(profiled, selected)).toEqual({ providerID: "openai", id: "base-fast", profile: "work" })
+  expect(modelSelection(profiled, { providerID: "openai", id: "other", profile: "work" })).toMatchObject({ blocked: true, model: { profile: "work" } })
+  expect(modelSelection(profiled, { providerID: "openai", id: "other", profile: "private" }).blocked).toBeUndefined()
+  const profileFast: ModelOption[] = [
+    { providerID: "openai", id: "base", name: "Base", variants: ["high"], profiles: [{ name: "work", active: true, variants: ["high"] }] },
+    { providerID: "openai", id: "base-fast", name: "Base Fast", variants: ["low"], profiles: [{ name: "personal", active: false, variants: ["low"] }] },
+  ]
+  const fastSelection = switchFastModel(profileFast, { providerID: "openai", id: "base", variant: "high", profile: "work" })
+  expect(fastSelection).toEqual({ providerID: "openai", id: "base-fast", profile: "work" })
+  expect(modelSelection(profileFast, fastSelection).blocked).toBe(true)
+})
+
+test("named profiles use only their own variants, and disabled provider defaults require an explicit profile", () => {
+  const catalog = readCatalog({ agents: [], commands: [], skills: [], references: [], resources: [], defaultModel: null,
+    models: [{ providerID: "cursor", id: "claude", name: "Claude", enabled: false, variants: ["high", "low"], profiles: [
+      { name: "work", active: true, variants: ["high"] }, { name: "personal", active: false, variants: ["low"] },
+    ] }] })!
+  expect(modelSelection(catalog.models, { providerID: "cursor", id: "claude" })).toMatchObject({ blocked: true })
+  expect(modelSelection(catalog.models, { providerID: "cursor", id: "claude", profile: "work", variant: "high" }).blocked).toBeUndefined()
+  expect(modelSelection(catalog.models, { providerID: "cursor", id: "claude", profile: "personal", variant: "low" }).blocked).toBeUndefined()
+  expect(modelSelection(catalog.models, { providerID: "cursor", id: "claude", profile: "personal", variant: "high" })).toMatchObject({ blocked: true })
+  expect(modelSelection(catalog.models, { providerID: "cursor", id: "claude", profile: "work", variant: "low" })).toMatchObject({ blocked: true })
+  const unlisted = readCatalog({ agents: [], commands: [], skills: [], references: [], resources: [], models: [
+    { providerID: "openai", id: "gpt", name: "GPT", variants: ["high"], profiles: [{ name: "work", active: true }] },
+  ] })!
+  expect(modelSelection(unlisted.models, { providerID: "openai", id: "gpt", profile: "work" }).blocked).toBeUndefined()
+  expect(modelSelection(unlisted.models, { providerID: "openai", id: "gpt", profile: "work", variant: "high" }).blocked).toBe(true)
+})
+
+test("missing-profile recovery takes precedence over stale effort while valid profiles report unsupported effort", () => {
+  const models: ModelOption[] = [{ providerID: "openai", id: "gpt", name: "GPT", enabled: false, variants: ["high", "low"], profiles: [
+    { name: "work", active: true, variants: ["high"] },
+  ] }]
+  expect(modelSelection(models, { providerID: "openai", id: "gpt", profile: "removed", variant: "high" }).warning).toContain("Profile removed is not offered")
+  expect(modelSelection(models, { providerID: "openai", id: "gpt", profile: "work", variant: "low" }).warning).toContain("Saved effort low is not offered by profile work")
+})
+
+test("pending model selections are fenced by connection device and generation", () => {
+  const target = { sessionID: "ses_same" }
+  expect(modelSelectionKey(target, "dev_a", 2)).toBe(modelSelectionKey(target, "dev_a", 2))
+  expect(modelSelectionKey(target, "dev_a", 2)).not.toBe(modelSelectionKey(target, "dev_b", 2))
+  expect(modelSelectionKey(target, "dev_a", 2)).not.toBe(modelSelectionKey(target, "dev_a", 3))
+  expect(modelSelectionKey(undefined, "dev_a", 2)).toBeUndefined()
 })
 
 test("model rows show available recents once before the selected provider and stable remaining provider groups", () => {
@@ -58,6 +116,7 @@ test("model rows show available recents once before the selected provider and st
   expect(orderedModelOptions(catalog, [], { providerID: "missing", id: "gone" }).map((item) => item.id)).toEqual([
     "claude-a", "gpt-a", "gpt-b", "zai-a",
   ])
+  expect(orderedModelOptions(catalog, [{ providerID: "openai", id: "gpt-a", profile: "work" }, { providerID: "openai", id: "gpt-a", profile: "personal" }], undefined).map((item) => item.id).slice(0, 2)).toEqual(["gpt-a", "gpt-a"])
 })
 
 test("effort levels map known variants exactly and unknown variants to one deterministic fallback", () => {
@@ -120,6 +179,11 @@ describe("composer input semantics", () => {
     expect(submission("/research context", [], catalog, "steer")).toEqual({ kind: "skill", input: { skill: "research" } })
     expect(submission("/unknown", [], catalog, "steer")).toEqual({ kind: "prompt", input: { text: "/unknown", delivery: "steer" } })
   })
+  test("marks an explicitly reselected profile for a same-reference rebind without changing request shape", () => {
+    expect(submission("hello", [], catalog, "steer", undefined, { providerID: "openai", id: "gpt", profile: "work" }, true)).toEqual({
+      kind: "prompt", input: { text: "hello", delivery: "steer", model: { providerID: "openai", id: "gpt", profile: "work" }, forceModelSwitch: true },
+    })
+  })
 
 })
 
@@ -131,6 +195,26 @@ test("suggestions never exceed the space above the composer or the viewport shar
   expect(autocompleteBound(90, 200)).toBe(80)
   expect(autocompleteBound(60, 300)).toBe(54)
   expect(autocompleteBound(30, 300)).toBe(54)
+})
+
+test("phone suggestions use the visual viewport space above the field up to three quarters of it, with no fixed cap", () => {
+  expect(autocompleteBound(700, 844, true)).toBe(633)
+  expect(autocompleteBound(300, 400, true)).toBe(292)
+  expect(autocompleteBound(260, 380, true)).toBe(252)
+  expect(autocompleteBound(260, 380, true)).toBeGreaterThan(autocompleteBound(260, 380))
+  expect(autocompleteBound(1300, 1400, true)).toBe(1050)
+  expect(autocompleteBound(60, 300, true)).toBe(54)
+  expect(autocompleteBound(30, 300, true)).toBe(54)
+  expect(autocompleteBound(700, 844, false)).toBe(autocompleteBound(700, 844))
+})
+
+test("a phone sheet follows the visual viewport top and height in whole pixels and ignores an unreported viewport", () => {
+  expect(sheetFrame({ offsetTop: 0, height: 844 })).toEqual({ top: 0, height: 844 })
+  expect(sheetFrame({ offsetTop: 12.4, height: 420.6 })).toEqual({ top: 12, height: 421 })
+  expect(sheetFrame({ offsetTop: -3, height: 400 })).toEqual({ top: 0, height: 400 })
+  expect(sheetFrame({ offsetTop: 0, height: 0 })).toBeUndefined()
+  expect(sheetFrame({ offsetTop: 0, height: Number.NaN })).toBeUndefined()
+  expect(sheetFrame(undefined)).toBeUndefined()
 })
 
 test("a dismissed suggestion token stays closed until the token changes or another token is chosen", () => {

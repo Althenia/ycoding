@@ -603,6 +603,7 @@ export const createLLMEventPublisher = (events: Pick<EventRuntime.Interface, "pu
     hasRetryEvidence: () => retryEvidence,
     hasAssistantText: () => assistantText,
     hasStepStarted: () => stepStarted,
+    currentMessageID: () => assistantMessageID,
     stepFailure: () => stepFailure,
     stepSettlement: () => stepSettlement,
     startAssistant,

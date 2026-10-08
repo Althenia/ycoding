@@ -51,7 +51,18 @@ export const localTitle = (input: string) => {
 }
 
 export const selectHelperModel = (input: SelectHelperModelInput) =>
-  input.agentModel ?? (input.roleModel === "session" ? input.sessionModel : input.roleModel) ?? input.sessionModel
+  inheritProfile(
+    input.agentModel ?? (input.roleModel === "session" ? input.sessionModel : input.roleModel) ?? input.sessionModel,
+    input.sessionModel,
+  )
+
+export const inheritProfile = (selected: CatalogModel.Ref | undefined, parent: CatalogModel.Ref | undefined) =>
+  selected &&
+  selected.profile === undefined &&
+  selected.providerID === parent?.providerID &&
+  parent.profile !== undefined
+    ? CatalogModel.Ref.make({ ...selected, profile: parent.profile })
+    : selected
 
 /**
  * Summmarizer model selection for role `compaction`, scoped by chat type.
@@ -68,18 +79,22 @@ const selectCompactionModel = (
   agent?: Agent.Info,
 ): CatalogModel.Ref | undefined => {
   const roleModel = scopes[session.parentID ? "subagent" : "main"]
-  if (roleModel !== undefined && roleModel !== "session") return roleModel
-  return agent?.model ?? session.model
+  if (roleModel !== undefined && roleModel !== "session") return inheritProfile(roleModel, session.model)
+  return inheritProfile(agent?.model ?? session.model, session.model)
 }
 
 const configuredModel = (
-  selected: "session" | { readonly providerID: string; readonly model: string; readonly variant?: string } | undefined,
+  selected:
+    | "session"
+    | { readonly providerID: string; readonly model: string; readonly variant?: string; readonly profile?: string }
+    | undefined,
 ) => {
   if (!selected || selected === "session") return selected
   return CatalogModel.Ref.make({
     providerID: Provider.ID.make(selected.providerID),
     id: CatalogModel.ID.make(selected.model),
     ...(selected.variant === undefined ? {} : { variant: CatalogModel.VariantID.make(selected.variant) }),
+    ...(selected.profile === undefined ? {} : { profile: selected.profile }),
   })
 }
 

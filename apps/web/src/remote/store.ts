@@ -210,6 +210,7 @@ export type RemoteStoreState = {
   readonly sessionHasNext: boolean
   readonly sessionHasPrevious: boolean
   readonly selectedSessionInfo?: SessionInfoView
+  readonly confirmedModelSwitches?: Readonly<Record<string, { readonly revision: number; readonly model: ModelRefView }>>
   readonly drafts: Readonly<Record<string, string>>
   /** Bumps whenever the device connection is replaced or ended; read resources are keyed by device and generation. */
   readonly generation: number
@@ -309,8 +310,8 @@ export type RemoteStore = {
   readonly loadOversizedMessage: (messageID: string) => Promise<void>
   readonly loadImageSource: (input: { readonly deviceID: string; readonly sessionID: string; readonly digest: string; readonly mime: string }) => Promise<string>
   readonly loadShellOutputPage: (shellID: string) => Promise<void>
-  readonly sendPrompt: (input: { readonly text: string; readonly delivery: "steer" | "queue"; readonly files?: readonly FileAttachmentInput[]; readonly agents?: readonly AgentAttachmentInput[]; readonly skills?: readonly string[]; readonly agent?: string; readonly model?: ModelRefView }) => Promise<boolean>
-  readonly runCommand: (input: { readonly command: string; readonly arguments?: string; readonly delivery: "steer" | "queue"; readonly files?: readonly FileAttachmentInput[]; readonly agents?: readonly AgentAttachmentInput[]; readonly agent?: string; readonly model?: ModelRefView }) => Promise<boolean>
+  readonly sendPrompt: (input: { readonly text: string; readonly delivery: "steer" | "queue"; readonly files?: readonly FileAttachmentInput[]; readonly agents?: readonly AgentAttachmentInput[]; readonly skills?: readonly string[]; readonly agent?: string; readonly model?: ModelRefView; readonly forceModelSwitch?: boolean }) => Promise<boolean>
+  readonly runCommand: (input: { readonly command: string; readonly arguments?: string; readonly delivery: "steer" | "queue"; readonly files?: readonly FileAttachmentInput[]; readonly agents?: readonly AgentAttachmentInput[]; readonly agent?: string; readonly model?: ModelRefView; readonly forceModelSwitch?: boolean }) => Promise<boolean>
   readonly activateSkill: (skill: string) => Promise<boolean>
   readonly compactSession: () => Promise<boolean>
   readonly cancelUpload: () => void
@@ -406,6 +407,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     sessionHasNext: false,
     sessionHasPrevious: false,
     drafts: {},
+    confirmedModelSwitches: {},
     generation: 0,
     mutations: [],
     mutationToasts: [],
@@ -2278,7 +2280,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     mutation: PendingMutation
     readonly deviceID: string
     readonly files?: readonly FileAttachmentInput[]
-    readonly prerequisites: readonly { readonly operation: RemoteOperation; readonly input: Readonly<Record<string, unknown>>; completed: boolean; attempted: boolean }[]
+    readonly prerequisites: readonly { readonly operation: RemoteOperation; readonly input: Readonly<Record<string, unknown>>; readonly force?: boolean; completed: boolean; attempted: boolean }[]
     uploaded?: readonly FileAttachmentInput[]
     uploadedAt?: number
     uploadsReady: boolean
@@ -2330,10 +2332,32 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
           }
           const view = container.state.view
           const model = readModelRef(prerequisite.input.model)
-          if ((prerequisite.completed || !prerequisite.attempted) &&
+          if (prerequisite.completed) {
+            if (prerequisite.operation === "session.switchModel") {
+              if (model === undefined) {
+                finishMutation(progress.mutation.id, "failed", "The Session model selection is no longer known. Choose it again before retrying this send.")
+                return
+              }
+              const selected = container.state.selectedSessionInfo
+              const knownModel = selected?.id === sessionID && selected.model !== undefined
+                ? selected.model
+                : view?.id === sessionID ? view.model : undefined
+              const modelChanged = knownModel === undefined || model.id !== knownModel.id || model.providerID !== knownModel.providerID ||
+                model.variant !== knownModel.variant || model.profile !== knownModel.profile
+              if (modelChanged && (prerequisite.force || model.profile !== undefined)) {
+                finishMutation(progress.mutation.id, "failed", "The Session model changed after this send selected its model. Choose that model again before retrying this send.")
+                return
+              }
+              if (modelChanged) prerequisite.completed = false
+            }
+            const agentChanged = prerequisite.operation === "session.switchAgent" && prerequisite.input.agent !== view?.agent
+            if (agentChanged) prerequisite.completed = false
+            if (prerequisite.completed) continue
+          }
+          if (!prerequisite.attempted &&
             (prerequisite.operation === "session.switchAgent" && prerequisite.input.agent === view?.agent ||
-              prerequisite.operation === "session.switchModel" && model !== undefined && model.id === view?.model?.id &&
-              model.providerID === view.model.providerID && model.variant === view.model.variant)) {
+              prerequisite.operation === "session.switchModel" && !prerequisite.force && model !== undefined && model.id === view?.model?.id &&
+              model.providerID === view.model.providerID && model.variant === view.model.variant && model.profile === view.model.profile)) {
             prerequisite.completed = true
             continue
           }
@@ -2343,7 +2367,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
           if (outcome.status !== "ok") return
           prerequisite.completed = true
           if (owns() && container.state.view) {
-            if (prerequisite.operation === "session.switchModel" && model !== undefined) setState({ view: { ...container.state.view, model } })
+            if (prerequisite.operation === "session.switchModel" && model !== undefined) setState({ view: { ...container.state.view, model },
+              confirmedModelSwitches: { ...container.state.confirmedModelSwitches, [sessionID]: {
+                revision: (container.state.confirmedModelSwitches?.[sessionID]?.revision ?? 0) + 1, model,
+              } },
+              ...(container.state.selectedSessionInfo?.id === sessionID ? { selectedSessionInfo: { ...container.state.selectedSessionInfo, model } } : {}) })
             if (prerequisite.operation === "session.switchAgent" && typeof prerequisite.input.agent === "string") setState({ view: { ...container.state.view, agent: prerequisite.input.agent } })
           }
         }
@@ -2366,7 +2394,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     return run
   }
 
-  const acceptSend = (mutation: PendingMutation, input: { readonly files?: readonly FileAttachmentInput[]; readonly agent?: string; readonly model?: ModelRefView }) => {
+  const acceptSend = (mutation: PendingMutation, input: { readonly files?: readonly FileAttachmentInput[]; readonly agent?: string; readonly model?: ModelRefView; readonly forceModelSwitch?: boolean }) => {
     const view = container.state.view ?? createSessionView(mutation.sessionID)
     const progress: SendProgress = {
       mutation,
@@ -2375,7 +2403,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       prerequisites: [
         ...(input.agent !== undefined ? [{ operation: "session.switchAgent" as const, input: { agent: input.agent } }] : []),
         ...(input.model !== undefined
-          ? [{ operation: "session.switchModel" as const, input: { model: input.model } }] : []),
+          ? [{ operation: "session.switchModel" as const, input: { model: input.model }, ...(input.forceModelSwitch ? { force: true } : {}) }] : []),
       ].map((step) => ({ ...step, completed: false, attempted: false })),
       uploadsReady: input.files === undefined,
     }

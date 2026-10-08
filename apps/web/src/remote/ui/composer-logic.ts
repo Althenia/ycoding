@@ -1,4 +1,4 @@
-import { type AgentAttachmentInput, type CatalogTarget, type CatalogView, type FileAttachmentInput, type FileOption, type ModelOption } from "../catalog"
+import { catalogKey, type AgentAttachmentInput, type CatalogTarget, type CatalogView, type FileAttachmentInput, type FileOption, type ModelOption } from "../catalog"
 import type { ModelRefView } from "../projection"
 
 export type Trigger = "/" | "@" | "$" | "#"
@@ -19,15 +19,30 @@ export function orderedVariants(variants: readonly string[]): string[] {
 }
 
 export function sameModel(left: ModelRefView | undefined, right: ModelRefView | undefined): boolean {
-  return left !== undefined && right !== undefined && left.providerID === right.providerID && left.id === right.id && left.variant === right.variant
+  return left !== undefined && right !== undefined && left.providerID === right.providerID && left.id === right.id && left.variant === right.variant && left.profile === right.profile
+}
+
+export function variantsForModel(model: ModelOption | undefined, profile: string | undefined) {
+  if (model === undefined) return []
+  if (profile === undefined) return model.variants
+  return model.profiles?.find((item) => item.name === profile)?.variants ?? []
+}
+
+export function modelSelectionKey(target: CatalogTarget | undefined, deviceID: string | undefined, generation: number) {
+  return target === undefined ? undefined : JSON.stringify([catalogKey(target), deviceID ?? null, generation])
 }
 
 export function modelSelection(models: readonly ModelOption[], selected: ModelRefView | undefined): { readonly model?: ModelRefView; readonly warning?: string; readonly blocked?: boolean } {
   if (!selected) return {}
   const option = models.find((item) => item.providerID === selected.providerID && item.id === selected.id)
   if (!option) return { model: selected, blocked: true, warning: `Model ${selected.id} is not offered by this machine. Choose another model before sending.` }
-  if (selected.variant !== undefined && !option.variants.includes(selected.variant)) return { model: selected, blocked: true,
-    warning: `Saved effort ${selected.variant} is not offered for ${option.name}. Clear the reasoning effort override, or select this model again and choose an offered effort before sending.` }
+  const profile = selected.profile === undefined ? undefined : option.profiles?.find((item) => item.name === selected.profile)
+  if (selected.profile !== undefined && profile === undefined) return { model: selected, blocked: true,
+    warning: `Profile ${selected.profile} is not offered for ${option.name}. Choose an available profile or use the provider default before sending.` }
+  if (selected.profile === undefined && option.enabled === false) return { model: selected, blocked: true,
+    warning: `${option.name} requires a named profile. Choose an available profile before sending.` }
+  if (selected.variant !== undefined && !variantsForModel(option, selected.profile).includes(selected.variant)) return { model: selected, blocked: true,
+    warning: `Saved effort ${selected.variant} is not offered${selected.profile === undefined ? ` for ${option.name}` : ` by profile ${selected.profile} for ${option.name}`}. Clear the reasoning effort override, or select this model again and choose an offered effort before sending.` }
   return { model: selected }
 }
 
@@ -35,15 +50,15 @@ export function visibleModels(models: readonly ModelOption[]): ModelOption[] {
   return models.filter((item) => !item.id.endsWith("-fast") || !models.some((base) => base.providerID === item.providerID && base.id === item.id.slice(0, -5)))
 }
 
-export function orderedModelOptions(models: readonly ModelOption[], recent: readonly ModelRefView[], selected: ModelRefView | undefined) {
+export function orderedModelOptions(models: readonly ModelOption[], recent: readonly ModelRefView[], selected: ModelRefView | undefined): (ModelOption & { readonly recentSelection?: ModelRefView })[] {
   const available = visibleModels(models)
   const seenRecent = new Set<string>()
   const recentOptions = recent.flatMap((model) => {
     const option = available.find((item) => item.providerID === model.providerID && item.id === model.id)
-    const key = option ? JSON.stringify([option.providerID, option.id]) : ""
+    const key = option ? JSON.stringify([option.providerID, option.id, model.profile]) : ""
     if (!option || seenRecent.has(key)) return []
     seenRecent.add(key)
-    return [option]
+    return [{ ...option, recentSelection: model }]
   })
   const recentKeys = new Set(recentOptions.map((item) => JSON.stringify([item.providerID, item.id])))
   const remaining = available.filter((item) => !recentKeys.has(JSON.stringify([item.providerID, item.id])))
@@ -67,8 +82,13 @@ export function switchFastModel(models: readonly ModelOption[], selected: ModelR
   const pair = pairedFastModel(models, selected)
   if (!pair) return undefined
   const target = pair.active ? pair.base : pair.fast
-  const variant = selected?.variant && target.variants.includes(selected.variant) ? selected.variant : undefined
-  return modelSelection([target], { providerID: target.providerID, id: target.id, ...(variant ? { variant } : {}) }).model
+  const profile = selected?.providerID === target.providerID ? selected.profile : undefined
+  const variant = selected?.variant && variantsForModel(target, profile).includes(selected.variant) ? selected.variant : undefined
+  return modelSelection([target], { providerID: target.providerID, id: target.id, ...(variant ? { variant } : {}), ...(profile ? { profile } : {}) }).model
+}
+
+export function profileForModel(models: readonly ModelOption[], current: ModelRefView | undefined, target: ModelOption) {
+  return current?.providerID === target.providerID ? current.profile : undefined
 }
 
 export function effortLevel(variant: string | undefined) {
@@ -95,8 +115,14 @@ export function suggestionTrigger(text: string, cursor: number, dismissed: strin
   return match && tokenKey(match) !== dismissed ? match : undefined
 }
 
-export function autocompleteBound(availableAbove: number, viewportHeight: number): number {
-  return Math.floor(Math.max(54, Math.min(360, viewportHeight * 0.4, availableAbove - 8)))
+export function autocompleteBound(availableAbove: number, viewportHeight: number, phone = false): number {
+  const share = phone ? viewportHeight * 0.75 : Math.min(360, viewportHeight * 0.4)
+  return Math.floor(Math.max(54, Math.min(share, availableAbove - 8)))
+}
+
+export function sheetFrame(viewport: { readonly offsetTop: number; readonly height: number } | undefined): { readonly top: number; readonly height: number } | undefined {
+  if (!viewport || !(viewport.height > 0)) return undefined
+  return { top: Math.max(0, Math.round(viewport.offsetTop)), height: Math.round(viewport.height) }
 }
 
 function fuzzy(value: string, query: string): number {
@@ -166,7 +192,7 @@ export function reconcileMentions(before: string, after: string, parts: readonly
   })
 }
 
-export function submission(text: string, parts: readonly MentionPart[], catalog: CatalogView | undefined, delivery: "steer" | "queue", agent?: string, model?: ModelRefView) {
+export function submission(text: string, parts: readonly MentionPart[], catalog: CatalogView | undefined, delivery: "steer" | "queue", agent?: string, model?: ModelRefView, forceModelSwitch = false) {
   const trimmed = text.trim()
   const command = trimmed.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/)
   if (command?.[1] === "compact") return command[2]?.trim()
@@ -186,7 +212,7 @@ export function submission(text: string, parts: readonly MentionPart[], catalog:
     .map((part) => ({ uri: part.uri, name: part.name, description: part.description, mention: part.mention }))
   const agents: AgentAttachmentInput[] = parts.filter((part): part is Extract<MentionPart, { kind: "agent" }> => part.kind === "agent")
     .map((part) => ({ name: part.name, mention: part.mention }))
-  const base = { delivery, ...(files.length ? { files } : {}), ...(agents.length ? { agents } : {}), ...(agent ? { agent } : {}), ...(model ? { model } : {}) }
+  const base = { delivery, ...(files.length ? { files } : {}), ...(agents.length ? { agents } : {}), ...(agent ? { agent } : {}), ...(model ? { model } : {}), ...(forceModelSwitch ? { forceModelSwitch: true } : {}) }
   if (command && catalog?.commands.some((item) => item.name === command[1])) return { kind: "command" as const, input: { command: command[1]!, ...(command[2] ? { arguments: command[2] } : {}), ...base } }
   if (command && catalog?.skills.some((skill) => skill.id === command[1] && skill.slash)) return { kind: "skill" as const, input: { skill: command[1]! } }
   const skills = [...new Set([...parts.filter((part): part is Extract<MentionPart, { kind: "skill" }> => part.kind === "skill").map((part) => part.id), ...(catalog?.skills ?? []).filter((skill) => new RegExp(`(^|\\s)\\$${skill.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=[\\s.,!?;:)\\]'"\x60]|$)`).test(trimmed)).map((skill) => skill.id)])]

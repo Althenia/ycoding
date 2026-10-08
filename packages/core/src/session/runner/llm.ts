@@ -65,6 +65,8 @@ type StepEnd = {
 
 type AttemptState = {
   current?: SessionProviderRequest.Tracker
+  accountIdentityDigest?: string
+  mixedAccountProvenance?: boolean
   contextBreakdown?: ReturnType<typeof SessionContextPressure.breakdown>
   attempts: number
   continuationFallback?: boolean
@@ -220,31 +222,36 @@ const layer = Layer.effect(
         }
         return [{ source, text: entry.message.text, id: entry.message.id }]
       })
-      const projected = yield* Effect.forEach(
-        contextObservationBatches(candidates),
-        (batch) =>
-          db
-            .select({ id: EventTable.id, data: EventTable.data })
-            .from(EventTable)
-            .where(
-              and(
-                eq(EventTable.aggregate_id, selected.session.id),
-                eq(
-                  EventTable.type,
-                  EventRuntime.versionedType(SessionEvent.ContextObserved.type, SessionEvent.ContextObserved.durable.version),
-                ),
-                inArray(
-                  EventTable.id,
-                  batch.map((candidate) => EventRuntime.ID.make(String(candidate.id).replace(/^msg_/, "evt_"))),
+      const projected = yield* Effect.forEach(contextObservationBatches(candidates), (batch) =>
+        db
+          .select({ id: EventTable.id, data: EventTable.data })
+          .from(EventTable)
+          .where(
+            and(
+              eq(EventTable.aggregate_id, selected.session.id),
+              eq(
+                EventTable.type,
+                EventRuntime.versionedType(
+                  SessionEvent.ContextObserved.type,
+                  SessionEvent.ContextObserved.durable.version,
                 ),
               ),
-            )
-            .all()
-            .pipe(Effect.orDie),
+              inArray(
+                EventTable.id,
+                batch.map((candidate) => EventRuntime.ID.make(String(candidate.id).replace(/^msg_/, "evt_"))),
+              ),
+            ),
+          )
+          .all()
+          .pipe(Effect.orDie),
       ).pipe(Effect.map((batches) => batches.flat()))
       const trusted = new Set(
         projected.flatMap((event) => {
-          if (event.data.source !== "session-state" && event.data.source !== "team-view" && event.data.source !== "step-limit")
+          if (
+            event.data.source !== "session-state" &&
+            event.data.source !== "team-view" &&
+            event.data.source !== "step-limit"
+          )
             return []
           if (typeof event.data.text !== "string") return []
           return [`${event.id}\0${event.data.source}\0${event.data.text}`]
@@ -258,13 +265,18 @@ const layer = Layer.effect(
             eq(EventTable.aggregate_id, selected.session.id),
             eq(
               EventTable.type,
-              EventRuntime.versionedType(SessionEvent.ContextObserved.type, SessionEvent.ContextObserved.durable.version),
+              EventRuntime.versionedType(
+                SessionEvent.ContextObserved.type,
+                SessionEvent.ContextObserved.durable.version,
+              ),
             ),
           ),
         )
         .all()
         .pipe(Effect.orDie)
-      const observedSources = new Set(observed.flatMap((event) => (isContextSource(event.source) ? [event.source] : [])))
+      const observedSources = new Set(
+        observed.flatMap((event) => (isContextSource(event.source) ? [event.source] : [])),
+      )
       const latest = candidates.toReversed().reduce((result, candidate) => {
         const eventID = EventRuntime.ID.make(String(candidate.id).replace(/^msg_/, "evt_"))
         if (trusted.has(`${eventID}\0${candidate.source}\0${candidate.text}`) && !result.has(candidate.source))
@@ -273,9 +285,7 @@ const layer = Layer.effect(
       }, new Map<ContextSource, string>())
       const state = yield* liveState.load(selected.session.id).pipe(Effect.orDie)
       const inheritedTeam =
-        state.teamView === undefined
-          ? candidates.some((candidate) => candidate.source === "team-view")
-          : false
+        state.teamView === undefined ? candidates.some((candidate) => candidate.source === "team-view") : false
       const stepLimitReached = selected.agent.info.steps !== undefined && step >= selected.agent.info.steps
       const stepLimit = terminalResponseRecovery
         ? undefined
@@ -398,19 +408,36 @@ const layer = Layer.effect(
                 contextSafetyMarginTokens: compactionPolicy.contextSafetyMarginTokens,
               },
               candidate: { context: initialContext, prepared: initialPrepared },
-              prepareOwner: (job) => Effect.gen(function* () {
-                const loaded = yield* context.load(yield* context.select(job.sessionID))
-                const through = yield* SessionHistory.entriesForModelThrough(db, job.sessionID, job.requestedThrough.seq)
-                const ids = new Set(through.map((entry) => entry.message.id))
-                const owner = yield* modelRequests.prepare({
-                  context: { ...loaded, messages: loaded.messages.filter((message) => ids.has(message.id) ||
-                    (message.type === "synthetic" && message.metadata?.remoteCompactionV2 === true)) },
-                  step: currentStep,
-                  disableContinuation: true,
-                })
-                return { request: owner.request, cache: owner.cache, cost: loaded.model.cost, modelRef: loaded.model.ref,
-                  contextRevision: loaded.contextRevision }
-              }),
+              prepareOwner: (job) =>
+                Effect.gen(function* () {
+                  const loaded = yield* context.load(yield* context.select(job.sessionID))
+                  const through = yield* SessionHistory.entriesForModelThrough(
+                    db,
+                    job.sessionID,
+                    job.requestedThrough.seq,
+                  )
+                  const ids = new Set(through.map((entry) => entry.message.id))
+                  const owner = yield* modelRequests.prepare({
+                    context: {
+                      ...loaded,
+                      messages: loaded.messages.filter(
+                        (message) =>
+                          ids.has(message.id) ||
+                          (message.type === "synthetic" && message.metadata?.remoteCompactionV2 === true),
+                      ),
+                    },
+                    step: currentStep,
+                    disableContinuation: true,
+                  })
+                  return {
+                    request: owner.request,
+                    cache: owner.cache,
+                    cost: loaded.model.cost,
+                    modelRef: loaded.model.ref,
+                    accountIdentityDigest: loaded.model.accountIdentityDigest,
+                    contextRevision: loaded.contextRevision,
+                  }
+                }),
               force: requestTrackerState.overflowRecovery === "pending",
               canReduce: (candidate, target) =>
                 SessionCompactionGate.canReduce(candidate.prepared.request, candidate.context.messages, target),
@@ -451,24 +478,27 @@ const layer = Layer.effect(
       const agent = loaded.agent
       const resolved = loaded.model
       let requestTracker = requestTrackerState.current
+      if (requestTracker && requestTrackerState.accountIdentityDigest !== resolved.accountIdentityDigest)
+        requestTrackerState.mixedAccountProvenance = true
       if (!requestTracker) {
-        requestTracker = yield* providerRequests.next({
-          sessionID: session.id,
-          expectedContextRevision: loaded.contextRevision,
-          inputID: loaded.messages.findLast((message) => message.type === "user")?.id,
-          source: "step",
-          agent: agent.id,
-          model: resolved.ref,
-          routeID: resolved.model.route.id,
-          promptCacheKey: originalPrepared.cache.promptCacheKey,
-          systemDigest: originalPrepared.cache.systemDigest,
-          toolDigest: originalPrepared.cache.toolDigest,
-        }).pipe(
-          Effect.catchTag("SessionProviderRequest.StaleContextRevision", () => Effect.succeed(undefined)),
-        )
-        if (!requestTracker)
-          return { _tag: "RestartAfterCompaction", step: currentStep, promoted } as const
+        requestTracker = yield* providerRequests
+          .next({
+            sessionID: session.id,
+            expectedContextRevision: loaded.contextRevision,
+            inputID: loaded.messages.findLast((message) => message.type === "user")?.id,
+            source: "step",
+            agent: agent.id,
+            model: resolved.ref,
+            connectionIdentityDigest: resolved.accountIdentityDigest,
+            routeID: resolved.model.route.id,
+            promptCacheKey: originalPrepared.cache.promptCacheKey,
+            systemDigest: originalPrepared.cache.systemDigest,
+            toolDigest: originalPrepared.cache.toolDigest,
+          })
+          .pipe(Effect.catchTag("SessionProviderRequest.StaleContextRevision", () => Effect.succeed(undefined)))
+        if (!requestTracker) return { _tag: "RestartAfterCompaction", step: currentStep, promoted } as const
         requestTrackerState.current = requestTracker
+        requestTrackerState.accountIdentityDigest = resolved.accountIdentityDigest
       }
       const startSnapshot = yield* snapshots.capture()
       const prepared = {
@@ -578,7 +608,9 @@ const layer = Layer.effect(
                 (yield* Effect.die(new Error("Step finish did not produce provider settlement")))
               const usage = stepUsage(settlement)
               generationTiming = SessionUsage.generationTiming(event.usage, {
-                text: firstTextNs, reasoning: firstReasoningNs, ended: yield* Clock.currentTimeNanos,
+                text: firstTextNs,
+                reasoning: firstReasoningNs,
+                ended: yield* Clock.currentTimeNanos,
               })
               const speedTiming = { ...settlement.timing, ...generationTiming }
               yield* serialized(
@@ -661,7 +693,9 @@ const layer = Layer.effect(
               cost: Money.USD.zero,
               tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
             }
-        const estimatedCost = settlement ? SessionUsage.estimatedCost(effective.cost, settlement.tokens, settlement.oneHourCacheWrites) : undefined
+        const estimatedCost = settlement
+          ? SessionUsage.estimatedCost(effective.cost, settlement.tokens, settlement.oneHourCacheWrites)
+          : undefined
         const cache = settlement ? providerCache(settlement) : undefined
         const invalidation =
           override ??
@@ -670,13 +704,17 @@ const layer = Layer.effect(
             : requestTracker.defaultInvalidation === "compaction-reset"
               ? "compaction-reset"
               : settlement && settlement.tokens.cache.read > 0
-              ? "stable-hit"
-              : cache?.mechanism === "none"
-                ? "cache-disabled"
-                : cache && !cache.readReported
-                  ? "provider-not-reported"
-                  : undefined)
+                ? "stable-hit"
+                : cache?.mechanism === "none"
+                  ? "cache-disabled"
+                  : cache && !cache.readReported
+                    ? "provider-not-reported"
+                    : undefined)
         return requestTracker.complete({
+          assistantMessageID: publisher.currentMessageID(),
+          connectionIdentityDigest: requestTrackerState.mixedAccountProvenance
+            ? null
+            : requestTrackerState.accountIdentityDigest,
           tokens: usage.tokens,
           ...(estimatedCost === undefined ? {} : { cost: estimatedCost }),
           continuation:
@@ -687,8 +725,9 @@ const layer = Layer.effect(
                 : "full",
           ...(invalidation === undefined ? {} : { invalidation }),
           ...(cache === undefined ? {} : { cacheReadReported: cache.readReported }),
-          ...((settlement?.timing === undefined && generationTiming === undefined)
-            ? {} : { timing: { ...settlement?.timing, ...generationTiming } }),
+          ...(settlement?.timing === undefined && generationTiming === undefined
+            ? {}
+            : { timing: { ...settlement?.timing, ...generationTiming } }),
         })
       }
 
@@ -762,13 +801,17 @@ const layer = Layer.effect(
           if (contextOverflowFailure && !publisher.hasRetryEvidence()) {
             if (
               requestTrackerState.overflowRecovery === undefined &&
-              (limits?.context === undefined || limits.output === undefined ||
+              (limits?.context === undefined ||
+                limits.output === undefined ||
                 SessionCompactionGate.canReduce(
                   prepared.request,
                   loaded.messages,
-                  SessionCompactionGate.targetInputTokens({
-                    contextWindowTokens: limits.context,
-                  }, compactionPolicy),
+                  SessionCompactionGate.targetInputTokens(
+                    {
+                      contextWindowTokens: limits.context,
+                    },
+                    compactionPolicy,
+                  ),
                 ))
             ) {
               requestTrackerState.overflowRecovery = "pending"
@@ -973,11 +1016,7 @@ const layer = Layer.effect(
             (yield* SessionPending.has(db, session.id, "steer"))
           if (overflowLimit) return yield* new StepFailedError({ error: overflowLimit })
           if (streamInterrupted) return yield* Effect.interrupt
-          if (
-            stream._tag === "Failure" &&
-            !recoverableProviderFailure &&
-            !promotePendingSteerAfterProviderRecovery
-          )
+          if (stream._tag === "Failure" && !recoverableProviderFailure && !promotePendingSteerAfterProviderRecovery)
             return yield* Effect.failCause(stream.cause)
           if (userDeclined) return yield* Effect.interrupt
           if ((toolsInterrupted || infraError !== undefined) && settledFailure)
@@ -1002,7 +1041,9 @@ const layer = Layer.effect(
             providerRecovery: recoverableProviderFailure
               ? {
                   delay:
-                    llmFailure.reason._tag === "ProviderInternal" ? Math.max(0, llmFailure.reason.retryAfterMs ?? 0) : 0,
+                    llmFailure.reason._tag === "ProviderInternal"
+                      ? Math.max(0, llmFailure.reason.retryAfterMs ?? 0)
+                      : 0,
                 }
               : undefined,
             terminalSilence:
@@ -1027,6 +1068,10 @@ const layer = Layer.effect(
       const requestTrackerState: AttemptState = { attempts: 0 }
       const completeRetryFallback = () =>
         requestTrackerState.current?.complete({
+          assistantMessageID,
+          connectionIdentityDigest: requestTrackerState.mixedAccountProvenance
+            ? null
+            : requestTrackerState.accountIdentityDigest,
           invalidation: "retry-fallback",
           continuation: "fallback",
           cost: Money.USD.zero,

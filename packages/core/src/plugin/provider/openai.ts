@@ -10,6 +10,7 @@ import {
   HttpIncomingMessage,
 } from "effect/unstable/http"
 import { Credential } from "../../credential"
+import { Catalog } from "../../catalog"
 import { EventRuntime } from "../../event"
 import { InstallationVersion } from "../../installation/version"
 import { Integration } from "../../integration"
@@ -50,9 +51,7 @@ const Claims = Schema.fromJsonString(
 const decodeClaims = Schema.decodeUnknownOption(Claims)
 const DaybreakModel = Schema.Struct({
   slug: Schema.String,
-  available_access_programs: Schema.optional(
-    Schema.NullOr(Schema.Struct({ cyber: Schema.Array(Schema.String) })),
-  ),
+  available_access_programs: Schema.optional(Schema.NullOr(Schema.Struct({ cyber: Schema.Array(Schema.String) }))),
 })
 const decodeDaybreakModel = Schema.decodeUnknownOption(DaybreakModel)
 
@@ -176,67 +175,116 @@ export const OpenAIPlugin = define({
   effect: Effect.fn(function* (ctx) {
     const events = yield* EventRuntime.Service
     const http = yield* HttpClient.HttpClient
+    const catalog = yield* Catalog.Service
+    const integrations = yield* Integration.Service
+    const credentials = yield* Credential.Service
     const loading = Semaphore.makeUnsafe(1)
-    let chatgpt = false
     let generation = 0
-    let daybreak = new Map<string, ReadonlyArray<"daybreak_blue" | "daybreak_red">>()
+    let snapshots: readonly Integration.Snapshot[] = []
+    const daybreak = new Map<string, Map<string, ReadonlyArray<"daybreak_blue" | "daybreak_red">>>()
 
     const load = Effect.fn("OpenAIPlugin.load")(function* () {
-      const connection = yield* ctx.integration.connection.active("openai")
-      const credential = connection
-        ? yield* ctx.integration.connection.resolve(connection).pipe(Effect.catch(() => Effect.succeed(undefined)))
-        : undefined
-      chatgpt = OpenAICodex.isChatGPT(credential)
       generation += 1
-      daybreak = new Map()
-      return { credential, generation }
+      snapshots = yield* Effect.forEach(
+        yield* credentials.list(Integration.ID.make("openai")),
+        (credential) =>
+          integrations.connection
+            .snapshot({ type: "credential", id: credential.id, label: credential.label, active: credential.active })
+            .pipe(Effect.catch(() => Effect.succeed(undefined))),
+        { concurrency: "unbounded" },
+      ).pipe(Effect.map((items) => items.filter((item): item is Integration.Snapshot => item !== undefined)))
+      return { snapshots, generation }
     })
 
-    const discover = Effect.fn("OpenAIPlugin.discoverDaybreak")(function* (input: Effect.Success<ReturnType<typeof load>>) {
-      if (input.credential?.type !== "oauth" || !OpenAICodex.isChatGPT(input.credential)) return
-      const accountID = OpenAICodex.accountID(input.credential)
+    const discoverAccount = Effect.fn("OpenAIPlugin.discoverDaybreak")(function* (
+      snapshot: Integration.Snapshot,
+      currentGeneration: number,
+    ) {
+      if (snapshot.value?.type !== "oauth" || !OpenAICodex.isChatGPT(snapshot.value) || !snapshot.credential) return
+      const accountID = OpenAICodex.accountID(snapshot.value)
       if (!accountID) return
       const response = yield* HttpClient.filterStatusOk(http)
         .execute(
           HttpClientRequest.get(`${OpenAICodex.baseURL}/models`).pipe(
             HttpClientRequest.setUrlParam("client_version", OpenAICodex.catalogClientVersion),
-            HttpClientRequest.bearerToken(input.credential.access),
+            HttpClientRequest.bearerToken(snapshot.value.access),
             HttpClientRequest.setHeader("chatgpt-account-id", accountID),
             HttpClientRequest.setHeader("User-Agent", `ycoding/${InstallationVersion}`),
             HttpClientRequest.acceptJson,
           ),
         )
         .pipe(
-          Effect.flatMap(
-            HttpClientResponse.schemaBodyJson(Schema.Struct({ models: Schema.Array(Schema.Unknown) })),
-          ),
+          Effect.flatMap(HttpClientResponse.schemaBodyJson(Schema.Struct({ models: Schema.Array(Schema.Unknown) }))),
           Effect.provideService(FetchHttpClient.RequestInit, { redirect: "error" }),
           Effect.provideService(HttpIncomingMessage.MaxBodySize, FileSystem.Size(4 * 1024 * 1024)),
           Effect.timeout("3 seconds"),
           Effect.catch(() => Effect.succeed({ models: [] })),
         )
-      if (input.generation !== generation) return
-      daybreak = new Map(
-        response.models.flatMap((value) => {
-          const model = Option.getOrUndefined(decodeDaybreakModel(value))
-          if (!model) return []
-          return [[
-            model.slug,
-            (model.available_access_programs?.cyber ?? []).filter(
-              (program): program is "daybreak_blue" | "daybreak_red" =>
-                program === "daybreak_blue" || program === "daybreak_red",
-            ),
-          ]]
-        }),
+      if (currentGeneration !== generation) return
+      daybreak.set(
+        JSON.stringify([snapshot.credential.id, snapshot.credential.accountGeneration]),
+        new Map(
+          response.models.flatMap((value) => {
+            const model = Option.getOrUndefined(decodeDaybreakModel(value))
+            if (!model) return []
+            return [
+              [
+                model.slug,
+                (model.available_access_programs?.cyber ?? []).filter(
+                  (program): program is "daybreak_blue" | "daybreak_red" =>
+                    program === "daybreak_blue" || program === "daybreak_red",
+                ),
+              ],
+            ]
+          }),
+        ),
       )
-      yield* ctx.catalog.reload()
+      yield* catalog.reload()
     })
+    const discover = (input: Effect.Success<ReturnType<typeof load>>) =>
+      Effect.forEach(input.snapshots, (snapshot) => discoverAccount(snapshot, input.generation), {
+        concurrency: "unbounded",
+        discard: true,
+      })
 
     yield* ctx.integration.transform((draft) => {
       draft.method.update(browser)
       draft.method.update(headless)
     })
     const initial = yield* load()
+    yield* catalog.transform((draft) => {
+      draft.model.account.clear(Provider.ID.openai)
+      const item = draft.provider.get(Provider.ID.openai)
+      if (!item) return
+      for (const snapshot of snapshots) {
+        if (!snapshot.credential || !snapshot.value) continue
+        const chatgpt = OpenAICodex.isChatGPT(snapshot.value)
+        const programs = daybreak.get(JSON.stringify([snapshot.credential.id, snapshot.credential.accountGeneration]))
+        draft.model.account.update(
+          snapshot.credential,
+          Provider.ID.openai,
+          [...item.models.values()]
+            .filter(
+              (model) =>
+                model.id !== "gpt-5-chat-latest" &&
+                (!chatgpt ||
+                  (!Schema.is(Schema.Struct({ mode: Schema.Literal("pro") }))(model.body?.reasoning) &&
+                    OpenAICodex.eligible(model.modelID ?? model.id))),
+            )
+            .map((model) => ({
+              ...model,
+              package: model.package ?? item.provider.package,
+              settings: Provider.mergeOverlay(item.provider.settings, model.settings),
+              headers: Provider.mergeHeaders(item.provider.headers, model.headers),
+              body: Provider.mergeOverlay(item.provider.body, model.body),
+              daybreak:
+                chatgpt && programs?.get(model.modelID ?? model.id)?.length
+                  ? programs.get(model.modelID ?? model.id)
+                  : undefined,
+            })),
+        )
+      }
+    })
     yield* ctx.catalog.transform((evt) => {
       for (const item of evt.provider.list()) {
         if (!Provider.isAISDK(item.provider.package)) continue
@@ -248,37 +296,17 @@ export const OpenAIPlugin = define({
           model.enabled = false
         })
       }
-      if (!chatgpt) return
-      const item = evt.provider.get(Provider.ID.openai)
-      if (!item) return
-      for (const model of [...item.models.values()]) {
-        // ChatGPT-plan tokens only authorize codex-eligible models. Catalog
-        // prices remain available as API-equivalent usage estimates.
-        if (
-          Schema.is(Schema.Struct({ mode: Schema.Literal("pro") }))(model.body?.reasoning) ||
-          !OpenAICodex.eligible(model.modelID ?? model.id)
-        ) {
-          evt.model.update(item.provider.id, model.id, (draft) => {
-            draft.enabled = false
-            draft.daybreak = undefined
-          })
-          continue
-        }
-        const programs = daybreak.get(model.modelID ?? model.id) ?? []
-        evt.model.update(item.provider.id, model.id, (draft) => {
-          draft.daybreak = programs.length > 0 ? [...programs] : undefined
-        })
-      }
     })
 
     yield* discover(initial).pipe(Effect.forkScoped({ startImmediately: true }))
-    const refresh = () => loading.withPermit(
-      Effect.gen(function* () {
-        const next = yield* load()
-        yield* ctx.catalog.reload()
-        yield* discover(next).pipe(Effect.forkScoped({ startImmediately: true }))
-      }),
-    )
+    const refresh = () =>
+      loading.withPermit(
+        Effect.gen(function* () {
+          const next = yield* load()
+          yield* ctx.catalog.reload()
+          yield* discover(next).pipe(Effect.forkScoped({ startImmediately: true }))
+        }),
+      )
     yield* events.subscribe(Integration.Event.ConnectionUpdated).pipe(
       Stream.filter((event) => event.data.integrationID === Integration.ID.make("openai")),
       Stream.runForEach(refresh),

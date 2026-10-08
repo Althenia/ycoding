@@ -60,24 +60,137 @@ const waitFor = Effect.fnUntraced(function* (condition: () => Effect.Effect<bool
 })
 
 describe("ConfigProviderPlugin.Plugin", () => {
+  it.live("discovers custom models for every named account and keeps exact profile metadata isolated", () =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const requests: string[] = []
+        const server = Bun.serve({
+          port: 0,
+          fetch(request) {
+            const auth = request.headers.get("authorization") ?? ""
+            requests.push(auth)
+            const work = auth === "Bearer fixture-work"
+            return Response.json({
+              object: "list",
+              data: [
+                {
+                  id: work ? "work-only" : "personal-only",
+                  capabilities: { tools: true, input: ["text"], output: ["text"] },
+                },
+                {
+                  id: "shared",
+                  limit: { context: work ? 160000 : 32000, output: 1000 },
+                  variants: [{ id: work ? "high" : "low", settings: { reasoningEffort: work ? "high" : "low" } }],
+                },
+              ],
+            })
+          },
+        })
+        return { requests, server }
+      }),
+      ({ server, requests }) =>
+        Effect.gen(function* () {
+          const credentials = yield* Credential.Service
+          const catalog = yield* Catalog.Service
+          const providerID = Provider.ID.make("profile-discovery")
+          yield* credentials.create({
+            integrationID: Integration.ID.make(providerID),
+            label: "Work",
+            value: { type: "key", key: "fixture-work" },
+          })
+          yield* credentials.create({
+            integrationID: Integration.ID.make(providerID),
+            label: "Personal",
+            value: { type: "key", key: "fixture-personal" },
+          })
+          yield* addPlugin(
+            Config.Service.of({
+              reload: () => Effect.void,
+              entries: () =>
+                Effect.succeed([
+                  new Config.Document({
+                    type: "document",
+                    info: decode({
+                      providers: {
+                        [providerID]: {
+                          package: "aisdk:@ai-sdk/openai-compatible",
+                          settings: { baseURL: `http://127.0.0.1:${server.port}/v1` },
+                          catalog: { source: "openai-models" },
+                          models: { shared: { headers: { "x-fixture": "configured" } } },
+                        },
+                      },
+                    }),
+                  }),
+                ]),
+            }),
+          )
+          expect(requests.toSorted()).toEqual(["Bearer fixture-personal", "Bearer fixture-work"])
+          expect(
+            (yield* catalog.model.get(providerID, CatalogModel.ID.make("work-only"), "Work"))?.profiles?.map(
+              (profile) => profile.name,
+            ),
+          ).toEqual(["Work"])
+          expect(yield* catalog.model.get(providerID, CatalogModel.ID.make("work-only"), "Personal")).toBeUndefined()
+          expect(yield* catalog.model.get(providerID, CatalogModel.ID.make("shared"), "Work")).toMatchObject({
+            limit: { context: 160000 },
+            variants: [{ id: "high" }],
+            headers: { "x-fixture": "configured" },
+          })
+          expect(yield* catalog.model.get(providerID, CatalogModel.ID.make("shared"), "Personal")).toMatchObject({
+            limit: { context: 32000 },
+            variants: [{ id: "low" }],
+          })
+          expect(JSON.stringify(yield* catalog.model.available())).not.toContain("fixture-work")
+          expect(JSON.stringify(yield* catalog.model.available())).not.toContain("fixture-personal")
+        }),
+      ({ server }) => Effect.sync(() => server.stop(true)),
+    ),
+  )
+
   it.effect("registers credential profiles for configured Runpod endpoints", () =>
     Effect.gen(function* () {
       const integrations = yield* Integration.Service
       const catalog = yield* Catalog.Service
-      yield* addPlugin(Config.Service.of({ reload: () => Effect.void, entries: () => Effect.succeed([new Config.Document({
-        type: "document",
-        info: decode({ providers: {
-          "runpod-a": { package: "@ycoding-ai/ai/providers/runpod", settings: { worker: "ollama", baseURL: "https://api.runpod.ai/v2/a" }, models: { ollama: { capabilities: { tools: true } } } },
-          "runpod-b": { package: "@ycoding-ai/ai/providers/runpod", settings: { worker: "vllm", baseURL: "https://api.runpod.ai/v2/b" }, models: { coder: { modelID: "org/coder", capabilities: { tools: true } } } },
-        } }),
-      })]) }))
+      yield* addPlugin(
+        Config.Service.of({
+          reload: () => Effect.void,
+          entries: () =>
+            Effect.succeed([
+              new Config.Document({
+                type: "document",
+                info: decode({
+                  providers: {
+                    "runpod-a": {
+                      package: "@ycoding-ai/ai/providers/runpod",
+                      settings: { worker: "ollama", baseURL: "https://api.runpod.ai/v2/a" },
+                      models: { ollama: { capabilities: { tools: true } } },
+                    },
+                    "runpod-b": {
+                      package: "@ycoding-ai/ai/providers/runpod",
+                      settings: { worker: "vllm", baseURL: "https://api.runpod.ai/v2/b" },
+                      models: { coder: { modelID: "org/coder", capabilities: { tools: true } } },
+                    },
+                  },
+                }),
+              }),
+            ]),
+        }),
+      )
       for (const name of ["runpod-a", "runpod-b"]) {
         const id = Integration.ID.make(name)
         expect((yield* integrations.get(id))?.methods).toContainEqual({ type: "key", label: "API key" })
         yield* integrations.connection.key({ integrationID: id, key: "first-key", label: "Work" })
         yield* integrations.connection.key({ integrationID: id, key: "second-key", label: "Personal" })
-        expect((yield* integrations.get(id))?.connections.filter((connection) => connection.type === "credential").map((connection) => ({ label: connection.label, active: connection.active })))
-          .toEqual(expect.arrayContaining([{ label: "Work", active: false }, { label: "Personal", active: true }]))
+        expect(
+          (yield* integrations.get(id))?.connections
+            .filter((connection) => connection.type === "credential")
+            .map((connection) => ({ label: connection.label, active: connection.active })),
+        ).toEqual(
+          expect.arrayContaining([
+            { label: "Work", active: false },
+            { label: "Personal", active: true },
+          ]),
+        )
       }
       for (const [provider, modelID, route, endpoint] of [
         ["runpod-a", "ollama", "runpod-ollama", "https://api.runpod.ai/v2/a/runsync"],
@@ -86,7 +199,10 @@ describe("ConfigProviderPlugin.Plugin", () => {
         const entry = required(yield* catalog.model.get(Provider.ID.make(provider), CatalogModel.ID.make(modelID)))
         expect(entry.capabilities.tools).toBe(true)
         const connection = required(yield* integrations.connection.active(Integration.ID.make(provider)))
-        const selected = yield* SessionRunnerModel.fromCatalogModel(entry, yield* integrations.connection.resolve(connection))
+        const selected = yield* SessionRunnerModel.fromCatalogModel(
+          entry,
+          yield* integrations.connection.resolve(connection),
+        )
         expect(selected.route.id).toBe(route)
         const prepared = yield* LLMClient.prepare(LLM.request({ model: selected, prompt: "Hello" }))
         expect(`${selected.route.endpoint.baseURL}/runsync`).toBe(endpoint)
@@ -98,20 +214,41 @@ describe("ConfigProviderPlugin.Plugin", () => {
     Effect.gen(function* () {
       const integrations = yield* Integration.Service
       const id = Integration.ID.make("private-compatible")
-      yield* addPlugin(Config.Service.of({
-        reload: () => Effect.void,
-        entries: () => Effect.succeed([new Config.Document({
-          type: "document",
-          info: decode({ providers: {
-            [id]: { name: "Private endpoint", package: "aisdk:@ai-sdk/openai-compatible", settings: { baseURL: "https://example.test/v1" } },
-            "compatible-env": { package: "aisdk:@ai-sdk/openai-compatible", env: ["COMPATIBLE_KEY"], settings: { baseURL: "https://example.test/v1" } },
-          } }),
-        })]),
-      }))
+      yield* addPlugin(
+        Config.Service.of({
+          reload: () => Effect.void,
+          entries: () =>
+            Effect.succeed([
+              new Config.Document({
+                type: "document",
+                info: decode({
+                  providers: {
+                    [id]: {
+                      name: "Private endpoint",
+                      package: "aisdk:@ai-sdk/openai-compatible",
+                      settings: { baseURL: "https://example.test/v1" },
+                    },
+                    "compatible-env": {
+                      package: "aisdk:@ai-sdk/openai-compatible",
+                      env: ["COMPATIBLE_KEY"],
+                      settings: { baseURL: "https://example.test/v1" },
+                    },
+                  },
+                }),
+              }),
+            ]),
+        }),
+      )
 
       expect((yield* integrations.get(id))?.methods).toContainEqual({ type: "key", label: "API key" })
-      expect((yield* integrations.get(Integration.ID.make("compatible-env")))?.methods).toContainEqual({ type: "key", label: "API key" })
-      expect((yield* integrations.get(Integration.ID.make("compatible-env")))?.methods).toContainEqual({ type: "env", names: ["COMPATIBLE_KEY"] })
+      expect((yield* integrations.get(Integration.ID.make("compatible-env")))?.methods).toContainEqual({
+        type: "key",
+        label: "API key",
+      })
+      expect((yield* integrations.get(Integration.ID.make("compatible-env")))?.methods).toContainEqual({
+        type: "env",
+        names: ["COMPATIBLE_KEY"],
+      })
       yield* integrations.connection.key({ integrationID: id, key: "private-key", label: "Work" })
       expect((yield* integrations.get(id))?.connections).toMatchObject([
         { type: "credential", label: "Work", active: true },
@@ -120,103 +257,183 @@ describe("ConfigProviderPlugin.Plugin", () => {
     }),
   )
 
-  it.live("uses the selected stored profile for model discovery and never follows authenticated redirects", () =>
-    Effect.acquireUseRelease(
-      Effect.sync(() => {
-        const requests: string[] = []
-        const destination = Bun.serve({ port: 0, fetch(request) {
-          requests.push(`destination:${request.headers.get("authorization") ?? ""}`)
-          return Response.json({ object: "list", data: [{ id: "redirected-model" }] })
-        } })
-        const source = Bun.serve({ port: 0, fetch(request) {
-          const auth = request.headers.get("authorization") ?? ""
-          requests.push(`source:${auth}`)
-          if (auth === "Bearer redirect-key") return Response.redirect(`http://127.0.0.1:${destination.port}/models`)
-          return Response.json({ object: "list", data: [{ id: auth === "Bearer second-key" ? "second-model" : auth === "Bearer rotated-key" ? "rotated-model" : "first-model" }] })
-        } })
-        return { requests, source, destination }
-      }),
-      ({ requests, source }) => Effect.gen(function* () {
-        const integrations = yield* Integration.Service
-        const credentials = yield* Credential.Service
-        const catalog = yield* Catalog.Service
-        const id = Integration.ID.make("credential-catalog")
-        const blockedID = Integration.ID.make("insecure-catalog")
-        const first = yield* credentials.create({
-          integrationID: id, label: "First", value: Credential.Key.make({ type: "key", key: "first-key" }),
-        })
-        yield* credentials.create({
-          integrationID: blockedID, value: Credential.Key.make({ type: "key", key: "blocked-key" }),
-        })
-        yield* addPlugin(Config.Service.of({ reload: () => Effect.void, entries: () => Effect.succeed([new Config.Document({
-          type: "document",
-          info: decode({ providers: {
-            [id]: {
-              package: "aisdk:@ai-sdk/openai-compatible",
-              settings: { baseURL: `http://127.0.0.1:${source.port}/v1` },
-              catalog: { source: "openai-models" },
+  it.live(
+    "uses the selected stored profile for model discovery and never follows authenticated redirects",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.sync(() => {
+          const requests: string[] = []
+          const destination = Bun.serve({
+            port: 0,
+            fetch(request) {
+              requests.push(`destination:${request.headers.get("authorization") ?? ""}`)
+              return Response.json({ object: "list", data: [{ id: "redirected-model" }] })
             },
-            [blockedID]: {
-              package: "aisdk:@ai-sdk/openai-compatible",
-              settings: { baseURL: `http://0.0.0.0:${source.port}/v1` },
-              catalog: { source: "openai-models" },
+          })
+          const source = Bun.serve({
+            port: 0,
+            fetch(request) {
+              const auth = request.headers.get("authorization") ?? ""
+              requests.push(`source:${auth}`)
+              if (auth === "Bearer redirect-key")
+                return Response.redirect(`http://127.0.0.1:${destination.port}/models`)
+              return Response.json({
+                object: "list",
+                data: [
+                  {
+                    id:
+                      auth === "Bearer second-key"
+                        ? "second-model"
+                        : auth === "Bearer rotated-key"
+                          ? "rotated-model"
+                          : "first-model",
+                  },
+                ],
+              })
             },
-          } }),
-        })]) }))
-        expect(requests).toEqual(["source:Bearer first-key"])
-        expect(yield* catalog.model.get(Provider.ID.make(id), CatalogModel.ID.make("first-model"))).toBeDefined()
-        expect(yield* catalog.model.get(Provider.ID.make(blockedID), CatalogModel.ID.make("first-model"))).toBeUndefined()
-        expect(JSON.stringify(yield* catalog.provider.get(Provider.ID.make(id)))).not.toContain("first-key")
-        expect(JSON.stringify(yield* catalog.model.get(Provider.ID.make(id), CatalogModel.ID.make("first-model")))).not.toContain("first-key")
+          })
+          return { requests, source, destination }
+        }),
+        ({ requests, source }) =>
+          Effect.gen(function* () {
+            const integrations = yield* Integration.Service
+            const credentials = yield* Credential.Service
+            const catalog = yield* Catalog.Service
+            const id = Integration.ID.make("credential-catalog")
+            const blockedID = Integration.ID.make("insecure-catalog")
+            const first = yield* credentials.create({
+              integrationID: id,
+              label: "First",
+              value: Credential.Key.make({ type: "key", key: "first-key" }),
+            })
+            yield* credentials.create({
+              integrationID: blockedID,
+              value: Credential.Key.make({ type: "key", key: "blocked-key" }),
+            })
+            yield* addPlugin(
+              Config.Service.of({
+                reload: () => Effect.void,
+                entries: () =>
+                  Effect.succeed([
+                    new Config.Document({
+                      type: "document",
+                      info: decode({
+                        providers: {
+                          [id]: {
+                            package: "aisdk:@ai-sdk/openai-compatible",
+                            settings: { baseURL: `http://127.0.0.1:${source.port}/v1` },
+                            catalog: { source: "openai-models" },
+                          },
+                          [blockedID]: {
+                            package: "aisdk:@ai-sdk/openai-compatible",
+                            settings: { baseURL: `http://0.0.0.0:${source.port}/v1` },
+                            catalog: { source: "openai-models" },
+                          },
+                        },
+                      }),
+                    }),
+                  ]),
+              }),
+            )
+            expect(requests).toEqual(["source:Bearer first-key"])
+            expect(yield* catalog.model.get(Provider.ID.make(id), CatalogModel.ID.make("first-model"))).toBeDefined()
+            expect(
+              yield* catalog.model.get(Provider.ID.make(blockedID), CatalogModel.ID.make("first-model")),
+            ).toBeUndefined()
+            expect(JSON.stringify(yield* catalog.provider.get(Provider.ID.make(id)))).not.toContain("first-key")
+            expect(
+              JSON.stringify(yield* catalog.model.get(Provider.ID.make(id), CatalogModel.ID.make("first-model"))),
+            ).not.toContain("first-key")
 
-        yield* integrations.connection.key({ integrationID: id, key: "second-key", label: "Second" })
-        yield* waitFor(() => catalog.model.get(Provider.ID.make(id), CatalogModel.ID.make("second-model")).pipe(Effect.map(Boolean)))
-        expect(requests).toContain("source:Bearer second-key")
-        expect(yield* catalog.model.get(Provider.ID.make(id), CatalogModel.ID.make("second-model"))).toBeDefined()
-        yield* integrations.connection.activate(first.id)
-        yield* waitFor(() => Effect.sync(() => requests.filter((request) => request === "source:Bearer first-key").length === 2))
-        yield* integrations.connection.key({ integrationID: id, key: "rotated-key", label: "First" })
-        yield* waitFor(() => catalog.model.get(Provider.ID.make(id), CatalogModel.ID.make("rotated-model")).pipe(Effect.map(Boolean)))
-        expect(requests).toContain("source:Bearer rotated-key")
-        yield* integrations.connection.key({ integrationID: id, key: "redirect-key", label: "Redirect" })
-        yield* waitFor(() => Effect.sync(() => requests.includes("source:Bearer redirect-key")))
-        expect(requests.some((request) => request.startsWith("destination:"))).toBe(false)
-        expect(yield* catalog.model.get(Provider.ID.make(id), CatalogModel.ID.make("redirected-model"))).toBeUndefined()
-        expect(JSON.stringify(yield* integrations.get(id))).not.toMatch(/first-key|second-key|rotated-key|redirect-key/)
-      }),
-      ({ source, destination }) => Effect.promise(() => Promise.all([source.stop(true), destination.stop(true)])),
-    ), 10000,
+            yield* integrations.connection.key({ integrationID: id, key: "second-key", label: "Second" })
+            yield* waitFor(() =>
+              catalog.model.get(Provider.ID.make(id), CatalogModel.ID.make("second-model")).pipe(Effect.map(Boolean)),
+            )
+            expect(requests).toContain("source:Bearer second-key")
+            expect(yield* catalog.model.get(Provider.ID.make(id), CatalogModel.ID.make("second-model"))).toBeDefined()
+            yield* integrations.connection.activate(first.id)
+            yield* waitFor(() =>
+              Effect.sync(() => requests.filter((request) => request === "source:Bearer first-key").length === 2),
+            )
+            yield* integrations.connection.key({ integrationID: id, key: "rotated-key", label: "First" })
+            yield* waitFor(() =>
+              catalog.model.get(Provider.ID.make(id), CatalogModel.ID.make("rotated-model")).pipe(Effect.map(Boolean)),
+            )
+            expect(requests).toContain("source:Bearer rotated-key")
+            yield* integrations.connection.key({ integrationID: id, key: "redirect-key", label: "Redirect" })
+            yield* waitFor(() => Effect.sync(() => requests.includes("source:Bearer redirect-key")))
+            expect(requests.some((request) => request.startsWith("destination:"))).toBe(false)
+            expect(
+              yield* catalog.model.get(Provider.ID.make(id), CatalogModel.ID.make("redirected-model")),
+            ).toBeUndefined()
+            expect(JSON.stringify(yield* integrations.get(id))).not.toMatch(
+              /first-key|second-key|rotated-key|redirect-key/,
+            )
+          }),
+        ({ source, destination }) => Effect.promise(() => Promise.all([source.stop(true), destination.stop(true)])),
+      ),
+    10000,
   )
 
   it.effect("keeps config-key and header discovery on remote HTTP with ordinary redirects", () =>
     Effect.acquireUseRelease(
       Effect.sync(() => {
         const requests: string[] = []
-        const server = Bun.serve({ port: 0, fetch(request) {
-          const url = new URL(request.url)
-          requests.push(`${url.pathname}:${request.headers.get("authorization") ?? ""}`)
-          if (url.pathname.endsWith("/models")) return Response.redirect(new URL("/catalog", url).toString())
-          return Response.json({ object: "list", data: [{ id: request.headers.get("authorization") === "Bearer configured-key" ? "key-model" : "header-model" }] })
-        } })
+        const server = Bun.serve({
+          port: 0,
+          fetch(request) {
+            const url = new URL(request.url)
+            requests.push(`${url.pathname}:${request.headers.get("authorization") ?? ""}`)
+            if (url.pathname.endsWith("/models")) return Response.redirect(new URL("/catalog", url).toString())
+            return Response.json({
+              object: "list",
+              data: [
+                { id: request.headers.get("authorization") === "Bearer configured-key" ? "key-model" : "header-model" },
+              ],
+            })
+          },
+        })
         return { server, requests }
       }),
-      ({ server, requests }) => Effect.gen(function* () {
-        const catalog = yield* Catalog.Service
-        const baseURL = `http://0.0.0.0:${server.port}/v1`
-        yield* addPlugin(Config.Service.of({ reload: () => Effect.void, entries: () => Effect.succeed([new Config.Document({
-          type: "document",
-          info: decode({ providers: {
-            "config-key": { settings: { baseURL, apiKey: "configured-key" }, catalog: { source: "openai-models" } },
-            "config-header": { settings: { baseURL }, headers: { Authorization: "Bearer header-key" }, catalog: { source: "openai-models" } },
-          } }),
-        })]) }))
-        expect(requests).toContain("/v1/models:Bearer configured-key")
-        expect(requests).toContain("/catalog:Bearer configured-key")
-        expect(requests).toContain("/v1/models:Bearer header-key")
-        expect(requests).toContain("/catalog:Bearer header-key")
-        expect(yield* catalog.model.get(Provider.ID.make("config-key"), CatalogModel.ID.make("key-model"))).toBeDefined()
-        expect(yield* catalog.model.get(Provider.ID.make("config-header"), CatalogModel.ID.make("header-model"))).toBeDefined()
-      }),
+      ({ server, requests }) =>
+        Effect.gen(function* () {
+          const catalog = yield* Catalog.Service
+          const baseURL = `http://0.0.0.0:${server.port}/v1`
+          yield* addPlugin(
+            Config.Service.of({
+              reload: () => Effect.void,
+              entries: () =>
+                Effect.succeed([
+                  new Config.Document({
+                    type: "document",
+                    info: decode({
+                      providers: {
+                        "config-key": {
+                          settings: { baseURL, apiKey: "configured-key" },
+                          catalog: { source: "openai-models" },
+                        },
+                        "config-header": {
+                          settings: { baseURL },
+                          headers: { Authorization: "Bearer header-key" },
+                          catalog: { source: "openai-models" },
+                        },
+                      },
+                    }),
+                  }),
+                ]),
+            }),
+          )
+          expect(requests).toContain("/v1/models:Bearer configured-key")
+          expect(requests).toContain("/catalog:Bearer configured-key")
+          expect(requests).toContain("/v1/models:Bearer header-key")
+          expect(requests).toContain("/catalog:Bearer header-key")
+          expect(
+            yield* catalog.model.get(Provider.ID.make("config-key"), CatalogModel.ID.make("key-model")),
+          ).toBeDefined()
+          expect(
+            yield* catalog.model.get(Provider.ID.make("config-header"), CatalogModel.ID.make("header-model")),
+          ).toBeDefined()
+        }),
       ({ server }) => Effect.sync(() => server.stop(true)),
     ),
   )
@@ -307,7 +524,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
               type: "document",
               info: decode({
                 providers: {
-                  opencode: { // YCODING_EXTERNAL_OPENCODE: external provider fixture
+                  [providerID]: {
                     package: "aisdk:@ai-sdk/openai",
                     settings: { baseURL: "https://provider.test/v1" },
                     models: {
@@ -360,7 +577,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
               type: "document",
               info: decode({
                 providers: {
-                  opencode: { // YCODING_EXTERNAL_OPENCODE: external provider fixture
+                  [providerID]: {
                     package: "aisdk:@ai-sdk/openai",
                     settings: { baseURL: "https://provider.test/v1" },
                   },
@@ -371,7 +588,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
               type: "document",
               info: decode({
                 providers: {
-                  opencode: { // YCODING_EXTERNAL_OPENCODE: external provider fixture
+                  [providerID]: {
                     models: {
                       "alpha-gpt-next": {
                         variants: [{ id: "high", body: { reasoningEffort: "high" } }],
@@ -439,7 +656,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
               new Config.Document({
                 type: "document",
                 info: decode({
-                  model: "custom/default",
+                  model: { providerID: "custom", model: "default", variant: "fast", profile: "Work" },
                   providers: {
                     custom: {
                       package: "aisdk:custom-sdk",
@@ -448,6 +665,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
                       models: {
                         default: {
                           name: "Default",
+                          variants: [{ id: "fast" }],
                         },
                         chat: {
                           modelID: "api-chat",
@@ -486,7 +704,19 @@ describe("ConfigProviderPlugin.Plugin", () => {
 
         const provider = required(yield* catalog.provider.get(providerID))
         const model = required(yield* catalog.model.get(providerID, modelID))
+        expect(yield* catalog.model.default()).toBeUndefined()
+        yield* (yield* Credential.Service).create({
+          integrationID: Integration.ID.make(providerID),
+          label: "Work",
+          value: { type: "key", key: "fixture-default" },
+        })
         expect((yield* catalog.model.default())?.id).toBe(CatalogModel.ID.make("default"))
+        expect(yield* catalog.model.defaultSelection()).toMatchObject({
+          providerID: "custom",
+          id: "default",
+          variant: "fast",
+          profile: "Work",
+        })
         expect(provider.name).toBe("Renamed")
         expect((yield* integrations.get(Integration.ID.make("custom")))?.methods).toContainEqual({
           type: "env",

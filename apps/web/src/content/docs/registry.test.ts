@@ -110,6 +110,95 @@ describe("remote workspace documentation", () => {
   })
 })
 
+describe("structured decision documentation", () => {
+  test("documents helper model precedence and separates estimated confidence from native probabilities", () => {
+    const tools = findDocPage("configuration/tools")
+    const text = JSON.stringify(tools?.sections)
+    expect(text).toContain("ycoding.tool.decision")
+    expect(text).toContain("agents.decision.model")
+    expect(text).toContain("efficiency.helper_models.decision")
+    expect(text).toContain("min_confidence")
+    expect(text).toContain("min_probability")
+    expect(text).toContain("uncalibrated")
+    expect(text).toContain("subscription")
+    expect(text).toContain("OPENAI_API_KEY")
+    expect(text).toContain("TYPESAFE_API_KEY")
+    expect(text).toContain("API Platform billing")
+    const example = tools?.sections.flatMap((section) => section.blocks)
+      .find((block) => block.kind === "code" && block.label === "Decision helper model")
+    expect(example?.kind).toBe("code")
+    if (example?.kind !== "code") throw new Error("Decision helper model example is missing")
+    expect(Bun.JSONC.parse(example.code)).toEqual({
+      efficiency: { helper_models: { decision: "openai/gpt-6-luna-fast#medium" } },
+    })
+    const native = tools?.sections.flatMap((section) => section.blocks)
+      .find((block) => block.kind === "code" && block.label === "Native decision connections")
+    if (native?.kind !== "code") throw new Error("Native decision connection example is missing")
+    expect(Bun.JSONC.parse(native.code)).toEqual({
+      decisions: {
+        timeout_ms: 10000,
+        providers: {
+          openai: { api_key: "{env:OPENAI_API_KEY}" },
+          typesafe: { api_key: "{env:TYPESAFE_API_KEY}", model: "jev-1.13.0" },
+        },
+      },
+    })
+    expect(JSON.stringify(findDocPage("configuration/models")?.sections)).toContain(".decision")
+    expect(JSON.stringify(findDocPage("configuration/agents")?.sections)).toContain("`decision`")
+  })
+
+  test("documents opt-in policies without granting permission or claiming goal completion", () => {
+    const tools = findDocPage("configuration/tools")
+    const text = JSON.stringify(tools?.sections)
+    expect(text).toContain("disabled when omitted")
+    expect(text).toContain("hard reviews")
+    expect(text).toContain("explicit selections")
+    expect(text).toContain("stopped")
+    expect(text).toContain("completed")
+    expect(text).toContain("authorized")
+    expect(text).toContain("keep-current")
+    const example = tools?.sections.flatMap((section) => section.blocks)
+      .find((block) => block.kind === "code" && block.label === "Opt-in decision policies")
+    expect(example?.kind).toBe("code")
+    if (example?.kind !== "code") throw new Error("Opt-in decision policies example is missing")
+    expect(Bun.JSONC.parse(example.code)).toEqual({
+      decisions: {
+        guardrails: { provider: "agent", min_confidence: 0.95 },
+        routing: {
+          provider: "agent", min_confidence: 0.9,
+          candidates: [{ id: "delivery", description: "Complete a bounded repository implementation", agent: "GSD" }],
+        },
+        goal: { provider: "agent", min_confidence: 0.95 },
+        questions: { provider: "agent", min_confidence: 0.8 },
+      },
+    })
+    expect(JSON.stringify(findDocPage("configuration/goal")?.sections)).toContain("decisions.goal")
+    expect(JSON.stringify(findDocPage("configuration/guardrails")?.sections)).toContain("decisions.guardrails")
+    expect(JSON.stringify(findDocPage("configuration")?.sections)).toContain("`decisions`")
+  })
+})
+
+describe("remote recovery documentation", () => {
+  test("documents saved enablement, bounded recovery, safe disable, and manual repair", () => {
+    const recovery = findDocPage("usage/remote")?.sections.find((section) => section.heading === "Connection recovery")
+    const text = JSON.stringify(recovery?.blocks ?? [])
+    expect(text).toContain("connecting")
+    expect(text).toContain("1, 2, 4, 8, 16")
+    expect(text).toContain("30 seconds")
+    expect(text).toContain("authentication")
+    expect(text).toContain("pending enable")
+    expect(text).toContain("late")
+    expect(text).toContain("off and then on")
+    expect(text).toContain("ycoding remote status")
+    expect(text).toContain("ycoding update")
+    const help = JSON.stringify(findDocPage("troubleshooting")?.sections)
+    expect(help).toContain("automatically")
+    expect(help).toContain("connecting")
+    expect(help).toContain("rejected credentials")
+    expect(help).toContain("off and then on")
+  })
+})
+
 describe("page structure", () => {
   test("the remote guide describes family-finished and attention categories", () => {
     const section = findDocPage("usage/remote")?.sections.find((entry) => entry.heading === "Notifications and availability")

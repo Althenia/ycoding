@@ -8,7 +8,8 @@ import { Modal } from "../../ui/modal"
 import { pwaInstall } from "../../pwa/install"
 import { InstallPWAButton } from "../../pwa/install-button"
 import { useTheme } from "../../theme/theme-store"
-import type { ThemePreference } from "../../theme/theme"
+import { normalizeSchemePreference, type ThemePreference } from "../../theme/theme"
+import { SCHEMES, SCHEME_IDS } from "../../theme/schemes"
 import { useRemote } from "../context"
 import { createRemoteQuery } from "../query"
 import { keepAwakeView } from "../keep-awake"
@@ -43,6 +44,8 @@ const themeOptions: readonly { readonly id: ThemePreference; readonly label: str
   { id: "light", label: "Light" },
   { id: "dark", label: "Dark" },
 ]
+
+const schemeOptions = SCHEME_IDS.map((id) => ({ value: id, label: SCHEMES[id].label }))
 
 export function MachineSettings(): JSX.Element {
   const remote = useRemote()
@@ -506,9 +509,10 @@ export function DeviceSettings(): JSX.Element {
 }
 
 /**
- * Theme is reachable from Settings at every width, because below 480 the header control
- * is absent and this group is the only path. It is a real three-option control, and the
- * stored preference keeps resolving before the first paint exactly as it shipped.
+ * Theme and color scheme are reachable from Settings at every width, because below 480 the
+ * header control is absent and this group is the only path. Theme is a real three-option
+ * control; the scheme is a select so more schemes add options, not controls. Both stored
+ * choices resolve before the first paint.
  */
 export function AppearanceSettings(): JSX.Element {
   const theme = useTheme()
@@ -517,7 +521,7 @@ export function AppearanceSettings(): JSX.Element {
       id="appearance-settings"
       category="Appearance"
       title="Appearance"
-      hint="Light, dark, or system. The choice is stored in this browser and applied before the first paint."
+      hint="Light, dark, or system, and a color scheme. One Dark Pro paints dark mode only. With System and the default scheme, a system request for more contrast applies High contrast. The choices are stored in this browser and applied before the first paint."
     >
       <div class="list appearance-segments">
         <div class="list__row">
@@ -544,6 +548,25 @@ export function AppearanceSettings(): JSX.Element {
                 </button>
               )}
             </For>
+          </span>
+        </div>
+      </div>
+      <div class="list">
+        <div class="list__row">
+          <span class="list__label">
+            Color scheme
+          </span>
+          <span class="list__control">
+            <CustomSelect
+              class="scheme-select"
+              label="Color scheme"
+              sheetTitle="Select Color Scheme"
+              sheetSubtitle="Applies on top of Light, Dark, or System"
+              value={theme.scheme()}
+              placeholder="Default"
+              options={schemeOptions}
+              onChange={(id) => theme.setScheme(normalizeSchemePreference(id))}
+            />
           </span>
         </div>
       </div>

@@ -18,11 +18,13 @@ import { RemoteSetupError } from "./remote-error"
 import { agentURL } from "./remote-config"
 import {
   createSessionRegistry,
+  createOperationCache,
   createAttachmentUploads,
   attentionDetails,
   createSubscriptions,
   executeRemoteOperation,
   sessionStatus,
+  type OperationCache,
   type SessionRegistry,
   type SubscriptionRegistry,
 } from "./remote-operations"
@@ -89,6 +91,7 @@ export type BridgeState = "idle" | "live" | "terminal" | "closed"
 
 const terminalCloseCodes: readonly number[] = [RemoteCloseCode.unauthorized, RemoteCloseCode.forbidden]
 const maxPendingEvents = 4_096
+const slowRequestMs = 1_000
 const agentFrameIntervalMs = 25
 const interactiveCoalesceMs = 40
 const backgroundCoalesceMs = 750
@@ -97,6 +100,7 @@ export class RemoteAgent {
   private readonly registry: SessionRegistry
   private readonly subscriptions: SubscriptionRegistry
   private uploads = createAttachmentUploads()
+  private readonly cache: OperationCache
   private readonly now: () => number
   private readonly refreshIntervalMs: number
   private readonly eventRetryInitialMs: number
@@ -140,6 +144,7 @@ export class RemoteAgent {
 
   constructor(private readonly options: RemoteBridgeOptions) {
     this.now = options.now ?? Date.now
+    this.cache = createOperationCache(this.now)
     this.refreshIntervalMs = options.refreshIntervalMs ?? defaults.refreshIntervalMs
     this.eventRetryInitialMs = options.eventRetryInitialMs ?? defaults.eventRetryInitialMs
     this.eventRetryMaxMs = options.eventRetryMaxMs ?? defaults.eventRetryMaxMs
@@ -300,6 +305,7 @@ export class RemoteAgent {
   private async handleRequest(request: RemoteRequest, controller: AbortController) {
     const owner = this.connection
     try {
+      const started = this.now()
       const frames = await executeRemoteOperation({
         request,
         signal: controller.signal,
@@ -307,7 +313,10 @@ export class RemoteAgent {
         sessions: this.registry,
         subscriptions: this.subscriptions,
         local: this.options.local,
+        cache: this.cache,
       })
+      const elapsed = this.now() - started
+      if (elapsed >= slowRequestMs) this.diagnostic(`slow remote request ${request.operation} took ${elapsed}ms on this device`)
       if (this.connection !== owner || controller.signal.aborted) return
       const live = this.live(owner)
       if (live === undefined) return

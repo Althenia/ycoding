@@ -9,19 +9,30 @@ import { EventRuntime } from "./event"
 import { Policy } from "./policy"
 import { State } from "./state"
 import { Integration } from "./integration"
+import { Credential } from "./credential"
 
 export type ProviderRecord = {
   provider: Provider.MutableInfo
   models: Map<CatalogModel.ID, CatalogModel.MutableInfo>
 }
 
-export type DefaultModel = { providerID: Provider.ID; modelID: CatalogModel.ID }
+export type DefaultModel = {
+  providerID: Provider.ID
+  modelID: CatalogModel.ID
+  variant?: CatalogModel.VariantID
+  profile?: string
+}
 
 export const Event = Catalog.Event
 
 type Data = {
   providers: Map<Provider.ID, ProviderRecord>
   defaultModel?: DefaultModel
+  accounts: Map<
+    Credential.ID,
+    { generation: number; providers: Map<Provider.ID, Map<CatalogModel.ID, CatalogModel.Info>> }
+  >
+  contextualProviders: Set<Provider.ID>
 }
 
 export type Draft = {
@@ -35,9 +46,17 @@ export type Draft = {
     get: (providerID: Provider.ID, modelID: CatalogModel.ID) => CatalogModel.Info | undefined
     update: (providerID: Provider.ID, modelID: CatalogModel.ID, fn: (model: CatalogModel.MutableInfo) => void) => void
     remove: (providerID: Provider.ID, modelID: CatalogModel.ID) => void
+    account: {
+      update: (credential: Credential.Info, providerID: Provider.ID, models: readonly CatalogModel.Info[]) => void
+      clear: (providerID: Provider.ID) => void
+    }
     default: {
       get: () => DefaultModel | undefined
-      set: (providerID: Provider.ID, modelID: CatalogModel.ID) => void
+      set: (
+        providerID: Provider.ID,
+        modelID: CatalogModel.ID,
+        selection?: Pick<CatalogModel.Ref, "variant" | "profile">,
+      ) => void
     }
   }
 }
@@ -49,10 +68,19 @@ export interface Interface extends State.Transformable<Draft> {
     readonly available: () => Effect.Effect<Provider.Info[]>
   }
   readonly model: {
-    readonly get: (providerID: Provider.ID, modelID: CatalogModel.ID) => Effect.Effect<CatalogModel.Info | undefined>
+    readonly get: (
+      providerID: Provider.ID,
+      modelID: CatalogModel.ID,
+      profile?: string,
+    ) => Effect.Effect<CatalogModel.Info | undefined>
     readonly all: () => Effect.Effect<CatalogModel.Info[]>
     readonly available: () => Effect.Effect<CatalogModel.Info[]>
     readonly default: () => Effect.Effect<CatalogModel.Info | undefined>
+    readonly defaultSelection: () => Effect.Effect<CatalogModel.Ref | undefined>
+    readonly forConnection: (
+      model: CatalogModel.Info,
+      snapshot?: Integration.Snapshot,
+    ) => Effect.Effect<CatalogModel.Info | undefined>
     readonly small: (providerID: Provider.ID) => Effect.Effect<CatalogModel.Info | undefined>
   }
 }
@@ -65,6 +93,7 @@ const layer = Layer.effect(
     const events = yield* EventRuntime.Service
     const integrations = yield* Integration.Service
     const policy = yield* Policy.Service
+    const credentials = yield* Credential.Service
 
     const available = (provider: Provider.Info, integration: Integration.Info | undefined) => {
       if (provider.disabled) return false
@@ -85,7 +114,7 @@ const layer = Layer.effect(
 
     const state = State.create<Data, Draft>({
       name: "catalog",
-      initial: () => ({ providers: new Map() }),
+      initial: () => ({ providers: new Map(), accounts: new Map(), contextualProviders: new Set() }),
       draft: (draft) => {
         const result: Draft = {
           provider: {
@@ -107,6 +136,22 @@ const layer = Layer.effect(
             },
           },
           model: {
+            account: {
+              update: (credential, providerID, models) => {
+                draft.contextualProviders.add(providerID)
+                const existing = draft.accounts.get(credential.id)
+                const entry =
+                  existing?.generation === credential.accountGeneration
+                    ? existing
+                    : { generation: credential.accountGeneration, providers: new Map() }
+                entry.providers.set(providerID, new Map(models.map((model) => [model.id, structuredClone(model)])))
+                draft.accounts.set(credential.id, entry)
+              },
+              clear: (providerID) => {
+                draft.contextualProviders.add(providerID)
+                for (const account of draft.accounts.values()) account.providers.delete(providerID)
+              },
+            },
             get: (providerID, modelID) => draft.providers.get(providerID)?.models.get(modelID),
             update: (providerID, modelID, fn) => {
               let record = draft.providers.get(providerID)
@@ -129,8 +174,8 @@ const layer = Layer.effect(
             },
             default: {
               get: () => draft.defaultModel,
-              set: (providerID, modelID) => {
-                draft.defaultModel = { providerID, modelID }
+              set: (providerID, modelID, selection) => {
+                draft.defaultModel = { providerID, modelID, ...selection }
               },
             },
           },
@@ -141,6 +186,47 @@ const layer = Layer.effect(
         yield* events.publish(Event.Updated, {})
       }),
     })
+    const accountModels = (credential: Credential.Info, providerID: Provider.ID) => {
+      const account = state.get().accounts.get(credential.id)
+      return account?.generation === credential.accountGeneration ? account.providers.get(providerID) : undefined
+    }
+    const profiled = (
+      model: CatalogModel.Info,
+      provider: Provider.Info,
+      saved: readonly Credential.Info[],
+      selectedCredential?: Credential.Info,
+    ) => {
+      const relevant = saved.filter(
+        (credential) => credential.integrationID === (provider.integrationID ?? Integration.ID.make(provider.id)),
+      )
+      const active = relevant.find((credential) => credential.active) ?? relevant.at(-1)
+      const contextual = state.get().contextualProviders.has(provider.id)
+      const effective = selectedCredential ?? active
+      const selected = effective ? accountModels(effective, provider.id)?.get(model.id) : undefined
+      return {
+        ...(selected ?? model),
+        enabled: contextual && effective ? selected?.enabled === true : model.enabled,
+        profiles: relevant
+          .filter(
+            (credential) =>
+              relevant.filter((item) => item.label === credential.label).length === 1 &&
+              (contextual ? accountModels(credential, provider.id)?.get(model.id)?.enabled === true : model.enabled),
+          )
+          .map((credential) => {
+            const daybreak = accountModels(credential, provider.id)?.get(model.id)?.daybreak
+            const variants =
+              (contextual ? accountModels(credential, provider.id)?.get(model.id)?.variants : model.variants)?.map(
+                (variant) => variant.id,
+              ) ?? []
+            return {
+              name: credential.label,
+              active: credential.id === active?.id,
+              variants,
+              ...(daybreak?.length ? { daybreak: [...daybreak] } : {}),
+            }
+          }),
+      }
+    }
     const result: Interface = {
       transform: state.transform,
       reload: state.reload,
@@ -170,18 +256,77 @@ const layer = Layer.effect(
       },
 
       model: {
-        get: Effect.fn("Catalog.model.get")(function* (providerID, modelID) {
+        defaultSelection: Effect.fn("Catalog.model.defaultSelection")(function* () {
+          const configured = state.get().defaultModel
+          if (configured?.profile !== undefined)
+            return CatalogModel.Ref.make({
+              providerID: configured.providerID,
+              id: configured.modelID,
+              variant: configured.variant,
+              profile: configured.profile,
+            })
+          const model = yield* result.model.default()
+          return model
+            ? CatalogModel.Ref.make({
+                providerID: model.providerID,
+                id: model.id,
+                variant:
+                  configured?.providerID === model.providerID && configured.modelID === model.id
+                    ? configured.variant
+                    : undefined,
+              })
+            : undefined
+        }),
+        forConnection: Effect.fn("Catalog.model.forConnection")(function* (model, snapshot) {
+          const provider = yield* result.provider.get(model.providerID)
+          if (provider?.disabled || (yield* policy.evaluate("provider.use", model.providerID, "allow")) === "deny")
+            return undefined
+          const credential = snapshot?.credential
+          const models = credential ? accountModels(credential, model.providerID) : undefined
+          if (credential && state.get().contextualProviders.has(model.providerID) && models === undefined)
+            return undefined
+          const selected = models ? models.get(model.id) : model
+          if (!selected?.enabled) return undefined
+          return models ? selected : provider ? projectModel(selected, provider) : selected
+        }),
+        get: Effect.fn("Catalog.model.get")(function* (providerID, modelID, profile) {
           const record = state.get().providers.get(providerID)
           if (!record) return
-          const model = record.models.get(modelID)
-          return model && projectModel(model, record.provider)
+          const saved = yield* credentials.all()
+          const model =
+            record.models.get(modelID) ??
+            saved.flatMap((credential) => {
+              const model = accountModels(credential, providerID)?.get(modelID)
+              return model ? [model] : []
+            })[0]
+          if (profile === undefined)
+            return model && profiled(projectModel(model, record.provider), record.provider, saved)
+          const matching = saved.filter(
+            (credential) =>
+              credential.integrationID === (record.provider.integrationID ?? Integration.ID.make(providerID)) &&
+              credential.label === profile,
+          )
+          if (matching.length !== 1) return undefined
+          const contextual = state.get().contextualProviders.has(providerID)
+            ? accountModels(matching[0]!, providerID)?.get(modelID)
+            : model
+              ? projectModel(model, record.provider)
+              : undefined
+          return contextual && profiled(contextual, record.provider, saved, matching[0])
         }),
 
         all: Effect.fn("Catalog.model.all")(function* () {
+          const saved = yield* credentials.all()
           return pipe(
             Array.fromIterable(state.get().providers.values()),
             Array.flatMap((record) => {
-              return Array.fromIterable(record.models.values()).map((model) => projectModel(model, record.provider))
+              const models = new Map(record.models)
+              for (const credential of saved)
+                for (const model of accountModels(credential, record.provider.id)?.values() ?? [])
+                  if (!models.has(model.id)) models.set(model.id, model as CatalogModel.MutableInfo)
+              return Array.fromIterable(models.values()).map((model) =>
+                profiled(projectModel(model, record.provider), record.provider, saved),
+              )
             }),
             Array.sortWith((item) => item.time.released, Order.flip(Order.Number)),
           )
@@ -189,14 +334,9 @@ const layer = Layer.effect(
 
         available: Effect.fn("Catalog.model.available")(function* () {
           const providers = new Set((yield* result.provider.available()).map((provider) => provider.id))
-          const models: CatalogModel.Info[] = []
-          for (const record of state.get().providers.values()) {
-            if (!providers.has(record.provider.id)) continue
-            for (const model of record.models.values()) {
-              if (!model.enabled) continue
-              models.push(projectModel(model, record.provider))
-            }
-          }
+          const models = (yield* result.model.all()).filter(
+            (model) => providers.has(model.providerID) && (model.enabled || model.profiles?.length),
+          )
           return pipe(
             models,
             Array.sortWith((item) => item.time.released, Order.flip(Order.Number)),
@@ -208,12 +348,19 @@ const layer = Layer.effect(
           if (defaultModel) {
             const provider = yield* result.provider.get(defaultModel.providerID)
             if (provider && (yield* result.provider.available()).some((item) => item.id === provider.id)) {
-              const model = yield* result.model.get(defaultModel.providerID, defaultModel.modelID)
-              if (model?.enabled) return model
+              const model = yield* result.model.get(defaultModel.providerID, defaultModel.modelID, defaultModel.profile)
+              if (
+                model &&
+                (defaultModel.profile === undefined
+                  ? model.enabled
+                  : model.profiles?.some((profile) => profile.name === defaultModel.profile))
+              )
+                return model
             }
+            if (defaultModel.profile !== undefined) return undefined
           }
 
-          return (yield* result.model.available())[0]
+          return (yield* result.model.available()).find((model) => model.enabled)
         }),
 
         small: Effect.fn("Catalog.model.small")(function* (providerID) {
@@ -279,4 +426,8 @@ const layer = Layer.effect(
 
 const SMALL_MODEL_RE = /\b(nano|flash|lite|mini|haiku|small|fast)\b/
 
-export const node = makeLocationNode({ service: Service, layer, deps: [EventRuntime.node, Integration.node, Policy.node] })
+export const node = makeLocationNode({
+  service: Service,
+  layer,
+  deps: [EventRuntime.node, Integration.node, Policy.node, Credential.node],
+})

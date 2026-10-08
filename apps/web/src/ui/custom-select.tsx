@@ -35,6 +35,7 @@ export function CustomSelect(props: {
   const [pendingValue, setPendingValue] = createSignal<string>()
   const [active, setActive] = createSignal(0)
   const [placement, setPlacement] = createSignal({ left: 0, top: 0, width: 260 })
+  const [sheetFrame, setSheetFrame] = createSignal({ top: 0, height: Math.round(window.visualViewport?.height ?? window.innerHeight) })
   const selected = createMemo(() => props.options.findIndex((option) => option.value === props.value))
   const activeIndex = createMemo(() => Math.min(Math.max(active(), 0), Math.max(props.options.length - 1, 0)))
   let root: HTMLDivElement | undefined
@@ -47,6 +48,7 @@ export function CustomSelect(props: {
 
   const openMenu = (pointer = false) => {
     if (props.disabled || closing() || props.options.length === 0) return
+    if (compact()) updateSheetFrame()
     setPointerOpened(pointer)
     setActive(selected() < 0 ? 0 : selected())
     setPendingValue(props.value)
@@ -120,15 +122,19 @@ export function CustomSelect(props: {
   }
 
   onMount(() => {
-    const media = window.matchMedia("(max-width: 479px)")
+    const media = window.matchMedia("(max-width: 767px)")
     setCompact(media.matches)
+    updateSheetFrame()
     const resize = () => {
       if (open()) closeMenu(true)
       if (closeTimer !== undefined) clearTimeout(closeTimer)
       setClosing(false)
       setCompact(media.matches)
+      updateSheetFrame()
     }
     media.addEventListener("change", resize)
+    window.visualViewport?.addEventListener("resize", updateSheetFrame)
+    window.visualViewport?.addEventListener("scroll", updateSheetFrame)
     const outside = (event: PointerEvent) => {
       if (!open() || !(event.target instanceof Node)) return
       if (compact()) {
@@ -139,11 +145,15 @@ export function CustomSelect(props: {
     }
     document.addEventListener("pointerdown", outside)
     window.addEventListener("resize", positionSurface)
+    window.addEventListener("resize", updateSheetFrame)
     window.addEventListener("scroll", positionSurface, true)
     onCleanup(() => {
       media.removeEventListener("change", resize)
+      window.visualViewport?.removeEventListener("resize", updateSheetFrame)
+      window.visualViewport?.removeEventListener("scroll", updateSheetFrame)
       document.removeEventListener("pointerdown", outside)
       window.removeEventListener("resize", positionSurface)
+      window.removeEventListener("resize", updateSheetFrame)
       window.removeEventListener("scroll", positionSurface, true)
     })
   })
@@ -172,6 +182,14 @@ export function CustomSelect(props: {
       left: Math.max(8, Math.min(rootRect.right - width, window.innerWidth - width - 8)),
       top: Math.max(8, Math.min(rootRect.bottom + 8, window.innerHeight - surfaceRect.height - 8)),
       width,
+    })
+  }
+
+  function updateSheetFrame() {
+    const viewport = window.visualViewport
+    setSheetFrame({
+      top: Math.max(0, Math.round(viewport?.offsetTop ?? 0)),
+      height: Math.round(viewport?.height ?? window.innerHeight),
     })
   }
 
@@ -255,7 +273,7 @@ export function CustomSelect(props: {
               {options()}
             </div>
           }>
-            <Modal class={`overlay--sheet custom-select__dialog${props.surfaceClass ? ` ${props.surfaceClass}` : ""}`} label={props.sheetTitle ?? props.label} pointerOpened={pointerOpened()} returnFocus={trigger!} requestClose={(close) => closeModal = close} onDismiss={() => { setClosing(true); setOpen(false) }} onClose={() => setClosing(false)}>
+            <Modal class={`overlay--sheet custom-select__dialog${props.surfaceClass ? ` ${props.surfaceClass}` : ""}`} surfaceStyle={{ "--custom-select-sheet-top": `${sheetFrame().top}px`, "--custom-select-sheet-height": `${sheetFrame().height}px` }} label={props.sheetTitle ?? props.label} pointerOpened={pointerOpened()} returnFocus={trigger!} requestClose={(close) => closeModal = close} onDismiss={() => { setClosing(true); setOpen(false) }} onClose={() => setClosing(false)}>
               <p class="custom-select__subtitle">{props.sheetSubtitle ?? "Available options"}</p>
               {options()}
               <div class="custom-select__confirm-footer"><button

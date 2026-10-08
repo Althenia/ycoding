@@ -4,8 +4,27 @@ import { RELEASES, changeTagCounts } from "./changelog"
 const TAGS = ["Added", "Changed", "Fixed"] as const
 
 describe("release entries", () => {
-  test("lists v0.9.5 model decisions and remote recovery first", () => {
+  test("lists v0.10.0 concurrent profiles and workspace improvements first", () => {
     expect(RELEASES[0]).toEqual({
+      version: "0.10.0",
+      date: "2026-10-08",
+      title: "Concurrent profiles and a more capable workspace",
+      tags: ["Added", "Changed", "Fixed"],
+      changes: [
+        { tag: "Added", text: "Run different named provider profiles concurrently in Sessions and subagents without changing the provider-wide default. Authentication, model discovery, effort choices, Daybreak access, quota observations, and provider state follow the selected profile. Choose a profile in the model picker or structured model configuration." },
+        { tag: "Added", text: "Open the web command palette from the header or with Ctrl+K/Cmd+K to search Session actions, configured commands, skills, navigation, and settings. The TUI palette also searches slash names and aliases and exposes more supported actions without requiring prompt focus." },
+        { tag: "Added", text: "Choose One Dark, One Dark Pro, and high-contrast appearance options across the web client and TUI. Web preferences persist locally and respect system contrast with the default system appearance." },
+        { tag: "Added", text: "Opt into question-option suggestions with decisions.questions and an explicit confidence or probability threshold. Suggestions respect permissions, bounded concurrency, and a shared timeout; normal mode keeps human choice authoritative, and agent confidence remains uncalibrated." },
+        { tag: "Changed", text: "Use full-screen agent, model, machine, and workspace selectors on phones. Search and scrollable choices follow the visible viewport, and autocomplete stays above the composer when keyboard space is reduced." },
+        { tag: "Fixed", text: "Reduce repeated backend work for remote Sessions by avoiding full-inventory scans for known Sessions and reusing captured-change summaries until durable events invalidate them. Authorization remains enforced; update the connected machine to apply the improvements." },
+        { tag: "Fixed", text: "Keep usable custom TUI themes when another theme file is malformed, and resolve standalone-theme text roles instead of displaying missing-token colors." },
+        { tag: "Fixed", text: "Report invalid decision requests, authentication failures, and malformed provider output distinctly, and reject empty native decision requests before sending them." },
+      ],
+    })
+  })
+
+  test("retains v0.9.5 model decisions and remote recovery", () => {
+    expect(RELEASES[1]).toEqual({
       version: "0.9.5",
       date: "2026-10-08",
       title: "Model-powered decisions and resilient remote access",
@@ -21,7 +40,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.9.4 independent Claude profiles and native decisions", () => {
-    expect(RELEASES[1]).toEqual({
+    expect(RELEASES[2]).toEqual({
       version: "0.9.4",
       date: "2026-10-07",
       title: "Independent Claude accounts and native decisions",
@@ -37,7 +56,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.9.3 remote navigation, attention refresh, transcript recovery, and terminal OAuth layout", () => {
-    expect(RELEASES[2]).toEqual({
+    expect(RELEASES[3]).toEqual({
       version: "0.9.3",
       date: "2026-10-07",
       title: "Session navigation and attachment fixes",
@@ -55,7 +74,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.9.2 submitted prompt visibility", () => {
-    expect(RELEASES[3]).toEqual({
+    expect(RELEASES[4]).toEqual({
       version: "0.9.2",
       date: "2026-10-06",
       title: "Keep submitted prompts visible",
@@ -67,7 +86,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.9.1 Cursor models and machine-local Web diagnostics", () => {
-    expect(RELEASES[4]).toEqual({
+    expect(RELEASES[5]).toEqual({
       version: "0.9.1",
       date: "2026-10-05",
       title: "Cursor models and machine-local Web diagnostics",
@@ -83,7 +102,7 @@ describe("release entries", () => {
   })
 
   test("retains the v0.9.0 runtime and remote cutover", () => {
-    expect(RELEASES[5]).toEqual({
+    expect(RELEASES[6]).toEqual({
       version: "0.9.0",
       date: "2026-10-04",
       title: "Reliable shell recovery and remote protocol v4",
@@ -104,7 +123,7 @@ describe("release entries", () => {
   })
 
   test("retains the previous TUI release after v0.9.0", () => {
-    expect(RELEASES[6]).toEqual({
+    expect(RELEASES[7]).toEqual({
       version: "0.8.12",
       date: "2026-10-03",
       title: "Large images and actionable input requests",
@@ -114,7 +133,7 @@ describe("release entries", () => {
         { tag: "Changed", text: "Improve agent guidance to request missing information, decisions, and required reviews through actionable questions, so pending requests use the existing attention alerts instead of ending with a text-only request. Permission and guardrail approvals keep their existing rules." },
       ],
     })
-    expect(RELEASES[7]).toEqual({
+    expect(RELEASES[8]).toEqual({
       version: "0.8.11",
       date: "2026-10-02",
       title: "Specific and reliable System alerts",
@@ -134,7 +153,7 @@ describe("release entries", () => {
         { tag: "Fixed", text: "Show \"YCoding — alerts paused\" when the browser drops push alerts for this device and they cannot be renewed." },
       ],
     })
-    expect(RELEASES[8]).toEqual({
+    expect(RELEASES[9]).toEqual({
       version: "0.8.10",
       date: "2026-10-02",
       title: "Keep working while background tasks run",
@@ -144,7 +163,7 @@ describe("release entries", () => {
         { tag: "Changed", text: "Always choose a model variant when starting a subagent if that model offers variants. Match the variant to the task, and use a stronger variant only when the task needs it." },
       ],
     })
-    expect(RELEASES[9]).toEqual({
+    expect(RELEASES[10]).toEqual({
       version: "0.8.9",
       date: "2026-10-02",
       title: "Skills follow the prompt that invokes them",
@@ -155,7 +174,7 @@ describe("release entries", () => {
         { tag: "Fixed", text: "Show an invoked skill's Loaded row in the terminal transcript as soon as the skill activates." },
       ],
     })
-    expect(RELEASES[10]).toEqual({
+    expect(RELEASES[11]).toEqual({
       version: "0.8.8",
       date: "2026-10-01",
       title: "Responsive prompts and reliable model selection",
@@ -170,7 +189,7 @@ describe("release entries", () => {
         { tag: "Changed", text: "Allow explicit shell timeouts up to one hour. The default remains ten minutes, and foreground commands still move to the background after five minutes." },
       ],
     })
-    expect(RELEASES[11]).toEqual({
+    expect(RELEASES[12]).toEqual({
       version: "0.8.7",
       date: "2026-10-01",
       title: "Cursor cache reporting",
@@ -182,7 +201,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[12]).toEqual({
+    expect(RELEASES[13]).toEqual({
       version: "0.8.6",
       date: "2026-10-01",
       title: "Quieter attention notifications",
@@ -194,7 +213,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[13]).toEqual({
+    expect(RELEASES[14]).toEqual({
       version: "0.8.5",
       date: "2026-10-01",
       title: "Machine memory and steadier Session status",
@@ -210,7 +229,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[14]).toEqual({
+    expect(RELEASES[15]).toEqual({
       version: "0.8.4",
       date: "2026-10-01",
       title: "Forced update restarts and steadier Session catalogs",
@@ -234,7 +253,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[15]).toEqual({
+    expect(RELEASES[16]).toEqual({
       version: "0.8.3",
       date: "2026-10-01",
       title: "Cursor models and quotas",
@@ -258,7 +277,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[16]).toEqual({
+    expect(RELEASES[17]).toEqual({
       version: "0.8.2",
       date: "2026-10-01",
       title: "Cursor provider",
@@ -278,7 +297,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[17]).toEqual({
+    expect(RELEASES[18]).toEqual({
       version: "0.8.1",
       date: "2026-10-01",
       title: "Instant remote view transitions",
@@ -306,7 +325,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[18]).toEqual({
+    expect(RELEASES[19]).toEqual({
       version: "0.8.0",
       date: "2026-10-01",
       title: "Multiplexed remote delivery and windowed transcripts",
@@ -1176,7 +1195,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 25)).toEqual([
+    expect(versions.slice(0, 26)).toEqual([
+      "0.10.0",
       "0.9.5",
       "0.9.4",
       "0.9.3",

@@ -381,6 +381,13 @@ export const usePages: readonly DocPage[] = [
     description: "Sign in, enroll your machine, create or reopen a Session, and work through the browser while execution stays local.",
     sections: [
       {
+        heading: "Command palette",
+        blocks: [
+          { kind: "paragraph", text: "Inside the workspace, choose Open command palette in the header or press Ctrl+K or Cmd+K. Ctrl+P also opens it outside text fields; Cmd+P keeps browser printing. Search actions by name, slash command, or skill ID, then use the arrow keys and Enter or tap a result. Available Session actions, configured commands, skills, navigation, appearance, notifications, and account actions follow your current view and connection state." },
+          { kind: "paragraph", text: "Commands that need text fill the composer for editing while preserving your draft; they do not send automatically. Escape returns focus to the opener. On phones, the palette fills the visible screen above the on-screen keyboard. The terminal palette uses Ctrl+P and also searches slash names and aliases." },
+        ],
+      },
+      {
         heading: "Sign in and connect",
         blocks: [
           { kind: "paragraph", text: "The remote workspace is a browser client for Sessions on a machine running YCoding. Its five app tabs are Sessions (/remote/sessions), Conversation (/remote), Session (/remote/session), Usage (/remote/usage), and Settings (/remote/settings). Conversation is always the logo and new-session landing; a selected transcript is the separate Session view. Open /remote; when signed out, use Continue with Google or enter an access key from a redeemed invite. After sign-in, select an online machine and one of its Sessions. Account and connection states remain distinct, so an offline device does not appear signed out." },
@@ -403,10 +410,28 @@ export const usePages: readonly DocPage[] = [
             rows: [
               ["Signed out", "Dedicated sign-in screen with Continue with Google and an access-key form.", "Complete sign-in; if Google is rejected, confirm the account is eligible; an invalid key or too many attempts is reported separately."],
               ["Signed in, no machine", "Workspace offers device enrollment in Settings.", "Create a one-use enrollment and run the displayed CLI command."],
-              ["Machine offline", "Device is not selectable; reconnect is offered for a selected device.", "Restore the machine's network. If its remote connection is off or shows an error, turn it on again with ycoding remote connect or the TUI's Remote connection toggle."],
+              ["Machine offline", "Device is not selectable; reconnect is offered for a selected device.", "Restore the machine's network and run ycoding remote status. An enabled connecting state recovers automatically. Enable an off connection; for error, repair the reported problem, then run ycoding remote connect or turn the TUI toggle off and then on."],
               ["Machine online, no Sessions", "Connected machine reports an empty Session list and offers New session.", "Choose a previously opened repository. If none is listed, open it locally, then refresh repositories."],
             ],
           },
+        ],
+      },
+      {
+        heading: "Connection recovery",
+        blocks: [
+          { kind: "paragraph", text: "The machine saves your enabled choice and restores it when its background service starts. While enabled, it automatically retries recoverable startup failures, connector-lock contention, network outages, and failed credential rotation. Update the connected machine with `ycoding update` to use the current recovery behavior; replace development builds and Windows binaries manually." },
+          {
+            kind: "table",
+            head: ["Local connection state", "Meaning", "Next action"],
+            rows: [
+              ["`off`", "Remote access is disabled.", "Run `ycoding remote connect` or select Remote connection in the TUI to enable it."],
+              ["`connecting`", "Remote access is enabled and starting or recovering.", "Restore network access and let recovery continue. Startup and lock retries wait 1, 2, 4, 8, 16, then at most 30 seconds; ordinary socket reconnection is automatic. Authentication and socket opening each have a 30-second deadline."],
+              ["`on`", "The machine's relay connection is open.", "Select the machine and open a Session in the browser."],
+              ["`error`", "Setup or authentication needs attention.", "Run `ycoding remote status` and repair the reported problem. Missing or invalid enrollment, rejected credentials, a relay-origin mismatch, and unsafe local endpoints require attention; recovery does not automatically reenroll a device. Then run `ycoding remote connect`, or turn the TUI toggle off and then on."],
+            ],
+          },
+          { kind: "paragraph", text: "Selecting Remote connection while it is connecting, on, or in error turns it off. A second toggle during a pending enable also requests disable. Disabling with the toggle or `ycoding remote disconnect` aborts pending authentication, cancels recovery, and prevents late replies from reopening the connection. When you stop the background service, the live connection closes but its saved enabled choice remains for the next start." },
+          { kind: "code", language: "sh", label: "Inspect or disable remote access", code: "ycoding remote status\nycoding remote disconnect" },
         ],
       },
       {
@@ -423,7 +448,7 @@ export const usePages: readonly DocPage[] = [
               ["Requests", "Reply to permission or guardrail asks and answer or cancel pending Forms and questions. A pending family guardrail review can be answered from the current Session: inspect its owner, action and targets first. Missing inspectable context disables approval but leaves Reject available. Hard reviews require a human one-time approval or rejection; an uncertain reply is not resent automatically."],
               ["Office", "On tablets and desktops, switch Conversation to Office to see the selected Session and its reported subagent tasks in a shared pixel workspace. Each character keeps its own workstation among varied desks, plants and personal details, with shared lounge seating, a meeting area and a coffee corner. Office is available on viewports at least 768px wide that are at least 600px tall or have a fine primary pointer; elsewhere Conversation stays visible and the switch is hidden, whatever the stored preference. Office opens near the selected agent at a readable working scale. Drag or scroll to pan, use Shift-scroll to move sideways, or focus the floor and use arrow keys. Fit shows the whole floor, including its bottom edge. The stage uses the height left below headers and notices, and the Agents list scrolls independently. The toolbar zooms, fits, follows the selected character, or returns to Conversation, where your requests and composer are."],
               ["Usage", "View connected providers' reported quota windows, reset countdowns, and pace; refresh them from the machine. See spend for today, yesterday, and the last 30 days, plus a current-month provider donut with Spend and Tokens views; the UTC | Local switch, remembered in this browser, sets the time zone for days, months, and hours. The daily chart offers a table. The provider donut lists each provider with its share and exact value in one legend beside the chart, without a separate table, and Spend and Tokens each keep their own unit and unreported values. Model, Session, project, and agent breakdowns can be sorted and paged. Changing a breakdown page, group, or sort keeps the previous rows in place while the new report loads, and same-machine reconnects and quota refreshes keep the previous values visible until replacements arrive. Switching machines, disconnecting, or signing out clears the display; spend tiles stack on phones and tablets. Hover, focus, or tap a daily bar or provider segment for its exact values. Costs are estimates from recorded usage and model pricing, not provider bills."],
-              ["Settings", "Choose the active machine, and manage your account, enrolled devices, app installation, appearance, Office view, and notification preferences. Remove a revoked device, or all revoked devices at once, after confirming. Notification categories have independent channel switches in a horizontally scrollable table on narrow screens. System alerts offers the permission request until the browser decides, then shows whether alerts are allowed or blocked while YCoding is open. Set a Session's autonomy level and goal from its Conversation status instead. The entire Office settings section appears only where the Office view is available."],
+              ["Settings", "Choose the active machine, and manage your account, enrolled devices, app installation, appearance, Office view, and notification preferences. Appearance holds the Light, Dark, or System theme and a Color scheme select: Default, One Dark, One Dark Pro, or High contrast. One Dark Pro paints dark mode only; with System and the Default scheme, a system request for more contrast paints High contrast. Both choices are stored in this browser. Remove a revoked device, or all revoked devices at once, after confirming. Notification categories have independent channel switches in a horizontally scrollable table on narrow screens. System alerts offers the permission request until the browser decides, then shows whether alerts are allowed or blocked while YCoding is open. Set a Session's autonomy level and goal from its Conversation status instead. The entire Office settings section appears only where the Office view is available."],
             ],
           },
           { kind: "paragraph", text: "While the selected Session is running, the newest prompt's Edited files card stays hidden; earlier prompts keep their cards beside their own replies, and the newest card appears once the Session is idle, interrupted, or failed. Intermediate tool and text steps do not create separate summaries: each prompt has one card at the end of its completed response, with only that prompt's changes." },

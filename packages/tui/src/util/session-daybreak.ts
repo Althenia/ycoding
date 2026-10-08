@@ -4,6 +4,20 @@ export type DaybreakPlan =
   | { readonly type: "request"; readonly daybreak: ModelDaybreak | null }
   | { readonly type: "reject"; readonly message: string }
 
+export function modelDaybreak(input: {
+  readonly model?: {
+    readonly daybreak?: readonly ModelDaybreak[]
+    readonly profiles?: readonly { readonly name: string; readonly daybreak?: readonly ModelDaybreak[] }[]
+  }
+  readonly selection?: { readonly profile?: string }
+}) {
+  const selectedProfile = input.selection?.profile
+  if (selectedProfile !== undefined) {
+    return input.model?.profiles?.find((profile) => profile.name === selectedProfile)?.daybreak ?? []
+  }
+  return input.model?.daybreak ?? []
+}
+
 const PROGRAMS: Record<string, ModelDaybreak> = {
   blue: "daybreak_blue",
   daybreak_blue: "daybreak_blue",

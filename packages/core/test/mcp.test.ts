@@ -216,6 +216,7 @@ function resourceMcpLayer(
         }),
         Layer.mock(Integration.Service, {
           connection: {
+            snapshot: () => Effect.die("unused Integration.snapshot"),
             active: unusedIntegration,
             resolve: unusedIntegration,
             key: unusedIntegration,

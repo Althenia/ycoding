@@ -10,6 +10,7 @@ import { RGBA } from "@opentui/core"
 import { rm } from "fs/promises"
 import { readJson } from "../util/persistence"
 import { errorMessage } from "../util/error"
+import { modelVariantIDs } from "../util/model"
 import { useClient } from "./client"
 import {
   createModelPreferenceRepository,
@@ -42,7 +43,7 @@ export function recentModels(model: ModelPreferenceModel, recent: ModelPreferenc
       return true
     })
     .slice(0, 10)
-    .map((item) => ({ providerID: item.providerID, modelID: item.modelID }))
+    .map((item) => ({ providerID: item.providerID, modelID: item.modelID, ...(item.profile === undefined ? {} : { profile: item.profile }) }))
 }
 
 export const {
@@ -64,16 +65,19 @@ export const {
     const activeLocation = () => location.current ?? data.location.default()
 
     function isModelValid(model: ModelPreferenceModel) {
-      return !!data.location.model
+      const info = data.location.model
         .list(activeLocation())
-        ?.some((item) => item.providerID === model.providerID && item.id === model.modelID)
+        ?.find((item) => item.providerID === model.providerID && item.id === model.modelID)
+      if (!info) return false
+      if (model.profile !== undefined) return info.profiles?.some((profile) => profile.name === model.profile) === true
+      return info.enabled
     }
 
-    function getFirstValidModel(...modelFns: (() => ModelPreferenceModel | undefined)[]) {
+    function getFirstValidModel(...modelFns: (() => (ModelPreferenceModel & { variant?: string }) | undefined)[]) {
       for (const modelFn of modelFns) {
         const model = modelFn()
         if (!model) continue
-        if (isModelValid(model)) return model
+        if (model.profile !== undefined || isModelValid(model)) return model
       }
     }
 
@@ -216,17 +220,14 @@ export const {
           }
         }
 
-        for (const item of modelStore.recent) {
-          if (isModelValid(item)) {
-            return item
-          }
-        }
-
-        const model = data.location.model.list(activeLocation())?.[0]
-        if (!model) return undefined
-        return {
-          providerID: model.providerID,
-          modelID: model.id,
+        const recent = modelStore.recent.find((item) => item.profile !== undefined || isModelValid(item))
+        if (recent) return recent
+        const configured = data.location.model.default(activeLocation())
+        return configured && {
+          providerID: configured.providerID,
+          modelID: configured.id,
+          ...(configured.profile === undefined ? {} : { profile: configured.profile }),
+          ...(configured.variant === undefined ? {} : { variant: configured.variant }),
         }
       })
 
@@ -235,7 +236,12 @@ export const {
         return (
           getFirstValidModel(
             () => a && modelStore.model[a.id],
-            () => a?.model && { providerID: a.model.providerID, modelID: a.model.id },
+            () => a?.model && {
+              providerID: a.model.providerID,
+              modelID: a.model.id,
+              ...(a.model.profile === undefined ? {} : { profile: a.model.profile }),
+              ...(a.model.variant === undefined ? {} : { variant: a.model.variant }),
+            },
             fallbackModel,
           ) ?? undefined
         )
@@ -246,20 +252,25 @@ export const {
         const pending = sessionID ? pendingTargets()[sessionID] : undefined
         if (pending) return pending
         const saved = sessionID ? data.session.get(sessionID)?.model : undefined
-        if (saved) return { providerID: saved.providerID, modelID: saved.id, variant: saved.variant }
+        if (saved) return { providerID: saved.providerID, modelID: saved.id, variant: saved.variant, ...(saved.profile === undefined ? {} : { profile: saved.profile }) }
         const configured = agent.current()?.model
         const value = sessionID
           ? getFirstValidModel(
-              () => configured && { providerID: configured.providerID, modelID: configured.id },
+              () => configured && {
+                providerID: configured.providerID,
+                modelID: configured.id,
+                ...(configured.profile === undefined ? {} : { profile: configured.profile }),
+                ...(configured.variant === undefined ? {} : { variant: configured.variant }),
+              },
               fallbackModel,
             )
           : currentModel()
         if (!value) return undefined
-        return { ...value, variant: modelStore.variant[modelPreferenceKey(value)] }
+        return { ...value, variant: modelStore.variant[modelPreferenceKey(value)] ?? value.variant }
       }
       const selectedModel = () => {
         const value = selection()
-        return value && { providerID: value.providerID, modelID: value.modelID }
+        return value && { providerID: value.providerID, modelID: value.modelID, ...(value.profile === undefined ? {} : { profile: value.profile }) }
       }
 
       event.on("session.deleted", (evt) => clearPendingTarget(evt.data.sessionID))
@@ -279,7 +290,7 @@ export const {
           return sessionID ? pendingTargets()[sessionID] : undefined
         },
         async select(
-          input: { providerID: string; modelID: string; variant?: string },
+          input: ModelPreferenceModel & { variant?: string },
           options?: { sessionID?: string },
         ) {
           const target = { providerID: input.providerID, modelID: input.modelID }
@@ -294,9 +305,32 @@ export const {
             })
             return
           }
+          const prior = selection()
+          const sameProvider = prior?.providerID === target.providerID
+          const sameModel = sameProvider && prior.modelID === target.modelID
+          const profileExplicit = "profile" in input
+          const profile = profileExplicit
+            ? input.profile
+            : sameProvider && prior.profile !== undefined
+              ? prior.profile
+              : undefined
+          const profileAvailable =
+            profile === undefined
+              ? info.enabled
+              : info.profiles?.some((item) => item.name === profile) === true
+          if (!profileAvailable && !(profile !== undefined && sameProvider && prior?.profile === profile)) {
+            toast.show({
+              message: profile === undefined
+                ? `Model ${target.providerID}/${target.modelID} is unavailable for the provider default`
+                : `Profile ${profile} is unavailable for ${target.providerID}/${target.modelID}`,
+              variant: "warning",
+              duration: 3000,
+            })
+            return
+          }
           const explicit = "variant" in input
           const requested = input.variant
-          if (explicit && requested !== undefined && !info.variants.some((item) => item.id === requested)) {
+          if (explicit && requested !== undefined && !modelVariantIDs({ model: info, profile }).includes(requested)) {
             toast.show({
               message: `Variant ${requested} is not available for ${target.providerID}/${target.modelID}`,
               variant: "warning",
@@ -304,31 +338,32 @@ export const {
             })
             return
           }
-          const prior = selection()
+          const sameSelection = sameModel && prior.profile === profile
           const remembered =
-            prior?.providerID === target.providerID && prior.modelID === target.modelID
+            sameSelection
               ? prior.variant
-              : modelStore.variant[modelPreferenceKey(target)]
+              : modelStore.variant[modelPreferenceKey({ ...target, ...(profile === undefined ? {} : { profile }) })]
           const variant = explicit ? requested : remembered
           if (prior) {
             setModelStore("variant", modelPreferenceKey(prior), prior.variant)
           }
-          setModelStore("variant", modelPreferenceKey(target), variant)
+          const desired = { ...target, ...(profile === undefined ? {} : { profile }), ...(variant === undefined ? {} : { variant }) }
+          setModelStore("variant", modelPreferenceKey(desired), variant)
           const sessionID = options?.sessionID
           if (!sessionID) {
             // The home screen only records the next-Session preference; no Session API call.
-            this.set(target, { recent: true })
+            this.set(desired, { recent: true })
             return
           }
-          const desired = { ...target, ...(variant === undefined ? {} : { variant }) }
           setPendingTargets((current) => ({ ...current, [sessionID]: desired }))
           save()
         },
-        commitPending(sessionID: string, model: { providerID: string; id: string; variant?: string }) {
+        commitPending(sessionID: string, model: { providerID: string; id: string; variant?: string; profile?: string }) {
           const pending = pendingTargets()[sessionID]
           if (!pending) return
           if (pending.providerID !== model.providerID || pending.modelID !== model.id) return
           if (pending.variant !== model.variant) return
+          if (pending.profile !== model.profile) return
           setModelStore("recent", recentModels(pending, modelStore.recent))
           save()
           clearPendingTarget(sessionID)
@@ -349,7 +384,7 @@ export const {
           return {
             provider: provider?.name ?? value.providerID,
             model: info?.name ?? value.modelID,
-            reasoning: (info?.variants?.length ?? 0) !== 0,
+            reasoning: modelVariantIDs({ model: info, profile: value.profile }).length !== 0,
           }
         }),
         cycle(direction: 1 | -1) {
@@ -397,7 +432,7 @@ export const {
           if (!agent.current()) return Promise.resolve()
           return this.select(next, { sessionID })
         },
-        set(model: { providerID: string; modelID: string }, options?: { recent?: boolean }) {
+        set(model: ModelPreferenceModel, options?: { recent?: boolean }) {
           batch(() => {
             if (!isModelValid(model)) {
               toast.show({
@@ -409,14 +444,14 @@ export const {
             }
             const a = agent.current()
             if (!a) return
-            setModelStore("model", a.id, { providerID: model.providerID, modelID: model.modelID })
+            setModelStore("model", a.id, { providerID: model.providerID, modelID: model.modelID, ...(model.profile === undefined ? {} : { profile: model.profile }) })
             if (options?.recent) {
               setModelStore("recent", recentModels(model, modelStore.recent))
               save()
             }
           })
         },
-        toggleFavorite(model: { providerID: string; modelID: string }) {
+        toggleFavorite(model: ModelPreferenceModel) {
           batch(() => {
             if (!isModelValid(model)) {
               toast.show({
@@ -426,15 +461,14 @@ export const {
               })
               return
             }
-            const exists = modelStore.favorite.some(
-              (x) => x.providerID === model.providerID && x.modelID === model.modelID,
-            )
+            const key = modelPreferenceKey(model)
+            const exists = modelStore.favorite.some((item) => modelPreferenceKey(item) === key)
             const next = exists
-              ? modelStore.favorite.filter((x) => x.providerID !== model.providerID || x.modelID !== model.modelID)
+              ? modelStore.favorite.filter((item) => modelPreferenceKey(item) !== key)
               : [model, ...modelStore.favorite]
             setModelStore(
               "favorite",
-              next.map((x) => ({ providerID: x.providerID, modelID: x.modelID })),
+              next.map((item) => ({ providerID: item.providerID, modelID: item.modelID, ...(item.profile === undefined ? {} : { profile: item.profile }) })),
             )
             save()
           })
@@ -443,8 +477,12 @@ export const {
           selected() {
             return selection()?.variant
           },
-          current() {
-            return this.selected()
+          current(model?: ModelPreferenceModel) {
+            if (!model) return this.selected()
+            const selected = selection()
+            if (selected?.providerID === model.providerID && selected.modelID === model.modelID && selected.profile === model.profile)
+              return selected.variant
+            return modelStore.variant[modelPreferenceKey(model)]
           },
           list() {
             const m = selectedModel()
@@ -452,7 +490,7 @@ export const {
             const info = data.location.model
               .list(activeLocation())
               ?.find((item) => item.providerID === m.providerID && item.id === m.modelID)
-            return info?.variants?.map((variant) => variant.id) ?? []
+            return [...modelVariantIDs({ model: info, profile: m.profile })]
           },
           cycle() {
             const variants = this.list()
@@ -527,7 +565,7 @@ export const {
     createEffect(() => {
       const value = agent.current()
       if (!value?.model) return
-      if (isModelValid({ providerID: value.model.providerID, modelID: value.model.id })) return
+      if (isModelValid({ providerID: value.model.providerID, modelID: value.model.id, ...(value.model.profile === undefined ? {} : { profile: value.model.profile }) })) return
       toast.show({
         variant: "warning",
         message: `Agent ${value.id}'s configured model ${value.model.providerID}/${value.model.id} is not valid`,

@@ -58,4 +58,5 @@ export class Info extends Schema.Class<Info>("Config.Decisions")({
   guardrails: Schema.Union([Policy, AgentPolicy]).pipe(Schema.optional),
   routing: Schema.Union([Routing, AgentRouting]).pipe(Schema.optional),
   goal: Schema.Union([Policy, AgentPolicy]).pipe(Schema.optional),
+  questions: Schema.Union([Policy, AgentPolicy]).pipe(Schema.optional),
 }) {}

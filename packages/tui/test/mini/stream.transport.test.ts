@@ -1865,7 +1865,7 @@ describe("Mini transport", () => {
     await transport.close()
   })
 
-  test("falls back to the default model when selecting a variant on a fresh session", async () => {
+  test("overrides a configured default profile when explicitly selecting another variant", async () => {
     const events = feed()
     events.push(connected())
     const client = sdk({ streams: [events] })
@@ -1881,7 +1881,20 @@ describe("Mini transport", () => {
       () =>
         ok({
           location: { directory: "/tmp", project: { id: "proj_1", directory: "/tmp" } },
-          data: { id: "gpt-5", providerID: "openai" },
+          data: {
+            id: "gpt-5",
+            modelID: "gpt-5",
+            providerID: "openai",
+            name: "GPT-5",
+            capabilities: { tools: true, input: ["text"], output: ["text"] },
+            variants: [{ id: "high" }],
+            time: { released: 1 },
+            cost: [],
+            status: "active",
+            enabled: true,
+            limit: { context: 200_000, output: 32_000 },
+            selection: { providerID: "openai", id: "gpt-5", variant: "high", profile: "Work" },
+          },
         }) as never,
     )
     const switched = spyOn(client.session, "switchModel").mockImplementation(() => ok(undefined))
@@ -1896,7 +1909,7 @@ describe("Mini transport", () => {
     const turn = transport.runPromptTurn({
       agent: undefined,
       model: undefined,
-      variant: "high",
+      variant: "low",
       prompt: { messageID: "msg_prompt", text: "hello", parts: [] },
       files: [],
       includeFiles: true,
@@ -1922,7 +1935,7 @@ describe("Mini transport", () => {
     await turn
 
     expect(switched).toHaveBeenCalledWith(
-      { sessionID: "ses_1", model: { providerID: "openai", id: "gpt-5", variant: "high" } },
+      { sessionID: "ses_1", model: { providerID: "openai", id: "gpt-5", variant: "low", profile: "Work" } },
       { signal: undefined },
     )
     await transport.close()

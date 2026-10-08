@@ -33,9 +33,11 @@ export default {
           \`method_id\` text,
           \`active\` integer,
           \`generation\` integer DEFAULT 0 NOT NULL,
+          \`account_generation\` integer DEFAULT 0 NOT NULL,
           \`time_created\` integer NOT NULL,
           \`time_updated\` integer NOT NULL,
-          CONSTRAINT "credential_generation_check" CHECK(typeof("generation") = 'integer' AND "generation" >= 0)
+          CONSTRAINT "credential_generation_check" CHECK(typeof("generation") = 'integer' AND "generation" >= 0),
+          CONSTRAINT "credential_account_generation_check" CHECK(typeof("account_generation") = 'integer' AND "account_generation" >= 0)
         );
       `)
       yield* tx.run(`
@@ -638,6 +640,8 @@ export default {
           \`id\` text PRIMARY KEY,
           \`session_id\` text NOT NULL,
           \`input_id\` text,
+          \`assistant_message_id\` text,
+          \`connection_identity_digest\` text,
           \`source\` text NOT NULL,
           \`agent\` text NOT NULL,
           \`model\` text NOT NULL,
@@ -719,6 +723,7 @@ export default {
           \`orchestration_revision\` integer DEFAULT 0 NOT NULL,
           \`agent\` text,
           \`model\` text,
+          \`profile_binding\` text,
           \`daybreak\` text,
           \`time_created\` integer NOT NULL,
           \`time_updated\` integer NOT NULL,

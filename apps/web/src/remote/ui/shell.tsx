@@ -38,6 +38,7 @@ import { projectOffice } from "../office/model"
 import { OfficeWorkspace } from "../office/OfficeWorkspace"
 import { createOfficeSettings, type OfficeSettingsStore, type WorkspacePresentation } from "../office/storage"
 import { Composer } from "./composer"
+import { CommandPalette, focusComposerField, type PaletteHandlers } from "./command-palette"
 import { NewSessionButton, NewSessionComposer } from "./new-session"
 import { UsagePage } from "./usage"
 import {
@@ -351,6 +352,29 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
     window.removeEventListener("ycoding:open-session", alertEvent)
     navigator.serviceWorker?.removeEventListener("message", workerMessage)
   })
+  const prefillComposer = (text: string) => {
+    const sessionID = composerSessionID()
+    if (sessionID === undefined) return
+    const draft = state().drafts[sessionID] ?? ""
+    remote.store.setDraft(sessionID, draft.startsWith(text) ? draft : `${text}${draft}`)
+    if (office.presentation() === "office") office.present("conversation")
+    if (view() !== "/remote/session") navigate({ to: "/remote/session", search: sessionSearch(sessionID, state().activeDeviceID) })
+    focusComposerField()
+  }
+  const paletteHandlers: Omit<PaletteHandlers, "openTeam"> = {
+    go: (target) => {
+      if (target === "new") { openNewSession(); return }
+      if (target === "session") {
+        const sessionID = state().activeSessionID
+        if (sessionID !== undefined) navigate({ to: "/remote/session", search: sessionSearch(sessionID, state().activeDeviceID) })
+        return
+      }
+      navigate({ to: `/remote/${target}` })
+    },
+    openSession,
+    draft: prefillComposer,
+  }
+  const paletteSessionSelected = () => selected() && (view() !== "/remote/session" || (ownsSessionDevice() && ownsSessionRoute()))
   const teamContent = () => <TeamView
     data={() => state().team!} currentSessionID={state().activeSessionID ?? ""} now={Date.now} sheet={phoneLayout()}
     onClose={closeTeam} onOpen={openFromTeam} onCancel={remote.store.cancelSubagent} onAnswer={remote.store.answerSubagent}
@@ -367,6 +391,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
           navControls={tabletRailToggle() ? "session-rail" : undefined}
           onOpenNav={openSessionsNavigation}
           onOpenSession={openSession}
+          palette={{ canCreateSession: canCreateSession(), sessionSelected: paletteSessionSelected(), managedChild: managedChild(), handlers: paletteHandlers }}
           team={view() === "/remote/session" && selected() && ownsSessionDevice() ? {
             count: state().team === undefined ? undefined : teamActiveCount(state().team!),
             activity: state().team === undefined ? "Activity unreported" : teamActivityLabel(state().team!),
@@ -624,6 +649,12 @@ function RemoteHeader(props: {
   readonly navControls?: string
   readonly onOpenNav: (trigger: HTMLButtonElement) => void
   readonly onOpenSession: (sessionID: string) => void
+  readonly palette: {
+    readonly canCreateSession: boolean
+    readonly sessionSelected: boolean
+    readonly managedChild: boolean
+    readonly handlers: Omit<PaletteHandlers, "openTeam">
+  }
   readonly team?: {
     readonly count: number | undefined
     readonly activity: string
@@ -682,6 +713,14 @@ function RemoteHeader(props: {
           </span>
         </div>
         <div class="app-header__end">
+          <CommandPalette
+            view={props.view}
+            canCreateSession={props.palette.canCreateSession}
+            sessionSelected={props.palette.sessionSelected}
+            managedChild={props.palette.managedChild}
+            hasTeam={props.team !== undefined}
+            handlers={{ ...props.palette.handlers, openTeam: () => props.team?.onOpen() }}
+          />
           <Show when={props.team}>{(team) => (
             <button
               ref={team().ref}

@@ -60,6 +60,7 @@ import { DialogDebug } from "./component/dialog-debug"
 import { DialogPair, type DialogPairCredentials } from "./component/dialog-pair"
 import { DialogThemeList } from "./component/dialog-theme-list"
 import { DialogHelp } from "./ui/dialog-help"
+import open from "open"
 import { DialogAgent } from "./component/dialog-agent"
 import { DialogSessionList } from "./component/dialog-session-list"
 import { ThemeProvider, useTheme } from "./context/theme"
@@ -679,9 +680,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       },
       {
         name: "model.cycle_recent",
+        description: "Next recently used model",
         title: "Model cycle",
         category: "Agent",
-        palette: undefined,
         run: () => {
           void local.model.cycle(1).catch((error: unknown) =>
             toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" }),
@@ -690,9 +691,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       },
       {
         name: "model.cycle_recent_reverse",
+        description: "Previous recently used model",
         title: "Model cycle reverse",
         category: "Agent",
-        palette: undefined,
         run: () => {
           void local.model.cycle(-1).catch((error: unknown) =>
             toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" }),
@@ -701,9 +702,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       },
       {
         name: "model.cycle_favorite",
+        description: "Next favorite model",
         title: "Favorite cycle",
         category: "Agent",
-        palette: undefined,
         run: () => {
           void local.model.cycleFavorite(1).catch((error: unknown) =>
             toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" }),
@@ -712,9 +713,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       },
       {
         name: "model.cycle_favorite_reverse",
+        description: "Previous favorite model",
         title: "Favorite cycle reverse",
         category: "Agent",
-        palette: undefined,
         run: () => {
           void local.model.cycleFavorite(-1).catch((error: unknown) =>
             toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" }),
@@ -741,9 +742,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       },
       {
         name: "agent.cycle",
+        description: "Next agent",
         title: "Agent cycle",
         category: "Agent",
-        palette: undefined,
         run: () => {
           local.agent.move(1)
         },
@@ -781,9 +782,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       },
       {
         name: "agent.cycle.reverse",
+        description: "Previous agent",
         title: "Agent cycle reverse",
         category: "Agent",
-        palette: undefined,
         run: () => {
           local.agent.move(-1)
         },
@@ -926,8 +927,8 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       },
       {
         name: "theme.switch_mode",
+        description: "Toggle between dark and light",
         title: mode() === "dark" ? "Switch to light mode" : "Switch to dark mode",
-        palette: undefined,
         enabled: () => supports(mode() === "dark" ? "light" : "dark"),
         run: () => {
           setMode(mode() === "dark" ? "light" : "dark")
@@ -937,8 +938,8 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       },
       {
         name: "theme.mode.lock",
+        description: "Keep the current mode instead of following the terminal theme",
         title: locked() ? "Unlock theme mode" : "Lock theme mode",
-        palette: undefined,
         run: () => {
           if (locked()) unlock()
           else lock()
@@ -952,6 +953,17 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
         slash: { name: "help" },
         run: () => {
           dialog.replace(() => <DialogHelp />)
+        },
+        category: "System",
+      },
+      {
+        name: "docs.open",
+        title: "Open documentation",
+        description: "Open the YCoding documentation in your browser",
+        slash: { name: "docs" },
+        run: () => {
+          void open("https://ycoding.althenia.app/docs").catch(toast.error)
+          dialog.clear()
         },
         category: "System",
       },
@@ -996,9 +1008,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       },
       {
         name: "terminal.suspend",
+        description: "Send YCoding to the background",
         title: "Suspend terminal",
         category: "System",
-        palette: undefined,
         enabled: process.platform !== "win32",
         run: () => {
           renderer.suspend()
@@ -1008,9 +1020,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       },
       {
         name: "terminal.title.toggle",
+        description: "Toggle terminal title updates",
         title: terminalTitleEnabled() ? "Disable terminal title" : "Enable terminal title",
         category: "System",
-        palette: undefined,
         run: () => {
           const next = !terminalTitleEnabled()
           if (!next) renderer.setTerminalTitle("")
@@ -1024,9 +1036,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       },
       {
         name: "app.toggle.animations",
+        description: "Toggle interface animations",
         title: (config.data.animations ?? true) ? "Disable animations" : "Enable animations",
         category: "System",
-        palette: undefined,
         run: () => {
           void config
             .update((draft) => {
@@ -1038,9 +1050,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       },
       {
         name: "app.toggle.file_context",
+        description: "Toggle editor file context in prompts",
         title: (config.data.prompt?.editor ?? true) ? "Disable file context" : "Enable file context",
         category: "System",
-        palette: undefined,
         run: () => {
           void config
             .update((draft) => {
@@ -1052,9 +1064,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       },
       {
         name: "app.toggle.diffwrap",
+        description: "Toggle diff line wrapping",
         title: (config.data.diffs?.wrap ?? "word") === "word" ? "Disable diff wrapping" : "Enable diff wrapping",
         category: "System",
-        palette: undefined,
         run: () => {
           void config
             .update((draft) => {
@@ -1069,9 +1081,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       },
       {
         name: "app.toggle.paste_summary",
+        description: "Toggle compact summaries of pasted text",
         title: pasteSummaryEnabled() ? "Disable paste summary" : "Enable paste summary",
         category: "System",
-        palette: undefined,
         run: () => {
           void config
             .update((draft) => {
@@ -1096,6 +1108,25 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
   Keymap.createLayer(() => ({
     mode: "global",
     commands: appCommands(),
+  }))
+
+  Keymap.createLayer(() => ({
+    mode: "global",
+    commands: (data.location.command.list(location.current) ?? []).map(
+      (command) =>
+        ({
+          id: `command.run.${command.name}`,
+          title: `/${command.name}`,
+          description: command.description,
+          group: "Commands",
+          bind: false,
+          palette: true as const,
+          run: () => {
+            promptRef.current?.set({ text: `/${command.name} `, files: [], agents: [], pasted: [] })
+            dialog.clear()
+          },
+        }) satisfies KeymapCommand,
+    ),
   }))
 
   Keymap.createLayer(() => ({

@@ -12,6 +12,7 @@ const Explicit = Schema.Struct({
   providerID: ProviderID,
   model: ModelID,
   variant: VariantID.pipe(Schema.optional),
+  profile: Model.ProfileName.pipe(Schema.optional),
 })
 
 const Short = Schema.String.check(Schema.isPattern(/^[^/#]+\/[^#]+(?:#[^#]+)?$/))

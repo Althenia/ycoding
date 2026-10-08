@@ -1,6 +1,15 @@
 export * as SessionCompaction from "./compaction"
 
-import { LLM, LLMClient, LLMError, LLMEvent, LLMRequest, Message, mergeProviderOptions, type Model } from "@ycoding-ai/ai"
+import {
+  LLM,
+  LLMClient,
+  LLMError,
+  LLMEvent,
+  LLMRequest,
+  Message,
+  mergeProviderOptions,
+  type Model,
+} from "@ycoding-ai/ai"
 import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy"
 import { OpenAIOptions } from "@ycoding-ai/ai/protocols/utils/openai-options"
 import { Money } from "@ycoding-ai/schema/money"
@@ -69,7 +78,10 @@ Replace through_sequence with the exact supplied sequence. decision rows have { 
 Keep the memory terse and factual. Preserve still-true goals, constraints, decisions, exact facts, identifiers, paths, commands, errors, validation state, and remaining risks. Merge a supplied conversation_memory document with newer material and remove only details superseded by newer evidence. Emit no Markdown fences, prose, or commentary.`
 
 export interface Interface {
-  readonly manifest: (job: SessionCompactionJob.Job, prepareOwner?: OwnerRequestBuilder) => Effect.Effect<ContextManifest.Manifest, ManifestError>
+  readonly manifest: (
+    job: SessionCompactionJob.Job,
+    prepareOwner?: OwnerRequestBuilder,
+  ) => Effect.Effect<ContextManifest.Manifest, ManifestError>
 }
 
 type OwnerPrepared = {
@@ -77,6 +89,7 @@ type OwnerPrepared = {
   readonly cache: { readonly promptCacheKey: string; readonly systemDigest: string; readonly toolDigest: string }
   readonly cost: CatalogModel.Info["cost"]
   readonly modelRef?: CatalogModel.Ref
+  readonly accountIdentityDigest?: string
   readonly contextRevision: number
 }
 export type OwnerRequestBuilder = (job: SessionCompactionJob.Job) => Effect.Effect<OwnerPrepared, unknown>
@@ -112,7 +125,13 @@ const make = (dependencies: Dependencies): Interface => {
     const modelRef = input.resolved.ref
     const baseRequest = LLM.request({
       model: input.resolved.model,
-      http: { headers: SessionModelHeaders.make(input.session, { ...dependencies.headers, providerID: modelRef.providerID }) },
+      http: {
+        headers: SessionModelHeaders.make(input.session, {
+          ...dependencies.headers,
+          providerID: modelRef.providerID,
+          accountIdentityDigest: input.resolved.accountIdentityDigest,
+        }),
+      },
       system: SUMMARY_TEMPLATE,
       messages: [...input.messages],
       tools: [],
@@ -125,6 +144,7 @@ const make = (dependencies: Dependencies): Interface => {
       providerID: modelRef.providerID,
       modelID: modelRef.id,
       variant: modelRef.variant,
+      accountIdentityDigest: input.resolved.accountIdentityDigest,
       policyRevision: CACHE_POLICY_REVISION,
       permissions: [],
       system: baseRequest.system,
@@ -151,6 +171,7 @@ const make = (dependencies: Dependencies): Interface => {
       source: "compaction",
       agent: Agent.ID.make("compaction"),
       model: modelRef,
+      connectionIdentityDigest: input.resolved.accountIdentityDigest,
       routeID: input.resolved.model.route.id,
       promptCacheKey: cache.promptCacheKey,
       systemDigest: cache.systemDigest,
@@ -170,7 +191,8 @@ const make = (dependencies: Dependencies): Interface => {
         cost: Money.USD.zero,
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
       }
-      const cost = SessionUsage.estimatedCost(input.resolved.cost, recorded.tokens) === undefined ? undefined : recorded.cost
+      const cost =
+        SessionUsage.estimatedCost(input.resolved.cost, recorded.tokens) === undefined ? undefined : recorded.cost
       return tracker.complete({
         tokens: recorded.tokens,
         ...(cost === undefined ? {} : { cost }),
@@ -207,11 +229,17 @@ const make = (dependencies: Dependencies): Interface => {
     return text
   })
 
-  const manifest = Effect.fn("SessionCompaction.manifest")(function* (job: SessionCompactionJob.Job, prepareOwner?: OwnerRequestBuilder) {
+  const manifest = Effect.fn("SessionCompaction.manifest")(function* (
+    job: SessionCompactionJob.Job,
+    prepareOwner?: OwnerRequestBuilder,
+  ) {
     const session = yield* dependencies.store.get(job.sessionID)
     if (!session) return yield* new ManifestError({ code: "migration_failed" })
-    const owner = prepareOwner ? yield* prepareOwner(job).pipe(Effect.mapError(() => new ManifestError({ code: "migration_failed" }))) : undefined
-    const remoteRoute = owner && ["openai-codex-responses", "openai-codex-websocket-responses"].includes(owner.request.model.route.id)
+    const owner = prepareOwner
+      ? yield* prepareOwner(job).pipe(Effect.mapError(() => new ManifestError({ code: "migration_failed" })))
+      : undefined
+    const remoteRoute =
+      owner && ["openai-codex-responses", "openai-codex-websocket-responses"].includes(owner.request.model.route.id)
 
     const rows = yield* dependencies.db
       .select({
@@ -253,21 +281,33 @@ const make = (dependencies: Dependencies): Interface => {
       const remote = yield* remoteCompaction(dependencies, session, job, owner).pipe(Effect.option)
       if (Option.isSome(remote)) {
         let retainedTokens = 0
-        const retained = decodedMessages.filter((entry) => entry.message.type === "user" &&
-          entry.message.metadata?.contextSource === undefined).toReversed().flatMap((entry) => {
-          const row = rows.find((row) => row.id === entry.message.id)
-          if (!row || !Schema.is(Schema.Json)(row.data)) return []
-          const tokens = Token.estimateJson(row.data)
-          if (retainedTokens + tokens > 64_000) return []
-          retainedTokens += tokens
-          return [{ messageID: entry.message.id, seq: EventRuntime.Seq.make(entry.seq), digest: ContextManifest.payloadDigest(row.data) }]
-        }).toReversed()
-        const currentLiveState = yield* dependencies.liveState.load(job.sessionID).pipe(
-          Effect.mapError(() => new ManifestError({ code: "migration_failed" })),
-        )
-        return ContextManifest.remote({
+        const retained = decodedMessages
+          .filter((entry) => entry.message.type === "user" && entry.message.metadata?.contextSource === undefined)
+          .toReversed()
+          .flatMap((entry) => {
+            const row = rows.find((row) => row.id === entry.message.id)
+            if (!row || !Schema.is(Schema.Json)(row.data)) return []
+            const tokens = Token.estimateJson(row.data)
+            if (retainedTokens + tokens > 64_000) return []
+            retainedTokens += tokens
+            return [
+              {
+                messageID: entry.message.id,
+                seq: EventRuntime.Seq.make(entry.seq),
+                digest: ContextManifest.payloadDigest(row.data),
+              },
+            ]
+          })
+          .toReversed()
+        const currentLiveState = yield* dependencies.liveState
+          .load(job.sessionID)
+          .pipe(Effect.mapError(() => new ManifestError({ code: "migration_failed" })))
+        const manifest = ContextManifest.remote({
           baseContextRevision: job.baseContextRevision,
-          coveredThrough: { messageID: job.requestedThrough.messageID, seq: EventRuntime.Seq.make(job.requestedThrough.seq) },
+          coveredThrough: {
+            messageID: job.requestedThrough.messageID,
+            seq: EventRuntime.Seq.make(job.requestedThrough.seq),
+          },
           protectedState: SessionLiveState.toProtectedState(currentLiveState.sources),
           retained,
           provider: owner.request.model.provider,
@@ -275,13 +315,17 @@ const make = (dependencies: Dependencies): Interface => {
           variant: owner.modelRef?.variant,
           inputTokens: Token.estimateJson(owner.request.messages),
           retainedTokens,
-          item: remote.value,
+          item: remote.value.item,
         })
+        yield* remote.value.complete(
+          SessionMessage.ID.make(`msg_compaction_${ContextManifest.manifestDigest(manifest)}`),
+        )
+        return manifest
       }
     }
     const agent = yield* dependencies.agents.get(Agent.ID.make("compaction"))
     const resolved = yield* dependencies.helpers.resolveModel(session, "compaction", agent)
-    const helperSession = resolved ? yield* ensureHelperSession(dependencies, session, job, resolved.ref) : undefined
+    const helperSession = resolved ? yield* ensureHelperSession(dependencies, session, job, resolved) : undefined
     const targetMaxInputTokens = job.targetMaxInputTokens ?? 0
     const maxInputTokens = resolved
       ? selectedInputBudget(job, resolved.model, dependencies.config)
@@ -434,20 +478,35 @@ const remoteCompaction = Effect.fn("SessionCompaction.remote")(function* (
       sessionID: session.id,
       source: "compaction",
       agent: session.agent ?? Agent.defaultID,
-      model: model ?? CatalogModel.Ref.make({ providerID: Provider.ID.make(owner.request.model.provider), id: CatalogModel.ID.make(owner.request.model.id) }),
+      model:
+        model ??
+        CatalogModel.Ref.make({
+          providerID: Provider.ID.make(owner.request.model.provider),
+          id: CatalogModel.ID.make(owner.request.model.id),
+        }),
+      connectionIdentityDigest: owner.accountIdentityDigest,
       routeID: owner.request.model.route.id,
       ...owner.cache,
     })
-    const { previousResponseId: _previous, continuationInputStart: _start, ...openai } =
-      mergeProviderOptions(owner.request.providerOptions, { openai: {
+    const {
+      previousResponseId: _previous,
+      continuationInputStart: _start,
+      ...openai
+    } = mergeProviderOptions(owner.request.providerOptions, {
+      openai: {
         parallelToolCalls: true,
-        responsesWebSocket: owner.request.model.route.id === "openai-codex-websocket-responses"
-          ? { ...OpenAIOptions.responsesWebSocket(owner.request), fullReplay: true }
-          : undefined,
-      } })?.openai ?? {}
+        responsesWebSocket:
+          owner.request.model.route.id === "openai-codex-websocket-responses"
+            ? { ...OpenAIOptions.responsesWebSocket(owner.request), fullReplay: true }
+            : undefined,
+      },
+    })?.openai ?? {}
     const request = LLMRequest.update(owner.request, {
       id: tracker.requestID,
-      messages: [...owner.request.messages, Message.make({ role: "user", content: [], native: { openai: { compactionTrigger: true } } })],
+      messages: [
+        ...owner.request.messages,
+        Message.make({ role: "user", content: [], native: { openai: { compactionTrigger: true } } }),
+      ],
       providerOptions: { ...owner.request.providerOptions, openai },
     })
     const items: Schema.Json[] = []
@@ -456,34 +515,53 @@ const remoteCompaction = Effect.fn("SessionCompaction.remote")(function* (
     let usage: SessionUsage.Recorded | undefined
     let timing: ReturnType<typeof SessionUsage.timing>
     yield* dependencies.llm.stream(request).pipe(
-      Stream.runForEach((event) => Effect.sync(() => {
-        if (LLMEvent.is.providerError(event)) failed = true
-        if (LLMEvent.is.reasoningEnd(event)) {
-          const item = event.providerMetadata?.openai?.opaqueCompactionItem
-          if (Schema.is(Schema.Json)(item)) items.push(item)
-        }
-        if (LLMEvent.is.stepFinish(event)) {
-          finished = event.reason === "stop" && event.providerMetadata?.openai?.remoteCompactionCompleted === true
-          usage = SessionUsage.record(event.usage, owner.cost)
-          timing = SessionUsage.timing(event.usage)
-        }
-      })),
-      Effect.catchTag("LLM.Error", () => Effect.sync(() => { failed = true })),
+      Stream.runForEach((event) =>
+        Effect.sync(() => {
+          if (LLMEvent.is.providerError(event)) failed = true
+          if (LLMEvent.is.reasoningEnd(event)) {
+            const item = event.providerMetadata?.openai?.opaqueCompactionItem
+            if (Schema.is(Schema.Json)(item)) items.push(item)
+          }
+          if (LLMEvent.is.stepFinish(event)) {
+            finished = event.reason === "stop" && event.providerMetadata?.openai?.remoteCompactionCompleted === true
+            usage = SessionUsage.record(event.usage, owner.cost)
+            timing = SessionUsage.timing(event.usage)
+          }
+        }),
+      ),
+      Effect.catchTag("LLM.Error", () =>
+        Effect.sync(() => {
+          failed = true
+        }),
+      ),
     )
     const recorded = usage ?? { tokens: SessionUsage.tokens(undefined), cost: Money.USD.zero }
     const cost = SessionUsage.estimatedCost(owner.cost, recorded.tokens) === undefined ? undefined : recorded.cost
     const item = items[0]
-    const valid = !failed && finished && items.length === 1 && Schema.is(Schema.Json)(item) && jsonObject(item) &&
-      item.type === "compaction" && typeof item.encrypted_content === "string" && item.encrypted_content.length > 0
-    yield* tracker.complete({
+    const valid =
+      !failed &&
+      finished &&
+      items.length === 1 &&
+      Schema.is(Schema.Json)(item) &&
+      jsonObject(item) &&
+      item.type === "compaction" &&
+      typeof item.encrypted_content === "string" &&
+      item.encrypted_content.length > 0
+    const completion: SessionProviderRequest.CompleteInput = {
       tokens: recorded.tokens,
       ...(cost === undefined ? {} : { cost }),
       continuation: retry === 0 ? "full" : "fallback",
       ...(timing ? { timing } : {}),
       ...(!valid ? { invalidation: "retry-fallback" as const } : {}),
-    })
-    if (!valid) continue
-    return { ...item, id: typeof item.id === "string" && item.id ? item.id : `cmp_${job.id}` }
+    }
+    if (!valid) {
+      yield* tracker.complete(completion)
+      continue
+    }
+    return {
+      item: { ...item, id: typeof item.id === "string" && item.id ? item.id : `cmp_${job.id}` },
+      complete: (assistantMessageID: SessionMessage.ID) => tracker.complete({ ...completion, assistantMessageID }),
+    }
   }
   return yield* new ManifestError({ code: "provider_failed" })
 })
@@ -1117,24 +1195,32 @@ const ensureHelperSession = Effect.fnUntraced(function* (
   dependencies: Dependencies,
   owner: SessionSchema.Info,
   job: SessionCompactionJob.Job,
-  model: CatalogModel.Ref,
+  resolved: SessionRunnerModel.Resolved,
 ) {
   const id = SessionSchema.ID.make(`ses_compaction_${Hash.sha256(job.id).slice(0, 24)}`)
   const existing = yield* dependencies.store.get(id)
   if (existing) return existing
   const created = yield* Clock.currentTimeMillis
-  yield* dependencies.events.publish(SessionEvent.Created, {
-    sessionID: id,
-    projectID: owner.projectID,
-    location: owner.location,
-    parentID: owner.id,
-    agent: Agent.ID.make("compaction"),
-    model,
-    permissionCeiling: owner.permissionCeiling,
-    title: `Compaction ${job.id}`,
-    subpath: owner.subpath,
-    created,
-  })
+  yield* dependencies.events.publishBatch([
+    {
+      definition: SessionEvent.Created,
+      data: {
+        sessionID: id,
+        projectID: owner.projectID,
+        location: owner.location,
+        parentID: owner.id,
+        agent: Agent.ID.make("compaction"),
+        model: resolved.ref,
+        permissionCeiling: owner.permissionCeiling,
+        title: `Compaction ${job.id}`,
+        subpath: owner.subpath,
+        created,
+      },
+    },
+    ...(resolved.profileBinding
+      ? [{ definition: SessionEvent.ProfileBound, data: { sessionID: id, binding: resolved.profileBinding } }]
+      : []),
+  ])
   const helper = yield* dependencies.store.get(id)
   if (!helper) return yield* new ManifestError({ code: "migration_failed" })
   return helper

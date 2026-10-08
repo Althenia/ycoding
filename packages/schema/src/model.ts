@@ -11,10 +11,14 @@ export type ID = typeof ID.Type
 export const VariantID = Schema.String.pipe(Schema.brand("Model.VariantID"))
 export type VariantID = typeof VariantID.Type
 
+export const ProfileName = Schema.String.check(Schema.isNonEmpty()).annotate({ identifier: "Model.ProfileName" })
+export type ProfileName = typeof ProfileName.Type
+
 export const Ref = Schema.Struct({
   id: ID,
   providerID: Provider.ID,
   variant: VariantID.pipe(optional),
+  profile: ProfileName.pipe(optional),
 })
   .annotate({ identifier: "Model.Ref" })
   .pipe(
@@ -73,6 +77,14 @@ export const Daybreak = Schema.Literals(["daybreak_blue", "daybreak_red"]).annot
 })
 export type Daybreak = typeof Daybreak.Type
 
+export interface Profile extends Schema.Schema.Type<typeof Profile> {}
+export const Profile = Schema.Struct({
+  name: ProfileName,
+  active: Schema.Boolean,
+  variants: Schema.Array(VariantID).pipe(optional),
+  daybreak: Schema.Array(Daybreak).pipe(optional),
+}).annotate({ identifier: "Model.Profile" })
+
 export const API = Schema.Literals(["chat", "responses"]).annotate({
   identifier: "Model.API",
 })
@@ -89,6 +101,7 @@ export const Info = Schema.Struct({
   ...Provider.Overlays,
   capabilities: Capabilities,
   variants: Schema.Array(Variant),
+  profiles: Schema.Array(Profile).pipe(optional),
   time: Schema.Struct({
     released: Schema.Finite,
   }),
@@ -124,3 +137,9 @@ export const Info = Schema.Struct({
         }) satisfies Info,
     })),
   )
+
+export interface Default extends Schema.Schema.Type<typeof Default> {}
+export const Default = Schema.Struct({
+  ...Info.fields,
+  selection: Ref,
+}).annotate({ identifier: "Model.Default" })

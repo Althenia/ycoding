@@ -66,9 +66,9 @@ Live response observations replace overlapping older OAuth windows. The OAuth us
 
 ### Codex and Spark
 
-When configured, YCoding invokes a Codex app-server process directly with an argv array, performs the documented `initialize`, `initialized`, and `account/rateLimits/read` sequence, then terminates the process. This path has precedence when it succeeds.
+When configured, YCoding invokes a Codex app-server process directly with an argv array, performs the documented `initialize`, `initialized`, and `account/rateLimits/read` sequence, then terminates the process. Its snapshot is a separate **Codex app-server** source with unknown account attribution, not a stored credential profile's quota.
 
-Without a usable app-server snapshot, a ChatGPT OAuth credential may use the provider-owned backend usage endpoint as a best-effort fallback. Account routing uses the credential's account ID when present.
+A stored ChatGPT OAuth credential uses the provider-owned backend usage endpoint independently for that profile. Account routing uses the credential's account ID when present. Profile quota caches distinguish credential identity, account generation, and token generation; provider-local organization hints and response observations cannot cross account identities. A response observation without account provenance remains unbound rather than being assigned to a named profile.
 
 Primary, secondary, credit, reset-credit, and every additional named limit ID are preserved. Known Spark IDs render as Spark; unknown future IDs receive a sanitized display label instead of being discarded.
 

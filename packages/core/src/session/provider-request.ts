@@ -24,6 +24,8 @@ export interface BeginInput {
   readonly sessionID: ProviderRequest.Record["sessionID"]
   readonly expectedContextRevision?: number
   readonly inputID?: ProviderRequest.Record["inputID"]
+  readonly assistantMessageID?: ProviderRequest.Record["assistantMessageID"]
+  readonly connectionIdentityDigest?: string
   readonly source: ProviderRequest.Source
   readonly agent: ProviderRequest.Record["agent"]
   readonly model: ProviderRequest.Record["model"]
@@ -39,6 +41,8 @@ export class StaleContextRevision extends Data.TaggedError("SessionProviderReque
 }> {}
 
 export interface CompleteInput {
+  readonly assistantMessageID?: ProviderRequest.Record["assistantMessageID"]
+  readonly connectionIdentityDigest?: string | null
   readonly invalidation?: ProviderRequest.Invalidation
   readonly continuation: ProviderRequest.Continuation
   readonly cacheReadReported?: boolean
@@ -63,8 +67,13 @@ export interface Interface {
   readonly list: (
     sessionID: ProviderRequest.Record["sessionID"],
   ) => Effect.Effect<ReadonlyArray<ProviderRequest.Record>>
-  readonly recentSteps: (sessionID: ProviderRequest.Record["sessionID"]) => Effect.Effect<ReadonlyArray<ProviderRequest.Record>>
-  readonly listAll: (range?: { readonly from?: number; readonly to?: number }) => Effect.Effect<ReadonlyArray<ProviderRequest.Record>>
+  readonly recentSteps: (
+    sessionID: ProviderRequest.Record["sessionID"],
+  ) => Effect.Effect<ReadonlyArray<ProviderRequest.Record>>
+  readonly listAll: (range?: {
+    readonly from?: number
+    readonly to?: number
+  }) => Effect.Effect<ReadonlyArray<ProviderRequest.Record>>
   readonly summary: (sessionID: ProviderRequest.Record["sessionID"]) => Effect.Effect<ProviderRequest.Summary>
 }
 
@@ -138,7 +147,7 @@ export function summarize(records: readonly CostedRecord[]): ProviderRequest.Sum
     }
   >()
   for (const record of records) {
-    const key = JSON.stringify([record.model.providerID, record.model.id, record.model.variant])
+    const key = JSON.stringify([record.model.providerID, record.model.id, record.model.variant, record.model.profile])
     const current = models.get(key)
     if (!current) {
       models.set(key, {
@@ -181,7 +190,8 @@ export function summarize(records: readonly CostedRecord[]): ProviderRequest.Sum
             : right.cost - left.cost) ||
         left.model.providerID.localeCompare(right.model.providerID) ||
         left.model.id.localeCompare(right.model.id) ||
-        (left.model.variant ?? "").localeCompare(right.model.variant ?? ""),
+        (left.model.variant ?? "").localeCompare(right.model.variant ?? "") ||
+        (left.model.profile ?? "").localeCompare(right.model.profile ?? ""),
     )
   const latest = records.at(-1)
   return {
@@ -196,8 +206,11 @@ export function summarize(records: readonly CostedRecord[]): ProviderRequest.Sum
     tokens: metrics.tokens,
     ...(latest === undefined
       ? {}
-      : { latestInvalidation: latest.invalidation, latestNamespace: latest.promptCacheKey.slice(0, 8),
-          ...(latest.timing === undefined ? {} : { latestTiming: latest.timing }) }),
+      : {
+          latestInvalidation: latest.invalidation,
+          latestNamespace: latest.promptCacheKey.slice(0, 8),
+          ...(latest.timing === undefined ? {} : { latestTiming: latest.timing }),
+        }),
   }
 }
 
@@ -230,8 +243,8 @@ function defaultInvalidation(
   if (previous.source === "compaction" || compactedSincePrevious) return "compaction-reset"
   if (previous.model && (previous.model.providerID !== input.model.providerID || previous.model.id !== input.model.id))
     return "model-switched"
-  if (previous.model && previous.model.variant !== input.model.variant)
-    return "model-variant-switched"
+  if (previous.model && previous.model.variant !== input.model.variant) return "model-variant-switched"
+  if (previous.model && previous.model.profile !== input.model.profile) return "model-switched"
   if (previous.promptCacheKey === input.promptCacheKey) return "provider-not-reported"
   if (previous.systemDigest !== input.systemDigest) return "system-prefix-changed"
   if (previous.toolDigest !== input.toolDigest) return "tool-prefix-changed"
@@ -242,6 +255,8 @@ const rowRecord = (row: typeof SessionProviderRequestTable.$inferSelect): Provid
   id: row.id,
   sessionID: row.session_id,
   ...(row.input_id === null ? {} : { inputID: row.input_id }),
+  ...(row.assistant_message_id === null ? {} : { assistantMessageID: row.assistant_message_id }),
+  ...(row.connection_identity_digest === null ? {} : { connectionIdentityDigest: row.connection_identity_digest }),
   source: row.source,
   agent: row.agent,
   model: row.model,
@@ -293,23 +308,33 @@ const layer = Layer.effect(
       db
         .select()
         .from(SessionProviderRequestTable)
-        .where(and(eq(SessionProviderRequestTable.session_id, sessionID), eq(SessionProviderRequestTable.source, "step")))
+        .where(
+          and(eq(SessionProviderRequestTable.session_id, sessionID), eq(SessionProviderRequestTable.source, "step")),
+        )
         .orderBy(desc(SessionProviderRequestTable.request))
         .limit(8)
         .all()
-        .pipe(Effect.orDie, Effect.map((rows) => rows.toReversed().map(rowRecord)))
+        .pipe(
+          Effect.orDie,
+          Effect.map((rows) => rows.toReversed().map(rowRecord)),
+        )
 
     const listAll: Interface["listAll"] = (range) =>
       db
         .select()
         .from(SessionProviderRequestTable)
-        .where(and(
-          range?.from === undefined ? undefined : gte(SessionProviderRequestTable.time_created, range.from),
-          range?.to === undefined ? undefined : lt(SessionProviderRequestTable.time_created, range.to),
-        ))
+        .where(
+          and(
+            range?.from === undefined ? undefined : gte(SessionProviderRequestTable.time_created, range.from),
+            range?.to === undefined ? undefined : lt(SessionProviderRequestTable.time_created, range.to),
+          ),
+        )
         .orderBy(asc(SessionProviderRequestTable.session_id), asc(SessionProviderRequestTable.request))
         .all()
-        .pipe(Effect.orDie, Effect.map((rows) => rows.map(rowRecord)))
+        .pipe(
+          Effect.orDie,
+          Effect.map((rows) => rows.map(rowRecord)),
+        )
 
     const summary: Interface["summary"] = (sessionID) =>
       Effect.gen(function* () {
@@ -356,7 +381,8 @@ const layer = Layer.effect(
                   : right.cost - left.cost) ||
               left.model.providerID.localeCompare(right.model.providerID) ||
               left.model.id.localeCompare(right.model.id) ||
-              (left.model.variant ?? "").localeCompare(right.model.variant ?? ""),
+              (left.model.variant ?? "").localeCompare(right.model.variant ?? "") ||
+              (left.model.profile ?? "").localeCompare(right.model.profile ?? ""),
           )
         const cost = rows.some((row) => row.cost !== null)
           ? Money.USD.make(rows.reduce((total, row) => total + (row.cost ?? 0), 0))
@@ -381,8 +407,11 @@ const layer = Layer.effect(
           ),
           ...(last === undefined
             ? {}
-            : { latestInvalidation: last.invalidation, latestNamespace: last.promptCacheKey.slice(0, 8),
-                ...(last.timing === null ? {} : { latestTiming: last.timing }) }),
+            : {
+                latestInvalidation: last.invalidation,
+                latestNamespace: last.promptCacheKey.slice(0, 8),
+                ...(last.timing === null ? {} : { latestTiming: last.timing }),
+              }),
         }
       })
 
@@ -467,6 +496,11 @@ const layer = Layer.effect(
                       id: requestID,
                       sessionID: input.sessionID,
                       inputID: input.inputID,
+                      assistantMessageID: completion.assistantMessageID ?? input.assistantMessageID,
+                      connectionIdentityDigest:
+                        completion.connectionIdentityDigest === null
+                          ? undefined
+                          : (completion.connectionIdentityDigest ?? input.connectionIdentityDigest),
                       source: input.source,
                       agent: input.agent,
                       model: input.model,
@@ -478,7 +512,9 @@ const layer = Layer.effect(
                       attempts: Math.max(1, current.attempts),
                       invalidation: completion.invalidation ?? current.defaultInvalidation,
                       continuation: completion.continuation,
-                      ...(completion.cacheReadReported === undefined ? {} : { cacheReadReported: completion.cacheReadReported }),
+                      ...(completion.cacheReadReported === undefined
+                        ? {}
+                        : { cacheReadReported: completion.cacheReadReported }),
                       ...(completion.timing === undefined ? {} : { timing: completion.timing }),
                       ...(completion.cost === undefined ? {} : { cost: completion.cost }),
                       tokens: completion.tokens,

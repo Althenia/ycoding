@@ -21,7 +21,7 @@ afterAll(async () => { await browser?.close(); server?.kill(); if (server) await
 const models = [
   { providerID: "anthropic", providerName: "Anthropic", id: "claude-1", name: "Claude 1", variants: ["low", "high"] },
   { providerID: "anthropic", providerName: "Anthropic", id: "claude-2", name: "Claude 2", variants: ["low", "high"] },
-  { providerID: "openai", providerName: "OpenAI", id: "model-a", name: "Model A", variants: ["low", "high", "max"] },
+  { providerID: "openai", providerName: "OpenAI", id: "model-a", name: "Model A", variants: ["low", "high", "max"], profiles: [{ name: "profileA", active: true, variants: ["high"] }, { name: "profileB", active: false, variants: ["low"] }] },
   { providerID: "openai", providerName: "OpenAI", id: "model-a-fast", name: "Model A Fast", variants: ["medium", "high"] },
   { providerID: "openai", providerName: "OpenAI", id: "model-b", name: "Model B", variants: ["low", "high"] },
   { providerID: "openai", providerName: "OpenAI", id: "model-c", name: "Model C", variants: ["medium", "high"] },
@@ -36,18 +36,24 @@ async function wait(page: Page, expression: string) {
   }
   throw new Error(`Timed out: ${expression}`)
 }
-async function harness(initial: ModelRefView | null = { providerID: "openai", id: "model-a", variant: "max" }, preferred?: ModelRefView) {
+async function harness(initial: ModelRefView | null = { providerID: "openai", id: "model-a", variant: "max" }, preferred?: ModelRefView, defaultModel: ModelRefView = { providerID: "openai", id: "model-a" }, viewport: readonly [number, number] = [1440, 900]) {
   let current: ModelRefView | undefined = initial ?? undefined
   let catalogModels = models
   let refused = false
-  const session = () => ({ id: "ses_a", title: "Model replay", agent: "god", model: current, time: { created: 1, updated: 2 } })
+  let promptUnknown = false
+  let sessionRevision = 2
+  const session = () => ({ id: "ses_a", title: "Model replay", agent: "god", model: current === undefined ? undefined : { ...current }, time: { created: 1, updated: sessionRevision++ } })
   const relay = await startRelayDouble({
     advertisedSessions: ["ses_a"],
     snapshot: () => ({ session: session(), messages: [], watermark: { type: "log.synced", aggregateID: "ses_a", seq: 0 } }),
     handler: (request) => {
-      if (request.operation === "session.catalog" || request.operation === "workspace.catalog") return { ok: true, value: { defaultModel: { providerID: "openai", id: "model-a" }, agents: [{ id: "god", name: "God", mode: "primary" }], models: catalogModels, commands: [], skills: [], references: [], resources: [] } }
+      if (request.operation === "session.catalog" || request.operation === "workspace.catalog") return { ok: true, value: { defaultModel, agents: [{ id: "god", name: "God", mode: "primary" }], models: catalogModels, commands: [{ name: "plan", description: "Plan" }], skills: [], references: [], resources: [] } }
       if (request.operation === "session.list") return { ok: true, value: { data: [session()], cursor: {} } }
       if (request.operation === "session.get") return { ok: true, value: { data: session() } }
+      if (request.operation === "session.prompt" && promptUnknown) {
+        promptUnknown = false
+        return { ok: false, code: "outcome_unknown", message: "Admission answer was lost" }
+      }
       if (request.operation !== "session.switchModel") return "default"
       if (refused) return { ok: false, code: "forbidden", message: "Switch refused" }
       const chosen = readModelRef(request.input?.model)
@@ -58,13 +64,15 @@ async function harness(initial: ModelRefView | null = { providerID: "openai", id
     },
   })
   const page = await browser!.openPage()
+  await page.setViewport(viewport[0], viewport[1])
+  if (viewport[0] === 390) await page.setCoarsePointer(true)
   const storageSession = crypto.randomUUID()
   await page.injectOnNewDocument(`if(localStorage.getItem('__modelReplayStorageSession')!==${JSON.stringify(storageSession)}){localStorage.removeItem('ycoding.remote.recent-models');localStorage.removeItem('ycoding.remote.preferred-model');localStorage.setItem('__modelReplayStorageSession',${JSON.stringify(storageSession)})}${preferred ? `localStorage.setItem('ycoding.remote.preferred-model',${JSON.stringify(JSON.stringify(preferred))})` : ""}`)
   await page.navigate(`http://127.0.0.1:${port}/verify/model-replay-fixture.html?relay=${encodeURIComponent(relay.wsURL("dev_1"))}`)
   await wait(page, `window.modelReplayStore?.state().transport.kind === 'open' && window.modelReplayStore.state().sessions.length > 0`)
   await page.evaluate(`window.modelReplayStore.selectSession('ses_a')`)
   await wait(page, `document.querySelector('.model-control__trigger')?.disabled === false`)
-  return { page, relay, current: () => current, refuse: () => { refused = true }, setCatalogModels: (next: typeof models) => { catalogModels = next }, external: (model: ModelRefView) => { current = model; relay.pushEvent("ses_a", { type: "session.model.selected", data: { sessionID: "ses_a", model } }) }, close: async () => { await page.close(); await relay.stop() } }
+  return { page, relay, current: () => current, refuse: () => { refused = true }, failNextPrompt: () => { promptUnknown = true }, refreshSessionInfo: () => relay.pushSessions(["ses_a"]), setCatalogModels: (next: typeof models) => { catalogModels = next }, external: (model: ModelRefView) => { current = model; relay.pushEvent("ses_a", { type: "session.model.selected", data: { sessionID: "ses_a", model } }) }, close: async () => { await page.close(); await relay.stop() } }
 }
 async function choose(page: Page, name: string) {
   await page.evaluate(`document.querySelector('.model-control__trigger').click()`)
@@ -78,6 +86,13 @@ async function openModelList(page: Page) {
 }
 async function send(page: Page, text: string) {
   await page.evaluate(`(() => { const field=document.querySelector('.mini-composer__mount textarea'); field.value=${JSON.stringify(text)}; field.dispatchEvent(new Event('input',{bubbles:true})); document.querySelector('[aria-label="Send prompt"]').click(); })()`)
+}
+async function waitForOperation(relay: Awaited<ReturnType<typeof startRelayDouble>>, operation: string) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (relay.requests.some((request) => request.operation === operation)) return
+    await Bun.sleep(30)
+  }
+  throw new Error(`Timed out waiting for ${operation}`)
 }
 async function effort(page: Page, value: string) {
   await page.evaluate(`document.querySelector('.model-control__trigger').click()`)
@@ -123,6 +138,232 @@ test("provider-offered none and default remain selectable explicit variants", as
     await wait(h.page, `document.querySelector('textarea').value === ''`)
     expect(h.relay.requests.find((request) => request.operation === "session.switchModel")?.input?.model).toEqual({ providerID: "openai", id: "model-d", variant: "default" })
   } finally { await h.close() }
+})
+
+test("explicit provider profiles switch before prompts, fail closed, and never activate a global integration", async () => {
+  const h = await harness({ providerID: "openai", id: "model-a" })
+  try {
+    await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
+    await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileA')).click()`)
+    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__trigger').textContent`)).toContain("profileA")
+    await send(h.page, "Profile A")
+    await wait(h.page, `document.querySelector('textarea').value === ''`)
+    expect(h.relay.requests.filter((request) => request.operation === "session.switchModel").at(-1)?.input?.model).toEqual({ providerID: "openai", id: "model-a", profile: "profileA" })
+    expect(h.relay.requests.some((request) => String(request.operation) === "integration.activate")).toBe(false)
+    expect(await h.page.evaluate<boolean>(`document.querySelector('.composer__model-warning') === null`)).toBe(true)
+  } finally { await h.close() }
+
+  const failed = await harness({ providerID: "openai", id: "model-a" })
+  try {
+    failed.refuse()
+    await failed.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    await failed.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
+    await failed.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileB')).click()`)
+    await send(failed.page, "Do not send after failed switch")
+    await wait(failed.page, `window.modelReplayStore.state().mutations.some(item=>item.state==='failed')`)
+    expect(failed.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(1)
+    expect(failed.relay.requests.filter((request) => request.operation === "session.prompt")).toHaveLength(0)
+    expect(failed.relay.requests.some((request) => String(request.operation) === "integration.activate")).toBe(false)
+  } finally { await failed.close() }
+})
+
+test("profile selection precedes remote command admission with the same Model.Ref", async () => {
+  const h = await harness({ providerID: "openai", id: "model-a" })
+  try {
+    await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
+    await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileB')).click()`)
+    await send(h.page, "/plan review")
+    await waitForOperation(h.relay, "session.command")
+    expect(h.relay.requests.slice(-2).map((request) => request.operation)).toEqual(["session.switchModel", "session.command"])
+    expect(h.relay.requests.at(-2)?.input?.model).toEqual({ providerID: "openai", id: "model-a", profile: "profileB" })
+    expect(h.relay.requests.at(-1)?.input).toMatchObject({ command: "plan", arguments: "review" })
+  } finally { await h.close() }
+})
+
+test("a fast model without the selected same-provider profile stays blocked until explicit provider default", async () => {
+  const h = await harness({ providerID: "openai", id: "model-a", variant: "high", profile: "profileA" })
+  try {
+    h.setCatalogModels(models.map((item) => item.id === "model-a"
+      ? { ...item, profiles: [{ name: "profileA", active: true, variants: ["high"] }] }
+      : item.id === "model-a-fast" ? { ...item, profiles: [{ name: "profileB", active: false, variants: ["low"] }] } : item))
+    await h.page.evaluate(`window.modelReplayStore.loadCatalog({sessionID:'ses_a'}, {refresh:true})`)
+    await wait(h.page, `window.modelReplayStore.state().catalogs['session:ses_a']?.models.find(item=>item.id==='model-a-fast')?.profiles?.[0]?.name === 'profileB'`)
+    await h.page.evaluate(`document.querySelector('.model-control__trigger').click(); document.querySelector('[aria-label="Fast model"]').click()`)
+    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__trigger').textContent`)).toContain("profileA")
+    expect(await h.page.evaluate<string>(`document.querySelector('.composer__model-warning').textContent`)).toContain("profileA")
+    await send(h.page, "Do not fall back from Work")
+    expect(h.relay.requests.filter((request) => request.operation === "session.switchModel" || request.operation === "session.prompt")).toHaveLength(0)
+    expect(await h.page.evaluate<string>(`document.querySelector('textarea').value`)).toBe("Do not fall back from Work")
+    await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click(); [...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('Use provider default')).click()`)
+    expect(await h.page.evaluate<boolean>(`document.querySelector('.composer__model-warning') === null`)).toBe(true)
+    await send(h.page, "Use provider default explicitly")
+    await waitForOperation(h.relay, "session.prompt")
+    expect(h.relay.requests.find((request) => request.operation === "session.switchModel")?.input?.model).toEqual({ providerID: "openai", id: "model-a-fast" })
+  } finally { await h.close() }
+})
+
+test("profile variants, effort choices, and remembered values stay profile-specific", async () => {
+  const h = await harness({ providerID: "openai", id: "model-a" })
+  try {
+    h.setCatalogModels([...models, { providerID: "cursor", providerName: "Cursor", id: "claude-profiles", name: "Profile variants", variants: ["low", "high"], profiles: [{ name: "Work", active: true, variants: ["high"] }, { name: "Personal", active: false, variants: ["low"] }] }])
+    await h.page.evaluate(`window.modelReplayStore.loadCatalog({sessionID:'ses_a'}, {refresh:true})`)
+    await wait(h.page, `window.modelReplayStore.state().catalogs['session:ses_a']?.models.some(item=>item.id==='claude-profiles')`)
+    await choose(h.page, "Profile variants")
+    await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
+    await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('Work')).click()`)
+    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__labels span')].map(node=>node.textContent)`)).toEqual(["high"])
+    await h.page.evaluate(`document.querySelector('[role="slider"]').focus()`)
+    await h.page.pressKey("End", "End", 35)
+    expect(await h.page.evaluate<string>(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("high")
+    await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
+    await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('Personal')).click()`)
+    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__labels span')].map(node=>node.textContent)`)).toEqual(["low"])
+    expect(await h.page.evaluate<string>(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("No effort override")
+    await h.page.evaluate(`document.querySelector('[role="slider"]').focus()`)
+    await h.page.pressKey("Home", "Home", 35)
+    expect(await h.page.evaluate<string>(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("low")
+    await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
+    await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('Work')).click()`)
+    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__labels span')].map(node=>node.textContent)`)).toEqual(["high"])
+    expect(await h.page.evaluate<string>(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("high")
+    await send(h.page, "Use remembered Work effort")
+    await waitForOperation(h.relay, "session.prompt")
+    expect(h.relay.requests.find((request) => request.operation === "session.switchModel")?.input?.model).toEqual({ providerID: "cursor", id: "claude-profiles", variant: "high", profile: "Work" })
+  } finally { await h.close() }
+})
+
+test("reselecting the current named profile forces one confirmed rebind before prompt admission", async () => {
+  const h = await harness({ providerID: "openai", id: "model-a", profile: "profileA" })
+  try {
+    await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
+    await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileA')).click()`)
+    await send(h.page, "Rebind this profile")
+    await waitForOperation(h.relay, "session.prompt")
+    expect(h.relay.requests.slice(-2).map((request) => request.operation)).toEqual(["session.switchModel", "session.prompt"])
+    expect(h.relay.requests.at(-2)?.input?.model).toEqual({ providerID: "openai", id: "model-a", profile: "profileA" })
+  } finally { await h.close() }
+
+  const refused = await harness({ providerID: "openai", id: "model-a", profile: "profileA" })
+  try {
+    refused.refuse()
+    await refused.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    await refused.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
+    await refused.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileA')).click()`)
+    await send(refused.page, "Do not bypass a failed rebind")
+    await wait(refused.page, `window.modelReplayStore.state().mutations.some(item=>item.state==='failed')`)
+    expect(refused.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(1)
+    expect(refused.relay.requests.filter((request) => request.operation === "session.prompt")).toHaveLength(0)
+  } finally { await refused.close() }
+})
+
+test("a confirmed same-profile rebind is not repeated when retrying rejected prompt admission", async () => {
+  const h = await harness({ providerID: "openai", id: "model-a", profile: "profileA" })
+  try {
+    h.failNextPrompt()
+    await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
+    await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileA')).click()`)
+    await send(h.page, "Retry admission only")
+    await waitForOperation(h.relay, "session.prompt")
+    await wait(h.page, `window.modelReplayStore.state().mutations.some(item=>item.state==='failed')`)
+    const mutationID = await h.page.evaluate<string>(`window.modelReplayStore.state().mutations.find(item=>item.state==='failed').id`)
+    await h.page.evaluate(`window.modelReplayStore.retryMutation(${JSON.stringify(mutationID)})`)
+    await waitForOperation(h.relay, "session.prompt")
+    for (let attempt = 0; attempt < 100 && h.relay.requests.filter((request) => request.operation === "session.prompt").length < 2; attempt++) await Bun.sleep(30)
+    expect(h.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(1)
+    expect(h.relay.requests.filter((request) => request.operation === "session.prompt")).toHaveLength(2)
+  } finally { await h.close() }
+})
+
+test("a retry fails closed if another client changes the model after the confirmed rebind", async () => {
+  const h = await harness({ providerID: "openai", id: "model-a", profile: "profileA" })
+  try {
+    h.failNextPrompt()
+    await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
+    await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileA')).click()`)
+    await send(h.page, "Do not retry under a different profile")
+    await wait(h.page, `window.modelReplayStore.state().mutations.some(item=>item.state==='failed')`)
+    const mutationID = await h.page.evaluate<string>(`window.modelReplayStore.state().mutations.find(item=>item.state==='failed').id`)
+    h.external({ providerID: "openai", id: "model-a", profile: "profileB" })
+    await wait(h.page, `window.modelReplayStore.state().selectedSessionInfo.model.profile === 'profileB'`)
+    await h.page.evaluate(`window.modelReplayStore.retryMutation(${JSON.stringify(mutationID)})`)
+    expect(h.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(1)
+    expect(h.relay.requests.filter((request) => request.operation === "session.prompt")).toHaveLength(1)
+    expect(await h.page.evaluate<string[]>(`window.modelReplayStore.state().mutations.filter(item=>item.id===${JSON.stringify(mutationID)}).map(item=>item.state)`)).toEqual(["failed"])
+  } finally { await h.close() }
+})
+
+test("a refreshed equal Session Model.Ref cannot clear an unsubmitted profile rebind", async () => {
+  const h = await harness({ providerID: "openai", id: "model-a", profile: "profileA" })
+  try {
+    await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
+    await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileA')).click()`)
+    const updatedAt = await h.page.evaluate<number>(`window.modelReplayStore.state().selectedSessionInfo.updatedAt`)
+    h.refreshSessionInfo()
+    await wait(h.page, `window.modelReplayStore.state().selectedSessionInfo.updatedAt > ${updatedAt}`)
+    expect(await h.page.evaluate<boolean>(`document.querySelector('.model-control__trigger').classList.contains('mini-picker__trigger--pending')`)).toBe(true)
+    await send(h.page, "Keep pending rebind")
+    await waitForOperation(h.relay, "session.prompt")
+    expect(h.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(1)
+    expect(h.relay.requests.find((request) => request.operation === "session.switchModel")?.input?.model).toEqual({ providerID: "openai", id: "model-a", profile: "profileA" })
+  } finally { await h.close() }
+})
+
+test("two Sessions retain independent profile picks and drafts across composer selection", async () => {
+  const current = new Map<string, ModelRefView>([
+    ["ses_a", { providerID: "openai", id: "model-a" }],
+    ["ses_b", { providerID: "openai", id: "model-a" }],
+  ])
+  const session = (id: string) => ({ id, title: id, agent: "god", model: current.get(id), time: { created: 1, updated: 2 } })
+  const relay = await startRelayDouble({
+    advertisedSessions: ["ses_a", "ses_b"],
+    snapshot: (id) => ({ session: session(id), messages: [], watermark: { type: "log.synced", aggregateID: id, seq: 0 } }),
+    handler: (request) => {
+      if (request.operation === "session.catalog") return { ok: true, value: { defaultModel: { providerID: "openai", id: "model-a" }, agents: [{ id: "god", name: "God", mode: "primary" }], models, commands: [], skills: [], references: [], resources: [] } }
+      if (request.operation === "session.list") return { ok: true, value: { data: [...current.keys()].map(session), cursor: {} } }
+      if (request.operation === "session.get") return { ok: true, value: { data: session(request.sessionID!) } }
+      if (request.operation === "session.switchModel") {
+        current.set(request.sessionID!, readModelRef(request.input?.model)!)
+        relay.pushEvent(request.sessionID!, { type: "session.model.selected", data: { sessionID: request.sessionID, model: current.get(request.sessionID!) } })
+        return { ok: true, value: { data: session(request.sessionID!) } }
+      }
+      return "default"
+    },
+  })
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/model-replay-fixture.html?relay=${encodeURIComponent(relay.wsURL("dev_1"))}`)
+    await wait(page, `window.modelReplayStore?.state().transport.kind === 'open' && window.modelReplayStore.state().sessions.length === 2`)
+    await page.evaluate(`window.modelReplayStore.selectSession('ses_a')`)
+    await wait(page, `window.modelReplayStore.state().activeSessionID === 'ses_a' && document.querySelector('.model-control__trigger')?.disabled === false`)
+    await page.evaluate(`document.querySelector('.model-control__trigger').click(); document.querySelector('[aria-label="Profile"]').click(); [...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileA')).click()`)
+    await page.evaluate(`(() => { const field=document.querySelector('textarea'); field.value='draft A'; field.dispatchEvent(new Event('input',{bubbles:true})); })()`)
+    await page.evaluate(`window.modelReplayStore.selectSession('ses_b')`)
+    await wait(page, `window.modelReplayStore.state().activeSessionID === 'ses_b' && document.querySelector('textarea')?.value === '' && document.querySelector('.model-control__trigger')?.disabled === false`)
+    await page.evaluate(`document.querySelector('.model-control__trigger').click(); document.querySelector('[aria-label="Profile"]').click(); [...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileB')).click()`)
+    await page.evaluate(`(() => { const field=document.querySelector('textarea'); field.value='draft B'; field.dispatchEvent(new Event('input',{bubbles:true})); })()`)
+    await page.evaluate(`window.modelReplayStore.selectSession('ses_a')`)
+    await wait(page, `window.modelReplayStore.state().activeSessionID === 'ses_a' && document.querySelector('textarea')?.value === 'draft A'`)
+    expect(await page.evaluate<string>(`document.querySelector('.model-control__trigger').textContent`)).toContain("profileA")
+    await send(page, "draft A")
+    await waitForOperation(relay, "session.prompt")
+    await page.evaluate(`window.modelReplayStore.selectSession('ses_b')`)
+    await wait(page, `window.modelReplayStore.state().activeSessionID === 'ses_b' && document.querySelector('textarea')?.value === 'draft B'`)
+    expect(await page.evaluate<string>(`document.querySelector('.model-control__trigger').textContent`)).toContain("profileB")
+    await send(page, "draft B")
+    for (let attempt = 0; attempt < 100 && relay.requests.filter((request) => request.operation === "session.prompt").length < 2; attempt++) await Bun.sleep(30)
+    expect(relay.requests.filter((request) => request.operation === "session.switchModel").map((request) => [request.sessionID, request.input?.model])).toEqual([
+      ["ses_a", { providerID: "openai", id: "model-a", profile: "profileA" }],
+      ["ses_b", { providerID: "openai", id: "model-a", profile: "profileB" }],
+    ])
+    expect(relay.requests.filter((request) => request.operation === "session.prompt").map((request) => request.sessionID)).toEqual(["ses_a", "ses_b"])
+  } finally { await page.close(); await relay.stop() }
 })
 
 test("each model restores its own valid effort instead of another model's effort or its default", async () => {
@@ -231,21 +472,45 @@ test("an omitted effort stays unselected with authoritative diagnostics and no i
 
 test("an existing Session without a model uses the catalog default identity, not the stored new-session preference", async () => {
   const preferred = { providerID: "openai", id: "model-b", variant: "high" }
-  const h = await harness(null, preferred)
+  const configuredDefault = { providerID: "openai", id: "model-a", variant: "high", profile: "profileA" }
+  const h = await harness(null, preferred, configuredDefault)
   try {
     expect(await h.page.evaluate<string>(`document.querySelector('.model-control__name').textContent`)).toBe("Model A")
-    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__effort').textContent`)).toBe("Model settings")
-    expect(await h.page.evaluate<unknown>(`window.modelReplayStore.state().selectedSessionInfo.model`)).toBeUndefined()
-    await send(h.page, "Use the runtime default")
-    await wait(h.page, `document.querySelector('textarea').value === ''`)
-    expect(h.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(0)
-    expect(h.relay.requests.find((request) => request.operation === "session.prompt")?.input?.model).toBeUndefined()
-    expect(h.current()).toBeUndefined()
+    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__effort').textContent`)).toBe("profileA")
     expect(await h.page.evaluate<unknown>(`JSON.parse(localStorage.getItem('ycoding.remote.preferred-model'))`)).toEqual(preferred)
+    await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__switch strong').textContent`)).toBe("high")
+    await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
+    await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileA')).click()`)
+    expect(await h.page.evaluate<unknown>(`window.modelReplayStore.state().selectedSessionInfo.model`)).toBeUndefined()
+    await send(h.page, "Use the configured default")
+    await wait(h.page, `document.querySelector('textarea').value === ''`)
+    expect(h.relay.requests.find((request) => request.operation === "session.switchModel")?.input?.model).toEqual(configuredDefault)
+    expect(h.relay.requests.find((request) => request.operation === "session.prompt")?.input?.model).toBeUndefined()
+    expect(h.current()).toEqual(configuredDefault)
+    expect(await h.page.evaluate<unknown>(`JSON.parse(localStorage.getItem('ycoding.remote.preferred-model'))`)).toEqual(configuredDefault)
     await h.page.evaluate(`window.modelReplayShowWorkspace()`)
     await wait(h.page, `document.querySelector('.model-control__trigger')?.disabled === false`)
-    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__name').textContent`)).toBe("Model B")
-    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__effort').textContent`)).toBe("high")
+    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__name').textContent`)).toBe("Model A")
+    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__effort').textContent`)).toBe("profileA")
+  } finally { await h.close() }
+})
+
+test("named profile choices use the existing full-screen picker on phones", async () => {
+  const h = await harness({ providerID: "openai", id: "model-a" }, undefined, undefined, [390, 844])
+  try {
+    await wait(h.page, `document.querySelector('.composer__mobile-trigger')?.disabled === false`)
+    await h.page.evaluate(`document.querySelector('.composer__mobile-trigger')?.click()`)
+    await wait(h.page, `document.querySelector('.composer__mobile-trigger')?.getAttribute('aria-expanded') === 'true'`)
+    await wait(h.page, `document.querySelector('.composer__selection-sheet') !== null`)
+    await wait(h.page, `document.querySelector('.composer__selection-sheet .model-control__trigger')?.disabled === false`)
+    await h.page.evaluate(`document.querySelector('.composer__selection-sheet .model-control__trigger')?.click()`)
+    await wait(h.page, `document.querySelector('.model-control__profile [aria-label="Profile"]') !== null`)
+    await h.page.evaluate(`document.querySelector('.model-control__profile [aria-label="Profile"]').click()`)
+    await wait(h.page, `document.querySelector('.mini-picker__surface--sheet[role="dialog"][aria-label="Profile"]') !== null`)
+    expect(await h.page.evaluate<{ width: number; height: number; modal: string | null }>(`(() => { const surface=document.querySelector('.mini-picker__surface--sheet[role="dialog"][aria-label="Profile"]'),rect=surface.getBoundingClientRect(); return { width:rect.width, height:rect.height, modal:surface.getAttribute('aria-modal') }; })()`)).toMatchObject({ modal: "true" })
+    expect(await h.page.evaluate<boolean>(`(() => { const rect=document.querySelector('.mini-picker__surface--sheet[role="dialog"][aria-label="Profile"]').getBoundingClientRect(); return rect.width >= innerWidth - 16 && rect.height >= innerHeight - 24; })()`)).toBe(true)
+    expect(await h.page.evaluate<boolean>(`[...document.querySelectorAll('.mini-picker__surface--sheet[aria-label="Profile"] [role="option"]')].some(option=>option.textContent.includes('profileA'))`)).toBe(true)
   } finally { await h.close() }
 })
 

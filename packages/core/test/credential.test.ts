@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Effect } from "effect"
+import { Deferred, Effect, Fiber } from "effect"
 import { Credential } from "@ycoding-ai/core/credential"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Integration } from "@ycoding-ai/core/integration"
@@ -8,6 +8,76 @@ import { testEffect } from "./lib/effect"
 const it = testEffect(LayerNode.compile(Credential.node))
 
 describe("Credential", () => {
+  it.effect("shares one refresh while distinct credentials progress independently and fences stale settlement", () =>
+    Effect.gen(function* () {
+      const credentials = yield* Credential.Service
+      const value = Credential.OAuth.make({
+        type: "oauth",
+        methodID: Integration.MethodID.make("test"),
+        access: "old",
+        refresh: "refresh",
+        expires: 0,
+      })
+      const work = yield* credentials.create({ integrationID: Integration.ID.make("test"), label: "Work", value })
+      const personal = yield* credentials.create({ integrationID: work.integrationID, label: "Personal", value })
+      const gate = yield* Deferred.make<void>()
+      const entered = yield* Deferred.make<void>()
+      let count = 0
+      const refresh = Effect.gen(function* () {
+        count += 1
+        yield* Deferred.succeed(entered, undefined)
+        yield* Deferred.await(gate)
+        return Credential.OAuth.make({ ...value, access: "new" })
+      })
+      const first = yield* credentials.refresh(work, refresh).pipe(Effect.forkScoped)
+      yield* Deferred.await(entered)
+      const second = yield* credentials.refresh(work, refresh).pipe(Effect.forkScoped)
+      yield* Effect.yieldNow
+      expect(
+        (yield* credentials.refresh(personal, Effect.succeed(Credential.OAuth.make({ ...value, access: "personal" }))))
+          ?.value,
+      ).toMatchObject({ access: "personal" })
+      yield* credentials.create({
+        integrationID: work.integrationID,
+        label: work.label,
+        value: Credential.OAuth.make({ ...value, access: "replacement" }),
+      })
+      yield* Deferred.succeed(gate, undefined)
+      expect(yield* Fiber.join(first)).toBeUndefined()
+      expect(yield* Fiber.join(second)).toBeUndefined()
+      expect(count).toBe(1)
+      expect((yield* credentials.get(work.id))?.value).toMatchObject({ access: "replacement" })
+    }),
+  )
+
+  it.effect("preserves account identity on refresh and rejects replacement or deleted snapshots", () =>
+    Effect.gen(function* () {
+      const credentials = yield* Credential.Service
+      const value = Credential.OAuth.make({
+        type: "oauth",
+        methodID: Integration.MethodID.make("test"),
+        access: "old",
+        refresh: "refresh",
+        expires: 0,
+      })
+      const created = yield* credentials.create({ integrationID: Integration.ID.make("test"), label: "Work", value })
+      expect(created.accountGeneration).toBe(0)
+      const refreshed = yield* credentials.refresh(
+        created,
+        Effect.succeed(Credential.OAuth.make({ ...value, access: "new", expires: 10000 })),
+      )
+      expect(refreshed?.accountGeneration).toBe(created.accountGeneration)
+      expect(refreshed?.generation).toBe(1)
+      const replaced = yield* credentials.create({ integrationID: created.integrationID, label: created.label, value })
+      expect(replaced.accountGeneration).toBe(1)
+      expect(yield* credentials.refresh(created, Effect.succeed(value))).toBeUndefined()
+      expect((yield* credentials.get(created.id))?.value).toEqual(value)
+      yield* credentials.remove(created.id)
+      expect(yield* credentials.refresh(replaced, Effect.succeed(value))).toBeUndefined()
+      expect(yield* credentials.get(created.id)).toBeUndefined()
+    }),
+  )
+
   it.effect("stores, updates, lists, and removes credentials", () =>
     Effect.gen(function* () {
       const credentials = yield* Credential.Service

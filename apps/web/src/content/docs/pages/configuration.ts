@@ -27,7 +27,7 @@ const domainCards: DocBlock = {
     { title: "Guardrails", text: "Session-family reviews and custom rules.", href: "/docs/configuration/guardrails" },
     { title: "Notifications", text: "Desktop attention alerts and sounds.", href: "/docs/configuration/notifications" },
     { title: "Permissions", text: "Ordered tool rules and inheritance.", href: "/docs/configuration/permissions" },
-    { title: "Tools", text: "Tool surfaces and resource limits.", href: "/docs/configuration/tools" },
+    { title: "Tools", text: "Tool permissions, structured decisions, and resource limits.", href: "/docs/configuration/tools" },
     { title: "Appearance", text: "Theme, keybindings, and terminal behavior.", href: "/docs/configuration/appearance" },
   ],
 }
@@ -244,6 +244,7 @@ export const configurationPages: readonly DocPage[] = [
               ["`compaction`", "object", "see below", "Selective compaction limits and advisory thresholds."],
               ["`memory`", "object", "`enabled: true`", "Explicit workspace knowledge storage."],
               ["`guardrails`", "object", "`enabled: true`, caps 8/8/16", "Session-family review service and concurrency caps."],
+              ["`decisions`", "object", "unset", "Optional native or helper-agent judgments for explicitly configured guardrail, routing, and goal policies."],
               ["`skills`", "string[]", "unset", "Extra skill directories, `~/` paths, or HTTP(S) sources."],
               ["`commands`", "record of command objects", "unset", "Named slash commands."],
               ["`instructions`", "string[]", "unset", "Accepted but not read by instruction discovery. Use `AGENTS.md` or skills."],
@@ -251,7 +252,7 @@ export const configurationPages: readonly DocPage[] = [
               ["`references`", "record", "unset", "Named local directories or Git repositories used as context."],
               ["`plugins`", "array of string | `{ package, options? }`", "unset", "Ordered plugin additions and removals."],
               ["`providers`", "record of provider objects", "unset", "Provider and model metadata and request overlays."],
-              ["`provider_usage.codex_app_server`", "object", "unset", "Optional local Codex app-server quota source."],
+              ["`provider_usage.codex_app_server`", "object", "unset", "Optional local Codex app-server quota source, displayed separately with unknown account attribution rather than as a stored profile."],
               ["`efficiency`", "object", "runtime-derived", "Helper models, title policy, prompt caching, Responses continuation."],
               ["`image_analyzer`", "object", "unset", "Image-to-text fallback for text-only models."],
               ["`experimental.subagent_depth`", "integer ≥ 0", "`1`", "Maximum subagent nesting depth."],
@@ -363,7 +364,7 @@ export const configurationPages: readonly DocPage[] = [
               ["`GSD`, `architech`, `yangi`", "primary", "Selectable primary agents."],
               ["`occam`, `omoikane`, `wittgenstein`, `zeus`", "subagent", "Maintained task subagents."],
               ["`btw`", "subagent", "Visible read-only advisor; shell, edit, write, and patch ask."],
-              ["`compaction`, `title`, `goal`, `summary`", "primary, hidden", "Internal helpers with every tool denied."],
+              ["`compaction`, `title`, `goal`, `decision`, `summary`", "primary, hidden", "Internal helpers with every tool denied; `decision` serves structured judgments."],
             ],
           },
         ],
@@ -537,7 +538,7 @@ Report concrete defects with file and symbol evidence.`,
               ["`model`", "selector"],
               ["`agents.<id>.model`", "selector"],
               ["`commands.<name>.model`", "selector"],
-              ["`efficiency.helper_models.title`, `.goal`, `.compaction.main`, `.compaction.subagent`", "selector or `session` (default)"],
+              ["`efficiency.helper_models.title`, `.goal`, `.decision`, `.compaction.main`, `.compaction.subagent`", "selector or `session` (default)"],
               ["`image_analyzer.model`", "selector string"],
             ],
           },
@@ -759,9 +760,11 @@ Report concrete defects with file and symbol evidence.`,
           {
             kind: "list",
             items: [
-              "Exactly one profile per provider is active; model requests and usage reporting use it.",
-              "Switching the active profile keeps the others. Removing the active profile promotes the remaining one.",
-              "The Session header shows the active profile after the agent when a provider has more than one profile; a single profile shows the plain `provider/model` label.",
+              "One profile per provider is the active default. Choose an eligible named profile in a Session's model control to use that account independently; other Sessions and subagents can use different profiles for the same provider and model at the same time.",
+              "Available models, effort variants, and Daybreak access follow the selected profile. A model offered only to a named profile remains selectable with that profile, but cannot use an ineligible provider default. Authenticated custom-provider discovery keeps each profile's inventory separate.",
+              "Selecting a Session profile does not activate it globally. Use provider default clears explicit selection. Switching or removing the active default does not redirect an explicitly selected Session. Usage reports supported stored profiles; local Today spend remains provider-wide.",
+              "The model control and Session header show the selected profile. A missing, renamed, removed, or replaced profile blocks provider work instead of silently selecting another account. Re-select the named profile explicitly after reconnecting or replacing it; failed switches preserve your draft.",
+              'Structured model configuration can include a profile name, for example { "provider": "openai", "model": "gpt-6-luna", "profile": "Work" }. String shorthand uses provider/model#variant. Helpers and subagents inherit an omitted profile only within the same provider, after applying their existing model-selection precedence.',
             ],
           },
         ],
@@ -1100,6 +1103,10 @@ ycoding mcp add docs --global -- bunx @example/docs-mcp`,
         heading: "Continuation and terminal states",
         blocks: [
           {
+            kind: "paragraph",
+            text: "The optional top-level `decisions.goal` policy may use a native `min_probability` or helper-agent `min_confidence` judgment to stop continuation; it is disabled when omitted. Refusal or uncertainty continues toward the unchanged objective. Provider failure surfaces as a goal calculation error; a policy-selected stop is recorded as `stopped`, never `completed`.",
+          },
+          {
             kind: "list",
             items: [
               "An active goal auto-answers questions, forms, and `ask` permissions at YOLO 0. Guardrail reviews still need effective YOLO 3 or a human.",
@@ -1221,6 +1228,10 @@ ycoding mcp add docs --global -- bunx @example/docs-mcp`,
           {
             kind: "paragraph",
             text: "Guardrails review high-impact actions across a root Session and all of its subagents, independently of tool permissions. Shell commands, direct Session shell, edits, writes, patches, subagent launches, mutation-capable MCP tools, and project-artifact changes pass through the same service. A pending review blocks the whole Session family and appears in every Session view it blocks.",
+          },
+          {
+            kind: "paragraph",
+            text: "The optional top-level `decisions.guardrails` policy can classify a bounded guardrail judgment using native `min_probability` or helper-agent `min_confidence`. It is disabled when omitted; uncertainty preserves the ordinary review, and deterministic denials and hard reviews remain authoritative.",
           },
         ],
       },
@@ -1629,11 +1640,108 @@ Confirm the account, cluster, namespace, and change plan.`,
               ["`shell`", "`ycoding.tool.shell`", "Run commands with a finite timeout and optional memory limit."],
               ["`webfetch`, `websearch`", "`ycoding.tool.webfetch`, `.websearch`", "Fetch a URL; local web search backed by Exa or Parallel."],
               ["`browser`", "`ycoding.tool.browser`", "Paired Chrome tabs, Session-owned tabs, or an isolated browser."],
+              ["`decision`", "`ycoding.tool.decision`", "Evaluate bounded classification, fixed-option choices, or rubric scores using an authorized provider."],
               ["`computer`", "`ycoding.tool.computer`", "macOS iTerm sessions, Finder paths, and one identified app window."],
               ["`memory`", "`ycoding.tool.memory`", "Explicit workspace knowledge."],
               ["`subagent`, `subagent_control`, `todowrite`, `question`, `goal`, `skill`", "`ycoding.tool.subagent`, `.subagent-control`, `.todowrite`, `.question`, `.goal`, `.skill`", "Orchestration and Session control."],
             ],
           },
+        ],
+      },
+      {
+        heading: "Structured decisions",
+        blocks: [
+          {
+            kind: "paragraph",
+            text: "The `decision` tool accepts `provider: \"agent\"`, `\"openai\"`, or `\"typesafe\"`; permission rules use action `decision` and resource `agent`, `openai`, or `typesafe`. Agent requests contain JSON `state` and ordered named `predicate`, `choice`, or `score` questions; choices use `{ value, description }`, and score levels use `{ label, description }`. OpenAI requests use `gpt-6-luna`, `input`, and ordered native questions; TypeSafe requests use `model`, `state`, and named `noul`, `choice`, or `score` questions. Agent output is validated TOON with uncalibrated confidence estimates; native APIs return their own answers and probabilities. Send only evidence authorized for the selected model or external provider. These judgments never grant permission approval or prove completion; credentials are configured or connected separately, never passed as tool inputs. See Automatic decision policies below for opt-in automation.",
+          },
+          {
+            kind: "code",
+            language: "jsonc",
+            label: "Decision helper model",
+            code: `{
+  "efficiency": {
+    "helper_models": {
+      "decision": "openai/gpt-6-luna-fast#medium",
+    },
+  },
+}`,
+          },
+          {
+            kind: "paragraph",
+            text: "The hidden built-in `decision` agent is reserved for internal judgments, has every tool denied, and is not a selectable foreground agent. An explicit `agents.decision.model` takes precedence over `efficiency.helper_models.decision`. With no agent override, an omitted helper selection or `\"session\"` uses the Session model. Choose a model and effort offered by your connected provider; the selector above is an example. The selected model's normal authentication route applies, including supported subscription routes, with its ordinary privacy, quota, and pricing. This is not a free-usage or zero-retention guarantee.",
+          },
+          {
+            kind: "paragraph",
+            text: "Native OpenAI and TypeSafe judgments require API-key access. Authentication uses `decisions.providers.<provider>.api_key`, then the selected active API-key profile, then `OPENAI_API_KEY` or `TYPESAFE_API_KEY` respectively. An optional HTTP(S) `decisions.providers.<provider>.base_url` overrides the endpoint; it does not supply credentials. ChatGPT subscription access is not native API-key access; OpenAI uses API Platform billing. Keep keys in credential storage or environment variables, not tool inputs.",
+          },
+          {
+            kind: "table",
+            head: ["Field", "Default", "Purpose"],
+            rows: [
+              ["`decisions.timeout_ms`", "`10000`", "Request deadline in milliseconds; positive integers up to `60000`."],
+              ["`decisions.providers.openai.api_key`, `.base_url`", "unset", "Optional native API key and HTTP(S) endpoint override. The OpenAI decision model is `gpt-6-luna`."],
+              ["`decisions.providers.typesafe.api_key`, `.base_url`", "unset", "Optional native API key and HTTP(S) endpoint override."],
+              ["`decisions.providers.typesafe.model`", "`jev-1.13.0`", "Model for automatic native TypeSafe policies; direct TypeSafe tool requests supply their own model."],
+            ],
+          },
+          {
+            kind: "code",
+            language: "jsonc",
+            label: "Native decision connections",
+            code: `{
+  "decisions": {
+    "timeout_ms": 10000,
+    "providers": {
+      "openai": { "api_key": "{env:OPENAI_API_KEY}" },
+      "typesafe": { "api_key": "{env:TYPESAFE_API_KEY}", "model": "jev-1.13.0" },
+    },
+  },
+}`,
+          },
+        ],
+      },
+      {
+        heading: "Automatic decision policies",
+        blocks: [
+          {
+            kind: "paragraph",
+            text: "Automatic policies are disabled when omitted. Native `openai` or `typesafe` policies require `min_probability`; `agent` policies require `min_confidence`. Each threshold accepts values from `0` through `1`; mixed or incorrect metric fields fail configuration validation. A qualifying chosen answer must meet or exceed the threshold. Native policies compare the chosen option's probability, not the separate confidence field; agent confidence is an uncalibrated estimate, not a probability guarantee. The example's thresholds are deliberate policy choices, not calibration claims.",
+          },
+          {
+            kind: "code",
+            language: "jsonc",
+            label: "Opt-in decision policies",
+            code: `{
+  "decisions": {
+    "guardrails": { "provider": "agent", "min_confidence": 0.95 },
+    "routing": {
+      "provider": "agent",
+      "min_confidence": 0.9,
+      "candidates": [
+        { "id": "delivery", "description": "Complete a bounded repository implementation", "agent": "GSD" },
+      ],
+    },
+    "goal": { "provider": "agent", "min_confidence": 0.95 },
+    "questions": { "provider": "agent", "min_confidence": 0.8 },
+  },
+}`,
+          },
+          {
+            kind: "list",
+            items: [
+              "When deterministic guardrails allow an action, a qualifying low-risk judgment preserves that allow; refusal, uncertainty, or a provider error requires ordinary review. A policy cannot approve an existing review or change a deterministic denial or hard review.",
+              "Initial routing applies only to eligible new Sessions without an explicit agent or model selection. Provide 1–254 candidates with unique nonempty IDs and descriptions, each selecting an agent, a model, or both. An agent must be selectable and allowed by the current agent's effective `agent` permission; a model and any variant must be available and supported. `keep-current` is reserved; ineligible candidates are not offered. Refusal, uncertainty, or no eligible candidates preserves the current default; provider errors fail the initiating step rather than silently selecting a route.",
+              "Goal continuation may stop or continue the configured objective; refusal or uncertainty continues toward the unchanged objective. A provider failure surfaces as a goal calculation error and cannot claim completion. A policy-selected stop records `stopped`, never `completed`.",
+              "Question suggestions can preselect and label an option before a single-select question opens. The helper sees only the question and its options; explicit recommendations, multiselect prompts, and free-text prompts are left alone. An effective decision-provider deny skips the helper. Normal mode still waits for your choice; YOLO or active-goal mode uses the suggested default through its existing auto-answer rules. At most four suggestions run concurrently within one shared timeout_ms budget. Failure, uncertainty, or timeout leaves the original question available, without treating a suggestion as your answer or approval.",
+              "Decision tool provider failures are returned as errors, not successful judgments. Guardrail provider failures preserve the ordinary review; goal provider failures surface as a goal calculation error. Policies cannot grant permission, bypass hard reviews, override explicit selections, certify completion, or authorize disclosure; every judgment uses only evidence authorized for its selected model or provider.",
+            ],
+          },
+        ],
+      },
+      {
+        heading: "Tool configuration",
+        blocks: [
           {
             kind: "code",
             language: "jsonc",
@@ -1819,8 +1927,8 @@ Confirm the account, cluster, namespace, and change plan.`,
           {
             kind: "list",
             items: [
-              "Built-in themes include `ycoding`, `tokyonight`, `catppuccin`, `dracula`, `gruvbox`, `nord`, `one-dark`, `rosepine`, and `solarized`. Press `<leader>t` to list every available theme.",
-              "Custom themes are JSON files directly under `themes/` in the global config directory or an ancestor `.ycoding/themes/`; the file name without `.json` is the theme ID. Later files with the same ID replace earlier ones, nearer project directories last.",
+              "Built-in themes include `ycoding`, `tokyonight`, `catppuccin`, `dracula`, `gruvbox`, `nord`, `one-dark`, `one-dark-pro`, `high-contrast`, `rosepine`, and `solarized`. `one-dark` and `one-dark-pro` use the official One Dark and One Dark Pro palettes; `high-contrast` keeps every text color at 7:1 or better in both modes. Press `<leader>t` to list every available theme.",
+              "Custom themes are JSON files directly under `themes/` in the global config directory or an ancestor `.ycoding/themes/`; the file name without `.json` is the theme ID. Later files with the same ID replace earlier ones, nearer project directories last. An unreadable theme file is skipped and the other themes stay available; a standalone theme that omits `text.separator`, `text.hint`, or `text.label` uses its `text.subdued` color for them.",
               "The default leader key is `ctrl+x`. Examples of bindings: `session_new` `<leader>n`, `session_list` `<leader>l`, `sidebar_toggle` `<leader>b`, `theme_list` `<leader>t`, `session_compact` `<leader>c`, `session_autonomy_normal` `<leader>y`.",
               "A binding string may list alternatives separated by commas, for example `\"ctrl+c,ctrl+d,<leader>q\"`.",
               "With a selection, `Ctrl+C` (or `Cmd+C` on macOS) copies instead of exiting, and `Esc` clears the selection.",

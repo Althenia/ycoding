@@ -4,7 +4,7 @@ import { InputRenderable } from "@opentui/core"
 import { expect, test } from "bun:test"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
-import type { ModelDaybreak } from "@ycoding-ai/client"
+import type { ModelDaybreak, ModelProfile } from "@ycoding-ai/client"
 import { createEffect, onMount } from "solid-js"
 import { DialogModel, type DialogModelResult } from "../src/component/dialog-model"
 import { DialogVariant } from "../src/component/dialog-variant"
@@ -44,11 +44,21 @@ const session = {
   time: { created: 1, updated: 2 },
 }
 
-type PreferenceModel = { providerID: string; modelID: string }
+type PreferenceModel = { providerID: string; modelID: string; profile?: string }
 
-const switches: Array<{ sessionID: string; model: { providerID: string; id: string; variant?: string } }> = []
+const switches: Array<{ sessionID: string; model: { providerID: string; id: string; variant?: string; profile?: string } }> = []
+const integrationWrites: string[] = []
 
-function model(input: { id: string; providerID: string; name: string; context: number; daybreak?: ModelDaybreak[] }) {
+function model(input: {
+  id: string
+  providerID: string
+  name: string
+  context: number
+  variants?: string[]
+  daybreak?: ModelDaybreak[]
+  profiles?: ModelProfile[]
+  enabled?: boolean
+}) {
   return {
     id: input.id,
     modelID: input.id,
@@ -56,11 +66,12 @@ function model(input: { id: string; providerID: string; name: string; context: n
     name: input.name,
     family: "",
     capabilities: { tools: true, input: ["text"], output: ["text"] },
-    variants: [],
+    variants: (input.variants ?? []).map((id) => ({ id })),
     time: { released: 1 },
     cost: [],
     status: "active" as const,
-    enabled: true,
+    enabled: input.enabled ?? true,
+    ...(input.profiles === undefined ? {} : { profiles: input.profiles }),
     ...(input.daybreak === undefined ? {} : { daybreak: input.daybreak }),
     limit: { context: input.context, output: 32_000 },
   }
@@ -77,10 +88,11 @@ const models = [
 
 const route: FetchHandler = async (url, request) => {
   if (url.pathname === `/api/session/${sessionID}/model` && request.method === "POST") {
-    const body = (await request.json()) as { model: { providerID: string; id: string; variant?: string } }
+    const body = (await request.json()) as { model: { providerID: string; id: string; variant?: string; profile?: string } }
     switches.push({ sessionID, model: body.model })
     return new Response(null, { status: 204 })
   }
+  if (url.pathname.includes("/integration") && request.method !== "GET") integrationWrites.push(url.pathname)
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
   if (url.pathname === "/api/session/active") return json({ data: {} })
@@ -143,7 +155,7 @@ async function renderPicker(input: {
   stateDir: string
   /** Stored per-model variant preferences, so a default selection can prove it clears one. */
   storedVariant?: Record<string, string>
-  sessionModel?: { providerID: string; id: string; variant?: string }
+  sessionModel?: { providerID: string; id: string; variant?: string; profile?: string }
   /** Skips opening the picker, for cases that exercise LocalProvider actions only. */
   withoutPicker?: boolean
   variantPicker?: boolean
@@ -158,6 +170,15 @@ async function renderPicker(input: {
 
   const events = createEventStream()
   const transport = createFetch((url, request) => {
+    if (url.pathname === "/api/model/default") {
+      const selected = (input.catalog ?? models).find((item) => item.enabled)
+      return json({
+        location,
+        data: selected
+          ? { selection: { providerID: selected.providerID, id: selected.id } }
+          : null,
+      })
+    }
     if (input.catalog && url.pathname === "/api/model") return json({ location, data: input.catalog })
     if (input.sessionModel && url.pathname === "/api/session")
       return json({ data: [{ ...session, model: input.sessionModel }], cursor: {} })
@@ -167,16 +188,17 @@ async function renderPicker(input: {
   }, events)
   let current: PreferenceModel | undefined
   let currentVariant: string | undefined
+  let reasoning: boolean | undefined
   let pendingTarget: (PreferenceModel & { variant?: string }) | undefined
   let navigate: ((next: Route) => void) | undefined
   let cycle: ((direction: 1 | -1) => Promise<void>) | undefined
   let variantCycle: (() => Promise<void>) | undefined
-  let commitPending: ((model: { providerID: string; id: string; variant?: string }) => void) | undefined
+  let commitPending: ((model: { providerID: string; id: string; variant?: string; profile?: string }) => void) | undefined
   let select: ((model: PreferenceModel & { variant?: string }) => Promise<void>) | undefined
   let eventSeq = 0
   let sessionLoaded = false
   let modelReady = false
-  let durableModel: { providerID: string; id: string; variant?: string } | undefined
+  let durableModel: { providerID: string; id: string; variant?: string; profile?: string } | undefined
 
   function Probe() {
     const local = useLocal()
@@ -191,6 +213,7 @@ async function renderPicker(input: {
     createEffect(() => {
       current = local.model.current()
       currentVariant = local.model.variant.current()
+      reasoning = local.model.parsed().reasoning
       pendingTarget = local.model.pendingTarget(sessionID)
       sessionLoaded = data.session.get(sessionID) !== undefined
       durableModel = data.session.get(sessionID)?.model
@@ -260,18 +283,19 @@ async function renderPicker(input: {
     app,
     current: () => current,
     variant: () => currentVariant,
+    reasoning: () => reasoning,
     durableModel: () => durableModel,
     pendingTarget: () => pendingTarget,
     variantCycle: () => {
       if (!variantCycle) throw new Error("LocalProvider is not mounted")
       return variantCycle()
     },
-    commitPending: (model: { providerID: string; id: string; variant?: string }) => commitPending?.(model),
+    commitPending: (model: { providerID: string; id: string; variant?: string; profile?: string }) => commitPending?.(model),
     select: (model: PreferenceModel & { variant?: string }) => {
       if (!select) throw new Error("LocalProvider is not mounted")
       return select(model)
     },
-    modelSelected: (model: { providerID: string; id: string; variant?: string }) => {
+    modelSelected: (model: { providerID: string; id: string; variant?: string; profile?: string }) => {
       eventSeq += 1
       events.emit({
         id: `evt_selected_${eventSeq}`,
@@ -299,6 +323,16 @@ function SyncLocation() {
   const location = useLocation()
   createEffect(() => location.set(data.location.default()))
   return null
+}
+
+async function selectProviderDefault(screen: Awaited<ReturnType<typeof renderPicker>>) {
+  await waitFor(() => {
+    const frame = screen.app.captureCharFrame()
+    return frame.includes("Provider profile") || frame.includes("Select variant") || screen.pendingTarget() !== undefined
+  }, "profile, variant, or completed model selection")
+  if (!screen.app.captureCharFrame().includes("Provider profile")) return
+  screen.app.mockInput.pressKey("HOME")
+  screen.app.mockInput.pressEnter()
 }
 
 async function waitFor(predicate: () => boolean, label: string, attempts = 200) {
@@ -336,6 +370,229 @@ test("renders one row for a Daybreak-advertising model and records the ordinary 
     await waitFor(() => screen.pendingTarget()?.modelID === "gpt-5.6-luna", "the desired model")
     expect(screen.current()).toEqual({ providerID: "openai", modelID: "gpt-5.6-luna" })
     expect(switches).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("profile-only Session selection stays pending without activating an integration", async () => {
+  switches.length = 0
+  integrationWrites.length = 0
+  const screen = await renderPicker({
+    stateDir: "profile-only-selection",
+    withoutPicker: true,
+    sessionModel: { providerID: "anthropic", id: "claude-opus-5", profile: "Work" },
+    catalog: models.map((item) => item.id === "claude-opus-5"
+      ? { ...item, profiles: [{ name: "Work", active: true }, { name: "Personal", active: false }] }
+      : item),
+  })
+  try {
+    await waitFor(() => screen.current()?.modelID === "claude-opus-5", "the Session model")
+    await screen.select({ providerID: "anthropic", modelID: "claude-opus-5", profile: "Personal" })
+    expect(screen.pendingTarget()).toEqual({ providerID: "anthropic", modelID: "claude-opus-5", profile: "Personal" })
+    expect(screen.current()).toEqual({ providerID: "anthropic", modelID: "claude-opus-5", profile: "Personal" })
+    expect(switches).toEqual([])
+    expect(integrationWrites).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("model selection presents a named profile even when it is the only eligible profile", async () => {
+  switches.length = 0
+  integrationWrites.length = 0
+  const screen = await renderPicker({
+    stateDir: "single-profile-selection",
+    order: [{ providerID: "anthropic", modelID: "claude-opus-5" }],
+    catalog: models.map((item) => item.id === "claude-opus-5"
+      ? { ...item, profiles: [{ name: "Work", active: true }] }
+      : item),
+  })
+  try {
+    screen.app.mockInput.pressEnter()
+    await screen.app.waitForFrame((frame) => frame.includes("Provider profile"))
+    expect(screen.app.captureCharFrame()).toContain("Use provider default")
+    expect(screen.app.captureCharFrame()).toContain("Work")
+    await screen.app.mockInput.typeText("Work")
+    screen.app.mockInput.pressEnter()
+    await waitFor(() => screen.pendingTarget()?.profile === "Work", "the explicit named profile")
+    expect(screen.pendingTarget()).toEqual({ providerID: "anthropic", modelID: "claude-opus-5", profile: "Work" })
+    expect(switches).toEqual([])
+    expect(integrationWrites).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("model selection renders only the selected profile's variants and keeps clear and invalid choices scoped", async () => {
+  switches.length = 0
+  const screen = await renderPicker({
+    stateDir: "profile-variant-selection",
+    order: [{ providerID: "openai", modelID: "gpt-5-2" }],
+    sessionModel: { providerID: "openai", id: "gpt-5-2", profile: "Work", variant: "high" },
+    catalog: models.map((item) => item.id === "gpt-5-2"
+      ? {
+          ...item,
+          variants: [],
+          enabled: false,
+          profiles: [
+            { name: "Work", active: true, variants: ["high"] },
+            { name: "Personal", active: false, variants: ["low", "personal-only"] },
+          ],
+        }
+      : item),
+  })
+  try {
+    screen.app.mockInput.pressEnter()
+    await screen.app.waitForFrame((frame) => frame.includes("Provider profile"))
+    screen.app.mockInput.pressKey("END")
+    screen.app.mockInput.pressEnter()
+    await screen.app.waitForFrame((frame) => frame.includes("Select variant"))
+    expect(screen.app.captureCharFrame()).toContain("low")
+    expect(screen.app.captureCharFrame()).toContain("personal-only")
+    expect(screen.app.captureCharFrame()).not.toContain("high")
+    screen.app.mockInput.pressKey("END")
+    screen.app.mockInput.pressEnter()
+    await waitFor(() => screen.pendingTarget()?.profile === "Personal", "the selected Personal profile")
+    await waitFor(() => screen.pendingTarget()?.variant === "personal-only", "the Personal-only variant")
+    expect(screen.pendingTarget()).toEqual({
+      providerID: "openai",
+      modelID: "gpt-5-2",
+      profile: "Personal",
+      variant: "personal-only",
+    })
+    expect(screen.reasoning()).toBe(true)
+    await screen.variantCycle()
+    expect(screen.pendingTarget()).toEqual({
+      providerID: "openai",
+      modelID: "gpt-5-2",
+      profile: "Personal",
+      variant: "low",
+    })
+    await screen.select({ providerID: "openai", modelID: "gpt-5-2", profile: "Personal", variant: "high" })
+    expect(screen.pendingTarget()).toEqual({
+      providerID: "openai",
+      modelID: "gpt-5-2",
+      profile: "Personal",
+      variant: "low",
+    })
+    await screen.select({ providerID: "openai", modelID: "gpt-5-2", profile: "Personal", variant: undefined })
+    expect(screen.pendingTarget()).toEqual({ providerID: "openai", modelID: "gpt-5-2", profile: "Personal" })
+    expect(screen.variant()).toBeUndefined()
+    await screen.select({ providerID: "openai", modelID: "gpt-5-2", profile: undefined, variant: undefined })
+    expect(screen.pendingTarget()).toEqual({ providerID: "openai", modelID: "gpt-5-2", profile: "Personal" })
+    expect(switches).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("same-provider model selection does not drop an explicit profile that the target does not offer", async () => {
+  switches.length = 0
+  const screen = await renderPicker({
+    stateDir: "same-provider-unavailable-profile",
+    withoutPicker: true,
+    sessionModel: { providerID: "openai", id: "gpt-5-2", profile: "Work", variant: "high" },
+    catalog: [
+      ...models,
+      model({
+        id: "gpt-personal-only",
+        providerID: "openai",
+        name: "GPT Personal",
+        context: 300_000,
+        profiles: [{ name: "Personal", active: true, variants: ["low"] }],
+        enabled: false,
+      }),
+    ],
+  })
+  try {
+    await waitFor(() => screen.current()?.profile === "Work", "the current Work profile")
+    await screen.select({ providerID: "openai", modelID: "gpt-personal-only" })
+    expect(screen.pendingTarget()).toEqual({
+      providerID: "openai",
+      modelID: "gpt-personal-only",
+      profile: "Work",
+    })
+    expect(screen.current()).toEqual({
+      providerID: "openai",
+      modelID: "gpt-personal-only",
+      profile: "Work",
+    })
+    expect(switches).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("same-provider selection cannot use a profile-only model through provider default", async () => {
+  switches.length = 0
+  const screen = await renderPicker({
+    stateDir: "same-provider-disabled-default",
+    withoutPicker: true,
+    sessionModel: { providerID: "openai", id: "gpt-5-2" },
+    catalog: [
+      ...models,
+      model({
+        id: "gpt-personal-only",
+        providerID: "openai",
+        name: "GPT Personal",
+        context: 300_000,
+        profiles: [{ name: "Personal", active: true, variants: ["low"] }],
+        enabled: false,
+      }),
+    ],
+  })
+  try {
+    await waitFor(() => screen.current()?.modelID === "gpt-5-2", "the current provider-default model")
+    await screen.select({ providerID: "openai", modelID: "gpt-personal-only" })
+    expect(screen.pendingTarget()).toBeUndefined()
+    expect(screen.current()).toEqual({ providerID: "openai", modelID: "gpt-5-2" })
+    expect(switches).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("choosing provider default explicitly clears a Session profile without activating an integration", async () => {
+  switches.length = 0
+  integrationWrites.length = 0
+  const screen = await renderPicker({
+    stateDir: "explicit-provider-default",
+    order: [{ providerID: "anthropic", modelID: "claude-opus-5" }],
+    sessionModel: { providerID: "anthropic", id: "claude-opus-5", profile: "Work" },
+    catalog: models.map((item) => item.id === "claude-opus-5"
+      ? { ...item, profiles: [{ name: "Work", active: true }, { name: "Personal", active: false }] }
+      : item),
+  })
+  try {
+    screen.app.mockInput.pressEnter()
+    await screen.app.waitForFrame((frame) => frame.includes("Provider profile"))
+    screen.app.mockInput.pressKey("HOME")
+    screen.app.mockInput.pressEnter()
+    await waitFor(() => screen.pendingTarget() !== undefined && screen.pendingTarget()?.profile === undefined, "provider default")
+    expect(screen.pendingTarget()).toEqual({ providerID: "anthropic", modelID: "claude-opus-5", variant: undefined })
+    expect(switches).toEqual([])
+    expect(integrationWrites).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("profile picker keeps an unavailable saved profile visible and offers an explicit default", async () => {
+  const screen = await renderPicker({
+    stateDir: "unavailable-profile-picker",
+    order: [{ providerID: "anthropic", modelID: "claude-opus-5" }],
+    sessionModel: { providerID: "anthropic", id: "claude-opus-5", profile: "Removed" },
+    catalog: models.map((item) => item.id === "claude-opus-5"
+      ? { ...item, profiles: [{ name: "Work", active: true }] }
+      : item),
+  })
+  try {
+    await waitFor(() => screen.current()?.profile === "Removed", "the unavailable saved profile")
+    screen.app.mockInput.pressEnter()
+    await screen.app.waitForFrame((frame) => frame.includes("Provider profile"))
+    expect(screen.app.captureCharFrame()).toContain("Unavailable: Removed")
+    expect(screen.app.captureCharFrame()).toContain("Use provider default")
   } finally {
     await screen.dispose()
   }
@@ -513,6 +770,7 @@ test("selecting a model restores its valid stored variant without another varian
   })
   try {
     screen.app.mockInput.pressEnter()
+    await selectProviderDefault(screen)
     await waitFor(() => screen.pendingTarget()?.modelID === "gpt-5-2", "the desired model")
     expect(screen.pendingTarget()).toEqual({ providerID: "openai", modelID: "gpt-5-2", variant: "high" })
     expect(screen.variant()).toBe("high")
@@ -546,15 +804,14 @@ test("variant cycling displays none and wraps only through offered variants", as
   switches.length = 0
   const screen = await renderPicker({
     stateDir: "variant-cycle-none",
-    order: [{ providerID: "openai", modelID: "gpt-5-2" }],
+    variantPicker: true,
     recent: [{ providerID: "openai", modelID: "gpt-5-2" }],
+    sessionModel: { providerID: "openai", id: "gpt-5-2", variant: "high" },
     catalog: models.map((item) =>
       item.id === "gpt-5-2" ? { ...item, variants: [{ id: "none" }, { id: "low" }, { id: "high" }] } : item,
     ),
   })
   try {
-    screen.app.mockInput.pressEnter()
-    await screen.app.waitForFrame((frame) => frame.includes("Select variant") && frame.includes("none"))
     await waitFor(() => screen.current()?.modelID === "gpt-5-2", "the model preference")
     await screen.variantCycle()
     expect(screen.pendingTarget()).toEqual({ providerID: "openai", modelID: "gpt-5-2", variant: "none" })
@@ -587,6 +844,7 @@ test("renders and persists an advertised none variant from model selection", asy
   })
   try {
     screen.app.mockInput.pressEnter()
+    await selectProviderDefault(screen)
     await waitFor(() => screen.pendingTarget()?.variant === "none", "the selected none variant")
     expect(await Bun.file(path.join(root, "variant-saved-none", "model.json")).json()).toMatchObject({
       variant: { "openai/gpt-5-2": "none" },
@@ -606,6 +864,7 @@ test("keeps the desired target until the matching prompt submission commits it",
   })
   try {
     screen.app.mockInput.pressEnter()
+    await selectProviderDefault(screen)
     await screen.app.waitForFrame((frame) => frame.includes("Select variant"))
     screen.app.mockInput.pressEnter()
     await waitFor(() => screen.pendingTarget()?.variant === "high", "the desired target")
@@ -765,7 +1024,7 @@ test("selecting a model with an unoffered saved variant keeps it after picker ca
     screen.app.mockInput.pressEscape()
     await waitFor(() => screen.pendingTarget()?.modelID === "gpt-5-2", "the desired model")
     expect(screen.pendingTarget()).toEqual({ providerID: "openai", modelID: "gpt-5-2", variant: "max" })
-    expect(screen.variant()).toBe("max")
+    await waitFor(() => screen.variant() === "max", "the retained unavailable variant")
     expect(switches).toEqual([])
   } finally {
     await screen.dispose()

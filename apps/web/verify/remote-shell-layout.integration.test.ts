@@ -590,7 +590,7 @@ describe("remote shell layout", () => {
           expect(measured.left, `${label} left`).toBeGreaterThanOrEqual(0)
           expect(measured.right, `${label} right`).toBeLessThanOrEqual(width + 1)
           expect(measured.bottom, `${label} above the field`).toBeLessThanOrEqual(measured.fieldTop + 1)
-          expect(measured.height, `${label} bounded`).toBeLessThanOrEqual(Math.max(54, Math.min(360, measured.viewport * 0.4)) + 1)
+          expect(measured.height, `${label} bounded`).toBeLessThanOrEqual(Math.max(54, suggestionShare(width, measured.viewport)) + 1)
           expect(measured.top, `${label} inside the visual viewport`).toBeGreaterThanOrEqual(measured.offsetTop - 1)
           expect(measured.top, `${label} below the workspace toolbar`).toBeGreaterThanOrEqual(measured.regionTop - 1)
           expect(measured.composerBottom, `${label} composer stays visible`).toBeLessThanOrEqual(measured.viewport + measured.offsetTop + 1)
@@ -605,10 +605,10 @@ describe("remote shell layout", () => {
         check(`${width}x${height} ${theme}`, await measure())
         if (width < 768 && height > 600) {
           await page.setViewport(width, 380)
-          for (let attempt = 0; attempt < 40; attempt += 1) { const current = await measure(); if (current.viewport <= 380 && current.height <= Math.max(54, Math.min(360, current.viewport * 0.4)) + 1) break; await Bun.sleep(50) }
+          for (let attempt = 0; attempt < 40; attempt += 1) { const current = await measure(); if (current.viewport <= 380 && current.height <= Math.max(54, suggestionShare(width, current.viewport)) + 1) break; await Bun.sleep(50) }
           const keyboard = await measure()
           check(`${width}x380 ${theme} keyboard-sized`, keyboard)
-          expect(keyboard.height).toBeLessThanOrEqual(Math.max(54, 380 * 0.4) + 1)
+          expect(keyboard.height).toBeLessThanOrEqual(Math.max(54, suggestionShare(width, 380)) + 1)
         }
         await Bun.write(new URL(`../../../.cache/tmp/suggestions-${width}x${height}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
       } finally { await page.close() }
@@ -628,13 +628,13 @@ describe("remote shell layout", () => {
       const read = () => page.evaluate<{ readonly height: number; readonly top: number; readonly fieldTop: number; readonly layout: number }>(`(async () => { await Promise.all(document.querySelector('.mini-composer__suggestions').getAnimations().map((animation) => animation.finished)); const panel = document.querySelector('.mini-composer__suggestions').getBoundingClientRect(); return { height: panel.height, top: panel.top, fieldTop: document.querySelector('.mini-composer__mount textarea').getBoundingClientRect().top, layout: innerHeight } })()`)
       const first = await read()
       expect(first.layout).toBe(844)
-      expect(first.height).toBeLessThanOrEqual(Math.min(360, 420 * 0.4, first.fieldTop - 300 - 8) + 1)
+      expect(first.height).toBeLessThanOrEqual(Math.min(suggestionShare(390, 420), first.fieldTop - 300 - 8) + 1)
       expect(first.top).toBeGreaterThanOrEqual(300 - 1)
       await page.evaluate(`Object.assign(window.viewportStub, { height: 250, pageTop: 440, offsetTop: 440 }); window.viewportStub.dispatchEvent(new Event('resize'))`)
-      for (let attempt = 0; attempt < 40 && (await read()).height > Math.min(360, 250 * 0.4, (await read()).fieldTop - 440 - 8) + 1; attempt += 1) await Bun.sleep(25)
+      for (let attempt = 0; attempt < 40 && (await read()).height > Math.min(suggestionShare(390, 250), (await read()).fieldTop - 440 - 8) + 1; attempt += 1) await Bun.sleep(25)
       const second = await read()
       expect(second.layout).toBe(844)
-      expect(second.height).toBeLessThanOrEqual(Math.max(54, Math.min(360, 250 * 0.4, second.fieldTop - 440 - 8)) + 1)
+      expect(second.height).toBeLessThanOrEqual(Math.max(54, Math.min(suggestionShare(390, 250), second.fieldTop - 440 - 8)) + 1)
       expect(second.height).toBeLessThan(first.height)
       await page.evaluate(`Object.assign(window.viewportStub, { height: 150, pageTop: 640, offsetTop: 640 }); window.viewportStub.dispatchEvent(new Event('scroll'))`)
       for (let attempt = 0; attempt < 40 && (await read()).height > 55; attempt += 1) await Bun.sleep(25)
@@ -1457,4 +1457,9 @@ async function ready(): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+// DESIGN.md W18: below 768px a suggestions panel may use 75% of the visual viewport; from 768px, 40% of it or 360px.
+function suggestionShare(width: number, viewport: number) {
+  return width < 768 ? viewport * 0.75 : Math.min(360, viewport * 0.4)
 }

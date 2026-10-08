@@ -56,7 +56,7 @@ For source development on macOS, run `bun run build:computer-use` explicitly bef
 
 On POSIX systems, YCoding restricts its log directory to mode `0700` and the active YCoding log file to `0600`, whether that file is new or pre-existing. Startup repairs more-permissive modes without deleting or rewriting existing log content.
 
-The server-hosted remote connector writes warning-level diagnostics to the active YCoding log file in `$XDG_DATA_HOME/ycoding/log` with `component=remote-connector`. A relay-close entry records the close code and whether the connector reconnects; failure entries omit error details, so credentials, bearer tokens, and frame payloads never reach the log.
+The server-hosted remote connector writes warning-level diagnostics to the active YCoding log file in `$XDG_DATA_HOME/ycoding/log` with `component=remote-connector`. A relay-close entry records the close code and whether the connector reconnects; failure entries omit error details, so credentials, bearer tokens, and frame payloads never reach the log. A remote request that takes 1 s or longer on the machine writes `slow remote request <operation> took <N>ms on this device`, naming only the operation and duration. Session-scoped reads verify the Session with one `session.get` at its recorded Location, scanning the full Session inventory only for an ID the connector has not yet seen; captured-change summaries are reused while every member Session's durable event position is unchanged.
 
 When `$XDG_CONFIG_HOME` is `~/.config`, the global JSONC source is `~/.config/ycoding/ycoding.jsonc`. Compaction helper selection reads the merged runtime configuration from this normal discovery chain; it does not use a separate helper-only configuration file.
 
@@ -363,7 +363,7 @@ The field reference below expands the overview. `unset` means the field is optio
 
 ### Provider-usage reporting
 
-`provider_usage` configures only the optional Codex app-server fields above. Provider usage refreshes use credentials already stored for the matching YCoding integration; they do not discover credentials from another application's files, keychain, or browser cookies. GitHub Copilot reuses the OAuth credential configured for `github-copilot`.
+`provider_usage` configures only the optional Codex app-server fields above. Its output appears separately as **Codex app-server** with unknown account attribution; it does not replace or inherit a stored profile's quota. Provider usage refreshes use credentials already stored for the matching YCoding integration; they do not discover credentials from another application's files, keychain, or browser cookies. GitHub Copilot reuses the OAuth credential configured for `github-copilot`.
 
 After unsuccessful Copilot model discovery, YCoding removes previously discovered Copilot model entries so stale models cannot remain selectable.
 
@@ -516,7 +516,7 @@ The native OpenAI and ChatGPT/Codex routes do not consume `chunkTimeout`, `heade
 
 Daybreak is OpenAI's Trusted Access for Cyber program with two access levels, `daybreak_blue` and `daybreak_red`, selected per Session as `session.daybreak`; an absent value is off and requests keep standard safeguards. ChatGPT connections discover Daybreak availability from the authenticated Codex model catalog at startup and when the active connection changes. Catalog requests use the supported Codex catalog client version `0.157.1`, independently of the YCoding release version, and retain `User-Agent: ycoding/<version>`. Each ordinary model entry advertising `daybreak_blue` or `daybreak_red` in `available_access_programs.cyber` carries an advertised `daybreak` list containing exactly those programs. Discovery runs in the background with a three-second timeout; missing, unknown, invalid, or unavailable metadata never blocks ordinary model use. Changing the connection clears the previous account's discovery, and late responses cannot restore it.
 
-Use `/daybreak blue`, `/daybreak red`, or `/daybreak off`, or the Daybreak command in the landing or Session command palette. Without an argument, `/daybreak` cycles off → blue → red → off, offering only programs the active model advertises. The model picker lists ordinary models, not separate Daybreak entries. A landing selection updates the header immediately without creating a Session; it is saved durably as `session.daybreak.set` after Session creation and before the first prompt or explicit goal starts. A Session toggle saves the selection immediately. If saving fails, the prompt or goal does not start. The header shows `Daybreak Blue` or `Daybreak Red` beside the current model name; an unsupported model or another provider shows the saved selection as `(inactive)`. Switching back to a supported model restores the selected mode; `/daybreak off` clears it and removes the indicator.
+Use `/daybreak blue`, `/daybreak red`, or `/daybreak off`, or the Daybreak command in the landing or Session command palette. Without an argument, `/daybreak` cycles off → blue → red → off, offering only programs the selected model profile advertises. An explicit named profile uses its own advertised programs, including an empty list; it does not inherit model-wide programs. The provider default uses the model-wide advertisement. The model picker lists ordinary models, not separate Daybreak entries. A landing selection updates the header immediately without creating a Session; it is saved durably as `session.daybreak.set` after Session creation and before the first prompt or explicit goal starts. A Session toggle saves the selection immediately. If saving fails, the prompt or goal does not start. The header shows `Daybreak Blue` or `Daybreak Red` beside the current model name; an unsupported model, profile, or provider shows the saved selection as `(inactive)`. Switching back to a supported model or profile restores the selected mode; `/daybreak off` clears it and removes the indicator.
 
 Requests carry `access_programs: { cyber: <program> }` only when the provider is `openai`, the credential is ChatGPT OAuth, the resolved route is a Codex HTTP or WebSocket backend route, and the active model advertises the selected program. Unsupported models, API-key credentials, custom providers, GPT through OpenRouter, Anthropic, and DeepSeek omit the field while retaining the stored Session selection. Discovery is not entitlement: missing metadata does not establish an authorization denial, and neither plan names nor a ChatGPT UI toggle grant inference access. OpenAI still enforces authorization. Daybreak does not change YCoding permissions, guardrails, or autonomy.
 
@@ -822,14 +822,42 @@ provider. A profile is the stored credential's user-facing name. Connecting asks
 (`/connect`, the command palette's `Connect integration`, or the model selector's connect action),
 and re-using a name updates that profile instead of replacing the provider's credentials.
 
-Exactly one profile per provider is active. The active profile is the one a model request resolves,
-the one provider usage reports, and the one named in the Session header and in the model selector; a
-provider with a single profile keeps the plain `provider/model` label. Switching the active profile
-does not remove the others, and removing the active profile promotes the remaining one.
+One profile per provider is the active default. A Session can select an eligible named profile alongside
+its model independently of that default, so two Sessions or subagents can use different accounts for
+the same provider and model simultaneously. Selecting a Session profile does not activate it globally.
+**Use provider default** clears explicit selection. Provider usage reports supported stored profiles;
+provider-wide local spend is not per-profile billing.
 
-The Session header names the active profile as its own segment immediately after the agent, keeping
-the plain `provider/model` label beside it. A provider with a single stored profile shows no profile
-segment. Context keeps the Provider and Model identity rows and never carries the profile.
+Model availability, effort variants, and Daybreak access follow the selected profile. A model offered
+only by another named profile stays selectable with that profile; it is not usable through an
+ineligible provider default. Authenticated custom-provider discovery maintains each stored profile's
+own inventory and request settings.
+
+The public model reference carries the user-chosen `profile` name. Structured configuration selectors
+accept it too; string shorthand keeps its `provider/model#variant` form:
+
+```jsonc
+{
+  "model": {
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "high",
+    "profile": "Work"
+  }
+}
+```
+
+Profile names resolve only within that provider's integration. A missing, renamed, removed, or replaced
+explicit profile blocks provider work instead of selecting another account. Re-selecting the same
+named profile explicitly restores its binding after replacement. Ordinary token refresh does not
+change the selected account. Reusing a Session or admitted-input ID retains its original binding.
+
+Model controls and the Session header distinguish explicit profiles from the provider default. Pending
+changes apply before prompt admission; failure preserves the draft. An unavailable saved selection
+stays visible with a recovery action. Helpers and subagents keep their existing model precedence and
+inherit an omitted profile only when the chosen provider matches the owning Session. Explicit profiles
+override that inheritance; profile names are not copied across providers. See the
+[profile isolation contract](../specs/provider-profiles.md).
 
 ### Claude Code account profiles
 
@@ -845,9 +873,9 @@ The `decisions` runtime object configures native OpenAI Decisions and TypeSafe J
 
 Authentication precedence is the configured `api_key`, the selected active API-key credential for the `openai` or `typesafe` integration, then `OPENAI_API_KEY` or `TYPESAFE_API_KEY`. Codex OAuth and subscription credentials are not native decision API keys. Keys belong in configuration or credential storage, never tool inputs or results.
 
-OpenAI Decisions uses API Platform billing, separate from a ChatGPT subscription; a subscription alone supplies neither a decision API key nor included API usage. See [OpenAI billing](https://help.openai.com/en/articles/9039756-managing-billing-for-chatgpt-and-the-api-platform). Shared agent guidance encourages appropriate use only with configured API access and authorized evidence; it does not enable billing or automatic policies.
+OpenAI Decisions uses API Platform billing, separate from a ChatGPT subscription; a subscription alone supplies neither a decision API key nor included API usage. See [OpenAI billing](https://help.openai.com/en/articles/9039756-managing-billing-for-chatgpt-and-the-api-platform). Shared agent guidance directs proactive `decision` tool use for bounded classification, option choice, grading, ranking, unverifiable predicates, and calibrating a recommendation before `question`, only with configured access and authorized evidence; it does not enable billing or automatic policies.
 
-All three automatic policies are disabled when omitted. Native policies require `provider` (`openai` or `typesafe`) and an explicit `min_probability` in `[0, 1]`; thresholds are inclusive and apply to the chosen option's probability, not the separate confidence field. Agent policies instead require `provider: "agent"` and `min_confidence` in `[0, 1]`. Wrong or mixed metric fields are rejected. This native example deliberately sets thresholds without a calibration guarantee. Its route changes only the agent, using the available default model.
+The automatic `guardrails`, `routing`, `goal`, and `questions` policies are disabled when omitted. Native policies require `provider` (`openai` or `typesafe`) and an explicit `min_probability` in `[0, 1]`; thresholds are inclusive and apply to the chosen option's probability, not the separate confidence field. Agent policies instead require `provider: "agent"` and `min_confidence` in `[0, 1]`. Wrong or mixed metric fields are rejected. A refusal, a missing choice, or a missing, non-finite, or out-of-range score is uncertain at every threshold; scores are never clamped. This native example deliberately sets thresholds without a calibration guarantee. Its route changes only the agent, using the available default model.
 
 ```jsonc
 {
@@ -865,18 +893,23 @@ All three automatic policies are disabled when omitted. Native policies require 
         { "id": "delivery", "description": "Complete a bounded repository implementation", "agent": "GSD" }
       ]
     },
-    "goal": { "provider": "openai", "min_probability": 0.95 }
+    "goal": { "provider": "openai", "min_probability": 0.95 },
+    "questions": { "provider": "openai", "min_probability": 0.8 }
   }
 }
 ```
 
-Routing accepts 1–254 candidates with unique nonempty IDs and descriptions; `keep-current` is reserved for the runtime's baseline choice. Candidates select an agent, a normal model selector, or both; entries selecting neither are not offered. Only known selectable agents allowed by the current agent's effective `agent` permission and available supported models/variants are offered. See [runtime policies](./runtime.md#automatic-decision-policies) and the [native decision contract](../specs/decisions.md) for disclosure, failure, safety, and usage boundaries.
+Routing accepts 1–254 candidates with unique nonempty IDs and descriptions; `keep-current` is reserved for the runtime's baseline choice. Candidates select an agent, a normal model selector, or both; entries selecting neither are not offered. Only known selectable agents allowed by the current agent's effective `agent` permission and available supported models/variants are offered.
+
+`questions` requests an option suggestion for single-select `question` prompts with at least two unique labels. It skips multiselect, free-text, and prompts already containing an explicit `(Recommended)` option. An effective `decision` permission deny, including an inherited ceiling, skips the helper; policy configuration never overrides that deny. The evidence is only the prompt's header, question text, and option labels and descriptions. A suggestion at or above the threshold becomes the form's preselected default, its option description gains `(Suggested by the decision helper: native probability 0.91)` or `(Suggested by the decision helper: model confidence 0.82, uncalibrated)`, and the agent's tool result lists it separately from the answers. Normal mode still waits for the user's answer and permits a different choice. Under YOLO 1–3 or an active goal, the existing form auto-answerer uses the suggested default. Uncertain, refused, or failed evaluations leave the prompt unchanged. At most four evaluations run concurrently within one overall `timeout_ms` budget; expiration discards suggestions, interrupts unfinished evaluations, and opens the original form. This timeout does not establish provider-side cancellation or billing cancellation.
+
+See [runtime policies](./runtime.md#automatic-decision-policies) and the [native decision contract](../specs/decisions.md) for disclosure, failure, safety, and usage boundaries.
 
 ### Decision agent
 
 The hidden primary `decision` agent evaluates JSON state and bounded questions without tools and returns strict TOON. Its ID is reserved for the decision tool and automatic policies, not foreground Session or command selection. Select its model with `agents.decision.model`, then `efficiency.helper_models.decision`; missing helper configuration or `"session"` uses the owner Session model, or the normal default resolver when no model is selected. The selected model's existing authentication route is used, including supported subscription routes; no separate native-decision API key is required. Its provider's ordinary privacy, quotas, and pricing apply. This does not establish free usage or a zero-retention guarantee, and local Session history and tool results remain durable.
 
-This example enables all three agent policies and retains the owner Session model. Its deliberate confidence thresholds are not calibration promises:
+This example enables all four agent policies and retains the owner Session model. Its deliberate confidence thresholds are not calibration promises:
 
 ```jsonc
 {
@@ -889,13 +922,14 @@ This example enables all three agent policies and retains the owner Session mode
         { "id": "delivery", "description": "Complete a bounded repository implementation", "agent": "GSD" }
       ]
     },
-    "goal": { "provider": "agent", "min_confidence": 0.95 }
+    "goal": { "provider": "agent", "min_confidence": 0.95 },
+    "questions": { "provider": "agent", "min_confidence": 0.8 }
   },
   "efficiency": { "helper_models": { "decision": "session" } }
 }
 ```
 
-Agent confidence is self-reported and uncalibrated, not a native probability. At the inclusive `min_confidence` threshold it can preserve a deterministic allow, select an eligible initial route, or stop goal continuation; existing permission, hard-review, selection, autonomy-revision, and active-work gates remain enforced. Refusal or uncertainty requests ordinary review, preserves routing defaults, or continues toward the unchanged goal, respectively. See the [agent input and TOON contract](../specs/decisions.md#decision-agent-inputs).
+Agent confidence is self-reported and uncalibrated, not a native probability. The helper is asked to weigh plausible alternatives and rate how likely its answer is correct given only the supplied evidence. At the inclusive `min_confidence` threshold it can preserve a deterministic allow, select an eligible initial route, stop goal continuation, or suggest a question option; existing permission, hard-review, selection, autonomy-revision, and active-work gates remain enforced. Refusal or uncertainty requests ordinary review, preserves routing defaults, continues toward the unchanged goal, or leaves the question unchanged, respectively. See the [agent input and TOON contract](../specs/decisions.md#decision-agent-inputs).
 
 ### Cursor
 
@@ -1184,7 +1218,7 @@ All other `cli.json` fields are optional and remain `unset` until configured. Th
 
 | Field path                                                         | Exact type or closed values                       | Default               | Operational remark                                                                                  |
 | ------------------------------------------------------------------ | ------------------------------------------------- | --------------------- | --------------------------------------------------------------------------------------------------- |
-| `theme.name`                                                       | string                                            | unset                 | Discovered theme ID.                                                                                |
+| `theme.name`                                                       | string                                            | unset                 | Discovered theme ID: a built-in such as `ycoding`, `one-dark`, `one-dark-pro`, or `high-contrast`, or a custom theme file. A standalone theme that omits `text.separator`, `text.hint`, or `text.label` reads them as its own `text.subdued`; an unreadable custom theme file is skipped without affecting the others. |
 | `theme.mode`                                                       | `system` \| `dark` \| `light`                     | unset                 | `system` follows the terminal.                                                                      |
 | `keybinds.<command>`                                               | key-sequence override                             | unset                 | The supported command names and default bindings are owned by `packages/tui/src/config/keybind.ts`. |
 | `plugins[]`                                                        | string \| `{ package: string, options?: record }` | unset                 | TUI-side plugin directives, separate from Core runtime plugins.                                     |

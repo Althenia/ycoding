@@ -41,6 +41,7 @@ import { Auth, Endpoint, type AnyRoute } from "@ycoding-ai/ai/route"
 import { ProviderShared } from "@ycoding-ai/ai/protocols/shared"
 import { Cause, Context, Effect, Layer, Option, Schema, Scope, Stream } from "effect"
 import { AISDKCache } from "./aisdk-cache"
+import type { Integration } from "./integration"
 import { CatalogModel } from "./model"
 import { Provider } from "./provider"
 import { State } from "./state"
@@ -51,6 +52,7 @@ type AssistantContent = Extract<LanguageModelV3Message, { role: "assistant" }>["
 type ToolResultContent = Extract<AssistantContent[number], { type: "tool-result" }>
 
 export interface SDKEvent {
+  readonly snapshot?: Integration.Snapshot
   readonly model: CatalogModel.Info
   readonly package: string
   readonly options: Record<string, any>
@@ -58,6 +60,7 @@ export interface SDKEvent {
 }
 
 export interface LanguageEvent {
+  readonly snapshot?: Integration.Snapshot
   readonly model: CatalogModel.Info
   readonly sdk: SDK
   readonly options: Record<string, any>
@@ -214,8 +217,11 @@ export interface Interface {
   }
   readonly runSDK: (event: SDKEvent) => Effect.Effect<SDKEvent>
   readonly runLanguage: (event: LanguageEvent) => Effect.Effect<LanguageEvent>
-  readonly language: (model: CatalogModel.Info) => Effect.Effect<LanguageModelV3, InitError>
-  readonly model: (model: CatalogModel.Info) => Effect.Effect<Model, InitError>
+  readonly language: (
+    model: CatalogModel.Info,
+    snapshot?: Integration.Snapshot,
+  ) => Effect.Effect<LanguageModelV3, InitError>
+  readonly model: (model: CatalogModel.Info, snapshot?: Integration.Snapshot) => Effect.Effect<Model, InitError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/AISDK") {}
@@ -280,8 +286,17 @@ export const locationLayer = Layer.effect(
       },
       runSDK: (event) => run(sdkHooks, event),
       runLanguage: (event) => run(languageHooks, event),
-      language: Effect.fn("AISDK.language")(function* (model) {
+      language: Effect.fn("AISDK.language")(function* (model, snapshot) {
+        const connection = snapshot?.credential
+          ? {
+              integrationID: snapshot.credential.integrationID,
+              id: snapshot.credential.id,
+              accountGeneration: snapshot.credential.accountGeneration,
+              generation: snapshot.credential.generation,
+            }
+          : snapshot?.connection
         const key = cacheKey({
+          connection,
           providerID: model.providerID,
           id: model.id,
           modelID: model.modelID,
@@ -302,6 +317,7 @@ export const locationLayer = Layer.effect(
         const packageName = Provider.packageName(model.package)
         const options = prepareOptions(model, packageName)
         const sdkKey = cacheKey({
+          connection,
           providerID: model.providerID,
           package: packageName,
           settings: model.settings,
@@ -310,22 +326,23 @@ export const locationLayer = Layer.effect(
         })
         const sdk =
           sdks.get(sdkKey) ??
-          (yield* service.runSDK({ model, package: packageName, options }).pipe(initError(model.providerID))).sdk
+          (yield* service.runSDK({ model, package: packageName, options, snapshot }).pipe(initError(model.providerID)))
+            .sdk
         if (!sdk)
           return yield* new InitError({
             providerID: model.providerID,
             cause: new Error("No AISDK provider plugin returned an SDK"),
           })
         sdks.set(sdkKey, sdk)
-        const result = yield* service.runLanguage({ model, sdk, options }).pipe(initError(model.providerID))
+        const result = yield* service.runLanguage({ model, sdk, options, snapshot }).pipe(initError(model.providerID))
         const language = yield* Effect.sync(() => result.language ?? sdk.languageModel(model.modelID ?? model.id)).pipe(
           initError(model.providerID),
         )
         languages.set(key, language)
         return language
       }),
-      model: Effect.fn("AISDK.model")(function* (model) {
-        return modelFromLanguage(model, yield* service.language(model))
+      model: Effect.fn("AISDK.model")(function* (model, snapshot) {
+        return modelFromLanguage(model, yield* service.language(model, snapshot))
       }),
     })
     return service
@@ -344,8 +361,9 @@ function modelFromLanguage(info: CatalogModel.Info, language: LanguageModelV3) {
   })()
   const modelID = String(info.modelID ?? info.id)
   const mode = AnthropicModel.capabilities(modelID).adaptiveThinking
-  const defaultAnthropicThinking = (["@ai-sdk/anthropic", "@ai-sdk/google-vertex/anthropic"].includes(packageName) ||
-    (packageName === "@ai-sdk/gateway" && modelID.startsWith("anthropic/"))) &&
+  const defaultAnthropicThinking =
+    (["@ai-sdk/anthropic", "@ai-sdk/google-vertex/anthropic"].includes(packageName) ||
+      (packageName === "@ai-sdk/gateway" && modelID.startsWith("anthropic/"))) &&
     (mode === "default" || mode === "required")
   const route: AnyRoute = {
     id: `ai-sdk:${packageName}`,
@@ -378,8 +396,13 @@ function modelFromLanguage(info: CatalogModel.Info, language: LanguageModelV3) {
     with: () => route,
     model: (input) => Model.make({ ...input, provider: "provider" in input ? input.provider : info.providerID, route }),
     prepareTransport: (body) => Effect.succeed(body),
-    streamPrepared: (prepared) => streamLanguage(language, prepared as LanguageModelV3CallOptions,
-      defaultAnthropicThinking, packageName === CURSOR_PACKAGE),
+    streamPrepared: (prepared) =>
+      streamLanguage(
+        language,
+        prepared as LanguageModelV3CallOptions,
+        defaultAnthropicThinking,
+        packageName === CURSOR_PACKAGE,
+      ),
   }
   return Model.make({ id: info.modelID ?? info.id, provider: info.providerID, route })
 }
@@ -898,7 +921,8 @@ function usage(
     outputTokens: input.outputTokens.total,
     reasoningTokens: input.outputTokens.reasoning,
     ...(outputMayIncludeUnreportedReasoning && input.outputTokens.reasoning === undefined
-      ? { outputMayIncludeUnreportedReasoning: true } : {}),
+      ? { outputMayIncludeUnreportedReasoning: true }
+      : {}),
     totalTokens:
       normalized.inputTokens === undefined || input.outputTokens.total === undefined
         ? undefined
@@ -921,7 +945,9 @@ function usage(
   return Object.values(output).some((value) => value !== undefined) || Object.keys(cacheCreation).length > 0
     ? {
         ...output,
-        ...(Object.keys(cacheCreation).length > 0 ? { providerMetadata: { anthropic: { cache_creation: cacheCreation } } } : {}),
+        ...(Object.keys(cacheCreation).length > 0
+          ? { providerMetadata: { anthropic: { cache_creation: cacheCreation } } }
+          : {}),
       }
     : undefined
 }

@@ -117,6 +117,8 @@ const promptCatalog = Layer.mock(Catalog.Service, {
     available: () => Effect.succeed([]),
   },
   model: {
+    defaultSelection: () => Effect.succeed(undefined),
+    forConnection: (model) => Effect.succeed(model),
     get: () => Effect.succeed(undefined),
     all: () => Effect.succeed(catalogModels),
     available: () => Effect.succeed(catalogModels),
@@ -172,10 +174,7 @@ const models = SessionRunnerModel.layerWith((session) => {
   // Mirror the production resolver: a target outside the catalog is unavailable, not resolved
   // to the nearest known model.
   const selected = session.model
-  if (
-    selected &&
-    !catalogModels.some((model) => model.providerID === selected.providerID && model.id === selected.id)
-  )
+  if (selected && !catalogModels.some((model) => model.providerID === selected.providerID && model.id === selected.id))
     return Effect.fail(
       new SessionRunnerModel.ModelUnavailableError({
         providerID: selected.providerID,
@@ -229,8 +228,7 @@ const compactionExecution = Layer.effect(
     const db = (yield* Database.Service).db
     const owner = "switch-test-compaction"
     const terminalResult = (job: SessionCompactionJob.Job) => {
-      if (job.status !== "ended" && job.status !== "failed")
-        throw new Error(`Compaction job did not settle: ${job.id}`)
+      if (job.status !== "ended" && job.status !== "failed") throw new Error(`Compaction job did not settle: ${job.id}`)
       return {
         id: job.id,
         sessionID: job.sessionID,
@@ -581,7 +579,9 @@ describe("Session.switchModel context validation", () => {
         .where(eq(SessionMessageTable.session_id, sessionID))
         .all()
         .pipe(Effect.orDie)
-      const seeded = rows.filter((row) => row.type !== "compaction" || row.id === messageID(sessionID, SessionMessage.ID.make("msg_summary")))
+      const seeded = rows.filter(
+        (row) => row.type !== "compaction" || row.id === messageID(sessionID, SessionMessage.ID.make("msg_summary")),
+      )
       expect(seeded.map((row) => row.id)).toContain(messageID(sessionID, SessionMessage.ID.make("msg_u1")))
       expect(seeded.map((row) => row.id)).toContain(messageID(sessionID, SessionMessage.ID.make("msg_summary")))
     }),
@@ -643,7 +643,11 @@ describe("Session.switchModel context validation", () => {
       // No completed compaction exists, and the only complete boundary is one large consumed user
       // message: the advisory summary boundary would be absent, yet mandatory compaction fits.
       const onlyID = messageID(sessionID, SessionMessage.ID.make("msg_only"))
-      const { id: _onlyID, type: onlyType, ...onlyData } = encodeMessage(
+      const {
+        id: _onlyID,
+        type: onlyType,
+        ...onlyData
+      } = encodeMessage(
         SessionMessage.User.make({
           type: "user",
           id: onlyID,
@@ -736,7 +740,11 @@ describe("Session.switchModel context validation", () => {
       const { db } = yield* Database.Service
       // A large but still-incomplete user message: no completed boundary exists to compact through.
       const pendingID = messageID(sessionID, SessionMessage.ID.make("msg_pending"))
-      const { id: _pendingID, type: pendingType, ...pendingData } = encodeMessage(
+      const {
+        id: _pendingID,
+        type: pendingType,
+        ...pendingData
+      } = encodeMessage(
         SessionMessage.User.make({
           type: "user",
           id: pendingID,

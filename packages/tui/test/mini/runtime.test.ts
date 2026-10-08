@@ -356,6 +356,179 @@ describe("run interactive runtime", () => {
     expect(resolved).toBe(1)
   })
 
+  test("loads the configured default profile and variant for a fresh Mini Session", async () => {
+    const sdk = YCoding.make({ baseUrl: "https://ycoding.test" })
+    const events: FooterEvent[] = []
+    const api = footer(events)
+    const event = api.event
+    api.event = (value) => {
+      event(value)
+      if (value.type === "model") api.close()
+    }
+    stubCatalogLists(sdk, {
+      providers: [catalogProvider("openai", "OpenAI")],
+      models: [catalogModel({
+        id: "gpt-5",
+        providerID: "openai",
+        variants: ["default-only"],
+        profiles: [
+          { name: "Work", active: true, variants: ["high"] },
+          { name: "Personal", active: false, variants: ["low"] },
+        ],
+        enabled: false,
+      })],
+    })
+    spyOn(sdk.model, "default").mockImplementation(
+      () =>
+        ok({
+          location: { directory: "/tmp", project: { id: "proj_1", directory: "/tmp" } },
+          data: {
+            id: "gpt-5",
+            modelID: "gpt-5",
+            providerID: "openai",
+            name: "GPT-5",
+            capabilities: { tools: true, input: ["text"], output: ["text"] },
+            variants: [{ id: "default-only" }],
+            time: { released: 1 },
+            cost: [],
+            status: "active",
+            enabled: true,
+            limit: { context: 200_000, output: 32_000 },
+            selection: { providerID: "openai", id: "gpt-5", variant: "high", profile: "Work" },
+          },
+        }) as never,
+    )
+
+    const task = runInteractiveDeferredMode(
+      {
+        host: host(),
+        sdk,
+        directory: "/tmp",
+        target: async () => ({
+          sessionID: "ses-default-profile",
+          sessionTitle: "Configured default",
+          location: { directory: "/tmp", project: { id: "proj_1", directory: "/tmp" } },
+          agent: "build",
+          model: undefined,
+          variant: undefined,
+          resume: false,
+        }),
+        agent: "build",
+        model: undefined,
+        variant: undefined,
+        files: [],
+        thinking: false,
+      },
+      {
+        createRuntimeLifecycle: async () => ({
+          footer: api,
+          onResize: () => () => {},
+          refreshTheme: () => {},
+          resetForReplay: () => Promise.resolve(),
+          close: () => Promise.resolve(),
+        }),
+      },
+    )
+
+    await task
+    expect(events).toContainEqual({
+      type: "variants",
+      variants: ["high"],
+      current: "high",
+    })
+    expect(events).toContainEqual({
+      type: "model",
+      model: "gpt-5 · OpenAI · high",
+      selection: { providerID: "openai", modelID: "gpt-5", profile: "Work" },
+    })
+  })
+
+  test("blocks an unavailable unprofiled Mini default before provider prompt work", async () => {
+    const sdk = YCoding.make({ baseUrl: "https://ycoding.test" })
+    const fixture = createFooterApiFixture()
+    const blocked = defer<void>()
+    const append = fixture.api.append
+    fixture.api.append = (value) => {
+      append(value)
+      if (value.kind === "error") blocked.resolve()
+    }
+    stubCatalogLists(sdk, {
+      providers: [catalogProvider("openai", "OpenAI")],
+      models: [catalogModel({ id: "gpt-exclusive", providerID: "openai", enabled: false })],
+    })
+    spyOn(sdk.model, "default").mockImplementation(
+      () =>
+        ok({
+          location: { directory: "/tmp", project: { id: "proj_1", directory: "/tmp" } },
+          data: {
+            id: "gpt-exclusive",
+            modelID: "gpt-exclusive",
+            providerID: "openai",
+            name: "GPT Exclusive",
+            capabilities: { tools: true, input: ["text"], output: ["text"] },
+            variants: [],
+            time: { released: 1 },
+            cost: [],
+            status: "active",
+            enabled: false,
+            limit: { context: 200_000, output: 32_000 },
+            selection: { providerID: "openai", id: "gpt-exclusive" },
+          },
+        }) as never,
+    )
+    const prompt = spyOn(sdk.session, "prompt").mockImplementation(() => ok({}) as never)
+    const task = runInteractiveDeferredMode(
+      {
+        host: host(),
+        sdk,
+        directory: "/tmp",
+        target: async () => ({
+          sessionID: "ses-exclusive-default",
+          sessionTitle: "Disabled default",
+          location: { directory: "/tmp", project: { id: "proj_1", directory: "/tmp" } },
+          agent: "build",
+          model: undefined,
+          variant: undefined,
+          resume: false,
+        }),
+        agent: "build",
+        model: undefined,
+        variant: undefined,
+        files: [],
+        thinking: false,
+        initialInput: "blocked by the unavailable default",
+      },
+      {
+        createRuntimeLifecycle: async () => ({
+          footer: fixture.api,
+          onResize: () => () => {},
+          refreshTheme: () => {},
+          resetForReplay: () => Promise.resolve(),
+          close: () => Promise.resolve(),
+        }),
+        streamTransport: Promise.resolve({
+          createSessionTransport: async () => ({
+            runPromptTurn: async () => {},
+            interruptActiveTurn: async () => {},
+            selectSubagent: () => {},
+            replayOnResize: async () => false,
+            close: async () => {},
+          }),
+          formatUnknownError: (error: unknown) => String(error),
+        }),
+      },
+    )
+
+    try {
+      await blocked.promise
+      expect(fixture.commits.at(-1)).toMatchObject({ text: expect.stringContaining("unavailable for the provider default") })
+      expect(prompt).not.toHaveBeenCalled()
+    } finally {
+      fixture.api.close()
+      await task
+    }
+  })
+
   test("restores deferred session history and model after first paint", async () => {
     const sdk = YCoding.make({ baseUrl: "https://ycoding.test" })
     const lifecycleStarted = defer<void>()

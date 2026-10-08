@@ -7,6 +7,17 @@ export function formatRef(model: { providerID: string; id: string; variant?: str
   return [model.providerID, model.id, model.variant].filter((value) => value !== undefined).join("/")
 }
 
+export function modelVariantIDs(input: {
+  readonly model?: {
+    readonly variants: readonly { readonly id: string }[]
+    readonly profiles?: readonly { readonly name: string; readonly variants?: readonly string[] }[]
+  }
+  readonly profile?: string
+}) {
+  if (input.profile !== undefined) return input.model?.profiles?.find((profile) => profile.name === input.profile)?.variants ?? []
+  return input.model?.variants.map((variant) => variant.id) ?? []
+}
+
 export function switchLabel(
   model: { providerID: string; id: string; variant?: string },
   models?: readonly { providerID: string; id: string; name: string }[],

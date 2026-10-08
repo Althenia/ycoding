@@ -9,11 +9,13 @@ import { DialogVariant } from "./dialog-variant"
 import * as fuzzysort from "fuzzysort"
 import { useConnected } from "./use-connected"
 import { useData } from "../context/data"
+import { modelVariantIDs } from "../util/model"
 
 export type DialogModelSelection = {
   providerID: string
   modelID: string
   variant?: string
+  profile?: string
 }
 
 export type DialogModelResult =
@@ -26,13 +28,20 @@ export function completeModelSelection(input: {
   variants: string[]
   currentVariant?: string
   variant?: string
+  profile?: string
 }): DialogModelSelection | undefined {
-  if (input.variant) return { providerID: input.providerID, modelID: input.modelID, variant: input.variant }
+  const selection = {
+    providerID: input.providerID,
+    modelID: input.modelID,
+    ...(input.variant === undefined ? {} : { variant: input.variant }),
+    ...("profile" in input ? { profile: input.profile } : {}),
+  }
+  if (input.variant) return selection
   if (input.currentVariant && input.variants.includes(input.currentVariant)) {
-    return { providerID: input.providerID, modelID: input.modelID, variant: input.currentVariant }
+    return { ...selection, variant: input.currentVariant }
   }
   if (input.variants.length) return
-  return { providerID: input.providerID, modelID: input.modelID }
+  return selection
 }
 
 export function DialogModel(props: {
@@ -47,38 +56,17 @@ export function DialogModel(props: {
   const { theme } = useTheme().contextual("elevated")
   const [query, setQuery] = createSignal("")
   let settled = false
+  let selectingProfile = false
   let selectingVariant = false
   onCleanup(() => {
-    if (settled || selectingVariant) return
+    if (settled || selectingProfile || selectingVariant) return
     props.onComplete?.({ type: "cancelled" })
   })
 
   const connected = useConnected()
-  const providers = createMemo(() => new Map((data.location.provider.list() ?? []).map((item) => [item.id, item])))
-  const models = createMemo(() => data.location.model.list() ?? [])
-  // A provider with several stored profiles names the active one on every row, so the selector
-  // states which account a chosen model would run as. A single profile stays unnamed.
-  const profiles = createMemo(() => {
-    const byProvider = new Map<string, { active?: string; count: number }>()
-    const location = data.location.default()
-    for (const provider of data.location.provider.list(location) ?? []) {
-      const integrationID = provider.integrationID ?? provider.id
-      const credentials = (data.location.integration.list(location) ?? [])
-        .filter((integration) => integration.id === integrationID)
-        .flatMap((integration) => integration.connections)
-        .filter((connection) => connection.type === "credential")
-      if (credentials.length === 0) continue
-      byProvider.set(provider.id, {
-        count: credentials.length,
-        active: credentials.find((connection) => connection.active)?.label,
-      })
-    }
-    return byProvider
-  })
-  const profileLabel = (providerID: string) => {
-    const profile = profiles().get(providerID)
-    return profile && profile.count > 1 ? profile.active : undefined
-  }
+  const selectionLocation = createMemo(() => props.sessionID ? data.session.get(props.sessionID)?.location ?? data.location.default() : data.location.default())
+  const providers = createMemo(() => new Map((data.location.provider.list(selectionLocation()) ?? []).map((item) => [item.id, item])))
+  const models = createMemo(() => data.location.model.list(selectionLocation()) ?? [])
 
   const showExtra = createMemo(() => connected() && !props.providerID)
 
@@ -97,14 +85,14 @@ export function DialogModel(props: {
         return [
           {
             key: item,
-            value: { providerID: model.providerID, modelID: model.id },
+            value: { providerID: model.providerID, modelID: model.id, ...(item.profile === undefined ? {} : { profile: item.profile }) },
             title: model.name,
             releaseDate: model.time.released,
-            description: provider?.name ?? model.providerID,
+            description: `${provider?.name ?? model.providerID} · ${item.profile ?? "provider default"}`,
             category,
             footer: model.enabled ? formatContext(model.limit.context) : "Unavailable",
             onSelect: () => {
-              onSelect(model.providerID, model.id)
+              onSelect(model.providerID, model.id, item.profile, true)
             },
           },
         ]
@@ -125,11 +113,13 @@ export function DialogModel(props: {
         .filter((model) => (props.providerID ? model.providerID === props.providerID : true))
         .map((model) => {
           const provider = providers().get(model.providerID)
+          const profileAvailable = (model.profiles?.length ?? 0) > 0
+          const selectable = model.enabled || profileAvailable
           return {
             value: { providerID: model.providerID, modelID: model.id },
             providerID: model.providerID,
             providerName: provider?.name ?? model.providerID,
-            enabled: model.enabled,
+            enabled: selectable,
             title: model.name,
             releaseDate: model.time.released,
             description: model.family
@@ -139,21 +129,17 @@ export function DialogModel(props: {
                 : model.capabilities.tools
                   ? "tools"
                   : undefined,
-            category: connected()
-              ? profileLabel(model.providerID)
-                ? `${provider?.name ?? model.providerID} · ${profileLabel(model.providerID)}`
-                : (provider?.name ?? model.providerID)
-              : undefined,
+            category: connected() ? provider?.name ?? model.providerID : undefined,
             categoryView:
-              model.enabled || !connected() ? undefined : (
+              selectable || !connected() ? undefined : (
                 <box height={1}>
                   <text fg={theme.text.feedback.info.default} attributes={TextAttributes.BOLD}>
                     {provider?.name ?? model.providerID}
                   </text>
                 </box>
               ),
-            footer: model.enabled ? formatContext(model.limit.context) : "Unavailable",
-            state: model.enabled ? ("connected" as const) : ("disabled" as const),
+            footer: model.enabled ? formatContext(model.limit.context) : profileAvailable ? "Profiles" : "Unavailable",
+            state: model.enabled ? ("connected" as const) : profileAvailable ? undefined : ("disabled" as const),
             onSelect() {
               onSelect(model.providerID, model.id)
             },
@@ -205,71 +191,73 @@ export function DialogModel(props: {
     return value.name
   })
 
-  function onSelect(providerID: string, modelID: string) {
-    if (props.onComplete) {
-      const variants =
-        models()
-          .find((model) => model.providerID === providerID && model.id === modelID)
-          ?.variants.map((variant) => variant.id) ?? []
-      const selection = completeModelSelection({
-        providerID,
-        modelID,
-        variants,
-        currentVariant: local.model.variant.current(),
-      })
-      if (selection) {
-        settled = true
-        props.onComplete({ type: "selected", selection })
-        dialog.clear()
-        return
-      }
-      selectingVariant = true
+  function onSelect(providerID: string, modelID: string, preferredProfile?: string, explicitProfile = false) {
+    const model = models().find((item) => item.providerID === providerID && item.id === modelID)
+    if (!model) return
+    const selected = local.model.current()
+    const currentProfile = selected?.providerID === providerID ? selected.profile : undefined
+    const profile = explicitProfile ? preferredProfile : currentProfile
+    if (model.profiles?.length || profile !== undefined || explicitProfile) {
+      selectingProfile = true
       dialog.replace(() => (
-        <DialogVariant
-          variants={variants}
-          current={undefined}
-          onSelect={(variant) => {
-            const selection = completeModelSelection({ providerID, modelID, variants, variant })
-            if (!selection) return
-            settled = true
-            props.onComplete?.({ type: "selected", selection })
-            dialog.clear()
-          }}
+        <DialogModelProfile
+          profiles={model.profiles ?? []}
+          selected={profile}
+          providerDefaultAvailable={model.enabled}
           onCancel={() => props.onComplete?.({ type: "cancelled" })}
-          onClear={() => {
-            settled = true
-            props.onComplete?.({ type: "selected", selection: { providerID, modelID } })
-            dialog.clear()
-          }}
+          onSelect={(value) => finishSelection(providerID, modelID, value, true)}
         />
       ))
       return
     }
-    void local.model.select({ providerID, modelID }, { sessionID: props.sessionID })
-    const list = local.model.variant.list()
-    const cur = local.model.variant.current()
-    if (cur && list.includes(cur)) {
+    finishSelection(providerID, modelID)
+  }
+
+  function finishSelection(providerID: string, modelID: string, profile?: string, explicitProfile = false) {
+    const info = models().find((model) => model.providerID === providerID && model.id === modelID)
+    const variants = [...modelVariantIDs({ model: info, profile })]
+    const profileSelection = explicitProfile ? { profile } : {}
+    const currentVariant = local.model.variant.current({ providerID, modelID, ...profileSelection })
+    const selection = completeModelSelection({
+      providerID,
+      modelID,
+      variants,
+      currentVariant,
+      ...profileSelection,
+    })
+    if (selection) {
+      settled = true
+      if (props.onComplete) props.onComplete({ type: "selected", selection })
+      else void local.model.select(selection, { sessionID: props.sessionID })
       dialog.clear()
       return
     }
-    if (list.length > 0) {
-      dialog.replace(() => (
-        <DialogVariant
-          onSelect={(variant) => void selectVariant(providerID, modelID, variant)}
-          onClear={() => {
-            dialog.clear()
-            void local.model.select({ providerID, modelID, variant: undefined }, { sessionID: props.sessionID })
-          }}
-        />
-      ))
-      return
-    }
-    dialog.clear()
-  }
-
-  function selectVariant(providerID: string, modelID: string, variant: string) {
-    dialog.clear()
-    return local.model.select({ providerID, modelID, variant }, { sessionID: props.sessionID })
+    if (currentVariant !== undefined && !variants.includes(currentVariant) && !props.onComplete)
+      void local.model.select({ providerID, modelID, ...profileSelection }, { sessionID: props.sessionID })
+    selectingVariant = true
+    dialog.replace(() => (
+      <DialogVariant
+        variants={variants}
+        current={currentVariant}
+        onSelect={(variant) => {
+          const selected = completeModelSelection({ providerID, modelID, variants, variant, ...profileSelection })
+          if (!selected) return
+          settled = true
+          if (props.onComplete) props.onComplete({ type: "selected", selection: selected })
+          else void local.model.select(selected, { sessionID: props.sessionID })
+          dialog.clear()
+        }}
+        onCancel={() => props.onComplete?.({ type: "cancelled" })}
+        onClear={() => {
+          const selected = completeModelSelection({ providerID, modelID, variants, ...profileSelection })
+          if (!selected) return
+          settled = true
+          if (props.onComplete) props.onComplete({ type: "selected", selection: selected })
+          else void local.model.select({ ...selected, variant: undefined }, { sessionID: props.sessionID })
+          dialog.clear()
+        }}
+      />
+    ))
   }
 
   return (
@@ -294,9 +282,7 @@ export function DialogModel(props: {
           command: "model.dialog.favorite",
           title: "Favorite",
           hidden: !connected(),
-          onTrigger: (option) => {
-            local.model.toggleFavorite(option.value as { providerID: string; modelID: string })
-          },
+          onTrigger: (option) => local.model.toggleFavorite(option.value),
         },
       ]}
       onFilter={setQuery}
@@ -307,6 +293,40 @@ export function DialogModel(props: {
       focusCurrent={false}
     />
   )
+}
+
+function DialogModelProfile(props: {
+  readonly profiles: readonly { readonly name: string; readonly active: boolean }[]
+  readonly selected?: string
+  readonly providerDefaultAvailable: boolean
+  readonly onSelect: (profile?: string) => void
+  readonly onCancel: () => void
+}) {
+  const options = createMemo(() => [
+    {
+      title: "Use provider default",
+      value: undefined,
+      description: "Use the provider's current default profile",
+      disabled: !props.providerDefaultAvailable,
+    },
+    ...(props.selected !== undefined && !props.profiles.some((profile) => profile.name === props.selected)
+      ? [{ title: `Unavailable: ${props.selected}`, value: props.selected, description: "No longer offered for this model" }]
+      : []),
+    ...props.profiles.map((profile) => ({
+      title: profile.name,
+      value: profile.name,
+      description: profile.active ? "Provider default" : undefined,
+    })),
+  ])
+  let settled = false
+  onCleanup(() => { if (!settled) props.onCancel() })
+  return <DialogSelect<string | undefined>
+    title="Provider profile"
+    options={options()}
+    current={props.selected}
+    focusCurrent
+    onSelect={(option) => { settled = true; props.onSelect(option.value) }}
+  />
 }
 
 export function sortModelOptions<

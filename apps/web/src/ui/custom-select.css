@@ -169,13 +169,16 @@
   --yc-radius-lg: 6px;
 }
 
-@media (max-width: 479px) {
+@media (max-width: 767px) {
   .custom-select__dialog.overlay--sheet .overlay__surface {
-    max-block-size: min(70dvh, 520px);
-    padding: var(--yc-space-3) 0 max(var(--yc-space-4), env(safe-area-inset-bottom));
-    border-block-start: var(--yc-border-width) solid var(--yc-border-strong);
-    border-radius: var(--yc-radius-lg) var(--yc-radius-lg) 0 0;
-    grid-template-rows: auto auto minmax(0, 1fr);
+    inset-block-start: var(--custom-select-sheet-top, 0px);
+    inset-block-end: auto;
+    block-size: var(--custom-select-sheet-height, 100dvh);
+    max-block-size: none;
+    padding-block: max(var(--yc-space-4), env(safe-area-inset-top)) max(var(--yc-space-4), env(safe-area-inset-bottom));
+    border: 0;
+    border-radius: 0;
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   .custom-select__dialog .overlay__surface::before {
@@ -191,6 +194,7 @@
   .custom-select__dialog .overlay__body {
     display: grid;
     grid-template-rows: auto minmax(0, 1fr) auto auto;
+    min-block-size: 0;
     overflow: hidden;
     padding-inline: var(--yc-gutter);
   }
@@ -225,8 +229,6 @@
   }
 
   .custom-select__confirm-footer {
-    position: sticky;
-    inset-block-end: 0;
     z-index: 1;
     padding-block-start: var(--yc-space-2);
     border-block-start: var(--yc-border-width) solid var(--yc-border);

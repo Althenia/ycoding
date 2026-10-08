@@ -29,6 +29,7 @@ Generated clients follow the assembled public `HttpApi`. GitHub issues own activ
 | [Session](./session.md)                       | Explain prompt admission, execution, instructions, compaction, and recovery boundaries. |
 | [Session guardrails](./session-guardrails.md) | Explain root-family policy, reviews, counters, boundaries, and security invariants.     |
 | [Provider usage](./provider-usage.md)         | Explain normalized quota sources, caching, source stability, APIs, and TUI semantics.   |
+| [Concurrent provider profiles](./provider-profiles.md) | Define explicit per-Session account selection, private binding, refresh, replay isolation, and consumer behavior. |
 | [Native decisions](./decisions.md)           | Explain OpenAI/TypeSafe native inputs, opt-in automatic flows, safety, errors, and usage. |
 | [Integration authorization](./integration-auth.md) | Explain automatic OAuth settlement and optional manual-code submission.              |
 | [Tools](./tools.md)                           | Explain tool construction, registration, execution, and settlement laws.                |

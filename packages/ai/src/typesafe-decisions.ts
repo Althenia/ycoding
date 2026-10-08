@@ -35,7 +35,9 @@ export const Question = Schema.Union([
 export const Request = Schema.Struct({
   state: Content,
   model: Model,
-  questions: Schema.Record(Schema.String, Question),
+  questions: Schema.Record(Schema.String, Question).check(
+    Schema.makeFilter((questions) => Object.keys(questions).length > 0, { expected: "at least one question" }),
+  ),
 })
 
 export const Answer = Schema.Union([

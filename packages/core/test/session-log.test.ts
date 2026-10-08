@@ -59,6 +59,8 @@ const projects = Layer.succeed(
 const catalog = Layer.mock(Catalog.Service, {
   provider: { get: () => Effect.succeed(undefined), all: () => Effect.succeed([]), available: () => Effect.succeed([]) },
   model: {
+    defaultSelection: () => Effect.succeed(undefined),
+    forConnection: (model) => Effect.succeed(model),
     get: (providerID, modelID) => {
       const cost =
         providerID === Provider.ID.make("openai") && modelID === CatalogModel.ID.make("provider-priced")

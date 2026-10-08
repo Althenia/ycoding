@@ -157,6 +157,12 @@ export type Draft = {
   }
 }
 
+export interface Snapshot {
+  readonly connection: IntegrationConnection.Info
+  readonly credential?: Credential.Info
+  readonly value?: Credential.Value
+}
+
 export interface Interface extends State.Transformable<Draft> {
   /** Registers a scoped transform over the integration registry. */
   /** Returns one integration with its methods and current connections. */
@@ -164,6 +170,7 @@ export interface Interface extends State.Transformable<Draft> {
   /** Returns all integrations with their methods and current connections. */
   readonly list: () => Effect.Effect<Info[]>
   readonly connection: {
+    readonly snapshot: (connection: IntegrationConnection.Info) => Effect.Effect<Snapshot, AuthorizationError>
     /** Returns the active connection for one integration. */
     readonly active: (id: ID) => Effect.Effect<IntegrationConnection.Info | undefined>
     /** Resolves a connection into usable credential material. */
@@ -668,6 +675,27 @@ const layer = Layer.effect(
       return CommandAttempt.make({ attemptID, time })
     })
 
+    const snapshot = Effect.fn("Integration.connection.snapshot")(function* (connection: IntegrationConnection.Info) {
+      if (connection.type === "env") {
+        const key = process.env[connection.name]
+        return { connection, value: key ? Credential.Key.make({ type: "key", key }) : undefined }
+      }
+      const credential = yield* credentials.get(connection.id)
+      if (!credential) return { connection }
+      if (credential.value.type === "key") return { connection, credential, value: credential.value }
+      const implementation = state
+        .get()
+        .integrations.get(credential.integrationID)
+        ?.implementations.get(credential.value.methodID)
+      const now = yield* Clock.currentTimeMillis
+      if (!implementation?.refresh || credential.value.expires > now + Duration.toMillis(Duration.minutes(5)))
+        return { connection, credential, value: credential.value }
+      const refreshed = yield* authorize(credentials.refresh(credential, implementation.refresh(credential.value)))
+      if (!refreshed)
+        return yield* authorize(Effect.fail(new Error("Credential changed during refresh; select the profile again")))
+      return { connection, credential: refreshed, value: refreshed.value }
+    })
+
     return Service.of({
       transform: state.transform,
       reload: state.reload,
@@ -683,28 +711,13 @@ const layer = Layer.effect(
         ).toSorted((a, b) => a.name.localeCompare(b.name))
       }),
       connection: {
+        snapshot,
         active: Effect.fn("Integration.connection.active")(function* (id) {
           const entry = state.get().integrations.get(id)
           return resolveConnections(entry, yield* credentials.list(id))[0]
         }),
         resolve: Effect.fn("Integration.connection.resolve")(function* (connection) {
-          if (connection.type === "env") {
-            const key = process.env[connection.name]
-            return key ? Credential.Key.make({ type: "key", key }) : undefined
-          }
-          const credential = yield* credentials.get(connection.id)
-          if (!credential) return undefined
-          if (credential.value.type === "key") return credential.value
-          const implementation = state
-            .get()
-            .integrations.get(credential.integrationID)
-            ?.implementations.get(credential.value.methodID)
-          if (!implementation?.refresh) return credential.value
-          const now = yield* Clock.currentTimeMillis
-          if (credential.value.expires > now + Duration.toMillis(Duration.minutes(5))) return credential.value
-          const value = yield* authorize(implementation.refresh(credential.value))
-          yield* credentials.update(credential.id, { value })
-          return value
+          return (yield* snapshot(connection)).value
         }),
         key: Effect.fn("Integration.connection.key")(function* (input) {
           const method = state
@@ -759,7 +772,13 @@ const layer = Layer.effect(
           const attempt = yield* SynchronizedRef.modify(attempts, (current) => {
             const match = current.get(input.attemptID)
             if (!match || match.integrationID !== input.integrationID) return [undefined, current]
-            if (match.status === "pending" && !match.persisting && match.authorization.mode === "auto" && match.authorization.submitCode && input.code !== undefined) {
+            if (
+              match.status === "pending" &&
+              !match.persisting &&
+              match.authorization.mode === "auto" &&
+              match.authorization.submitCode &&
+              input.code !== undefined
+            ) {
               if (!input.code.trim() || match.manualSubmitted) return [match, current]
               return [match, new Map(current).set(input.attemptID, { ...match, manualSubmitted: true })]
             }

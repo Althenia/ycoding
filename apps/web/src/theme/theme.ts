@@ -1,4 +1,5 @@
 import { browserStorage, readStored, writeStored, type StorageLike } from "../lib/storage"
+import { DEFAULT_SCHEME, SCHEME_STORAGE_KEY, isSchemeID, schemeBackground, type SchemeID } from "./schemes"
 
 export const THEME_STORAGE_KEY = "ycoding.theme"
 const THEME_PREFERENCES = ["light", "dark", "system"] as const
@@ -40,4 +41,20 @@ export function writeThemePreference(
   preference: ThemePreference,
 ): boolean {
   return writeStored(storage, THEME_STORAGE_KEY, preference)
+}
+
+export function normalizeSchemePreference(value: unknown): SchemeID {
+  return isSchemeID(value) ? value : DEFAULT_SCHEME
+}
+
+export function readSchemePreference(storage: StorageLike | null | undefined = browserStorage()): SchemeID {
+  return normalizeSchemePreference(readStored(storage, SCHEME_STORAGE_KEY, normalizeSchemePreference))
+}
+
+export function writeSchemePreference(storage: StorageLike | null | undefined, scheme: SchemeID): boolean {
+  return writeStored(storage, SCHEME_STORAGE_KEY, scheme)
+}
+
+export function themeColor(scheme: SchemeID, resolved: ResolvedTheme): string {
+  return schemeBackground(scheme, resolved) ?? (resolved === "dark" ? "#0b1115" : "#ffffff")
 }

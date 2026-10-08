@@ -29,6 +29,7 @@ import { SessionMessage } from "./message"
 import { SessionPermissionCeiling } from "./permission-ceiling"
 import { SessionOrchestrationIdentity } from "./orchestration-identity"
 import { SessionRunnerModel } from "./runner/model"
+import { SessionHelperPolicy } from "./helper-policy"
 import { SessionSchema } from "./schema"
 import { SessionPendingTable, SessionTable, SessionTaskTable } from "./sql"
 import { isTerminal, readTeamView, renderTeamView, taskFromRow } from "./orchestration-view"
@@ -43,7 +44,7 @@ export const selectModel = (
   spawn: Model.Ref | undefined,
   agent: Model.Ref | undefined,
   parent: Model.Ref | undefined,
-) => spawn ?? agent ?? parent
+) => SessionHelperPolicy.inheritProfile(spawn ?? agent ?? parent, parent)
 
 const taskRank = (state: State): ListAnchor["rank"] => {
   if (state === "waiting") return 0
@@ -275,7 +276,10 @@ export const preflight = Effect.fn("SessionOrchestration.preflight")(function* (
   if (!caller) return yield* new InvalidRequestError({ message: "Parent agent is unavailable" })
   const models = yield* SessionRunnerModel.Service
   const resolved = yield* models
-    .resolve({ ...parent, model: selectModel(input.model, target.model, parent.model) })
+    .resolve(
+      { ...parent, model: selectModel(input.model, target.model, parent.model) },
+      { rebind: input.model?.profile !== undefined || target.model?.profile !== undefined },
+    )
     .pipe(Effect.mapError((error) => new InvalidRequestError({ message: error.message })))
   return { target, caller, resolved }
 })
@@ -426,7 +430,11 @@ const layer = Layer.effect(
         return taskFromRow(yield* owned(parentID, childID))
       }),
       launch: Effect.fn("SessionOrchestration.launch")((input) => {
-        const ids = SessionOrchestrationIdentity.launch(input.parentID, input.parentAssistantMessageID, input.toolCallID)
+        const ids = SessionOrchestrationIdentity.launch(
+          input.parentID,
+          input.parentAssistantMessageID,
+          input.toolCallID,
+        )
         return locks.withLock(ids.childID)(
           Effect.gen(function* () {
             const parent = yield* sessions.get(input.parentID)
@@ -456,6 +464,7 @@ const layer = Layer.effect(
                 existing.model.providerID === prepared.resolved.ref.providerID &&
                 existing.model.id === prepared.resolved.ref.id &&
                 existing.model.variant === prepared.resolved.ref.variant &&
+                existing.model.profile === prepared.resolved.ref.profile &&
                 existing.prompt_digest === promptDigest &&
                 existing.background === input.background &&
                 existing.delivery === "steer"
@@ -465,19 +474,20 @@ const layer = Layer.effect(
               }
               return yield* new ConflictError({ message: `Conflicting launch retry for ${ids.childID}` })
             }
-            yield* sessions.create({
-              id: ids.childID,
-              parentID: input.parentID,
-              title: input.description,
-              agent: prepared.target.id,
-              model: prepared.resolved.ref,
-              permissionCeiling: SessionPermissionCeiling.inherit(
-                parent.permissionCeiling,
-                prepared.caller.permissions,
-              ),
-            }).pipe(Effect.catchTag("Session.AgentNotSelectableError", (error) =>
-              Effect.fail(new InvalidRequestError({ message: error.message })),
-            ))
+            yield* sessions
+              .create({
+                id: ids.childID,
+                parentID: input.parentID,
+                title: input.description,
+                agent: prepared.target.id,
+                model: prepared.resolved.ref,
+                profileBinding: prepared.resolved.profileBinding,
+                permissionCeiling: SessionPermissionCeiling.inherit(
+                  parent.permissionCeiling,
+                  prepared.caller.permissions,
+                ),
+              })
+              .pipe(Effect.mapError((error) => new InvalidRequestError({ message: error.message })))
             yield* publish(
               ids.childID,
               {
@@ -566,9 +576,11 @@ const layer = Layer.effect(
               return yield* new ConflictError({ message: `Question ${input.questionID} is not open` })
             if (input.text === undefined && input.data === undefined)
               return yield* new InvalidRequestError({ message: "An answer requires text or data" })
-            const id = SessionOrchestrationIdentity.launch(row.parent_id, row.parent_assistant_message_id, row.tool_call_id).answer(
-              input.questionID,
-            )
+            const id = SessionOrchestrationIdentity.launch(
+              row.parent_id,
+              row.parent_assistant_message_id,
+              row.tool_call_id,
+            ).answer(input.questionID)
             yield* sessions
               .synthetic({
                 id,
@@ -662,10 +674,16 @@ const layer = Layer.effect(
               data,
               time: Date.now(),
             })
-            if (yield* autonomy.canAutoAnswer(childID).pipe(Effect.mapError(() => new TaskNotFoundError({ childID })))) {
+            if (
+              yield* autonomy.canAutoAnswer(childID).pipe(Effect.mapError(() => new TaskNotFoundError({ childID })))
+            ) {
               yield* sessions
                 .synthetic({
-                  id: SessionOrchestrationIdentity.launch(row.parent_id, row.parent_assistant_message_id, row.tool_call_id).answer(question.id),
+                  id: SessionOrchestrationIdentity.launch(
+                    row.parent_id,
+                    row.parent_assistant_message_id,
+                    row.tool_call_id,
+                  ).answer(question.id),
                   sessionID: childID,
                   text: `Parent answer:\n${JSON.stringify({
                     questionID: question.id,

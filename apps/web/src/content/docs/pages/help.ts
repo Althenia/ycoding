@@ -111,7 +111,7 @@ export const helpPages: readonly DocPage[] = [
             items: [
               "**Symptom:** No device is available to select. **Cause:** The account is not signed in, the device is not enrolled, or its connector is not connected. **Fix:** Sign in, enroll the machine using the workspace's enrollment flow, then run `ycoding remote connect` on that machine.",
               "**Symptom:** The selected online device has an empty session list. **Cause:** There are no Sessions on that machine's local backend yet. **Fix:** Open a terminal in the project folder on that machine and run `ycoding` to create a Session, then refresh or reselect the device in the workspace.",
-              "**Symptom:** The machine went offline and its Sessions cannot be opened. **Cause:** The local connector is disconnected. The last session list stays visible as read-only until reconnect. **Fix:** On the machine, restore its network connection. If its remote connection is off or shows an error, turn it on again with `ycoding remote connect` or the TUI's Remote connection toggle; then reselect the device after it reports online.",
+              "**Symptom:** The machine went offline and its Sessions cannot be opened. **Cause:** The local connector is disconnected. The last session list stays visible as read-only until reconnect. **Fix:** Restore the machine's network and run `ycoding remote status`. An enabled `connecting` state recovers automatically; an `off` connection needs `ycoding remote connect`. For `error`, repair the reported problem before reconnecting; in the TUI, turn Remote connection off and then on. Reselect the device after it reports online if needed.",
             ],
           },
           {
@@ -119,6 +119,21 @@ export const helpPages: readonly DocPage[] = [
             text: "An offline machine does not mean its sessions were deleted: its last session list stays visible read-only until it reconnects. The remote workspace controls the connected machine's Sessions; execution remains on that machine.",
           },
           { kind: "related", slugs: ["usage/remote", "configuration"] },
+        ],
+      },
+      {
+        heading: "Remote connection needs attention",
+        blocks: [
+          {
+            kind: "list",
+            items: [
+              "**Symptom:** `ycoding remote status` reports `connecting` after a network outage or a failed start. **Fix:** Restore network access and leave the connection enabled to recover automatically. Startup and connector-lock retries wait 1, 2, 4, 8, 16, then at most 30 seconds; authentication and socket opening each have a 30-second deadline.",
+              "**Symptom:** Status reports `error` with missing or invalid enrollment, rejected credentials, a relay-origin mismatch, or an unsafe local endpoint. **Fix:** Repair the problem named by the status message. Enroll only when enrollment is needed; automatic recovery does not reenroll devices or retry rejected credentials. Then run `ycoding remote connect`, or turn the TUI's Remote connection toggle off and then on.",
+              "**Symptom:** You want to stop remote access while it is starting or recovering. **Fix:** Run `ycoding remote disconnect` or select the TUI toggle while it shows connecting, on, or error. A second toggle during a pending enable disables it. Disabling aborts pending authentication and cancels recovery; late replies cannot enable it again.",
+              "**Symptom:** The installed connector does not follow this recovery behavior. **Fix:** Update the connected machine with `ycoding update` on installer-supported systems, or replace development builds and Windows binaries manually. If running work prevents the background service from restarting onto the new version, run `ycoding service restart` after that work finishes.",
+            ],
+          },
+          { kind: "related", slugs: ["usage/remote"] },
         ],
       },
     ],

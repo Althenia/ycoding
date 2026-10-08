@@ -14,13 +14,20 @@ describe("run catalog shared", () => {
       () =>
         Promise.resolve({
           location: { directory: "/tmp", project: { id: "proj_1", directory: "/tmp" } },
-          data: { id: "gpt-5", providerID: "openai" },
+          data: {
+            id: "gpt-5",
+            modelID: "gpt-5",
+            providerID: "openai",
+            selection: { providerID: "openai", id: "gpt-5", variant: "high", profile: "Work" },
+          },
         }) as never,
     )
 
     await expect(waitForDefaultModel({ sdk: client, location: { directory: "/tmp" } })).resolves.toEqual({
       providerID: "openai",
       modelID: "gpt-5",
+      variant: "high",
+      profile: "Work",
     })
     expect(selected).toHaveBeenCalledWith(
       { location: { directory: "/tmp", workspace: undefined } },
@@ -82,6 +89,7 @@ describe("run catalog shared", () => {
               input: 0,
             },
             status: "active",
+            enabled: true,
             variants: {
               high: {},
             },
@@ -89,5 +97,32 @@ describe("run catalog shared", () => {
         },
       },
     ])
+  })
+
+  test("keeps profile variant IDs separate from model-wide variants", () => {
+    const providers = runProviders(
+      [catalogProvider("openai", "OpenAI")],
+      [
+        catalogModel({
+          id: "gpt-5",
+          providerID: "openai",
+          variants: ["default-only"],
+          profiles: [
+            { name: "Work", active: true, variants: ["high"] },
+            { name: "Personal", active: false, variants: ["low"] },
+          ],
+          enabled: false,
+        }),
+      ],
+    )
+
+    expect(providers[0]?.models["gpt-5"]).toMatchObject({
+      enabled: false,
+      variants: { "default-only": {} },
+      profiles: {
+        Work: { variants: { high: {} } },
+        Personal: { variants: { low: {} } },
+      },
+    })
   })
 })

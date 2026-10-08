@@ -63,7 +63,7 @@ export class Info extends Schema.Class<Info>("Config.Info")({
     description: "Default primary agent to use when no session agent is selected",
   }),
   decisions: ConfigDecisions.Info.pipe(Schema.optional).annotate({
-    description: "Typed decision providers and opt-in guardrail, routing, and goal policies",
+    description: "Typed decision providers and opt-in guardrail, routing, goal, and question-suggestion policies",
   }),
   autoupdate: Schema.Union([Schema.Boolean, Schema.Literal("notify")])
     .pipe(Schema.optional)

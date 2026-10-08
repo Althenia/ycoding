@@ -8,6 +8,8 @@ YCoding owns its runtime, terminal experience, package names, configuration, sto
 
 The product goal is a dependable, highly customizable coding-agent runtime with durable execution state, explicit orchestration, and provider-efficient model usage.
 
+Sessions and subagents can select named profiles independently for the same provider and model. Explicit selections remain bound to their accounts, with isolated authentication, provider state, and cache affinity; account replacement requires explicit reselection rather than automatic rotation.
+
 ## Priorities
 
 ### Concepts at a glance
@@ -84,7 +86,7 @@ Priorities include stable prompt prefixes, provider-specific cache controls, acc
 
 OpenCode Zen and OpenCode Go remain named as such only because they are external provider identities.
 
-OpenAI Decisions, TypeSafe Jev, and a hidden decision agent provide structured judgments through the `decision` tool and explicitly configured guardrail, initial routing, and goal-continuation policies. Native APIs require their own API-key access; the hidden agent uses a configured helper or Session model through its normal authentication route, including supported subscription routes. Agent confidence is a self-reported, uncalibrated estimate, not a native probability. Decisions do not grant permission, certify completion, or change the user's goal objective; explicit autonomy and human-only hard reviews remain enforced. See [configuration](./configuration.md#native-decisions).
+OpenAI Decisions, TypeSafe Jev, and a hidden decision agent provide structured judgments through the `decision` tool and explicitly configured guardrail, initial routing, goal-continuation, and question-option suggestion policies. Native APIs require their own API-key access; the hidden agent uses a configured helper or Session model through its normal authentication route, including supported subscription routes. Agent confidence is a self-reported, uncalibrated estimate, not a native probability. Suggestions retain human choice in normal mode and follow existing question auto-answer rules under explicit autonomy. Decisions do not grant permission, certify completion, or change the user's goal objective; explicit autonomy and human-only hard reviews remain enforced. See [configuration](./configuration.md#native-decisions).
 
 ### 8. Documentation and distribution
 
@@ -121,6 +123,8 @@ The cached offline page provides Home, Documentation, and Changelog navigation a
 Remote questions use the runtime's native Forms. The workspace renders string, multiselect, number, integer, boolean, and external-step fields, preserves defaults and conditional visibility, and submits typed answers or explicit cancellation. External steps expose HTTP(S) links and require acknowledgement. Only pending Forms owned by the selected Session can be answered; the local runtime validates every answer.
 
 The machine picker lists online, active enrollments and states how many offline or revoked machines Settings manages. Wide desktop layouts expand the selector and its popover; machine names stay on one line and truncate with an ellipsis when necessary. Option text uses the same compact size as the selection control. On phones, selection is staged in a keyboard-contained sheet until **Confirm Selection**; dismissing the sheet keeps the current machine. Wider layouts select directly from the popover. When the selected machine goes offline, the workspace preserves its name, reconnect action, and last session list; that list stays read-only until the machine reconnects, rather than switching to another machine. Settings retains offline and revoked enrollments and exposes notification preferences for Work finished, Needs your attention, and Machine offline with independent In app and System channels, plus an opt-in Web Push subscription for this device that sends the categories whose System switch is on to a closed browser or installed app, and a test alert that reports whether the push service accepted it.
+
+Both supported clients expose context-sensitive command palettes. The web offers One Dark, One Dark Pro, and High contrast as browser-local color schemes separate from its Light, Dark, and System mode; the terminal offers the corresponding named themes. Phone agent/model sheets follow the visual viewport so their controls stay above the on-screen keyboard. Composer suggestions remain anchored above the input and scroll within the visible space.
 
 ## Compatibility policy
 

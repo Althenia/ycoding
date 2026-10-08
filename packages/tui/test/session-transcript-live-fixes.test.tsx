@@ -722,6 +722,7 @@ function routeFor(
             providerID: "anthropic",
             name: "Claude Opus 5",
             capabilities: { tools: true, input: ["text"], output: ["text"] },
+            variants: [],
             time: { released: 0 },
             cost: [],
             status: "active",

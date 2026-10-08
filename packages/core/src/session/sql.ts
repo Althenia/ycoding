@@ -31,6 +31,7 @@ import type { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import type { TokenUsage } from "@ycoding-ai/schema/token-usage"
 import type { RelativePath } from "../schema"
 import type { SessionCompaction } from "@ycoding-ai/schema/session-compaction"
+import type { SessionEvent } from "@ycoding-ai/schema/session-event"
 
 type SessionMessageData = Omit<(typeof SessionMessage.Info)["Encoded"], "type" | "id">
 
@@ -70,11 +71,8 @@ export const SessionTable = sqliteTable(
     autonomy_revision: integer().notNull().default(0),
     orchestration_revision: integer().notNull().default(0),
     agent: text(),
-    model: text({ mode: "json" }).$type<{
-      id: string
-      providerID: string
-      variant?: string
-    }>(),
+    model: text({ mode: "json" }).$type<Model.Ref>(),
+    profile_binding: text({ mode: "json" }).$type<SessionEvent.ProfileBinding>(),
     daybreak: text().$type<Model.Daybreak>(),
     ...Timestamps,
     time_archived: integer(),
@@ -101,6 +99,8 @@ export const SessionProviderRequestTable = sqliteTable(
       .notNull()
       .references(() => SessionTable.id, { onDelete: "cascade" }),
     input_id: text().$type<SessionMessage.ID>(),
+    assistant_message_id: text().$type<SessionMessage.ID>(),
+    connection_identity_digest: text(),
     source: text().$type<ProviderRequest.Source>().notNull(),
     agent: text().$type<ProviderRequest.Record["agent"]>().notNull(),
     model: text({ mode: "json" }).$type<Model.Ref>().notNull(),

@@ -10,6 +10,7 @@ import type {
   IntegrationInfo,
   LocationRef,
   LocationGetOutput,
+  ModelRef,
   McpResource,
   McpServer,
   ModelInfo,
@@ -151,6 +152,7 @@ type LocationData = {
     resource?: McpResource[]
   }
   model?: ModelInfo[]
+  modelDefault?: ModelRef
   provider?: ProviderInfo[]
   reference?: ReferenceInfo[]
   // Currently running shell commands for this location, keyed by shell id. Entries are removed
@@ -2118,16 +2120,22 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           list(location?: LocationRef) {
             return store.location[locationKey(location ?? defaultLocation())]?.model
           },
+          default(location?: LocationRef) {
+            return store.location[locationKey(location ?? defaultLocation())]?.modelDefault
+          },
           sync(ref?: LocationRef) {
             const id = locationKey(ref ?? defaultLocation())
             return sync.run(`location.model:${id}`, async () => {
-              const response = await client.api.model.list({
-                location: locationQuery(ref ?? defaultLocation()),
-              })
+              const requestedLocation = locationQuery(ref ?? defaultLocation())
+              const [response, configured] = await Promise.all([
+                client.api.model.list({ location: requestedLocation }),
+                client.api.model.default({ location: requestedLocation }),
+              ])
               const key = locationKey(response.location)
               setStore("location", key, {
                 ...store.location[key],
                 model: response.data,
+                modelDefault: configured.data?.selection,
               })
             })
           },

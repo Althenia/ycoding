@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import type { ModelDaybreak, ModelRef, SessionCreateInput, SessionMessageModelSelected, YCodingEvent } from "@ycoding-ai/client"
+import type { ModelDaybreak, ModelProfile, ModelRef, SessionCreateInput, SessionMessageModelSelected, YCodingEvent } from "@ycoding-ai/client"
 import { json, type FetchHandler } from "../fixture/tui-client"
 import { renderScreen } from "./harness"
 
@@ -22,6 +22,7 @@ const baseSession = {
 }
 
 let advertised: ModelDaybreak[] = []
+let profiles: ModelProfile[] = []
 let sessionModel: ModelRef = baseSession.model
 let sessionDaybreak: ModelDaybreak | undefined
 let daybreakSets: Array<{ daybreak: ModelDaybreak | null }> = []
@@ -34,14 +35,15 @@ let mutations: string[] = []
 let createdIDs: string[] = []
 let persistedDaybreakEvent: ((daybreak?: ModelDaybreak) => void) | undefined
 
-function resetFixture(input: { advertised: ModelDaybreak[]; daybreak?: ModelDaybreak; landing?: boolean }) {
+function resetFixture(input: { advertised: ModelDaybreak[]; daybreak?: ModelDaybreak; landing?: boolean; profile?: string; profiles?: ModelProfile[] }) {
   sessionID = baseSession.id
   sessionExists = !input.landing
   failDaybreak = false
   mutations = []
   createdIDs = []
   advertised = input.advertised
-  sessionModel = baseSession.model
+  profiles = input.profiles ?? []
+  sessionModel = { ...baseSession.model, ...(input.profile === undefined ? {} : { profile: input.profile }) }
   sessionDaybreak = input.daybreak
   daybreakSets = []
   promptRequests = []
@@ -155,7 +157,7 @@ const route: FetchHandler = async (url, request) => {
     return json({
       location,
       data: [
-        { ...baseSession.model, name: "GPT 5.6 Terra", daybreak: advertised },
+        { ...baseSession.model, name: "GPT 5.6 Terra", daybreak: advertised, profiles },
         ...unsupportedModels,
       ].map((model) => ({
         id: model.id,
@@ -169,6 +171,7 @@ const route: FetchHandler = async (url, request) => {
         status: "active",
         enabled: true,
         ...("daybreak" in model && model.daybreak.length > 0 ? { daybreak: model.daybreak } : {}),
+        ...("profiles" in model ? { profiles: model.profiles } : {}),
         limit: { context: 200_000, output: 32_000 },
       })),
     })
@@ -258,8 +261,14 @@ async function expectPaletteTitle(screen: Screen, title: string) {
   )
 }
 
-async function boot(advertisedPrograms: ModelDaybreak[], daybreak?: ModelDaybreak, landing = false) {
-  resetFixture({ advertised: advertisedPrograms, daybreak, landing })
+async function boot(
+  advertisedPrograms: ModelDaybreak[],
+  daybreak?: ModelDaybreak,
+  landing = false,
+  profile?: string,
+  profileAdvertisements?: ModelProfile[],
+) {
+  resetFixture({ advertised: advertisedPrograms, daybreak, landing, profile, profiles: profileAdvertisements })
   const screen = await renderScreen({ width: 120, height: 69, args: landing ? {} : { sessionID }, route, settle: "Message YCoding…" })
   persistedDaybreakEvent = (daybreak) => emitDaybreak(screen, daybreak)
   await waitUntil(screen, () => screen.lines()[1].includes("openai/GPT 5.6 Terra"), "the resolved model").catch(async (error) => {
@@ -476,6 +485,33 @@ test("keeps Daybreak inactive on unsupported models and providers, and restores 
     expect(promptRequests).toEqual([])
   } finally {
     await screen.dispose()
+  }
+}, 30_000)
+
+test("uses only the selected model profile's Daybreak programs", async () => {
+  const profileAdvertisements: ModelProfile[] = [
+    { name: "Work", active: true, daybreak: ["daybreak_blue"] },
+    { name: "Personal", active: false },
+  ]
+  const work = await boot(["daybreak_blue"], "daybreak_blue", false, "Work", profileAdvertisements)
+  try {
+    await work.waitForEventStream()
+    await waitUntil(work, () => work.lines()[1].includes("Daybreak Blue") && !work.lines()[1].includes("(inactive)"), "the active Work profile indicator")
+    expect(daybreakSets).toEqual([])
+    expect(mutations).toEqual([])
+  } finally {
+    await work.dispose()
+  }
+
+  const personal = await boot(["daybreak_blue"], "daybreak_blue", false, "Personal", profileAdvertisements)
+  try {
+    await personal.waitForEventStream()
+    await waitUntil(personal, () => personal.lines()[1].includes("Daybreak Blue (inactive)"), "the inactive Personal profile indicator")
+    expect(daybreakSets).toEqual([])
+    expect(mutations).toEqual([])
+    expect(promptRequests).toEqual([])
+  } finally {
+    await personal.dispose()
   }
 }, 30_000)
 

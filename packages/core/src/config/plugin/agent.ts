@@ -80,6 +80,7 @@ export const Plugin = define({
                 id: item.model.model,
                 providerID: item.model.providerID,
                 ...(item.model.variant === undefined ? {} : { variant: item.model.variant }),
+                ...(item.model.profile === undefined ? {} : { profile: item.model.profile }),
               }
             if (item.request !== undefined) {
               Object.assign(agent.request.headers, item.request.headers ?? {})

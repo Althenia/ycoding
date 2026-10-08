@@ -24,7 +24,7 @@ export const ModelGroup = HttpApiGroup.make("server.model")
   .add(
     HttpApiEndpoint.get("model.default", "/api/model/default", {
       query: LocationQuery,
-      success: Location.response(Schema.UndefinedOr(Model.Info)),
+      success: Location.response(Schema.UndefinedOr(Model.Default)),
       error: ServiceUnavailableError,
     })
       .annotateMerge(locationQueryOpenApi)

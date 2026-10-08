@@ -33,7 +33,6 @@ import {
 import {
   LocalFailure,
   findSession,
-  listSessions,
   type LocalAutonomy,
   type LocalLocation,
   type LocalPrompt,
@@ -68,6 +67,28 @@ const maxPendingInputs = 200
 // One shell-output request returns one page at most: the local default page, so a
 // remote reader pages explicitly instead of asking the device for unbounded output.
 const maxShellOutputPage = 65_536
+
+const maxCapturedCacheEntries = 32
+const maxCapturedChildReads = 4
+const directoryPermissionTtlMs = 30_000
+
+type CapturedGroup = ReturnType<typeof summarizeCapturedChanges>[number]["files"][number] & { readonly placementMessageID: string }
+type CapturedEntry = {
+  readonly parentKey: string
+  readonly members: ReadonlyMap<string, string | null>
+  readonly groups: readonly CapturedGroup[]
+  readonly digest: string
+}
+
+export type OperationCache = {
+  readonly now: () => number
+  readonly capturedChanges: Map<string, CapturedEntry>
+  readonly directories: Map<string, { readonly allowed: boolean; readonly expiresAt: number }>
+}
+
+export function createOperationCache(now: () => number = Date.now): OperationCache {
+  return { now, capturedChanges: new Map(), directories: new Map() }
+}
 
 const catalogLimit = { agents: 100, commands: 200, skills: 200, references: 200, resources: 200 }
 type ModelSelection = NonNullable<Parameters<LocalServer["createSession"]>[3]>
@@ -261,32 +282,42 @@ export function createSessionRegistry(input: {
 
   const refresh = () => {
     const run = refreshQueue.then(async () => {
+      const beforeRead = new Map(verified)
       const sessions = await readAll()
       const before = new Map(verified)
+      const refreshed = new Map(sessions.map((session) => [session.id, session]))
+      for (const sessionID of new Set([...beforeRead.keys(), ...verified.keys()])) {
+        if (beforeRead.get(sessionID) === verified.get(sessionID)) continue
+        const current = verified.get(sessionID)
+        if (current === undefined) refreshed.delete(sessionID)
+        else refreshed.set(sessionID, current)
+      }
       verified.clear()
-      for (const session of sessions) verified.set(session.id, session)
-      if (before.size !== sessions.length || sessions.some((session) => sessionInventoryChanged(before.get(session.id), session))) input.onChange?.()
-      return sessions
+      for (const [sessionID, session] of refreshed) verified.set(sessionID, session)
+      if (before.size !== verified.size || [...verified.values()].some((session) => sessionInventoryChanged(before.get(session.id), session))) input.onChange?.()
+      return [...verified.values()]
     })
     refreshQueue = run.catch(() => [...verified.values()])
     return run
   }
 
   const verify = async (sessionID: string) => {
-    const info = await findSession(input.local, sessionID)
-    if (info === undefined) {
-      if (verified.delete(sessionID)) input.onChange?.()
-      return undefined
-    }
+    const known = verified.get(sessionID)
+    const info = known ?? await findSession(input.local, sessionID)
+    if (info === undefined) return undefined
     try {
       const current = await input.local.getSession(sessionID, locationInfo(info))
+      if (verified.get(sessionID) !== known) {
+        const latest = verified.get(sessionID)
+        return latest === undefined || JSON.stringify(locationInfo(latest)) !== JSON.stringify(locationInfo(current)) ? undefined : latest
+      }
       const changed = sessionInventoryChanged(verified.get(sessionID), current)
       verified.set(sessionID, current)
       if (changed) input.onChange?.()
       return current
     } catch (cause) {
       if (!(cause instanceof LocalFailure && cause.kind === "not_found")) throw cause
-      if (verified.delete(sessionID)) input.onChange?.()
+      if (verified.get(sessionID) === known && verified.delete(sessionID)) input.onChange?.()
       return undefined
     }
   }
@@ -333,8 +364,10 @@ function workspaceKey(projectID: string, directory: string, locationWorkspaceID?
   return `wsp_${createHash("sha256").update("ycoding.remote.workspace.v1\0").update(JSON.stringify([projectID, directory, locationWorkspaceID ?? null])).digest("hex")}`
 }
 
-async function workspaceInventory(local: LocalServer): Promise<WorkspaceCandidate[]> {
-  const [sessions, projects] = await Promise.all([listSessions(local), local.projectList()])
+async function workspaceInventory(input: OperationInput): Promise<WorkspaceCandidate[]> {
+  const local = input.local
+  const sessions = input.sessions.snapshot()
+  const projects = await local.projectList()
   const projectsByID = new Map(projects.map((project) => [project.id, project]))
   const candidates = new Map<string, WorkspaceCandidate>()
   const add = (projectID: string, recorded: string, workspaceID?: string) => {
@@ -380,14 +413,15 @@ async function workspaceInventory(local: LocalServer): Promise<WorkspaceCandidat
   )
 }
 
-async function workspaceList(local: LocalServer): Promise<readonly RemoteWorkspaceInfo[]> {
-  return (await workspaceInventory(local)).map((candidate) => candidate.info)
+async function workspaceList(input: OperationInput): Promise<readonly RemoteWorkspaceInfo[]> {
+  return (await workspaceInventory(input)).map((candidate) => candidate.info)
 }
 
-async function sessionWorkspaces(local: LocalServer, sessions: readonly SessionInfo[]): Promise<readonly RemoteWorkspaceInfo[]> {
+async function sessionWorkspaces(local: LocalServer, sessions: readonly SessionInfo[], cache?: OperationCache): Promise<readonly RemoteWorkspaceInfo[]> {
   const projects = new Map((await local.projectList()).map((project) => [project.id, project]))
   const directories = [...new Set(sessions.map((session) => resolve(session.location.directory)))]
-  const permitted = new Set((await Promise.all(directories.map(async (directory) => await allowedWorkspaceDirectory(directory) ? directory : undefined)))
+  if (cache !== undefined) for (const [directory, entry] of cache.directories) if (entry.expiresAt <= cache.now()) cache.directories.delete(directory)
+  const permitted = new Set((await Promise.all(directories.map(async (directory) => await cachedWorkspaceDirectory(directory, cache) ? directory : undefined)))
     .filter((directory): directory is string => directory !== undefined))
   return [...new Map(sessions.filter((session) => permitted.has(resolve(session.location.directory))).map((session) => {
     const projectID = session.projectID
@@ -398,6 +432,15 @@ async function sessionWorkspaces(local: LocalServer, sessions: readonly SessionI
       ...(session.location.workspaceID === undefined ? {} : { workspaceID: session.location.workspaceID }),
       name } as RemoteWorkspaceInfo] as const
   })).values()].toSorted((left, right) => left.projectID.localeCompare(right.projectID) || left.directory.localeCompare(right.directory) || left.id.localeCompare(right.id))
+}
+
+async function cachedWorkspaceDirectory(directory: string, cache?: OperationCache): Promise<boolean> {
+  if (cache === undefined) return allowedWorkspaceDirectory(directory)
+  const known = cache.directories.get(directory)
+  if (known !== undefined && known.expiresAt > cache.now()) return known.allowed
+  const allowed = await allowedWorkspaceDirectory(directory)
+  cache.directories.set(directory, { allowed, expiresAt: cache.now() + directoryPermissionTtlMs })
+  return allowed
 }
 
 async function allowedWorkspaceDirectory(directory: string): Promise<boolean> {
@@ -423,15 +466,18 @@ async function catalog(local: LocalServer, location: LocalLocation) {
     [skills, catalogLimit.skills], [references, catalogLimit.references], [resources.resources, catalogLimit.resources],
   ] as const) if (items.length > limit) throw new OperationError("message_too_large", "Catalog exceeds its bounded list size")
   const connected = new Map(providers.filter((provider) => provider.disabled !== true).map((provider) => [provider.id, provider.name]))
-  const offeredModels = models.filter((item) => connected.has(item.providerID) && item.enabled)
+  const offeredModels = models.filter((item) => connected.has(item.providerID) && (item.enabled || (item.profiles?.length ?? 0) > 0))
   return {
     agents: agents.map((agent) => ({ id: agent.id, name: agent.name, ...(agent.description === undefined ? {} : { description: agent.description }),
       mode: agent.mode, hidden: agent.hidden, ...(agent.model === undefined ? {} : { model: agent.model }) })),
     models: offeredModels.map((item) => ({
       providerID: item.providerID, providerName: connected.get(item.providerID), id: item.id, name: item.name,
       variants: item.variants.map((variant) => variant.id),
+      ...(item.enabled ? {} : { enabled: false }),
+      ...(item.profiles === undefined ? {} : { profiles: item.profiles.map((profile) => ({ name: profile.name, active: profile.active,
+        ...(profile.variants === undefined ? {} : { variants: profile.variants }) })) }),
     })),
-    ...(model === null ? {} : { defaultModel: { providerID: model.providerID, id: model.id } }),
+    ...(model === null ? {} : { defaultModel: model.selection }),
     commands: commands.map((command) => ({ name: command.name, ...(command.description === undefined ? {} : { description: command.description }) })),
     skills: skills.map((skill) => ({ id: skill.id, name: skill.name,
       ...(skill.description === undefined ? {} : { description: skill.description }), slash: skill.slash === true })),
@@ -505,16 +551,18 @@ async function requireAgentMentions(local: LocalServer, location: LocalLocation,
 
 function modelSelection(value: unknown): ModelSelection {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new OperationError("invalid_message", "Invalid model")
-  if (Object.keys(value).some((key) => !["providerID", "id", "variant"].includes(key))) throw new OperationError("invalid_message", "Invalid model")
+  if (Object.keys(value).some((key) => !["providerID", "id", "variant", "profile"].includes(key))) throw new OperationError("invalid_message", "Invalid model")
   const providerID = Reflect.get(value, "providerID")
   const id = Reflect.get(value, "id")
   const variant = Reflect.get(value, "variant")
+  const profile = Reflect.get(value, "profile")
   return { providerID: requireString(providerID, "providerID", 128), id: requireString(id, "model.id", 128),
-    ...(variant === undefined ? {} : { variant: requireString(variant, "variant", 128) }) }
+    ...(variant === undefined ? {} : { variant: requireString(variant, "variant", 128) }),
+    ...(profile === undefined ? {} : { profile: requireString(profile, "profile", 128) }) }
 }
 
-async function createRootSession(input: OperationInput, id: string, workspaceID: string, agent?: string, model?: { readonly providerID: string; readonly id: string; readonly variant?: string }): Promise<SessionInfo> {
-  const candidate = (await workspaceInventory(input.local)).find((item) => item.info.id === workspaceID)
+async function createRootSession(input: OperationInput, id: string, workspaceID: string, agent?: string, model?: ModelSelection): Promise<SessionInfo> {
+  const candidate = (await workspaceInventory(input)).find((item) => item.info.id === workspaceID)
   if (candidate === undefined) throw new OperationError("invalid_message", "Workspace is unavailable; refresh the workspace list and reopen it")
   if (!(await stat(candidate.location.directory).then((value) => value.isDirectory(), () => false)))
     throw new OperationError("invalid_message", "Workspace is unavailable; refresh the workspace list and reopen it")
@@ -522,7 +570,7 @@ async function createRootSession(input: OperationInput, id: string, workspaceID:
   if (currentProject.id !== candidate.info.projectID)
     throw new OperationError("invalid_message", "Workspace project changed; refresh the workspace list and reopen it")
 
-  const existing = await findSession(input.local, id)
+  const existing = input.sessions.snapshot().find((session) => session.id === id) ?? await findSession(input.local, id)
   if (existing !== undefined) {
     assertRootPlacement(existing, id, candidate)
     const current = await input.local.getSession(id, locationInfo(existing))
@@ -567,6 +615,7 @@ export type OperationInput = {
   readonly sessions: SessionRegistry
   readonly subscriptions: SubscriptionRegistry
   readonly local: LocalServer
+  readonly cache?: OperationCache
 }
 
 export async function executeRemoteOperation(input: OperationInput): Promise<readonly RemoteResponse[]> {
@@ -587,10 +636,10 @@ async function run(input: OperationInput) {
   // causes local side effects.
   const validated = validate(request)
   if (validated.kind === "workspace.list") return { data: validated.sessionsOnly
-    ? await sessionWorkspaces(input.local, input.sessions.snapshot())
-    : await workspaceList(input.local) }
+    ? await sessionWorkspaces(input.local, input.sessions.snapshot(), input.cache)
+    : await workspaceList(input) }
   if (validated.kind === "workspace.catalog" || validated.kind === "workspace.file.find") {
-    const candidate = (await workspaceInventory(input.local)).find((item) => item.info.id === validated.workspace)
+    const candidate = (await workspaceInventory(input)).find((item) => item.info.id === validated.workspace)
     if (candidate === undefined) throw new OperationError("invalid_message", "Workspace is unavailable")
     const current = await input.local.projectCurrent(candidate.location)
     if (current.id !== candidate.info.projectID) throw new OperationError("invalid_message", "Workspace project changed")
@@ -1174,22 +1223,11 @@ async function requireFamilyMember(input: OperationInput, root: SessionInfo, mem
 }
 
 async function capturedChangesPage(input: OperationInput, owner: SessionInfo, sessionID: string, location: LocalLocation, requestID: string, cursor?: string): Promise<RemoteCapturedChangesPage> {
-  const parent = await input.local.messages(sessionID, location)
-  const children = new Map<string, typeof parent>()
-  if (owner.parentID === undefined) {
-    for (const childID of capturedChildSessionIDs(parent)) {
-      const child = await input.sessions.verify(childID)
-      if (child?.parentID !== owner.id || child.agent === "btw") continue
-      children.set(childID, await input.local.messages(child.id, locationInfo(child)))
-    }
-  }
-  const groups = summarizeCapturedChanges(parent, children, (assistantMessageID, callID) => SessionOrchestrationIdentity.send(sessionID, assistantMessageID, callID))
-    .flatMap((unit) => unit.files.map((file) => ({ placementMessageID: unit.placementMessageID, ...file })))
+  const { groups, digest } = await capturedGroups(input, owner, sessionID, location)
   if (groups.length === 0) {
     if (cursor !== undefined) throw new OperationError("invalid_message", "Captured change cursor is stale")
     return { data: [] }
   }
-  const digest = createHash("sha256").update(sessionID).update(JSON.stringify(groups)).digest("hex")
   let offset = 0
   if (cursor !== undefined) {
     try {
@@ -1218,6 +1256,62 @@ async function capturedChangesPage(input: OperationInput, owner: SessionInfo, se
   }
   if (successFrames(requestID, page)[0]?.ok === false) throw new OperationError("message_too_large", "Captured change page exceeds the response bound")
   return page
+}
+
+async function capturedGroups(input: OperationInput, owner: SessionInfo, sessionID: string, location: LocalLocation) {
+  const cache = input.cache?.capturedChanges
+  const parentKey = cache === undefined ? undefined : await eventPosition(input.local, sessionID, location)
+  const cached = parentKey === undefined ? undefined : cache?.get(sessionID)
+  const checked = new Map<string, Awaited<ReturnType<typeof capturedMember>>>()
+  if (cache !== undefined && cached !== undefined && cached.parentKey === parentKey) {
+    const members = await limited([...cached.members.keys()], (childID) => capturedMember(input, owner, childID, true))
+    for (const member of members) checked.set(member.childID, member)
+    if (members.every((member) => member.key === cached.members.get(member.childID))) {
+      cache.delete(sessionID)
+      cache.set(sessionID, cached)
+      return cached
+    }
+  }
+
+  const parent = await input.local.messages(sessionID, location)
+  const members = await limited(owner.parentID === undefined ? capturedChildSessionIDs(parent) : [], async (childID) => {
+    const member = checked.get(childID) ?? await capturedMember(input, owner, childID, cache !== undefined)
+    return { ...member, messages: member.child === undefined ? undefined : await input.local.messages(member.child.id, locationInfo(member.child)) }
+  })
+  const children = new Map(members.flatMap((member) => member.messages === undefined ? [] : [[member.childID, member.messages] as const]))
+  const groups = summarizeCapturedChanges(parent, children, (assistantMessageID, callID) => SessionOrchestrationIdentity.send(sessionID, assistantMessageID, callID))
+    .flatMap((unit) => unit.files.map((file) => ({ placementMessageID: unit.placementMessageID, ...file })))
+  const digest = createHash("sha256").update(sessionID).update(JSON.stringify(groups)).digest("hex")
+  const stable = cache !== undefined && parentKey !== undefined &&
+    await eventPosition(input.local, sessionID, location) === parentKey &&
+    (await limited(members, async (member) => member.child === undefined || member.key !== undefined &&
+      await eventPosition(input.local, member.child.id, locationInfo(member.child)) === member.key)).every(Boolean)
+  if (cache !== undefined && parentKey !== undefined && stable) {
+    cache.delete(sessionID)
+    cache.set(sessionID, { parentKey, members: new Map(members.map((member) => [member.childID, member.key ?? null] as const)), groups, digest })
+    if (cache.size > maxCapturedCacheEntries) cache.delete(cache.keys().next().value!)
+  }
+  return { groups, digest }
+}
+
+async function capturedMember(input: OperationInput, owner: SessionInfo, childID: string, keyed: boolean) {
+  const child = await input.sessions.verify(childID)
+  if (child?.parentID !== owner.id || child.agent === "btw") return { childID, key: null }
+  return { childID, child, key: keyed ? await eventPosition(input.local, child.id, locationInfo(child)) : undefined }
+}
+
+async function eventPosition(local: LocalServer, sessionID: string, location: LocalLocation) {
+  const snapshot = await local.snapshot(sessionID, location, { limit: 1 })
+  const epoch = field(snapshot, "sourceEpoch")
+  const seq = field(field(snapshot, "watermark"), "seq")
+  return typeof epoch === "string" && typeof seq === "number" ? `${epoch}:${seq}` : undefined
+}
+
+async function limited<Item, Result>(items: readonly Item[], read: (item: Item) => Promise<Result>) {
+  const results: Result[] = []
+  for (let offset = 0; offset < items.length; offset += maxCapturedChildReads)
+    results.push(...await Promise.all(items.slice(offset, offset + maxCapturedChildReads).map(read)))
+  return results
 }
 
 async function familyLocations(input: OperationInput, root: SessionInfo): Promise<readonly LocalLocation[]> {
@@ -1434,7 +1528,7 @@ export function listPage(sessions: readonly SessionInfo[], query: ListQuery, run
   const matching = sessions
     .filter((session) => query.workspace === undefined || workspaceKey(session.projectID, resolve(session.location.directory), session.location.workspaceID) === query.workspace)
     .filter((session) => needle === undefined || (query.searchFields === "summary"
-      ? [session.title, session.agent ?? "", ...(session.model === undefined ? [] : [`${session.model.providerID}/${session.model.id}${session.model.variant === undefined ? "" : `#${session.model.variant}`}`])]
+      ? [session.title, session.agent ?? "", ...(session.model === undefined ? [] : [`${session.model.providerID}/${session.model.id}${session.model.variant === undefined ? "" : `#${session.model.variant}`}${session.model.profile === undefined ? "" : ` profile ${session.model.profile}`}`])]
         .some((value) => value.toLowerCase().includes(needle))
       : session.title.toLowerCase().includes(needle)))
     .filter((session) => query.status === undefined || (query.status === "running" ? isRunning(session) : !isRunning(session) && session.time.archived === undefined))

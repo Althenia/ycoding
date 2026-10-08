@@ -47,6 +47,17 @@ test("decodes content-free provider request records", () => {
   expect(() => decode({ ...record, timing: { generatedTokens: -1 } })).toThrow()
 })
 
+test("preserves optional private assistant account provenance without inventing historical attribution", () => {
+  const connectionIdentityDigest = "a".repeat(64)
+  expect(decode({ ...record, assistantMessageID: "msg_assistant", connectionIdentityDigest })).toMatchObject({
+    assistantMessageID: "msg_assistant",
+    connectionIdentityDigest,
+  })
+  expect(decode(record)).not.toHaveProperty("assistantMessageID")
+  expect(decode(record)).not.toHaveProperty("connectionIdentityDigest")
+  expect(() => decode({ ...record, connectionIdentityDigest: "account-private" })).toThrow()
+})
+
 test("rejects unknown sources and non-positive counters", () => {
   expect(() => decode({ ...record, source: "background" })).toThrow()
   expect(() => decode({ ...record, request: 0 })).toThrow()

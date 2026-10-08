@@ -1,7 +1,7 @@
 export * as Credential from "./credential"
 
 import { and, asc, desc, eq, sql } from "drizzle-orm"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Deferred, Effect, Layer, Schema, Scope } from "effect"
 import { Credential } from "@ycoding-ai/schema/credential"
 import { Integration } from "@ycoding-ai/schema/integration"
 import { Database } from "./database/database"
@@ -25,7 +25,8 @@ export class Info extends Schema.Class<Info>("Credential.Info")({
   integrationID: Integration.ID,
   label: Schema.String,
   value: Value,
-  generation: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
+  generation: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(Schema.withConstructorDefault(Effect.succeed(0))),
+  accountGeneration: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
     Schema.withConstructorDefault(Effect.succeed(0)),
   ),
   active: Schema.Boolean.pipe(Schema.withConstructorDefault(Effect.succeed(false))),
@@ -38,6 +39,7 @@ export interface Interface {
   readonly list: (integrationID: Integration.ID) => Effect.Effect<Info[]>
   /** Returns one stored credential by ID. */
   readonly get: (id: ID) => Effect.Effect<Info | undefined>
+  readonly refresh: (expected: Info, refresh: Effect.Effect<OAuth, unknown>) => Effect.Effect<Info | undefined, unknown>
   /**
    * Stores a credential as a named profile. Re-using an existing profile name for the same
    * integration updates that profile in place; the stored profile becomes the active one.
@@ -61,6 +63,8 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const { db } = yield* Database.Service
+    const scope = yield* Scope.Scope
+    const refreshing = new Map<string, Deferred.Deferred<Info | undefined, unknown>>()
     const decode = Schema.decodeUnknownSync(Value)
     const stored = (row: typeof CredentialTable.$inferSelect) => {
       if (!row.integration_id) return
@@ -70,6 +74,7 @@ const layer = Layer.effect(
         label: row.label,
         value: decode(row.value),
         generation: row.generation,
+        accountGeneration: row.account_generation,
         active: row.active === true,
       })
     }
@@ -101,6 +106,48 @@ const layer = Layer.effect(
       get: Effect.fn("Credential.get")(function* (id) {
         const row = yield* db.select().from(CredentialTable).where(eq(CredentialTable.id, id)).get().pipe(Effect.orDie)
         return row ? stored(row) : undefined
+      }),
+      refresh: Effect.fn("Credential.refresh")(function* (expected, refresh) {
+        const key = JSON.stringify([expected.id, expected.generation, expected.accountGeneration])
+        const pending = refreshing.get(key)
+        if (pending) return yield* Deferred.await(pending)
+        const deferred = Deferred.makeUnsafe<Info | undefined, unknown>()
+        refreshing.set(key, deferred)
+        yield* Effect.gen(function* () {
+          const before = yield* db
+            .select()
+            .from(CredentialTable)
+            .where(eq(CredentialTable.id, expected.id))
+            .get()
+            .pipe(Effect.orDie)
+          if (
+            !before ||
+            before.account_generation !== expected.accountGeneration ||
+            before.generation !== expected.generation
+          )
+            return undefined
+          const value = yield* refresh
+          const rows = yield* db
+            .update(CredentialTable)
+            .set({ value, generation: sql`${CredentialTable.generation} + 1` })
+            .where(
+              and(
+                eq(CredentialTable.id, expected.id),
+                eq(CredentialTable.generation, expected.generation),
+                eq(CredentialTable.account_generation, expected.accountGeneration),
+              ),
+            )
+            .returning()
+            .all()
+            .pipe(Effect.orDie)
+          return rows[0] ? stored(rows[0]) : undefined
+        }).pipe(
+          Effect.exit,
+          Effect.flatMap((exit) => Deferred.done(deferred, exit)),
+          Effect.ensuring(Effect.sync(() => refreshing.delete(key))),
+          Effect.forkIn(scope, { startImmediately: true }),
+        )
+        return yield* Deferred.await(deferred)
       }),
       create: Effect.fn("Credential.create")(function* (input) {
         const label = input.label ?? "default"
@@ -135,6 +182,7 @@ const layer = Layer.effect(
                     value: credential.value,
                     active: true,
                     generation: sql`CASE WHEN ${eq(CredentialTable.value, credential.value)} THEN ${CredentialTable.generation} ELSE ${CredentialTable.generation} + 1 END`,
+                    account_generation: sql`${CredentialTable.account_generation} + 1`,
                   })
                   .where(eq(CredentialTable.id, credential.id))
                   .run()
@@ -172,6 +220,7 @@ const layer = Layer.effect(
               ? {}
               : {
                   generation: sql`CASE WHEN ${eq(CredentialTable.value, updates.value)} THEN ${CredentialTable.generation} ELSE ${CredentialTable.generation} + 1 END`,
+                  account_generation: sql`CASE WHEN ${eq(CredentialTable.value, updates.value)} THEN ${CredentialTable.account_generation} ELSE ${CredentialTable.account_generation} + 1 END`,
                 }),
           })
           .where(eq(CredentialTable.id, id))
@@ -179,9 +228,12 @@ const layer = Layer.effect(
           .pipe(Effect.orDie)
       }),
       activate: Effect.fn("Credential.activate")(function* (id) {
-        const credential = yield* db.select().from(CredentialTable).where(eq(CredentialTable.id, id)).get().pipe(
-          Effect.orDie,
-        )
+        const credential = yield* db
+          .select()
+          .from(CredentialTable)
+          .where(eq(CredentialTable.id, id))
+          .get()
+          .pipe(Effect.orDie)
         const integrationID = credential?.integration_id
         if (!integrationID) return
         yield* db
@@ -198,9 +250,12 @@ const layer = Layer.effect(
           .pipe(Effect.orDie)
       }),
       remove: Effect.fn("Credential.remove")(function* (id) {
-        const credential = yield* db.select().from(CredentialTable).where(eq(CredentialTable.id, id)).get().pipe(
-          Effect.orDie,
-        )
+        const credential = yield* db
+          .select()
+          .from(CredentialTable)
+          .where(eq(CredentialTable.id, id))
+          .get()
+          .pipe(Effect.orDie)
         yield* db
           .transaction((tx) =>
             Effect.gen(function* () {

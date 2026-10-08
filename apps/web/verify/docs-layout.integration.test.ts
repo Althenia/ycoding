@@ -33,6 +33,59 @@ afterAll(async () => {
 })
 
 describe("public docs and site layout", () => {
+  test("renders decision setup and remote recovery guidance on phones and desktops", async () => {
+    const page = await requireBrowser().openPage()
+    const guides = [
+      { route: "/docs/configuration/tools", anchor: "structured-decisions", text: ["agents.decision.model", "efficiency.helper_models.decision", "min_confidence", "min_probability", "API Platform billing"] },
+      { route: "/docs/usage/remote", anchor: "connection-recovery", text: ["pending enable", "off and then on", "ycoding remote status"] },
+      { route: "/docs/troubleshooting", anchor: "remote-connection-needs-attention", text: ["rejected credentials", "off and then on", "ycoding remote disconnect"] },
+    ]
+    await page.setColorScheme("light")
+    for (const width of [320, 1440]) {
+      await page.setViewport(width, 1000)
+      for (const guide of guides) {
+        await page.navigate(url(guide.route))
+        for (let attempt = 0; attempt < 50 && !(await page.evaluate<boolean>(`document.getElementById(${JSON.stringify(guide.anchor)}) !== null`)); attempt += 1) await Bun.sleep(100)
+        await page.evaluate<void>(`(async () => {
+          document.documentElement.dataset.theme = 'light'
+          await document.fonts.ready
+          const anchor = document.getElementById(${JSON.stringify(guide.anchor)})
+          const section = anchor?.closest('.motion-reveal')
+          if (!(section instanceof HTMLElement)) throw new Error('Documentation section is missing')
+          anchor.scrollIntoView({ behavior: 'instant' })
+          if (!section.classList.contains('motion-reveal--visible')) {
+            await new Promise(resolve => {
+              const observer = new MutationObserver(() => {
+                if (!section.classList.contains('motion-reveal--visible')) return
+                observer.disconnect()
+                resolve()
+              })
+              observer.observe(section, { attributes: true, attributeFilter: ['class'] })
+            })
+          }
+          await Promise.all(document.getAnimations()
+            .filter(animation => Number.isFinite(animation.effect?.getComputedTiming().endTime))
+            .map(animation => animation.finished))
+        })()`)
+        const result = await page.evaluate<{ text: string; anchor: boolean; overflow: boolean; settled: boolean }>(`(() => {
+          const article = document.querySelector('.docs-article')
+          const section = document.getElementById(${JSON.stringify(guide.anchor)})?.closest('.doc-section')
+          const style = section instanceof HTMLElement ? getComputedStyle(section) : undefined
+          return {
+            text: article instanceof HTMLElement ? article.innerText : '',
+            anchor: document.getElementById(${JSON.stringify(guide.anchor)}) !== null,
+            overflow: document.documentElement.scrollWidth > innerWidth,
+            settled: style?.opacity === '1' && (style.filter === 'none' || style.filter === 'blur(0px)'),
+          }
+        })()`)
+        expect({ route: guide.route, width, anchor: result.anchor, overflow: result.overflow, settled: result.settled }).toEqual({ route: guide.route, width, anchor: true, overflow: false, settled: true })
+        for (const text of guide.text) expect(result.text).toContain(text)
+        await saveScreenshot(page, "after", guide.route, width, "light")
+      }
+    }
+    await page.close()
+  }, 60_000)
+
   test("keeps shared public surfaces inside the header grid at every assigned width", async () => {
     const page = await requireBrowser().openPage()
     for (const width of widths) {

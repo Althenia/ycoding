@@ -4,8 +4,34 @@ import { isYCodingEvent, YCodingEvent } from "../src/groups/event.js"
 import { ServiceStatus } from "../src/groups/health.js"
 import { SessionLogItem, SessionProjection } from "../src/groups/session.js"
 import { SourceEpoch } from "@ycoding-ai/schema/source-epoch"
+import { SessionEvent } from "@ycoding-ai/schema/session-event"
 
 const sourceEpoch = SourceEpoch.make("source_test")
+
+test("refuses private profile binding and provenance on public event and Session log streams", () => {
+  const event = {
+    id: "evt_profile",
+    created: 1,
+    sourceEpoch,
+    type: "session.profile.bound",
+    durable: { aggregateID: "ses_profile", seq: 1, version: 1 },
+    data: {
+      sessionID: "ses_profile",
+      binding: {
+        providerID: "openai",
+        integrationID: "openai",
+        profile: "Work",
+        credentialID: "cred_private",
+        accountGeneration: 0,
+      },
+    },
+  }
+  expect(Schema.decodeUnknownSync(SessionEvent.ProfileBound)(event).data.binding?.profile).toBe("Work")
+  expect(isYCodingEvent(event)).toBe(false)
+  expect(() => Schema.decodeUnknownSync(YCodingEvent)(event)).toThrow()
+  expect(() => Schema.decodeUnknownSync(SessionLogItem)(event)).toThrow()
+  expect(isYCodingEvent({ type: "session.provider.request.recorded" })).toBe(false)
+})
 
 test("classifies public events by type", () => {
   expect(isYCodingEvent({ type: "server.connected" })).toBe(true)

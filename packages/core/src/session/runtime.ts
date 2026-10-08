@@ -2,6 +2,7 @@ import { Cause, DateTime, Effect, Layer, Option, Schema, Context, Stream, Scope 
 import { ListAnchor } from "@ycoding-ai/schema/session"
 import { Event } from "@ycoding-ai/schema/event"
 import type { Model } from "@ycoding-ai/schema/model"
+import { Money } from "@ycoding-ai/schema/money"
 import { ID, type Admission, type Result } from "@ycoding-ai/schema/session-compaction"
 import { and, asc, desc, eq, gt, inArray, isNull, like, lt, or, sql, type SQL } from "drizzle-orm"
 import { Project } from "../project"
@@ -33,7 +34,14 @@ import { SessionProjector } from "./projector"
 import { SessionContextExclusionCleanup } from "./context-exclusion-cleanup"
 import { SessionFileChangeCleanup } from "./file-change-cleanup"
 import { SessionUsageCleanup } from "./usage-cleanup"
-import { SessionFileChangeTable, SessionMessageTable, SessionPendingTable, SessionTable, SessionTaskNotificationTable, SessionTaskTable } from "./sql"
+import {
+  SessionFileChangeTable,
+  SessionMessageTable,
+  SessionPendingTable,
+  SessionTable,
+  SessionTaskNotificationTable,
+  SessionTaskTable,
+} from "./sql"
 import { SessionSchema } from "./schema"
 import { AbsolutePath, PositiveInt, RelativePath } from "../schema"
 import { Agent } from "../agent"
@@ -43,7 +51,14 @@ import { fromRow } from "./info"
 import { SessionRunner } from "./runner/index"
 import { SessionStore } from "./store"
 import { SessionExecution } from "./execution"
-import { AgentNotFoundError, AgentNotSelectableError, AttachmentReadError, InvalidCursorError, MessageDecodeError, NotFoundError } from "./error"
+import {
+  AgentNotFoundError,
+  AgentNotSelectableError,
+  AttachmentReadError,
+  InvalidCursorError,
+  MessageDecodeError,
+  NotFoundError,
+} from "./error"
 import { makeGlobalNode } from "../effect/app-node"
 import { LocationServiceMap } from "../location-service-map"
 import { SessionEvent } from "./event"
@@ -80,6 +95,7 @@ import { SessionModelSwitch } from "./model-switch"
 import { SessionHistory } from "./history"
 import { SessionContextBudget } from "./context-budget"
 import { SessionRunnerModel } from "./runner/model"
+import { SessionHelperPolicy } from "./helper-policy"
 import { Catalog } from "../catalog"
 import { Config } from "../config"
 import { ConfigCompaction } from "../config/compaction"
@@ -129,6 +145,7 @@ type CreateBaseInput = {
   title?: string
   agent?: Agent.ID
   model?: CatalogModel.Ref
+  profileBinding?: SessionEvent.ProfileBinding
   permissionCeiling?: SessionSchema.Info["permissionCeiling"]
 }
 type CreateInput = CreateBaseInput &
@@ -256,10 +273,15 @@ export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<{
     readonly data: SessionSchema.Info[]
   }>
-  readonly create: (input: CreateInput) => Effect.Effect<SessionSchema.Info, NotFoundError | AgentNotSelectableError>
+  readonly create: (
+    input: CreateInput,
+  ) => Effect.Effect<SessionSchema.Info, NotFoundError | AgentNotSelectableError | SessionRunnerModel.Error>
   readonly fork: (input: ForkInput) => Effect.Effect<SessionSchema.Info, NotFoundError | MessageNotFoundError>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info, NotFoundError>
-  readonly snapshot: (sessionID: SessionSchema.ID, options?: { readonly limit?: number; readonly before?: string }) => Effect.Effect<
+  readonly snapshot: (
+    sessionID: SessionSchema.ID,
+    options?: { readonly limit?: number; readonly before?: string },
+  ) => Effect.Effect<
     {
       readonly session: SessionSchema.Info
       readonly messages: SessionMessage.Info[]
@@ -269,7 +291,10 @@ export interface Interface {
     },
     NotFoundError | MessageDecodeError | InvalidCursorError
   >
-  readonly attachmentRead: (sessionID: SessionSchema.ID, digest: string) => Effect.Effect<
+  readonly attachmentRead: (
+    sessionID: SessionSchema.ID,
+    digest: string,
+  ) => Effect.Effect<
     { readonly mime: string; readonly bytes: number; readonly data: string },
     NotFoundError | AttachmentReadError
   >
@@ -408,9 +433,10 @@ export interface Interface {
   readonly compact: Compact
   readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
   readonly active: Effect.Effect<ReadonlySet<SessionSchema.ID>>
-  readonly completions: (input: { readonly after?: SessionSchema.ID; readonly limit: number }) => Effect.Effect<
-    Effect.Success<ReturnType<typeof SessionCompletion.latest>>
-  >
+  readonly completions: (input: {
+    readonly after?: SessionSchema.ID
+    readonly limit: number
+  }) => Effect.Effect<Effect.Success<ReturnType<typeof SessionCompletion.latest>>>
   readonly outstanding: (includeFailures?: boolean) => Effect.Effect<{
     readonly sessions: ReadonlySet<SessionSchema.ID>
     readonly running: ReadonlySet<SessionSchema.ID>
@@ -451,11 +477,11 @@ function usageReportGroup(
   if (group === "model") {
     const variant = item.record.model.variant
     return {
-      key: [item.record.model.providerID, item.record.model.id, variant]
+      key: [item.record.model.providerID, item.record.model.id, variant, item.record.model.profile]
         .flatMap((part) => (part === undefined ? [] : [part]))
         .map((part) => encodeURIComponent(part))
         .join("/"),
-      label: `${item.record.model.providerID}/${item.record.model.id}${variant ? ` (${variant})` : ""}`,
+      label: `${item.record.model.providerID}/${item.record.model.id}${variant ? ` (${variant})` : ""}${item.record.model.profile ? ` · ${item.record.model.profile}` : ""}`,
     }
   }
   if (group === "session") return { key: item.session.id, label: item.session.title }
@@ -465,7 +491,11 @@ function usageReportGroup(
     const project = projects.find((project) => project.id === item.session.projectID)
     return {
       key: item.session.projectID,
-      label: project ? (project.name ? `${project.name} · ${project.worktree}` : project.worktree) : item.session.projectID,
+      label: project
+        ? project.name
+          ? `${project.name} · ${project.worktree}`
+          : project.worktree
+        : item.session.projectID,
     }
   }
   if (group === "agent") return { key: item.record.agent, label: item.record.agent }
@@ -488,9 +518,19 @@ function usageReportTokenTotal(row: ProviderRequest.ReportRow) {
   return row.tokens.input + row.tokens.output + row.tokens.reasoning + row.tokens.cache.read + row.tokens.cache.write
 }
 
-function usageReportComparator(sort: ProviderRequest.ReportSort, order: ProviderRequest.ReportOrder, localHour: boolean) {
+function usageReportComparator(
+  sort: ProviderRequest.ReportSort,
+  order: ProviderRequest.ReportOrder,
+  localHour: boolean,
+) {
   return (left: ProviderRequest.ReportRow, right: ProviderRequest.ReportRow) => {
-    const key = localHour ? Date.parse(left.key) - Date.parse(right.key) : left.key < right.key ? -1 : left.key > right.key ? 1 : 0
+    const key = localHour
+      ? Date.parse(left.key) - Date.parse(right.key)
+      : left.key < right.key
+        ? -1
+        : left.key > right.key
+          ? 1
+          : 0
     if (sort === "key") return order === "asc" ? key : -key
     const metric = (row: ProviderRequest.ReportRow) => {
       if (sort === "cost") return row.cost ?? 0
@@ -521,13 +561,19 @@ function buildUsageReport(
     const time = DateTime.toEpochMillis(record.time)
     return (input.from === undefined || time >= input.from) && (input.to === undefined || time < input.to)
   })
-  const grouped = new Map<
-    string,
-    { readonly label: string; readonly records: SessionProviderRequest.CostedRecord[] }
-  >()
-  const formatter = input.timeZone && (input.group === "hour" || input.group === "day" || input.group === "month")
-    ? new Intl.DateTimeFormat("en-US", { timeZone: input.timeZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hourCycle: "h23", timeZoneName: "longOffset" })
-    : undefined
+  const grouped = new Map<string, { readonly label: string; readonly records: SessionProviderRequest.CostedRecord[] }>()
+  const formatter =
+    input.timeZone && (input.group === "hour" || input.group === "day" || input.group === "month")
+      ? new Intl.DateTimeFormat("en-US", {
+          timeZone: input.timeZone,
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          hourCycle: "h23",
+          timeZoneName: "longOffset",
+        })
+      : undefined
   for (const item of records) {
     const group = usageReportGroup(input.group, item, projects, formatter)
     const current = grouped.get(group.key)
@@ -541,7 +587,13 @@ function buildUsageReport(
     key,
     label: value.label,
     ...SessionProviderRequest.reportMetrics(value.records),
-  })).toSorted(usageReportComparator(input.sort ?? "key", input.order ?? "asc", input.group === "hour" && input.timeZone !== undefined))
+  })).toSorted(
+    usageReportComparator(
+      input.sort ?? "key",
+      input.order ?? "asc",
+      input.group === "hour" && input.timeZone !== undefined,
+    ),
+  )
   const offset = input.offset ?? 0
   const limit = input.limit ?? 100
   const page = rows.slice(offset, offset + limit)
@@ -592,7 +644,8 @@ const layer = Layer.effect(
     const sameModel = (current: CatalogModel.Ref | undefined, target: CatalogModel.Ref) =>
       current?.providerID === target.providerID &&
       current.id === target.id &&
-      current.variant === target.variant
+      current.variant === target.variant &&
+      current.profile === target.profile
     const compactionPolicy = Effect.fnUntraced(function* (session: SessionSchema.Info) {
       return yield* Config.Service.pipe(
         Effect.provide(locations.get(session.location)),
@@ -651,9 +704,9 @@ const layer = Layer.effect(
       session: SessionSchema.Info,
       targetModel: CatalogModel.Ref,
     ) {
-      yield* SessionRunnerModel.Service.pipe(
+      return yield* SessionRunnerModel.Service.pipe(
         Effect.provide(locations.get(session.location)),
-        Effect.flatMap((models) => models.resolve({ ...session, model: targetModel })),
+        Effect.flatMap((models) => models.resolve({ ...session, model: targetModel }, { rebind: true })),
       )
     })
     // The target's safe input budget is catalog data, so it can be checked before any
@@ -689,50 +742,53 @@ const layer = Layer.effect(
       const policy = yield* compactionPolicy(session)
       const configDigest = ConfigCompaction.admissionDigest(policy)
       const manifest = compactionManifest(session)
-      return yield* compactionJobs.withAdmissionGate(session.id, (admit) =>
-        Effect.gen(function* () {
-          let admitted = false
-          while (true) {
-            const active = (yield* compactionJobs.pending(session.id))[0]
-            if (active) {
-              const settled = yield* compactionExecution.run({ jobID: active.id, manifest })
-              if (settled.status !== "ended") return false
-            } else {
-              if (admitted) return false
-              const boundary = yield* latestCompleteBoundary(db, session.id)
-              if (!boundary) return false
-              const current = yield* contextState.current(session.id)
-              if (
-                yield* compactionJobs.hasUnchangedDeterministicFailure({
+      return yield* compactionJobs
+        .withAdmissionGate(session.id, (admit) =>
+          Effect.gen(function* () {
+            let admitted = false
+            while (true) {
+              const active = (yield* compactionJobs.pending(session.id))[0]
+              if (active) {
+                const settled = yield* compactionExecution.run({ jobID: active.id, manifest })
+                if (settled.status !== "ended") return false
+              } else {
+                if (admitted) return false
+                const boundary = yield* latestCompleteBoundary(db, session.id)
+                if (!boundary) return false
+                const current = yield* contextState.current(session.id)
+                if (
+                  yield* compactionJobs.hasUnchangedDeterministicFailure({
+                    sessionID: session.id,
+                    requestedThrough: boundary,
+                    baseContextRevision: current.revision,
+                    targetMaxInputTokens: targetSafeInputTokens,
+                    configDigest,
+                  })
+                )
+                  return false
+                const job = yield* admit({
                   sessionID: session.id,
+                  trigger: "mandatory",
                   requestedThrough: boundary,
                   baseContextRevision: current.revision,
                   targetMaxInputTokens: targetSafeInputTokens,
                   configDigest,
                 })
-              )
-                return false
-              const job = yield* admit({
-                sessionID: session.id,
-                trigger: "mandatory",
-                requestedThrough: boundary,
-                baseContextRevision: current.revision,
-                targetMaxInputTokens: targetSafeInputTokens,
-                configDigest,
-              })
-              admitted = true
-              const settled = yield* compactionExecution.run({ jobID: job.id, manifest })
-              if (settled.status !== "ended") return false
+                admitted = true
+                const settled = yield* compactionExecution.run({ jobID: job.id, manifest })
+                if (settled.status !== "ended") return false
+              }
+              const reloaded = yield* result.get(session.id)
+              if ((yield* checkModelSwitch(reloaded, targetModel)).status === "switched") return true
             }
-            const reloaded = yield* result.get(session.id)
-            if ((yield* checkModelSwitch(reloaded, targetModel)).status === "switched") return true
-          }
-        }),
-      ).pipe(
-        Effect.mapError(
-          (error) => new CompactionConflictError({ sessionID: session.id, jobID: ID.create(), message: error.message }),
-        ),
-      )
+          }),
+        )
+        .pipe(
+          Effect.mapError(
+            (error) =>
+              new CompactionConflictError({ sessionID: session.id, jobID: ID.create(), message: error.message }),
+          ),
+        )
     })
     const family = Effect.fnUntraced(function* (session: SessionSchema.Info) {
       if (session.parentID) return [session]
@@ -765,7 +821,7 @@ const layer = Layer.effect(
       return yield* Effect.forEach(records, (record) => {
         if (record.cost !== undefined || record.source === "decision") return Effect.succeed(record)
         return Effect.gen(function* () {
-          const provider = yield* catalog.model.get(record.model.providerID, record.model.id)
+          const provider = yield* catalog.model.get(record.model.providerID, record.model.id, record.model.profile)
           const openrouter = yield* catalog.model.get(
             Provider.ID.openrouter,
             CatalogModel.ID.make(
@@ -789,12 +845,16 @@ const layer = Layer.effect(
         if (records) records.push(record)
         else recordsBySession.set(record.sessionID, [record])
       }
-      return yield* Effect.forEach(sessions.flatMap((session) => {
-        const records = recordsBySession.get(session.id)
-        return records === undefined ? [] : [{ session, records }]
-      }), (item) => estimated(item.session, item.records).pipe(Effect.map((records) => records.map((record) => ({ record, session: item.session }))))).pipe(
-        Effect.map((items) => items.flat()),
-      )
+      return yield* Effect.forEach(
+        sessions.flatMap((session) => {
+          const records = recordsBySession.get(session.id)
+          return records === undefined ? [] : [{ session, records }]
+        }),
+        (item) =>
+          estimated(item.session, item.records).pipe(
+            Effect.map((records) => records.map((record) => ({ record, session: item.session }))),
+          ),
+      ).pipe(Effect.map((items) => items.flat()))
     })
     const decode = (row: typeof SessionMessageTable.$inferSelect) =>
       decodeMessage({ ...row.data, id: row.id, type: row.type }).pipe(
@@ -854,23 +914,75 @@ const layer = Layer.effect(
         const now = Date.now()
         const permissionCeiling = SessionPermissionCeiling.inherit(parent?.permissionCeiling, input.permissionCeiling)
         const relative = path.relative(project.directory, location.directory).replaceAll("\\", "/")
+        const chosen = SessionHelperPolicy.inheritProfile(input.model ?? parent?.model, parent?.model)
+        const selection =
+          chosen ??
+          (yield* Catalog.Service.pipe(
+            Effect.provide(locations.get(location)),
+            Effect.flatMap((catalog) => catalog.model.defaultSelection()),
+          ))
+        const inheritedBinding =
+          input.profileBinding ??
+          (parent &&
+          input.model?.profile === undefined &&
+          selection?.providerID === parent.model?.providerID &&
+          selection?.profile === parent.model?.profile
+            ? ((yield* db
+                .select({ binding: SessionTable.profile_binding })
+                .from(SessionTable)
+                .where(eq(SessionTable.id, parent.id))
+                .get()
+                .pipe(Effect.orDie))?.binding ?? undefined)
+            : undefined)
+        const bound =
+          selection?.profile === undefined
+            ? undefined
+            : yield* SessionRunnerModel.Service.pipe(
+                Effect.provide(locations.get(location)),
+                Effect.flatMap((models) =>
+                  models.resolve(
+                    SessionSchema.Info.make({
+                      id: sessionID,
+                      projectID: project.id,
+                      title: input.title ?? "New session",
+                      model: selection,
+                      location,
+                      cost: Money.USD.zero,
+                      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+                      time: { created: DateTime.makeUnsafe(now), updated: DateTime.makeUnsafe(now) },
+                    }),
+                    { binding: inheritedBinding },
+                  ),
+                ),
+              )
         const projected = yield* events
-          .publish(
-            SessionEvent.Created,
+          .publishBatch([
             {
-              sessionID,
-              projectID: project.id,
-              location,
-              parentID: input.parentID,
-              agent: input.agent,
-              model: input.model,
-              permissionCeiling: permissionCeiling.length > 0 ? permissionCeiling : undefined,
-              title: input.title ?? `New session - ${new Date(now).toISOString()}`,
-              subpath: relative.length > 0 ? RelativePath.make(relative) : undefined,
-              created: now,
+              definition: SessionEvent.Created,
+              data: {
+                sessionID,
+                projectID: project.id,
+                location,
+                parentID: input.parentID,
+                agent: input.agent,
+                model: bound?.ref ?? chosen,
+                permissionCeiling: permissionCeiling.length > 0 ? permissionCeiling : undefined,
+                title: input.title ?? `New session - ${new Date(now).toISOString()}`,
+                subpath: relative.length > 0 ? RelativePath.make(relative) : undefined,
+                created: now,
+              },
+              options: { location },
             },
-            { location },
-          )
+            ...(bound?.profileBinding
+              ? [
+                  {
+                    definition: SessionEvent.ProfileBound,
+                    data: { sessionID, binding: bound.profileBinding },
+                    options: { location },
+                  },
+                ]
+              : []),
+          ])
           .pipe(
             Effect.as({ type: "created" } as const),
             Effect.catchDefect((defect) => {
@@ -907,12 +1019,20 @@ const layer = Layer.effect(
           return yield* new MessageNotFoundError({ sessionID: input.sessionID, messageID: input.messageID })
         const sessionID = SessionSchema.ID.create()
         const parentSeq = boundary ? boundary.seq - 1 : yield* EventRuntime.latestSequence(db, parent.id)
-        yield* events.publish(SessionEvent.Forked, {
-          sessionID,
-          parentID: parent.id,
-          parentSeq,
-          from: input.messageID,
-        })
+        const binding =
+          (yield* db
+            .select({ binding: SessionTable.profile_binding })
+            .from(SessionTable)
+            .where(eq(SessionTable.id, parent.id))
+            .get()
+            .pipe(Effect.orDie))?.binding ?? undefined
+        yield* events.publishBatch([
+          {
+            definition: SessionEvent.Forked,
+            data: { sessionID, parentID: parent.id, parentSeq, from: input.messageID },
+          },
+          ...(binding ? [{ definition: SessionEvent.ProfileBound, data: { sessionID, binding } }] : []),
+        ])
         return yield* result.get(sessionID).pipe(Effect.orDie)
       }),
       get: Effect.fn("Session.get")(function* (sessionID) {
@@ -921,24 +1041,32 @@ const layer = Layer.effect(
         return session
       }),
       snapshot: Effect.fn("Session.snapshot")(function* (sessionID, options) {
-        if (options?.limit !== undefined && (!Number.isSafeInteger(options.limit) || options.limit < 1 || options.limit > 200))
+        if (
+          options?.limit !== undefined &&
+          (!Number.isSafeInteger(options.limit) || options.limit < 1 || options.limit > 200)
+        )
           return yield* new InvalidCursorError()
         if (options?.before !== undefined && options.limit === undefined) return yield* new InvalidCursorError()
-        const before = options?.before === undefined ? undefined : yield* SessionHistory.snapshotCursor(sessionID, options.before)
+        const before =
+          options?.before === undefined ? undefined : yield* SessionHistory.snapshotCursor(sessionID, options.before)
         return yield* db
           .transaction(() =>
             Effect.gen(function* () {
               const session = yield* result.get(sessionID)
-              const history = options?.limit === undefined
-                ? { messages: yield* SessionHistory.load(db, sessionID) }
-                : yield* SessionHistory.snapshotWindow(db, sessionID, options.limit, before)
+              const history =
+                options?.limit === undefined
+                  ? { messages: yield* SessionHistory.load(db, sessionID) }
+                  : yield* SessionHistory.snapshotWindow(db, sessionID, options.limit, before)
               const sequence = yield* EventRuntime.latestSequence(db, sessionID)
               const watermark: EventLog.Synced = {
                 type: "log.synced",
                 aggregateID: sessionID,
                 ...(sequence < 0 ? {} : { seq: EventRuntime.Seq.make(sequence) }),
               }
-              const generationSpeed = SessionCacheDiagnostics.latestAssistant(history.messages, session.revert?.messageID)
+              const generationSpeed = SessionCacheDiagnostics.latestAssistant(
+                history.messages,
+                session.revert?.messageID,
+              )
                 ? SessionCacheDiagnostics.generationSpeed(yield* providerRequests.recentSteps(sessionID))
                 : undefined
               return {
@@ -954,7 +1082,9 @@ const layer = Layer.effect(
       attachmentRead: Effect.fn("Session.attachmentRead")(function* (sessionID, digest) {
         if (!/^[0-9a-f]{64}$/.test(digest)) return yield* new AttachmentReadError({ reason: "invalid" })
         yield* result.get(sessionID)
-        const reference = yield* db.get<{ mime: unknown; bytes: unknown; path: unknown }>(sql`
+        const reference = yield* db
+          .get<{ mime: unknown; bytes: unknown; path: unknown }>(
+            sql`
           SELECT json_extract(file.value, '$.mime') AS mime,
                  json_extract(file.value, '$.content.bytes') AS bytes,
                  json_extract(file.value, '$.content.path') AS path
@@ -971,17 +1101,26 @@ const layer = Layer.effect(
             AND json_extract(file.value, '$.content.type') = 'managed'
             AND json_extract(file.value, '$.content.digest') = ${digest}
           LIMIT 1
-        `).pipe(Effect.orDie)
+        `,
+          )
+          .pipe(Effect.orDie)
         if (!reference) return yield* new AttachmentReadError({ reason: "not-found" })
         const content = yield* Schema.decodeUnknownEffect(ManagedAttachmentContent)({
-          type: "managed", digest, bytes: reference.bytes, path: reference.path,
+          type: "managed",
+          digest,
+          bytes: reference.bytes,
+          path: reference.path,
         }).pipe(Effect.orDie)
         const mime = yield* Schema.decodeUnknownEffect(Schema.String)(reference.mime).pipe(Effect.orDie)
         if (content.bytes > MaxAttachmentReadBytes) return yield* new AttachmentReadError({ reason: "too-large" })
-        const bytes = yield* attachments.read(content).pipe(Effect.catchTag("AttachmentStore.Error", (error) => Effect.gen(function* () {
-          yield* Effect.logWarning("Managed Session attachment unavailable", { reason: error.reason })
-          return yield* new AttachmentReadError({ reason: "not-found" })
-        })))
+        const bytes = yield* attachments.read(content).pipe(
+          Effect.catchTag("AttachmentStore.Error", (error) =>
+            Effect.gen(function* () {
+              yield* Effect.logWarning("Managed Session attachment unavailable", { reason: error.reason })
+              return yield* new AttachmentReadError({ reason: "not-found" })
+            }),
+          ),
+        )
         return { mime, bytes: bytes.byteLength, data: Buffer.from(bytes).toString("base64") }
       }),
       diagnostics: Effect.fn("Session.diagnostics")(function* (sessionID) {
@@ -992,7 +1131,9 @@ const layer = Layer.effect(
         )
         if (!diagnostics) return diagnostics
         const generationSpeed = SessionCacheDiagnostics.generationSpeed(yield* providerRequests.recentSteps(sessionID))
-        return { ...diagnostics, requests: yield* providerRequests.summary(sessionID),
+        return {
+          ...diagnostics,
+          requests: yield* providerRequests.summary(sessionID),
           ...(generationSpeed === undefined ? {} : { generationSpeed }),
         }
       }),
@@ -1025,11 +1166,7 @@ const layer = Layer.effect(
       }),
       usageReportAll: Effect.fn("Session.usageReportAll")(function* (input) {
         const projectInfos = input.group === "project" ? yield* projects.list() : []
-        return buildUsageReport(
-          input,
-          yield* globalCostedRecords(input),
-          projectInfos,
-        )
+        return buildUsageReport(input, yield* globalCostedRecords(input), projectInfos)
       }),
       autonomy: {
         get: Effect.fn("Session.autonomy.get")(function* (sessionID) {
@@ -1276,9 +1413,7 @@ const layer = Layer.effect(
           .all()
           .pipe(Effect.orDie)
         const messages = yield* Effect.forEach(rows, decode)
-        const contextModule = yield* Effect.promise<typeof import("./context")>(
-          () => import("./" + "context"),
-        )
+        const contextModule = yield* Effect.promise<typeof import("./context")>(() => import("./" + "context"))
         const context = yield* contextModule.SessionContext.Service.pipe(
           Effect.provide(locations.get(session.location)),
         )
@@ -1399,99 +1534,113 @@ const layer = Layer.effect(
         const generate = yield* SessionGenerate.Service.pipe(Effect.provide(locations.get(session.location)))
         return yield* generate.generate(input)
       }),
-      command: Effect.fn("Session.command")(function* (input) {
-        const session = yield* result.get(input.sessionID)
-        if (input.id !== undefined) {
-          const messageID = input.id
-          const prior = yield* SessionPending.lookup(db, input.sessionID, messageID).pipe(
-            Effect.catchDefect((defect) =>
-              defect instanceof SessionPending.LifecycleConflict
-                ? new PromptConflictError({ sessionID: input.sessionID, messageID })
-                : Effect.die(defect),
-            ),
-          )
-          if (prior) {
-            if (prior.type !== "user" || prior.sessionID !== input.sessionID)
-              return yield* new PromptConflictError({ sessionID: input.sessionID, messageID })
-            return yield* result.prompt({ sessionID: input.sessionID, id: prior.id, text: prior.data.text, resume: input.resume })
-          }
-        }
-        const commands = yield* Command.Service.pipe(Effect.provide(locations.get(session.location)))
-        const source = yield* projectArtifactSource(session.location)
-        const command = yield* commands.get(input.command)
-        if (!command)
-          return yield* new Command.NotFoundError({
-            command: input.command,
-            message: `Command not found: ${input.command}`,
-          })
-        // TODO(v2 commands): decide whether command-level subtask/background execution belongs in v2 commands.
-        const agent = command.agent ?? input.agent
-        if (agent === Agent.ID.make("decision")) return yield* new Command.EvaluationError({
-          command: input.command,
-          message: new AgentNotSelectableError({ agent }).message,
-        })
-        const evaluated = yield* commands.evaluate({ name: input.command, arguments: input.arguments })
-        const commandAgent = yield* Effect.gen(function* () {
-          if (!command.agent) return undefined
-          const agents = yield* Agent.Service.pipe(Effect.provide(locations.get(session.location)))
-          return yield* agents.get(Agent.ID.make(command.agent))
-        })
-        const model = command.model ?? commandAgent?.model ?? input.model
-        if (agent !== undefined && session.agent !== Agent.ID.make(agent))
-          yield* result.switchAgent({ sessionID: input.sessionID, agent: Agent.ID.make(agent) }).pipe(
-            Effect.catchTag("Session.AgentNotSelectableError", (error) =>
-              Effect.fail(new Command.EvaluationError({ command: input.command, message: error.message })),
-            ),
-          )
-        // A requested command model must be selected before the command is admitted. A failed
-        // selection is an explicit command evaluation failure rather than a silent run on the
-        // previous model. Transcript corruption is a defect and fails loudly.
-        if (model !== undefined)
-          yield* result.switchModel({ sessionID: input.sessionID, model }).pipe(
-            Effect.catchTag("Session.MessageDecodeError", Effect.die),
-            Effect.mapError(
-              (error) => new Command.EvaluationError({ command: input.command, message: error.message }),
-            ),
-          )
-        const provenance = source ? yield* source.provenance("command", input.command) : undefined
-
-        const admitted = yield* result.prompt({
-          id: input.id,
-          sessionID: input.sessionID,
-          text: evaluated.text,
-          files: input.files,
-          agents: input.agents,
-          metadata: provenance
-            ? {
-                projectArtifact: {
-                  scopeID: provenance.scopeID,
-                  versionID: provenance.versionID,
-                  kind: provenance.kind,
-                  id: provenance.id,
-                  sourceScope: provenance.scope,
-                },
-              }
-            : undefined,
-          delivery: input.delivery,
-          resume: input.resume,
-        })
-        if (provenance && source)
-          yield* source
-            .activate({
-              kind: "command",
-              id: input.command,
-              sessionID: input.sessionID,
-              agentID: session.agent,
-              source: "command",
-              messageID: admitted.id,
-            })
-            .pipe(
-              Effect.catchCause((cause) =>
-                Effect.logWarning("project artifact command activation failed", { cause, sessionID: input.sessionID }),
+      command: Effect.fn("Session.command")(
+        function* (input) {
+          const session = yield* result.get(input.sessionID)
+          if (input.id !== undefined) {
+            const messageID = input.id
+            const prior = yield* SessionPending.lookup(db, input.sessionID, messageID).pipe(
+              Effect.catchDefect((defect) =>
+                defect instanceof SessionPending.LifecycleConflict
+                  ? new PromptConflictError({ sessionID: input.sessionID, messageID })
+                  : Effect.die(defect),
               ),
             )
-        return admitted
-      }, (effect, input) => input.id === undefined ? effect : commandLocks.withLock(input.id)(effect)),
+            if (prior) {
+              if (prior.type !== "user" || prior.sessionID !== input.sessionID)
+                return yield* new PromptConflictError({ sessionID: input.sessionID, messageID })
+              return yield* result.prompt({
+                sessionID: input.sessionID,
+                id: prior.id,
+                text: prior.data.text,
+                resume: input.resume,
+              })
+            }
+          }
+          const commands = yield* Command.Service.pipe(Effect.provide(locations.get(session.location)))
+          const source = yield* projectArtifactSource(session.location)
+          const command = yield* commands.get(input.command)
+          if (!command)
+            return yield* new Command.NotFoundError({
+              command: input.command,
+              message: `Command not found: ${input.command}`,
+            })
+          // TODO(v2 commands): decide whether command-level subtask/background execution belongs in v2 commands.
+          const agent = command.agent ?? input.agent
+          if (agent === Agent.ID.make("decision"))
+            return yield* new Command.EvaluationError({
+              command: input.command,
+              message: new AgentNotSelectableError({ agent }).message,
+            })
+          const evaluated = yield* commands.evaluate({ name: input.command, arguments: input.arguments })
+          const commandAgent = yield* Effect.gen(function* () {
+            if (!command.agent) return undefined
+            const agents = yield* Agent.Service.pipe(Effect.provide(locations.get(session.location)))
+            return yield* agents.get(Agent.ID.make(command.agent))
+          })
+          const model = command.model ?? commandAgent?.model ?? input.model
+          if (agent !== undefined && session.agent !== Agent.ID.make(agent))
+            yield* result
+              .switchAgent({ sessionID: input.sessionID, agent: Agent.ID.make(agent) })
+              .pipe(
+                Effect.catchTag("Session.AgentNotSelectableError", (error) =>
+                  Effect.fail(new Command.EvaluationError({ command: input.command, message: error.message })),
+                ),
+              )
+          // A requested command model must be selected before the command is admitted. A failed
+          // selection is an explicit command evaluation failure rather than a silent run on the
+          // previous model. Transcript corruption is a defect and fails loudly.
+          if (model !== undefined)
+            yield* result.switchModel({ sessionID: input.sessionID, model }).pipe(
+              Effect.catchTag("Session.MessageDecodeError", Effect.die),
+              Effect.mapError(
+                (error) => new Command.EvaluationError({ command: input.command, message: error.message }),
+              ),
+            )
+          const provenance = source ? yield* source.provenance("command", input.command) : undefined
+
+          const admitted = yield* result.prompt({
+            id: input.id,
+            sessionID: input.sessionID,
+            text: evaluated.text,
+            files: input.files,
+            agents: input.agents,
+            metadata: provenance
+              ? {
+                  projectArtifact: {
+                    scopeID: provenance.scopeID,
+                    versionID: provenance.versionID,
+                    kind: provenance.kind,
+                    id: provenance.id,
+                    sourceScope: provenance.scope,
+                  },
+                }
+              : undefined,
+            delivery: input.delivery,
+            resume: input.resume,
+          })
+          if (provenance && source)
+            yield* source
+              .activate({
+                kind: "command",
+                id: input.command,
+                sessionID: input.sessionID,
+                agentID: session.agent,
+                source: "command",
+                messageID: admitted.id,
+              })
+              .pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("project artifact command activation failed", {
+                    cause,
+                    sessionID: input.sessionID,
+                  }),
+                ),
+              )
+          return admitted
+        },
+        (effect, input) => (input.id === undefined ? effect : commandLocks.withLock(input.id)(effect)),
+      ),
       shell: Effect.fn("Session.shell")(function* (input) {
         const session = yield* result.get(input.sessionID)
         yield* shellLocks.withLock(input.sessionID)(
@@ -1607,51 +1756,54 @@ const layer = Layer.effect(
         const source = yield* projectArtifactSource(session.location)
         const provenance = source ? yield* source.provenance("agent", input.agent) : undefined
         const activatedAt = ProjectArtifact.TimestampMillis.make(Date.now())
-        return yield* events.publish(
-          SessionEvent.AgentSelected,
-          {
-            sessionID: input.sessionID,
-            agent: input.agent,
-            artifact: provenance
-              ? {
-                  scopeID: provenance.scopeID,
-                  versionID: provenance.versionID,
-                  kind: provenance.kind,
-                  id: provenance.id,
-                  sourceScope: provenance.scope,
-                }
-              : undefined,
-          },
-          {
-            commit:
-              provenance && source
-                ? (seq) =>
-                    source
-                      .activate({
-                        kind: "agent",
-                        id: input.agent,
-                        sessionID: input.sessionID,
-                        agentID: input.agent,
-                        source: "agent-selected",
-                        boundarySeq: ProjectArtifact.Revision.make(seq),
-                        activatedAt,
-                      })
-                      .pipe(Effect.orDie)
+        return yield* events
+          .publish(
+            SessionEvent.AgentSelected,
+            {
+              sessionID: input.sessionID,
+              agent: input.agent,
+              artifact: provenance
+                ? {
+                    scopeID: provenance.scopeID,
+                    versionID: provenance.versionID,
+                    kind: provenance.kind,
+                    id: provenance.id,
+                    sourceScope: provenance.scope,
+                  }
                 : undefined,
-          },
-        ).pipe(Effect.asVoid)
+            },
+            {
+              commit:
+                provenance && source
+                  ? (seq) =>
+                      source
+                        .activate({
+                          kind: "agent",
+                          id: input.agent,
+                          sessionID: input.sessionID,
+                          agentID: input.agent,
+                          source: "agent-selected",
+                          boundarySeq: ProjectArtifact.Revision.make(seq),
+                          activatedAt,
+                        })
+                        .pipe(Effect.orDie)
+                  : undefined,
+            },
+          )
+          .pipe(Effect.asVoid)
       }),
       switchModel: Effect.fn("Session.switchModel")(function* (input) {
         return yield* execution.withTransition(
           input.sessionID,
           Effect.gen(function* () {
             const current = yield* result.get(input.sessionID)
-            if (sameModel(current.model, input.model)) return { status: "switched" } as const
+            if (sameModel(current.model, input.model) && input.model.profile === undefined)
+              return { status: "switched" } as const
             // Validate the target before cancelling any work: an invalid target must leave the
             // active drain, the selected model, and every durable row untouched. The target
             // budget is validated unconditionally, including when the transcript is empty, so a
             // zero or unresolved budget can never be selected.
-            yield* validateModelSwitchTarget(current, input.model)
+            const resolved = yield* validateModelSwitchTarget(current, input.model)
             const targetBudget = yield* modelSwitchTargetBudget(current, input.model)
             if (targetBudget === undefined || targetBudget <= 0)
               return yield* new CompactionConflictError({
@@ -1664,13 +1816,21 @@ const layer = Layer.effect(
               yield* execution.awaitIdle(input.sessionID)
             }
             const session = yield* result.get(input.sessionID)
-            if (sameModel(session.model, input.model)) return { status: "switched" } as const
+            if (sameModel(session.model, input.model) && input.model.profile === undefined)
+              return { status: "switched" } as const
             const checked = yield* checkModelSwitch(session, input.model)
             if (checked.status === "switched") {
-              yield* events.publish(SessionEvent.ModelSelected, {
-                sessionID: session.id,
-                model: input.model,
-              })
+              yield* events.publishBatch([
+                { definition: SessionEvent.ModelSelected, data: { sessionID: session.id, model: input.model } },
+                ...(resolved.profileBinding || session.model?.profile
+                  ? [
+                      {
+                        definition: SessionEvent.ProfileBound,
+                        data: { sessionID: session.id, binding: resolved.profileBinding },
+                      },
+                    ]
+                  : []),
+              ])
               return { status: "switched" } as const
             }
             const compacted = yield* compactForModelSwitch(session, input.model, targetBudget)
@@ -1678,10 +1838,17 @@ const layer = Layer.effect(
             const reloaded = yield* result.get(input.sessionID)
             const fitted = yield* checkModelSwitch(reloaded, input.model)
             if (fitted.status === "blocked") return fitted
-            yield* events.publish(SessionEvent.ModelSelected, {
-              sessionID: reloaded.id,
-              model: input.model,
-            })
+            yield* events.publishBatch([
+              { definition: SessionEvent.ModelSelected, data: { sessionID: reloaded.id, model: input.model } },
+              ...(resolved.profileBinding || reloaded.model?.profile
+                ? [
+                    {
+                      definition: SessionEvent.ProfileBound,
+                      data: { sessionID: reloaded.id, binding: resolved.profileBinding },
+                    },
+                  ]
+                : []),
+            ])
             return { status: "switched" } as const
           }),
         )
@@ -1880,36 +2047,77 @@ const layer = Layer.effect(
       active: execution.active,
       completions: (input) => SessionCompletion.latest(db, input),
       outstanding: Effect.fn("Session.outstanding")(function* (includeFailures = false) {
-        const tasks = yield* db.select({ sessionID: SessionTaskTable.parent_id }).from(SessionTaskTable)
+        const tasks = yield* db
+          .select({ sessionID: SessionTaskTable.parent_id })
+          .from(SessionTaskTable)
           .where(inArray(SessionTaskTable.state, ["starting", "running", "waiting", "cancelling"]))
-          .all().pipe(Effect.orDie)
-        const notices = yield* db.select({ sessionID: SessionTaskNotificationTable.parent_id }).from(SessionTaskNotificationTable)
-          .where(eq(SessionTaskNotificationTable.delivered, false)).all().pipe(Effect.orDie)
-        const goals = yield* db.select({ sessionID: SessionTable.id }).from(SessionTable)
-          .where(sql`json_extract(${SessionTable.autonomy}, '$.goal.status') = 'active'`).all().pipe(Effect.orDie)
+          .all()
+          .pipe(Effect.orDie)
+        const notices = yield* db
+          .select({ sessionID: SessionTaskNotificationTable.parent_id })
+          .from(SessionTaskNotificationTable)
+          .where(eq(SessionTaskNotificationTable.delivered, false))
+          .all()
+          .pipe(Effect.orDie)
+        const goals = yield* db
+          .select({ sessionID: SessionTable.id })
+          .from(SessionTable)
+          .where(sql`json_extract(${SessionTable.autonomy}, '$.goal.status') = 'active'`)
+          .all()
+          .pipe(Effect.orDie)
         const shellJobs = yield* jobs.outstandingSessions()
-        const pending = yield* db.select({ sessionID: SessionPendingTable.session_id }).from(SessionPendingTable)
-          .groupBy(SessionPendingTable.session_id).all().pipe(Effect.orDie)
+        const pending = yield* db
+          .select({ sessionID: SessionPendingTable.session_id })
+          .from(SessionPendingTable)
+          .groupBy(SessionPendingTable.session_id)
+          .all()
+          .pipe(Effect.orDie)
         const active = yield* execution.active
-        const running = new Set([...active, ...(yield* jobs.list()).flatMap((job) => {
-          const sessionID = job.metadata?.sessionID
-          return job.type === "shell" && job.status === "running" && Schema.is(SessionSchema.ID)(sessionID)
-            ? [sessionID] : []
-        })])
-        const sessions = new Set([...tasks, ...notices, ...goals, ...pending].map((row) => row.sessionID).concat([...shellJobs, ...active]))
+        const running = new Set([
+          ...active,
+          ...(yield* jobs.list()).flatMap((job) => {
+            const sessionID = job.metadata?.sessionID
+            return job.type === "shell" && job.status === "running" && Schema.is(SessionSchema.ID)(sessionID)
+              ? [sessionID]
+              : []
+          }),
+        ])
+        const sessions = new Set(
+          [...tasks, ...notices, ...goals, ...pending].map((row) => row.sessionID).concat([...shellJobs, ...active]),
+        )
         const lost = new Set(yield* ShellLedger.lostSessions(db))
         if (!includeFailures) return { sessions, running, failed: new Set<SessionSchema.ID>(), lost }
-        const startedType = Event.versionedType(SessionEvent.Execution.Started.type, SessionEvent.Execution.Started.durable.version)
-        const failedType = Event.versionedType(SessionEvent.Execution.Failed.type, SessionEvent.Execution.Failed.durable.version)
-        const latest = db.select({ aggregateID: EventTable.aggregate_id, seq: sql<number>`max(${EventTable.seq})`.as("seq") })
-          .from(EventTable).where(inArray(EventTable.type, [startedType, failedType]))
-          .groupBy(EventTable.aggregate_id).as("latest_execution")
-        const history = yield* db.select({ aggregateID: EventTable.aggregate_id, type: EventTable.type,
-          created: EventTable.created, id: EventTable.id }).from(EventTable)
+        const startedType = Event.versionedType(
+          SessionEvent.Execution.Started.type,
+          SessionEvent.Execution.Started.durable.version,
+        )
+        const failedType = Event.versionedType(
+          SessionEvent.Execution.Failed.type,
+          SessionEvent.Execution.Failed.durable.version,
+        )
+        const latest = db
+          .select({ aggregateID: EventTable.aggregate_id, seq: sql<number>`max(${EventTable.seq})`.as("seq") })
+          .from(EventTable)
+          .where(inArray(EventTable.type, [startedType, failedType]))
+          .groupBy(EventTable.aggregate_id)
+          .as("latest_execution")
+        const history = yield* db
+          .select({
+            aggregateID: EventTable.aggregate_id,
+            type: EventTable.type,
+            created: EventTable.created,
+            id: EventTable.id,
+          })
+          .from(EventTable)
           .innerJoin(latest, and(eq(EventTable.aggregate_id, latest.aggregateID), eq(EventTable.seq, latest.seq)))
-          .orderBy(asc(EventTable.created), asc(EventTable.id)).all().pipe(Effect.orDie)
-        const rows = yield* db.select({ id: SessionTable.id, parentID: SessionTable.parent_id })
-          .from(SessionTable).all().pipe(Effect.orDie)
+          .orderBy(asc(EventTable.created), asc(EventTable.id))
+          .all()
+          .pipe(Effect.orDie)
+        const rows = yield* db
+          .select({ id: SessionTable.id, parentID: SessionTable.parent_id })
+          .from(SessionTable)
+          .all()
+          .pipe(Effect.orDie)
         const parents = new Map(rows.map((row) => [row.id, row.parentID]))
         const failed = new Set<SessionSchema.ID>()
         for (const event of history) {
@@ -1994,9 +2202,7 @@ const layer = Layer.effect(
           }),
         ),
       ),
-      interrupt: Effect.fn("Session.interrupt")((sessionID) =>
-        Effect.uninterruptible(execution.interrupt(sessionID)),
-      ),
+      interrupt: Effect.fn("Session.interrupt")((sessionID) => Effect.uninterruptible(execution.interrupt(sessionID))),
       revert: {
         stage: Effect.fn("Session.revert.stage")(function* (input) {
           const session = yield* result.get(input.sessionID)
@@ -2072,7 +2278,8 @@ const recordedAttachment = Effect.fnUntraced(function* (db: Database.Interface["
   const digest = AttachmentStore.managedDigest(uri)
   if (digest === undefined) return undefined
   const row = yield* db
-    .get<{ bytes: unknown; path: unknown; mime: unknown }>(sql`
+    .get<{ bytes: unknown; path: unknown; mime: unknown }>(
+      sql`
       SELECT json_extract(file.value, '$.content.bytes') AS bytes,
              json_extract(file.value, '$.content.path') AS path,
              json_extract(file.value, '$.mime') AS mime
@@ -2081,11 +2288,15 @@ const recordedAttachment = Effect.fnUntraced(function* (db: Database.Interface["
         AND json_extract(file.value, '$.content.type') = 'managed'
         AND json_extract(file.value, '$.content.digest') = ${digest}
       LIMIT 1
-    `)
+    `,
+    )
     .pipe(Effect.orDie)
   if (!row) return undefined
   return Option.getOrUndefined(
-    decodeRecordedAttachment({ content: { type: "managed", digest, bytes: row.bytes, path: row.path }, mime: row.mime }),
+    decodeRecordedAttachment({
+      content: { type: "managed", digest, bytes: row.bytes, path: row.path },
+      mime: row.mime,
+    }),
   )
 })
 
@@ -2294,12 +2505,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isMissingLocation(value: unknown) {
-  return (
-    isRecord(value) &&
-    value._tag === "PlatformError" &&
-    isRecord(value.reason) &&
-    value.reason._tag === "NotFound"
-  )
+  return isRecord(value) && value._tag === "PlatformError" && isRecord(value.reason) && value.reason._tag === "NotFound"
 }
 
 // Mirrors the shell tool's in-memory preview safety limit.

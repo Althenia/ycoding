@@ -2,6 +2,50 @@ import { expect, test } from "bun:test"
 import { SessionCompaction } from "@ycoding-ai/schema"
 import { isSessionNotFoundError, isUnauthorizedError, YCoding } from "../src/promise/index"
 
+test("sends explicit named profile selection without credential identity", async () => {
+  const requests: Request[] = []
+  const client = YCoding.make({
+    baseUrl: "http://localhost:3000",
+    fetch: async (input, init) => {
+      requests.push(input instanceof Request ? input : new Request(input, init))
+      return new Response(null, { status: 204 })
+    },
+  })
+  const model = { providerID: "openai", id: "gpt-6.1-sol", variant: "high", profile: "Work" }
+  await client.session.switchModel({ sessionID: "ses_profile", model })
+  expect(requests).toHaveLength(1)
+  expect(new URL(requests[0].url).pathname).toBe("/api/session/ses_profile/model")
+  expect(await requests[0].json()).toEqual({ model })
+})
+
+test("preserves explicit default model selection alongside model metadata", async () => {
+  const selection = { providerID: "openai", id: "gpt-6.1-sol", variant: "high", profile: "Work" }
+  const response = {
+    location: { directory: "/fixture", project: { id: "global", directory: "/fixture" } },
+    data: {
+      id: selection.id,
+      providerID: selection.providerID,
+      modelID: selection.id,
+      name: "Sol",
+      capabilities: { tools: true, input: ["text"], output: ["text"] },
+      variants: [],
+      time: { released: 0 },
+      cost: [],
+      status: "active" as const,
+      enabled: true,
+      limit: { context: 100, output: 20 },
+      selection,
+    },
+  }
+  const client = YCoding.make({
+    baseUrl: "http://localhost:3000",
+    fetch: async () => Response.json(response),
+  })
+  const actual = await client.model.default()
+  expect(actual.data?.id).toBe(selection.id)
+  expect(actual.data?.selection).toEqual(selection)
+})
+
 test("R7 sends explicit goal resume and preserves the returned objective", async () => {
   const requests: Request[] = []
   const state = {

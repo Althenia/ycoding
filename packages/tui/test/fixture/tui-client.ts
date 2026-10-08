@@ -106,6 +106,8 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
       return json({ location: { directory, project: { id: "proj_test", directory: worktree } }, data: [] })
     if (url.pathname === "/api/project/current") return json({ id: "proj_test", directory: worktree })
     if (url.pathname === "/api/project/proj_test/directories") return json([{ directory: worktree }])
+    if (url.pathname === "/api/model/default")
+      return json({ location: { directory, project: { id: "proj_test", directory: worktree } }, data: null })
     if (url.pathname === "/api/shell")
       return json({ location: { directory, project: { id: "proj_test", directory: worktree } }, data: [] })
     if (url.pathname === "/api/mcp")

@@ -18,6 +18,42 @@ function fixture(switchModel: Session.Interface["switchModel"]) {
   }
 }
 
+test("profile selection failures are sanitized invalid-request responses for creation and model switching", async () => {
+  const error = new SessionRunnerModel.ProfileUnavailableError({
+    providerID: model.providerID,
+    profile: "private-profile-label",
+  })
+  await using http = sessionHttp({
+    create: () => Effect.fail(error),
+    switchModel: () => Effect.fail(error),
+  })
+  for (const path of ["/api/session", `/api/session/${sessionID}/model`]) {
+    const response = await http.json(path, "POST", { model: { ...model, profile: "Work" } })
+    expect(response.status).toBe(400)
+    const body = await response.json()
+    expect(body).toMatchObject({ _tag: "InvalidRequestError", field: "model.profile" })
+    expect(body.message).toMatch(/profile.*unavailable.*select/i)
+    expect(JSON.stringify(body)).not.toContain("private-profile-label")
+    expect(JSON.stringify(body)).not.toContain(error._tag)
+  }
+})
+
+test("creation maps newly reachable model resolution failures without exposing provider details", async () => {
+  const errors = [
+    { error: new SessionRunnerModel.ModelUnavailableError({ providerID: model.providerID, modelID: CatalogModel.ID.make("private-model") }), field: "model" },
+    { error: new SessionRunnerModel.VariantUnavailableError({ providerID: model.providerID, modelID: model.id, variant: CatalogModel.VariantID.make("private-variant") }), field: "model.variant" },
+  ]
+  for (const entry of errors) {
+    await using http = sessionHttp({ create: () => Effect.fail(entry.error) })
+    const response = await http.json("/api/session", "POST", { model })
+    expect(response.status).toBe(400)
+    const body = await response.json()
+    expect(body).toMatchObject({ _tag: "InvalidRequestError", field: entry.field })
+    expect(JSON.stringify(body)).not.toContain("private-")
+    expect(JSON.stringify(body)).not.toContain(entry.error._tag)
+  }
+})
+
 test("R1-F returns 204 only after Core switch settlement", async () => {
   const entered = Deferred.makeUnsafe<void>()
   const settle = Deferred.makeUnsafe<void>()

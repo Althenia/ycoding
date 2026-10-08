@@ -1451,6 +1451,8 @@ body:has(.app) {
   inline-size: min(100%, 420px);
 }
 
+.scheme-select { inline-size: min(100%, 240px); }
+
 .appearance-segments .filters__option { gap: var(--yc-space-2); justify-content: center; }
 .appearance-segments .filters__option svg { flex: none; }
 

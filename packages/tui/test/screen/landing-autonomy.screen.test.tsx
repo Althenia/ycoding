@@ -11,23 +11,41 @@ const directory = "/tmp/ycoding/landing-autonomy"
 const location = { directory, project: { id: "proj_landing_autonomy", directory } }
 const model = { providerID: "openai", id: "gpt-5.6-terra" }
 const agent = { id: "build", name: "Build", mode: "primary", hidden: false, permissions: [], request: { headers: {}, body: {} } }
-const modelInfo = {
+const modelInfoBase = {
   ...model, modelID: "openai/gpt-5.6-terra", name: "GPT 5.6 Terra",
   capabilities: { tools: true, input: ["text"], output: ["text"] }, variants: [],
   time: { released: 0 }, cost: [], status: "active", enabled: true,
   limit: { context: 200_000, output: 32_000 },
 }
 
-function fixture() {
+function fixture(input: {
+  enabled?: boolean
+  profiles?: Array<{ name: string; active: boolean; variants: string[] }>
+  selection?: { providerID: string; id: string; profile?: string; variant?: string }
+  agentModel?: { providerID: string; id: string; profile?: string; variant?: string }
+} = {}) {
   let sessionID: string | undefined
   let autonomy: SessionAutonomyState = { mode: "normal", yolo: 0 }
   let failAutonomy = false
   let failGoal = false
   const mutations: string[] = []
+  const creates: Record<string, unknown>[] = []
   const admissionStates: SessionAutonomyState[] = []
+  const selection = input.selection ?? { providerID: model.providerID, id: model.id }
+  const modelInfo = {
+    ...modelInfoBase,
+    enabled: input.enabled ?? modelInfoBase.enabled,
+    ...(input.profiles === undefined ? {} : { profiles: input.profiles }),
+  }
+  const infoModel = {
+    providerID: selection.providerID,
+    id: selection.id,
+    ...(selection.profile === undefined ? {} : { profile: selection.profile }),
+    ...(selection.variant === undefined ? {} : { variant: selection.variant }),
+  }
   const info = () => ({
     id: sessionID, projectID: location.project.id, title: "Landing autonomy", location: { directory },
-    agent: "build", model, cost: 0,
+    agent: "build", model: infoModel, cost: 0,
     tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
     time: { created: 1, updated: 2 },
   })
@@ -35,14 +53,17 @@ function fixture() {
     if (url.pathname === "/api/location") return json(location)
     if (url.pathname === "/api/fs/list") return json({ location, data: [] })
     if (url.pathname === "/api/vcs/branch") return json({ location, data: { current: "main", default: "main" } })
-    if (url.pathname === "/api/agent") return json({ location, data: [agent] })
+    if (url.pathname === "/api/agent") return json({ location, data: [{ ...agent, ...(input.agentModel ? { model: input.agentModel } : {}) }] })
     if (url.pathname === "/api/model") return json({ location, data: [modelInfo] })
+    if (url.pathname === "/api/model/default")
+      return json({ location, data: { ...modelInfo, selection } })
     if (url.pathname === "/api/provider") return json({ location, data: [] })
     if (["/api/integration", "/api/command", "/api/skill", "/api/reference", "/api/permission/request", "/api/form/request"].includes(url.pathname))
       return json({ location, data: [] })
     if (url.pathname === "/api/session/active") return json({ data: {} })
     if (url.pathname === "/api/session" && request.method === "POST") {
       const body: unknown = await request.json()
+      if (typeof body === "object" && body !== null) creates.push(structuredClone(body) as Record<string, unknown>)
       const id = typeof body === "object" && body !== null ? Reflect.get(body, "id") : undefined
       sessionID = typeof id === "string" ? id : "ses_landing_goal_new"
       autonomy = { mode: "normal", yolo: 0 }
@@ -102,7 +123,7 @@ function fixture() {
     if (url.pathname === "/api/mcp/resource") return json({ location, data: { resources: [], templates: [] } })
     return undefined
   }
-  return { route, mutations, admissionStates, current: () => autonomy, failNextAutonomy: () => { failAutonomy = true }, failNextGoal: () => { failGoal = true } }
+  return { route, mutations, creates, admissionStates, current: () => autonomy, failNextAutonomy: () => { failAutonomy = true }, failNextGoal: () => { failGoal = true } }
 }
 
 async function waitFor(check: () => boolean, label: string) {
@@ -112,6 +133,85 @@ async function waitFor(check: () => boolean, label: string) {
   }
   throw new Error(`Timed out waiting for ${label}`)
 }
+
+test("clean Home shows and creates a Session from the configured profile variant", async () => {
+  const state = await mkdtemp(path.join(os.tmpdir(), "ycoding-landing-model-"))
+  const selection = { providerID: "openai", id: "gpt-5.6-terra", profile: "Work", variant: "high" }
+  const backend = fixture({
+    enabled: false,
+    profiles: [
+      { name: "Work", active: true, variants: ["high"] },
+      { name: "Personal", active: false, variants: ["low"] },
+    ],
+    selection,
+  })
+  const screen = await renderScreen({ width: 100, height: 40, state, route: backend.route, settle: "Work" })
+  try {
+    await waitFor(() => screen.frame().includes("Work") && screen.frame().includes("high"), "configured Work/high in Home header")
+    const row = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
+    await screen.mouse.click(3, row)
+    await screen.input.typeText("Use configured profile")
+    screen.input.pressEnter()
+    await waitFor(() => backend.creates.length === 1, "Session creation with the configured selection")
+    expect(backend.creates[0]).toMatchObject({
+      model: { providerID: "openai", id: "gpt-5.6-terra", profile: "Work", variant: "high" },
+    })
+  } finally {
+    await screen.dispose()
+    await rm(state, { recursive: true, force: true })
+  }
+}, 30_000)
+
+test("an unavailable named Home preference remains visible and blocks submission", async () => {
+  const state = await mkdtemp(path.join(os.tmpdir(), "ycoding-landing-model-"))
+  await Bun.write(
+    path.join(state, "model.json"),
+    JSON.stringify({ recent: [{ providerID: "openai", modelID: "gpt-5.6-terra", profile: "Work" }], favorite: [], variant: {} }),
+  )
+  const backend = fixture({
+    enabled: false,
+    profiles: [{ name: "Personal", active: true, variants: ["low"] }],
+    selection: { providerID: "openai", id: "gpt-5.6-terra", profile: "Personal", variant: "low" },
+  })
+  const screen = await renderScreen({ width: 100, height: 40, state, route: backend.route, settle: "Work" })
+  try {
+    await waitFor(() => screen.frame().includes("Work"), "the unavailable named Work preference")
+    const row = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
+    await screen.mouse.click(3, row)
+    await screen.input.typeText("Keep this unavailable-profile draft")
+    screen.input.pressEnter()
+    await waitFor(() => screen.frame().includes("Model selection needs attention"), "the unavailable profile warning")
+    expect(screen.frame()).toContain("Keep this unavailable-profile draft")
+    expect(backend.creates).toEqual([])
+  } finally {
+    await screen.dispose()
+    await rm(state, { recursive: true, force: true })
+  }
+}, 30_000)
+
+test("an unavailable configured agent profile remains visible and blocks submission", async () => {
+  const state = await mkdtemp(path.join(os.tmpdir(), "ycoding-landing-model-"))
+  const backend = fixture({
+    enabled: false,
+    profiles: [{ name: "Personal", active: true, variants: ["low"] }],
+    selection: { providerID: "openai", id: "gpt-5.6-terra", profile: "Personal", variant: "low" },
+    agentModel: { providerID: "openai", id: "gpt-5.6-terra", profile: "Work", variant: "high" },
+  })
+  const screen = await renderScreen({ width: 100, height: 40, state, route: backend.route, settle: "Work" })
+  try {
+    await waitFor(() => screen.frame().includes("Work"), "the unavailable configured agent profile")
+    const row = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
+    await screen.mouse.click(3, row)
+    await screen.input.typeText("Keep the agent-profile draft")
+    screen.input.pressEnter()
+    await waitFor(() => screen.frame().includes("Model selection needs attention"), "the unavailable agent profile warning")
+    expect(screen.frame()).toContain("Keep the agent-profile draft")
+    expect(backend.creates).toEqual([])
+  } finally {
+    await screen.dispose()
+    await rm(state, { recursive: true, force: true })
+  }
+}, 30_000)
 
 test.each([1, 2, 3] as const)("landing YOLO %d is durable before its first prompt and shown in chat", async (level) => {
   const state = await mkdtemp(path.join(os.tmpdir(), "ycoding-landing-autonomy-"))

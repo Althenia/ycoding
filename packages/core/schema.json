@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "66fad4f6-a3e3-4491-8aca-0140abba7612",
+  "id": "b62baca3-c955-43bc-9168-7da04223ea3f",
   "prevIds": [
-    "16e8ba31-f648-4084-959c-b3d561432a6f"
+    "66fad4f6-a3e3-4491-8aca-0140abba7612"
   ],
   "ddl": [
     {
@@ -367,6 +367,16 @@
       "default": "0",
       "generated": null,
       "name": "generation",
+      "entityType": "columns",
+      "table": "credential"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "account_generation",
       "entityType": "columns",
       "table": "credential"
     },
@@ -3348,6 +3358,26 @@
     },
     {
       "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "assistant_message_id",
+      "entityType": "columns",
+      "table": "session_provider_request"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "connection_identity_digest",
+      "entityType": "columns",
+      "table": "session_provider_request"
+    },
+    {
+      "type": "text",
       "notNull": true,
       "autoincrement": false,
       "default": null,
@@ -3883,6 +3913,16 @@
       "default": null,
       "generated": null,
       "name": "model",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "profile_binding",
       "entityType": "columns",
       "table": "session"
     },
@@ -7158,6 +7198,12 @@
     {
       "value": "typeof(\"generation\") = 'integer' AND \"generation\" >= 0",
       "name": "credential_generation_check",
+      "entityType": "checks",
+      "table": "credential"
+    },
+    {
+      "value": "typeof(\"account_generation\") = 'integer' AND \"account_generation\" >= 0",
+      "name": "credential_account_generation_check",
       "entityType": "checks",
       "table": "credential"
     },

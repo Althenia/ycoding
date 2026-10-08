@@ -3,6 +3,7 @@ import { Effect, Layer, LayerMap } from "effect"
 import path from "node:path"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Command } from "@ycoding-ai/core/command"
+import { Catalog } from "@ycoding-ai/core/catalog"
 import { Config } from "@ycoding-ai/core/config"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -32,7 +33,7 @@ const locations = Layer.effect(
   LocationServiceMap.Service,
   LayerMap.make(
     () =>
-      AppNodeBuilder.build(LayerNode.group([Command.node, Agent.node]), [
+      AppNodeBuilder.build(LayerNode.group([Command.node, Agent.node, Catalog.node]), [
         [Config.node, emptyConfigLayer],
         [MCP.node, emptyMcpLayer],
         [Location.node, testLocationLayer],

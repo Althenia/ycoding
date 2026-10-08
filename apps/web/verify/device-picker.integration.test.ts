@@ -68,8 +68,18 @@ describe("machine picker", () => {
         for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]') !== null`); attempt += 1) await Bun.sleep(50)
         expect(await page.evaluate<{ readonly disabled: boolean; readonly label: string }>(`(() => { const trigger = document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]'); return { disabled: trigger?.disabled ?? false, label: trigger?.textContent?.trim() ?? '' }; })()`)).toEqual({ disabled: true, label: placeholder })
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&devices=${mode}`)
-        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.empty__title') !== null`); attempt += 1) await Bun.sleep(50)
-        expect(await page.evaluate<boolean>(`document.body.innerText.includes(${JSON.stringify(mode === "offline" ? "ycoding remote connect" : "No machine is enrolled")})`)).toBe(true)
+        const expectedAlert = mode === "offline"
+          ? "The machine for this Session is offline. Reconnect that machine to open its Session."
+          : "The machine for this Session is unavailable to this account."
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('[role="alert"]')?.textContent?.trim() === ${JSON.stringify(expectedAlert)}`); attempt += 1) await Bun.sleep(50)
+        const state = await page.evaluate<{ readonly pathname: string; readonly search: string; readonly activeView: string; readonly alert: string; readonly requests: readonly { readonly deviceID: string; readonly operation: string }[]; readonly text: string }>(`({ pathname: location.pathname, search: location.search, activeView: document.querySelector('.remote-nav__link--active')?.textContent?.trim() ?? '', alert: document.querySelector('[role="alert"]')?.textContent?.trim() ?? '', requests: window.remoteDeviceRequests, text: document.body.innerText })`)
+        expect(state.pathname).toBe("/remote/session")
+        expect(state.search).toContain("session_id=ses_fixture")
+        expect(state.search).toContain("device_id=dev_studio")
+        expect(state.activeView).toBe("Session")
+        expect(state.alert).toBe(expectedAlert)
+        expect(state.requests).toEqual([])
+        expect(state.text).not.toContain("ycoding remote connect")
       } finally { await page.close() }
     }
   }, 30_000)
@@ -119,6 +129,7 @@ describe("machine picker", () => {
         await page.evaluate(`document.querySelector('button[aria-label="Machine"]')?.click()`)
       for (let index = 0; index < 40 && !(await page.evaluate<boolean>(`document.querySelector('.custom-select__dialog[open]') !== null`)); index++) await Bun.sleep(25)
       await page.evaluate(`Promise.all([...document.querySelector('.custom-select__dialog .overlay__surface')?.getAnimations() ?? []].map(animation => animation.finished))`)
+      await page.evaluate(`(() => { const list=document.querySelector('.custom-select__list'), option=list?.querySelector('[role="option"]'); if (!list || !option) throw new Error('Machine options are missing'); list.append(...Array.from({ length: 24 }, () => option.cloneNode(true))); })()`)
       const initial = await page.evaluate<{ listScrollable: boolean; bodyScrollable: boolean; footerVisible: boolean; listTop: number; footerTop: number }>(`(() => { const body=document.querySelector('.custom-select__dialog .overlay__body'), list=body.querySelector('.custom-select__list'), footer=body.querySelector('.custom-select__confirm'), surface=document.querySelector('.custom-select__dialog .overlay__surface'); return { listScrollable:list.scrollHeight > list.clientHeight, bodyScrollable:body.scrollHeight > body.clientHeight, footerVisible:footer.getBoundingClientRect().bottom <= surface.getBoundingClientRect().bottom, listTop:list.getBoundingClientRect().top, footerTop:footer.getBoundingClientRect().top }; })()`)
       expect(initial.listScrollable).toBe(true)
       expect(initial.bodyScrollable).toBe(false)
@@ -249,18 +260,20 @@ describe("machine picker", () => {
         await page.pressKey("Tab", "Tab", 9)
         expect(await page.evaluate<boolean>(`document.querySelector('dialog')?.contains(document.activeElement) === true`)).toBe(true)
         await page.evaluate(`Promise.all([...document.querySelector('.custom-select__dialog .overlay__surface')?.getAnimations() ?? []].map(animation => animation.finished))`)
-        const layout = await page.evaluate<{ readonly left: number; readonly right: number; readonly bottom: number; readonly radius: string; readonly expectedRadius: string; readonly paddingBottom: number; readonly minPadding: number; readonly controls: readonly { readonly label: string; readonly height: number }[]; readonly overflow: boolean }>(`(() => {
+        const layout = await page.evaluate<{ readonly left: number; readonly right: number; readonly top: number; readonly bottom: number; readonly height: number; readonly visualHeight: number; readonly visualTop: number; readonly radius: string; readonly paddingBottom: number; readonly minPadding: number; readonly controls: readonly { readonly label: string; readonly height: number }[]; readonly overflow: boolean }>(`(() => {
           const surface = document.querySelector('dialog .overlay__surface');
           if (!(surface instanceof HTMLElement)) throw new Error('Machine sheet missing');
           const rect = surface.getBoundingClientRect();
           const style = getComputedStyle(surface);
           const controls = [...surface.querySelectorAll('button')].filter(button => button.getBoundingClientRect().height > 0);
-          return { left: rect.left, right: rect.right, bottom: rect.bottom, radius: style.borderTopLeftRadius, expectedRadius: style.getPropertyValue('--yc-radius-lg').trim(), paddingBottom: parseFloat(style.paddingBottom), minPadding: parseFloat(style.getPropertyValue('--yc-space-4')), controls: controls.map(button => ({ label: button.getAttribute('aria-label') ?? button.textContent.trim(), height: button.getBoundingClientRect().height })), overflow: document.documentElement.scrollWidth > innerWidth };
+          return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, height: rect.height, visualHeight: visualViewport.height, visualTop: visualViewport.offsetTop, radius: style.borderTopLeftRadius, paddingBottom: parseFloat(style.paddingBottom), minPadding: parseFloat(style.getPropertyValue('--yc-space-4')), controls: controls.map(button => ({ label: button.getAttribute('aria-label') ?? button.textContent.trim(), height: button.getBoundingClientRect().height })), overflow: document.documentElement.scrollWidth > innerWidth };
         })()`)
         expect(layout.left, JSON.stringify({ width, layout })).toBeGreaterThanOrEqual(0)
         expect(layout.right, JSON.stringify({ width, layout })).toBeLessThanOrEqual(width)
         expect(layout.bottom, JSON.stringify({ width, layout })).toBeLessThanOrEqual(844)
-        expect(layout.radius).toBe(layout.expectedRadius)
+        expect(layout.top).toBe(layout.visualTop)
+        expect(layout.height).toBe(layout.visualHeight)
+        expect(layout.radius).toBe("0px")
         expect(layout.paddingBottom).toBeGreaterThanOrEqual(layout.minPadding)
         expect(layout.controls.every((control) => control.height >= 44), JSON.stringify({ width, layout })).toBe(true)
         expect(layout.overflow).toBe(false)

@@ -133,7 +133,7 @@ import {
   type SessionAutonomyResponse,
   yoloLevel,
 } from "../../util/session-autonomy"
-import { daybreakPlan, daybreakSuccessLabel, daybreakTitle } from "../../util/session-daybreak"
+import { daybreakPlan, daybreakSuccessLabel, daybreakTitle, modelDaybreak } from "../../util/session-daybreak"
 import { promptSkillsFromMetadata, segmentPromptSkills } from "../../prompt/skill"
 import { sessionSkillContent } from "../../util/session-skills"
 import { Header, headerModelRef, pendingVariantSelection, sessionRetryHeaderState, type SessionHeaderOperationalState, type SessionHeaderState } from "./header"
@@ -338,8 +338,8 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   const daybreakPrograms = createMemo(() => {
     const selected = local.model.pendingTarget(route.sessionID) ?? local.model.current()
     if (!selected) return []
-    return models().find((item) => item.providerID === selected.providerID && item.id === selected.modelID)
-      ?.daybreak ?? []
+    const model = models().find((item) => item.providerID === selected.providerID && item.id === selected.modelID)
+    return modelDaybreak({ model, selection: selected })
   })
 
   const scrollAcceleration = createMemo(() => getScrollAcceleration(config))
@@ -519,7 +519,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     if (!program) return
     const model = currentHeaderModel()
     const info = models().find((item) => item.providerID === model?.providerID && item.id === model?.id)
-    return { program, active: model?.providerID === "openai" && info?.daybreak?.includes(program) === true }
+    return { program, active: model?.providerID === "openai" && modelDaybreak({ model: info, selection: model }).includes(program) }
   })
   const pendingHeaderModel = createMemo(() => {
     // While a switch is in flight, show the desired target as pending progress. The durable Session
@@ -542,22 +542,11 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     const agent = local.agent.current()
     return agent?.name ?? (agent ? Locale.titlecase(agent.id) : undefined)
   })
-  // The active credential profile is the account a provider request resolves through, so the header
-  // names it beside the agent. A provider with a single credential keeps the plain `provider/model`
-  // label, and only the user-facing credential label is exposed — never a credential ID or token.
-  const headerProfile = createMemo(() => {
-    const model = currentHeaderModel()
-    if (!model) return undefined
-    const target = location()
-    const integrationID =
-      (data.location.provider.list(target) ?? []).find((provider) => provider.id === model.providerID)
-        ?.integrationID ?? model.providerID
-    const credentials = (data.location.integration.list(target) ?? [])
-      .filter((integration) => integration.id === integrationID)
-      .flatMap((integration) => integration.connections)
-      .filter((connection) => connection.type === "credential")
-    if (credentials.length <= 1) return undefined
-    return credentials.find((connection) => connection.active)?.label
+  const headerProfile = createMemo(() => currentHeaderModel()?.profile)
+  const pendingHeaderProfile = createMemo(() => {
+    const pending = local.model.pendingTarget(route.sessionID)
+    if (!pending || pending.profile === currentHeaderModel()?.profile) return undefined
+    return `→ ${pending.profile ?? "Provider default"}`
   })
   const parentID = createMemo(() => session()?.parentID)
   const btw = createMemo(() => Boolean(session()?.parentID && session()?.agent === "btw"))
@@ -929,8 +918,8 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     {
       id: "session.first",
       title: "First message",
+      description: "Scroll to the start of the transcript",
       group: "Session",
-      palette: undefined,
       run: () => {
         clearMessageNavigation()
         scroll.scrollTo(0)
@@ -940,8 +929,8 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     {
       id: "session.last",
       title: "Last message",
+      description: "Scroll to the end of the transcript",
       group: "Session",
-      palette: undefined,
       run: () => {
         clearMessageNavigation()
         scroll.scrollTo(scroll.scrollHeight)
@@ -1167,7 +1156,6 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       })(),
       id: "session.toggle.thinking",
       group: "Session",
-      palette: undefined,
       slash: {
         name: "thinking",
         aliases: ["toggle-thinking"],
@@ -1185,7 +1173,6 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       title: "Toggle session scrollbar",
       id: "session.toggle.scrollbar",
       group: "Session",
-      palette: undefined,
       run: () => {
         void configState
           .update((draft) => {
@@ -1199,7 +1186,6 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       title: groupExploration() ? "Show tool calls individually" : "Group related tool calls",
       id: "session.toggle.exploration_grouping",
       group: "Session",
-      palette: undefined,
       run: () => {
         void configState
           .update((draft) => {
@@ -1213,7 +1199,6 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       title: "Jump to last user message",
       id: "session.messages_last_user",
       group: "Session",
-      palette: undefined,
       run: () => {
         const messages = data.session.message.list(route.sessionID)
         if (!messages || !messages.length) return
@@ -1394,7 +1379,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       title: "Background blocking tools",
       id: "session.background",
       group: "Session",
-      palette: undefined,
+      enabled: data.session.status(route.sessionID) === "running",
       run: () => {
         void client.api.session.background({ sessionID: route.sessionID })
         dialog.clear()
@@ -1418,7 +1403,6 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       title: "Go to parent session",
       id: "session.parent",
       group: "Session",
-      palette: undefined,
       enabled: !!session()?.parentID,
       run: () => {
         const parentID = session()?.parentID
@@ -1435,7 +1419,6 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       title: "Next subagent",
       id: "session.child.next",
       group: "Session",
-      palette: undefined,
       enabled: subagent(),
       run: () => {
         navigateSibling(1)
@@ -1445,7 +1428,6 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       title: "Previous subagent",
       id: "session.child.previous",
       group: "Session",
-      palette: undefined,
       enabled: subagent(),
       run: () => {
         navigateSibling(-1)
@@ -1504,7 +1486,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         branch={branch()}
         agent={headerAgent()}
         pendingAgent={pendingHeaderAgent()}
-        profile={headerProfile()}
+        profile={pendingHeaderProfile() ?? headerProfile()}
         model={headerModel()}
         daybreak={headerDaybreak()}
         variant={headerVariant()}

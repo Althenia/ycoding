@@ -28,7 +28,8 @@ import { DecisionTool } from "@ycoding-ai/core/tool/decision"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { RequestExecutor } from "@ycoding-ai/ai/route"
-import { LLM, LLMClient } from "@ycoding-ai/ai"
+import { AuthenticationReason, LLM, LLMClient, LLMError } from "@ycoding-ai/ai"
+import { ConfigDecisions } from "@ycoding-ai/core/config/decisions"
 import { CatalogModel } from "@ycoding-ai/core/model"
 import { Provider } from "@ycoding-ai/core/provider"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
@@ -37,7 +38,7 @@ import { imagePassthrough } from "./lib/image"
 import { executeTool, registerToolPlugin, toolDefinitions, toolIdentity } from "./lib/tool"
 
 const wire: Array<{ url: string; body: unknown; authorization: string | undefined }> = []
-const behavior = { denied: false, refused: false, hold: false, telemetry: false }
+const behavior = { denied: false, refused: false, hold: false, telemetry: false, mismatch: false, unauthorized: false }
 let entered = Deferred.makeUnsafe<void>()
 const executor = Layer.mock(RequestExecutor.Service, { execute: (request) => Effect.sync(() => {
   if (request.body._tag !== "Uint8Array") throw new Error("Expected a JSON body")
@@ -48,14 +49,16 @@ const executor = Layer.mock(RequestExecutor.Service, { execute: (request) => Eff
   } : {
     model: "gpt-6-luna",
     answers: [behavior.refused ? { type: "refusal", name: "decision" } : {
-      type: "choice", name: "decision", choice: "review", probabilities: [{ value: "allow", probability: 0.2 }, { value: "review", probability: 0.8 }], confidence: 0.6,
+      type: "choice", name: "decision", choice: behavior.mismatch ? "escalate" : "review", probabilities: [{ value: "allow", probability: 0.2 }, { value: "review", probability: 0.8 }], confidence: 0.6,
     }],
     usage: behavior.telemetry ? { input_tokens: 12, output_tokens: 5, total_tokens: 17,
       input_tokens_details: { cached_tokens: 4, cache_write_tokens: 2 }, output_tokens_details: { reasoning_tokens: 2 },
     } : { input_tokens: 12, output_tokens: 0, total_tokens: 12 },
   }), { headers: { "content-type": "application/json" } }))
 }).pipe(Effect.flatMap((response) => Deferred.succeed(entered, undefined).pipe(
-  Effect.andThen(behavior.hold ? Effect.never : Effect.succeed(response)),
+  Effect.andThen(behavior.hold ? Effect.never : behavior.unauthorized ? Effect.fail(new LLMError({
+    module: "RequestExecutor", method: "execute", reason: new AuthenticationReason({ message: "Rejected key", kind: "invalid" }),
+  })) : Effect.succeed(response)),
 ))) })
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, Decision.node, SessionProjector.node, SessionProviderRequest.node, ToolRegistry.node, ToolRegistry.toolsNode, Permission.node, Credential.node, EventRuntime.node, Agent.node, SessionStore.node]), [
   [requestExecutor, executor],
@@ -79,6 +82,8 @@ const seed = (id: string) => Effect.gen(function* () {
   behavior.refused = false
   behavior.hold = false
   behavior.telemetry = false
+  behavior.mismatch = false
+  behavior.unauthorized = false
   entered = Deferred.makeUnsafe<void>()
   const database = yield* Database.Service
   yield* database.db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] }).onConflictDoNothing().run().pipe(Effect.orDie)
@@ -117,6 +122,51 @@ it.effect("a refusal is preserved as uncertainty rather than an affirmative deci
   behavior.refused = true
   const decisions = yield* Decision.Service
   expect(yield* decisions.choose(choice(sessionID, "openai"))).toEqual({ refused: true })
+}))
+
+it.effect("native adapter failures keep distinct sanitized reasons and settle the ledger", () => Effect.gen(function* () {
+  const decisions = yield* Decision.Service
+  const requests = yield* SessionProviderRequest.Service
+  const mismatched = yield* seed("ses_decision_invalid_output")
+  behavior.mismatch = true
+  const invalidOutput = yield* decisions.choose(choice(mismatched, "openai")).pipe(Effect.exit)
+  expect(Exit.isFailure(invalidOutput) && Cause.squash(invalidOutput.cause)).toMatchObject({ _tag: "Decision.Error", reason: "invalid-output" })
+  expect(wire).toHaveLength(1)
+  expect(yield* requests.list(mismatched)).toHaveLength(1)
+
+  const rejected = yield* seed("ses_decision_rejected_key")
+  behavior.unauthorized = true
+  const unavailable = yield* decisions.choose(choice(rejected, "openai")).pipe(Effect.exit)
+  expect(Exit.isFailure(unavailable) && Cause.squash(unavailable.cause)).toMatchObject({ _tag: "Decision.Error", reason: "unavailable" })
+  expect(JSON.stringify(Exit.isFailure(unavailable) && Cause.squash(unavailable.cause))).not.toContain("fixture-openai-key")
+  expect(yield* requests.list(rejected)).toHaveLength(1)
+
+  const oversizedImages = yield* seed("ses_decision_adapter_request")
+  const invalidRequest = yield* decisions.evaluate({ provider: "openai", request: {
+    model: "gpt-6-luna",
+    input: [{ role: "user", content: Array.from({ length: 129 }, () => ({ type: "input_image" as const, image_url: "data:image/png;base64,AAAA" })) }],
+    questions: [{ type: "predicate", name: "damage", instructions: "Is any product damaged?" }],
+  } }, { sessionID: oversizedImages }).pipe(Effect.exit)
+  expect(Exit.isFailure(invalidRequest) && Cause.squash(invalidRequest.cause)).toMatchObject({ _tag: "Decision.Error", reason: "invalid-request" })
+  expect(wire).toHaveLength(0)
+}))
+
+it.effect("assessment separates native probability from uncalibrated confidence and rejects unusable scores", () => Effect.sync(() => {
+  const native = new ConfigDecisions.Policy({ provider: "openai", min_probability: 0.8 })
+  const agent = new ConfigDecisions.AgentPolicy({ provider: "agent", min_confidence: 0.8 })
+  expect(Decision.assess(native, { choice: "allow", probability: 0.8, confidence: 0.1, refused: false }))
+    .toEqual({ status: "confident", choice: "allow", score: { metric: "probability", value: 0.8 } })
+  expect(Decision.assess(agent, { choice: "allow", probability: 0.99, confidence: 0.79, refused: false }))
+    .toEqual({ status: "uncertain", score: { metric: "confidence", value: 0.79 } })
+  expect(Decision.assess(agent, { choice: "allow", probability: 0.99, refused: false })).toEqual({ status: "uncertain" })
+  for (const value of [Number.NaN, -0.01, 1.01, Number.POSITIVE_INFINITY])
+    expect(Decision.assess(native, { choice: "allow", probability: value, refused: false })).toEqual({ status: "uncertain" })
+  expect(Decision.assess(native, { choice: "allow", probability: 0.99, refused: true })).toEqual({ status: "refused" })
+  expect(Decision.assess(native, { probability: 0.99, refused: false })).toEqual({ status: "refused" })
+  expect(Decision.confident(native, { choice: "allow", probability: 0.8, refused: false })).toBe(true)
+  expect(Decision.confident(agent, { choice: "allow", probability: 0.99, confidence: 0.79, refused: false })).toBe(false)
+  expect(Decision.describe({ metric: "probability", value: 0.912 })).toBe("native probability 0.91")
+  expect(Decision.describe({ metric: "confidence", value: 0.8 })).toBe("model confidence 0.80, uncalibrated")
 }))
 
 it.effect("decision usage preserves native totals while normalizing non-overlapping ledger tokens", () => Effect.gen(function* () {

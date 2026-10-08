@@ -29,6 +29,7 @@ function landingRoute(url: URL) {
   if (url.pathname === "/api/agent")
     return json({ location, data: [{ id: "build", name: "Build", mode: "primary", hidden: false, permissions: [], request: { headers: {}, body: {} } }] })
   if (url.pathname === "/api/model") return json({ location, data: [model] })
+  if (url.pathname === "/api/model/default") return json({ location, data: { selection: { providerID: model.providerID, id: model.id, variant: "max" } } })
   if (url.pathname === "/api/provider") return json({ location, data: [] })
   if (["/api/integration", "/api/command", "/api/skill", "/api/reference"].includes(url.pathname))
     return json({ location, data: [] })

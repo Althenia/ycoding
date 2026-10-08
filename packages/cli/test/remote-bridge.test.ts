@@ -1389,3 +1389,21 @@ describe("remote bridge multiplexed delivery", () => {
     } finally { await test.bridge.close() }
   })
 })
+
+test("records agent-side execution time for a slow request and stays silent for a fast one", async () => {
+  let elapsed = 1_500
+  let advance = (_ms: number) => {}
+  const test = harness({ results: { autonomyGet: () => { advance(elapsed); return { mode: "normal" } } } })
+  advance = test.advance
+  try {
+    await test.bridge.connect()
+    test.records[0].deliver(requestFrame("session.autonomy.get", "ses_1"))
+    await waitFor(() => sentFrames(test.records[0]).filter((frame) => frame.type === "response").length >= 1 ? true : undefined)
+    elapsed = 10
+    test.records[0].deliver(requestFrame("session.autonomy.get", "ses_1"))
+    await waitFor(() => sentFrames(test.records[0]).filter((frame) => frame.type === "response").length >= 2 ? true : undefined)
+    expect(test.diagnostics.filter((message) => message.startsWith("slow remote request"))).toEqual([
+      "slow remote request session.autonomy.get took 1500ms on this device",
+    ])
+  } finally { await test.bridge.close() }
+})

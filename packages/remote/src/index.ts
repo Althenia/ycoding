@@ -763,7 +763,8 @@ function validName(value: unknown): boolean {
 function validModel(value: unknown): boolean {
   return isRecord(value) && validName(value.providerID) && validName(value.id) &&
     (value.variant === undefined || validName(value.variant)) &&
-    Object.keys(value).every((key) => key === "providerID" || key === "id" || key === "variant")
+    (value.profile === undefined || validName(value.profile)) &&
+    Object.keys(value).every((key) => key === "providerID" || key === "id" || key === "variant" || key === "profile")
 }
 
 function parseResponse(frame: Record<string, unknown>): ParseResult<RemoteResponse> {

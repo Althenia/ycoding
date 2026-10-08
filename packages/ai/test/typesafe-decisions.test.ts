@@ -121,6 +121,7 @@ describe("TypeSafe Decisions", () => {
       questions: { test: { type: "score", instructions: "Rate", criteria: Array.from({ length: 11 }, () => "Level") } },
     },
     { ...request, questions: { test: { type: "choice", instructions: "Choose", criteria: {} } } },
+    { ...request, questions: {} },
     {
       ...request,
       questions: {

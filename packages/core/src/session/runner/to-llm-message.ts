@@ -34,7 +34,9 @@ export const readAttachments = Effect.fnUntraced(function* (
   messages: ReadonlyArray<SessionMessage.Info>,
 ) {
   const files = new Map(
-    messages.flatMap((message) => (message.type === "user" ? (message.files ?? []) : [])).map((file) => [file.content.digest, file] as const),
+    messages
+      .flatMap((message) => (message.type === "user" ? (message.files ?? []) : []))
+      .map((file) => [file.content.digest, file] as const),
   )
   const results = yield* Effect.forEach(
     [...files.values()],
@@ -83,7 +85,11 @@ export const readToolImages = (messages: ReadonlyArray<SessionMessage.Info>) => 
             {
               uri: item.uri,
               bytes: new Uint8Array(bytes),
-              file: { mime: item.mime, name: item.name, content: { digest: Hash.sha256(bytes), bytes: bytes.byteLength } },
+              file: {
+                mime: item.mime,
+                name: item.name,
+                content: { digest: Hash.sha256(bytes), bytes: bytes.byteLength },
+              },
             },
           ] as const,
         ]
@@ -230,10 +236,14 @@ const assistant = (
   providerMetadataKey: string,
   materialized: ReadonlyMap<string, Record<string, unknown>>,
   attachments?: AttachmentMaterialization,
+  accountIdentityDigest?: string,
 ) => {
   const sameModel =
     String(message.model.providerID) === String(model.providerID) && String(message.model.id) === String(model.id)
-  const reuseProviderMetadata = sameModel && message.error === undefined
+  const sameAccount =
+    accountIdentityDigest !== undefined &&
+    materialized.get(SessionProviderState.accountKey(message.id))?.accountIdentityDigest === accountIdentityDigest
+  const reuseProviderMetadata = sameModel && sameAccount && message.error === undefined
   const content = message.content.flatMap((item, ordinal): ContentPart[] => {
     if (item.type === "text")
       return [
@@ -267,6 +277,7 @@ const assistant = (
     const reuseToolProviderMetadata =
       reuseProviderMetadata ||
       (sameModel &&
+        sameAccount &&
         item.executed === true &&
         (item.state.status === "completed" || (item.state.status === "error" && item.state.result !== undefined)))
     const materializedCallState = materialized.get(SessionProviderState.key(message.id, ordinal, "tool-call"))
@@ -340,6 +351,7 @@ function toLLMMessage(
   providerMetadataKey: string,
   materialized: ReadonlyMap<string, Record<string, unknown>>,
   attachments?: AttachmentMaterialization,
+  accountIdentityDigest?: string,
 ): Message[] {
   switch (message.type) {
     case "agent-switched":
@@ -370,12 +382,23 @@ function toLLMMessage(
     case "synthetic":
       if (message.metadata?.remoteCompactionV2 === true) {
         const state = materialized.get(SessionProviderState.key(message.id, 0, "reasoning"))
-        if (!state?.opaqueCompactionItem) return []
-        return [Message.assistant([{
-          type: "reasoning",
-          text: "",
-          providerMetadata: { openai: { remoteCompactionV2: true, opaqueCompactionItem: state.opaqueCompactionItem } },
-        }])]
+        if (
+          !state?.opaqueCompactionItem ||
+          accountIdentityDigest === undefined ||
+          materialized.get(SessionProviderState.accountKey(message.id))?.accountIdentityDigest !== accountIdentityDigest
+        )
+          return []
+        return [
+          Message.assistant([
+            {
+              type: "reasoning",
+              text: "",
+              providerMetadata: {
+                openai: { remoteCompactionV2: true, opaqueCompactionItem: state.opaqueCompactionItem },
+              },
+            },
+          ]),
+        ]
       }
       return [Message.make({ id: message.id, role: "user", content: message.text })]
     case "skill":
@@ -392,7 +415,7 @@ function toLLMMessage(
         }),
       ]
     case "assistant":
-      return assistant(message, model, providerMetadataKey, materialized, attachments)
+      return assistant(message, model, providerMetadataKey, materialized, attachments, accountIdentityDigest)
     case "compaction":
       if (message.status !== "completed" || !("reason" in message)) return []
       return [
@@ -422,4 +445,8 @@ export const toLLMMessages = (
   providerMetadataKey: string = model.providerID,
   materialized: ReadonlyMap<string, Record<string, unknown>> = new Map(),
   attachments?: AttachmentMaterialization,
-) => messages.flatMap((message) => toLLMMessage(message, model, providerMetadataKey, materialized, attachments))
+  accountIdentityDigest?: string,
+) =>
+  messages.flatMap((message) =>
+    toLLMMessage(message, model, providerMetadataKey, materialized, attachments, accountIdentityDigest),
+  )

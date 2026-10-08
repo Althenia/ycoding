@@ -1,18 +1,18 @@
-import { describe, expect } from "bun:test";
-import { LLMClient, LLMEvent, LLMResponse, Model } from "@ycoding-ai/ai";
-import { OpenAIChat } from "@ycoding-ai/ai/protocols";
-import { AISDK } from "@ycoding-ai/core/aisdk";
-import { Catalog } from "@ycoding-ai/core/catalog";
-import { Credential } from "@ycoding-ai/core/credential";
-import { Generate } from "@ycoding-ai/core/generate";
-import { Integration } from "@ycoding-ai/core/integration";
-import { IntegrationConnection } from "@ycoding-ai/core/integration/connection";
-import { CatalogModel } from "@ycoding-ai/core/model";
-import { Npm } from "@ycoding-ai/core/npm";
-import { claudeCodeMethodID } from "@ycoding-ai/core/plugin/provider/anthropic";
-import { Provider } from "@ycoding-ai/core/provider";
-import { Effect, Layer } from "effect";
-import { it } from "./lib/effect";
+import { describe, expect } from "bun:test"
+import { LLMClient, LLMEvent, LLMResponse, Model } from "@ycoding-ai/ai"
+import { OpenAIChat } from "@ycoding-ai/ai/protocols"
+import { AISDK } from "@ycoding-ai/core/aisdk"
+import { Catalog } from "@ycoding-ai/core/catalog"
+import { Credential } from "@ycoding-ai/core/credential"
+import { Generate } from "@ycoding-ai/core/generate"
+import { Integration } from "@ycoding-ai/core/integration"
+import { IntegrationConnection } from "@ycoding-ai/core/integration/connection"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Npm } from "@ycoding-ai/core/npm"
+import { claudeCodeMethodID } from "@ycoding-ai/core/plugin/provider/anthropic"
+import { Provider } from "@ycoding-ai/core/provider"
+import { Effect, Layer } from "effect"
+import { it } from "./lib/effect"
 
 const anthropic = CatalogModel.Info.make({
   id: CatalogModel.ID.make("claude-sonnet-4-5"),
@@ -30,13 +30,13 @@ const anthropic = CatalogModel.Info.make({
   status: "active",
   enabled: true,
   limit: { context: 200_000, output: 64_000 },
-});
+})
 
 const loaded = Model.make({
   id: "loaded-anthropic",
   provider: "anthropic",
   route: OpenAIChat.route,
-});
+})
 
 const response = (text: string) => {
   const value = LLMResponse.fromEvents([
@@ -50,30 +50,31 @@ const response = (text: string) => {
       usage: { inputTokens: 10, outputTokens: 1 },
     }),
     LLMEvent.finish({ reason: "stop" }),
-  ]);
-  if (!value) throw new Error("Incomplete generate response");
-  return value;
-};
+  ])
+  if (!value) throw new Error("Incomplete generate response")
+  return value
+}
 
 const claudeCodeCredential = Credential.OAuth.make({
   type: "oauth",
   methodID: claudeCodeMethodID,
-  access: "file",
+  access: "01234567-89ab-4cde-8f01-23456789abcd",
   refresh: "",
   expires: Number.MAX_SAFE_INTEGER,
-  metadata: { authKind: "claude-code", source: "file" },
-});
+  metadata: { authKind: "claude-code", source: "01234567-89ab-4cde-8f01-23456789abcd", managed: true },
+})
 
 /** Builds Generate over mocked catalog, integration, model loading, and LLM dependencies. */
 const generate = (input: {
-  readonly connection: IntegrationConnection.Info;
-  readonly credential: Credential.Value;
-  readonly onLoad: (model: CatalogModel.Info) => void;
-  readonly onGenerate: (model: Model) => void;
+  readonly connection: IntegrationConnection.Info
+  readonly credential: Credential.Value
+  readonly onLoad: (model: CatalogModel.Info) => void
+  readonly onGenerate: (model: Model) => void
 }) =>
   Generate.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        Layer.mock(Credential.Service, { list: () => Effect.succeed([]) }),
         Layer.mock(Catalog.Service, {
           provider: {
             get: () => Effect.succeed(undefined),
@@ -81,6 +82,8 @@ const generate = (input: {
             available: () => Effect.die("unused"),
           },
           model: {
+            defaultSelection: () => Effect.succeed(undefined),
+            forConnection: (model) => Effect.succeed(model),
             get: () => Effect.die("unused"),
             all: () => Effect.die("unused"),
             available: () => Effect.die("unused"),
@@ -90,6 +93,21 @@ const generate = (input: {
         }),
         Layer.mock(Integration.Service, {
           connection: {
+            snapshot: () =>
+              Effect.succeed({
+                connection: input.connection,
+                value: input.credential,
+                credential:
+                  input.connection.type === "credential"
+                    ? new Credential.Info({
+                        id: input.connection.id,
+                        integrationID: Integration.ID.make("anthropic"),
+                        label: input.connection.label,
+                        value: input.credential,
+                        active: input.connection.active,
+                      })
+                    : undefined,
+              }),
             active: () => Effect.succeed(input.connection),
             resolve: () => Effect.succeed(input.credential),
             key: () => Effect.die("unused"),
@@ -116,8 +134,8 @@ const generate = (input: {
           },
           model: (model) =>
             Effect.sync(() => {
-              input.onLoad(model);
-              return loaded;
+              input.onLoad(model)
+              return loaded
             }),
         }),
         Layer.mock(Npm.Service, {
@@ -128,47 +146,43 @@ const generate = (input: {
         Layer.mock(LLMClient.Service, {
           generate: (request) =>
             Effect.sync(() => {
-              input.onGenerate(request.model);
-              return response("Generated");
+              input.onGenerate(request.model)
+              return response("Generated")
             }),
         }),
       ),
     ),
-  );
+  )
 
 describe("Generate", () => {
-  it.effect(
-    "generates through the AI SDK adapter for a Claude Code credential source",
-    () =>
-      Effect.gen(function* () {
-        let runtime: CatalogModel.Info | undefined;
-        let requested: Model | undefined;
+  it.effect("generates through the AI SDK adapter for a Claude Code credential source", () =>
+    Effect.gen(function* () {
+      let runtime: CatalogModel.Info | undefined
+      let requested: Model | undefined
 
-        const text = yield* Generate.Service.use((service) =>
-          service.text({ prompt: "Hello" }),
-        ).pipe(
-          Effect.provide(
-            generate({
-              connection: {
-                type: "credential",
-                id: Credential.ID.make("anthropic-claude-code"),
-                label: "Claude",
-                active: true,
-              },
-              credential: claudeCodeCredential,
-              onLoad: (model) => (runtime = model),
-              onGenerate: (model) => (requested = model),
-            }),
-          ),
-        );
+      const text = yield* Generate.Service.use((service) => service.text({ prompt: "Hello" })).pipe(
+        Effect.provide(
+          generate({
+            connection: {
+              type: "credential",
+              id: Credential.ID.make("anthropic-claude-code"),
+              label: "Claude",
+              active: true,
+            },
+            credential: claudeCodeCredential,
+            onLoad: (model) => (runtime = model),
+            onGenerate: (model) => (requested = model),
+          }),
+        ),
+      )
 
-        expect(text).toBe("Generated");
-        expect(requested).toBe(loaded);
-        expect(runtime?.settings).toMatchObject({
-          apiKey: "claude-code",
-          claudeCodeSource: "file",
-        });
-        expect(runtime?.settings).not.toHaveProperty("authToken");
-      }),
-  );
-});
+      expect(text).toBe("Generated")
+      expect(requested).toBe(loaded)
+      expect(runtime?.settings).toMatchObject({
+        apiKey: "claude-code",
+        claudeCodeSource: "01234567-89ab-4cde-8f01-23456789abcd",
+      })
+      expect(runtime?.settings).not.toHaveProperty("authToken")
+    }),
+  )
+})

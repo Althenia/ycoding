@@ -91,7 +91,10 @@ describe("ConfigAgentPlugin.Plugin", () => {
               info: decode({
                 permissions: [{ action: "read", resource: "*", effect: "allow" }],
                 agents: {
-                  reviewer: { model: "openrouter/openai/gpt-5#high", hidden: true },
+                  reviewer: {
+                    model: { providerID: "openrouter", model: "openai/gpt-5", variant: "high", profile: "Work" },
+                    hidden: true,
+                  },
                   removed: { disabled: true },
                   late: {
                     permissions: [{ action: "edit", resource: "*", effect: "allow" }],
@@ -124,7 +127,7 @@ describe("ConfigAgentPlugin.Plugin", () => {
         description: "Review changes",
         mode: "subagent",
         hidden: true,
-        model: { providerID: "openrouter", id: "openai/gpt-5", variant: "high" },
+        model: { providerID: "openrouter", id: "openai/gpt-5", variant: "high", profile: "Work" },
       })
       expect(reviewer.permissions).toEqual([
         ...defaultPermissions,

@@ -21,6 +21,7 @@ import { BrandMark } from "../component/logo"
 import { useToast } from "../ui/toast"
 import { DialogChromeConnection } from "../component/dialog-session-browser"
 import { errorMessage } from "../util/error"
+import { modelDaybreak } from "../util/session-daybreak"
 import type { ModelDaybreak, SessionAutonomyState } from "@ycoding-ai/client"
 
 let once = false
@@ -161,8 +162,9 @@ export function Home() {
   const daybreakIndicator = createMemo(() => {
     const program = landingDaybreak()
     if (!program) return undefined
+    const selection = local.model.current()
     const model = landingModelInfo()
-    return { program, active: model?.providerID === "openai" && model.daybreak?.includes(program) === true }
+    return { program, active: model?.providerID === "openai" && modelDaybreak({ model, selection }).includes(program) }
   })
   const [branch, setBranch] = createSignal<string>()
   let sent = false
@@ -218,6 +220,7 @@ export function Home() {
         branch={branch()}
         agent={local.agent.current()?.name}
         model={landingModel()}
+        profile={local.model.current()?.profile}
         daybreak={daybreakIndicator()}
         variant={local.model.variant.current()}
         state={{ type: "ready" }}

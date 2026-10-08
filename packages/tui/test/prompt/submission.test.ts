@@ -217,6 +217,33 @@ test("model switch failure pauses only its Session and prevents accidental admis
   }
 })
 
+test("explicitly reselecting the same named profile rebinds it before prompt admission", async () => {
+  const item = submission("ses_profile_rebind", "reselect profile", false)
+  item.payload.modelSelectionPending = true
+  item.payload.model = { providerID: "openai", id: "fixture", profile: "Work" }
+  const switches: Array<{ sessionID: string; model: { providerID: string; id: string; variant?: string; profile?: string } }> = []
+  const flow = fixture(async (url, request) => {
+    if (url.pathname === `/api/session/${item.sessionID}/model`) {
+      const body = await request.json() as { model: { providerID: string; id: string; variant?: string; profile?: string } }
+      switches.push({ sessionID: item.sessionID, model: body.model })
+      return new Response(null, { status: 204 })
+    }
+    if (url.pathname === `/api/session/${item.sessionID}`)
+      return json({ data: { agent: "build", model: { providerID: "openai", id: "fixture", profile: "Work" } } })
+    if (url.pathname.endsWith("/prompt")) return json({ data: pending(item) })
+  })
+  try {
+    flow.dispatch(item)
+    await until(() => flow.manager.list().length === 0)
+    expect(switches).toEqual([{ sessionID: item.sessionID, model: { providerID: "openai", id: "fixture", profile: "Work" } }])
+    expect(flow.requests.filter((request) => request.path.endsWith("/prompt"))).toHaveLength(2)
+    expect(flow.requests.findIndex((request) => request.path === `/api/session/${item.sessionID}/model`))
+      .toBeLessThan(flow.requests.findIndex((request) => request.path.endsWith("/prompt")))
+  } finally {
+    flow.manager.dispose()
+  }
+})
+
 test("late admission reconciles an unknown response, and retry after failed wake never reactivates or readmits", async () => {
   const item = submission()
   let failWake = true
@@ -420,7 +447,7 @@ test("consumed snapshot retires a still-pending admission despite a later failur
   }
 })
 
-test.each([true, false])("pre-admission retry restores the chosen model only when it drifted: %s", async (drifted) => {
+test.each([true, false])("pre-admission retry restores the chosen unprofiled model only when it drifted: %s", async (drifted) => {
   const item = submission("ses_model_drift", "selected model", false)
   item.payload.modelSelectionPending = true
   item.payload.editor = { key: "selection", text: "editor context" }
@@ -454,6 +481,49 @@ test.each([true, false])("pre-admission retry restores the chosen model only whe
     await until(() => flow.manager.list().length === 0 || flow.manager.list()[0]?.state === "attention")
     expect(flow.manager.list()).toHaveLength(0)
     expect(switches).toBe(drifted ? 2 : 1)
+  } finally {
+    flow.manager.dispose()
+  }
+})
+
+test.each([true, false])("named-profile retry does not rebind after success and rejects a changed Session model: %s", async (drifted) => {
+  const item = submission("ses_profile_retry", "selected profile", false)
+  item.payload.modelSelectionPending = true
+  item.payload.model = { ...item.payload.model, profile: "Work" }
+  item.payload.editor = { key: "selection", text: "editor context" }
+  let model: { providerID: string; id: string; variant?: string; profile?: string } = { providerID: "openai", id: "original" }
+  let rejectEditor = true
+  let switches = 0
+  const flow = fixture(async (url) => {
+    if (/\/api\/session\/[^/]+$/.test(url.pathname)) return json({ data: { agent: "build", model } })
+    if (url.pathname.endsWith("/model")) {
+      switches++
+      model = item.payload.model
+      return new Response(null, { status: 204 })
+    }
+    if (url.pathname.endsWith("/synthetic"))
+      return rejectEditor
+        ? json({ message: "editor rejected" }, { status: 500 })
+        : json({ data: { id: item.syntheticID } })
+    if (url.pathname.endsWith("/prompt")) return json({ data: pending(item) })
+    return undefined
+  })
+  try {
+    flow.dispatch(item)
+    await until(() => flow.manager.list()[0]?.state === "attention")
+    expect(switches).toBe(1)
+    rejectEditor = false
+    if (drifted) model = { ...item.payload.model, profile: "Personal" }
+    flow.manager.retry(item.sessionID, item.promptID)
+    await until(() => flow.manager.list().length === 0 || flow.manager.list()[0]?.state === "attention")
+    expect(switches).toBe(1)
+    if (drifted) {
+      expect(flow.manager.list()[0]?.state).toBe("attention")
+      expect(flow.requests.filter((request) => request.path.endsWith("/prompt"))).toEqual([])
+    } else {
+      expect(flow.manager.list()).toHaveLength(0)
+      expect(flow.requests.filter((request) => request.path.endsWith("/prompt"))).toHaveLength(2)
+    }
   } finally {
     flow.manager.dispose()
   }

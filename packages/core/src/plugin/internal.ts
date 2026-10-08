@@ -1,130 +1,133 @@
-export * as PluginInternal from "./internal";
+export * as PluginInternal from "./internal"
 
-import type { Plugin } from "@ycoding-ai/plugin/effect/plugin";
-import { Context, Effect, Scope } from "effect";
-import { HttpClient } from "effect/unstable/http";
-import { Agent } from "../agent";
-import { Browser } from "../browser";
-import { IsolatedBrowser } from "../isolated-browser";
-import { Catalog } from "../catalog";
-import { Command } from "../command";
-import { Config } from "../config";
-import { Computer } from "../computer";
-import { Credential } from "../credential";
-import { Decision } from "../decision";
-import { ConfigAgentPlugin } from "../config/plugin/agent";
-import { ConfigCommandPlugin } from "../config/plugin/command";
-import { ConfigProviderPlugin } from "../config/plugin/provider";
-import { ConfigPolicyPlugin } from "../config/plugin/policy";
-import { ConfigReferencePlugin } from "../config/plugin/reference";
-import { ConfigSkillPlugin } from "../config/plugin/skill";
-import { EventRuntime } from "../event";
-import { FileMutation } from "../file-mutation";
-import { Form } from "../form";
-import { FileSystem } from "../filesystem";
-import { FSUtil } from "../fs-util";
-import { Global } from "../global";
-import { Image } from "../image";
-import { Integration } from "../integration";
-import { Location } from "../location";
-import { LocationMutation } from "../location-mutation";
-import { ModelsDev } from "../models-dev";
-import { Memory } from "../memory";
-import { MCP } from "../mcp";
-import { Npm } from "../npm";
-import { Permission } from "../permission";
-import { ProviderUsageRuntime } from "../provider-usage";
-import { Reference } from "../reference";
-import { Ripgrep } from "../ripgrep";
-import { SessionAutonomy } from "../session/autonomy";
-import { SessionGuardrail } from "../session/guardrail";
-import { BrowserTool } from "../tool/browser";
-import { ConversationCompactTool } from "../tool/conversation-compact";
-import { ComputerTool } from "../tool/computer";
-import { SessionInstructions } from "../session/instructions";
-import { SessionRunnerModel } from "../session/runner/model";
-import { SessionTodo } from "../session/todo";
-import { Shell } from "../shell";
-import { Skill } from "../skill";
-import { PatchTool } from "../tool/patch";
-import { EditTool } from "../tool/edit";
-import { GlobTool } from "../tool/glob";
-import { GrepTool } from "../tool/grep";
-import { QuestionTool } from "../tool/question";
-import { ReadToolFileSystem } from "../tool/read-filesystem";
-import { ReadTool } from "../tool/read";
-import { ShellTool } from "../tool/shell";
-import { SkillTool } from "../tool/skill";
-import { SubagentTool } from "../tool/subagent";
-import { SubagentControlTool } from "../tool/subagent-control";
-import { SubagentReportTool } from "../tool/subagent-report";
-import { TodoWriteTool } from "../tool/todowrite";
-import { GoalTool } from "../tool/goal";
-import { DecisionTool } from "../tool/decision";
-import { TaskCompleteTool } from "../tool/task-complete";
-import { MemoryTool } from "../tool/memory";
-import { ProjectArtifactTool } from "../tool/project-artifact";
-import { ProjectArtifactStore } from "../project-artifact";
-import { Tools } from "../tool/tools";
-import { WebFetchTool } from "../tool/webfetch";
-import { WebSearchTool } from "../tool/websearch";
-import { WellKnown } from "../wellknown";
-import { WriteTool } from "../tool/write";
-import { AgentPlugin } from "./agent";
-import { CommandPlugin } from "./command";
-import { ModelsDevPlugin } from "./models-dev";
-import { ProviderPlugins } from "./provider";
-import { PluginRuntime } from "./runtime";
-import { SkillPlugin } from "./skill";
-import { SystemPromptPlugin } from "./system-prompt";
-import { VariantPlugin } from "./variant";
-import { WellKnownPlugin } from "../wellknown/plugin";
-import { ProjectArtifactSource } from "../project-artifact/source";
+import type { Plugin } from "@ycoding-ai/plugin/effect/plugin"
+import { Context, Effect, Scope } from "effect"
+import { HttpClient } from "effect/unstable/http"
+import { Agent } from "../agent"
+import { AISDK } from "../aisdk"
+import { Browser } from "../browser"
+import { IsolatedBrowser } from "../isolated-browser"
+import { Catalog } from "../catalog"
+import { Command } from "../command"
+import { Config } from "../config"
+import { Computer } from "../computer"
+import { Credential } from "../credential"
+import { Decision } from "../decision"
+import { ConfigAgentPlugin } from "../config/plugin/agent"
+import { ConfigCommandPlugin } from "../config/plugin/command"
+import { ConfigProviderPlugin } from "../config/plugin/provider"
+import { ConfigPolicyPlugin } from "../config/plugin/policy"
+import { ConfigReferencePlugin } from "../config/plugin/reference"
+import { ConfigSkillPlugin } from "../config/plugin/skill"
+import { EventRuntime } from "../event"
+import { FileMutation } from "../file-mutation"
+import { Form } from "../form"
+import { FileSystem } from "../filesystem"
+import { FSUtil } from "../fs-util"
+import { Global } from "../global"
+import { Image } from "../image"
+import { Integration } from "../integration"
+import { Location } from "../location"
+import { LocationMutation } from "../location-mutation"
+import { ModelsDev } from "../models-dev"
+import { Memory } from "../memory"
+import { MCP } from "../mcp"
+import { Npm } from "../npm"
+import { Permission } from "../permission"
+import { ProviderUsageRuntime } from "../provider-usage"
+import { Reference } from "../reference"
+import { Ripgrep } from "../ripgrep"
+import { SessionAutonomy } from "../session/autonomy"
+import { SessionGuardrail } from "../session/guardrail"
+import { BrowserTool } from "../tool/browser"
+import { ConversationCompactTool } from "../tool/conversation-compact"
+import { ComputerTool } from "../tool/computer"
+import { SessionInstructions } from "../session/instructions"
+import { SessionRunnerModel } from "../session/runner/model"
+import { SessionTodo } from "../session/todo"
+import { Shell } from "../shell"
+import { Skill } from "../skill"
+import { PatchTool } from "../tool/patch"
+import { EditTool } from "../tool/edit"
+import { GlobTool } from "../tool/glob"
+import { GrepTool } from "../tool/grep"
+import { QuestionTool } from "../tool/question"
+import { ReadToolFileSystem } from "../tool/read-filesystem"
+import { ReadTool } from "../tool/read"
+import { ShellTool } from "../tool/shell"
+import { SkillTool } from "../tool/skill"
+import { SubagentTool } from "../tool/subagent"
+import { SubagentControlTool } from "../tool/subagent-control"
+import { SubagentReportTool } from "../tool/subagent-report"
+import { TodoWriteTool } from "../tool/todowrite"
+import { GoalTool } from "../tool/goal"
+import { DecisionTool } from "../tool/decision"
+import { TaskCompleteTool } from "../tool/task-complete"
+import { MemoryTool } from "../tool/memory"
+import { ProjectArtifactTool } from "../tool/project-artifact"
+import { ProjectArtifactStore } from "../project-artifact"
+import { Tools } from "../tool/tools"
+import { WebFetchTool } from "../tool/webfetch"
+import { WebSearchTool } from "../tool/websearch"
+import { WellKnown } from "../wellknown"
+import { WriteTool } from "../tool/write"
+import { AgentPlugin } from "./agent"
+import { CommandPlugin } from "./command"
+import { ModelsDevPlugin } from "./models-dev"
+import { ProviderPlugins } from "./provider"
+import { PluginRuntime } from "./runtime"
+import { SkillPlugin } from "./skill"
+import { SystemPromptPlugin } from "./system-prompt"
+import { VariantPlugin } from "./variant"
+import { WellKnownPlugin } from "../wellknown/plugin"
+import { ProjectArtifactSource } from "../project-artifact/source"
 
 const services = Effect.fn("PluginInternal.services")(function* () {
-  const agent = yield* Agent.Service;
-  const browser = yield* Browser.Service;
-  const isolatedBrowser = yield* IsolatedBrowser.Service;
-  const catalog = yield* Catalog.Service;
-  const command = yield* Command.Service;
-  const config = yield* Config.Service;
-  const computer = yield* Computer.Service;
-  const credential = yield* Credential.Service;
-  const decision = yield* Decision.Service;
-  const events = yield* EventRuntime.Service;
-  const mutation = yield* FileMutation.Service;
-  const filesystem = yield* FileSystem.Service;
-  const fs = yield* FSUtil.Service;
-  const global = yield* Global.Service;
-  const http = yield* HttpClient.HttpClient;
-  const image = yield* Image.Service;
-  const integration = yield* Integration.Service;
-  const location = yield* Location.Service;
-  const locationMutation = yield* LocationMutation.Service;
-  const models = yield* ModelsDev.Service;
-  const memory = yield* Memory.Service;
-  const mcp = yield* MCP.Service;
-  const npm = yield* Npm.Service;
-  const permission = yield* Permission.Service;
-  const providerUsage = yield* ProviderUsageRuntime.Service;
-  const guardrail = yield* SessionGuardrail.Service;
-  const runtime = yield* PluginRuntime.Service;
-  const form = yield* Form.Service;
-  const read = yield* ReadToolFileSystem.Service;
-  const reference = yield* Reference.Service;
-  const ripgrep = yield* Ripgrep.Service;
-  const instructions = yield* SessionInstructions.Service;
-  const sessionRunnerModel = yield* SessionRunnerModel.Service;
-  const todo = yield* SessionTodo.Service;
-  const autonomy = yield* SessionAutonomy.Service;
-  const shell = yield* Shell.Service;
-  const skill = yield* Skill.Service;
-  const tools = yield* Tools.Service;
-  const websearch = yield* WebSearchTool.ConfigService;
-  const wellknown = yield* WellKnown.Service;
-  const projectArtifactSource = yield* ProjectArtifactSource.Service;
-  const projectArtifactStore = yield* ProjectArtifactStore.Service;
+  const aisdk = yield* AISDK.Service
+  const agent = yield* Agent.Service
+  const browser = yield* Browser.Service
+  const isolatedBrowser = yield* IsolatedBrowser.Service
+  const catalog = yield* Catalog.Service
+  const command = yield* Command.Service
+  const config = yield* Config.Service
+  const computer = yield* Computer.Service
+  const credential = yield* Credential.Service
+  const decision = yield* Decision.Service
+  const events = yield* EventRuntime.Service
+  const mutation = yield* FileMutation.Service
+  const filesystem = yield* FileSystem.Service
+  const fs = yield* FSUtil.Service
+  const global = yield* Global.Service
+  const http = yield* HttpClient.HttpClient
+  const image = yield* Image.Service
+  const integration = yield* Integration.Service
+  const location = yield* Location.Service
+  const locationMutation = yield* LocationMutation.Service
+  const models = yield* ModelsDev.Service
+  const memory = yield* Memory.Service
+  const mcp = yield* MCP.Service
+  const npm = yield* Npm.Service
+  const permission = yield* Permission.Service
+  const providerUsage = yield* ProviderUsageRuntime.Service
+  const guardrail = yield* SessionGuardrail.Service
+  const runtime = yield* PluginRuntime.Service
+  const form = yield* Form.Service
+  const read = yield* ReadToolFileSystem.Service
+  const reference = yield* Reference.Service
+  const ripgrep = yield* Ripgrep.Service
+  const instructions = yield* SessionInstructions.Service
+  const sessionRunnerModel = yield* SessionRunnerModel.Service
+  const todo = yield* SessionTodo.Service
+  const autonomy = yield* SessionAutonomy.Service
+  const shell = yield* Shell.Service
+  const skill = yield* Skill.Service
+  const tools = yield* Tools.Service
+  const websearch = yield* WebSearchTool.ConfigService
+  const wellknown = yield* WellKnown.Service
+  const projectArtifactSource = yield* ProjectArtifactSource.Service
+  const projectArtifactStore = yield* ProjectArtifactStore.Service
   return Context.mergeAll(
+    Context.make(AISDK.Service, aisdk),
     Context.make(Agent.Service, agent),
     Context.make(Browser.Service, browser),
     Context.make(IsolatedBrowser.Service, isolatedBrowser),
@@ -167,16 +170,14 @@ const services = Effect.fn("PluginInternal.services")(function* () {
     Context.make(WellKnown.Service, wellknown),
     Context.make(ProjectArtifactSource.Service, projectArtifactSource),
     Context.make(ProjectArtifactStore.Service, projectArtifactStore),
-  );
-});
+  )
+})
 
-type ContextServices<A> = A extends Context.Context<infer R> ? R : never;
+type ContextServices<A> = A extends Context.Context<infer R> ? R : never
 
-export type Requirements = ContextServices<
-  Effect.Success<ReturnType<typeof services>>
->;
+export type Requirements = ContextServices<Effect.Success<ReturnType<typeof services>>>
 
-export type InternalPlugin = Plugin<Requirements | Scope.Scope>;
+export type InternalPlugin = Plugin<Requirements | Scope.Scope>
 
 const pre = [
   WellKnownPlugin.Plugin,
@@ -209,7 +210,7 @@ const pre = [
   GoalTool.Plugin,
   DecisionTool.Plugin,
   BrowserTool.Plugin,
-] as const satisfies readonly InternalPlugin[];
+] as const satisfies readonly InternalPlugin[]
 
 const post = [
   ConfigReferencePlugin.Plugin,
@@ -220,19 +221,19 @@ const post = [
   VariantPlugin.Plugin,
   ConfigPolicyPlugin.Plugin,
   ProjectArtifactSource.Plugin,
-] as const satisfies readonly InternalPlugin[];
+] as const satisfies readonly InternalPlugin[]
 
 export const list = Effect.fn("PluginInternal.list")(function* () {
-  const context = yield* services();
+  const context = yield* services()
   const resolve = (plugins: readonly InternalPlugin[]) =>
     plugins.map(
       (plugin): Plugin => ({
         id: plugin.id,
         effect: (host) => plugin.effect(host).pipe(Effect.provide(context)),
       }),
-    );
+    )
   return {
     pre: resolve(pre),
     post: resolve(post),
-  };
-});
+  }
+})

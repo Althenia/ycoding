@@ -354,8 +354,14 @@ async function resolveSelectedModel(
   sdk: YCodingClient,
   next: Pick<SessionTurnInput, "model" | "variant" | "signal">,
 ) {
-  if (next.model) return { providerID: next.model.providerID, id: next.model.modelID, variant: next.variant }
-  if (!next.variant) return
+  if (next.model)
+    return {
+      providerID: next.model.providerID,
+      id: next.model.modelID,
+      variant: next.variant,
+      ...(next.model.profile === undefined ? {} : { profile: next.model.profile }),
+    }
+  if (next.variant === undefined) return
 
   const session = await sdk.session
     .get({ sessionID: input.sessionID }, { signal: next.signal })
@@ -364,7 +370,7 @@ async function resolveSelectedModel(
 
   const fallback = await sdk.model.default(undefined, { signal: next.signal }).then((response) => response.data)
   if (!fallback) return
-  return { providerID: fallback.providerID, id: fallback.id, variant: next.variant }
+  return { ...fallback.selection, variant: next.variant }
 }
 
 export async function createSessionTransport(input: StreamInput): Promise<SessionTransport> {

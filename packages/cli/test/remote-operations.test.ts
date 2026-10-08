@@ -685,7 +685,7 @@ describe("workspace inventory and Session creation", () => {
     } })
     const workspaces = arrayOf(recordOf(valueOf(await executeRemoteOperation({ request: request("workspace.list"), local: test.local,
       sessions: test.registry, subscriptions: test.subscriptions }))).data)
-    const model = { providerID: "test", id: "model", variant: "high" }
+    const model = { providerID: "test", id: "model", variant: "high", profile: "work" }
     const outcome = await executeRemoteOperation({ request: request("session.create", { id: "ses_chosen", workspace: recordOf(workspaces[0]).id,
       agent: "build", model }), local: test.local, sessions: test.registry, subscriptions: test.subscriptions })
     expect(valueOf(outcome)).toMatchObject({ data: { id: "ses_chosen" } })
@@ -964,8 +964,11 @@ describe("operation mapping", () => {
       projectCurrent: { id: "prj_1", directory },
       agentList: [{ id: "build", name: "Builder", mode: "primary", hidden: false, description: "Build", model: { providerID: "test", id: "model" }, permissions: [], request: {} }],
       providerList: [{ id: "test", name: "Test", package: "test" }, { id: "off", name: "Off", disabled: true, package: "off" }],
-      modelList: [{ providerID: "test", id: "model", name: "Model", enabled: true, variants: [{ id: "high" }] }, { providerID: "off", id: "hidden", name: "Hidden", enabled: true, variants: [] }],
-      modelDefault: { providerID: "test", id: "model" },
+      modelList: [{ providerID: "test", id: "model", name: "Model", enabled: false, variants: [{ id: "high" }, { id: "low" }], profiles: [
+        { name: "work", active: true, variants: ["high"], credentialID: "private", daybreak: ["daybreak_blue"] },
+        { name: "personal", active: false, variants: ["low"], credentialID: "other-private" },
+      ] }, { providerID: "off", id: "hidden", name: "Hidden", enabled: true, variants: [] }],
+      modelDefault: { selection: { providerID: "test", id: "model", variant: "high", profile: "work" } },
       commandList: [{ name: "test", template: "example", description: "Test" }],
       skillList: [{ id: "skill", name: "Skill", description: "Help", slash: true, content: "secret" }],
       referenceList: [{ name: "Readme", path: join(directory, "README.md"), source: { type: "file" } }],
@@ -975,8 +978,10 @@ describe("operation mapping", () => {
     const { local, registry, subscriptions, calls } = await harness({ sessions: [session], results })
     const catalog = valueOf(await executeRemoteOperation({ request: request("session.catalog"), local, sessions: registry, subscriptions }))
     expect(catalog).toEqual({ agents: [{ id: "build", name: "Builder", mode: "primary", hidden: false, description: "Build", model: { providerID: "test", id: "model" } }],
-      models: [{ providerID: "test", providerName: "Test", id: "model", name: "Model", variants: ["high"] }],
-      defaultModel: { providerID: "test", id: "model" }, commands: [{ name: "test", description: "Test" }],
+      models: [{ providerID: "test", providerName: "Test", id: "model", name: "Model", variants: ["high", "low"], enabled: false, profiles: [
+        { name: "work", active: true, variants: ["high"] }, { name: "personal", active: false, variants: ["low"] },
+      ] }],
+      defaultModel: { providerID: "test", id: "model", variant: "high", profile: "work" }, commands: [{ name: "test", description: "Test" }],
       skills: [{ id: "skill", name: "Skill", description: "Help", slash: true }],
       references: [{ name: "Readme", uri: pathToFileURL(join(directory, "README.md")).href }], resources: [{ name: "Docs", uri: "mcp://docs" }] })
     const workspace = recordOf(arrayOf(recordOf(valueOf(await executeRemoteOperation({ request: request("workspace.list"), local, sessions: registry, subscriptions }))).data)[0]).id
@@ -1021,11 +1026,13 @@ describe("operation mapping", () => {
     } })
     const invoke = (operation: RemoteRequest["operation"], payload: Record<string, unknown>) => executeRemoteOperation({ request: request(operation, payload), local, sessions: registry, subscriptions })
     expect(valueOf(await invoke("session.switchModel", { model: { providerID: "test", id: "model" } }))).toBeNull()
+    expect(valueOf(await invoke("session.switchModel", { model: { providerID: "test", id: "model", profile: "work" } }))).toBeNull()
     expect(valueOf(await invoke("session.switchAgent", { agent: "build" }))).toBeNull()
     expect(valueOf(await invoke("session.command", { command: "test", arguments: "--x" }))).toEqual({ data: { id: "msg_command" } })
     expect(valueOf(await invoke("session.skill", { skill: "skill" }))).toBeNull()
     expect(calls.filter((call) => ["switchModel", "switchAgent", "command", "skill"].includes(call.method))).toEqual([
       { method: "switchModel", args: ["ses_1", { directory: "/work" }, { providerID: "test", id: "model" }] },
+      { method: "switchModel", args: ["ses_1", { directory: "/work" }, { providerID: "test", id: "model", profile: "work" }] },
       { method: "switchAgent", args: ["ses_1", { directory: "/work" }, "build"] },
       { method: "command", args: ["ses_1", { directory: "/work" }, { command: "test", arguments: "--x" }] },
       { method: "skill", args: ["ses_1", { directory: "/work" }, { skill: "skill" }] },
@@ -1424,11 +1431,7 @@ describe("operation mapping", () => {
     expect(valueOf(await executeRemoteOperation({ request: request("session.subscribe"), sessions: registry, subscriptions, local }))).toBeNull()
     expect(valueOf(await executeRemoteOperation({ request: request("session.subscribe"), sessions: registry, subscriptions, local }))).toBeNull()
     expect(valueOf(await executeRemoteOperation({ request: request("session.unsubscribe"), sessions: registry, subscriptions, local }))).toBeNull()
-    expect(calls.filter((call) => call.method !== "getSession").slice(before).map((call) => call.method)).toEqual([
-      "listPage",
-      "listPage",
-      "listPage",
-    ])
+    expect(calls.filter((call) => call.method !== "getSession").slice(before)).toEqual([])
     expect(subscriptions.count("ses_1")).toBe(0)
     expect(subscriptions.has("ses_1")).toBe(false)
     expect(valueOf(await executeRemoteOperation({ request: request("session.unsubscribe"), sessions: registry, subscriptions, local }))).toBeNull()
@@ -1807,6 +1810,7 @@ describe("strict validation and error mapping", () => {
       [request("workspace.list", { directory: "/etc" }), "invalid_message"],
       [request("session.create", { id: "invalid", workspace: "wsp_1" }), "invalid_message"],
       [request("session.create", { id: "ses_new", workspace: "wsp_1", directory: "/etc" }), "invalid_message"],
+      [request("session.switchModel", { model: { providerID: "test", id: "model", profile: "" } }), "invalid_message"],
       [request("session.get", { directory: "/etc" }), "invalid_message"],
       [request("session.active", { limit: 1 }), "invalid_message"],
       // A frame outside the shared contract; the relay parser rejects it before this layer.

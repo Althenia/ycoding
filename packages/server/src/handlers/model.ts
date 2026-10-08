@@ -1,4 +1,5 @@
 import { Catalog } from "@ycoding-ai/core/catalog"
+import { CatalogModel } from "@ycoding-ai/core/model"
 import { PluginSupervisor } from "@ycoding-ai/core/plugin/supervisor"
 import { ServiceUnavailableError } from "@ycoding-ai/protocol/errors"
 import { Effect } from "effect"
@@ -33,7 +34,17 @@ export const ModelHandler = HttpApiBuilder.group(Api, "server.model", (handlers)
             }),
           )
           const catalog = yield* Catalog.Service
-          return yield* response(catalog.model.default())
+          return yield* response(
+            Effect.gen(function* () {
+              const model = yield* catalog.model.default()
+              if (!model) return undefined
+              const selection = yield* catalog.model.defaultSelection()
+              return {
+                ...model,
+                selection: selection ?? CatalogModel.Ref.make({ providerID: model.providerID, id: model.id }),
+              }
+            }),
+          )
         }),
       )
   }),

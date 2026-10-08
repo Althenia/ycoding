@@ -51,12 +51,15 @@ describe("notification categories", () => {
 })
 
 test("new sessions use a valid remembered model and variant, otherwise the catalog default", () => {
-  const catalog: CatalogView = { status: "ready", agents: [], commands: [], skills: [], references: [], resources: [], models: [{ providerID: "openai", id: "gpt", name: "GPT", variants: ["high", "medium"] }], defaultModel: { providerID: "openai", id: "gpt", variant: "high" } }
+  const catalog: CatalogView = { status: "ready", agents: [], commands: [], skills: [], references: [], resources: [], models: [{ providerID: "openai", id: "gpt", name: "GPT", variants: ["high", "medium"], profiles: [{ name: "work", active: true }] }], defaultModel: { providerID: "openai", id: "gpt", variant: "high", profile: "work" } }
   const target = storage()
   expect(defaultComposerModel(catalog, readPreferredModel(target))).toEqual(catalog.defaultModel)
   expect(writePreferredModel(target, { providerID: "openai", id: "gpt", variant: "medium" })).toBe(true)
   expect(defaultComposerModel(catalog, readPreferredModel(target))).toEqual({ providerID: "openai", id: "gpt", variant: "medium" })
   expect(defaultComposerModel(catalog, { providerID: "other", id: "unknown" })).toEqual(catalog.defaultModel)
+  expect(defaultComposerModel(catalog, { providerID: "openai", id: "gpt", profile: "deleted" })).toEqual({ providerID: "openai", id: "gpt", profile: "deleted" })
+  expect(writePreferredModel(target, { providerID: "openai", id: "gpt", profile: "work" })).toBe(true)
+  expect(readPreferredModel(target)).toEqual({ providerID: "openai", id: "gpt", profile: "work" })
 })
 
 test("recent model identities are bounded, deduplicated, and persisted across reads", () => {
@@ -82,6 +85,15 @@ test("recent model identities are bounded, deduplicated, and persisted across re
     { providerID: "openai", id: "gpt" },
   ])
   expect(readRecentModels(storage({ "ycoding.remote.recent-models": "{broken" }))).toEqual([])
+})
+
+test("recent model identity distinguishes profiles", () => {
+  const target = storage()
+  rememberRecentModel(target, { providerID: "openai", id: "gpt", profile: "work" })
+  expect(rememberRecentModel(target, { providerID: "openai", id: "gpt", profile: "personal" })).toEqual([
+    { providerID: "openai", id: "gpt", profile: "personal" },
+    { providerID: "openai", id: "gpt", profile: "work" },
+  ])
 })
 
 describe("normalizeNotificationPreferences", () => {

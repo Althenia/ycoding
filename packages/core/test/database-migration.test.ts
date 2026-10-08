@@ -9,6 +9,7 @@ import { sql } from "drizzle-orm"
 import { Database } from "@ycoding-ai/core/database/database"
 import { DatabaseFormat } from "@ycoding-ai/core/database/format"
 import { DatabaseMigration } from "@ycoding-ai/core/database/migration"
+import { migrations } from "../src/database/migration.gen"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
 import { tmpdir } from "./fixture/tmpdir"
 import previousSchema from "./fixture/database-current-2026-07-25"
@@ -56,6 +57,7 @@ const currentMigrations = [
   { id: "20261002020321_drop-legacy-account-share" },
   { id: "20261004094144_shell-ledger" },
   { id: "20261004154315_web-latency" },
+  { id: "20261008065350_provider-profiles" },
 ]
 const selectiveCompactionTables = [
   "compaction_manifest_blob",
@@ -289,6 +291,78 @@ function normalizeSqlWhitespace(value: string) {
 }
 
 describe("DatabaseMigration", () => {
+  test("adds private provider profile storage without attributing historical rows", async () => {
+    await run(
+      Effect.gen(function* () {
+        const migration = migrations.find((item) => item.id.endsWith("_provider-profiles"))
+        expect(migration).toBeDefined()
+        if (!migration) throw new Error("Missing provider profiles migration")
+        const db = yield* makeDb
+        yield* seedPreviousDatabase(db)
+        yield* DatabaseMigration.applyOnly(
+          db,
+          migrations.filter((item) => item.id < migration.id),
+        )
+        yield* seedSession(db, "ses_profile_history")
+        yield* seedMessage(db, {
+          id: "msg_profile_history",
+          sessionID: "ses_profile_history",
+          type: "assistant",
+          seq: 1,
+          data: { model: { providerID: "openai", id: "gpt-6.1-sol" }, content: [] },
+        })
+        yield* seedEvent(db, {
+          id: "evt_profile_history",
+          sessionID: "ses_profile_history",
+          seq: 1,
+          type: "session.model.selected.1",
+          data: { sessionID: "ses_profile_history", model: { providerID: "openai", id: "gpt-6.1-sol" } },
+        })
+        yield* db.run(sql`
+          INSERT INTO credential (id, integration_id, label, value, active, generation, time_created, time_updated)
+          VALUES ('cred_profile_history', 'openai', 'Work', '{"type":"key","key":"synthetic"}', 1, 3, 1, 1)
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_provider_request
+            (id, session_id, source, agent, model, route_id, prompt_cache_key, system_digest, tool_digest,
+             request, attempts, invalidation, continuation, tokens, time_created)
+          VALUES ('prq_profile_history', 'ses_profile_history', 'step', 'god', '{"providerID":"openai","id":"gpt-6.1-sol"}',
+                  'openai-responses', 'cache', 'system', 'tools', 1, 1, 'first-request', 'full',
+                  '{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}}', 1)
+        `)
+        const credential = yield* db.get<Record<string, unknown>>(sql`SELECT * FROM credential`)
+        const session = yield* db.get<Record<string, unknown>>(sql`SELECT * FROM session`)
+        const request = yield* db.get<Record<string, unknown>>(sql`SELECT * FROM session_provider_request`)
+        const message = yield* db.get(sql`SELECT * FROM session_message`)
+        const event = yield* db.get(sql`SELECT * FROM event`)
+
+        yield* DatabaseMigration.applyOnly(db, [migration])
+        yield* DatabaseMigration.applyOnly(db, [migration])
+
+        expect(yield* db.get(sql`SELECT * FROM credential`)).toEqual({ ...credential, account_generation: 0 })
+        expect(yield* db.get(sql`SELECT * FROM session`)).toEqual({ ...session, profile_binding: null })
+        expect(yield* db.get(sql`SELECT * FROM session_provider_request`)).toEqual({
+          ...request,
+          assistant_message_id: null,
+          connection_identity_digest: null,
+        })
+        expect(yield* db.get(sql`SELECT * FROM session_message`)).toEqual(message)
+        expect(yield* db.get(sql`SELECT * FROM event`)).toEqual(event)
+        expect(yield* db.all(sql`PRAGMA foreign_key_check`)).toEqual([])
+        expect(yield* Effect.exit(db.run(sql`UPDATE credential SET account_generation = -1`))).toMatchObject({
+          _tag: "Failure",
+        })
+        expect(yield* Effect.exit(db.run(sql`UPDATE credential SET account_generation = 0.5`))).toMatchObject({
+          _tag: "Failure",
+        })
+        expect(yield* db.get(sql`SELECT account_generation, generation FROM credential`)).toEqual({
+          account_generation: 0,
+          generation: 3,
+        })
+      }),
+    )
+  })
+
   test("creates the current-only schema and format marker", async () => {
     await run(
       Effect.gen(function* () {
@@ -356,6 +430,7 @@ describe("DatabaseMigration", () => {
         const columns = (yield* db.all<{ name: string }>(sql`PRAGMA table_info(session)`)).map((column) => column.name)
         expect(columns).toContain("permission")
         expect(columns).toContain("autonomy")
+        expect(columns).toContain("profile_binding")
         expect(columns).toContain("time_archived")
         for (const removed of [
           "slug",
@@ -379,6 +454,11 @@ describe("DatabaseMigration", () => {
           notnull: 1,
           dflt_value: "0",
         })
+        expect(
+          yield* db.get(sql`
+          SELECT name, "notnull", dflt_value FROM pragma_table_info('credential') WHERE name = 'account_generation'
+        `),
+        ).toEqual({ name: "account_generation", notnull: 1, dflt_value: "0" })
         expect(
           yield* db.get(sql`
             SELECT name
@@ -415,11 +495,11 @@ describe("DatabaseMigration", () => {
     await run(
       Effect.gen(function* () {
         const db = yield* makeDb
-        yield* db.run(sql`CREATE TABLE database_format (id TEXT PRIMARY KEY, time_created INTEGER NOT NULL)`)
-        yield* db.run(sql`INSERT INTO database_format (id, time_created) VALUES (${DatabaseFormat.CurrentID}, 1)`)
-        yield* db.run(sql`CREATE TABLE migration (id TEXT PRIMARY KEY, time_completed INTEGER NOT NULL)`)
-        for (const migration of currentMigrations.slice(0, -1))
-          yield* db.run(sql`INSERT INTO migration (id, time_completed) VALUES (${migration.id}, 1)`)
+        yield* seedPreviousDatabase(db)
+        yield* DatabaseMigration.applyOnly(
+          db,
+          migrations.filter((item) => item.id < "20261004154315_web-latency"),
+        )
         yield* db.run(sql`CREATE TABLE retained_current (value TEXT NOT NULL)`)
         yield* db.run(sql`INSERT INTO retained_current (value) VALUES ('keep')`)
         yield* DatabaseMigration.apply(db)

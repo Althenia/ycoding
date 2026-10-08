@@ -133,7 +133,9 @@ export const layer = (options?: SessionModelHeaders.Options) =>
       const db = (yield* Database.Service).db
       const attachments = yield* AttachmentStore.Service
       const catalog = yield* Catalog.Service
-      const imageAnalyzer = yield* ImageAnalyzer.Service.pipe(Effect.orElseSucceed(() => undefined as unknown as ImageAnalyzer.Interface))
+      const imageAnalyzer = yield* ImageAnalyzer.Service.pipe(
+        Effect.orElseSucceed(() => undefined as unknown as ImageAnalyzer.Interface),
+      )
 
       const prepare = Effect.fn("SessionModelRequest.prepare")(function* (input: PrepareInput) {
         const session = input.context.session
@@ -156,46 +158,54 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           model.defaults?.providerOptions,
           directOpenAIResponses ? { openai: { store: responsesState === "stored" } } : undefined,
         )
-        const effectiveStore = model.route.id === "ai-sdk:@ai-sdk/github-copilot"
-          ? effectiveProviderOptions?.copilot?.store
-          : OpenAIOptions.store(LLM.request({ model, providerOptions: effectiveProviderOptions }))
+        const effectiveStore =
+          model.route.id === "ai-sdk:@ai-sdk/github-copilot"
+            ? effectiveProviderOptions?.copilot?.store
+            : OpenAIOptions.store(LLM.request({ model, providerOptions: effectiveProviderOptions }))
         const materialized = yield* providerState.materialize({
           sessionID: session.id,
           provider: model.provider,
           modelID: resolved.ref.id,
           stateless: effectiveStore === false,
+          accountIdentityDigest: resolved.accountIdentityDigest,
         })
         const attachmentRead = yield* readAttachments(attachments, session.id, input.context.messages)
         const verifiedAttachments = attachmentRead.verified
         const toolImages = readToolImages(input.context.messages)
         const imageInputs = [
-          ...verifiedAttachments.filter(({ file }) => isProviderImage(file)).map(({ file, bytes }) => ({ file, bytes })),
+          ...verifiedAttachments
+            .filter(({ file }) => isProviderImage(file))
+            .map(({ file, bytes }) => ({ file, bytes })),
           ...toolImages.map(({ file, bytes }) => ({ file, bytes })),
         ]
         let fallbackDescriptions: ReadonlyMap<string, string> | undefined
         if (imageInputs.length > 0) {
-          const runningInfo = yield* catalog.model.get(resolved.ref.providerID, resolved.ref.id).pipe(
-            Effect.orElseSucceed(() => undefined as unknown as import("../model").CatalogModel.Info | undefined),
-          )
+          const runningInfo = yield* catalog.model
+            .get(resolved.ref.providerID, resolved.ref.id, resolved.ref.profile)
+            .pipe(Effect.orElseSucceed(() => undefined as unknown as import("../model").CatalogModel.Info | undefined))
           const multimodal = runningInfo ? ImageAnalyzer.isMultimodal(runningInfo.capabilities) : false
           if (!multimodal) {
             const entriesImg = yield* config.entries()
             const analyzerInfo = Config.latest(entriesImg, "image_analyzer")
             const analyzerEnabled = analyzerInfo ? ConfigImageAnalyzer.isEnabled(analyzerInfo) : false
             if (analyzerEnabled && imageAnalyzer) {
-              const analyzed = yield* imageAnalyzer.analyze(imageInputs).pipe(
-                Effect.orElseSucceed(() =>
-                  new Map(
-                    imageInputs.map(({ file }) => [
-                      file.content.digest,
-                      ImageAnalyzer.failureBlock(file, "vision analysis error"),
-                    ]),
+              const analyzed = yield* imageAnalyzer
+                .analyze(imageInputs, { session: { ...session, model: resolved.ref } })
+                .pipe(
+                  Effect.orElseSucceed(
+                    () =>
+                      new Map(
+                        imageInputs.map(({ file }) => [
+                          file.content.digest,
+                          ImageAnalyzer.failureBlock(file, "vision analysis error"),
+                        ]),
+                      ),
                   ),
-                ),
-              )
+                )
               fallbackDescriptions = analyzed
             } else {
-              const reason = analyzerInfo === undefined ? "image analyzer not configured" : "vision analyzer unavailable"
+              const reason =
+                analyzerInfo === undefined ? "image analyzer not configured" : "vision analyzer unavailable"
               fallbackDescriptions = new Map(
                 imageInputs.map(({ file }) => [file.content.digest, ImageAnalyzer.failureBlock(file, reason)] as const),
               )
@@ -218,7 +228,14 @@ export const layer = (options?: SessionModelHeaders.Options) =>
             : {}),
         }
         const loweredHistory = input.context.messages.map((message) =>
-          toLLMMessages([message], resolved.ref, providerMetadataKey, materialized, attachmentMaterialization),
+          toLLMMessages(
+            [message],
+            resolved.ref,
+            providerMetadataKey,
+            materialized,
+            attachmentMaterialization,
+            resolved.accountIdentityDigest,
+          ),
         )
         const history = loweredHistory.flat()
         const messages = [...history, ...(input.messages ?? [])]
@@ -254,6 +271,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           providerID: resolved.ref.providerID,
           modelID: resolved.ref.id,
           variant: resolved.ref.variant,
+          accountIdentityDigest: resolved.accountIdentityDigest,
           policyRevision: CACHE_POLICY_REVISION,
           permissions,
           system: contextEvent.system,
@@ -277,24 +295,31 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           baselineKey,
           now,
         })
-        const cache = SessionRunnerCache.providerOptions({
-          ...namespaceInput,
-          apiModelID: model.id,
-          sessionID: session.id,
-          routeID: resolved.model.route.id,
-          anthropicTtlSeconds: SessionRunnerCache.anthropicTtlSeconds({
-            modelID: model.id,
-            configured: efficiency.anthropicTtl,
-            interactive: session.parentID === undefined,
-          }),
-          openaiMode: efficiency.openaiMode,
-          openaiExtendedRetention: efficiency.openaiExtendedRetention,
-          generation,
-        }, now)
+        const cache = SessionRunnerCache.providerOptions(
+          {
+            ...namespaceInput,
+            apiModelID: model.id,
+            sessionID: session.id,
+            routeID: resolved.model.route.id,
+            anthropicTtlSeconds: SessionRunnerCache.anthropicTtlSeconds({
+              modelID: model.id,
+              configured: efficiency.anthropicTtl,
+              interactive: session.parentID === undefined,
+            }),
+            openaiMode: efficiency.openaiMode,
+            openaiExtendedRetention: efficiency.openaiExtendedRetention,
+            generation,
+          },
+          now,
+        )
         const baseRequest = LLM.request({
           model,
           http: {
-            headers: SessionModelHeaders.make(session, { ...options, providerID: resolved.ref.providerID }),
+            headers: SessionModelHeaders.make(session, {
+              ...options,
+              providerID: resolved.ref.providerID,
+              accountIdentityDigest: resolved.accountIdentityDigest,
+            }),
           },
           providerOptions: mergeProviderOptions(
             cache.providerOptions,
@@ -372,6 +397,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
         }
         const eligible =
           directOpenAIResponses &&
+          resolved.accountIdentityDigest !== undefined &&
           continuationMode !== "off" &&
           responsesState === "stored" &&
           OpenAIOptions.store(effectiveRequest) === true &&
@@ -391,21 +417,20 @@ export const layer = (options?: SessionModelHeaders.Options) =>
               .reduce((count, messages) => count + messages.length, 0) + 1
           : 0
         const continuedMessages = state ? stableMessages : contextEvent.messages
-        const transportRequest =
-          !OpenAICodex.isWebSocketRoute(model.route.id)
-            ? baseRequest
-            : LLMRequest.update(baseRequest, {
-                providerOptions: mergeProviderOptions(baseRequest.providerOptions, {
-                  openai: {
-                    responsesWebSocket: {
-                      sessionKey: cache.wirePromptCacheKey,
-                      fingerprint: SessionContinuation.transportFingerprint(continuationFingerprint),
-                      messageBoundary: baseRequest.messages.length - 1,
-                      fullReplay: input.disableContinuation === true,
-                    },
+        const transportRequest = !OpenAICodex.isWebSocketRoute(model.route.id)
+          ? baseRequest
+          : LLMRequest.update(baseRequest, {
+              providerOptions: mergeProviderOptions(baseRequest.providerOptions, {
+                openai: {
+                  responsesWebSocket: {
+                    sessionKey: cache.wirePromptCacheKey,
+                    fingerprint: SessionContinuation.transportFingerprint(continuationFingerprint),
+                    messageBoundary: baseRequest.messages.length - 1,
+                    fullReplay: input.disableContinuation === true,
                   },
-                }),
-              })
+                },
+              }),
+            })
         const request =
           state === undefined
             ? transportRequest

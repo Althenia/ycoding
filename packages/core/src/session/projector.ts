@@ -446,11 +446,22 @@ function run(db: DatabaseService, event: MessageEvent) {
       appendMessage,
     }
     yield* SessionMessageUpdater.update(adapter, event)
-    if (event.type === SessionEvent.Step.Ended.type || event.type === SessionEvent.Step.Failed.type ||
-      event.type === SessionEvent.Execution.Succeeded.type || event.type === SessionEvent.Execution.Failed.type ||
-      event.type === SessionEvent.Execution.Interrupted.type)
-      yield* db.update(SessionTable).set({ time_active: sql`coalesce(max(${SessionTable.time_active}, ${DateTime.toEpochMillis(event.created)}), ${DateTime.toEpochMillis(event.created)})`, time_updated: sql`${SessionTable.time_updated}` })
-        .where(eq(SessionTable.id, event.data.sessionID)).run().pipe(Effect.orDie)
+    if (
+      event.type === SessionEvent.Step.Ended.type ||
+      event.type === SessionEvent.Step.Failed.type ||
+      event.type === SessionEvent.Execution.Succeeded.type ||
+      event.type === SessionEvent.Execution.Failed.type ||
+      event.type === SessionEvent.Execution.Interrupted.type
+    )
+      yield* db
+        .update(SessionTable)
+        .set({
+          time_active: sql`coalesce(max(${SessionTable.time_active}, ${DateTime.toEpochMillis(event.created)}), ${DateTime.toEpochMillis(event.created)})`,
+          time_updated: sql`${SessionTable.time_updated}`,
+        })
+        .where(eq(SessionTable.id, event.data.sessionID))
+        .run()
+        .pipe(Effect.orDie)
   })
 }
 
@@ -877,6 +888,14 @@ const layer = Layer.effectDiscard(
           .pipe(Effect.orDie)
       }),
     )
+    yield* events.project(SessionEvent.ProfileBound, (event) =>
+      db
+        .update(SessionTable)
+        .set({ profile_binding: event.data.binding ?? null })
+        .where(eq(SessionTable.id, event.data.sessionID))
+        .run()
+        .pipe(Effect.orDie),
+    )
     yield* events.project(SessionEvent.DaybreakSet, (event) =>
       Effect.gen(function* () {
         yield* run(db, event)
@@ -905,6 +924,8 @@ const layer = Layer.effectDiscard(
             id: event.data.id,
             session_id: event.data.sessionID,
             input_id: event.data.inputID,
+            assistant_message_id: event.data.assistantMessageID,
+            connection_identity_digest: event.data.connectionIdentityDigest,
             source: event.data.source,
             agent: event.data.agent,
             model: event.data.model,
@@ -931,7 +952,12 @@ const layer = Layer.effectDiscard(
           .insert(SessionUsageTable)
           .values({
             session_id: event.data.sessionID,
-            model_key: JSON.stringify([event.data.model.providerID, event.data.model.id, event.data.model.variant]),
+            model_key: JSON.stringify([
+              event.data.model.providerID,
+              event.data.model.id,
+              event.data.model.variant,
+              event.data.model.profile,
+            ]),
             model: event.data.model,
             logical: 1,
             physical: event.data.attempts,

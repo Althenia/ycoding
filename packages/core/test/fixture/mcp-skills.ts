@@ -359,6 +359,7 @@ export const skillsMcpLayer = (url: string) => {
         }),
         Layer.mock(Integration.Service, {
           connection: {
+            snapshot: () => Effect.die("unused Integration.snapshot"),
             active: unused,
             resolve: unused,
             key: unused,

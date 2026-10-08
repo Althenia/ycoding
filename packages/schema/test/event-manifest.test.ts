@@ -25,6 +25,43 @@ import { SessionMessage } from "../src/session-message.js"
 import { WorkspaceEvent } from "../src/workspace-event.js"
 
 describe("public event manifest", () => {
+  test("keeps profile bindings private while accepting them in durable replay", () => {
+    const definition = EventManifest.Durable.get("session.profile.bound.1")
+    expect(definition).toBeDefined()
+    if (!definition) throw new Error("Missing private profile binding definition")
+    const binding = {
+      providerID: "openai",
+      integrationID: "openai",
+      profile: "Work",
+      credentialID: "cred_private",
+      accountGeneration: 0,
+    }
+    expect(Schema.decodeUnknownSync(definition.data)({ sessionID: "ses_profile", binding })).toEqual({
+      sessionID: "ses_profile",
+      binding,
+    })
+    expect(Schema.decodeUnknownSync(definition.data)({ sessionID: "ses_profile" })).toEqual({
+      sessionID: "ses_profile",
+    })
+    expect(() =>
+      Schema.decodeUnknownSync(definition.data)({
+        sessionID: "ses_profile",
+        binding: { ...binding, accountGeneration: -1 },
+      }),
+    ).toThrow()
+    expect(EventManifest.Latest.has("session.profile.bound")).toBe(false)
+    expect(EventManifest.Server.has("session.profile.bound")).toBe(false)
+    const event = Schema.decodeUnknownSync(SessionEvent.ProfileBound)({
+      id: "evt_profile",
+      created: 1,
+      type: "session.profile.bound",
+      durable: { aggregateID: "ses_profile", seq: 1, version: 1 },
+      data: { sessionID: "ses_profile", binding },
+    })
+    expect(Schema.is(SessionEvent.All)(event)).toBe(true)
+    expect(Schema.is(SessionEvent.PublicDurable)(event)).toBe(false)
+  })
+
   test("publishes one canonical minimal durable work completion contract", () => {
     const definition = EventManifest.Latest.get("session.work.completed")
     expect(definition).toBeDefined()
@@ -167,6 +204,7 @@ describe("public event manifest", () => {
         "session.unpinned.1",
         "session.agent.selected.1",
         "session.model.selected.1",
+        "session.profile.bound.1",
         "session.daybreak.set.1",
         "session.project-artifacts-ended.1",
         "session.moved.1",
@@ -229,6 +267,7 @@ describe("public event manifest", () => {
       ...SessionEvent.Compaction.LegacyDurableDefinitions,
       SessionEvent.UsageRecorded,
       SessionEvent.ProviderRequestRecorded,
+      SessionEvent.ProfileBound,
     ])
     expect(SessionEvent.UsageRecorded.durability).toBe("durable")
     expect(SessionEvent.ProviderRequestRecorded.durability).toBe("durable")

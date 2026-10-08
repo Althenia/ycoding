@@ -22,7 +22,8 @@ export function readPreferredModel(storage: StorageLike | null | undefined = bro
   })
   if (typeof value !== "object" || value === null || !("providerID" in value) || !("id" in value)) return undefined
   if (typeof value.providerID !== "string" || typeof value.id !== "string") return undefined
-  return { providerID: value.providerID, id: value.id, ...( "variant" in value && typeof value.variant === "string" ? { variant: value.variant } : {}) }
+  return { providerID: value.providerID, id: value.id, ...( "variant" in value && typeof value.variant === "string" ? { variant: value.variant } : {}),
+    ...( "profile" in value && typeof value.profile === "string" && value.profile.length > 0 ? { profile: value.profile } : {}) }
 }
 
 export function writePreferredModel(storage: StorageLike | null | undefined = browserStorage(), model: ModelRefView): boolean {
@@ -38,10 +39,11 @@ export function readRecentModels(storage: StorageLike | null | undefined = brows
       return value.flatMap((item) => {
         if (typeof item !== "object" || item === null || !("providerID" in item) || !("id" in item)) return []
         if (typeof item.providerID !== "string" || !item.providerID || typeof item.id !== "string" || !item.id) return []
-        const key = JSON.stringify([item.providerID, item.id])
+        const profile = "profile" in item && typeof item.profile === "string" && item.profile.length > 0 ? item.profile : undefined
+        const key = JSON.stringify([item.providerID, item.id, profile])
         if (seen.has(key)) return []
         seen.add(key)
-        return [{ providerID: item.providerID, id: item.id }]
+        return [{ providerID: item.providerID, id: item.id, ...(profile === undefined ? {} : { profile }) }]
       }).slice(0, 10)
     } catch {
       return []
@@ -50,7 +52,7 @@ export function readRecentModels(storage: StorageLike | null | undefined = brows
 }
 
 export function rememberRecentModel(storage: StorageLike | null | undefined = browserStorage(), model: ModelRefView): ModelRefView[] {
-  const recent = [{ providerID: model.providerID, id: model.id }, ...readRecentModels(storage).filter((item) => item.providerID !== model.providerID || item.id !== model.id)].slice(0, 10)
+  const recent = [{ providerID: model.providerID, id: model.id, ...(model.profile === undefined ? {} : { profile: model.profile }) }, ...readRecentModels(storage).filter((item) => item.providerID !== model.providerID || item.id !== model.id || item.profile !== model.profile)].slice(0, 10)
   writeStored(storage, RECENT_MODELS_KEY, JSON.stringify(recent))
   return recent
 }

@@ -51,9 +51,7 @@ export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginRegist
       : Location.Ref.make({
           directory: AbsolutePath.make(input.location.directory ?? location.directory),
           workspaceID:
-            input.location.workspace === undefined
-              ? location.workspaceID
-              : Workspace.ID.make(input.location.workspace),
+            input.location.workspace === undefined ? location.workspaceID : Workspace.ID.make(input.location.workspace),
         })
   const isCurrentLocation = (ref: Location.Ref) =>
     ref.directory === location.directory && ref.workspaceID === location.workspaceID
@@ -124,10 +122,16 @@ export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginRegist
             ),
       },
       model: {
-        get: (providerID, modelID) =>
-          catalog.model.get(Provider.ID.make(providerID), CatalogModel.ID.make(modelID)),
+        get: (providerID, modelID) => catalog.model.get(Provider.ID.make(providerID), CatalogModel.ID.make(modelID)),
         list: () => response(catalog.model.available()),
-        default: () => response(catalog.model.default()),
+        default: () =>
+          response(
+            Effect.gen(function* () {
+              const model = yield* catalog.model.default()
+              const selection = yield* catalog.model.defaultSelection()
+              return model && selection ? { ...model, selection } : undefined
+            }),
+          ),
       },
       reload: catalog.reload,
       transform: (callback) =>
@@ -148,8 +152,12 @@ export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginRegist
                 draft.model.remove(Provider.ID.make(providerID), CatalogModel.ID.make(modelID)),
               default: {
                 get: draft.model.default.get,
-                set: (providerID, modelID) =>
-                  draft.model.default.set(Provider.ID.make(providerID), CatalogModel.ID.make(modelID)),
+                set: (providerID, modelID, selection) =>
+                  draft.model.default.set(Provider.ID.make(providerID), CatalogModel.ID.make(modelID), {
+                    variant:
+                      selection?.variant === undefined ? undefined : CatalogModel.VariantID.make(selection.variant),
+                    profile: selection?.profile,
+                  }),
               },
             },
           })

@@ -55,7 +55,7 @@ const it = testEffect(
     ],
   ),
 )
-const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
+const location = Location.Ref.make({ directory: AbsolutePath.make(process.cwd()) })
 const id = Session.ID.create()
 
 /** Public session events from a `log` read, without synced markers. */

@@ -4,6 +4,7 @@ import { isRecord } from "./util/record"
 export type ModelPreferenceModel = {
   providerID: string
   modelID: string
+  profile?: string
 }
 
 export type ModelPreference = {
@@ -20,7 +21,8 @@ function models(value: unknown) {
     if (!isRecord(item)) return []
     if (typeof item.providerID !== "string" || item.providerID.length === 0) return []
     if (typeof item.modelID !== "string" || item.modelID.length === 0) return []
-    return [{ providerID: item.providerID, modelID: item.modelID }]
+    if (item.profile !== undefined && (typeof item.profile !== "string" || item.profile.length === 0)) return []
+    return [{ providerID: item.providerID, modelID: item.modelID, ...(item.profile === undefined ? {} : { profile: item.profile }) }]
   })
 }
 
@@ -35,7 +37,7 @@ function variants(value: unknown) {
 }
 
 export function modelPreferenceKey(model: ModelPreferenceModel) {
-  return `${model.providerID}/${model.modelID}`
+  return `${model.providerID}/${model.modelID}${model.profile === undefined ? "" : `#profile=${encodeURIComponent(model.profile)}`}`
 }
 
 export function cycleModelVariant(current: string | undefined, variants: string[]) {

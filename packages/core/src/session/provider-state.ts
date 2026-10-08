@@ -9,7 +9,12 @@ import { makeLocationNode } from "../effect/app-node"
 import { Hash } from "../util/hash"
 import { SessionMessage } from "./message"
 import { SessionSchema } from "./schema"
-import { SessionMessageTable, SessionProviderStateBlobTable, SessionProviderStateLinkTable } from "./sql"
+import {
+  SessionMessageTable,
+  SessionProviderRequestTable,
+  SessionProviderStateBlobTable,
+  SessionProviderStateLinkTable,
+} from "./sql"
 import { canonicalJson } from "./runner/cache"
 
 type DatabaseClient = EffectDrizzleSqlite.EffectSQLiteDatabase
@@ -31,6 +36,7 @@ export interface MaterializeInput {
   readonly provider: string
   readonly modelID: string
   readonly stateless: boolean
+  readonly accountIdentityDigest?: string
 }
 
 export interface Interface {
@@ -43,6 +49,8 @@ export class Service extends Context.Service<Service, Interface>()("@ycoding/Ses
 
 export const key = (messageID: SessionMessage.ID, partOrdinal: number, partKind: string) =>
   `${messageID}:${partOrdinal}:${partKind}`
+
+export const accountKey = (messageID: SessionMessage.ID) => `account:${messageID}`
 
 export function redact(state: Record<string, unknown> | undefined) {
   if (!state || !("opaqueCompactionItem" in state)) return state
@@ -119,17 +127,15 @@ export function rebaseInTransaction(
       .where(and(eq(SessionMessageTable.session_id, sessionID), lte(SessionMessageTable.seq, through.seq)))
       .all()
     if (ids.length === 0) return
-    yield* tx
-      .delete(SessionProviderStateLinkTable)
-      .where(
-        and(
-          eq(SessionProviderStateLinkTable.session_id, sessionID),
-          inArray(
-            SessionProviderStateLinkTable.message_id,
-            ids.map((row) => row.id),
-          ),
+    yield* tx.delete(SessionProviderStateLinkTable).where(
+      and(
+        eq(SessionProviderStateLinkTable.session_id, sessionID),
+        inArray(
+          SessionProviderStateLinkTable.message_id,
+          ids.map((row) => row.id),
         ),
-      )
+      ),
+    )
   })
 }
 
@@ -142,7 +148,24 @@ export const layer = () =>
         capture: (input) => db.transaction((tx) => captureInTransaction(tx, input)).pipe(Effect.orDie),
         materialize: (input) =>
           Effect.gen(function* () {
-            if (!input.stateless) return new Map()
+            if (input.accountIdentityDigest === undefined) return new Map()
+            const provenance = yield* db
+              .select({ messageID: SessionProviderRequestTable.assistant_message_id })
+              .from(SessionProviderRequestTable)
+              .where(
+                and(
+                  eq(SessionProviderRequestTable.session_id, input.sessionID),
+                  eq(SessionProviderRequestTable.connection_identity_digest, input.accountIdentityDigest),
+                ),
+              )
+              .all()
+            const messages = new Set(provenance.flatMap((row) => (row.messageID ? [row.messageID] : [])))
+            const materialized = new Map(
+              [...messages].map(
+                (messageID) => [accountKey(messageID), { accountIdentityDigest: input.accountIdentityDigest }] as const,
+              ),
+            )
+            if (!input.stateless || messages.size === 0) return materialized
             const rows = yield* db
               .select({ link: SessionProviderStateLinkTable, blob: SessionProviderStateBlobTable })
               .from(SessionProviderStateLinkTable)
@@ -155,11 +178,13 @@ export const layer = () =>
                   eq(SessionProviderStateLinkTable.session_id, input.sessionID),
                   eq(SessionProviderStateLinkTable.provider, input.provider),
                   eq(SessionProviderStateLinkTable.model_id, input.modelID),
+                  inArray(SessionProviderStateLinkTable.message_id, [...messages]),
                 ),
               )
               .all()
-            return new Map(
-              rows.flatMap((row) =>
+            return new Map<string, Record<string, unknown>>([
+              ...materialized,
+              ...rows.flatMap((row) =>
                 typeof row.blob.content === "object" && row.blob.content !== null && !Array.isArray(row.blob.content)
                   ? [
                       [
@@ -169,9 +194,10 @@ export const layer = () =>
                     ]
                   : [],
               ),
-            )
+            ])
           }).pipe(Effect.orDie),
-        rebase: (sessionID, through) => db.transaction((tx) => rebaseInTransaction(tx, sessionID, through)).pipe(Effect.orDie),
+        rebase: (sessionID, through) =>
+          db.transaction((tx) => rebaseInTransaction(tx, sessionID, through)).pipe(Effect.orDie),
       })
     }),
   )

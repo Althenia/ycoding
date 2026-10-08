@@ -11,9 +11,10 @@ import { Config } from "../../config"
 import { ConfigImageAnalyzer } from "../../config/image-analyzer"
 import { Credential } from "../../credential"
 import { Integration } from "../../integration"
-import { IntegrationConnection } from "../../integration/connection"
 import { CatalogModel } from "../../model"
 import { SessionRunnerModel } from "./model"
+import { SessionHelperPolicy } from "../helper-policy"
+import { SessionSchema } from "../schema"
 
 export const IMAGE_ANALYSIS_SCHEMA_VERSION = "1"
 
@@ -146,7 +147,7 @@ export interface Interface {
   readonly standardPrompt: string
   readonly analyze: (
     inputs: readonly AnalyzeInput[],
-    options?: { readonly customPrompt?: string },
+    options?: { readonly customPrompt?: string; readonly session?: SessionSchema.Info },
   ) => Effect.Effect<ReadonlyMap<string, string>>
 }
 
@@ -185,32 +186,83 @@ const layer = Layer.effect(
     const config = yield* Config.Service
     const catalog = yield* Catalog.Service
     const integrations = yield* Integration.Service
+    const credentials = yield* Credential.Service
+    const models = yield* SessionRunnerModel.Service
     const memo = createAnalysisMemo()
 
-    const resolveLocal = Effect.fn("ImageAnalyzer.resolveVisionModel.local")(function* () {
+    const resolveLocal = Effect.fn("ImageAnalyzer.resolveVisionModel.local")(function* (session?: SessionSchema.Info) {
       const entries = yield* config.entries()
       const info = Config.latest(entries, "image_analyzer")
       if (!info || info.enabled === false) return undefined
       const selection = ConfigImageAnalyzer.resolveSelection(info)
       if (!selection) return undefined
-      const modelInfo = yield* catalog.model.get(selection.providerID, selection.model).pipe(
-        Effect.orElseSucceed(() => undefined as unknown as CatalogModel.Info | undefined),
-      )
+      const modelInfo = yield* catalog.model
+        .get(selection.providerID, selection.model)
+        .pipe(Effect.orElseSucceed(() => undefined as unknown as CatalogModel.Info | undefined))
       if (!modelInfo) return undefined
-      const provider = yield* catalog.provider.get(modelInfo.providerID).pipe(
-        Effect.orElseSucceed(() => undefined as unknown as import("../../provider").Provider.Info | undefined),
-      )
-      const connection = yield* integrations.connection
-        .active(provider?.integrationID ?? Integration.ID.make(modelInfo.providerID))
-        .pipe(Effect.orElseSucceed(() => undefined as unknown as IntegrationConnection.Info | undefined))
-      const credential = connection
-        ? yield* integrations.connection.resolve(connection).pipe(Effect.orElseSucceed(() => undefined))
+      if (session) {
+        const resolved = yield* models
+          .resolve({
+            ...session,
+            model: SessionHelperPolicy.inheritProfile(
+              CatalogModel.Ref.make({
+                providerID: selection.providerID,
+                id: selection.model,
+                variant: selection.variant,
+                profile: selection.profile,
+              }),
+              session.model,
+            ),
+          })
+          .pipe(Effect.orElseSucceed(() => undefined))
+        return resolved
+          ? {
+              model: resolved.model,
+              ref: selection,
+              info,
+              modelInfo,
+              accountIdentityDigest: resolved.accountIdentityDigest,
+            }
+          : undefined
+      }
+      const provider = yield* catalog.provider
+        .get(modelInfo.providerID)
+        .pipe(Effect.orElseSucceed(() => undefined as unknown as import("../../provider").Provider.Info | undefined))
+      const integrationID = provider?.integrationID ?? Integration.ID.make(modelInfo.providerID)
+      const matching =
+        selection.profile === undefined
+          ? []
+          : (yield* credentials.list(integrationID)).filter((credential) => credential.label === selection.profile)
+      if (selection.profile !== undefined && matching.length !== 1) return undefined
+      const connection =
+        selection.profile === undefined
+          ? yield* integrations.connection.active(integrationID)
+          : { type: "credential" as const, id: matching[0]!.id, label: matching[0]!.label, active: matching[0]!.active }
+      const snapshot = connection
+        ? yield* integrations.connection.snapshot(connection).pipe(Effect.orElseSucceed(() => undefined))
         : undefined
-      const nested = yield* SessionRunnerModel.fromCatalogModel(modelInfo, credential).pipe(
+      if (connection?.type === "credential" && !snapshot?.credential) return undefined
+      if (
+        selection.profile !== undefined &&
+        (!snapshot?.credential || snapshot.credential.accountGeneration !== matching[0]?.accountGeneration)
+      )
+        return undefined
+      const contextual = yield* catalog.model.forConnection(modelInfo, snapshot)
+      if (!contextual) return undefined
+      const nested = yield* SessionRunnerModel.withVariant(contextual, selection.variant).pipe(
+        Effect.flatMap((model) => SessionRunnerModel.fromCatalogModel(model, snapshot?.value)),
         Effect.orElseSucceed(() => undefined as unknown as import("@ycoding-ai/ai").Model),
       )
       if (!nested) return undefined
-      return { model: nested, ref: selection, info, modelInfo }
+      return {
+        model: nested,
+        ref: selection,
+        info,
+        modelInfo,
+        accountIdentityDigest: snapshot?.credential
+          ? SessionRunnerModel.accountIdentityDigest(snapshot.credential)
+          : SessionRunnerModel.exactAuthIdentityDigest(contextual, nested, snapshot?.value, integrationID),
+      }
     })
 
     return Service.of({
@@ -218,19 +270,23 @@ const layer = Layer.effect(
       standardPrompt: STANDARD_IMAGE_ANALYSIS_PROMPT,
       analyze: Effect.fn("ImageAnalyzer.analyze")(function* (
         inputs: readonly AnalyzeInput[],
-        options?: { readonly customPrompt?: string },
+        options?: { readonly customPrompt?: string; readonly session?: SessionSchema.Info },
       ) {
         if (inputs.length === 0) return new Map<string, string>()
-        const vision = yield* resolveLocal()
+        const vision = yield* resolveLocal(options?.session)
         if (!vision) {
           return new Map(
-            inputs.map(({ file }) => [file.content.digest, failureBlock(file, "vision model not configured or unavailable")]),
+            inputs.map(({ file }) => [
+              file.content.digest,
+              failureBlock(file, "vision model not configured or unavailable"),
+            ]),
           )
         }
         const info = vision.info
         const maxImages = info.max_images
         const maxBytes = info.max_bytes
-        const prompt = options?.customPrompt ?? ConfigImageAnalyzer.effectivePrompt(info) ?? STANDARD_IMAGE_ANALYSIS_PROMPT
+        const prompt =
+          options?.customPrompt ?? ConfigImageAnalyzer.effectivePrompt(info) ?? STANDARD_IMAGE_ANALYSIS_PROMPT
         const label = `${String(vision.ref.providerID)}/${String(vision.ref.model)}${vision.ref.variant ? `#${vision.ref.variant}` : ""}`
 
         const limited = maxImages !== undefined ? inputs.slice(0, maxImages) : inputs
@@ -241,7 +297,10 @@ const layer = Layer.effect(
           (input) =>
             Effect.gen(function* () {
               if (maxBytes !== undefined && input.bytes.length > maxBytes) {
-                return [input.file.content.digest, failureBlock(input.file, `image exceeds max_bytes ${maxBytes}`)] as const
+                return [
+                  input.file.content.digest,
+                  failureBlock(input.file, `image exceeds max_bytes ${maxBytes}`),
+                ] as const
               }
               const request = LLM.request({
                 model: vision.model,
@@ -256,24 +315,31 @@ const layer = Layer.effect(
                   }),
                 ],
               })
-              const analysis = yield* memo.analyze(label, prompt, input.file.content.digest, () =>
-                Effect.gen(function* () {
-                  const text = yield* Effect.gen(function* () {
-                    const response = yield* llm.generate(request)
-                    return response.events
-                      .filter((event) => event.type === "text-delta" || event.type === "text-end")
-                      .map((event) => (event.type === "text-delta" ? (event as { text: string }).text : ""))
-                      .join("")
-                      .trim()
-                  }).pipe(Effect.orElseSucceed(() => "[analysis failed]"))
-                  const raw = text.length > 0 ? text : "[no description returned]"
-                  const normalized = normalizeToonAnalysis(raw)
-                  // Validate via decode for telemetry; keep verbatim even if invalid to avoid dropping content
-                  if (normalized.length > 0) isValidToon(normalized)
-                  return normalized.length > 0 ? normalized : raw.trim()
-                }),
+              const analysis = yield* memo.analyze(
+                JSON.stringify([label, vision.accountIdentityDigest]),
+                prompt,
+                input.file.content.digest,
+                () =>
+                  Effect.gen(function* () {
+                    const text = yield* Effect.gen(function* () {
+                      const response = yield* llm.generate(request)
+                      return response.events
+                        .filter((event) => event.type === "text-delta" || event.type === "text-end")
+                        .map((event) => (event.type === "text-delta" ? (event as { text: string }).text : ""))
+                        .join("")
+                        .trim()
+                    }).pipe(Effect.orElseSucceed(() => "[analysis failed]"))
+                    const raw = text.length > 0 ? text : "[no description returned]"
+                    const normalized = normalizeToonAnalysis(raw)
+                    // Validate via decode for telemetry; keep verbatim even if invalid to avoid dropping content
+                    if (normalized.length > 0) isValidToon(normalized)
+                    return normalized.length > 0 ? normalized : raw.trim()
+                  }),
               )
-              return [input.file.content.digest, formatFallbackBlock({ file: input.file, analysis, modelLabel: label })] as const
+              return [
+                input.file.content.digest,
+                formatFallbackBlock({ file: input.file, analysis, modelLabel: label }),
+              ] as const
             }),
           { concurrency: 3 },
         )
@@ -291,5 +357,5 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [llmClient, Catalog.node, Config.node, Integration.node, Credential.node],
+  deps: [llmClient, Catalog.node, Config.node, Integration.node, Credential.node, SessionRunnerModel.node],
 })

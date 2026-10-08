@@ -125,51 +125,66 @@ export const GithubCopilotPlugin = define({
   effect: Effect.fn(function* (ctx) {
     const catalog = yield* Catalog.Service
     const events = yield* EventRuntime.Service
+    const credentials = yield* Credential.Service
+    const integrations = yield* Integration.Service
     const loading = Semaphore.makeUnsafe(1)
-    const loaded: {
-      baseURL?: string
-      models?: Map<CatalogModel.ID, CatalogModel.Info>
-    } = {}
+    let accounts: readonly {
+      readonly credential: Credential.Info
+      readonly models: Map<CatalogModel.ID, CatalogModel.Info>
+    }[] = []
 
     const load = Effect.fn("GithubCopilotPlugin.load")(function* () {
-      const connection = yield* ctx.integration.connection.active("github-copilot")
-      const credential = connection
-        ? yield* ctx.integration.connection.resolve(connection).pipe(Effect.catch(() => Effect.succeed(undefined)))
-        : undefined
-      if (credential?.type !== "oauth") {
-        loaded.baseURL = undefined
-        loaded.models = undefined
-        return
-      }
-
-      const enterprise = credential.metadata?.enterpriseUrl
-      loaded.baseURL = baseURL(typeof enterprise === "string" ? enterprise : undefined)
       const provider = yield* catalog.provider.get(Provider.ID.githubCopilot)
       const existing = (yield* catalog.model.all()).filter((model) => model.providerID === Provider.ID.githubCopilot)
-      loaded.models = yield* Effect.tryPromise({
-        try: () =>
-          CopilotModels.get(
-            loaded.baseURL ?? baseURL(),
-            {
-              ...provider?.headers,
-              Authorization: `Bearer ${credential.refresh}`,
-              "User-Agent": `ycoding/${InstallationVersion}`,
-              "X-GitHub-Api-Version": apiVersion,
-            },
-            existing,
-          ),
-        catch: (cause) => cause,
-      }).pipe(
-        Effect.catch((cause) =>
-          Effect.logWarning("failed to sync GitHub Copilot models", { cause }).pipe(Effect.as(undefined)),
-        ),
-      )
+      accounts = (yield* Effect.forEach(
+        yield* credentials.list(Integration.ID.make("github-copilot")),
+        (saved) =>
+          Effect.gen(function* () {
+            const snapshot = yield* integrations.connection
+              .snapshot({ type: "credential", id: saved.id, label: saved.label, active: saved.active })
+              .pipe(Effect.catch(() => Effect.succeed(undefined)))
+            if (!snapshot?.credential || snapshot.value?.type !== "oauth") return undefined
+            const credential = snapshot.value
+            const enterprise = credential.metadata?.enterpriseUrl
+            const url = baseURL(typeof enterprise === "string" ? enterprise : undefined)
+            const models = yield* Effect.tryPromise({
+              try: () =>
+                CopilotModels.get(
+                  url,
+                  {
+                    ...provider?.headers,
+                    Authorization: `Bearer ${credential.refresh}`,
+                    "User-Agent": `ycoding/${InstallationVersion}`,
+                    "X-GitHub-Api-Version": apiVersion,
+                  },
+                  existing,
+                ),
+              catch: (cause) => cause,
+            }).pipe(
+              Effect.catch((cause) =>
+                Effect.logWarning("failed to sync GitHub Copilot models", { cause }).pipe(Effect.as(undefined)),
+              ),
+            )
+            return { credential: snapshot.credential, models: models ?? new Map<CatalogModel.ID, CatalogModel.Info>() }
+          }),
+        { concurrency: "unbounded" },
+      )).filter((account) => account !== undefined)
     })
 
     yield* ctx.integration.transform((draft) => {
       draft.method.update(oauth)
     })
-    yield* ctx.catalog.transform((evt) => syncModels(evt, loaded.models, loaded.baseURL))
+    yield* catalog.transform((draft) => {
+      draft.model.account.clear(Provider.ID.githubCopilot)
+      const union = new Map(accounts.flatMap((account) => [...account.models]))
+      syncModels(draft, accounts.length > 0 ? union : undefined, undefined)
+      for (const account of accounts)
+        draft.model.account.update(
+          account.credential,
+          Provider.ID.githubCopilot,
+          [...account.models.values()].filter((model) => model.id !== "gpt-5-chat-latest"),
+        )
+    })
     const refresh = () => loading.withPermit(load().pipe(Effect.andThen(ctx.catalog.reload())))
     yield* events.subscribe(Integration.Event.ConnectionUpdated).pipe(
       Stream.filter((event) => event.data.integrationID === Integration.ID.make("github-copilot")),
@@ -224,12 +239,10 @@ function withoutMaxOutputTokens(language: LanguageModelV3): LanguageModelV3 {
   return new Proxy(language, {
     get(target, property, receiver) {
       if (property === "doGenerate") {
-        return (options: LanguageModelV3CallOptions) =>
-          target.doGenerate({ ...options, maxOutputTokens: undefined })
+        return (options: LanguageModelV3CallOptions) => target.doGenerate({ ...options, maxOutputTokens: undefined })
       }
       if (property === "doStream") {
-        return (options: LanguageModelV3CallOptions) =>
-          target.doStream({ ...options, maxOutputTokens: undefined })
+        return (options: LanguageModelV3CallOptions) => target.doStream({ ...options, maxOutputTokens: undefined })
       }
       return Reflect.get(target, property, receiver)
     },
@@ -261,13 +274,13 @@ export function syncModels(
 
 type CopilotCatalog = {
   provider: {
-    get: (providerID: string) =>
-      | { provider: { id: string }; models: ReadonlyMap<string, unknown> }
-      | undefined
+    get: (
+      providerID: Provider.ID,
+    ) => { provider: { id: Provider.ID }; models: ReadonlyMap<CatalogModel.ID, unknown> } | undefined
   }
   model: {
-    remove: (providerID: string, modelID: string) => void
-    update: (providerID: string, modelID: string, update: (model: { enabled: boolean }) => void) => void
+    remove: (providerID: Provider.ID, modelID: CatalogModel.ID) => void
+    update: (providerID: Provider.ID, modelID: CatalogModel.ID, update: (model: { enabled: boolean }) => void) => void
   }
 }
 

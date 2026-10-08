@@ -50,7 +50,9 @@ const make = (dependencies: Dependencies) => {
     if (session.parentID) return
     const firstUser = yield* SessionHistory.firstUserMessageIfOnly(db, session.id)
     if (!firstUser) return
-    const mode = Config.latest(yield* dependencies.config.entries(), "efficiency")?.title ?? dependencies.helpers.settings.titleMode
+    const mode =
+      Config.latest(yield* dependencies.config.entries(), "efficiency")?.title ??
+      dependencies.helpers.settings.titleMode
     if (mode === "off") return
     if (mode === "local") {
       yield* dependencies.events.publish(SessionEvent.Renamed, {
@@ -77,7 +79,13 @@ const make = (dependencies: Dependencies) => {
     }
     const baseRequest = LLM.request({
       model: resolved.model,
-      http: { headers: SessionModelHeaders.make(session, { ...dependencies.headers, providerID: resolved.ref.providerID }) },
+      http: {
+        headers: SessionModelHeaders.make(session, {
+          ...dependencies.headers,
+          providerID: resolved.ref.providerID,
+          accountIdentityDigest: resolved.accountIdentityDigest,
+        }),
+      },
       system: agent.system,
       messages: [Message.user(firstUser.text)],
       tools: [],
@@ -89,6 +97,7 @@ const make = (dependencies: Dependencies) => {
       providerID: resolved.ref.providerID,
       modelID: resolved.ref.id,
       variant: resolved.ref.variant,
+      accountIdentityDigest: resolved.accountIdentityDigest,
       policyRevision: CACHE_POLICY_REVISION,
       permissions: agent.permissions,
       system: baseRequest.system,
@@ -116,6 +125,7 @@ const make = (dependencies: Dependencies) => {
       source: "title",
       agent: agent.id,
       model: resolved.ref,
+      connectionIdentityDigest: resolved.accountIdentityDigest,
       routeID: resolved.model.route.id,
       promptCacheKey: cache.promptCacheKey,
       systemDigest: cache.systemDigest,

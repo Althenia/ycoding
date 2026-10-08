@@ -87,6 +87,8 @@ export const Record = Schema.Struct({
   id: ID,
   sessionID: SessionID,
   inputID: SessionMessageID.pipe(optional),
+  assistantMessageID: SessionMessageID.pipe(optional),
+  connectionIdentityDigest: Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/)).pipe(optional),
   source: Source,
   agent: Agent.ID,
   model: Model.Ref,

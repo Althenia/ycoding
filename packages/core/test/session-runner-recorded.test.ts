@@ -83,10 +83,16 @@ const cassette = HttpRecorder.layer(cassetteName, {
     expect(incomingBody).toEqual(expected)
     return incoming.method === recorded.method && incoming.url === recorded.url
   },
-}).pipe(Layer.provide(process.env.RECORD === "true" ? FetchHttpClient.layer : Layer.succeed(
-  HttpClient.HttpClient,
-  HttpClient.make(() => Effect.die("Recorded runner tests cannot access the network")),
-)))
+}).pipe(
+  Layer.provide(
+    process.env.RECORD === "true"
+      ? FetchHttpClient.layer
+      : Layer.succeed(
+          HttpClient.HttpClient,
+          HttpClient.make(() => Effect.die("Recorded runner tests cannot access the network")),
+        ),
+  ),
+)
 const executor = RequestExecutor.layer.pipe(Layer.provide(cassette))
 const client = LLMClient.layer.pipe(Layer.provide(executor))
 const permission = Layer.succeed(
@@ -128,6 +134,8 @@ const promptCatalog = Layer.mock(Catalog.Service, {
     available: () => Effect.succeed([]),
   },
   model: {
+    defaultSelection: () => Effect.succeed(undefined),
+    forConnection: (model) => Effect.succeed(model),
     get: () => Effect.succeed(undefined),
     all: () => Effect.succeed([]),
     available: () => Effect.succeed([]),

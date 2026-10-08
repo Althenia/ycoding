@@ -6,7 +6,13 @@ import { Integration } from "@ycoding-ai/core/integration"
 import { CatalogModel } from "@ycoding-ai/core/model"
 import { PluginRegistry } from "@ycoding-ai/core/plugin"
 import { PluginHost } from "@ycoding-ai/core/plugin/host"
-import { CursorPlugin, oauth, oauthCredential, reconcileInterval, syncCatalog } from "@ycoding-ai/core/plugin/provider/cursor"
+import {
+  CursorPlugin,
+  oauth,
+  oauthCredential,
+  reconcileInterval,
+  syncCatalog,
+} from "@ycoding-ai/core/plugin/provider/cursor"
 import { Provider } from "@ycoding-ai/core/provider"
 import type { LanguageModelV3 } from "@ai-sdk/provider"
 import { beforeEach, describe, expect, mock } from "bun:test"
@@ -196,29 +202,30 @@ describe("CursorPlugin", () => {
     }),
   )
 
-  it.live("keeps the published Cursor models when a later sync fails", () =>
-    Effect.gen(function* () {
-      const catalog = yield* Catalog.Service
-      const integrations = yield* Integration.Service
-      const credentials = yield* Credential.Service
-      yield* credentials.create({
-        integrationID: Integration.ID.make("cursor"),
-        value: Credential.Key.make({ type: "key", key: "crsr_first" }),
-      })
-      yield* State.batch(addPlugin().pipe(Effect.andThen(Effect.sleep("100 millis"))))
-      expect(yield* cursorModelIDs(catalog)).toEqual(["composer-2.5"])
+  it.effect(
+    "keeps same-account inventory on discovery failure but refuses inherited eligibility after replacement",
+    () =>
+      Effect.gen(function* () {
+        const catalog = yield* Catalog.Service
+        const integrations = yield* Integration.Service
+        const credentials = yield* Credential.Service
+        const credential = yield* credentials.create({
+          integrationID: Integration.ID.make("cursor"),
+          value: Credential.Key.make({ type: "key", key: "crsr_first" }),
+        })
+        yield* State.batch(addPlugin())
+        yield* settle()
+        expect(yield* readCursorModelIDs(catalog)).toEqual(["composer-2.5"])
 
-      discovery.failure = "AvailableModels timed out after 5000ms"
-      bearerInputs.length = 0
-      yield* integrations.connection.key({ integrationID: Integration.ID.make("cursor"), key: "crsr_second" })
-      yield* Effect.gen(function* () {
-        yield* Effect.sleep("50 millis")
-        if (bearerInputs.includes("crsr_second")) return true
-        return yield* Effect.fail("sync not attempted")
-      }).pipe(Effect.retry({ times: 60 }))
-      yield* Effect.sleep("1 second")
-      expect(yield* readCursorModelIDs(catalog)).toEqual(["composer-2.5"])
-    }),
+        discovery.failure = "AvailableModels timed out after 5000ms"
+        yield* integrations.connection.activate(credential.id)
+        yield* settle()
+        expect(yield* readCursorModelIDs(catalog)).toEqual(["composer-2.5"])
+        yield* integrations.connection.key({ integrationID: Integration.ID.make("cursor"), key: "crsr_second" })
+        yield* settle()
+        expect(bearerInputs).toContain("crsr_second")
+        expect(yield* readCursorModelIDs(catalog)).toEqual([])
+      }),
   )
 
   it.effect("replaces Cursor catalog models with the discovered set", () =>
@@ -238,7 +245,8 @@ describe("CursorPlugin", () => {
               update: (providerID, update) => draft.provider.update(Provider.ID.make(providerID), update),
             },
             model: {
-              remove: (providerID, modelID) => draft.model.remove(Provider.ID.make(providerID), CatalogModel.ID.make(modelID)),
+              remove: (providerID, modelID) =>
+                draft.model.remove(Provider.ID.make(providerID), CatalogModel.ID.make(modelID)),
               update: (providerID, modelID, update) =>
                 draft.model.update(Provider.ID.make(providerID), CatalogModel.ID.make(modelID), update),
             },
@@ -300,13 +308,20 @@ describe("CursorPlugin", () => {
   it.effect("refreshes the stored Cursor OAuth credential and persists the rotated refresh token", () =>
     Effect.gen(function* () {
       refreshInputs.length = 0
-      const credential = yield* oauth.refresh(Credential.OAuth.make({
-        type: "oauth", methodID: Integration.MethodID.make("browser"),
-        access: jwt({ exp: 1_900_000_000 }), refresh: "old-refresh", expires: 1_900_000_000_000,
-      }))
+      const credential = yield* oauth.refresh(
+        Credential.OAuth.make({
+          type: "oauth",
+          methodID: Integration.MethodID.make("browser"),
+          access: jwt({ exp: 1_900_000_000 }),
+          refresh: "old-refresh",
+          expires: 1_900_000_000_000,
+        }),
+      )
       expect(refreshInputs).toEqual(["old-refresh"])
       expect(credential).toMatchObject({
-        access: jwt({ exp: 1_950_000_000 }), refresh: "rotated", expires: 1_950_000_000_000,
+        access: jwt({ exp: 1_950_000_000 }),
+        refresh: "rotated",
+        expires: 1_950_000_000_000,
       })
     }),
   )

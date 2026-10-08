@@ -2,7 +2,7 @@ export * as Decision from "./decision"
 
 import { OpenAIDecisions } from "@ycoding-ai/ai/openai-decisions"
 import { TypeSafeDecisions } from "@ycoding-ai/ai/typesafe-decisions"
-import { Usage } from "@ycoding-ai/ai"
+import { LLMError, Usage } from "@ycoding-ai/ai"
 import { ProviderShared } from "@ycoding-ai/ai/protocols/shared"
 import { RequestExecutor, TransportAttempt } from "@ycoding-ai/ai/route"
 import { Money } from "@ycoding-ai/schema/money"
@@ -71,11 +71,34 @@ export interface Choice {
   readonly refused: boolean
 }
 
-export const confident = (policy: ConfigDecisions.Policy | ConfigDecisions.AgentPolicy, answer: Choice) => {
-  const score = policy.provider === "agent" ? answer.confidence : answer.probability
+export const Score = Schema.Struct({
+  metric: Schema.Literals(["probability", "confidence"]),
+  value: ConfigDecisions.Probability,
+})
+export type Score = typeof Score.Type
+
+export type Assessment =
+  | { readonly status: "refused" }
+  | { readonly status: "uncertain"; readonly score?: Score }
+  | { readonly status: "confident"; readonly choice: string; readonly score: Score }
+
+export const assess = (policy: ConfigDecisions.Policy | ConfigDecisions.AgentPolicy, answer: Choice): Assessment => {
+  if (answer.refused || answer.choice === undefined) return { status: "refused" }
+  const metric = policy.provider === "agent" ? "confidence" : "probability"
+  const value = answer[metric]
+  if (!Schema.is(ConfigDecisions.Probability)(value)) return { status: "uncertain" }
   const threshold = policy.provider === "agent" ? policy.min_confidence : policy.min_probability
-  return !answer.refused && score !== undefined && Number.isFinite(score) && score >= 0 && score <= 1 && score >= threshold
+  if (value < threshold) return { status: "uncertain", score: { metric, value } }
+  return { status: "confident", choice: answer.choice, score: { metric, value } }
 }
+
+export const confident = (policy: ConfigDecisions.Policy | ConfigDecisions.AgentPolicy, answer: Choice) =>
+  assess(policy, answer).status === "confident"
+
+export const describe = (score: Score) =>
+  score.metric === "probability"
+    ? `native probability ${score.value.toFixed(2)}`
+    : `model confidence ${score.value.toFixed(2)}, uncalibrated`
 
 export interface Interface {
   readonly settings: () => Effect.Effect<ConfigDecisions.Info | undefined>
@@ -147,7 +170,7 @@ export function make(input: {
       requestID: tracker.requestID, routeID, transport: "http-json", attempt: 1, observer: tracker.observeAttempt,
     }, operation.pipe(
       Effect.provideService(RequestExecutor.Service, input.executor),
-      Effect.mapError(() => new Error({ reason: "provider-failed" })),
+      Effect.mapError((error) => new Error({ reason: nativeFailure(error) })),
       Effect.timeoutOrElse({ duration: settings?.timeout_ms ?? 10_000, orElse: () => Effect.fail(new Error({ reason: "timeout" })) }),
     )).pipe(Effect.onInterrupt(() => failed), Effect.exit)
     if (Exit.isFailure(exit)) {
@@ -180,7 +203,7 @@ export function make(input: {
       if (value.provider === "agent") {
         const result = yield* evaluate({ provider: "agent", request: { state: value.state, questions: [
           { type: "choice", name: "decision", instructions: value.instructions,
-            choices: Object.entries(value.choices).map(([choice, description]) => ({ value: choice, description })),
+            choices: Object.entries(value.choices).map(([choice, description]) => description ? { value: choice, description } : { value: choice }),
           },
         ] } }, value.context)
         if (result.provider !== "agent") return { refused: true }
@@ -211,6 +234,13 @@ export function make(input: {
       return { choice: answer.choice, probability: answer.probabilities[answer.choice], refused: false }
     }),
   }
+}
+
+function nativeFailure(error: LLMError) {
+  if (error.reason._tag === "InvalidRequest") return "invalid-request"
+  if (error.reason._tag === "InvalidProviderOutput") return "invalid-output"
+  if (error.reason._tag === "Authentication") return "unavailable"
+  return "provider-failed"
 }
 
 export const layer = Layer.effect(Service, Effect.gen(function* () {

@@ -83,13 +83,22 @@ export const load = Effect.fn("SessionHistory.load")(function* (db: DatabaseServ
 
 const cursorOwner = (sessionID: SessionSchema.ID) => createHash("sha256").update(sessionID).digest("hex").slice(0, 16)
 
-export const snapshotCursor = Effect.fn("SessionHistory.snapshotCursor")(function* (sessionID: SessionSchema.ID, value: string) {
-  if (value.length === 0 || value.length > 256 || !/^[A-Za-z0-9_-]+$/.test(value)) return yield* new InvalidCursorError()
+export const snapshotCursor = Effect.fn("SessionHistory.snapshotCursor")(function* (
+  sessionID: SessionSchema.ID,
+  value: string,
+) {
+  if (value.length === 0 || value.length > 256 || !/^[A-Za-z0-9_-]+$/.test(value))
+    return yield* new InvalidCursorError()
   const decoded = Buffer.from(value, "base64url").toString("utf8")
   if (Buffer.from(decoded).toString("base64url") !== value) return yield* new InvalidCursorError()
   const [owner, sequence, extra] = decoded.split(":")
   const number = Number(sequence)
-  if (owner !== cursorOwner(sessionID) || extra !== undefined || !/^(0|[1-9][0-9]*)$/.test(sequence ?? "") || !Number.isSafeInteger(number))
+  if (
+    owner !== cursorOwner(sessionID) ||
+    extra !== undefined ||
+    !/^(0|[1-9][0-9]*)$/.test(sequence ?? "") ||
+    !Number.isSafeInteger(number)
+  )
     return yield* new InvalidCursorError()
   return number
 })
@@ -104,11 +113,13 @@ export const snapshotWindow = Effect.fn("SessionHistory.snapshotWindow")(functio
   const rows = yield* db
     .select()
     .from(SessionMessageTable)
-    .where(and(
-      eq(SessionMessageTable.session_id, sessionID),
-      compaction ? gte(SessionMessageTable.seq, compaction.seq) : undefined,
-      before === undefined ? undefined : lt(SessionMessageTable.seq, before),
-    ))
+    .where(
+      and(
+        eq(SessionMessageTable.session_id, sessionID),
+        compaction ? gte(SessionMessageTable.seq, compaction.seq) : undefined,
+        before === undefined ? undefined : lt(SessionMessageTable.seq, before),
+      ),
+    )
     .orderBy(desc(SessionMessageTable.seq))
     .limit(limit + 1)
     .all()
@@ -116,7 +127,9 @@ export const snapshotWindow = Effect.fn("SessionHistory.snapshotWindow")(functio
   const page = rows.slice(0, limit)
   return {
     messages: yield* Effect.forEach(page.toReversed(), decodeMessageRow),
-    ...(rows.length > limit && page.length > 0 ? { before: Buffer.from(`${cursorOwner(sessionID)}:${page.at(-1)!.seq}`).toString("base64url") } : {}),
+    ...(rows.length > limit && page.length > 0
+      ? { before: Buffer.from(`${cursorOwner(sessionID)}:${page.at(-1)!.seq}`).toString("base64url") }
+      : {}),
   }
 })
 
@@ -126,11 +139,12 @@ export function visibleForModel<T extends { readonly seq: number; readonly messa
 ) {
   const boundary =
     durableBoundary ??
-    entries.findLast((entry) =>
-      entry.message.type === "synthetic" &&
-      entry.message.metadata !== undefined &&
-      typeof entry.message.metadata.projectArtifactsEnded === "object" &&
-      entry.message.metadata.projectArtifactsEnded !== null,
+    entries.findLast(
+      (entry) =>
+        entry.message.type === "synthetic" &&
+        entry.message.metadata !== undefined &&
+        typeof entry.message.metadata.projectArtifactsEnded === "object" &&
+        entry.message.metadata.projectArtifactsEnded !== null,
     )?.seq
   if (boundary === undefined) return entries
   return entries.filter((entry) => {
@@ -139,9 +153,17 @@ export function visibleForModel<T extends { readonly seq: number; readonly messa
   })
 }
 
-const entriesVisibleForModel = Effect.fnUntraced(function* (db: DatabaseService, sessionID: SessionSchema.ID, model?: CatalogModel.Ref) {
-  const canonical = visibleForModel(yield* messageEntries(db, sessionID), yield* latestProjectArtifactBoundary(db, sessionID))
-  const selection = yield* SessionContextState.selectEntries(db, sessionID, canonical, model)
+const entriesVisibleForModel = Effect.fnUntraced(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  model?: CatalogModel.Ref,
+  accountIdentityDigest?: string,
+) {
+  const canonical = visibleForModel(
+    yield* messageEntries(db, sessionID),
+    yield* latestProjectArtifactBoundary(db, sessionID),
+  )
+  const selection = yield* SessionContextState.selectEntries(db, sessionID, canonical, model, accountIdentityDigest)
   if (selection.remote) {
     const remote = selection.remote
     const checkpoint = {
@@ -201,8 +223,9 @@ export const forModel = Effect.fn("SessionHistory.forModel")(function* (
   db: DatabaseService,
   sessionID: SessionSchema.ID,
   model?: CatalogModel.Ref,
+  accountIdentityDigest?: string,
 ) {
-  return (yield* entriesVisibleForModel(db, sessionID, model)).map((entry) => entry.message)
+  return (yield* entriesVisibleForModel(db, sessionID, model, accountIdentityDigest)).map((entry) => entry.message)
 })
 
 export const entriesForRunner = Effect.fn("SessionHistory.entriesForRunner")(function* (
@@ -210,11 +233,12 @@ export const entriesForRunner = Effect.fn("SessionHistory.entriesForRunner")(fun
   sessionID: SessionSchema.ID,
   instructions: Instructions.Instructions,
   model?: CatalogModel.Ref,
+  accountIdentityDigest?: string,
 ) {
   return yield* db
     .transaction(() =>
       Effect.gen(function* () {
-        const messages = yield* entriesVisibleForModel(db, sessionID, model)
+        const messages = yield* entriesVisibleForModel(db, sessionID, model, accountIdentityDigest)
         const assembled = yield* InstructionState.assemble(db, sessionID, instructions)
         return {
           initial: assembled.initial,
@@ -229,12 +253,14 @@ export const preview = Effect.fn("SessionHistory.preview")(function* (
   db: DatabaseService,
   sessionID: SessionSchema.ID,
   instructions: Instructions.Instructions,
+  model?: CatalogModel.Ref,
+  accountIdentityDigest?: string,
 ) {
   const observed = yield* Instructions.read(instructions)
   return yield* db
     .transaction(() =>
       Effect.gen(function* () {
-        const messages = yield* entriesVisibleForModel(db, sessionID)
+        const messages = yield* entriesVisibleForModel(db, sessionID, model, accountIdentityDigest)
         // An active assistant may contain an unresolved tool call, so only preview the settled prefix.
         const unsettled = messages.findIndex(
           (entry) => entry.message.type === "assistant" && entry.message.time.completed === undefined,
@@ -252,25 +278,20 @@ export const preview = Effect.fn("SessionHistory.preview")(function* (
     .pipe(Effect.catch((error) => (error instanceof Instructions.InitializationBlocked ? error : Effect.die(error))))
 })
 
-const latestProjectArtifactBoundary = Effect.fnUntraced(function* (
-  db: DatabaseService,
-  sessionID: SessionSchema.ID,
-) {
-  return (
-    yield* db
-      .select({ seq: EventTable.seq })
-      .from(EventTable)
-      .where(
-        and(
-          eq(EventTable.aggregate_id, sessionID),
-          eq(EventTable.type, EventRuntime.versionedType(SessionEvent.ProjectArtifactsEnded.type, 1)),
-        ),
-      )
-      .orderBy(desc(EventTable.seq))
-      .limit(1)
-      .get()
-      .pipe(Effect.orDie)
-  )?.seq
+const latestProjectArtifactBoundary = Effect.fnUntraced(function* (db: DatabaseService, sessionID: SessionSchema.ID) {
+  return (yield* db
+    .select({ seq: EventTable.seq })
+    .from(EventTable)
+    .where(
+      and(
+        eq(EventTable.aggregate_id, sessionID),
+        eq(EventTable.type, EventRuntime.versionedType(SessionEvent.ProjectArtifactsEnded.type, 1)),
+      ),
+    )
+    .orderBy(desc(EventTable.seq))
+    .limit(1)
+    .get()
+    .pipe(Effect.orDie))?.seq
 })
 
 function isProjectArtifact(message: SessionMessage.Info) {

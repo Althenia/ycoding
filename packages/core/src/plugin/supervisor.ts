@@ -1,156 +1,131 @@
-export * as PluginSupervisor from "./supervisor";
+export * as PluginSupervisor from "./supervisor"
 
-import type { Plugin } from "@ycoding-ai/plugin/effect/plugin";
-import { Event } from "@ycoding-ai/schema/config";
-import {
-  Context,
-  Deferred,
-  Effect,
-  Layer,
-  Option,
-  Schema,
-  Semaphore,
-  Stream,
-} from "effect";
-import path from "path";
-import { fileURLToPath, pathToFileURL } from "url";
-import { Agent } from "../agent";
-import { Browser } from "../browser";
-import { IsolatedBrowser } from "../isolated-browser";
-import { Catalog } from "../catalog";
-import { Command } from "../command";
-import { Computer } from "../computer";
-import { Config } from "../config";
-import { ConfigPlugin } from "../config/plugin";
-import { Credential } from "../credential";
-import { Decision } from "../decision";
-import { makeLocationNode } from "../effect/app-node";
-import { httpClient } from "../effect/app-node-platform";
-import { EventRuntime } from "../event";
-import { FileMutation } from "../file-mutation";
-import { FileSystem } from "../filesystem";
-import { Form } from "../form";
-import { FSUtil } from "../fs-util";
-import { Global } from "../global";
-import { Image } from "../image";
-import { Integration } from "../integration";
-import { Location } from "../location";
-import { LocationMutation } from "../location-mutation";
-import { ModelsDev } from "../models-dev";
-import { Memory } from "../memory";
-import { MCP } from "../mcp";
-import { Npm } from "../npm";
-import { Permission } from "../permission";
-import { ProviderUsageRuntime } from "../provider-usage";
-import { PluginRegistry } from "../plugin";
-import { PluginPromise } from "../plugin/promise";
-import { Reference } from "../reference";
-import { Ripgrep } from "../ripgrep";
-import { SessionAutonomy } from "../session/autonomy";
-import { SessionGuardrail } from "../session/guardrail";
-import { SessionCompaction } from "../session/compaction";
-import { SessionInstructions } from "../session/instructions";
-import { SessionRunnerModel } from "../session/runner/model";
-import { SessionTodo } from "../session/todo";
-import { Shell } from "../shell";
-import { Skill } from "../skill";
-import { ReadToolFileSystem } from "../tool/read-filesystem";
-import { ToolRegistry } from "../tool/registry";
-import { WebSearchTool } from "../tool/websearch";
-import { WellKnown } from "../wellknown";
-import { PluginInternal } from "./internal";
-import { PluginRuntime } from "./runtime";
-import { ProjectArtifactSource } from "../project-artifact/source";
-import { ProjectArtifactStore } from "../project-artifact";
-import { SdkPlugins } from "./sdk";
-import { importModule } from "#runtime-import";
+import type { Plugin } from "@ycoding-ai/plugin/effect/plugin"
+import { Event } from "@ycoding-ai/schema/config"
+import { Context, Deferred, Effect, Layer, Option, Schema, Semaphore, Stream } from "effect"
+import path from "path"
+import { fileURLToPath, pathToFileURL } from "url"
+import { Agent } from "../agent"
+import { AISDK } from "../aisdk"
+import { Browser } from "../browser"
+import { IsolatedBrowser } from "../isolated-browser"
+import { Catalog } from "../catalog"
+import { Command } from "../command"
+import { Computer } from "../computer"
+import { Config } from "../config"
+import { ConfigPlugin } from "../config/plugin"
+import { Credential } from "../credential"
+import { Decision } from "../decision"
+import { makeLocationNode } from "../effect/app-node"
+import { httpClient } from "../effect/app-node-platform"
+import { EventRuntime } from "../event"
+import { FileMutation } from "../file-mutation"
+import { FileSystem } from "../filesystem"
+import { Form } from "../form"
+import { FSUtil } from "../fs-util"
+import { Global } from "../global"
+import { Image } from "../image"
+import { Integration } from "../integration"
+import { Location } from "../location"
+import { LocationMutation } from "../location-mutation"
+import { ModelsDev } from "../models-dev"
+import { Memory } from "../memory"
+import { MCP } from "../mcp"
+import { Npm } from "../npm"
+import { Permission } from "../permission"
+import { ProviderUsageRuntime } from "../provider-usage"
+import { PluginRegistry } from "../plugin"
+import { PluginPromise } from "../plugin/promise"
+import { Reference } from "../reference"
+import { Ripgrep } from "../ripgrep"
+import { SessionAutonomy } from "../session/autonomy"
+import { SessionGuardrail } from "../session/guardrail"
+import { SessionCompaction } from "../session/compaction"
+import { SessionInstructions } from "../session/instructions"
+import { SessionRunnerModel } from "../session/runner/model"
+import { SessionTodo } from "../session/todo"
+import { Shell } from "../shell"
+import { Skill } from "../skill"
+import { ReadToolFileSystem } from "../tool/read-filesystem"
+import { ToolRegistry } from "../tool/registry"
+import { WebSearchTool } from "../tool/websearch"
+import { WellKnown } from "../wellknown"
+import { PluginInternal } from "./internal"
+import { PluginRuntime } from "./runtime"
+import { ProjectArtifactSource } from "../project-artifact/source"
+import { ProjectArtifactStore } from "../project-artifact"
+import { SdkPlugins } from "./sdk"
+import { importModule } from "#runtime-import"
 
 const PluginModule = Schema.Struct({
   default: Schema.Union([
     Schema.Struct({
       id: Schema.String,
-      effect: Schema.declare<Plugin["effect"]>(
-        (input): input is Plugin["effect"] => typeof input === "function",
-      ),
+      effect: Schema.declare<Plugin["effect"]>((input): input is Plugin["effect"] => typeof input === "function"),
     }),
     Schema.Struct({
       id: Schema.String,
-      setup: Schema.declare<
-        Parameters<typeof PluginPromise.fromPromise>[0]["setup"]
-      >(
-        (
-          input,
-        ): input is Parameters<typeof PluginPromise.fromPromise>[0]["setup"] =>
-          typeof input === "function",
+      setup: Schema.declare<Parameters<typeof PluginPromise.fromPromise>[0]["setup"]>(
+        (input): input is Parameters<typeof PluginPromise.fromPromise>[0]["setup"] => typeof input === "function",
       ),
     }),
   ]),
-});
+})
 
 type Operation =
   | {
-      readonly type: "add";
-      readonly target: string;
-      readonly options: Record<string, unknown>;
-      readonly mtime?: number;
+      readonly type: "add"
+      readonly target: string
+      readonly options: Record<string, unknown>
+      readonly mtime?: number
     }
   | {
-      readonly type: "remove";
-      readonly target: string;
-    };
+      readonly type: "remove"
+      readonly target: string
+    }
 
 function parse(input: ConfigPlugin.Plugin): Operation {
   if (typeof input !== "string") {
-    return { type: "add", target: input.package, options: input.options ?? {} };
+    return { type: "add", target: input.package, options: input.options ?? {} }
   }
-  if (!input.startsWith("-"))
-    return { type: "add", target: input, options: {} };
-  if (input.length === 1)
-    throw new Error("Plugin remove operation requires a target");
-  return { type: "remove", target: input.slice(1) };
+  if (!input.startsWith("-")) return { type: "add", target: input, options: {} }
+  if (input.length === 1) throw new Error("Plugin remove operation requires a target")
+  return { type: "remove", target: input.slice(1) }
 }
 
-const scan = Effect.fn("PluginSupervisor.scan")(function* (
-  entries: readonly Config.Entry[],
-) {
-  const fs = yield* FSUtil.Service;
-  const location = yield* Location.Service;
+const scan = Effect.fn("PluginSupervisor.scan")(function* (entries: readonly Config.Entry[]) {
+  const fs = yield* FSUtil.Service
+  const location = yield* Location.Service
   const discovered = yield* Effect.forEach(
-    entries.filter(
-      (entry): entry is Config.Directory => entry.type === "directory",
-    ),
+    entries.filter((entry): entry is Config.Directory => entry.type === "directory"),
     (entry) => discoverDirectory(fs, entry.path),
-  ).pipe(Effect.map((items) => items.flat()));
+  ).pipe(Effect.map((items) => items.flat()))
   const configured = entries
     .filter((entry): entry is Config.Document => entry.type === "document")
     .flatMap((entry) =>
       (entry.info.plugins ?? []).map(parse).map((operation) => {
-        if (operation.type === "remove") return operation;
-        const directory = entry.path
-          ? path.dirname(entry.path)
-          : location.directory;
+        if (operation.type === "remove") return operation
+        const directory = entry.path ? path.dirname(entry.path) : location.directory
         const target = operation.target.startsWith("file://")
           ? fileURLToPath(operation.target)
-          : operation.target.startsWith("./") ||
-              operation.target.startsWith("../")
+          : operation.target.startsWith("./") || operation.target.startsWith("../")
             ? path.resolve(directory, operation.target)
-            : operation.target;
-        return { ...operation, target };
+            : operation.target
+        return { ...operation, target }
       }),
-    );
+    )
   // Explicit config is applied last so it can remove auto-discovered packages.
   return yield* Effect.forEach([...discovered, ...configured], (operation) => {
-    if (operation.type === "remove" || !path.isAbsolute(operation.target))
-      return Effect.succeed(operation);
+    if (operation.type === "remove" || !path.isAbsolute(operation.target)) return Effect.succeed(operation)
     return fs.stat(operation.target).pipe(
       Effect.map((info) => ({
         ...operation,
         mtime: Option.getOrElse(info.mtime, () => new Date(0)).getTime(),
       })),
       Effect.catch(() => Effect.succeed(operation)),
-    );
-  });
-});
+    )
+  })
+})
 
 const resolve = Effect.fn("PluginSupervisor.resolve")(function* (
   pre: readonly PluginRegistry.Versioned[],
@@ -158,38 +133,33 @@ const resolve = Effect.fn("PluginSupervisor.resolve")(function* (
   operations: readonly Operation[],
 ) {
   const matches = (selector: string, target: string) =>
-    selector === "*" ||
-    (selector.endsWith(".*")
-      ? target.startsWith(selector.slice(0, -1))
-      : selector === target);
-  const definitions = [...pre, ...post];
-  const enabled = new Set(definitions.map((plugin) => plugin.id));
-  const packages = new Map<string, PluginRegistry.Versioned>();
-  const plugins = () => [...definitions, ...packages.values()];
+    selector === "*" || (selector.endsWith(".*") ? target.startsWith(selector.slice(0, -1)) : selector === target)
+  const definitions = [...pre, ...post]
+  const enabled = new Set(definitions.map((plugin) => plugin.id))
+  const packages = new Map<string, PluginRegistry.Versioned>()
+  const plugins = () => [...definitions, ...packages.values()]
 
-  const seen = new Set<string>();
+  const seen = new Set<string>()
   for (const operation of operations) {
-    const signature = JSON.stringify(operation);
-    if (seen.has(signature)) continue;
-    seen.add(signature);
+    const signature = JSON.stringify(operation)
+    if (seen.has(signature)) continue
+    seen.add(signature)
     if (operation.type === "remove") {
       plugins()
         .filter((plugin) => matches(operation.target, plugin.id))
-        .forEach((plugin) => enabled.delete(plugin.id));
-      continue;
+        .forEach((plugin) => enabled.delete(plugin.id))
+      continue
     }
 
-    const matched = plugins().filter((plugin) =>
-      matches(operation.target, plugin.id),
-    );
+    const matched = plugins().filter((plugin) => matches(operation.target, plugin.id))
     const selectsPlugins =
       matched.length > 0 ||
       operation.target === "*" ||
       operation.target.endsWith(".*") ||
-      operation.target.startsWith("ycoding.");
+      operation.target.startsWith("ycoding.")
     if (selectsPlugins) {
-      matched.forEach((plugin) => enabled.add(plugin.id));
-      continue;
+      matched.forEach((plugin) => enabled.add(plugin.id))
+      continue
     }
 
     const plugin = yield* load(operation).pipe(
@@ -199,59 +169,56 @@ const resolve = Effect.fn("PluginSupervisor.resolve")(function* (
           cause,
         }).pipe(Effect.as(undefined)),
       ),
-    );
-    if (!plugin) continue;
-    const previous = packages.get(operation.target);
-    if (previous) enabled.delete(previous.id);
-    packages.set(operation.target, plugin);
-    enabled.add(plugin.id);
+    )
+    if (!plugin) continue
+    const previous = packages.get(operation.target)
+    if (previous) enabled.delete(previous.id)
+    packages.set(operation.target, plugin)
+    enabled.add(plugin.id)
   }
 
   return [
     ...pre.filter((plugin) => enabled.has(plugin.id)),
     ...Array.from(packages.values()).filter((plugin) => enabled.has(plugin.id)),
     ...post.filter((plugin) => enabled.has(plugin.id)),
-  ];
-});
+  ]
+})
 
-const load = Effect.fn("PluginSupervisor.load")(function* (
-  operation: Extract<Operation, { type: "add" }>,
-) {
-  const npm = yield* Npm.Service;
+const load = Effect.fn("PluginSupervisor.load")(function* (operation: Extract<Operation, { type: "add" }>) {
+  const npm = yield* Npm.Service
   const entrypoint = path.isAbsolute(operation.target)
     ? pathToFileURL(operation.target).href
-    : (yield* npm.add(operation.target, { subpaths: ["server", ""] }))
-        .entrypoint;
-  if (!entrypoint) return;
+    : (yield* npm.add(operation.target, { subpaths: ["server", ""] })).entrypoint
+  if (!entrypoint) return
   // Bun currently ignores query parameters when caching file:// imports.
   const source =
     operation.mtime === undefined
       ? entrypoint
       : typeof Bun !== "undefined"
         ? `${operation.target.replaceAll("\\", "/")}?mtime=${operation.mtime}`
-        : `${entrypoint}?mtime=${operation.mtime}`;
+        : `${entrypoint}?mtime=${operation.mtime}`
   yield* Effect.log({
     msg: "loading plugin",
     id: operation.target,
     entrypoint: source,
-  });
-  const mod = yield* Effect.promise(() => importModule(source));
-  const decoded = Schema.decodeUnknownOption(PluginModule)(mod);
+  })
+  const mod = yield* Effect.promise(() => importModule(source))
+  const decoded = Schema.decodeUnknownOption(PluginModule)(mod)
   if (Option.isNone(decoded)) {
     return yield* Effect.fail(
       new Error(
         `Invalid plugin export: ${operation.target}. Export Plugin.define({ id, setup }) or Plugin.define({ id, effect }).`,
       ),
-    );
+    )
   }
-  const value = decoded.value.default;
-  const plugin = "effect" in value ? value : PluginPromise.fromPromise(value);
+  const value = decoded.value.default
+  const plugin = "effect" in value ? value : PluginPromise.fromPromise(value)
   return {
     id: plugin.id,
     version: JSON.stringify(operation),
     effect: (host) => plugin.effect({ ...host, options: operation.options }),
-  } satisfies PluginRegistry.Versioned;
-});
+  } satisfies PluginRegistry.Versioned
+})
 
 function discoverDirectory(fs: FSUtil.Interface, directory: string) {
   return Effect.gen(function* () {
@@ -263,42 +230,36 @@ function discoverDirectory(fs: FSUtil.Interface, directory: string) {
         dot: true,
         symlink: true,
       })
-      .pipe(Effect.orElseSucceed(() => []));
-    return files
-      .sort()
-      .map((target): Operation => ({ type: "add", target, options: {} }));
-  });
+      .pipe(Effect.orElseSucceed(() => []))
+    return files.sort().map((target): Operation => ({ type: "add", target, options: {} }))
+  })
 }
 
 export interface Interface {
   /** Wait for the initial plugin generation and startup updates to settle. */
-  readonly flush: Effect.Effect<void>;
+  readonly flush: Effect.Effect<void>
 }
 
-export class Service extends Context.Service<Service, Interface>()(
-  "@ycoding/PluginSupervisor",
-) {}
+export class Service extends Context.Service<Service, Interface>()("@ycoding/PluginSupervisor") {}
 
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const registry = yield* PluginRegistry.Service;
-    const sdk = yield* SdkPlugins.Service;
-    const config = yield* Config.Service;
-    const events = yield* EventRuntime.Service;
-    const lock = Semaphore.makeUnsafe(1);
-    const ready = yield* Deferred.make<void>();
-    let observed = 0;
-    let applied = -1;
+    const registry = yield* PluginRegistry.Service
+    const sdk = yield* SdkPlugins.Service
+    const config = yield* Config.Service
+    const events = yield* EventRuntime.Service
+    const lock = Semaphore.makeUnsafe(1)
+    const ready = yield* Deferred.make<void>()
+    let observed = 0
+    let applied = -1
 
-    const activate = Effect.fn("PluginSupervisor.activate")(function* (
-      target: number,
-    ) {
+    const activate = Effect.fn("PluginSupervisor.activate")(function* (target: number) {
       yield* lock.withPermit(
         Effect.gen(function* () {
-          if (applied >= target) return;
+          if (applied >= target) return
           // Resolve YCoding's internal plugins with their privileged Location services.
-          const internal = yield* PluginInternal.list();
+          const internal = yield* PluginInternal.list()
           // Combine internal plugins with host-contributed SDK plugins in boot order.
           const pre = [
             ...internal.pre.map((plugin) => ({
@@ -306,49 +267,39 @@ const layer = Layer.effect(
               version: "internal",
             })),
             ...sdk.all(),
-          ];
+          ]
           const post = internal.post.map((plugin) => ({
             ...plugin,
             version: "internal",
-          }));
-          const operations = yield* scan(yield* config.entries());
+          }))
+          const operations = yield* scan(yield* config.entries())
           // Apply config operations and load enabled package plugins into one ordered generation.
-          const plugins = yield* resolve(pre, post, operations);
+          const plugins = yield* resolve(pre, post, operations)
           // Replace the active generation in one scoped, batched activation.
-          yield* registry.activate(plugins);
-          applied = target;
+          yield* registry.activate(plugins)
+          applied = target
         }),
-      );
-    });
+      )
+    })
     const updates = yield* events
       .subscribe([Event.Updated, SdkPlugins.Updated])
-      .pipe(Stream.toQueue({ capacity: 1, strategy: "sliding" }));
+      .pipe(Stream.toQueue({ capacity: 1, strategy: "sliding" }))
     const signals = yield* Stream.concat(
       Stream.succeed(0),
-      Stream.fromQueue(updates).pipe(
-        Stream.mapEffect(() => Effect.sync(() => ++observed)),
-      ),
-    ).pipe(Stream.broadcast({ capacity: 1, strategy: "sliding", replay: 1 }));
+      Stream.fromQueue(updates).pipe(Stream.mapEffect(() => Effect.sync(() => ++observed))),
+    ).pipe(Stream.broadcast({ capacity: 1, strategy: "sliding", replay: 1 }))
     const attempt = (target: number) =>
       activate(target).pipe(
         Effect.map(() => observed === target),
-        Effect.catchCause((cause) =>
-          Effect.logError("failed to reload plugins", { cause }).pipe(
-            Effect.as(false),
-          ),
-        ),
-      );
+        Effect.catchCause((cause) => Effect.logError("failed to reload plugins", { cause }).pipe(Effect.as(false))),
+      )
 
     yield* signals.pipe(
       Stream.runForEach((target) =>
-        activate(target).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logError("failed to reload plugins", { cause }),
-          ),
-        ),
+        activate(target).pipe(Effect.catchCause((cause) => Effect.logError("failed to reload plugins", { cause }))),
       ),
       Effect.forkScoped({ startImmediately: true }),
-    );
+    )
     yield* signals.pipe(
       Stream.debounce("100 millis"),
       Stream.mapEffect(attempt),
@@ -357,21 +308,18 @@ const layer = Layer.effect(
       Stream.runDrain,
       Effect.andThen(Deferred.succeed(ready, undefined)),
       Effect.forkScoped({ startImmediately: true }),
-    );
-    return Service.of({ flush: Deferred.await(ready) });
+    )
+    return Service.of({ flush: Deferred.await(ready) })
   }),
-);
+)
 
-const nodeLayer = layer as Layer.Layer<
-  Service,
-  never,
-  PluginInternal.Requirements
->;
+const nodeLayer = layer as Layer.Layer<Service, never, PluginInternal.Requirements>
 
 export const node = makeLocationNode({
   service: Service,
   layer: nodeLayer,
   deps: [
+    AISDK.node,
     PluginRegistry.node,
     SdkPlugins.node,
     Agent.node,
@@ -418,6 +366,6 @@ export const node = makeLocationNode({
     WebSearchTool.configNode,
     WellKnown.node,
   ],
-});
+})
 
-export { layer };
+export { layer }

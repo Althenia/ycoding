@@ -2636,7 +2636,7 @@
         "diffRemovedBg": [58, 45, 47, 255],
         "diffRemovedLineNumberBg": [54, 41, 43, 255],
         "error": [224, 108, 117, 255],
-        "info": [209, 154, 102, 255],
+        "info": [97, 175, 239, 255],
         "markdownBlockQuote": [92, 99, 112, 255],
         "markdownCode": [152, 195, 121, 255],
         "markdownCodeBlock": [171, 178, 191, 255],
@@ -2665,7 +2665,7 @@
         "syntaxType": [229, 192, 123, 255],
         "syntaxVariable": [224, 108, 117, 255],
         "text": [171, 178, 191, 255],
-        "textMuted": [92, 99, 112, 255],
+        "textMuted": [130, 137, 151, 255],
         "warning": [229, 192, 123, 255]
       },
       "thinkingOpacity": 0.6
@@ -2696,7 +2696,7 @@
         "diffRemovedBg": [252, 233, 232, 255],
         "diffRemovedLineNumberBg": [245, 226, 225, 255],
         "error": [228, 86, 73, 255],
-        "info": [152, 104, 1, 255],
+        "info": [64, 120, 242, 255],
         "markdownBlockQuote": [160, 161, 167, 255],
         "markdownCode": [80, 161, 79, 255],
         "markdownCodeBlock": [56, 58, 66, 255],
@@ -2725,7 +2725,7 @@
         "syntaxType": [193, 132, 1, 255],
         "syntaxVariable": [228, 86, 73, 255],
         "text": [56, 58, 66, 255],
-        "textMuted": [160, 161, 167, 255],
+        "textMuted": [105, 108, 119, 255],
         "warning": [193, 132, 1, 255]
       },
       "thinkingOpacity": 0.6

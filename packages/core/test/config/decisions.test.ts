@@ -14,6 +14,7 @@ test("retains explicit decision providers and opt-in automatic consumers", () =>
       { id: "review", agent: "plan", description: "Read-only analysis" },
     ] },
     goal: { provider: "openai", min_probability: 0.95 },
+    questions: { provider: "typesafe", min_probability: 0.7 },
   }
   expect(decode({ decisions })).toMatchObject({ decisions: {
     ...decisions,
@@ -44,7 +45,7 @@ test("rejects unbounded timeouts, invalid thresholds, and ambiguous routes", () 
 
 test("retains model-agent confidence policies independently of native probabilities", () => {
   const policy = { provider: "agent", min_confidence: 0.8 }
-  const decisions = { guardrails: policy, goal: policy, routing: { ...policy, candidates: [
+  const decisions = { guardrails: policy, goal: policy, questions: policy, routing: { ...policy, candidates: [
     { id: "review", agent: "GSD", description: "Review" },
   ] } }
   expect(decode({ decisions }).decisions).toMatchObject(decisions)
@@ -57,5 +58,8 @@ test("rejects missing, invalid, or mixed confidence/probability thresholds", () 
     { provider: "agent", min_confidence: -0.1 },
     { provider: "agent", min_confidence: 0.8, min_probability: 0.9 },
     { provider: "openai", min_probability: 0.8, min_confidence: 0.9 },
-  ]) expect(() => decode({ decisions: { guardrails } })).toThrow()
+  ]) {
+    expect(() => decode({ decisions: { guardrails } })).toThrow()
+    expect(() => decode({ decisions: { questions: guardrails } })).toThrow()
+  }
 })

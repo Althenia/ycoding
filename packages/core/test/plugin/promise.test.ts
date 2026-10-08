@@ -4,6 +4,8 @@ import { DateTime, Effect, Schema } from "effect"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Catalog } from "@ycoding-ai/core/catalog"
 import { CatalogModel } from "@ycoding-ai/core/model"
+import { Credential } from "@ycoding-ai/core/credential"
+import { Integration } from "@ycoding-ai/core/integration"
 import { PluginRegistry } from "@ycoding-ai/core/plugin"
 import { PluginHooks } from "@ycoding-ai/core/plugin/hooks"
 import { PluginHost } from "@ycoding-ai/core/plugin/host"
@@ -122,6 +124,49 @@ describe("fromPromise", () => {
 
       expect(seen).toHaveLength(8)
       expect(new Set(seen).size).toBe(1)
+    }),
+  )
+
+  it.effect("returns the configured named-profile default selection through the direct Promise catalog adapter", () =>
+    Effect.gen(function* () {
+      const plugin = yield* PluginRegistry.Service
+      const catalog = yield* Catalog.Service
+      const credentials = yield* Credential.Service
+      const host = yield* PluginHost.make(plugin)
+      const providerID = Provider.ID.make("profile-default")
+      const modelID = CatalogModel.ID.make("configured-chat")
+      yield* credentials.create({
+        integrationID: Integration.ID.make(providerID),
+        label: "Work",
+        value: { type: "key", key: "fixture-profile-default" },
+      })
+      yield* catalog.transform((draft) =>
+        draft.model.update(providerID, modelID, (model) => {
+          model.enabled = true
+          model.variants = [{ id: CatalogModel.VariantID.make("high") }]
+        }),
+      )
+      let callbacks = 0
+      yield* PluginPromise.fromPromise(
+        Plugin.define({
+          id: "promise-profile-default",
+          setup: async (ctx) => {
+            await ctx.catalog.transform((draft) => {
+              callbacks += 1
+              draft.model.default.set(providerID, modelID, { profile: "Work", variant: "high" })
+            })
+            const selected = await ctx.catalog.model.default()
+            expect(selected.data).toMatchObject({
+              id: modelID,
+              providerID,
+              selection: { id: modelID, providerID, profile: "Work", variant: "high" },
+            })
+            expect(selected.data?.profiles).toEqual([{ name: "Work", active: true, variants: ["high"] }])
+            expect(JSON.stringify(selected.data)).not.toContain("fixture-profile-default")
+          },
+        }),
+      ).effect(host)
+      expect(callbacks).toBe(1)
     }),
   )
 
