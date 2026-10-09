@@ -37,7 +37,7 @@ const catalog: CatalogView = {
   commands: [{ name: "plan", description: "Plan work" }],
   skills: [{ id: "frontend-workflow", name: "Frontend workflow", slash: true }, { id: "gpt-subgent-routing", name: "GPT subagent routing", slash: false }, { id: "audit", name: "Audit", slash: false }, ...Array.from({ length: 63 }, (_, index) => ({ id: `skill-${String(index).padStart(2, "0")}`, name: `Skill ${index}`, slash: false }))],
   references: [{ name: "design-system", uri: "file:///workspace/design-system" }],
-  resources: [{ name: "Runbook", uri: "mcp://docs/runbook" }],
+  resources: [{ name: "Runbook", description: "Operational reference", uri: "mcp://docs/runbook" }],
 }
 const requests: { operation: string; input: unknown }[] = []
 let resolveCompact: ((accepted: boolean) => void) | undefined
@@ -76,6 +76,7 @@ const store: RemoteStore = {
       return { status: "ok", files: [{ path: "slow.txt", uri: "file:///workspace/ycoding/slow.txt", kind: "file" as const }] }
     }
     if (query === "fail") return { status: "failed", message: "File search is unavailable" }
+    if (query === "agent.ts") return { status: "ok", files: ["packages/core/src/config/plugin/agent.ts", "packages/core/src/plugin/agent.ts", "packages/core/src/project-artifact/adapter/agent.ts"].map((path) => ({ path, uri: `file:///workspace/ycoding/${path}`, kind: "file" as const })) }
     return { status: "ok", files: [{ path: "apps/web/src/remote/ui/composer.tsx", uri: "file:///workspace/ycoding/apps/web/src/remote/ui/composer.tsx", kind: "file" as const }].filter((item) => item.path.includes(query)) }
   },
   setDraft: (sessionID: string, text: string) => update({ ...state(), drafts: { ...state().drafts, [sessionID]: text } }),

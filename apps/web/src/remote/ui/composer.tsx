@@ -396,8 +396,8 @@ export function MiniComposer(props: {
         <Show when={suggesting()}><div class="mini-composer__suggestions" style={{ "--composer-suggest-max": bound() === undefined ? undefined : `${bound()}px` }}>
           <div class="mini-composer__suggestions-head"><strong>Suggestions</strong><button type="button" aria-label="Close suggestions" onPointerDown={(event) => event.preventDefault()} onClick={() => dismissSuggestions()}><Icon name="close" size={16} />Close</button></div>
           <div ref={autocomplete} class="mini-composer__autocomplete" id="composer-autocomplete" role="listbox" aria-label="Suggestions" style={{ "--composer-name-width": `${Math.min(20, Math.max(9, ...options().map((item) => item.label.length)))}ch` }}>
-            <For each={options()}>{(option, index) => <button id={`composer-option-${index()}`} type="button" role="option" aria-selected={index() === active()} classList={{ "mini-composer__option--active": index() === active() }} onPointerDown={(event) => event.preventDefault()} onClick={() => select(index())}>
-              <span>{option.label}</span><small title={option.description}>{option.description}</small>
+            <For each={options()}>{(option, index) => <button id={`composer-option-${index()}`} type="button" role="option" aria-selected={index() === active()} classList={{ "mini-composer__option--active": index() === active(), "mini-composer__option--label-only": !option.description }} onPointerDown={(event) => event.preventDefault()} onClick={() => select(index())}>
+              <span>{option.label}</span><Show when={option.description}><small title={option.description}>{option.description}</small></Show>
             </button>}</For>
           </div>
           <Show when={fileError()}><p class="mini-composer__suggestions-status" role="status">{fileError()}</p></Show>

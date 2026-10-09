@@ -22,6 +22,15 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.10.3",
+    date: "2026-10-09",
+    title: "Readable file suggestions",
+    tags: ["Fixed"],
+    changes: [
+      { tag: "Fixed", text: "Read complete file paths in web composer suggestions. Paths use the available row width and wrap on narrow screens instead of being cut off beside empty space; keyboard and pointer selection keep the full path." },
+    ],
+  },
+  {
     version: "0.10.2",
     date: "2026-10-09",
     title: "Default profiles and resilient Claude sign-in",

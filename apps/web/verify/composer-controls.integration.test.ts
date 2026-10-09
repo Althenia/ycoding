@@ -786,6 +786,51 @@ test("composer states and effort surface retain layout at four sizes in both the
   }
 }, 90_000)
 
+test("file suggestions show complete paths across the row and wrap without clipping at narrow widths", async () => {
+  for (const width of [320, 390, 768, 1440]) for (const theme of ["light", "dark"]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width, 900)
+      if (width < 768) await page.setCoarsePointer(true)
+      await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+      const input = '.mini-composer__mount textarea[aria-label="Message your agent"]'
+      await wait(page, `document.querySelector(${JSON.stringify(input)}) !== null`)
+      await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
+      await type(page, input, "@agent.ts")
+      await wait(page, `document.querySelectorAll('.mini-composer__mount [role="option"]').length === 3`)
+      await page.evaluate("document.fonts.ready")
+      await page.evaluate(`Promise.all(document.querySelector('.mini-composer__suggestions').getAnimations().map(animation => animation.finished))`)
+      const layout = await page.evaluate<{ overflow: boolean; rows: { text: string; clipped: boolean; unused: number; height: number; lines: number }[] }>(`(() => ({
+        overflow: document.documentElement.scrollWidth > innerWidth,
+        rows: [...document.querySelectorAll('.mini-composer__mount [role="option"]')].map(row => {
+          const label = row.querySelector('span'), box = label.getBoundingClientRect(), rect = row.getBoundingClientRect(), style = getComputedStyle(row), range = document.createRange();
+          range.selectNodeContents(label);
+          return { text: label.textContent, clipped: label.scrollWidth > label.clientWidth || [...range.getClientRects()].some(part => part.left < box.left - 1 || part.right > box.right + 1 || part.top < rect.top || part.bottom > rect.bottom), unused: rect.width - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - box.width, height: rect.height, lines: box.height / parseFloat(getComputedStyle(label).lineHeight) };
+        })
+      }))()`)
+      expect(layout.overflow).toBe(false)
+      expect(layout.rows.map((row) => row.text).toSorted()).toEqual([
+        "@packages/core/src/config/plugin/agent.ts",
+        "@packages/core/src/plugin/agent.ts",
+        "@packages/core/src/project-artifact/adapter/agent.ts",
+      ])
+      for (const row of layout.rows) {
+        expect(row.clipped).toBe(false)
+        expect(Math.abs(row.unused)).toBeLessThanOrEqual(1)
+        expect(row.height).toBeGreaterThanOrEqual(width < 768 ? 44 : 36)
+      }
+      if (width < 768) expect(layout.rows[2]!.lines).toBeGreaterThan(1)
+      await page.pressKey("ArrowDown", "ArrowDown", 40)
+      await page.pressKey("Enter", "Enter", 13)
+      expect(await page.evaluate<string>(`document.querySelector(${JSON.stringify(input)}).value`)).toBe(`${layout.rows[1]!.text} `)
+      await type(page, input, "@agent.ts")
+      await wait(page, `document.querySelectorAll('.mini-composer__mount [role="option"]').length === 3`)
+      await page.evaluate(`document.querySelectorAll('.mini-composer__mount [role="option"]')[2].click()`)
+      expect(await page.evaluate<string>(`document.querySelector(${JSON.stringify(input)}).value`)).toBe("@packages/core/src/project-artifact/adapter/agent.ts ")
+    } finally { await page.close() }
+  }
+}, 120_000)
+
 test("keyboard and mouse autocomplete, pending identity, and creation work across four sizes and themes", async () => {
   for (const [width, height] of [[390, 844], [820, 1180], [1024, 768], [1440, 900]]) {
     for (const theme of ["light", "dark"]) {
