@@ -75,21 +75,59 @@ test("arrival and departure use the perimeter without traversing another block",
   expect(director.tick(0, false).some((item) => item.actor.id === child.id)).toBe(false)
 })
 
-test("delegation and reports speak from exclusive blocks and never replay on settle", () => {
+test("backend work, attention, and connection facts clear decorative chat on the next snapshot", () => {
+  for (const [status, connection, source] of [
+    ["working", "ready", "projection"],
+    ["attention", "ready", "projection"],
+    ["offline", "offline", "unavailable"],
+  ] as const) {
+    const director = new OfficeDirector(officeLayout)
+    const peers = ["a", "b", "c", "d"].map((id) => actor(id, { status: "idle" }))
+    director.sync(snapshot(peers))
+    let chatting = false
+    for (let index = 0; index < 500; index += 1) chatting ||= director.tick(50, false).some((frame) => frame.speech === "chat")
+    expect(chatting).toBe(true)
+    director.sync(snapshot([{ ...peers[0]!, status, source }, ...peers.slice(1)], { connection }))
+    expect(director.tick(0, false).find((frame) => frame.actor.id === peers[0]!.id)?.speech).toBeUndefined()
+  }
+})
+
+test("clearing an ambient gesture preserves corroborated handoff feedback", () => {
+  const director = new OfficeDirector(officeLayout)
+  const peers = ["a", "b", "c", "d"].map((id) => actor(id, { status: "idle" }))
+  director.sync(snapshot(peers))
+  let ambient = director.tick(0, false).filter((frame) => frame.speech === "chat")
+  for (let index = 0; !ambient.length && index < 500; index += 1) ambient = director.tick(50, false).filter((frame) => frame.speech === "chat")
+  expect(ambient.length).toBeGreaterThanOrEqual(2)
+  const root = peers.find((peer) => peer.id === ambient[0]!.actor.id)!
+  const child = peers.find((peer) => peer.id === ambient[1]!.actor.id)!
+  expect(director.playCue({ id: "delegate", kind: "delegate", fromActorID: root.id, toActorID: child.id })).toBe(true)
+  director.sync(snapshot([{ ...root, status: "thinking" }, ...peers.filter((peer) => peer.id !== root.id)]))
+  expect(director.tick(0, false).find((frame) => frame.actor.id === root.id)?.speech).toBe("delegate")
+})
+
+test("delegation and reports face only the two participants and restore activity facing", () => {
   const director = new OfficeDirector(officeLayout)
   const root = actor("root")
   const child = actor("child", { kind: "task", taskState: "running" })
-  director.sync(snapshot([root, child]))
-  const initial = director.tick(0, false).map((frame) => frame.position)
+  const peer = actor("peer", { activity: "research" })
+  director.sync(snapshot([root, child, peer]))
+  const initial = director.tick(0, false)
   expect(director.playCue({ id: "delegate", kind: "delegate", fromActorID: root.id, toActorID: child.id })).toBe(true)
-  expect(director.tick(50, false).map((frame) => frame.speech)).toEqual(["delegate", "chat"])
-  expect(director.tick(0, false).map((frame) => frame.position)).toEqual(initial)
+  const during = director.tick(50, false)
+  expect(during.map((frame) => frame.speech)).toEqual(["delegate", "chat", undefined])
+  expect(during.map((frame) => frame.position)).toEqual(initial.map((frame) => frame.position))
+  expect(during.slice(0, 2).map((frame) => frame.direction)).toEqual(["right", "left"])
+  expect(during[2]!.direction).toBe(initial[2]!.direction)
   run(director, 2_500)
   expect(director.cueActive(root.id)).toBe(false)
+  expect(director.tick(0, false).map((frame) => frame.direction)).toEqual([pods[0]!.spots.implement.facing, pods[1]!.spots.implement.facing, pods[2]!.spots.research.facing])
   expect(director.playCue({ id: "report", kind: "report", fromActorID: child.id, toActorID: root.id })).toBe(true)
   expect(director.tick(50, false).map((frame) => frame.speech)).toEqual(["chat", "report"])
+  director.sync(snapshot([root, { ...child, status: "attention" }, peer], { cues: [{ id: "report", kind: "report", fromActorID: child.id, toActorID: root.id }] }))
+  expect(director.tick(0, false).find((frame) => frame.actor.id === child.id)?.pose).toBe("wave")
   director.settle()
-  expect(director.tick(0, false).map((frame) => frame.position)).toEqual(initial)
+  expect(director.tick(0, false).map((frame) => frame.position)).toEqual(initial.map((frame) => frame.position))
   expect(director.tick(0, false).every((frame) => !frame.speech)).toBe(true)
 })
 
@@ -128,6 +166,18 @@ test("settling a terminal reported child does not strand it in the scene", () =>
   director.sync(snapshot([root, { ...child, taskState: "completed" }], { cues: [{ id: "report", kind: "report", fromActorID: child.id, toActorID: root.id }] }))
   director.settle()
   expect(director.tick(0, true).map((frame) => frame.actor.id)).toEqual([root.id])
+})
+
+test("a reported terminal child leaves after its corroborated cue expires", () => {
+  const director = new OfficeDirector(officeLayout)
+  const root = actor("root")
+  const child = actor("child", { kind: "task", taskState: "running" })
+  director.sync(snapshot([root, child]))
+  expect(director.playCue({ id: "report", kind: "report", fromActorID: child.id, toActorID: root.id })).toBe(true)
+  director.sync(snapshot([root, { ...child, taskState: "completed" }], { cues: [{ id: "report", kind: "report", fromActorID: child.id, toActorID: root.id, outcome: "completed" }] }))
+  expect(director.tick(0, false).find((frame) => frame.actor.id === child.id)?.leaving).toBe(false)
+  run(director, 2_100)
+  expect(director.tick(0, false).find((frame) => frame.actor.id === child.id)?.leaving).toBe(true)
 })
 
 const loading = { team: { status: "loading" as const, total: 0, shown: 0, more: false }, activityStatus: "loading" as const }

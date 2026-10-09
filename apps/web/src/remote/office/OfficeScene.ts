@@ -246,7 +246,7 @@ export class OfficeScene extends Phaser.Scene {
         this.director.settle()
         this.badge?.setVisible(false)
       }
-      this.discoverCues(input.snapshot, reduced)
+      this.discoverCues(input.snapshot, reduced, time)
       this.lastConnection = input.snapshot.connection
       this.applied = this.mailbox.revision()
     }
@@ -266,7 +266,7 @@ export class OfficeScene extends Phaser.Scene {
       objects.bubble.destroy(); objects.bubblePlate.destroy(); objects.marker.destroy()
       this.objects.delete(id)
     }
-    for (const frame of this.latestFrames) this.paintActor(frame, input.snapshot, scale)
+    for (const frame of this.latestFrames) this.paintActor(frame, input.snapshot, scale, reduced)
     const ball = rallyBall(this.latestFrames, time)
     if (ball) this.ball?.setPosition(ball.x, ball.y)
     this.ball?.setVisible(ball !== undefined)
@@ -274,7 +274,11 @@ export class OfficeScene extends Phaser.Scene {
     this.placeLabels(scale)
     const target = this.latestFrames.find((frame) => frame.actor.id === this.badgeActorID)
     this.badge?.setVisible(time < this.badgeUntil && !!target)
-    if (target) this.badge?.setPosition(target.position.x, target.position.y - 80).setScale(scale)
+    if (target) {
+      const objects = this.objects.get(target.actor.id)
+      this.badge?.setPosition(target.position.x, target.position.y - (objects?.sprite.displayHeight ?? 72)
+        - (objects?.bubble.visible ? objects.bubble.displayHeight : 0) - 16 * scale).setScale(scale)
+    }
     const selected = this.latestFrames.find((frame) => frame.actor.selected)
     if (this.selectedID === undefined && selected && !this.fitting) this.cameras.main.centerOn(selected.position.x, selected.position.y)
     if (selected?.actor.id !== this.selectedID) this.followSuspended = false
@@ -282,7 +286,7 @@ export class OfficeScene extends Phaser.Scene {
     this.selectedID = selected?.actor.id
   }
 
-  private discoverCues(snapshot: OfficeSnapshot, reduced: boolean): void {
+  private discoverCues(snapshot: OfficeSnapshot, reduced: boolean, time: number): void {
     if (snapshot.scope !== this.cueScope || snapshot.team.rootActorID !== this.cueRootID) {
       this.cueScope = snapshot.scope
       this.cueRootID = snapshot.team.rootActorID
@@ -298,7 +302,7 @@ export class OfficeScene extends Phaser.Scene {
       if (this.seenCues.has(cue.id)) continue
       this.seenCues.add(cue.id)
       if (reduced) this.badgeQueue.push(cue)
-      if (!reduced) this.director.playCue(cue)
+      if (!reduced && this.director.playCue(cue)) this.showCueBadge(cue, time)
     }
   }
 
@@ -369,7 +373,7 @@ export class OfficeScene extends Phaser.Scene {
     }
   }
 
-  private paintActor(frame: ActorFrame, snapshot: OfficeSnapshot, scale: number): void {
+  private paintActor(frame: ActorFrame, snapshot: OfficeSnapshot, scale: number, reduced: boolean): void {
     let objects = this.objects.get(frame.actor.id)
     if (!objects) {
       const sprite = this.add.sprite(0, 0, "characters", characterFrame(frame.appearance, frame.direction, 0))
@@ -395,11 +399,14 @@ export class OfficeScene extends Phaser.Scene {
     objects.sprite.setPosition(x, y).setDepth(y).setAlpha(alpha)
     if (frame.leaving) objects.sprite.disableInteractive()
     if (!frame.leaving && !objects.sprite.input) objects.sprite.setInteractive({ cursor: "var(--yc-cursor-action)" })
-    if (frame.pose === "sit" || frame.pose === "wave") {
+    if (reduced) {
+      objects.sprite.anims.stop()
+      objects.sprite.setTexture("characters", staticFrameForState(frame))
+    } else if (frame.pose === "sit" || frame.pose === "wave") {
       objects.sprite.anims.stop()
       objects.sprite.setTexture("characters", characterFrame(frame.appearance, frame.direction, characterColumns[frame.pose][0]))
     }
-    if (frame.pose !== "sit" && frame.pose !== "wave") objects.sprite.play(`${frame.appearance}-${frame.direction}-${frame.pose}`, true)
+    if (!reduced && frame.pose !== "sit" && frame.pose !== "wave") objects.sprite.play(`${frame.appearance}-${frame.direction}-${frame.pose}`, true)
     objects.shadow.setPosition(x, y + 2).setDepth(y - 1).setAlpha(alpha * 0.55)
     objects.ring.setPosition(x, y + 2).setDepth(y - 0.5).setVisible(frame.actor.selected && !frame.leaving).setAlpha(alpha)
     const preferences = this.mailbox.read().preferences
@@ -422,4 +429,9 @@ export class OfficeScene extends Phaser.Scene {
       .setVisible(!frame.leaving && inView && (frame.actor.status === "attention" || frame.actor.status === "failed" || frame.actor.unknownOutcome))
     if (snapshot.team.rootActorID === frame.actor.id) objects.ring.setStrokeStyle(2, 0x6de3b3)
   }
+}
+
+function staticFrameForState(frame: ActorFrame): number {
+  const pose = frame.pose === "play" ? "talk" : frame.pose
+  return characterFrame(frame.appearance, frame.direction, characterColumns[pose][0])
 }

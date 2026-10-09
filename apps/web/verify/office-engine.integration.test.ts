@@ -206,12 +206,20 @@ test("delegation and report bubbles occur inside each character's own block with
   for (const kind of ["delegate", "report"] as const) {
     await page.navigate(url("tool", `&team=1&cue=0&cueKind=${kind}&freeCamera=1`))
     await waitFor(page, "window.__officeGame?.scene.getScene('office').latestFrames.length===2")
-    const initial = await page.evaluate<readonly { readonly x: number; readonly y: number }[]>("window.__officeGame.scene.getScene('office').latestFrames.map(frame=>frame.position)")
+    await waitFor(page, "window.__officeGame.scene.getScene('office').latestFrames.every(frame=>!frame.moving)")
+    const initial = await page.evaluate<readonly { readonly x: number; readonly y: number; readonly direction: string }[]>("window.__officeGame.scene.getScene('office').latestFrames.map(frame=>({...frame.position,direction:frame.direction}))")
     await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Toggle observed cue')?.click()")
     await waitFor(page, `window.__officeGame.scene.getScene('office').latestFrames.some(frame=>frame.speech==='${kind}')`)
-    const spoken = await page.evaluate<readonly string[]>("window.__officeGame.scene.getScene('office').latestFrames.map(frame=>frame.speech)")
+    const spoken = await page.evaluate<readonly (string | undefined)[]>("window.__officeGame.scene.getScene('office').latestFrames.map(frame=>frame.speech)")
     expect(spoken).toContain(kind === "delegate" ? "delegate" : "report")
-    expect(await page.evaluate<readonly { readonly x: number; readonly y: number }[]>("window.__officeGame.scene.getScene('office').latestFrames.map(frame=>frame.position)")).toEqual(initial)
+    const current = await page.evaluate<readonly { readonly x: number; readonly y: number; readonly direction: string }[]>("window.__officeGame.scene.getScene('office').latestFrames.map(frame=>({...frame.position,direction:frame.direction}))")
+    expect(current.map(({ x, y }) => ({ x, y }))).toEqual(initial.map(({ x, y }) => ({ x, y })))
+    const from = current[kind === "delegate" ? 0 : 1]!
+    const to = current[kind === "delegate" ? 1 : 0]!
+    expect(from.direction).toBe(from.x === to.x ? from.y < to.y ? "down" : "up" : from.x < to.x ? "right" : "left")
+    expect(to.direction).toBe(to.x === from.x ? to.y < from.y ? "down" : "up" : to.x < from.x ? "right" : "left")
+    expect(await page.evaluate<boolean>(`(() => {const scene=window.__officeGame.scene.getScene('office'),target=scene.latestFrames.find(frame=>frame.actor.sessionID===${JSON.stringify(kind === "delegate" ? "session-b" : "session-a")}),objects=scene.objects.get(target.actor.id);return scene.badge.visible&&scene.badge.text===${JSON.stringify(kind === "delegate" ? "Delegated" : "Reported")}&&scene.badge.y<objects.bubble.y-objects.bubble.displayHeight})()`)).toBe(true)
+    expect(await page.evaluate<boolean>("(() => {const scene=window.__officeGame.scene.getScene('office'),ids=new Set(scene.latestFrames.map(frame=>frame.actor.id));return scene.latestFrames.every(frame=>ids.has(frame.actor.id))})()")).toBe(true)
     await advance(page, 80)
     expect(await page.evaluate<boolean>("window.__officeGame.scene.getScene('office').latestFrames.every(frame=>frame.room==='block'&&!frame.moving)")).toBe(true)
   }
@@ -496,9 +504,45 @@ test("reduced motion shows static stand poses facing the table and no ball", asy
     expect(frames.map((frame) => frame.pose)).toEqual(["stand", "stand"])
     expect(frames.map((frame) => frame.direction)).toEqual(["right", "left"])
     expect(await page.evaluate<boolean>("window.__officeGame.scene.getScene('office').ball.visible")).toBe(false)
+    const frameIDs = await page.evaluate<readonly string[]>("window.__officeGame.scene.getScene('office').latestFrames.map(frame=>String(window.__officeGame.scene.getScene('office').objects.get(frame.actor.id).sprite.frame.name))")
     const before = await page.evaluate<readonly number[]>("window.__officeGame.scene.getScene('office').latestFrames.map(frame=>frame.position.x)")
     await advance(page, 40)
     expect(await page.evaluate<readonly number[]>("window.__officeGame.scene.getScene('office').latestFrames.map(frame=>frame.position.x)")).toEqual(before)
+    expect(await page.evaluate<readonly string[]>("window.__officeGame.scene.getScene('office').latestFrames.map(frame=>String(window.__officeGame.scene.getScene('office').objects.get(frame.actor.id).sprite.frame.name))")).toEqual(frameIDs)
+    expect(await page.evaluate<boolean>("window.__officeGame.scene.getScene('office').latestFrames.every(frame=>!window.__officeGame.scene.getScene('office').objects.get(frame.actor.id).sprite.anims.isPlaying)")).toBe(true)
+  } finally { await page.close() }
+}, 30_000)
+
+test("reduced motion holds the active type frame while the engine advances", async () => {
+  const page = await requireBrowser().openPage()
+  try {
+    await page.navigate(url("tool", "&freeCamera=1"))
+    await waitFor(page, "window.__officeGame?.scene.getScene('office').latestFrames.length===1")
+    await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Toggle reduced motion')?.click()")
+    const before = await page.evaluate<string>("String(window.__officeGame.scene.getScene('office').objects.values().next().value.sprite.frame.name)")
+    await advance(page, 40)
+    expect(await page.evaluate<string>("String(window.__officeGame.scene.getScene('office').objects.values().next().value.sprite.frame.name)")).toBe(before)
+    expect(await page.evaluate<boolean>("[...window.__officeGame.scene.getScene('office').objects.values()].every(objects=>!objects.sprite.anims.isPlaying)")).toBe(true)
+  } finally { await page.close() }
+}, 30_000)
+
+test("reduced-motion preference switches freeze and resume the current sprite pose", async () => {
+  const page = await requireBrowser().openPage()
+  try {
+    await page.navigate(url("tool", "&freeCamera=1"))
+    await waitFor(page, "window.__officeGame?.scene.getScene('office').latestFrames.length===1")
+    const frameName = "String(window.__officeGame.scene.getScene('office').objects.values().next().value.sprite.frame.name)"
+    await Bun.sleep(600)
+    const animated = await page.evaluate<string>(frameName)
+    await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Toggle reduced motion')?.click()")
+    await Bun.sleep(150)
+    const fixed = await page.evaluate<string>(frameName)
+    await Bun.sleep(600)
+    expect(await page.evaluate<string>(frameName)).toBe(fixed)
+    await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Toggle reduced motion')?.click()")
+    await Bun.sleep(800)
+    expect(await page.evaluate<string>(frameName)).not.toBe(fixed)
+    expect(animated).not.toBe("")
   } finally { await page.close() }
 }, 30_000)
 

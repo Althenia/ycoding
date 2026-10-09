@@ -18,6 +18,8 @@ type ActorState = {
   idleAge: number
   lounge?: OfficeSpot
   speech?: ActorSpeech
+  speechSource?: "decorative" | "cue"
+  cueFacing?: ActorFrame["direction"]
   speechAge: number
   lastChat: number
 }
@@ -63,9 +65,12 @@ export class OfficeDirector {
         const previousStatus = state.actor.status
         const previousSource = state.actor.source
         state.actor = actor
-        if (terminalTask(actor) && !state.leaving && !snapshot.cues.some((cue) => cue.kind === "report" && cue.fromActorID === actor.id)) {
-          this.departed.add(actor.id)
-          this.depart(state)
+        if (snapshot.connection !== "ready" || actor.status !== "idle") this.clearDecorativeGesture(state)
+        if (terminalTask(actor) && !state.leaving) {
+          if (!snapshot.cues.some((cue) => cue.kind === "report" && cue.fromActorID === actor.id)) {
+            this.departed.add(actor.id)
+            this.depart(state)
+          }
           continue
         }
         if (state.leaving && this.departed.has(actor.id)) continue
@@ -98,6 +103,9 @@ export class OfficeDirector {
     if (!source || !recipient || source === recipient || source.actor.source === "unavailable" || recipient.actor.source === "unavailable" || this.snapshot?.connection !== "ready") return false
     source.speech = cue.kind === "delegate" ? "delegate" : "report"
     recipient.speech = "chat"
+    source.speechSource = recipient.speechSource = "cue"
+    source.cueFacing = this.face(source.position, recipient.position)
+    recipient.cueFacing = this.face(recipient.position, source.position)
     source.speechAge = recipient.speechAge = cue.kind === "delegate" ? 2_450 : 2_000
     return true
   }
@@ -108,6 +116,8 @@ export class OfficeDirector {
     for (const [id, state] of this.actors) {
       if (state.leaving || terminalTask(state.actor)) { this.actors.delete(id); continue }
       state.speech = undefined
+      state.speechSource = undefined
+      state.cueFacing = undefined
       state.speechAge = 0
       state.path = []
       state.speed = 0
@@ -134,6 +144,8 @@ export class OfficeDirector {
         state.speechAge = Math.max(0, state.speechAge - delta)
         if (!state.speechAge) {
           state.speech = undefined
+          state.speechSource = undefined
+          state.cueFacing = undefined
           if (terminalTask(state.actor)) { this.departed.add(id); this.depart(state) }
         }
       }
@@ -152,6 +164,7 @@ export class OfficeDirector {
         const b = cellAt(this.layout, second.position)
         if (Math.abs(a.x - b.x) + Math.abs(a.y - b.y) > 3 || this.elapsed - first.lastChat < 20_000 || this.elapsed - second.lastChat < 20_000) continue
         first.speech = second.speech = "chat"
+        first.speechSource = second.speechSource = "decorative"
         first.speechAge = second.speechAge = 3_000
         first.lastChat = second.lastChat = this.elapsed
       }
@@ -227,8 +240,8 @@ export class OfficeDirector {
     const working = ["working", "tool", "compacting"].includes(state.actor.status)
     return {
       actor: state.actor, appearance: appearanceFor(state.actor.sessionID), position: state.position,
-      direction: state.path.length ? state.direction : spot.facing,
-      pose: state.path.length && !reducedMotion ? "walk" : state.speech ? "talk" : state.actor.status === "attention" && atWork ? "wave" : working && atWork && (!state.actor.activity || state.actor.activity === "implement") ? "type" : spot.pose === "play" ? playing ? "play" : "stand" : spot.pose,
+      direction: state.path.length ? state.direction : this.cueFacingFor(state) ?? spot.facing,
+      pose: state.path.length && !reducedMotion ? "walk" : state.actor.status === "attention" && atWork ? "wave" : state.speech ? "talk" : working && atWork && (!state.actor.activity || state.actor.activity === "implement") ? "type" : spot.pose === "play" ? playing ? "play" : "stand" : spot.pose,
       moving: state.path.length > 0 && !reducedMotion && state.actor.source !== "unavailable",
       blocked: state.blocked, room: this.layout.roomAt(cellAt(this.layout, state.position)), speech: state.speech,
       leaving: state.leaving, opacity: state.leaving ? Math.max(0, 1 - state.leavingAge / 400) : state.opacityAge / 400,
@@ -239,9 +252,28 @@ export class OfficeDirector {
     state.leaving = true
     state.leavingAge = 0
     state.speech = undefined
+    state.speechSource = undefined
     state.speechAge = 0
     state.lounge = undefined
     this.move(state, this.layout.door)
+  }
+
+  private clearDecorativeGesture(state: ActorState): void {
+    if (state.speechSource !== "decorative") return
+    state.speech = undefined
+    state.speechSource = undefined
+    state.speechAge = 0
+  }
+
+  private cueFacingFor(state: ActorState): ActorFrame["direction"] | undefined {
+    if (state.speechSource !== "cue" || state.speechAge <= 0 || state.actor.status === "attention") return undefined
+    return state.cueFacing
+  }
+
+  private face(from: Point, to: Point): ActorFrame["direction"] {
+    const dx = to.x - from.x
+    const dy = to.y - from.y
+    return Math.abs(dx) > Math.abs(dy) ? dx > 0 ? "right" : "left" : dy > 0 ? "down" : "up"
   }
 }
 

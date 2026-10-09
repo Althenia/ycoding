@@ -492,10 +492,16 @@ describe("remote Office presentation", () => {
       expect(await until(page, `document.querySelector('.office-roster__row[data-session-id="ses_fixture"] .office-roster__room')?.textContent === 'Agent block'`)).toBe(true)
       expect(await page.evaluate<number>(`document.querySelectorAll('.office-roster__row').length`)).toBe(2)
       expect(await page.evaluate<string>(`document.querySelector('.office-roster [role="status"]').textContent`)).toBe("")
+      await page.evaluate<void>(`(() => {window.officeAnnouncements=[];new MutationObserver(()=>{for(const status of document.querySelectorAll('.office-roster [role="status"]'))if(['Delegated to subagent Fix flaky suite.','Subagent Fix flaky suite reported completed.'].includes(status.textContent))window.officeAnnouncements.push(status.textContent)}).observe(document.body,{childList:true,characterData:true,subtree:true})})()`)
 
       await page.evaluate(`[...document.querySelectorAll('.fixture__controls button')].find((button) => button.textContent.includes('Simulate subagent handoff')).click()`)
-      expect(await until(page, `document.querySelector('.office-roster [role="status"]').textContent === 'Delegated to subagent Fix flaky suite.'`)).toBe(true)
+      expect(await until(page, `document.querySelector('.office-roster [role="status"]')?.textContent === 'Delegated to subagent Fix flaky suite.'`)).toBe(true)
       expect(await until(page, `document.querySelector('.office-roster [role="status"]').textContent === 'Subagent Fix flaky suite reported completed.'`)).toBe(true)
+      const handoff = await page.evaluate<{ readonly transcriptLoads: number; readonly prompts: number; readonly announcements: number }>(`(() => {const report=remoteOperationReport();return {transcriptLoads:report.operations['session.snapshot']??0,prompts:report.operations['session.prompt']??0,announcements:window.officeAnnouncements.filter(text=>text==='Delegated to subagent Fix flaky suite.'||text==='Subagent Fix flaky suite reported completed.').length}})()`)
+      await page.evaluate(`[...document.querySelectorAll('.fixture__controls button')].find((button) => button.textContent.includes('disconnect and reconnect')).click()`)
+      expect(await until(page, `remoteOperationReport().operations['session.subagent.list'] > 1`)).toBe(true)
+      await page.evaluate<void>(`Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'));Object.defineProperty(document,'hidden',{configurable:true,value:false});document.dispatchEvent(new Event('visibilitychange'))`)
+      expect(await page.evaluate<{ readonly transcriptLoads: number; readonly prompts: number; readonly announcements: number }>(`(() => {const report=remoteOperationReport();return {transcriptLoads:report.operations['session.snapshot']??0,prompts:report.operations['session.prompt']??0,announcements:window.officeAnnouncements.filter(text=>text==='Delegated to subagent Fix flaky suite.'||text==='Subagent Fix flaky suite reported completed.').length}})()`)).toEqual(handoff)
       expect(await until(page, `${childRow} === null`, 350)).toBe(true)
       expect(await page.evaluate<boolean>(`document.querySelector('.office-workspace') !== null && document.querySelector('.office-roster__row[data-session-id="ses_fixture"]') !== null`)).toBe(true)
     } finally {
