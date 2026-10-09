@@ -114,6 +114,8 @@ Core chooses policy and context. AI translates that decision into provider wire 
 
 Owns Effect and Promise plugin contracts, hooks, tools, session extensions, integration transforms, and TUI extension APIs. Plugins extend declared surfaces and do not bypass durable services through undocumented side channels.
 
+Effect and Promise plugins can inspect/call the existing Location-scoped MCP registry through `context.mcp`; this is a trusted runtime plugin interface, not an agent permission grant. `extensions/meeting` consumes it and tool-free Session generation. Its capture bridge and separate SQLite store outlive TUI components. Its opt-in unpacked capture companion stays outside the browser-control release archive contract. See [meeting intelligence](./meeting-intelligence.md).
+
 ### `packages/cli`
 
 Owns:

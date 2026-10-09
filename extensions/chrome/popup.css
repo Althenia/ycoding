@@ -14,6 +14,13 @@
   --offline: #505b6b;
   --offline-bg: #e9edf3;
   --focus: #1764b2;
+  --popup-width: 320px;
+  --popup-padding: 12px;
+  --popup-height: 34px;
+  scrollbar-color: var(--border) var(--surface);
+  scrollbar-width: thin;
+  overflow-anchor: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -45,26 +52,28 @@
 
 body {
   font: 13px/1.45 var(--font-sans);
-  width: 360px;
+  width: var(--popup-width);
+  max-width: 100%;
   margin: 0;
   background: var(--background);
   color: var(--text);
 }
 
 main {
-  padding: 18px;
+  padding: var(--popup-padding);
 }
 
 h1 {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin: 0 0 18px;
-  font-size: 17px;
+  gap: 8px;
+  margin: 0 0 12px;
+  font-size: 15px;
   line-height: 1.2;
 }
 
 h1 img {
+  flex: 0 0 24px;
   border-radius: 8px;
 }
 
@@ -72,7 +81,7 @@ h1 img {
   border: 1px solid var(--border);
   border-radius: 14px;
   background: var(--surface);
-  padding: 16px;
+  padding: var(--popup-padding);
 }
 
 .card-header {
@@ -87,7 +96,7 @@ h1 img {
   align-items: center;
   gap: 8px;
   border-radius: 20px;
-  padding: 6px 11px;
+  padding: 4px 8px;
   color: var(--offline);
   background: var(--offline-bg);
   font-weight: 650;
@@ -107,7 +116,8 @@ h1 img {
 }
 
 p {
-  margin: 12px 0 0;
+  margin: 8px 0 0;
+  overflow-wrap: anywhere;
 }
 .description {
   color: var(--text);
@@ -120,18 +130,19 @@ p {
 }
 
 form {
-  margin-top: 12px;
+  margin-top: 8px;
 }
 
 label {
   display: block;
-  margin: 11px 0 5px;
+  margin: 8px 0 4px;
   font-weight: 600;
 }
 
 input,
 button {
   font: inherit;
+  min-height: var(--popup-height);
 }
 
 #server,
@@ -141,7 +152,9 @@ button {
 
 input {
   width: 100%;
-  padding: 9px 10px;
+  padding: 5px 8px;
+  min-width: 0;
+  caret-color: var(--focus);
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--background);
@@ -149,8 +162,7 @@ input {
 }
 
 button {
-  min-height: 34px;
-  padding: 7px 11px;
+  padding: 5px 9px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--button);
@@ -165,14 +177,14 @@ button:disabled {
   opacity: 0.5;
   cursor: default;
 }
-:is(button, input):focus-visible {
+:is(button, input, summary):focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 
 .primary {
   width: 100%;
-  margin-top: 16px;
+  margin-top: 10px;
   background: var(--connected);
   border-color: var(--connected);
   color: var(--background);
@@ -193,8 +205,8 @@ button:disabled {
 
 .secondary-actions {
   border-top: 1px solid var(--border);
-  padding-top: 16px;
-  margin-top: 16px;
+  padding-top: 10px;
+  margin-top: 10px;
 }
 #feedback {
   color: var(--muted);
@@ -202,6 +214,41 @@ button:disabled {
 
 [hidden] {
   display: none !important;
+}
+
+.help {
+  margin-top: 8px;
+  color: var(--muted);
+}
+.help summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--popup-height);
+  cursor: pointer;
+  list-style: none;
+  border-radius: 8px;
+}
+.help summary::-webkit-details-marker {
+  display: none;
+}
+.help summary::before {
+  content: "+";
+  width: 12px;
+}
+.help[open] summary::before {
+  content: "−";
+}
+::selection {
+  color: var(--background);
+  background: var(--focus);
+}
+@media (pointer: coarse) {
+  input,
+  button,
+  .help summary {
+    min-height: 44px;
+  }
 }
 
 /* generated:fonts begin - regenerate with bun packages/cli/script/generate-extension-fonts.ts; do not edit */

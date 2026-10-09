@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>YCoding Meet capture</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <h1><img src="icons/ycoding-32.png" width="24" height="24" alt="" /> YCoding Meet capture</h1>
+      <section class="card" aria-label="Meeting capture connection">
+        <div class="card-header"><span id="status" role="status" aria-live="polite">Checking capture state…</span></div>
+        <p id="error" role="alert" hidden></p>
+        <form id="pairing">
+          <p class="description">
+            Connect to the local meeting runtime. This pairing is separate from YCoding browser control.
+          </p>
+          <label for="url">Local meeting bridge</label>
+          <input id="url" type="url" value="http://127.0.0.1:4319" required autocomplete="off" spellcheck="false" />
+          <label for="code">One-use pairing code from TUI</label>
+          <input id="code" type="password" required autocomplete="off" spellcheck="false" />
+          <button id="pair" class="primary" type="submit">Pair with YCoding</button>
+        </form>
+        <form id="capture" hidden>
+          <label class="check" for="consent"
+            ><input id="consent" type="checkbox" />I have permission and all participants consent to recording this
+            meeting.</label
+          >
+          <label class="check" for="microphone"
+            ><input id="microphone" type="checkbox" />Also capture my microphone</label
+          >
+          <p>
+            Use headphones to avoid recording remote audio twice. Microphone echo cancellation is enabled; microphone
+            audio is never played back.
+          </p>
+          <p>Select the Meet tab, arm a meeting in the TUI, then press Start. Capture never starts automatically.</p>
+          <div class="capture-actions">
+            <button id="start" class="primary" type="submit">Start selected Meet tab</button>
+            <button id="stop" type="button">Stop capture</button>
+          </div>
+          <div class="secondary-actions"><button id="forget" type="button">Forget pairing</button></div>
+        </form>
+      </section>
+      <details class="help">
+        <summary>Capture help</summary>
+        <p class="note">
+          Stop also works with Ctrl+Shift+Y (Command+Shift+Y on Mac); configure it in Chrome extension shortcuts.
+          Call-connection closure stops capture conservatively, including internal reconnections. Use Stop if a call
+          ends without closing its connection.
+        </p>
+      </details>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

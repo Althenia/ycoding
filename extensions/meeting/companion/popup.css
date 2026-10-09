@@ -1,0 +1,286 @@
+@font-face {
+  font-family: Geist;
+  src: url("fonts/Geist.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Geist Mono";
+  src: url("fonts/GeistMono.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+:root {
+  color-scheme: light dark;
+  --background: #ffffff;
+  --surface: #f7f8fa;
+  --border: #dadde2;
+  --text: #1e2024;
+  --muted: #525862;
+  --button: #ebedf0;
+  --button-hover: #dee2e8;
+  --connected: #145e36;
+  --connected-bg: #e1f3e7;
+  --offline: #505b6b;
+  --offline-bg: #e9edf3;
+  --focus: #1764b2;
+  --badge-on: #28753e;
+  --font-sans: "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --radius-control: 8px;
+  --radius-card: 14px;
+  --gap: 8px;
+  --padding: 12px;
+  --control-height: 34px;
+  --focus-width: 2px;
+  --popup-width: 320px;
+  font-synthesis: none;
+  scrollbar-color: var(--border) var(--surface);
+  scrollbar-width: thin;
+  overflow-anchor: none;
+  -webkit-tap-highlight-color: transparent;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #17191d;
+    --surface: #22252a;
+    --border: #3c424a;
+    --text: #f2f3f5;
+    --muted: #bac0c9;
+    --button: #353a42;
+    --button-hover: #454c55;
+    --connected: #99e0ad;
+    --connected-bg: #193524;
+    --offline: #d0d6df;
+    --offline-bg: #323841;
+    --focus: #a9d0ff;
+  }
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  font: 13px/1.45 var(--font-sans);
+  margin: 0;
+  width: var(--popup-width);
+  max-width: 100%;
+  background: var(--background);
+  color: var(--text);
+  cursor: default;
+}
+main {
+  padding: var(--padding);
+}
+h1 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  line-height: 1.2;
+  margin: 0 0 12px;
+}
+h1 img {
+  flex: 0 0 24px;
+  border-radius: var(--radius-control);
+}
+p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.card {
+  padding: var(--padding);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+}
+.card-header {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+}
+form {
+  display: grid;
+  gap: var(--gap);
+  margin-top: var(--gap);
+}
+[hidden] {
+  display: none !important;
+}
+#status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 20px;
+  font-weight: 650;
+  color: var(--offline);
+  background: var(--offline-bg);
+}
+#status::before {
+  content: "";
+  flex: 0 0 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+#status[data-active="true"] {
+  color: var(--connected);
+  background: var(--connected-bg);
+}
+#error {
+  color: var(--text);
+  border: 1px solid var(--focus);
+  border-radius: var(--radius-control);
+  padding: var(--gap);
+  margin-top: var(--gap);
+}
+.note,
+.card p {
+  color: var(--muted);
+}
+.card .description {
+  color: var(--text);
+}
+.note {
+  margin-top: var(--gap);
+}
+.capture-actions {
+  display: grid;
+  gap: var(--gap);
+  position: sticky;
+  bottom: 0;
+  padding-block: 8px;
+  background: var(--surface);
+}
+.secondary-actions {
+  padding-top: var(--gap);
+  border-top: 1px solid var(--border);
+}
+.secondary-actions button {
+  width: auto;
+}
+label {
+  font-weight: 600;
+}
+input,
+button {
+  font: inherit;
+  border: 1px solid var(--muted);
+  border-radius: var(--radius-control);
+  min-height: var(--control-height);
+}
+button.primary {
+  background: var(--connected);
+  border-color: var(--connected);
+  color: var(--background);
+  font-weight: 650;
+}
+input:not([type="checkbox"]) {
+  width: 100%;
+  min-width: 0;
+  font: 13px/1.45 var(--font-mono);
+  padding: 5px 8px;
+  color: var(--text);
+  background: var(--background);
+  caret-color: var(--focus);
+  cursor: text;
+}
+button {
+  width: 100%;
+  padding: 5px 8px;
+  background: var(--button);
+  color: var(--text);
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+button[aria-busy="true"] {
+  cursor: progress;
+}
+@media (hover: hover) {
+  button:hover:not(:disabled) {
+    background: var(--button-hover);
+  }
+  button.primary:hover:not(:disabled) {
+    background: var(--connected);
+    filter: brightness(0.9);
+  }
+}
+:is(input, button, summary):focus-visible {
+  outline: var(--focus-width) solid var(--focus);
+  outline-offset: 2px;
+}
+.check {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  min-height: var(--control-height);
+  cursor: pointer;
+}
+input[type="checkbox"] {
+  appearance: none;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  min-height: 20px;
+  margin: 0;
+  border-radius: 4px;
+  background: var(--background);
+  cursor: pointer;
+}
+input[type="checkbox"]:checked {
+  background: var(--connected);
+  border-color: var(--connected);
+}
+input[type="checkbox"]:checked::after {
+  content: "✓";
+  display: block;
+  color: var(--background);
+  text-align: center;
+  font-weight: 700;
+}
+.help {
+  margin-top: var(--gap);
+  color: var(--muted);
+}
+.help summary {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  min-height: var(--control-height);
+  cursor: pointer;
+  list-style: none;
+  border-radius: var(--radius-control);
+}
+.help summary::-webkit-details-marker {
+  display: none;
+}
+.help summary::before {
+  content: "+";
+  width: 12px;
+}
+.help[open] summary::before {
+  content: "−";
+}
+@media (pointer: coarse) {
+  input:not([type="checkbox"]),
+  button,
+  .check,
+  .help summary {
+    min-height: 44px;
+  }
+}
+::selection {
+  color: var(--background);
+  background: var(--focus);
+}
+@media (forced-colors: active) {
+  input[type="checkbox"] {
+    appearance: auto;
+  }
+  input[type="checkbox"]:checked::after {
+    content: none;
+  }
+}

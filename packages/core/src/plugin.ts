@@ -11,6 +11,7 @@ import { Command } from "./command"
 import { EventRuntime } from "./event"
 import { Integration } from "./integration"
 import { Location } from "./location"
+import { MCP } from "./mcp"
 import { PluginHost } from "./plugin/host"
 import { PluginRuntime } from "./plugin/runtime"
 import { Reference } from "./reference"
@@ -149,6 +150,7 @@ export const node = makeLocationNode({
     Catalog.node,
     Command.node,
     Integration.node,
+    MCP.node,
     Location.node,
     Reference.node,
     Skill.node,

@@ -2,6 +2,10 @@
 
 This document specifies runtime behavior. Exact types and endpoint names remain owned by Schema and Protocol.
 
+## Meeting intelligence
+
+The optional [meeting extension](./meeting-intelligence.md) separates capture, local transcript storage and analysis lifecycles. One tool-free analysis Session per meeting uses existing model/profile resolution, bounded finalized evidence and rolling checkpoints. Native human review and revision/read-back checks own consequential knowledge writes. TUI components do not own recording, and recovery never implies a live source reconnected.
+
 ## Sessions
 
 ### Command palettes

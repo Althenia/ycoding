@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { tokens } from "../indicator.js"
 
-const GROUPS = ["colors", "typography", "rounded", "motion.duration", "layers"]
+const GROUPS = ["colors", "typography", "rounded", "motion.duration", "layers", "layout", "spacing", "controls"]
 const COMPONENT_LITERALS = ["height", "size", "padding"]
 
 function mapping(value) {
@@ -46,7 +46,14 @@ function popupTypography(stylesheet) {
 
 function drift(document, code, stylesheet) {
   const expected = literals(documented(document))
-  const actual = literals({ ...code, typography: { ...code.typography, ...popupTypography(stylesheet) } })
+  const variable = (name) => new RegExp(`--${name}:\\s*([^;]+);`).exec(stylesheet)?.[1]?.trim()
+  const actual = literals({
+    ...code,
+    typography: { ...code.typography, ...popupTypography(stylesheet) },
+    layout: { "popup-width": variable("popup-width") },
+    spacing: { "popup-padding": variable("popup-padding") },
+    controls: { "popup-height": variable("popup-height") },
+  })
   return [...new Set([...Object.keys(actual), ...Object.keys(expected)])]
     .sort()
     .filter((name) => actual[name] !== expected[name])
@@ -55,7 +62,13 @@ function drift(document, code, stylesheet) {
 
 describe("extension DESIGN.md token drift", () => {
   test("matches every documented token and indicator constant in both directions", async () => {
-    expect(drift(await Bun.file(new URL("../DESIGN.md", import.meta.url)).text(), tokens, await Bun.file(new URL("../popup.css", import.meta.url)).text())).toEqual([])
+    expect(
+      drift(
+        await Bun.file(new URL("../DESIGN.md", import.meta.url)).text(),
+        tokens,
+        await Bun.file(new URL("../popup.css", import.meta.url)).text(),
+      ),
+    ).toEqual([])
   })
 
   test("detects changed, missing, and stale tokens on scratch copies", async () => {
@@ -65,7 +78,10 @@ describe("extension DESIGN.md token drift", () => {
       [document, { ...tokens, colors: { ...tokens.colors, "agent-cursor": "#000000" } }, "colors.agent-cursor"],
       [
         document,
-        { ...tokens, colors: Object.fromEntries(Object.entries(tokens.colors).filter(([name]) => name !== "badge-on")) },
+        {
+          ...tokens,
+          colors: Object.fromEntries(Object.entries(tokens.colors).filter(([name]) => name !== "badge-on")),
+        },
         "colors.badge-on",
       ],
       [document.replace('  badge-on: "#28753e"', '  badge-on: "#28753e"\n  stale: "#000000"'), tokens, "colors.stale"],
@@ -74,7 +90,14 @@ describe("extension DESIGN.md token drift", () => {
       [document.replace("padding: 3px 6px", "padding: 0"), tokens, "components.agent-label.padding"],
       [document.replace("fontFamily: Geist Mono,", "fontFamily: Mono,"), tokens, "typography.popup-mono.fontFamily"],
       [document.replace("fontSize: 13px", "fontSize: 14px"), tokens, "typography.popup-body.fontSize"],
-      [document, { ...tokens, typography: { "agent-label": { ...tokens.typography["agent-label"], fontFamily: "system-ui" } } }, "typography.agent-label.fontFamily"],
+      [document.replace("popup-width: 320px", "popup-width: 360px"), tokens, "layout.popup-width"],
+      [document.replace("  popup-height: 34px", ""), tokens, "controls.popup-height"],
+      [document.replace("  popup-padding: 12px", "  popup-padding: 12px\n  stale: 1px"), tokens, "spacing.stale"],
+      [
+        document,
+        { ...tokens, typography: { "agent-label": { ...tokens.typography["agent-label"], fontFamily: "system-ui" } } },
+        "typography.agent-label.fontFamily",
+      ],
     ]
     for (const [specimen, code, name] of probes)
       expect(

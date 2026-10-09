@@ -8,7 +8,7 @@
   </head>
   <body>
     <main>
-      <h1><img src="icons/ycoding-32.png" width="32" height="32" alt="" /> YCoding Chrome</h1>
+      <h1><img src="icons/ycoding-32.png" width="24" height="24" alt="" /> YCoding Chrome</h1>
       <section class="card" aria-label="Chrome connection">
         <div class="card-header">
           <span id="connection-state" class="state" data-state="disconnected" role="status" aria-live="polite"
@@ -29,7 +29,10 @@
             <input id="secret" type="password" autocomplete="off" required />
             <button id="pair" class="primary" type="submit">Connect YCoding</button>
           </form>
-          <p class="detail">YCoding never activates tabs. Chrome shows a debugger warning while a tab is attached.</p>
+          <details class="help">
+            <summary>Browser control details</summary>
+            <p>YCoding never activates tabs. Chrome shows a debugger warning while a tab is attached.</p>
+          </details>
         </div>
 
         <div id="reconnecting-view" hidden>
@@ -40,7 +43,10 @@
 
         <div id="connected-view" hidden>
           <p class="description">YCoding can use eligible tabs, including the active tab, after site approval.</p>
-          <p class="detail">Chrome shows a debugger warning when YCoding attaches to a tab.</p>
+          <details class="help">
+            <summary>Browser control details</summary>
+            <p>Chrome shows a debugger warning when YCoding attaches to a tab.</p>
+          </details>
         </div>
 
         <div id="connection-actions" class="actions secondary-actions" hidden>

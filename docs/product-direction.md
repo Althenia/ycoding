@@ -74,6 +74,7 @@ Customization is a product capability. Supported domains include:
 - MCP servers and tools;
 - project and global artifacts;
 - model providers;
+- opt-in local meeting capture and intelligence through runtime and TUI plugins;
 - Session guardrails and provider-usage sources.
 
 Project artifacts provide managed scope, lifecycle, validation, provenance, and rollback for reusable agent behavior.

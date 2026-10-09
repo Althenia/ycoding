@@ -227,6 +227,24 @@ test("pairs a private Chrome extension for owned and automatically listed existi
           : undefined,
       "private popup connected view without pairing form",
     )
+    const compact = record(
+      await evaluate(
+        cdp,
+        popupSession,
+        `({
+      width:document.body.getBoundingClientRect().width,
+      height:document.body.getBoundingClientRect().height,
+      logoWidth:document.querySelector('h1 img').getBoundingClientRect().width,
+      helpClosed:document.querySelector('#connected-view details').open===false,
+      forgetVisible:document.querySelector('#forget').getBoundingClientRect().height>=34
+    })`,
+      ),
+    )
+    expect(compact.width).toBe(320)
+    expect(Number(compact.height)).toBeLessThanOrEqual(300)
+    expect(compact.logoWidth).toBe(24)
+    expect(compact.helpClosed).toBe(true)
+    expect(compact.forgetVisible).toBe(true)
     const status = Schema.decodeUnknownSync(Schema.Struct({ data: Browser.Status }))(
       await (await request(`/api/session/${owner}/browser`)).json(),
     ).data
@@ -377,7 +395,9 @@ test("pairs a private Chrome extension for owned and automatically listed existi
       }),
     })
     expect(ownedClick.status, await ownedClick.clone().text()).toBe(200)
-    expect(Schema.decodeUnknownSync(Schema.Struct({ data: Browser.ActionResult }))(await ownedClick.json()).data).toMatchObject({
+    expect(
+      Schema.decodeUnknownSync(Schema.Struct({ data: Browser.ActionResult }))(await ownedClick.json()).data,
+    ).toMatchObject({
       status: "completed",
       input: "scripted",
     })
@@ -851,7 +871,8 @@ async function startMarkerBridge(extensionDirectory: string) {
           "<!doctype html><title>tick 0</title><script>let n=0;setInterval(()=>{document.title='tick '+(++n)},200)</script>",
         )
       if (path === "/notitle") return html(`<!doctype html>${button}`)
-      if (path === "/password") return html("<!doctype html><title>Password fixture</title><input type='password' aria-label='Secret'>")
+      if (path === "/password")
+        return html("<!doctype html><title>Password fixture</title><input type='password' aria-label='Secret'>")
       return html(`<!doctype html><title>Plain fixture</title>${button}<a href='/second' aria-label='Next'>Next</a>`)
     },
   })
@@ -964,10 +985,13 @@ async function startMarkerBridge(extensionDirectory: string) {
     })
     await client.send("ServiceWorker.enable", {}, pageSession)
     const workerSession = string(
-      record(await client.send("Target.attachToTarget", { targetId: string(worker.targetId), flatten: true })).sessionId,
+      record(await client.send("Target.attachToTarget", { targetId: string(worker.targetId), flatten: true }))
+        .sessionId,
     )
     await client.send("Runtime.enable", {}, workerSession)
-    const popup = record(await client.send("Target.createTarget", { url: `chrome-extension://${extensionID}/popup.html` }))
+    const popup = record(
+      await client.send("Target.createTarget", { url: `chrome-extension://${extensionID}/popup.html` }),
+    )
     const popupSession = string(
       record(await client.send("Target.attachToTarget", { targetId: string(popup.targetId), flatten: true })).sessionId,
     )
@@ -979,12 +1003,31 @@ async function startMarkerBridge(extensionDirectory: string) {
           : undefined,
       "private extension popup",
     )
-    await eventually(async () => ((await evaluate(client, popupSession, "document.readyState === 'complete'")) === true ? true : undefined), "popup stylesheet loaded")
-    await evaluate(client, popupSession, "Promise.all([document.fonts.load('13px Geist'), document.fonts.load('13px \"Geist Mono\"')]).then(() => true)")
+    await eventually(
+      async () =>
+        (await evaluate(client, popupSession, "document.readyState === 'complete'")) === true ? true : undefined,
+      "popup stylesheet loaded",
+    )
+    await evaluate(
+      client,
+      popupSession,
+      "Promise.all([document.fonts.load('13px Geist'), document.fonts.load('13px \"Geist Mono\"')]).then(() => true)",
+    )
     const popupFonts = {
-      body: await platformFonts(client, popupSession, (node) => node.nodeName === "LABEL" && String(node.attributes).includes("server")),
-      address: await platformFonts(client, popupSession, (node) => node.nodeName === "#text" && node.nodeValue === "http://127.0.0.1:4096"),
-      faces: [...(await loadedFaces(client, popupSession, "Geist")), ...(await loadedFaces(client, popupSession, "Geist Mono"))],
+      body: await platformFonts(
+        client,
+        popupSession,
+        (node) => node.nodeName === "LABEL" && String(node.attributes).includes("server"),
+      ),
+      address: await platformFonts(
+        client,
+        popupSession,
+        (node) => node.nodeName === "#text" && node.nodeValue === "http://127.0.0.1:4096",
+      ),
+      faces: [
+        ...(await loadedFaces(client, popupSession, "Geist")),
+        ...(await loadedFaces(client, popupSession, "Geist Mono")),
+      ],
     }
     const paired = record(
       await evaluate(
@@ -1042,18 +1085,37 @@ async function startMarkerBridge(extensionDirectory: string) {
         : undefined
       if (!match) throw new Error(`No page target for ${path}`)
       return string(
-        record(await client.send("Target.attachToTarget", { targetId: string(match.targetId), flatten: true })).sessionId,
+        record(await client.send("Target.attachToTarget", { targetId: string(match.targetId), flatten: true }))
+          .sessionId,
       )
     }
     return {
-      base, origin, client, request, post, listTabs, profileAt, observe, open, targetTitle, pageSessionAt,
-      popupSession, workerSession, pageSession, dispose, popupFonts,
+      base,
+      origin,
+      client,
+      request,
+      post,
+      listTabs,
+      profileAt,
+      observe,
+      open,
+      targetTitle,
+      pageSessionAt,
+      popupSession,
+      workerSession,
+      pageSession,
+      dispose,
+      popupFonts,
       workerVersion: () => workerVersion,
       awaitTitle: (path: string, expected: (title: string) => boolean, label: string, timeoutMs = 10_000) =>
-        eventuallyFor(async () => {
-          const title = await targetTitle(path)
-          return title !== undefined && expected(title) ? title : undefined
-        }, label, timeoutMs),
+        eventuallyFor(
+          async () => {
+            const title = await targetTitle(path)
+            return title !== undefined && expected(title) ? title : undefined
+          },
+          label,
+          timeoutMs,
+        ),
     }
   } catch (error) {
     await dispose()
@@ -1072,9 +1134,17 @@ async function withExtension(variant: "source" | "packaged", use: (directory: st
   }
 }
 
-test.each(["source", "packaged"] as const)("%s extension marks controlled tabs in the tab title, holds an exclusive lease, and cleans up on release, stop, and navigation", (variant) => withExtension(variant, markerLifecycle), 150_000)
+test.each(["source", "packaged"] as const)(
+  "%s extension marks controlled tabs in the tab title, holds an exclusive lease, and cleans up on release, stop, and navigation",
+  (variant) => withExtension(variant, markerLifecycle),
+  150_000,
+)
 
-test.each(["source", "packaged"] as const)("%s extension removes an abandoned marker within the page expiry when the worker is lost, including a hidden and a frozen page", (variant) => withExtension(variant, markerExpiry), 150_000)
+test.each(["source", "packaged"] as const)(
+  "%s extension removes an abandoned marker within the page expiry when the worker is lost, including a hidden and a frozen page",
+  (variant) => withExtension(variant, markerExpiry),
+  150_000,
+)
 
 async function markerLifecycle(extensionDirectory: string) {
   const live = await startMarkerBridge(extensionDirectory)
@@ -1097,41 +1167,67 @@ async function markerLifecycle(extensionDirectory: string) {
     expect((await live.listTabs(markerOther)).find((tab) => tab.id === plain.id)?.lease).toBe("other")
     const refused = await live.observe(markerOther, plain, "marker-foreign")
     expect(refused.status).toBe(403)
-    const plainObservation = Schema.decodeUnknownSync(Schema.Struct({ data: Browser.Observation }))(await observed.json()).data
+    const plainObservation = Schema.decodeUnknownSync(Schema.Struct({ data: Browser.Observation }))(
+      await observed.json(),
+    ).data
     const go = plainObservation.elements.find((element) => element.name === "Go")
     if (!go) throw new Error("Go button was not observed")
     const clicked = await live.post(markerOwner, "action", {
-      tabID: plain.id, generation: plain.generation, documentGeneration: plainObservation.documentGeneration,
-      observationRevision: plainObservation.revision, callID: "marker-click", action: { type: "click", ref: go.ref },
+      tabID: plain.id,
+      generation: plain.generation,
+      documentGeneration: plainObservation.documentGeneration,
+      observationRevision: plainObservation.revision,
+      callID: "marker-click",
+      action: { type: "click", ref: go.ref },
     })
     expect(clicked.status, await clicked.clone().text()).toBe(200)
     expect(
-      await evaluate(client, plainPage, `(() => {
+      await evaluate(
+        client,
+        plainPage,
+        `(() => {
         const hosts = [...document.querySelectorAll('[data-ycoding-agent-cursor]')]
         return { count: hosts.length, pointerEvents: hosts[0] && getComputedStyle(hosts[0]).pointerEvents }
-      })()`),
+      })()`,
+      ),
     ).toEqual({ count: 1, pointerEvents: "none" })
     expect(live.popupFonts.faces).toEqual(["loaded", "loaded"])
     expect(live.popupFonts.body).toEqual([{ family: "Geist", custom: true }])
     expect(live.popupFonts.address).toEqual([{ family: "Geist Mono", custom: true }])
     expect(await loadedFaces(client, plainPage, "YCodingGeist")).toEqual(["loaded"])
-    expect(await platformFonts(client, plainPage, textOf("YCoding · Click"))).toEqual([{ family: "Geist", custom: true }])
+    expect(await platformFonts(client, plainPage, textOf("YCoding · Click"))).toEqual([
+      { family: "Geist", custom: true },
+    ])
     await client.send("Target.detachFromTarget", { sessionId: plainPage })
 
     const csp = await live.profileAt(markerOther, "/csp")
     const cspPage = await live.pageSessionAt("/csp")
-    await evaluate(client, cspPage, "window.__violations=[];document.addEventListener('securitypolicyviolation',e=>window.__violations.push(e.violatedDirective))")
+    await evaluate(
+      client,
+      cspPage,
+      "window.__violations=[];document.addEventListener('securitypolicyviolation',e=>window.__violations.push(e.violatedDirective))",
+    )
     const cspObserved = await live.observe(markerOther, csp, "marker-csp")
     expect(cspObserved.status, await cspObserved.clone().text()).toBe(200)
-    const cspObservation = Schema.decodeUnknownSync(Schema.Struct({ data: Browser.Observation }))(await cspObserved.json()).data
+    const cspObservation = Schema.decodeUnknownSync(Schema.Struct({ data: Browser.Observation }))(
+      await cspObserved.json(),
+    ).data
     const cspGo = cspObservation.elements.find((element) => element.name === "Go")
     if (!cspGo) throw new Error("CSP Go button was not observed")
     const cspClick = await live.post(markerOther, "action", {
-      tabID: csp.id, generation: csp.generation, documentGeneration: cspObservation.documentGeneration,
-      observationRevision: cspObservation.revision, callID: "marker-csp-click", action: { type: "click", ref: cspGo.ref },
+      tabID: csp.id,
+      generation: csp.generation,
+      documentGeneration: cspObservation.documentGeneration,
+      observationRevision: cspObservation.revision,
+      callID: "marker-csp-click",
+      action: { type: "click", ref: cspGo.ref },
     })
     expect(cspClick.status, await cspClick.clone().text()).toBe(200)
-    await live.awaitTitle("/csp", (title) => title === `${prefix}CSP fixture`, "marked title under strict CSP and Trusted Types")
+    await live.awaitTitle(
+      "/csp",
+      (title) => title === `${prefix}CSP fixture`,
+      "marked title under strict CSP and Trusted Types",
+    )
     expect(await evaluate(client, cspPage, "window.__violations")).toEqual([])
     expect(await evaluate(client, cspPage, "document.querySelectorAll('[data-ycoding-agent-cursor]').length")).toBe(1)
     expect(await loadedFaces(client, cspPage, "YCodingGeist")).toEqual(["loaded"])
@@ -1143,7 +1239,11 @@ async function markerLifecycle(extensionDirectory: string) {
     const tick = (title: string) => Number(/^\[YCoding\] tick (\d+)$/.exec(title)?.[1] ?? Number.NaN)
     const first = tick(await live.awaitTitle("/dynamic", (title) => tick(title) >= 0, "marked dynamic title"))
     await live.awaitTitle("/dynamic", (title) => tick(title) > first, "dynamic title keeps changing under the marker")
-    const released = await live.post(markerOwner, "release", { tabID: dynamic.id, generation: dynamic.generation, callID: "release-dynamic" })
+    const released = await live.post(markerOwner, "release", {
+      tabID: dynamic.id,
+      generation: dynamic.generation,
+      callID: "release-dynamic",
+    })
     expect(released.status, await released.clone().text()).toBe(204)
     await live.awaitTitle("/dynamic", (title) => /^tick \d+$/.test(title), "restored dynamic page title")
     expect(await debuggerAttached(client, workerSession, dynamicID)).toBe(false)
@@ -1153,12 +1253,21 @@ async function markerLifecycle(extensionDirectory: string) {
     const passwordID = await live.open("/password")
     const password = await live.profileAt(markerOther, "/password")
     const capture = await live.post(markerOther, "action", {
-      tabID: password.id, generation: password.generation, documentGeneration: password.documentGeneration,
-      observationRevision: password.observationRevision, callID: "capture-password", action: { type: "capture" },
+      tabID: password.id,
+      generation: password.generation,
+      documentGeneration: password.documentGeneration,
+      observationRevision: password.observationRevision,
+      callID: "capture-password",
+      action: { type: "capture" },
     })
     expect(capture.status, await capture.clone().text()).toBe(200)
-    expect(Schema.decodeUnknownSync(Schema.Struct({ data: Browser.ActionResult }))(await capture.json()).data.status).toBe("rejected")
-    await eventually(async () => ((await debuggerAttached(client, workerSession, passwordID)) ? undefined : true), "first failed capture detached")
+    expect(
+      Schema.decodeUnknownSync(Schema.Struct({ data: Browser.ActionResult }))(await capture.json()).data.status,
+    ).toBe("rejected")
+    await eventually(
+      async () => ((await debuggerAttached(client, workerSession, passwordID)) ? undefined : true),
+      "first failed capture detached",
+    )
     expect(await live.targetTitle("/password")).toBe("Password fixture")
     expect((await live.listTabs(markerOwner)).find((tab) => tab.id === password.id)?.lease).toBeUndefined()
 
@@ -1166,8 +1275,20 @@ async function markerLifecycle(extensionDirectory: string) {
     expect((await live.observe(markerOther, noTitle, "marker-notitle")).status).toBe(200)
     await live.awaitTitle("/notitle", (title) => title === "[YCoding]", "marked page without a title")
     const noTitlePage = await live.pageSessionAt("/notitle")
-    expect((await live.post(markerOther, "release", { tabID: noTitle.id, generation: noTitle.generation, callID: "release-notitle" })).status).toBe(204)
-    await eventually(async () => ((await evaluate(client, noTitlePage, "document.querySelector('title')")) === null ? true : undefined), "created title element removed")
+    expect(
+      (
+        await live.post(markerOther, "release", {
+          tabID: noTitle.id,
+          generation: noTitle.generation,
+          callID: "release-notitle",
+        })
+      ).status,
+    ).toBe(204)
+    await eventually(
+      async () =>
+        (await evaluate(client, noTitlePage, "document.querySelector('title')")) === null ? true : undefined,
+      "created title element removed",
+    )
     await client.send("Target.detachFromTarget", { sessionId: noTitlePage })
 
     const pinned = await live.profileAt(markerOwner, "/pinned")
@@ -1179,7 +1300,15 @@ async function markerLifecycle(extensionDirectory: string) {
     expect(await live.targetTitle("/pinned")).toBe(pinnedTitle)
     expect((await live.listTabs(markerOther)).find((tab) => tab.id === pinned.id)?.lease).toBeUndefined()
 
-    expect((await live.post(markerOwner, "release", { tabID: plain.id, generation: plain.generation, callID: "release-plain" })).status).toBe(204)
+    expect(
+      (
+        await live.post(markerOwner, "release", {
+          tabID: plain.id,
+          generation: plain.generation,
+          callID: "release-plain",
+        })
+      ).status,
+    ).toBe(204)
     await live.awaitTitle("/plain", (title) => title === "Plain fixture", "restored plain title")
     const releasedPage = await live.pageSessionAt("/plain")
     expect(await loadedFaces(client, releasedPage, "YCodingGeist")).toEqual([])
@@ -1187,22 +1316,38 @@ async function markerLifecycle(extensionDirectory: string) {
     const transferred = await live.observe(markerOther, plain, "marker-transfer")
     expect(transferred.status, await transferred.clone().text()).toBe(200)
     await live.awaitTitle("/plain", (title) => title === `${prefix}Plain fixture`, "marked title after transfer")
-    const transferObservation = Schema.decodeUnknownSync(Schema.Struct({ data: Browser.Observation }))(await transferred.json()).data
+    const transferObservation = Schema.decodeUnknownSync(Schema.Struct({ data: Browser.Observation }))(
+      await transferred.json(),
+    ).data
     const next = transferObservation.elements.find((element) => element.name === "Next")
     if (!next) throw new Error("Next link was not observed")
     const navigated = await live.post(markerOther, "action", {
-      tabID: plain.id, generation: plain.generation, documentGeneration: transferObservation.documentGeneration,
-      observationRevision: transferObservation.revision, callID: "marker-navigate", action: { type: "click", ref: next.ref },
+      tabID: plain.id,
+      generation: plain.generation,
+      documentGeneration: transferObservation.documentGeneration,
+      observationRevision: transferObservation.revision,
+      callID: "marker-navigate",
+      action: { type: "click", ref: next.ref },
     })
     expect(navigated.status, await navigated.clone().text()).toBe(200)
-    await live.awaitTitle("/second", (title) => title === `${prefix}Second fixture`, "marker re-applied after navigation")
+    await live.awaitTitle(
+      "/second",
+      (title) => title === `${prefix}Second fixture`,
+      "marker re-applied after navigation",
+    )
     expect(await debuggerAttached(client, workerSession, plainID)).toBe(true)
 
     const contexts = new Set<number>()
     const secondPage = await live.pageSessionAt("/second")
     const stop = client.subscribe((event) => {
       const context = event.params?.context
-      if (event.method !== "Runtime.executionContextCreated" || event.sessionId !== secondPage || typeof context !== "object" || context === null) return
+      if (
+        event.method !== "Runtime.executionContextCreated" ||
+        event.sessionId !== secondPage ||
+        typeof context !== "object" ||
+        context === null
+      )
+        return
       const details = record(context)
       if (details.name === "ycoding-agent-cursor") contexts.add(number(details.id))
     })
@@ -1217,10 +1362,17 @@ async function markerLifecycle(extensionDirectory: string) {
     expect(noTitleID).toBeGreaterThan(0)
     const stopped = await live.request(`/api/session/${markerOwner}/browser`, { method: "DELETE" })
     expect(stopped.status, await stopped.clone().text()).toBe(204)
-    await live.awaitTitle("/second", (title) => title === "Second fixture", "marker cleared before stop detached the tab")
+    await live.awaitTitle(
+      "/second",
+      (title) => title === "Second fixture",
+      "marker cleared before stop detached the tab",
+    )
     await live.awaitTitle("/csp", (title) => title === "CSP fixture", "csp marker cleared on stop")
     for (const id of [plainID, cspID])
-      await eventually(async () => ((await debuggerAttached(client, workerSession, id)) ? undefined : true), `tab ${id} detached after stop`)
+      await eventually(
+        async () => ((await debuggerAttached(client, workerSession, id)) ? undefined : true),
+        `tab ${id} detached after stop`,
+      )
   } finally {
     await live.dispose()
   }
@@ -1241,10 +1393,16 @@ async function markerExpiry(extensionDirectory: string) {
       expect((await live.observe(markerOwner, tab, `expire-${tab.id}`)).status).toBe(200)
     const visibleObserved = await live.observe(markerOwner, visibleTab, "expire-visible")
     expect(visibleObserved.status).toBe(200)
-    const visibleObservation = Schema.decodeUnknownSync(Schema.Struct({ data: Browser.Observation }))(await visibleObserved.json()).data
+    const visibleObservation = Schema.decodeUnknownSync(Schema.Struct({ data: Browser.Observation }))(
+      await visibleObserved.json(),
+    ).data
     const scrolled = await live.post(markerOwner, "action", {
-      tabID: visibleTab.id, generation: visibleTab.generation, documentGeneration: visibleObservation.documentGeneration,
-      observationRevision: visibleObservation.revision, callID: "expire-scroll", action: { type: "scroll", deltaY: 10 },
+      tabID: visibleTab.id,
+      generation: visibleTab.generation,
+      documentGeneration: visibleObservation.documentGeneration,
+      observationRevision: visibleObservation.revision,
+      callID: "expire-scroll",
+      action: { type: "scroll", deltaY: 10 },
     })
     expect(scrolled.status, await scrolled.clone().text()).toBe(200)
     const visiblePage = await live.pageSessionAt("/plain")
@@ -1261,17 +1419,34 @@ async function markerExpiry(extensionDirectory: string) {
     await client.send("Page.setWebLifecycleState", { state: "frozen" }, frozenPage)
 
     const bound = timing.expiry + timing.check + 10_000
-    await live.awaitTitle("/plain", (title) => title === "Plain fixture", "visible marker expiry after worker loss", bound)
+    await live.awaitTitle(
+      "/plain",
+      (title) => title === "Plain fixture",
+      "visible marker expiry after worker loss",
+      bound,
+    )
     expect(await loadedFaces(client, visiblePage, "YCodingGeist")).toEqual([])
-    expect(await evaluate(client, visiblePage, "document.querySelectorAll('[data-ycoding-agent-cursor]').length")).toBe(0)
-    await live.awaitTitle("/second", (title) => title === "Second fixture", "hidden marker expiry after worker loss", bound)
+    expect(await evaluate(client, visiblePage, "document.querySelectorAll('[data-ycoding-agent-cursor]').length")).toBe(
+      0,
+    )
+    await live.awaitTitle(
+      "/second",
+      (title) => title === "Second fixture",
+      "hidden marker expiry after worker loss",
+      bound,
+    )
     expect(Date.now() - lostAt).toBeLessThan(bound)
 
     const frozenUntil = lostAt + timing.expiry + 3_000
     await Bun.sleep(Math.max(0, frozenUntil - Date.now()))
     expect(await live.targetTitle("/csp")).toMatch(/^\[YCoding\] /)
     await client.send("Page.setWebLifecycleState", { state: "active" }, frozenPage)
-    await live.awaitTitle("/csp", (title) => title === "CSP fixture", "frozen marker removed after the page is thawed", timing.check + 4_000)
+    await live.awaitTitle(
+      "/csp",
+      (title) => title === "CSP fixture",
+      "frozen marker removed after the page is thawed",
+      timing.check + 4_000,
+    )
   } finally {
     await live.dispose()
   }

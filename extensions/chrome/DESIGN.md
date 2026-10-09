@@ -45,6 +45,12 @@ motion:
     ripple: 450ms
 layers:
   agent-overlay: 2147483647
+layout:
+  popup-width: 320px
+spacing:
+  popup-padding: 12px
+controls:
+  popup-height: 34px
 ---
 
 # YCoding Chrome control indicators
@@ -73,6 +79,7 @@ The Chrome extension marks every tab YCoding is controlling so the person using 
 | X6 | approved | A pinned tab MUST NEVER be controlled, because the tab strip shows only its favicon and no verified marker exists for it. | `extensions/chrome/test/service-worker.test.js` |
 | X8 | approved | The popup MUST render text in Geist and its local service address and pairing code in Geist Mono, from faces embedded in `popup.css`, and MUST NOT fetch a font or add a font file, permission, or CSP source. | `extensions/chrome/test/popup.test.js`, `extensions/chrome/test/fonts.test.js`, `packages/server/test-integration/browser-owned-chrome.test.ts` |
 | X9 | approved | The page label MUST use Geist through a page-scoped `FontFace` under the alias `YCodingGeist`, registered once per document with the first cursor without delaying the label, removed with the marker whether loaded or pending, and MUST fall back to the system UI stack, never blocking the action, when the face cannot be installed. | `extensions/chrome/test/indicator.test.js`, `extensions/chrome/test/service-worker.test.js`, `packages/server/test-integration/browser-owned-chrome.test.ts` |
+| X10 | approved | The popup MUST use 320px intrinsic width, 12px outer/card padding, a 24px canonical mark, a 15px heading and 13px body text. Controls MUST be at least 34px (44px for coarse pointers); secondary help MUST remain keyboard accessible, with pairing authority visible before Connect. | `extensions/chrome/test/popup.test.js`, `extensions/meeting/test/chrome.integration.test.ts` |
 | X7 | approved | Documented `colors`, `rounded`, `typography`, `motion.duration`, `layers`, and component sizes MUST equal `extensions/chrome/indicator.js`, with `popup-body` and `popup-mono` equal to the `--font-sans` and `--font-mono` values in `popup.css`, and documented values MUST NOT be missing from or extra to them. | `extensions/chrome/test/design-md.test.js` |
 
 ## Colors
@@ -82,6 +89,10 @@ The purple cursor, label, and ripple, and the green badge, are the existing exte
 ## Typography
 
 The label is 12px, 1.2 line height, regular weight, white on the label color, in Geist. The page has no Geist, so the extension installs the embedded face into the controlled document as `YCodingGeist`, a name no site is likely to use, so a site's own `Geist` family is never replaced. The `FontFace` API takes bytes directly, so the label does not depend on the page's `font-src` policy. The face is registered before it loads and the label never waits for it: it shows the fallback with `font-display: swap` and switches when the face is loaded. A load that fails removes its face, a load that settles after the marker ended cannot add it back, and removing the marker removes the face, loaded or pending. If the face cannot be installed the label falls back to the system UI stack. The popup body is 13px, 1.45 line height, Geist, set on `body` because Chrome's extension-page default style sets a system family there and would override one inherited from `:root`; the local service address and pairing code are Geist Mono. Both faces are variable (100-900) and embedded in `popup.css` as data URLs, so the popup needs no network, permission, or CSP source. Native surfaces (the tab title, toolbar badge, and debugger infobar) use Chrome's own font and are outside this rule.
+
+## Layout
+
+Use the popup width, padding and control-height tokens for the popup and its card. Keep the 13px body text; use a 15px heading, 24px mark, 8px heading gap and 12px bottom spacing. Use 8px paragraph/form spacing, 4px/8px status-pill padding, and 10px secondary-action separation. Keep the connected view within 300px height with help collapsed. Reflow within 320 CSS px without clipping, retain browser zoom, and increase control and help-summary targets to 44px for coarse pointers.
 
 ## Elevation & Depth
 
@@ -100,6 +111,7 @@ The cursor eases to each real target over `cursor-move`; a click adds a ripple o
 - **Tab marker**: the document title prefix `[YCoding] ` followed by the page's own title. Marker state lives in the extension-owned overlay host's data attributes, not in text visible to the page beyond the prefix.
 - **Agent cursor**: arrow, tip on the action coordinates, with a label chip reading `YCoding · Click`, `YCoding · Type`, or `YCoding · Scroll`. No label appears for actions without a target.
 - **Toolbar badge**: the text `ON` on `badge-on` for each tab with an attached debugger.
+- **Popup help**: native details, collapsed by default, with a 34px summary (44px for coarse pointers), muted text, owned plus/minus marker, pointer cursor and the control focus ring. Keep pairing scope and review requirements visible before Connect; place secondary debugger guidance in help. Use border/surface scrollbar roles, no overflow anchoring, focus-colored caret and text selection, and no tap highlight.
 
 ## Accessibility
 

@@ -32,7 +32,7 @@
     "lint": "oxlint",
     "lint:effect-patterns": "ast-grep scan -c script/ast-grep/sgconfig.yml packages/core/src packages/server/src packages/protocol/src packages/cli/src",
     "test:lint-rules": "ast-grep test -c script/ast-grep/sgconfig.yml",
-    "typecheck": "bun turbo typecheck --concurrency=3 --filter='./packages/*' --filter='./apps/web' && bun run typecheck:cloudflare",
+    "typecheck": "bun turbo typecheck --concurrency=3 --filter='./packages/*' --filter='./apps/web' --filter='./extensions/meeting' && bun run typecheck:cloudflare",
     "typecheck:profile": "bun script/profile-typecheck.ts",
     "typecheck:profile:packages": "bun script/profile-typecheck-packages.ts",
     "upgrade-opentui": "bun run script/upgrade-opentui.ts",
@@ -49,6 +49,7 @@
   "workspaces": {
     "packages": [
       "apps/web",
+      "extensions/meeting",
       "packages/ai",
       "packages/cli",
       "packages/client",

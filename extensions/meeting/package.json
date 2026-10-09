@@ -1,0 +1,36 @@
+{
+  "name": "@ycoding-ai/meeting",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "exports": {
+    ".": "./src/plugin.ts",
+    "./tui": "./src/tui.tsx"
+  },
+  "scripts": {
+    "test": "bun run test:unit && bun run test:integration",
+    "test:unit": "bun test test/audio.unit.test.ts test/bridge.test.ts test/capture*.test.js test/config.test.ts test/discovery.test.ts test/evaluate.test.ts test/intelligence.test.ts test/transcription.test.ts test/tui.test.tsx --timeout 30000",
+    "typecheck": "tsgo --noEmit",
+    "build": "bun run typecheck && bun companion/build.js",
+    "model": "bun script/model.ts",
+    "dev": "bun script/dev.ts",
+    "test:integration": "bun test test/bridge.integration.test.ts test/store.integration.test.ts test/runtime.test.ts test/extended-session.test.ts test/intelligence-state.integration.test.ts test/runtime-state.integration.test.ts --timeout 30000",
+    "test:integration:chrome": "bun companion/build.js && bun test test/chrome.integration.test.ts --timeout 240000"
+  },
+  "dependencies": {
+    "@ycoding-ai/plugin": "workspace:*",
+    "@ycoding-ai/client": "workspace:*",
+    "@ycoding-ai/tui": "workspace:*",
+    "@opentui/core": "catalog:",
+    "@opentui/solid": "catalog:",
+    "solid-js": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@tsconfig/bun": "catalog:",
+    "@types/bun": "catalog:",
+    "@types/node": "catalog:",
+    "@typescript/native-preview": "catalog:"
+  }
+}

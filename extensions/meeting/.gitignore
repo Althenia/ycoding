@@ -1,0 +1,11 @@
+dist/
+.build/
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+*.sqlite*
+*.wav
+*.flac
+*.mp3
+*.safetensors

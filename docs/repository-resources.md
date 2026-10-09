@@ -326,6 +326,10 @@ Skill availability is filtered through the selected agent's `skill` permission r
 
 ## Plugins
 
+The [meeting extension](./meeting-intelligence.md) has separate runtime and TUI entrypoints. Native `/meeting` commands register through the TUI keymap; the read-only `meeting_history` tool uses the runtime tool transform.
+
+Trusted Effect/Promise plugins have `context.mcp.servers()`, `tools()`, `readResource({server, uri})`, and `callTool({server, name, args?})`. These reuse the current Location's MCP services and errors, not a separate registry, authentication flow or annotation-based authorization.
+
 Plugins extend runtime domains and can register tools, hooks, agents, commands, skills, integrations, references, provider transforms, and Session behavior.
 
 ### Auto-discovered files

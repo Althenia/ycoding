@@ -74,6 +74,12 @@ export function host(overrides: Overrides = {}): PluginContext {
         resolve: () => Effect.die("unused integration.connection.resolve"),
       },
     },
+    mcp: overrides.mcp ?? {
+      servers: () => Effect.die("unused mcp.servers"),
+      tools: () => Effect.die("unused mcp.tools"),
+      readResource: () => Effect.die("unused mcp.readResource"),
+      callTool: () => Effect.die("unused mcp.callTool"),
+    },
     plugin: overrides.plugin ?? {
       list: () => Effect.die("unused plugin.list"),
     },

@@ -695,6 +695,8 @@ Relative local paths resolve from the containing configuration file.
 
 ## Plugins and hooks
 
+The [meeting extension](./meeting-intelligence.md#configuration) configures speech, processing, analysis, knowledge bindings and retention through runtime plugin `options`. Its TUI entrypoint belongs in global `cli.json` `plugins`; there is no top-level `meeting` configuration key. Plugin loading never downloads weights or starts recording.
+
 Plugins are applied in order.
 
 ```jsonc

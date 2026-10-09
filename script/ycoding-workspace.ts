@@ -11,6 +11,7 @@ export const approvedPackageNames = new Set([
   "@ycoding-ai/effect-sqlite-node",
   "@ycoding-ai/http-recorder",
   "@ycoding-ai/httpapi-codegen",
+  "@ycoding-ai/meeting",
   "@ycoding-ai/plugin",
   "@ycoding-ai/protocol",
   "@ycoding-ai/remote",
@@ -41,7 +42,7 @@ export async function discoverPackageNames(root: string): Promise<string[]> {
   }
 
   for (const entry of await readdir(root, { withFileTypes: true })) {
-    if (entry.isDirectory() && (entry.name === "packages" || entry.name === "apps"))
+    if (entry.isDirectory() && (entry.name === "packages" || entry.name === "apps" || entry.name === "extensions"))
       await visit(path.join(root, entry.name), 0)
   }
   return names.sort()

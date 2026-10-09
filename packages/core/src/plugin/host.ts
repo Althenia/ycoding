@@ -11,6 +11,7 @@ import { Credential } from "../credential"
 import { EventRuntime } from "../event"
 import { Integration } from "../integration"
 import { Location } from "../location"
+import { MCP } from "../mcp"
 import { CatalogModel } from "../model"
 import { PluginRegistry } from "../plugin"
 import { PluginRuntime } from "./runtime"
@@ -32,6 +33,7 @@ export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginRegist
   const commands = yield* Command.Service
   const events = yield* EventRuntime.Service
   const integration = yield* Integration.Service
+  const mcp = yield* MCP.Service
   const location = yield* Location.Service
   const reference = yield* Reference.Service
   const skill = yield* Skill.Service
@@ -332,6 +334,12 @@ export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginRegist
           })
         }),
     },
+    mcp: {
+      servers: mcp.servers,
+      tools: mcp.tools,
+      readResource: mcp.readResource,
+      callTool: mcp.callTool,
+    },
     plugin: {
       list: () => response(plugin.list()),
     },
@@ -430,8 +438,13 @@ export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginRegist
           id: input?.id,
           agent: input?.agent,
           model: input?.model,
-          location:
-            input?.location ?? Location.Ref.make({ directory: location.directory, workspaceID: location.workspaceID }),
+          ...(input?.parentID
+            ? { parentID: input.parentID }
+            : {
+                location:
+                  input?.location ??
+                  Location.Ref.make({ directory: location.directory, workspaceID: location.workspaceID }),
+              }),
         }),
       get: (input) => runtime.session.get(input.sessionID),
       prompt: runtime.session.prompt,
