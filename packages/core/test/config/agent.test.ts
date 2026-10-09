@@ -61,7 +61,7 @@ describe("ConfigAgentPlugin.Plugin", () => {
         }),
       )
 
-      const config = Config.Service.of({
+      const config = Config.Service.of({ diagnostics: () => Effect.succeed([]),
         reload: () => Effect.void,
         entries: () =>
           Effect.succeed([
@@ -150,7 +150,7 @@ describe("ConfigAgentPlugin.Plugin", () => {
   it.effect("maps configured agent fields and preserves an unspecified model variant", () =>
     Effect.gen(function* () {
       const agents = yield* Agent.Service
-      const config = Config.Service.of({
+      const config = Config.Service.of({ diagnostics: () => Effect.succeed([]),
         reload: () => Effect.void,
         entries: () =>
           Effect.succeed([
@@ -219,7 +219,7 @@ describe("ConfigAgentPlugin.Plugin", () => {
       const build = Agent.ID.make("build")
       yield* agents.transform((editor) => editor.update(build, () => {}))
 
-      const config = Config.Service.of({
+      const config = Config.Service.of({ diagnostics: () => Effect.succeed([]),
         reload: () => Effect.void,
         entries: () =>
           Effect.succeed([
@@ -283,7 +283,7 @@ Use current fields.`,
             await fs.writeFile(path.join(tmp.path, "agents", "disabled.md"), "---\ndisabled: true\n---\nDisabled")
           })
           const agents = yield* Agent.Service
-          const config = Config.Service.of({
+          const config = Config.Service.of({ diagnostics: () => Effect.succeed([]),
             reload: () => Effect.void,
             entries: () =>
               Effect.succeed([
@@ -329,7 +329,7 @@ function loadHomePermissions(home: string) {
     const agents = yield* Agent.Service
     const build = Agent.ID.make("build")
     yield* agents.transform((editor) => editor.update(build, () => {}))
-    const config = Config.Service.of({
+    const config = Config.Service.of({ diagnostics: () => Effect.succeed([]),
       reload: () => Effect.void,
       entries: () =>
         Effect.succeed([

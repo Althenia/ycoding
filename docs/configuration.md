@@ -95,6 +95,8 @@ Both JSON and JSONC support:
 - environment substitution with `{env:NAME}`;
 - file substitution with `{file:path}`.
 
+A configuration document with invalid JSON/JSONC, rejected keys, or values rejected by the configuration schema is ignored as a whole. The runtime logs `ignored config file with invalid JSON`, `ignored config file with removed keys`, or `ignored config file with invalid values`, as applicable. Ignored documents are listed by the Location-scoped `GET /api/config/diagnostics` endpoint and the TUI shows an error toast and lists their path, reason, and message in Status.
+
 `{file:path}` is resolved relative to the containing configuration file. Absolute paths and `~/` are supported. The referenced file is trimmed and inserted as a JSON string fragment. A `{file:...}` token inside a `//` comment is not resolved.
 
 Example:
@@ -116,7 +118,7 @@ Example:
 }
 ```
 
-Missing environment variables become an empty string. A missing file reference invalidates that configuration document.
+Missing environment variables become an empty string. A missing `{file:...}` reference fails configuration loading for that Location and is shown as a configuration error.
 
 The configuration JSON Schema is generated from the runtime-owned `Config.Info` Schema during the public web build. Its public endpoint is [`https://ycoding.althenia.app/ycoding.schema.json`](https://ycoding.althenia.app/ycoding.schema.json). Publish the built web assets before using the endpoint.
 
@@ -210,6 +212,8 @@ tools
 attachment
 layout
 ```
+
+Ignored documents are logged and exposed through `GET /api/config/diagnostics`; the TUI reports them with a toast and in the Status dialog.
 
 The MCP shape where server names appear directly under `mcp` is also rejected. Use `mcp.servers`.
 
@@ -718,6 +722,8 @@ Hooks are registered by plugins. There is no top-level `hooks` configuration key
 ## MCP
 
 MCP configuration is nested under `mcp.servers`.
+
+MCP server definitions are read when a Location's services boot. Changes to `mcp.servers` take effect after the server restarts or the Location is evicted and initialized again.
 
 ```jsonc
 {
@@ -1401,8 +1407,8 @@ CLI/TUI `cli.json` updates are serialized, written atomically through a temporar
 
 ## Troubleshooting
 
-- A config file containing a rejected key is ignored in full; inspect warning logs for the exact keys.
-- Invalid JSON/JSONC or a failed file substitution causes that document to be skipped.
+- Invalid JSON/JSONC, rejected keys, and schema-invalid values cause the affected document to be ignored in full. The runtime logs `ignored config file with invalid JSON`, `ignored config file with removed keys`, or `ignored config file with invalid values`; inspect `GET /api/config/diagnostics` or open the TUI Status dialog for the path, reason, and message. The TUI also shows an error toast when a diagnostic is loaded.
+- A missing `{file:...}` reference fails configuration loading for that Location and surfaces as a configuration error; it does not skip only that document.
 - `instructions` is accepted but currently inactive; use `AGENTS.md` or skills.
 - `tui.json`, `kv.json`, `config.json`, and project `.ycoding/tui.json` are not read.
 - A managed-service port conflict is not fixed by deleting session data. Change the channel service config port or use `ycoding --standalone`.

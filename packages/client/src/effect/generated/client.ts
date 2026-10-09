@@ -2429,6 +2429,13 @@ const Endpoint34_1 = (raw: RawClient["server.keepAwake"]) => (input: Endpoint34_
 
 const adaptGroup34 = (raw: RawClient["server.keepAwake"]) => ({ get: Endpoint34_0(raw), set: Endpoint34_1(raw) })
 
+type Endpoint35_0Request = Parameters<RawClient["server.config"]["config.diagnostics"]>[0]
+type Endpoint35_0Input = { readonly location?: Endpoint35_0Request["query"]["location"] }
+const Endpoint35_0 = (raw: RawClient["server.config"]) => (input?: Endpoint35_0Input) =>
+  raw["config.diagnostics"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError))
+
+const adaptGroup35 = (raw: RawClient["server.config"]) => ({ diagnostics: Endpoint35_0(raw) })
+
 const adaptClient = (raw: RawClient) => ({
   health: adaptGroup0(raw["server.health"]),
   server: adaptGroup1(raw["server.server"]),
@@ -2465,6 +2472,7 @@ const adaptClient = (raw: RawClient) => ({
   usage: adaptGroup32(raw["server.usage"]),
   remote: adaptGroup33(raw["server.remote"]),
   keepAwake: adaptGroup34(raw["server.keepAwake"]),
+  config: adaptGroup35(raw["server.config"]),
 })
 
 export const make = (options?: { readonly baseUrl?: URL | string }) =>

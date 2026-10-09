@@ -48,7 +48,7 @@ const it = testEffect(
 )
 const configuration = Layer.succeed(
   Config.Service,
-  Config.Service.of({ entries: () => Effect.succeed([]), reload: () => Effect.void }),
+  Config.Service.of({ diagnostics: () => Effect.succeed([]), entries: () => Effect.succeed([]), reload: () => Effect.void }),
 )
 const placements = makeGlobalNode({
   service: LocationServiceMap.Service,

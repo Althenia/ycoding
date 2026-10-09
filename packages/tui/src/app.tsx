@@ -93,6 +93,7 @@ import { writeHeapSnapshot } from "node:v8"
 import { saveCustomEndpoint } from "./custom-endpoint-save"
 import { KeepAwakeProvider, type KeepAwakeStatus } from "./keep-awake"
 import { RemoteProvider, type RemoteStatus } from "./remote-connector"
+import path from "node:path"
 
 const themePerformance = DevTools.register({ id: "theme-performance", title: "Theme performance" })
 
@@ -488,6 +489,24 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
           title: `MCP server failed: ${server.name}`,
           message: "Open MCP servers to view details.",
         })
+    }
+  })
+
+  const configAlerted = new Set<string>()
+  createEffect(() => {
+    const diagnostics = data.location.config.diagnostics.list() ?? []
+    const active = new Set(diagnostics.map((diagnostic) => `${diagnostic.path}\0${diagnostic.reason}\0${diagnostic.message}`))
+    for (const key of configAlerted) if (!active.has(key)) configAlerted.delete(key)
+    for (const diagnostic of diagnostics) {
+      const key = `${diagnostic.path}\0${diagnostic.reason}\0${diagnostic.message}`
+      if (configAlerted.has(key)) continue
+      configAlerted.add(key)
+      const firstLine = diagnostic.message.split("\n", 1)[0]
+      toast.show({
+        variant: "error",
+        title: "Configuration file ignored",
+        message: `${path.basename(diagnostic.path)}: ${firstLine.slice(0, 120)}${firstLine.length > 120 ? "…" : ""}. Open Status to view details.`,
+      })
     }
   })
 

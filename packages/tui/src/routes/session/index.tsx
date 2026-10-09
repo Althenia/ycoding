@@ -123,7 +123,7 @@ import {
 } from "./rows"
 import { switchLabel } from "../../util/model"
 import { findMessageBoundary, messageNavigationSlack } from "./message-navigation"
-import { noticeSummary } from "./notice-summary"
+import { decisionAdvisory, noticeSummary } from "./notice-summary"
 import { stringWidth } from "../../util/string-width"
 import {
   autonomyModeLabel,
@@ -2328,6 +2328,11 @@ function SessionNoticeMessage(props: { message: SessionMessageInfo }) {
     return ""
   }
   const notice = createMemo(() => noticeSummary(contextSource(), text()))
+  const advisory = createMemo(() =>
+    props.message.type === "synthetic" && metadata()?.decisionInputID !== undefined
+      ? decisionAdvisory(props.message.text)
+      : undefined,
+  )
   const description = () => (source() === "shell" ? text().replace(/\s+/g, " ").trim() : text())
   const status = () => {
     if (state() === "completed") return "finished"
@@ -2373,6 +2378,7 @@ function SessionNoticeMessage(props: { message: SessionMessageInfo }) {
           </text>
         </box>
       </Match>
+      <Match when={advisory()}>{(advisory) => <DecisionAdvisoryNotice advisory={advisory()} />}</Match>
       <Match when={true}>
         {/* Session-state and TeamView notices stay in the message store but never render. */}
         <Show when={contextSource() !== "session-state" && contextSource() !== "team-view"}>
@@ -2382,6 +2388,43 @@ function SessionNoticeMessage(props: { message: SessionMessageInfo }) {
         </Show>
       </Match>
     </Switch>
+  )
+}
+
+function DecisionAdvisoryNotice(props: { advisory: { summary: string; details: string[] } }) {
+  const ctx = use()
+  const { theme } = useTheme()
+  const renderer = useRenderer()
+  const [expanded, setExpanded] = createSignal(false)
+  const [hover, setHover] = createSignal(false)
+  return (
+    <box flexDirection="column" flexShrink={0}>
+      <InlineToolRow
+        icon={expanded() ? "-" : "+"}
+        color={hover() || expanded() ? theme.text.default : theme.text.subdued}
+        pending="Notice"
+        complete={true}
+        onMouseOver={() => setHover(true)}
+        onMouseOut={() => setHover(false)}
+        onMouseUp={() => {
+          if (renderer.getSelection()?.getSelectedText()) return
+          setExpanded((value) => !value)
+        }}
+      >
+        {Locale.truncateWidth(props.advisory.summary, Math.max(0, ctx.width - 5))}
+      </InlineToolRow>
+      <Show when={expanded()}>
+        <box paddingLeft={3} paddingTop={1} flexDirection="column">
+          <For each={props.advisory.details}>
+            {(line) => (
+              <text fg={theme.text.subdued} wrapMode="word">
+                {line}
+              </text>
+            )}
+          </For>
+        </box>
+      </Show>
+    </box>
   )
 }
 

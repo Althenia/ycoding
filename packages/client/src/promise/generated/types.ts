@@ -591,6 +591,8 @@ export type BrowserCaptureOutput = { mediaType: "image/png"; data: string; bytes
 
 export type KeepAwakeState = "off" | "on" | "unsupported" | "error"
 
+export type ConfigDiagnosticReason = "invalid-json" | "invalid-values" | "removed-keys"
+
 export type TelemetrySample = TelemetryRequestSample | TelemetryLongTaskSample
 
 export type ModelRef = { id: string; providerID: string; variant?: string; profile?: ModelProfileName }
@@ -2161,6 +2163,8 @@ export type BrowserElement = {
 }
 
 export type KeepAwakeStatus = { state: KeepAwakeState; message?: string }
+
+export type ConfigDiagnostic = { path: string; reason: ConfigDiagnosticReason; message: string }
 
 export type TelemetryPage = { data: Array<{ receivedAt: number; sample: TelemetrySample }>; cursor: { next?: string } }
 
@@ -8548,3 +8552,14 @@ export type KeepAwakeGetOutput = { data: KeepAwakeStatus }["data"]
 export type KeepAwakeSetInput = { readonly enabled: { readonly enabled: boolean }["enabled"] }
 
 export type KeepAwakeSetOutput = { data: KeepAwakeStatus }["data"]
+
+export type ConfigDiagnosticsInput = {
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+  }["location"]
+}
+
+export type ConfigDiagnosticsOutput = {
+  location: { directory: string; workspaceID?: string; project: { id: string; directory: string } }
+  data: Array<ConfigDiagnostic>
+}

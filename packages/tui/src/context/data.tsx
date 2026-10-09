@@ -5,6 +5,7 @@
 import type {
   AgentInfo,
   CommandInfo,
+  ConfigDiagnostic,
   FormInfo,
   GuardrailRequestListOutput,
   IntegrationInfo,
@@ -151,6 +152,7 @@ type LocationData = {
     server?: McpServer[]
     resource?: McpResource[]
   }
+  config?: { diagnostics?: ConfigDiagnostic[] }
   model?: ModelInfo[]
   modelDefault?: ModelRef
   provider?: ProviderInfo[]
@@ -1001,6 +1003,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         case "command.updated":
           result.location.command.invalidate(event.location)
           void result.location.command.sync(event.location)
+          break
+        case "config.updated":
+          result.location.config.diagnostics.invalidate(event.location)
+          void result.location.config.diagnostics.sync(event.location)
           break
         case "skill.updated":
           result.location.skill.invalidate(event.location)
@@ -1983,6 +1989,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             result.location.integration.sync(location),
             result.location.mcp.server.sync(location),
             result.location.mcp.resource.sync(location),
+            result.location.config.diagnostics.sync(location),
             result.location.model.sync(location),
             result.location.provider.sync(location),
             result.location.reference.sync(location),
@@ -1999,6 +2006,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           result.location.integration.invalidate(location)
           result.location.mcp.server.invalidate(location)
           result.location.mcp.resource.invalidate(location)
+          result.location.config.diagnostics.invalidate(location)
           result.location.model.invalidate(location)
           result.location.provider.invalidate(location)
           result.location.reference.invalidate(location)
@@ -2113,6 +2121,29 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             },
             invalidate(ref?: LocationRef) {
               sync.invalidate(`location.mcp.resource:${locationKey(ref ?? defaultLocation())}`)
+            },
+          },
+        },
+        config: {
+          diagnostics: {
+            list(location?: LocationRef) {
+              return store.location[locationKey(location ?? defaultLocation())]?.config?.diagnostics
+            },
+            sync(ref?: LocationRef) {
+              const id = locationKey(ref ?? defaultLocation())
+              return sync.run(`location.config.diagnostics:${id}`, async () => {
+                const response = await client.api.config.diagnostics({
+                  location: locationQuery(ref ?? defaultLocation()),
+                })
+                const key = locationKey(response.location)
+                setStore("location", key, {
+                  ...store.location[key],
+                  config: { ...store.location[key]?.config, diagnostics: response.data },
+                })
+              })
+            },
+            invalidate(ref?: LocationRef) {
+              sync.invalidate(`location.config.diagnostics:${locationKey(ref ?? defaultLocation())}`)
             },
           },
         },

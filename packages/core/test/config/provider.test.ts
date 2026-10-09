@@ -98,7 +98,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
           ),
         )
         yield* addPlugin(
-          Config.Service.of({
+          Config.Service.of({ diagnostics: () => Effect.succeed([]),
             reload: () => Effect.void,
             entries: () =>
               Effect.succeed([
@@ -252,7 +252,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
           }),
         )
         yield* addPlugin(
-          Config.Service.of({
+          Config.Service.of({ diagnostics: () => Effect.succeed([]),
             reload: () => Effect.void,
             entries: () =>
               Effect.succeed([
@@ -390,7 +390,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
             value: { type: "key", key: "fixture-personal" },
           })
           yield* addPlugin(
-            Config.Service.of({
+            Config.Service.of({ diagnostics: () => Effect.succeed([]),
               reload: () => Effect.void,
               entries: () =>
                 Effect.succeed([
@@ -438,7 +438,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
       const integrations = yield* Integration.Service
       const catalog = yield* Catalog.Service
       yield* addPlugin(
-        Config.Service.of({
+        Config.Service.of({ diagnostics: () => Effect.succeed([]),
           reload: () => Effect.void,
           entries: () =>
             Effect.succeed([
@@ -501,7 +501,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
       const integrations = yield* Integration.Service
       const id = Integration.ID.make("private-compatible")
       yield* addPlugin(
-        Config.Service.of({
+        Config.Service.of({ diagnostics: () => Effect.succeed([]),
           reload: () => Effect.void,
           entries: () =>
             Effect.succeed([
@@ -597,7 +597,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
               value: Credential.Key.make({ type: "key", key: "blocked-key" }),
             })
             yield* addPlugin(
-              Config.Service.of({
+              Config.Service.of({ diagnostics: () => Effect.succeed([]),
                 reload: () => Effect.void,
                 entries: () =>
                   Effect.succeed([
@@ -686,7 +686,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
           const catalog = yield* Catalog.Service
           const baseURL = `http://0.0.0.0:${server.port}/v1`
           yield* addPlugin(
-            Config.Service.of({
+            Config.Service.of({ diagnostics: () => Effect.succeed([]),
               reload: () => Effect.void,
               entries: () =>
                 Effect.succeed([
@@ -761,7 +761,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
               model.capabilities = { tools: false, input: ["text", "image"], output: ["text"] }
             }),
           )
-          const config = Config.Service.of({
+          const config = Config.Service.of({ diagnostics: () => Effect.succeed([]),
             reload: () => Effect.void,
             entries: () =>
               Effect.succeed([
@@ -802,7 +802,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
       const catalog = yield* Catalog.Service
       const providerID = Provider.ID.opencode
       const modelID = CatalogModel.ID.make("alpha-gpt-next")
-      const config = Config.Service.of({
+      const config = Config.Service.of({ diagnostics: () => Effect.succeed([]),
         reload: () => Effect.void,
         entries: () =>
           Effect.succeed([
@@ -855,7 +855,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
       const catalog = yield* Catalog.Service
       const providerID = Provider.ID.opencode
       const modelID = CatalogModel.ID.make("alpha-gpt-next")
-      const config = Config.Service.of({
+      const config = Config.Service.of({ diagnostics: () => Effect.succeed([]),
         reload: () => Effect.void,
         entries: () =>
           Effect.succeed([
@@ -904,7 +904,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
         const integrations = yield* Integration.Service
         const providerID = Provider.ID.make("custom")
         const modelID = CatalogModel.ID.make("chat")
-        const config = Config.Service.of({
+        const config = Config.Service.of({ diagnostics: () => Effect.succeed([]),
           reload: () => Effect.void,
           entries: () =>
             Effect.succeed([

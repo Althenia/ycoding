@@ -75,7 +75,7 @@ const permission = Layer.succeed(
 )
 const config = Layer.succeed(
   Config.Service,
-  Config.Service.of({ reload: () => Effect.void, entries: () => Effect.succeed([]) }),
+  Config.Service.of({ diagnostics: () => Effect.succeed([]), reload: () => Effect.void, entries: () => Effect.succeed([]) }),
 )
 const imageLayer = AppNodeBuilder.build(Image.node, [[Config.node, config]])
 

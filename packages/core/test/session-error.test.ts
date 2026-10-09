@@ -15,6 +15,7 @@ import {
   UnknownProviderReason,
   ToolFailure,
 } from "@ycoding-ai/ai"
+import { FileMutation } from "@ycoding-ai/core/file-mutation"
 import { Permission } from "@ycoding-ai/core/permission"
 import { Tool } from "@ycoding-ai/plugin/effect/tool"
 import { toSessionError } from "@ycoding-ai/core/session/to-session-error"
@@ -68,6 +69,31 @@ describe("toSessionError", () => {
     expect(toSessionError(new Tool.Failure({ message: "failed" }))).toEqual({
       type: "tool.execution",
       message: "failed",
+    })
+  })
+
+  test("keeps the tool failure message when its cause has no session error type", () => {
+    const stale = new FileMutation.StaleContentError({ path: "/repo/file.ts" })
+    expect(
+      toSessionError(
+        new ToolFailure({
+          message: "File changed after permission approval. Read it again before editing.",
+          error: stale,
+        }),
+      ),
+    ).toEqual({
+      type: "tool.execution",
+      message: "File changed after permission approval. Read it again before editing.",
+    })
+    expect(toSessionError(new ToolFailure({ message: "Unable to edit src/a.ts", error: new Error("ENOENT") }))).toEqual(
+      {
+        type: "tool.execution",
+        message: "Unable to edit src/a.ts: ENOENT",
+      },
+    )
+    expect(toSessionError(new ToolFailure({ message: "exit 1", error: new Error("exit 1") }))).toEqual({
+      type: "tool.execution",
+      message: "exit 1",
     })
   })
 

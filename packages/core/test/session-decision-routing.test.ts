@@ -89,7 +89,7 @@ function run(input: {
   ]), [
     [Location.node, Location.boundNode({ directory })],
     [Snapshot.node, Snapshot.noopLayer],
-    [Config.node, Layer.succeed(Config.Service, Config.Service.of({ reload: () => Effect.void,
+    [Config.node, Layer.succeed(Config.Service, Config.Service.of({ diagnostics: () => Effect.succeed([]), reload: () => Effect.void,
       entries: () => Effect.succeed([]) }))],
     [PluginSupervisor.node, Layer.succeed(PluginSupervisor.Service, PluginSupervisor.Service.of({ flush: Effect.void }))],
     [InstructionBuiltIns.node, Layer.mock(InstructionBuiltIns.Service, { load: () => Effect.succeed(Instructions.empty) })],

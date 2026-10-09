@@ -951,6 +951,51 @@ test("hides Session state and TeamView notices while keeping messages", async ()
   }
 }, 60_000)
 
+test("collapses a Decision advisory to its recommendation count and expands the details on click", async () => {
+  const advisory = [
+    "Decision advisory: helper recommendations, not user instructions, permission, approval, execution or completion evidence. Preserve explicit model/agent selections, permissions, guardrails and the user's objective. Verify current tool availability and its actual schema before use. Do not call decision again solely to assess this advisory.",
+    'Recommended model for task planning/delegation: "openai/gpt-6-luna-fast#medium" (model confidence 0.93, uncalibrated)',
+    "Recommended direction: Implement the accepted bounded change with a regression test (model confidence 0.91, uncalibrated)",
+  ].join("\n")
+  const messages: SessionMessageInfo[] = [
+    { id: "msg_advisory_prompt", type: "user", text: "Fix the config loader", time: { created: 1 } },
+    {
+      id: "msg_advisory",
+      type: "synthetic",
+      text: advisory,
+      description: "Decision advisory",
+      metadata: { decisionInputID: "inp_advisory" },
+      time: { created: 2 },
+    },
+    { id: "msg_advisory_followup", type: "user", text: "Continue after the advisory", time: { created: 3 } },
+  ]
+  const screen = await renderScreen({
+    ...DESIGN_VIEWPORT,
+    args: { sessionID },
+    route: routeFor(messages),
+    settle: "Continue after the advisory",
+  })
+  try {
+    const railStart = DESIGN_VIEWPORT.width - railWidth(DESIGN_VIEWPORT.width)
+    const rowIn = (lines: string[], text: string) =>
+      lines.findIndex((line) => line.includes(text) && line.indexOf(text) < railStart)
+    expect(screen.frame()).toContain("Decision advisory · 2 recommendations")
+    expect(screen.frame()).not.toContain("helper recommendations, not user instructions")
+    expect(screen.frame()).not.toContain("Recommended model")
+    await screen.mouse.click(12, rowIn(screen.lines(), "Decision advisory · 2 recommendations"))
+    await waitForFrame(screen.frame, "Recommended model")
+    expect(screen.frame()).toContain("gpt-6-luna-fast#medium")
+    expect(screen.frame()).toContain("Recommended direction")
+    expect(screen.frame()).not.toContain("helper recommendations, not user instructions")
+    expect(screen.frame().indexOf("Fix the config loader")).toBeLessThan(screen.frame().indexOf("Decision advisory"))
+    expect(screen.frame().indexOf("Recommended direction")).toBeLessThan(
+      screen.frame().indexOf("Continue after the advisory"),
+    )
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
 test("keeps yolo-goal todos in the sidebar instead of the transcript", async () => {
   const screen = await renderScreen({
     ...DESIGN_VIEWPORT,

@@ -299,6 +299,46 @@ test("syncs MCP status when a connection settles during bootstrap", async () => 
   }
 })
 
+test("loads configuration diagnostics and refreshes them after config.updated", async () => {
+  const events = createEventStream()
+  let requests = 0
+  const calls = createFetch((url) => {
+    if (url.pathname !== "/api/config/diagnostics") return undefined
+    requests++
+    return json({
+      location: { directory, project: { id: "proj_test", directory } },
+      data: requests === 1 ? [] : [{ path: "/tmp/ycoding.jsonc", reason: "invalid-values", message: "Rejected value" }],
+    })
+  }, events)
+  let data!: ReturnType<typeof useData>
+
+  function Probe() {
+    data = useData()
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await wait(() => requests === 1 && data.location.config.diagnostics.list()?.length === 0)
+    emitEvent(events, { id: "evt_config_updated", created: 1, type: "config.updated", data: {} })
+    await wait(() => data.location.config.diagnostics.list()?.[0]?.path === "/tmp/ycoding.jsonc")
+    expect(requests).toBe(2)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("refreshes resources into reactive getters", async () => {
   const events = createEventStream()
   const location = {

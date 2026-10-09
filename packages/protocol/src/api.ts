@@ -31,6 +31,7 @@ import { Authorization } from "./middleware/authorization.js"
 import { LocationGroup } from "./groups/location.js"
 import { IntegrationGroup } from "./groups/integration.js"
 import { McpGroup } from "./groups/mcp.js"
+import { ConfigGroup } from "./groups/config.js"
 import { CredentialGroup } from "./groups/credential.js"
 import { ProjectGroup } from "./groups/project.js"
 import { ProjectCopyGroup } from "./groups/project-copy.js"
@@ -49,6 +50,7 @@ type LocationGroups<LocationId extends HttpApiMiddleware.AnyId> =
   | HttpApiGroup.AddMiddleware<typeof ProviderUsageGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof IntegrationGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof McpGroup, LocationId>
+  | HttpApiGroup.AddMiddleware<typeof ConfigGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof CredentialGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof ProjectGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof FileSystemGroup, LocationId>
@@ -193,6 +195,7 @@ const makeApiFromGroup = <
     .add(UsageGroup)
     .add(RemoteGroup)
     .add(KeepAwakeGroup)
+    .add(ConfigGroup.middleware(locationMiddleware))
     .annotateMerge(
       OpenApi.annotations({
         title: "ycoding HttpApi",

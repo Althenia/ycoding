@@ -17,6 +17,7 @@ export function DialogStatus(props: DialogStatusProps = {}) {
   const remote = useRemote()
   const keepAwake = useKeepAwake()
   const mcp = createMemo(() => data.location.mcp.server.list() ?? [])
+  const diagnostics = createMemo(() => data.location.config.diagnostics.list() ?? [])
   const connected = createMemo(() => mcp().filter((server) => server.status.status === "connected").length)
   return (
     <DialogSelect
@@ -58,6 +59,14 @@ export function DialogStatus(props: DialogStatusProps = {}) {
             category: "Services",
             value: `mcp:${server.name}`,
           })),
+        ...diagnostics().map((diagnostic, index) => ({
+          title: diagnostic.path,
+          description: diagnostic.message,
+          footer: diagnostic.reason,
+          state: "error" as const,
+          category: "Configuration",
+          value: `config:${index}`,
+        })),
         { title: "Plugins", description: `${props.pluginCount ?? 0} loaded`, footer: "Healthy", state: "connected", category: "Services", value: "plugins" },
         { title: "Durable store", footer: "Healthy", state: "connected", category: "Session", value: "store" },
       ]}

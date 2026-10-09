@@ -76,7 +76,7 @@ const models = Layer.mock(SessionRunnerModel.Service)({
 let titleMode: SessionHelperPolicy.TitleMode = "local"
 const config = Layer.succeed(
   Config.Service,
-  Config.Service.of({
+  Config.Service.of({ diagnostics: () => Effect.succeed([]),
     reload: () => Effect.void,
     entries: () =>
       Effect.succeed([

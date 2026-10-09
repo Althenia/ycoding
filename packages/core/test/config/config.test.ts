@@ -1040,6 +1040,85 @@ describe("Config", () => {
     )
   })
 
+  it.live("reports which invalid values discarded a schema-rejected file", () => {
+    const warnings: { target: string; message: string }[] = []
+    const logger = Logger.map(Logger.formatStructured, (entry) => {
+      if (!Array.isArray(entry.message) || entry.message[0] !== "ignored config file with invalid values") return
+      const details: unknown = entry.message[1]
+      if (typeof details !== "object" || details === null) return
+      if (!("target" in details) || !("message" in details)) return
+      warnings.push({ target: String(details.target), message: String(details.message) })
+    })
+    return Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const target = path.join(tmp.path, "ycoding.json")
+          yield* Effect.promise(() =>
+            fs.writeFile(
+              target,
+              JSON.stringify({
+                mcp: { servers: { docs: { type: "remote", url: "https://example.com/mcp" } } },
+                decisions: {
+                  advisory: {
+                    provider: "agent",
+                    min_confidence: 0.9,
+                    candidates: [{ id: "bounded", description: "Bounded implementation" }],
+                    directions: [{ id: "implement", description: "Implement the change" }],
+                  },
+                },
+              }),
+            ),
+          )
+          return yield* Effect.gen(function* () {
+            const config = yield* Config.Service
+            expect((yield* config.entries()).filter((entry) => entry.type === "document")).toEqual([])
+            expect(warnings).toHaveLength(1)
+            expect(warnings[0]?.target).toBe(target)
+            expect(warnings[0]?.message).toContain(`["decisions"]["advisory"]["candidates"][0]["model"]`)
+            expect(yield* config.diagnostics()).toEqual([
+              { path: target, reason: "invalid-values", message: warnings[0]?.message },
+            ])
+          }).pipe(Effect.provide(testLayer(tmp.path)))
+        }),
+      ),
+      Effect.provide(Logger.layer([logger])),
+    )
+  })
+
+  it.live("reports unparsable and removed-key documents as diagnostics", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const json = path.join(tmp.path, "ycoding.json")
+          const jsonc = path.join(tmp.path, "ycoding.jsonc")
+          yield* Effect.promise(() =>
+            Promise.all([
+              fs.writeFile(json, JSON.stringify({ snapshot: false })),
+              fs.writeFile(jsonc, "{ invalid"),
+            ]),
+          )
+          return yield* Effect.gen(function* () {
+            const config = yield* Config.Service
+            expect((yield* config.entries()).filter((entry) => entry.type === "document")).toEqual([])
+            expect(yield* config.diagnostics()).toEqual([
+              { path: json, reason: "removed-keys", message: "snapshot" },
+              { path: jsonc, reason: "invalid-json", message: expect.stringContaining("offset") },
+            ])
+            yield* Effect.promise(() => fs.writeFile(jsonc, JSON.stringify({ $schema: "fixed" })))
+            yield* config.reload()
+            expect(yield* config.diagnostics()).toEqual([{ path: json, reason: "removed-keys", message: "snapshot" }])
+          }).pipe(Effect.provide(testLayer(tmp.path)))
+        }),
+      ),
+    ),
+  )
+
   it.live("ignores an invalid file while loading valid config values", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),

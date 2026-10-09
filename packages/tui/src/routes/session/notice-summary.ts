@@ -24,15 +24,30 @@ function sessionStateSummary(value: Record<string, unknown>) {
 
 function teamViewSummary(value: Record<string, unknown>) {
   const children = Array.isArray(value.children) ? value.children : []
-  const states = children
-    .map(record)
-    .flatMap((child) => (typeof child?.state === "string" ? [child.state] : []))
+  const states = children.map(record).flatMap((child) => (typeof child?.state === "string" ? [child.state] : []))
   const omitted = typeof value.omitted === "number" && value.omitted > 0 ? value.omitted : 0
   if (!states.length) return omitted ? `TeamView · ${omitted} omitted` : "TeamView · no children"
   return `TeamView · ${[...new Set(states)]
     .map((state) => `${states.filter((item) => item === state).length} ${state}`)
     .concat(omitted ? `${omitted} omitted` : [])
     .join(" · ")}`
+}
+
+const decisionAdvisoryPreamble = "Decision advisory:"
+
+/**
+ * Splits a Decision advisory notice into the one-line transcript summary and the lines worth
+ * expanding. The first line is the fixed disclaimer, which the model needs but the user does not.
+ */
+export function decisionAdvisory(text: string) {
+  const lines = text.split("\n")
+  if (!lines[0]?.startsWith(decisionAdvisoryPreamble)) return undefined
+  const details = lines.slice(1).filter((line) => line.trim().length > 0)
+  const recommendations = details.filter((line) => line.startsWith("Recommended "))
+  const summary = recommendations.length
+    ? `Decision advisory · ${recommendations.length} ${recommendations.length === 1 ? "recommendation" : "recommendations"}`
+    : (details[0] ?? "Decision advisory")
+  return { summary, details }
 }
 
 function record(value: unknown) {

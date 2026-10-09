@@ -4,8 +4,23 @@ import { RELEASES, changeTagCounts } from "./changelog"
 const TAGS = ["Added", "Changed", "Fixed"] as const
 
 describe("release entries", () => {
-  test("lists v0.10.3 readable file suggestions first", () => {
+  test("lists v0.10.4 visible configuration problems and complete tool errors first", () => {
     expect(RELEASES[0]).toEqual({
+      version: "0.10.4",
+      date: "2026-10-09",
+      title: "Focus workspace navigation, visible configuration problems, and complete tool errors",
+      tags: ["Changed", "Fixed"],
+      changes: [
+        { tag: "Changed", text: "Navigate the web client through one Focus workspace. Sessions, Usage, and Settings live in a collapsible desktop rail and a three-item labeled phone bar; New session is an explicit action, Session detail pins its title and Back action above the transcript, and a contextual Resume session link returns to the selected Session from other screens. Routes, Session URLs, drafts, approvals, and runtime operations are unchanged. Usage presents summary metrics as a divided strip that follows its content width." },
+        { tag: "Fixed", text: "Show why a configuration file is ignored. A ycoding.json or ycoding.jsonc document with invalid JSON, a rejected key, or a value the configuration schema rejects is still skipped as a whole, but the server now logs the exact reason, GET /api/config/diagnostics lists every ignored document for the Location, and the TUI shows a toast and a Configuration section in the Status dialog. Previously such a file disappeared silently, taking its MCP servers, providers, default agent, and skills with it." },
+        { tag: "Fixed", text: "Keep the tool's own message when edit, shell, or another tool fails. A failure whose underlying cause has no session error type, such as \"File changed after permission approval. Read it again before editing.\", now reaches the transcript as a tool.execution error with that text instead of a blank unknown error." },
+      { tag: "Fixed", text: "Read Decision advisory details in the transcript. The notice renders collapsed as Decision advisory · N recommendations (or its outcome line when none was confident) and expands on click to show each recommended model, direction, and tool; the fixed model-facing disclaimer is no longer printed." },
+      ],
+    })
+  })
+
+  test("retains v0.10.3 readable file suggestions", () => {
+    expect(RELEASES[1]).toEqual({
       version: "0.10.3",
       date: "2026-10-09",
       title: "Readable file suggestions",
@@ -17,7 +32,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.10.2 default profiles and resilient Claude sign-in", () => {
-    expect(RELEASES[1]).toEqual({
+    expect(RELEASES[2]).toEqual({
       version: "0.10.2",
       date: "2026-10-09",
       title: "Default profiles and resilient Claude sign-in",
@@ -30,7 +45,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.10.1 profile selectors, provider connection, and task advice", () => {
-    expect(RELEASES[2]).toEqual({
+    expect(RELEASES[3]).toEqual({
       version: "0.10.1",
       date: "2026-10-08",
       title: "Profile selectors, web provider connection, and task advice",
@@ -48,7 +63,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.10.0 concurrent profiles and workspace improvements", () => {
-    expect(RELEASES[3]).toEqual({
+    expect(RELEASES[4]).toEqual({
       version: "0.10.0",
       date: "2026-10-08",
       title: "Concurrent profiles and a more capable workspace",
@@ -67,7 +82,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.9.5 model decisions and remote recovery", () => {
-    expect(RELEASES[4]).toEqual({
+    expect(RELEASES[5]).toEqual({
       version: "0.9.5",
       date: "2026-10-08",
       title: "Model-powered decisions and resilient remote access",
@@ -83,7 +98,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.9.4 independent Claude profiles and native decisions", () => {
-    expect(RELEASES[5]).toEqual({
+    expect(RELEASES[6]).toEqual({
       version: "0.9.4",
       date: "2026-10-07",
       title: "Independent Claude accounts and native decisions",
@@ -99,7 +114,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.9.3 remote navigation, attention refresh, transcript recovery, and terminal OAuth layout", () => {
-    expect(RELEASES[6]).toEqual({
+    expect(RELEASES[7]).toEqual({
       version: "0.9.3",
       date: "2026-10-07",
       title: "Session navigation and attachment fixes",
@@ -117,7 +132,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.9.2 submitted prompt visibility", () => {
-    expect(RELEASES[7]).toEqual({
+    expect(RELEASES[8]).toEqual({
       version: "0.9.2",
       date: "2026-10-06",
       title: "Keep submitted prompts visible",
@@ -129,7 +144,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.9.1 Cursor models and machine-local Web diagnostics", () => {
-    expect(RELEASES[8]).toEqual({
+    expect(RELEASES[9]).toEqual({
       version: "0.9.1",
       date: "2026-10-05",
       title: "Cursor models and machine-local Web diagnostics",
@@ -145,7 +160,7 @@ describe("release entries", () => {
   })
 
   test("retains the v0.9.0 runtime and remote cutover", () => {
-    expect(RELEASES[9]).toEqual({
+    expect(RELEASES[10]).toEqual({
       version: "0.9.0",
       date: "2026-10-04",
       title: "Reliable shell recovery and remote protocol v4",
@@ -166,7 +181,7 @@ describe("release entries", () => {
   })
 
   test("retains the previous TUI release after v0.9.0", () => {
-    expect(RELEASES[10]).toEqual({
+    expect(RELEASES[11]).toEqual({
       version: "0.8.12",
       date: "2026-10-03",
       title: "Large images and actionable input requests",
@@ -176,7 +191,7 @@ describe("release entries", () => {
         { tag: "Changed", text: "Improve agent guidance to request missing information, decisions, and required reviews through actionable questions, so pending requests use the existing attention alerts instead of ending with a text-only request. Permission and guardrail approvals keep their existing rules." },
       ],
     })
-    expect(RELEASES[11]).toEqual({
+    expect(RELEASES[12]).toEqual({
       version: "0.8.11",
       date: "2026-10-02",
       title: "Specific and reliable System alerts",
@@ -196,7 +211,7 @@ describe("release entries", () => {
         { tag: "Fixed", text: "Show \"YCoding — alerts paused\" when the browser drops push alerts for this device and they cannot be renewed." },
       ],
     })
-    expect(RELEASES[12]).toEqual({
+    expect(RELEASES[13]).toEqual({
       version: "0.8.10",
       date: "2026-10-02",
       title: "Keep working while background tasks run",
@@ -206,7 +221,7 @@ describe("release entries", () => {
         { tag: "Changed", text: "Always choose a model variant when starting a subagent if that model offers variants. Match the variant to the task, and use a stronger variant only when the task needs it." },
       ],
     })
-    expect(RELEASES[13]).toEqual({
+    expect(RELEASES[14]).toEqual({
       version: "0.8.9",
       date: "2026-10-02",
       title: "Skills follow the prompt that invokes them",
@@ -217,7 +232,7 @@ describe("release entries", () => {
         { tag: "Fixed", text: "Show an invoked skill's Loaded row in the terminal transcript as soon as the skill activates." },
       ],
     })
-    expect(RELEASES[14]).toEqual({
+    expect(RELEASES[15]).toEqual({
       version: "0.8.8",
       date: "2026-10-01",
       title: "Responsive prompts and reliable model selection",
@@ -232,7 +247,7 @@ describe("release entries", () => {
         { tag: "Changed", text: "Allow explicit shell timeouts up to one hour. The default remains ten minutes, and foreground commands still move to the background after five minutes." },
       ],
     })
-    expect(RELEASES[15]).toEqual({
+    expect(RELEASES[16]).toEqual({
       version: "0.8.7",
       date: "2026-10-01",
       title: "Cursor cache reporting",
@@ -244,7 +259,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[16]).toEqual({
+    expect(RELEASES[17]).toEqual({
       version: "0.8.6",
       date: "2026-10-01",
       title: "Quieter attention notifications",
@@ -256,7 +271,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[17]).toEqual({
+    expect(RELEASES[18]).toEqual({
       version: "0.8.5",
       date: "2026-10-01",
       title: "Machine memory and steadier Session status",
@@ -272,7 +287,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[18]).toEqual({
+    expect(RELEASES[19]).toEqual({
       version: "0.8.4",
       date: "2026-10-01",
       title: "Forced update restarts and steadier Session catalogs",
@@ -296,7 +311,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[19]).toEqual({
+    expect(RELEASES[20]).toEqual({
       version: "0.8.3",
       date: "2026-10-01",
       title: "Cursor models and quotas",
@@ -320,7 +335,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[20]).toEqual({
+    expect(RELEASES[21]).toEqual({
       version: "0.8.2",
       date: "2026-10-01",
       title: "Cursor provider",
@@ -340,7 +355,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[21]).toEqual({
+    expect(RELEASES[22]).toEqual({
       version: "0.8.1",
       date: "2026-10-01",
       title: "Instant remote view transitions",
@@ -368,7 +383,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[22]).toEqual({
+    expect(RELEASES[23]).toEqual({
       version: "0.8.0",
       date: "2026-10-01",
       title: "Multiplexed remote delivery and windowed transcripts",
@@ -1238,7 +1253,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 29)).toEqual([
+    expect(versions.slice(0, 30)).toEqual([
+      "0.10.4",
       "0.10.3",
       "0.10.2",
       "0.10.1",

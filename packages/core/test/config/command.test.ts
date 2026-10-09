@@ -74,7 +74,7 @@ Review files`,
           ).pipe(
             Effect.provideService(
               Config.Service,
-              Config.Service.of({
+              Config.Service.of({ diagnostics: () => Effect.succeed([]),
                 reload: () => Effect.void,
                 entries: () =>
                   Effect.succeed([

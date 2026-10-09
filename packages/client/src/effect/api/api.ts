@@ -1940,6 +1940,15 @@ export interface KeepAwakeApi<E = never> {
   readonly set: KeepAwakeSetOperation<E>
 }
 
+type Endpoint35_0Request = Parameters<RawClient["server.config"]["config.diagnostics"]>[0]
+export type Endpoint35_0Input = { readonly location?: Endpoint35_0Request["query"]["location"] }
+export type Endpoint35_0Output = EffectValue<ReturnType<RawClient["server.config"]["config.diagnostics"]>>
+export type ConfigDiagnosticsOperation<E = never> = (input?: Endpoint35_0Input) => Effect.Effect<Endpoint35_0Output, E>
+
+export interface ConfigApi<E = never> {
+  readonly diagnostics: ConfigDiagnosticsOperation<E>
+}
+
 export interface AppApi<E = never> {
   readonly health: HealthApi<E>
   readonly server: ServerApi<E>
@@ -1976,4 +1985,5 @@ export interface AppApi<E = never> {
   readonly usage: UsageApi<E>
   readonly remote: RemoteApi<E>
   readonly keepAwake: KeepAwakeApi<E>
+  readonly config: ConfigApi<E>
 }

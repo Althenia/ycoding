@@ -3,10 +3,10 @@ export * as Config from "./config"
 import { makeLocationNode } from "./effect/app-node"
 import path from "path"
 import { isDeepStrictEqual } from "node:util"
-import { type ParseError, parse } from "jsonc-parser"
-import { Context, Effect, Fiber, Layer, Option, PubSub, Schema, Scope, Semaphore, Stream } from "effect"
+import { type ParseError, parse, printParseErrorCode } from "jsonc-parser"
+import { Context, Effect, Fiber, Layer, PubSub, Result, Schema, Scope, Semaphore, Stream } from "effect"
 import { Permission } from "@ycoding-ai/schema/permission"
-import { Event } from "@ycoding-ai/schema/config"
+import { Diagnostic, Event } from "@ycoding-ai/schema/config"
 import { Integration } from "@ycoding-ai/schema/integration"
 import { Credential } from "./credential"
 import { EventRuntime } from "./event"
@@ -189,6 +189,8 @@ export function latest<K extends keyof Info>(entries: readonly Entry[], key: K):
 export interface Interface {
   /** Returns location config documents and discovery sources from lowest to highest priority. */
   readonly entries: () => Effect.Effect<Entry[]>
+  /** Returns the documents the last discovery ignored, in discovery order, with the reason for each. */
+  readonly diagnostics: () => Effect.Effect<Diagnostic[]>
   readonly reload: () => Effect.Effect<void>
 }
 
@@ -217,7 +219,9 @@ export const layer = (options?: Options) =>
       const reloadLock = Semaphore.makeUnsafe(1)
       const context = yield* Effect.context<Scope.Scope | FSUtil.Service>()
       const decodeOptions = { errors: "all", onExcessProperty: "ignore", propertyOrder: "original" } as const
-      const decodeInfo = Schema.decodeUnknownOption(Info, decodeOptions)
+      const decodeInfo = Schema.decodeUnknownResult(Info, decodeOptions)
+      // Documents the current discovery ignored. Reset per discovery; discovery runs serially.
+      let ignored: Diagnostic[] = []
       const removedKeys = new Set([
         "logLevel",
         "server",
@@ -254,16 +258,30 @@ export const layer = (options?: Options) =>
         return keys
       }
 
+      // An ignored document is logged and recorded so the TUI can show the user why a file that
+      // declares MCP servers, providers, or agents has no effect.
       const parseInfo = Effect.fnUntraced(function* (text: string, target: string) {
         const errors: ParseError[] = []
         const input: unknown = parse(text, errors, { allowTrailingComma: true })
-        if (errors.length) return
+        if (errors.length) {
+          const message = errors
+            .map((error) => `${printParseErrorCode(error.error)} at offset ${error.offset}`)
+            .join("; ")
+          yield* Effect.logWarning("ignored config file with invalid JSON", { target, message })
+          ignored.push({ path: target, reason: "invalid-json", message })
+          return
+        }
         const removed = removedConfigKeys(input)
         if (removed.length) {
           yield* Effect.logWarning("ignored config file with removed keys", { target, keys: removed })
+          ignored.push({ path: target, reason: "removed-keys", message: removed.join(", ") })
           return
         }
-        return Option.getOrUndefined(decodeInfo(input))
+        const decoded = decodeInfo(input)
+        if (Result.isSuccess(decoded)) return decoded.success
+        const message = decoded.failure.message
+        yield* Effect.logWarning("ignored config file with invalid values", { target, message })
+        ignored.push({ path: target, reason: "invalid-values", message })
       })
 
       const loadFile = Effect.fnUntraced(function* (filepath: string) {
@@ -319,6 +337,7 @@ export const layer = (options?: Options) =>
       })
 
       const discover = Effect.fn("Config.discover")(function* () {
+        ignored = []
         const globalDirectory = AbsolutePath.make(global.config)
         const globalAgentsDirectory = AbsolutePath.make(path.join(global.home, ".agents"))
         const globalClaudeDirectory = AbsolutePath.make(path.join(global.home, ".claude"))
@@ -397,7 +416,7 @@ export const layer = (options?: Options) =>
           : []
 
         const supplementary = yield* Effect.forEach(directories, loadDirectory).pipe(Effect.orDie)
-        return [
+        const entries = [
           ...claude,
           ...agents,
           ...(supplementary[0] ?? []),
@@ -407,6 +426,7 @@ export const layer = (options?: Options) =>
           ...(yield* loadWellknown().pipe(Effect.orDie)),
           ...content,
         ]
+        return { entries, diagnostics: ignored }
       })
 
       const loadPolicies = (entries: readonly Entry[]) =>
@@ -418,8 +438,9 @@ export const layer = (options?: Options) =>
         )
 
       const initial = yield* discover()
-      yield* loadPolicies(initial)
-      let configs = initial
+      yield* loadPolicies(initial.entries)
+      let configs = initial.entries
+      let diagnostics = initial.diagnostics
       const updates = yield* PubSub.unbounded<Watcher.Update>()
       const subscriptions = new Map<string, Effect.Effect<unknown>>()
       const reconcile = Effect.fn("Config.reconcileWatches")(function* (entries: readonly Entry[]) {
@@ -454,11 +475,13 @@ export const layer = (options?: Options) =>
         reloadLock.withPermit(
           Effect.gen(function* () {
             const next = yield* discover()
-            const changed = !isDeepStrictEqual(configs, next)
+            const changed =
+              !isDeepStrictEqual(configs, next.entries) || !isDeepStrictEqual(diagnostics, next.diagnostics)
             if (changed) {
-              configs = next
-              yield* loadPolicies(next)
-              yield* reconcile(next)
+              configs = next.entries
+              diagnostics = next.diagnostics
+              yield* loadPolicies(next.entries)
+              yield* reconcile(next.entries)
             }
             if (!changed && !options?.notify) return
             yield* events.publish(Event.Updated, {})
@@ -512,11 +535,14 @@ export const layer = (options?: Options) =>
         Effect.forever,
         Effect.forkScoped({ startImmediately: true }),
       )
-      yield* reconcile(initial)
+      yield* reconcile(initial.entries)
 
       return Service.of({
         entries: Effect.fn("Config.entries")(function* () {
           return configs
+        }),
+        diagnostics: Effect.fn("Config.diagnostics")(function* () {
+          return diagnostics
         }),
         reload: () => reload({ notify: true }).pipe(Effect.provideContext(context)),
       })

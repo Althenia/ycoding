@@ -158,6 +158,7 @@ test("exposes every standard HTTP API group", () => {
     "usage",
     "remote",
     "keepAwake",
+    "config",
   ])
   expect(Object.keys(client.keepAwake)).toEqual(["get", "set"])
   expect(Object.keys(client.debug)).toEqual(["location"])

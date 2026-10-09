@@ -619,7 +619,7 @@ let compactionWakeHook = Effect.void
 let compactionSummary = false
 const config = Layer.succeed(
   Config.Service,
-  Config.Service.of({
+  Config.Service.of({ diagnostics: () => Effect.succeed([]),
     reload: () => Effect.void,
     entries: () =>
       Effect.succeed([

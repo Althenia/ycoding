@@ -368,6 +368,8 @@ import type {
   KeepAwakeGetOutput,
   KeepAwakeSetInput,
   KeepAwakeSetOutput,
+  ConfigDiagnosticsInput,
+  ConfigDiagnosticsOutput,
 } from "./types"
 import { ClientError } from "./client-error"
 
@@ -2994,6 +2996,20 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ).then((value) => value.data),
+    },
+    config: {
+      diagnostics: (input?: ConfigDiagnosticsInput, requestOptions?: RequestOptions) =>
+        request<ConfigDiagnosticsOutput>(
+          {
+            method: "GET",
+            path: `/api/config/diagnostics`,
+            query: { location: input?.["location"] },
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
     },
   }
 }
