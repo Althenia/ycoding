@@ -230,27 +230,72 @@ describe("Claude Code credentials", () => {
     expect(requests).toBe(1)
   })
 
-  test("does not borrow a default Claude CLI login when the selected profile's OAuth refresh fails", async () => {
-    let reads = 0
+  test("reports a rejected OAuth refresh as unavailable while the profile still holds the rejected token", async () => {
+    let writes = 0
     const source: ClaudeCodeCredentialSource = {
       list: async () => [],
-      read: async () => {
-        reads += 1
-        return reads === 1 ? credentials("expired", 61_000) : credentials("cli-rotated", 100_000)
+      read: async () => credentials("expired", 61_000),
+      write: async () => {
+        writes += 1
+        return true
       },
-      write: async () => true,
     }
     const request = Object.assign(async () => new Response("rejected", { status: 400 }), {
       preconnect: fetch.preconnect,
     })
-    const store = createClaudeCodeCredentialStore({
-      source,
-      fetch: request,
-      now: () => 1_000,
-    })
+    const store = createClaudeCodeCredentialStore({ source, fetch: request, now: () => 1_000 })
 
     expect(await store.resolve("file")).toBeNull()
-    expect(reads).toBe(1)
+    expect(writes).toBe(0)
+  })
+
+  test("adopts the profile's stored rotation when another process consumed the refresh token first", async () => {
+    let stored = credentials("expired", 61_000)
+    let writes = 0
+    const source: ClaudeCodeCredentialSource = {
+      list: async () => [],
+      read: async () => stored,
+      write: async () => {
+        writes += 1
+        return true
+      },
+    }
+    const request = Object.assign(
+      async () => {
+        stored = credentials("peer-rotated", 100_000)
+        return Response.json({ error: "invalid_grant" }, { status: 400 })
+      },
+      { preconnect: fetch.preconnect },
+    )
+    const store = createClaudeCodeCredentialStore({ source, fetch: request, now: () => 1_000 })
+
+    expect(await store.resolve("file")).toMatchObject({ accessToken: "peer-rotated", refreshToken: "refresh-peer-rotated" })
+    expect(writes).toBe(0)
+  })
+
+  test("keeps the profile's stored rotation when another process writes it during this process's refresh", async () => {
+    let stored = credentials("expired", 61_000)
+    let writes = 0
+    const source: ClaudeCodeCredentialSource = {
+      list: async () => [],
+      read: async () => stored,
+      write: async () => {
+        writes += 1
+        return true
+      },
+    }
+    const request = Object.assign(
+      async () => {
+        stored = credentials("peer-rotated", 100_000)
+        return Response.json({ access_token: "local-rotated", refresh_token: "local-refresh", expires_in: 36_000 })
+      },
+      { preconnect: fetch.preconnect },
+    )
+    const store = createClaudeCodeCredentialStore({ source, fetch: request, now: () => 1_000 })
+
+    expect((await store.refresh("file"))?.accessToken).toBe("peer-rotated")
+    expect((await store.resolve("file"))?.accessToken).toBe("peer-rotated")
+    expect(writes).toBe(0)
   })
 
   test("keeps Keychain credential material out of process arguments and plaintext stdin", () => {

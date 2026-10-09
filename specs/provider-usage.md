@@ -86,7 +86,7 @@ Other seats keep the legacy entitlement path, whose lanes report a percentage of
 
 Successful API snapshots are cached by provider and credential identity. Concurrent refreshes for the same cache key are single-flight. A refresh failure returns a stale copy when one exists.
 
-Observed response data is stored separately by provider and applies only to the provider's active profile. A newer observation takes precedence over that profile's older API snapshot. A forced API refresh does not erase a newer observation.
+Observed response data is stored separately by provider and applies only to the provider's default profile. A newer observation takes precedence over that profile's older API snapshot. A forced API refresh does not erase a newer observation.
 
 No cache key contains a credential secret.
 

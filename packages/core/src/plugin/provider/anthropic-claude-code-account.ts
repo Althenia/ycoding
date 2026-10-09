@@ -108,22 +108,21 @@ export function createClaudeCodeCredentialStore(input: {
     const active = refreshing.get(key)
     if (active) return active
     const operation = (async () => {
-      if (current.refreshToken) {
-        const refreshed = await refreshOAuth(current.refreshToken, fetcher, now())
-        const next = refreshed ? { ...refreshed, subscriptionType: current.subscriptionType } : null
-        if (next && fresh(next)) {
-          const latest = await input.source.read(source)
-          if (!latest || latest.accessToken !== current.accessToken || latest.refreshToken !== current.refreshToken)
-            return null
-          const written = await input.source.write(source, next)
-          input.onEvent?.({
-            event: "oauth-refresh",
-            data: { source, written },
-          })
-          return remember(source, next)
-        }
+      const refreshed = current.refreshToken ? await refreshOAuth(current.refreshToken, fetcher, now()) : null
+      if (!refreshed || !fresh(refreshed)) {
+        const latest = await input.source.read(source).catch(() => null)
+        return latest && replaced(latest, current) && fresh(latest) ? remember(source, latest) : null
       }
-      return null
+      const latest = await input.source.read(source)
+      if (!latest) return null
+      if (replaced(latest, current)) return fresh(latest) ? remember(source, latest) : null
+      const next = { ...refreshed, subscriptionType: current.subscriptionType }
+      const written = await input.source.write(source, next)
+      input.onEvent?.({
+        event: "oauth-refresh",
+        data: { source, written },
+      })
+      return remember(source, next)
     })().finally(() => refreshing.delete(key))
     refreshing.set(key, operation)
     return operation
@@ -227,6 +226,10 @@ async function refreshOAuth(refreshToken: string, fetcher: typeof fetch, now: nu
   } catch {
     return null
   }
+}
+
+function replaced(latest: ClaudeCodeCredentials, current: ClaudeCodeCredentials) {
+  return latest.accessToken !== current.accessToken || latest.refreshToken !== current.refreshToken
 }
 
 function record(value: unknown): value is Record<string, unknown> {

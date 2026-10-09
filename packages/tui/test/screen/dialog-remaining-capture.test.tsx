@@ -54,6 +54,7 @@ const sessionID = "ses_dialog_capture"
 const location = { directory, project: { id: "proj_test", directory: worktree } }
 const oauthCancelled: string[] = []
 const oauthSubmitted: string[] = []
+const defaultProfileRequests: string[] = []
 let oauthManualCode = false
 let oauthStatus: "pending" | "complete" = "pending"
 const viewports = [
@@ -311,6 +312,37 @@ test("the Connect integration menu opens the custom endpoint dialog", async () =
   app.renderer.destroy()
 })
 
+test("a provider's profiles offer default selection instead of an active profile", async () => {
+  defaultProfileRequests.length = 0
+  function Connect() {
+    const dialog = useDialog()
+    onMount(() => dialog.replace(() => <DialogIntegration />))
+    return <SyncLocation />
+  }
+
+  const app = await testRender(() => <DialogProviders><Connect /></DialogProviders>, { width: 100, height: 35, kittyKeyboard: true, useMouse: true })
+  app.renderer.start()
+  try {
+    await app.waitForFrame((frame) => frame.includes("Linked · Claude Max, Work"))
+    const rows = app.captureCharFrame().split("\n")
+    const claudeRow = rows.findIndex((row) => row.includes("Linked · Claude Max, Work"))
+    await app.mockMouse.click(rows[claudeRow].indexOf("Claude") + 1, claudeRow)
+    await app.waitForFrame((frame) => frame.includes("Disconnect Work"))
+    const frame = app.captureCharFrame()
+    expect(frame).toMatch(/Claude Max\s+Default profile/)
+    expect(frame).toContain("Used when a model has no profile")
+    expect(frame).not.toMatch(/[Aa]ctive profile/)
+    expect(frame).not.toContain("Use Claude Max")
+    app.mockInput.pressArrow("down")
+    app.mockInput.pressArrow("down")
+    app.mockInput.pressEnter()
+    await app.waitForFrame(() => defaultProfileRequests.length > 0)
+    expect(defaultProfileRequests).toEqual(["/api/credential/cred_Work/activate"])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 const designChecks: Partial<Record<(typeof states)[number]["name"], { title: string; row: number; column: number; text: string }>> = {
   "mcp-servers": { title: "MCP servers", row: 7, column: 6, text: "agentmemory" },
   "select-agent": { title: "Select agent", row: 7, column: 6, text: "build" },
@@ -461,6 +493,10 @@ async function route(url: URL, request: Request) {
     oauthCancelled.push("attempt_layout")
     return new Response(null, { status: 204 })
   }
+  if (url.pathname.startsWith("/api/credential/") && url.pathname.endsWith("/activate") && request.method === "POST") {
+    defaultProfileRequests.push(url.pathname)
+    return new Response(null, { status: 204 })
+  }
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/session") return json({ data: sessions, cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
@@ -532,7 +568,7 @@ const integrations = [
   { id: "ycoding", name: "YCoding Go", methods: [{ type: "key" as const, label: "API key" }], connections: [] },
   { id: "openai", name: "OpenAI", methods: [{ type: "key" as const, label: "API key" }], connections: credential("default") },
   { id: "github-copilot", name: "GitHub Copilot", methods: [{ id: "github", type: "oauth" as const, label: "Login with GitHub Copilot" }, { type: "key" as const, label: "API key" }], connections: [] },
-  { id: "anthropic", name: "Claude", methods: [{ type: "key" as const, label: "API key" }], connections: credential("Claude Max") },
+  { id: "anthropic", name: "Claude", methods: [{ type: "key" as const, label: "API key" }], connections: [...credential("Claude Max"), { type: "credential" as const, id: "cred_Work", label: "Work", active: false }] },
   { id: "google", name: "Google", methods: [{ type: "key" as const, label: "API key" }], connections: [] },
   { id: "302ai", name: "302.AI", methods: [{ type: "key" as const, label: "API key" }], connections: [] },
   { id: "amazon-bedrock", name: "Amazon Bedrock", methods: [{ type: "key" as const, label: "API key" }], connections: [] },

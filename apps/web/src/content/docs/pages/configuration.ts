@@ -742,7 +742,7 @@ Report concrete defects with file and symbol evidence.`,
           {
             kind: "list",
             items: [
-              "With `catalog.source: \"openai-models\"`, YCoding requests `GET <settings.baseURL>/models` with `Authorization: Bearer <key>` from the active profile, with a 5-second timeout.",
+              "With `catalog.source: \"openai-models\"`, YCoding requests `GET <settings.baseURL>/models` with `Authorization: Bearer <key>` from each stored profile, with a 5-second timeout.",
               "The response must be `{ \"object\": \"list\", \"data\": [{ \"id\": \"...\" }] }`; each record may add `name`, `capabilities`, `limit`, and `variants`, which override catalog metadata.",
               "With a stored profile, the URL must use HTTPS or loopback HTTP (`localhost`, `127.0.0.1`, `[::1]`), contain no embedded credentials, and must not redirect.",
               "A failure logs `OpenAI model discovery failed` and keeps configured models usable.",
@@ -760,9 +760,9 @@ Report concrete defects with file and symbol evidence.`,
           {
             kind: "list",
             items: [
-              "One profile per provider is the active default. Choose an eligible named profile in a Session's model control to use that account independently; other Sessions and subagents can use different profiles for the same provider and model at the same time.",
+              "One profile per provider is its default profile, used by any model reference without a profile; set it with Make <name> the default in the provider's connection dialog. Choose an eligible named profile in a Session's model control to use that account independently; other Sessions and subagents can use different profiles for the same provider and model at the same time.",
               "Available models, effort variants, and Daybreak access follow the selected profile. A model offered only to a named profile remains selectable with that profile, but cannot use an ineligible provider default. Authenticated custom-provider discovery keeps each profile's inventory separate.",
-              "Selecting a Session profile does not activate it globally. Use provider default clears explicit selection. Switching or removing the active default does not redirect an explicitly selected Session. Usage reports supported stored profiles; local Today spend remains provider-wide.",
+              "Selecting a Session profile does not change the default profile. Use provider default clears explicit selection. Changing or removing the default profile does not redirect an explicitly selected Session. Usage reports supported stored profiles; local Today spend remains provider-wide.",
               "The model control and Session header show the selected profile. A missing, renamed, removed, or replaced profile blocks provider work instead of silently selecting another account. Re-select the named profile explicitly after reconnecting or replacing it; failed switches preserve your draft.",
               'Structured model configuration can include a profile name, for example { "providerID": "openai", "model": "gpt-6-luna", "profile": "Work" }. String shorthand uses [profile#]provider/model[#variant], for example Work#openai/gpt-6-luna#high. An explicitly chosen model without a profile uses its provider’s global default, including for helpers and subagents; selecting the whole Session model retains the profile already in that reference.',
             ],
@@ -774,7 +774,7 @@ Report concrete defects with file and symbol evidence.`,
         blocks: [
           {
             kind: "paragraph",
-            text: "Open the model picker: the provider appears with its models, and discovered models appear after discovery succeeds. Send one prompt with the new model selected; an authentication error means no active profile or unset `env` variable.",
+            text: "Open the model picker: the provider appears with its models, and discovered models appear after discovery succeeds. Send one prompt with the new model selected; an authentication error means no default profile or unset `env` variable.",
           },
           { kind: "related", slugs: ["configuration/models", "usage/cli", "troubleshooting"] },
         ],

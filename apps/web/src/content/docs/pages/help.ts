@@ -54,7 +54,7 @@ export const helpPages: readonly DocPage[] = [
             kind: "list",
             items: [
               "**Symptom:** The model selector has no usable provider or model. **Cause:** No provider credential profile is connected, the profile is inactive, or the model is not in the effective catalog. **Fix:** Open the TUI and run `/connect`; finish the provider flow, then select a model listed for that connected profile.",
-              "**Symptom:** A configured provider cannot authenticate. **Cause:** The credential is absent, expired, or not attached to the active profile. **Fix:** Reconnect that provider with `/connect`, select the intended profile, and retry the prompt. Do not paste API keys into a public issue or log.",
+              "**Symptom:** A configured provider cannot authenticate. **Cause:** The credential is absent, expired, or not attached to the selected or default profile. **Fix:** Reconnect that provider with `/connect`, select the intended profile, and retry the prompt. Do not paste API keys into a public issue or log.",
               "**Symptom:** A request stops after a long wait or a rate-limit response. **Cause:** The provider may be rate limiting or the network transport may have failed. **Fix:** Check the provider's service and account limits, confirm network access, then retry from the TUI. YCoding retries eligible failures before it has received output; it does not replay a request after output has started.",
               "**Symptom:** The error says the prompt exceeds context. **Cause:** The model's input limit is smaller than the selected conversation and prompt. **Fix:** Choose a model with a larger context limit or start a new Session with only the relevant context, then resend the task.",
             ],

@@ -833,9 +833,11 @@ require checking authentication status or refreshing profiles before an explicit
 never automatically replayed. Model/profile selection uses **Select provider and model** and retains
 the composer's existing pending-selection and draft behavior.
 
-One profile per provider is the active default. A Session can select an eligible named profile alongside
-its model independently of that default, so two Sessions or subagents can use different accounts for
-the same provider and model simultaneously. Selecting a Session profile does not activate it globally.
+One profile per provider is its default profile; a model reference without a profile uses it. A Session
+can select an eligible named profile alongside its model independently of that default, so two Sessions
+or subagents can use different accounts for the same provider and model simultaneously. Selecting a
+Session profile does not change the default. In the TUI provider dialog, the default profile is marked
+**Default profile** and every other stored profile offers **Make `<name>` the default**.
 **Use provider default** clears explicit selection. Provider usage reports supported stored profiles;
 provider-wide local spend is not per-profile billing.
 
@@ -844,8 +846,8 @@ only by another named profile stays selectable with that profile; it is not usab
 ineligible provider default. Authenticated custom-provider discovery maintains each stored profile's
 own inventory and request settings.
 
-Provider and model configuration overlays apply to every eligible profile, including the active
-default. Configured packages, endpoints, headers, request bodies, and effort variants remain
+Provider and model configuration overlays apply to every eligible profile, including the default
+profile. Configured packages, endpoints, headers, request bodies, and effort variants remain
 authoritative after account-specific discovery; selecting a profile does not discard them or
 borrow another account's discovered settings.
 

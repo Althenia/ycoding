@@ -22,6 +22,16 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.10.2",
+    date: "2026-10-09",
+    title: "Default profiles and resilient Claude sign-in",
+    tags: ["Changed", "Fixed"],
+    changes: [
+      { tag: "Changed", text: "The provider connection dialog marks a provider's default profile as Default profile and offers Make <name> the default for other stored profiles. The default profile is the one a model reference without a profile uses; Sessions and subagents with an explicit profile keep using it at the same time." },
+      { tag: "Fixed", text: "Keep a Claude Code profile connected when another YCoding process on the same machine has already refreshed its sign-in. A rejected or superseded refresh now uses that profile's newer stored sign-in instead of failing with \"Claude Code credentials are unavailable or expired\"." },
+    ],
+  },
+  {
     version: "0.10.1",
     date: "2026-10-08",
     title: "Profile selectors, web provider connection, and task advice",
