@@ -249,6 +249,23 @@ function drawPerson(look: Look, direction: number, column: number) {
     art.rect(11, torsoY + 12 + shift, 4, 2, skinLight)
     art.rect(20, torsoY + 14 - shift, 4, 2, look.skin)
   }
+  if (column === 12 || column === 13) {
+    const tilt = column === 13 ? 2 : 0
+    art.rect(7, torsoY + 8, 6, 3, look.shirt)
+    art.rect(11, torsoY + 10, 10, 6, "#795c4a")
+    art.rect(12 + tilt, torsoY + 11, 7, 4, "#f3dfa3")
+    art.rect(15 + tilt, torsoY + 11, 1, 4, "#b78e57")
+    art.rect(20, torsoY + 10, 4, 4, look.skin)
+  }
+  if (column === 14) {
+    art.rect(21, torsoY + 4, 4, 7, look.shirt)
+    art.rect(23, torsoY + 10, 3, 4, look.skin)
+  }
+  if (column === 15 || column === 16) {
+    const raised = column === 16 ? -2 : 0
+    art.rect(22, torsoY + 2 + raised, 4, 8, look.shirt)
+    art.rect(25, torsoY - 2 + raised, 4, 4, look.skin)
+  }
 
   art.rect(14, 23 + headBob, 4, 4, skinDark)
   art.oval(16, 16 + headBob, 9, 10, skinDark)
@@ -389,6 +406,22 @@ function drawSidePerson(look: Look, column: number, flip: boolean) {
     art.rect(27, torsoY - 14, 3, 10, look.shirt)
     art.rect(26, torsoY - 19, 4, 6, look.skin)
     art.rect(25, torsoY - 20, 5, 2, skinLight)
+  }
+  if (column === 12 || column === 13) {
+    const tilt = column === 13 ? 2 : 0
+    art.rect(18, torsoY + 8, 5, 3, look.shirt)
+    art.rect(19, torsoY + 10, 9, 6, "#795c4a")
+    art.rect(20 + tilt, torsoY + 11, 6, 4, "#f3dfa3")
+    art.rect(22 + tilt, torsoY + 11, 1, 4, "#b78e57")
+  }
+  if (column === 14) {
+    art.rect(20, torsoY + 4, 5, 6, look.shirt)
+    art.rect(24, torsoY + 9, 4, 4, skinLight)
+  }
+  if (column === 15 || column === 16) {
+    const raised = column === 16 ? -2 : 0
+    art.rect(19, torsoY + 2 + raised, 5, 7, look.shirt)
+    art.rect(23, torsoY - 2 + raised, 5, 4, skinLight)
   }
 
   art.rect(14, 23 + headY, 4, 4, skinDark)

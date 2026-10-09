@@ -95,6 +95,7 @@ export class OfficeScene extends Phaser.Scene {
       for (const [pose, columns, speed] of [
         ["stand", characterColumns.stand, 1], ["walk", characterColumns.walk, 8],
         ["talk", characterColumns.talk, 3], ["type", characterColumns.type, 4], ["play", characterColumns.talk, 2],
+        ["read", characterColumns.read, 1.5], ["check", characterColumns.check, 1], ["point", characterColumns.point, 1.5],
       ] as const) {
         this.anims.create({ key: `${appearance}-${direction}-${pose}`,
           frames: this.anims.generateFrameNumbers("characters", { start: characterFrame(appearance, direction, columns[0]), end: characterFrame(appearance, direction, columns[columns.length - 1]!) }),
@@ -402,11 +403,11 @@ export class OfficeScene extends Phaser.Scene {
     if (reduced) {
       objects.sprite.anims.stop()
       objects.sprite.setTexture("characters", staticFrameForState(frame))
-    } else if (frame.pose === "sit" || frame.pose === "wave") {
+    } else if (frame.pose === "sit" || frame.pose === "wave" || frame.pose === "check") {
       objects.sprite.anims.stop()
       objects.sprite.setTexture("characters", characterFrame(frame.appearance, frame.direction, characterColumns[frame.pose][0]))
     }
-    if (!reduced && frame.pose !== "sit" && frame.pose !== "wave") objects.sprite.play(`${frame.appearance}-${frame.direction}-${frame.pose}`, true)
+    if (!reduced && frame.pose !== "sit" && frame.pose !== "wave" && frame.pose !== "check") objects.sprite.play(`${frame.appearance}-${frame.direction}-${frame.pose}`, true)
     objects.shadow.setPosition(x, y + 2).setDepth(y - 1).setAlpha(alpha * 0.55)
     objects.ring.setPosition(x, y + 2).setDepth(y - 0.5).setVisible(frame.actor.selected && !frame.leaving).setAlpha(alpha)
     const preferences = this.mailbox.read().preferences

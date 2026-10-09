@@ -273,11 +273,15 @@ export class OfficeDirector {
     const phase = state.leisurePhase
     const spot = phase?.kind === "rest" || phase?.kind === "table" ? phase.spot : state.reservedSpot ?? this.workSpot(state.pod, state.actor)
     const playing = spot.pose === "play" && !state.path.length && !reducedMotion && state.actor.source !== "unavailable" && same(cellAt(this.layout, state.position), spot.cell)
-    const working = ["working", "tool", "compacting"].includes(state.actor.status)
+    const working = ["working", "tool"].includes(state.actor.status)
+    const workPose = working && atWork ? state.actor.activity === "research" ? "read"
+      : state.actor.activity === "verify" ? spot.pose === "sit" ? "type" : "check"
+      : state.actor.activity === "coordinate" ? "point"
+      : state.actor.activity === "implement" ? "type" : undefined : undefined
     return {
       actor: state.actor, appearance: appearanceFor(state.actor.sessionID), position: state.position,
       direction: state.path.length ? state.direction : this.cueFacingFor(state) ?? spot.facing,
-      pose: state.path.length && !reducedMotion ? "walk" : state.actor.status === "attention" && atWork ? "wave" : state.speech ? "talk" : phase?.kind === "gathering" && phase.stage === "talk" ? (phase.elapsed + (this.gatherings.get(phase.groupID)?.members.indexOf(state.actor.id) ?? 0) * 1_000) % 2_000 < 1_000 ? "talk" : "stand" : phase?.kind === "stretch" ? phase.stage === "wave" ? "wave" : "stand" : working && atWork && (!state.actor.activity || state.actor.activity === "implement") ? "type" : spot.pose === "play" ? playing ? "play" : "stand" : spot.pose,
+      pose: state.path.length && !reducedMotion ? "walk" : state.actor.status === "attention" && atWork ? "wave" : state.speech ? "talk" : phase?.kind === "gathering" && phase.stage === "talk" ? (phase.elapsed + (this.gatherings.get(phase.groupID)?.members.indexOf(state.actor.id) ?? 0) * 1_000) % 2_000 < 1_000 ? "talk" : "stand" : phase?.kind === "stretch" ? phase.stage === "wave" ? "wave" : "stand" : workPose ?? (state.actor.activity === "hold" || state.actor.status === "thinking" || state.actor.status === "compacting" ? "stand" : spot.pose === "play" ? playing ? "play" : "stand" : spot.pose),
       moving: state.path.length > 0 && !reducedMotion && state.actor.source !== "unavailable",
       blocked: state.blocked, room: this.layout.roomAt(cellAt(this.layout, state.position)), speech: state.speech,
       leaving: state.leaving, opacity: state.leaving ? Math.max(0, 1 - state.leavingAge / 400) : state.opacityAge / 400,

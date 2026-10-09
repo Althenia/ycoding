@@ -672,3 +672,23 @@ test("inputs that settle within a beat never flash the loading notice", async ()
     expect(notices.filter((text) => text === "Loading the office…")).toEqual([])
   } finally { await page.close() }
 }, 30_000)
+
+test("work-category gestures animate truthfully and reduced motion fixes each category frame", async () => {
+  const page = await requireBrowser().openPage()
+  try {
+    for (const [theme, activity, pose, bubble] of [["light", "research", "read", "Reading store.ts"], ["dark", "verify", "type", "Running bun test"], ["light", "coordinate", "point", "Dispatching a subagent"]] as const) {
+      await page.navigate(url("tool", `&workspace=1&activity=${activity}&freeCamera=1`))
+      await page.evaluate<void>(`document.documentElement.dataset.theme='${theme}'`)
+      await waitFor(page, `window.__officeGame?.scene.getScene('office').latestFrames[0]?.pose==='${pose}'`)
+      const sprite = "window.__officeGame.scene.getScene('office').objects.values().next().value.sprite"
+      const animatedFrames = await page.evaluate<readonly number[]>(`(async()=>{const sprite=${sprite},frames=new Set([sprite.frame.name]);for(let index=0;index<120&&frames.size<2;index++)await new Promise(requestAnimationFrame).then(()=>frames.add(sprite.frame.name));return [...frames]})()`)
+      expect(animatedFrames.length).toBeGreaterThan(1)
+      expect(await page.evaluate<string>(`window.__officeGame.scene.getScene('office').latestFrames[0].actor.bubble`)).toBe(bubble)
+      await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Toggle reduced motion')?.click()")
+      await waitFor(page, `!${sprite}.anims.isPlaying`)
+      const fixedFrames = await page.evaluate<readonly number[]>(`(async()=>{const sprite=${sprite},frames=new Set([sprite.frame.name]);for(let index=0;index<12;index++)await new Promise(requestAnimationFrame).then(()=>frames.add(sprite.frame.name));return [...frames]})()`)
+      expect(fixedFrames).toHaveLength(1)
+      expect(await page.evaluate<string>("window.__officeGame.scene.getScene('office').latestFrames[0].pose")).toBe(pose)
+    }
+  } finally { await page.close() }
+}, 60_000)

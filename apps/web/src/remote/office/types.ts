@@ -130,7 +130,7 @@ export type OfficeLayout = {
   readonly roomAt: (cell: Point) => OfficeRoomID | undefined
 }
 
-type ActorPose = "stand" | "walk" | "sit" | "type" | "talk" | "wave" | "play"
+type ActorPose = "stand" | "walk" | "sit" | "type" | "talk" | "wave" | "play" | "read" | "check" | "point"
 export type ActorSpeech = "chat" | "delegate" | "report"
 
 export type ActorFrame = {

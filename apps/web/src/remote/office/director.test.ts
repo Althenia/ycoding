@@ -31,6 +31,33 @@ test("activity changes route at once to the own object and never dwell at stale 
   expect(cell(director.tick(0, false)[0]!.position)).toEqual(pods[0]!.spots.coordinate.cell)
 })
 
+test("work categories use distinct poses and generic activity stays neutral", () => {
+  const director = new OfficeDirector(officeLayout)
+  const worker = actor("worker", { status: "tool", activity: "research" })
+  director.sync(snapshot([worker]))
+  expect(director.tick(0, false)[0]!.pose).toBe("read")
+  director.sync(snapshot([{ ...worker, activity: "verify" }]))
+  run(director, 5_000)
+  expect(director.tick(0, false)[0]!.pose).toBe("type")
+  director.sync(snapshot([{ ...worker, activity: "coordinate" }]))
+  run(director, 5_000)
+  expect(director.tick(0, false)[0]!.pose).toBe("point")
+  const verificationDirector = new OfficeDirector(officeLayout)
+  const verifying = Array.from({ length: 5 }, (_, index) => actor(`verify-${index}`, { status: "tool", activity: "verify" }))
+  verificationDirector.sync(snapshot(verifying))
+  const verificationFrames = verificationDirector.tick(0, false)
+  expect(verificationFrames[0]!.pose).toBe("type")
+  expect(verificationFrames[4]!.pose).toBe("check")
+  for (const status of ["thinking", "compacting", "attention"] as const) {
+    const neutral = new OfficeDirector(officeLayout)
+    neutral.sync(snapshot([{ ...worker, status, activity: "hold" }]))
+    expect(neutral.tick(0, false)[0]!.pose, status).toBe(status === "attention" ? "wave" : "stand")
+  }
+  const reduced = new OfficeDirector(officeLayout)
+  reduced.sync(snapshot([worker]))
+  expect(reduced.tick(0, true)[0]!.pose).toBe("read")
+})
+
 test("sixteen agents have distinct reserved blocks regardless of home room or activity", () => {
   const director = new OfficeDirector(officeLayout)
   const workers = Array.from({ length: 16 }, (_, index) => actor(`worker-${index}`, { role: index % 2 ? "Reviewer" : "Researcher", activity: "verify" }))

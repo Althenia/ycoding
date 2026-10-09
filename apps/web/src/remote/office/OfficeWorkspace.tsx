@@ -2,7 +2,7 @@ import { For, Show, createMemo, createSignal, type JSX } from "solid-js"
 import { OfficeCanvas } from "./OfficeCanvas"
 import { LoadingPlaceholder } from "../ui/loading"
 import { officeLocationLabel } from "./model"
-import { appearanceFor, characterFrame } from "./sprites"
+import { appearanceFor, characterColumnCount, characterFrame } from "./sprites"
 import type { OfficeActor, OfficePreferences, OfficeRoomID, OfficeSnapshot } from "./types"
 
 const characterSheetURL = new URL("./assets/characters.png?no-inline", import.meta.url).href
@@ -106,7 +106,7 @@ function OfficeRosterRow(props: {
         aria-current={props.actor.selected ? "true" : undefined}
         onClick={() => props.onFocusActor(props.actor)}
       >
-        <span class="office-roster__sprite" aria-hidden="true" style={{ "background-image": `url(${characterSheetURL})`, "background-position": `${-(frame() % 12) * 32}px ${-Math.floor(frame() / 12) * 48}px` }} />
+        <span class="office-roster__sprite" aria-hidden="true" style={{ "background-image": `url(${characterSheetURL})`, "background-position": `${-(frame() % characterColumnCount) * 32}px ${-Math.floor(frame() / characterColumnCount) * 48}px` }} />
         <span class="office-roster__content">
           <span class="office-roster__name">{props.actor.name} <span aria-hidden="true">·</span> {props.actor.role}</span>
           <span class="office-roster__room">{officeLocationLabel(props.room)}</span>
