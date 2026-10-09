@@ -54,6 +54,63 @@ async function advance(page: Awaited<ReturnType<ReturnType<typeof requireBrowser
   await page.evaluate<void>(`(() => {const scene=window.__officeGame.scene.getScene('office');for(let step=0;step<${steps};step++)scene.update(performance.now()+step*50,50)})()`)
 }
 
+test("shared-floor crossings paint walk and yield frames without overlap and settle at 20 and 30 FPS", async () => {
+  const page = await requireBrowser().openPage()
+  try {
+    await page.navigate(url("tool", "&freeCamera=1"))
+    await waitFor(page, "window.__officeGame?.scene.getScene('office').latestFrames.length===1")
+    for (const fps of [20, 30]) for (const corridor of ["central", "widened"]) {
+      const evidence = await page.evaluate<{ readonly minimum: number; readonly aligned: boolean; readonly walking: boolean; readonly yielding: boolean; readonly frameChanges: boolean; readonly arrived: boolean; readonly speech: boolean; readonly reducedDirect: boolean }>(`(async () => {
+        const {OfficeDirector}=await import('/src/remote/office/director.ts');
+        const {officeLayout}=await import('/src/remote/office/map.ts');
+        const {actor,snapshot}=await import('/src/remote/office/layout.test-helper.ts');
+        const game=window.__officeGame,scene=game.scene.getScene('office');game.loop.stop();
+        const cells=${JSON.stringify(corridor === "central" ? [{ x: 25, y: 17 }, { x: 24, y: 17 }] : [{ x: 9, y: 13 }, { x: 9, y: 12 }])};
+        const layout={...officeLayout,lounge:cells.map(cell=>({cell,facing:'up',pose:'play',leisure:'table'}))};
+        scene.director=new OfficeDirector(layout);
+        const workers=Array.from({length:14},(_,index)=>index===0||index===13?actor(index===0?'a':'b',{status:'idle'}):actor('stationary-'+index,{source:'unavailable'}));
+        const input={...scene.mailbox.read(),preferences:{...scene.mailbox.read().preferences,motion:'system'}};
+        scene.mailbox.update({...input,snapshot:snapshot(workers)});scene.update(0,0);
+        scene.mailbox.update({...input,snapshot:snapshot(workers.map(worker=>({...worker,status:'working',activity:'research'})))});
+        let minimum=Infinity,aligned=true,walking=false,yielding=false,speech=false;
+        const painted=new Map();
+        for(let tick=0;tick<${fps * 30};tick++){
+          scene.update(tick*${1_000 / fps},${1_000 / fps});
+          const frames=scene.latestFrames.filter(frame=>frame.actor.source==='projection');
+          const sprites=frames.map(frame=>scene.objects.get(frame.actor.id).sprite);
+          minimum=Math.min(minimum,Math.hypot(sprites[0].x-sprites[1].x,sprites[0].y-sprites[1].y));
+          frames.forEach((frame,index)=>{
+            const sprite=sprites[index];sprite.preUpdate(tick*${1_000 / fps},${1_000 / fps});
+            aligned&&=sprite.x===Math.round(frame.position.x)&&sprite.y===Math.round(frame.position.y);
+            walking||=frame.moving&&sprite.anims.currentAnim?.key.endsWith('-walk');
+            yielding||=!frame.moving&&frame.pose==='stand'&&sprite.anims.currentAnim?.key.endsWith('-stand');
+            speech||=frame.speech!==undefined;
+            const names=painted.get(frame.actor.id)??new Set();names.add(String(sprite.frame.name));painted.set(frame.actor.id,names);
+          });
+        }
+        const frames=scene.latestFrames.filter(frame=>frame.actor.source==='projection');
+        const arrived=frames.every((frame,index)=>!frame.moving&&frame.pose==='read'&&frame.direction===officeLayout.pods[index===0?0:13].spots.research.facing&&Math.floor(frame.position.x/32)===officeLayout.pods[index===0?0:13].spots.research.cell.x&&Math.floor(frame.position.y/32)===officeLayout.pods[index===0?0:13].spots.research.cell.y);
+        scene.director=new OfficeDirector(layout);
+        scene.mailbox.update({...input,snapshot:snapshot(workers)});scene.update(0,0);
+        scene.mailbox.update({...input,snapshot:snapshot(workers.map(worker=>({...worker,status:'working',activity:'research'})))});scene.update(50,50);
+        scene.mailbox.update({...scene.mailbox.read(),preferences:{...input.preferences,motion:'reduced'}});scene.update(100,50);
+        const still=scene.latestFrames.filter(frame=>frame.actor.source==='projection').map(frame=>({...frame.position,frame:String(scene.objects.get(frame.actor.id).sprite.frame.name)}));
+        for(let tick=0;tick<20;tick++)scene.update(150+tick*50,50);
+        const reducedDirect=scene.latestFrames.filter(frame=>frame.actor.source==='projection').every((frame,index)=>!frame.moving&&frame.pose==='read'&&frame.position.x===still[index].x&&frame.position.y===still[index].y&&Math.floor(frame.position.x/32)===officeLayout.pods[index===0?0:13].spots.research.cell.x&&Math.floor(frame.position.y/32)===officeLayout.pods[index===0?0:13].spots.research.cell.y&&String(scene.objects.get(frame.actor.id).sprite.frame.name)===still[index].frame&&!scene.objects.get(frame.actor.id).sprite.anims.isPlaying);
+        return {minimum,aligned,walking,yielding,speech,reducedDirect,frameChanges:[...painted.values()].every(names=>names.size>1),arrived};
+      })()`)
+      expect(evidence.minimum).toBeGreaterThanOrEqual(31)
+      expect(evidence.aligned).toBe(true)
+      expect(evidence.walking).toBe(true)
+      expect(evidence.yielding).toBe(true)
+      expect(evidence.frameChanges).toBe(true)
+      expect(evidence.arrived).toBe(true)
+      expect(evidence.speech).toBe(false)
+      expect(evidence.reducedDirect).toBe(true)
+    }
+  } finally { await page.close() }
+}, 45_000)
+
 test("compact canvas names leave the role in the roster and characters lead their name plates", async () => {
   const page = await requireBrowser().openPage()
   try {

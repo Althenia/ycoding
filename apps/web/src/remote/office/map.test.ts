@@ -7,6 +7,38 @@ const inside = (pod: (typeof pods)[number], x: number, y: number) => x >= pod.le
 const inAnyPod = (x: number, y: number) => pods.some((pod) => inside(pod, x, y))
 const cellsOf = (prop: OfficeProp) => Array.from({ length: prop.height }, (_, dy) => Array.from({ length: prop.width }, (_, dx) => ({ x: prop.cell.x + dx, y: prop.cell.y + dy }))).flat()
 
+test("shared routes from distinct claims have a free perpendicular passing cell wherever they meet head-on", () => {
+  const shared = (x: number, y: number) => officeLayout.walkable(x, y) && !inAnyPod(x, y)
+  const passages = new Map<string, Set<number>>()
+  const destinations = [officeLayout.door, ...officeLayout.lounge.map((spot) => spot.cell), ...officeLayout.gathering.map((spot) => spot.cell)]
+  for (const [index, pod] of pods.entries()) for (const spot of Object.values(pod.spots)) for (const destination of destinations) {
+    const allowed = (point: { x: number; y: number }) => pods.every((claim, owner) => owner === index || !inside(claim, point.x, point.y))
+    for (const [start, end] of [[spot.cell, destination], [destination, spot.cell]] as const) {
+      const route = [start, ...findPath(officeLayout, start, end, allowed)!]
+      for (let step = 1; step < route.length - 1; step++) {
+        const before = route[step - 1]!
+        const at = route[step]!
+        const after = route[step + 1]!
+        if (![before, at, after].every((point) => shared(point.x, point.y)) || before.x + after.x !== 2 * at.x || before.y + after.y !== 2 * at.y) continue
+        const key = `${at.x},${at.y}:${after.x - at.x},${after.y - at.y}`
+        const owners = passages.get(key) ?? new Set<number>()
+        owners.add(index)
+        passages.set(key, owners)
+      }
+    }
+  }
+  const narrow = new Set<string>()
+  for (const [key, owners] of passages) {
+    const [cell, direction] = key.split(":")
+    const [x, y] = cell!.split(",").map(Number)
+    const [dx, dy] = direction!.split(",").map(Number)
+    const opposite = passages.get(`${cell}:${-dx!},${-dy!}`)
+    if (!opposite || ![...owners].some((owner) => [...opposite].some((peer) => peer !== owner))) continue
+    if (!shared(x! + dy!, y! + dx!) && !shared(x! - dy!, y! - dx!)) narrow.add(cell!)
+  }
+  expect(narrow).toEqual(new Set())
+})
+
 function reachableWithoutPods() {
   const seen = new Set<string>([`${officeLayout.door.x},${officeLayout.door.y}`])
   const queue = [officeLayout.door]

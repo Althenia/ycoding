@@ -15,6 +15,95 @@ const run = (director: OfficeDirector, duration: number) => {
 }
 const leisurePhase = (director: OfficeDirector, actorID: string) => director.leisurePhase(actorID)
 
+test("same-cell corridor approaches yield without overlapping and finish their owned routes", () => {
+  const layout = { ...officeLayout, lounge: [
+    { cell: { x: 25, y: 17 }, facing: "left" as const, pose: "play" as const, leisure: "table" as const },
+    { cell: { x: 23, y: 17 }, facing: "right" as const, pose: "play" as const, leisure: "table" as const },
+  ] }
+  const director = new OfficeDirector(layout)
+  const workers = Array.from({ length: 14 }, (_, index) => index === 0 || index === 13 ? actor(index === 0 ? "a" : "b", { status: "idle" }) : actor(`stationary-${index}`, { source: "unavailable" }))
+  director.sync(snapshot(workers))
+  director.sync(snapshot(workers.map((worker) => ({ ...worker, status: "working" as const, activity: "research" as const }))))
+  for (let tick = 0; tick < 500; tick++) {
+    const frames = director.tick(50, false).filter((frame) => frame.actor.source === "projection")
+    expect(new Set(frames.map((frame) => JSON.stringify(cell(frame.position)))).size, `tick ${tick}`).toBe(2)
+    expect(Math.hypot(frames[0]!.position.x - frames[1]!.position.x, frames[0]!.position.y - frames[1]!.position.y), `tick ${tick}`).toBeGreaterThanOrEqual(32)
+  }
+  expect(director.tick(0, false).filter((frame) => frame.actor.source === "projection").map((frame) => cell(frame.position))).toEqual([pods[0]!.spots.research.cell, pods[13]!.spots.research.cell])
+})
+
+test("equal-priority admission uses actor ID rather than snapshot order, then admits the loser without starvation", () => {
+  for (const ids of [["a", "z"], ["z", "a"]]) {
+    const layout = { ...officeLayout, lounge: [
+      { cell: { x: 25, y: 17 }, facing: "left" as const, pose: "play" as const, leisure: "table" as const },
+      { cell: { x: 23, y: 17 }, facing: "right" as const, pose: "play" as const, leisure: "table" as const },
+    ] }
+    const workers = Array.from({ length: 14 }, (_, index) => index === 0 || index === 13 ? actor(ids[index === 0 ? 0 : 1]!, { status: "idle" }) : actor(`stationary-${index}`, { source: "unavailable" }))
+    const director = new OfficeDirector(layout)
+    director.sync(snapshot(workers))
+    director.sync(snapshot(workers.map((worker) => ({ ...worker, status: "working" as const, activity: "research" as const }))))
+    const first = director.tick(50, false).filter((frame) => frame.actor.source === "projection")
+    expect(first.find((frame) => frame.actor.id === "a")!.moving).toBe(true)
+    expect(first.find((frame) => frame.actor.id === "z")!.pose).toBe("stand")
+    const origin = first.find((frame) => frame.actor.id === "z")!.position
+    let resumed = false
+    for (let tick = 0; tick < 40; tick++) {
+      const loser = director.tick(50, false).find((frame) => frame.actor.id === "z")!
+      resumed ||= loser.position.x !== origin.x || loser.position.y !== origin.y
+    }
+    expect(resumed).toBe(true)
+    run(director, 25_000)
+    expect(director.tick(0, false).filter((frame) => frame.actor.source === "projection").map((frame) => cell(frame.position))).toEqual([pods[0]!.spots.research.cell, pods[13]!.spots.research.cell])
+  }
+})
+
+test("resumed work and attention pass an idle occupied cell without waiting on its decorative dwell", () => {
+  for (const status of ["working", "attention"] as const) {
+    const layout = { ...officeLayout, lounge: [
+      { cell: { x: 25, y: 17 }, facing: "left" as const, pose: "play" as const, leisure: "table" as const },
+      { cell: { x: 24, y: 17 }, facing: "right" as const, pose: "play" as const, leisure: "table" as const },
+    ] }
+    const director = new OfficeDirector(layout)
+    const workers = Array.from({ length: 14 }, (_, index) => index === 0 || index === 13 ? actor(index === 0 ? "z-work" : "a-rest", { status: "idle" }) : actor(`stationary-${index}`, { source: "unavailable" }))
+    director.sync(snapshot(workers))
+    director.sync(snapshot([{ ...workers[0]!, status, activity: "research" }, ...workers.slice(1)]))
+    const before = director.tick(0, false).find((frame) => frame.actor.id === "a-rest")!.position
+    let steppedAside = false
+    for (let tick = 0; tick < 40; tick++) {
+      const rest = director.tick(50, false).find((frame) => frame.actor.id === "a-rest")!
+      steppedAside ||= rest.position.x !== before.x || rest.position.y !== before.y
+    }
+    const frames = director.tick(0, false)
+    expect(frames.find((frame) => frame.actor.id === "z-work")!.position.x).toBeLessThan(24 * 32)
+    expect(steppedAside).toBe(true)
+    expect(frames.every((frame) => frame.speech === undefined)).toBe(true)
+    expect(director.leisurePhase("a-rest")?.kind).toBe("table")
+  }
+})
+
+test("a yielding actor immediately accepts its latest work target and reduced motion settles it directly", () => {
+  for (const reduced of [false, true]) {
+    const layout = { ...officeLayout, lounge: [
+      { cell: { x: 25, y: 17 }, facing: "left" as const, pose: "play" as const, leisure: "table" as const },
+      { cell: { x: 23, y: 17 }, facing: "right" as const, pose: "play" as const, leisure: "table" as const },
+    ] }
+    const workers = Array.from({ length: 14 }, (_, index) => index === 0 || index === 13 ? actor(index === 0 ? "a" : "z", { status: "idle" }) : actor(`stationary-${index}`, { source: "unavailable" }))
+    const working = workers.map((worker) => ({ ...worker, status: "working" as const, activity: "research" as const }))
+    const director = new OfficeDirector(layout)
+    director.sync(snapshot(workers))
+    director.sync(snapshot(working))
+    expect(director.tick(50, false).find((frame) => frame.actor.id === "z")!.pose).toBe("stand")
+    director.sync(snapshot(working.map((worker) => worker.id === "z" ? { ...worker, activity: "coordinate" } : worker)))
+    expect(director.leisurePhase("z")).toBeUndefined()
+    if (!reduced) run(director, 25_000)
+    const final = director.tick(0, reduced).find((frame) => frame.actor.id === "z")!
+    expect(cell(final.position)).toEqual(pods[13]!.spots.coordinate.cell)
+    expect(final.pose).toBe("point")
+    expect(final.direction).toBe(pods[13]!.spots.coordinate.facing)
+    expect(final.moving).toBe(false)
+  }
+})
+
 test("activity changes route at once to the own object and never dwell at stale work", () => {
   const director = new OfficeDirector(officeLayout)
   const worker = actor("worker", { activity: "implement" })

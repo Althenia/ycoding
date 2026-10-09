@@ -22,6 +22,11 @@ type ActorState = {
   target: Point
   path: Point[]
   speed: number
+  anchor: Point
+  admitted?: Point
+  yieldTicks: number
+  yielding: boolean
+  passing?: Point
   direction: ActorFrame["direction"]
   blocked: boolean
   leaving: boolean
@@ -42,11 +47,13 @@ const center = (layout: OfficeLayout, cell: Point): Point => ({ x: cell.x * layo
 const cellAt = (layout: OfficeLayout, position: Point): Point => ({ x: Math.floor(position.x / layout.tileSize), y: Math.floor(position.y / layout.tileSize) })
 const same = (a: Point, b: Point) => a.x === b.x && a.y === b.y
 const identitySeed = (identity: string) => [...identity].reduce((seed, character) => Math.imul(seed ^ character.charCodeAt(0), 16_777_619) >>> 0, 2_166_136_261)
+const yieldTickBound = 8
 
 export class OfficeDirector {
   private readonly actors = new Map<string, ActorState>()
   private readonly departed = new Set<string>()
   private readonly gatherings = new Map<number, Gathering>()
+  private readonly routeOwners = new Map<number, number>()
   private scope?: string
   private snapshot?: OfficeSnapshot
   private hydrated = false
@@ -55,7 +62,11 @@ export class OfficeDirector {
   private ambientClock = 0
   private nextGatheringID = 0
 
-  constructor(private readonly layout: OfficeLayout) {}
+  constructor(private readonly layout: OfficeLayout) {
+    layout.pods.forEach((pod, index) => {
+      for (let y = pod.top; y <= pod.bottom; y++) for (let x = pod.left; x <= pod.right; x++) this.routeOwners.set(y * layout.columns + x, index)
+    })
+  }
 
   sync(snapshot: OfficeSnapshot): void {
     if (snapshot.scope !== this.scope) {
@@ -114,7 +125,7 @@ export class OfficeDirector {
         ? this.claimLeisure(actor, "table") ?? this.claimLeisure(actor, "rest") ?? this.claimLeisure(actor, "pantry") : undefined
       const target = initialLeisure?.cell ?? this.workSpot(pod, actor).cell
       const position = direct ? target : this.layout.door
-      const added: ActorState = { actor, pod, position: center(this.layout, position), target: position, path: [], speed: 0, direction: "down", blocked: false,
+      const added: ActorState = { actor, pod, position: center(this.layout, position), target: position, path: [], speed: 0, anchor: position, yieldTicks: 0, yielding: false, direction: "down", blocked: false,
         leaving: false, leavingAge: 0, opacityAge: direct ? 400 : 0, idleAge: 0,
         leisurePhase: initialLeisure ? this.phaseAt(initialLeisure, actor.sessionID) : actor.status === "idle" && actor.source === "projection" && snapshot.connection === "ready" ? this.deskPhase(actor.sessionID, 0) : undefined,
         reservedSpot: initialLeisure,
@@ -159,6 +170,10 @@ export class OfficeDirector {
       state.speechAge = 0
       state.path = []
       state.speed = 0
+      state.admitted = undefined
+      state.yieldTicks = 0
+      state.yielding = false
+      state.passing = undefined
       state.blocked = false
       state.opacityAge = 400
       this.releaseLeisure(state)
@@ -166,6 +181,7 @@ export class OfficeDirector {
         state.target = this.workSpot(state.pod, state.actor).cell
         state.position = center(this.layout, state.target)
       }
+      state.anchor = cellAt(this.layout, state.position)
     }
   }
 
@@ -175,6 +191,7 @@ export class OfficeDirector {
     const delta = Math.max(0, Math.min(Number.isFinite(deltaMs) ? deltaMs : 0, 50))
     this.elapsed += delta
     this.ambientClock += delta
+    if (delta > 0 && !reducedMotion && this.snapshot?.connection === "ready") this.admitNextCells()
     for (const [id, state] of this.actors) {
       if (state.actor.source === "unavailable") continue
       state.opacityAge = Math.min(400, state.opacityAge + delta)
@@ -229,41 +246,98 @@ export class OfficeDirector {
   }
 
   private move(state: ActorState, target: Point): void {
-    const allowed = (point: Point) => {
-      const owning = this.layout.pods.findIndex((item) => point.x >= item.left && point.x <= item.right && point.y >= item.top && point.y <= item.bottom)
-      return owning < 0 || owning === state.pod
-    }
-    const path = findPath(this.layout, cellAt(this.layout, state.position), target, allowed)
+    const path = findPath(this.layout, state.admitted ?? state.anchor, target, (point) => this.ownsRouteCell(state, point))
     state.target = target
-    state.path = path ? [...path] : []
+    state.path = path ? [...(state.admitted ? [state.admitted] : []), ...path] : state.admitted ? [state.admitted] : []
     state.blocked = path === undefined
     state.speed = 0
+    state.yieldTicks = 0
+    state.yielding = false
+    state.passing = undefined
+  }
+
+  private ownsRouteCell(state: ActorState, point: Point): boolean {
+    const owner = this.routeOwners.get(point.y * this.layout.columns + point.x)
+    return owner === undefined || owner === state.pod
+  }
+
+  private admitNextCells(): void {
+    const key = (point: Point) => point.y * this.layout.columns + point.x
+    const occupied = new Map<number, ActorState>()
+    const requests = new Map<number, ActorState>()
+    const states = [...this.actors.values()]
+    const priority = (state: ActorState) => state.actor.source === "projection" && state.actor.status !== "idle" ? 1 : 0
+    const before = (first: ActorState, second: ActorState) => priority(first) > priority(second)
+      || priority(first) === priority(second) && (first.yieldTicks > second.yieldTicks || first.yieldTicks === second.yieldTicks && first.actor.id < second.actor.id)
+    for (const state of states) {
+      occupied.set(key(state.anchor), state)
+      if (state.admitted) occupied.set(key(state.admitted), state)
+      state.yielding = false
+      if (!state.path.length || state.admitted || state.actor.source === "unavailable") continue
+      const next = key(state.path[0]!)
+      const request = requests.get(next)
+      if (!request || before(state, request)) requests.set(next, state)
+    }
+    for (const state of states) {
+      if (!state.path.length || state.admitted || state.actor.source === "unavailable") continue
+      const next = state.path[0]!
+      const blocker = occupied.get(key(next))
+      if (!blocker && requests.get(key(next)) === state) {
+        state.admitted = next
+        state.yieldTicks = 0
+        occupied.set(key(next), state)
+        continue
+      }
+      state.yielding = true
+      state.speed = 0
+      state.yieldTicks++
+      if (!blocker || blocker === state || blocker.admitted || state.yieldTicks % yieldTickBound !== 0) continue
+      const loser = before(state, blocker) ? blocker : state
+      if (loser.actor.source === "unavailable" || loser.admitted) continue
+      const travel = loser.path[0] ?? state.anchor
+      const offsets = travel.x !== loser.anchor.x ? [{ x: 0, y: 1 }, { x: 0, y: -1 }] : [{ x: 1, y: 0 }, { x: -1, y: 0 }]
+      const aside = offsets.map((offset) => ({ x: loser.anchor.x + offset.x, y: loser.anchor.y + offset.y })).find((point) =>
+        this.layout.walkable(point.x, point.y) && !this.routeOwners.has(key(point)) && !occupied.has(key(point)) && !requests.has(key(point)))
+      if (!aside) continue
+      const returning = !loser.path.length
+      const reroute = findPath(this.layout, aside, loser.target, (point) => this.ownsRouteCell(loser, point)
+        && (!same(point, loser.anchor) || returning) && (!occupied.has(key(point)) || same(point, loser.target)))
+      if (!reroute) continue
+      if (returning) loser.passing = loser.target
+      loser.path = [aside, ...reroute]
+      loser.admitted = aside
+      loser.yieldTicks = 0
+      loser.yielding = false
+      occupied.set(key(aside), loser)
+    }
   }
 
   private advance(state: ActorState, delta: number, reducedMotion: boolean): void {
-    if (!state.path.length || reducedMotion || this.snapshot?.connection !== "ready") return
+    if (!state.path.length || !state.admitted || reducedMotion || this.snapshot?.connection !== "ready") return
     const maxSpeed = this.layout.tileSize * 4.5 / 1000
     const acceleration = maxSpeed / 400
     const first = center(this.layout, state.path[0]!)
     const remaining = Math.hypot(first.x - state.position.x, first.y - state.position.y) + (state.path.length - 1) * this.layout.tileSize
     const targetSpeed = Math.min(maxSpeed, Math.sqrt(2 * acceleration * remaining))
     const nextSpeed = targetSpeed < state.speed ? Math.max(targetSpeed, state.speed - acceleration * delta) : Math.min(targetSpeed, state.speed + acceleration * delta)
-    let distance = Math.min(remaining, (state.speed + nextSpeed) / 2 * delta)
+    const distance = Math.min(remaining, (state.speed + nextSpeed) / 2 * delta)
     state.speed = nextSpeed
-    while (state.path.length && distance > 0) {
+    if (distance > 0) {
       const target = center(this.layout, state.path[0]!)
       const dx = target.x - state.position.x
       const dy = target.y - state.position.y
       const length = Math.hypot(dx, dy)
       if (length <= distance) {
         state.position = target
+        state.anchor = state.path[0]!
+        state.admitted = undefined
+        if (state.passing && same(state.passing, state.anchor)) state.passing = undefined
         state.path.shift()
-        distance -= length
-        continue
+        if (!state.path.length) state.speed = 0
+        return
       }
       state.direction = Math.abs(dx) > Math.abs(dy) ? dx > 0 ? "right" : "left" : dy > 0 ? "down" : "up"
       state.position = { x: state.position.x + dx / length * distance, y: state.position.y + dy / length * distance }
-      distance = 0
     }
     if (!state.path.length) state.speed = 0
   }
@@ -281,8 +355,8 @@ export class OfficeDirector {
     return {
       actor: state.actor, appearance: appearanceFor(state.actor.sessionID), position: state.position,
       direction: state.path.length ? state.direction : this.cueFacingFor(state) ?? spot.facing,
-      pose: state.path.length && !reducedMotion ? "walk" : state.actor.status === "attention" && atWork ? "wave" : state.speech ? "talk" : phase?.kind === "gathering" && phase.stage === "talk" ? (phase.elapsed + (this.gatherings.get(phase.groupID)?.members.indexOf(state.actor.id) ?? 0) * 1_000) % 2_000 < 1_000 ? "talk" : "stand" : phase?.kind === "stretch" ? phase.stage === "wave" ? "wave" : "stand" : workPose ?? (state.actor.activity === "hold" || state.actor.status === "thinking" || state.actor.status === "compacting" ? "stand" : spot.pose === "play" ? playing ? "play" : "stand" : spot.pose),
-      moving: state.path.length > 0 && !reducedMotion && state.actor.source !== "unavailable",
+      pose: state.yielding ? "stand" : state.path.length && !reducedMotion ? "walk" : state.actor.status === "attention" && atWork ? "wave" : state.speech ? "talk" : phase?.kind === "gathering" && phase.stage === "talk" ? (phase.elapsed + (this.gatherings.get(phase.groupID)?.members.indexOf(state.actor.id) ?? 0) * 1_000) % 2_000 < 1_000 ? "talk" : "stand" : phase?.kind === "stretch" ? phase.stage === "wave" ? "wave" : "stand" : workPose ?? (state.actor.activity === "hold" || state.actor.status === "thinking" || state.actor.status === "compacting" ? "stand" : spot.pose === "play" ? playing ? "play" : "stand" : spot.pose),
+      moving: state.path.length > 0 && !state.yielding && !reducedMotion && state.actor.source !== "unavailable",
       blocked: state.blocked, room: this.layout.roomAt(cellAt(this.layout, state.position)), speech: state.speech,
       leaving: state.leaving, opacity: state.leaving ? Math.max(0, 1 - state.leavingAge / 400) : state.opacityAge / 400,
     }
@@ -333,6 +407,7 @@ export class OfficeDirector {
   private advanceLeisure(state: ActorState, delta: number, reducedMotion: boolean): void {
     if (state.actor.status !== "idle" || state.actor.source !== "projection" || this.snapshot?.connection !== "ready" || !officeInputsSettled(this.snapshot) || reducedMotion || state.leaving) return
     const phase = state.leisurePhase
+    if (state.passing) return
     if (!phase) { this.beginDeskRest(state); return }
     if (phase.kind === "gathering") return
     if (phase.kind === "travel") {
