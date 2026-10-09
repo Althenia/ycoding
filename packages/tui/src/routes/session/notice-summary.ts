@@ -38,17 +38,23 @@ const decisionAdvisoryPreamble = "Decision advisory:"
 /**
  * Splits a Decision advisory notice into the one-line transcript summary and the lines worth
  * expanding. The first line is the fixed disclaimer, which the model needs but the user does not.
+ * An advisory that produced nothing actionable is noise in the transcript and is not rendered;
+ * an unavailable helper is still reported so the user can see the policy did not run.
  */
 export function decisionAdvisory(text: string) {
   const lines = text.split("\n")
   if (!lines[0]?.startsWith(decisionAdvisoryPreamble)) return undefined
   const details = lines.slice(1).filter((line) => line.trim().length > 0)
   const recommendations = details.filter((line) => line.startsWith("Recommended "))
+  if (recommendations.length === 0 && details.every((line) => line === noRecommendationOutcome))
+    return { hidden: true as const }
   const summary = recommendations.length
     ? `Decision advisory · ${recommendations.length} ${recommendations.length === 1 ? "recommendation" : "recommendations"}`
     : (details[0] ?? "Decision advisory")
-  return { summary, details }
+  return { hidden: false as const, summary, details }
 }
+
+const noRecommendationOutcome = "No sufficiently confident actionable recommendation was produced."
 
 function record(value: unknown) {
   if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>

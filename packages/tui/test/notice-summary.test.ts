@@ -39,6 +39,7 @@ test("summarizes a Decision advisory by its recommendations and keeps them as de
     "Recommended direction: Implement the accepted bounded change with a regression test (model confidence 0.91, uncalibrated)",
   ].join("\n")
   expect(decisionAdvisory(text)).toEqual({
+    hidden: false,
     summary: "Decision advisory · 2 recommendations",
     details: [
       'Recommended model for task planning/delegation: "openai/gpt-6-luna-fast#medium" (model confidence 0.93, uncalibrated)',
@@ -47,11 +48,12 @@ test("summarizes a Decision advisory by its recommendations and keeps them as de
   })
 })
 
-test("summarizes a Decision advisory without recommendations by its outcome line", () => {
+test("hides a Decision advisory that produced nothing actionable and keeps an unavailable one visible", () => {
   const outcome = "No sufficiently confident actionable recommendation was produced."
-  expect(decisionAdvisory(`${advisoryDisclaimer}\n${outcome}`)).toEqual({ summary: outcome, details: [outcome] })
+  expect(decisionAdvisory(`${advisoryDisclaimer}\n${outcome}`)).toEqual({ hidden: true })
   const unavailable = "Decision advisory unavailable (timeout); no recommendation was produced."
   expect(decisionAdvisory(`${advisoryDisclaimer}\n${unavailable}`)).toEqual({
+    hidden: false,
     summary: unavailable,
     details: [unavailable],
   })

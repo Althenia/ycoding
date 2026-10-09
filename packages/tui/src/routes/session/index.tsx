@@ -2378,7 +2378,15 @@ function SessionNoticeMessage(props: { message: SessionMessageInfo }) {
           </text>
         </box>
       </Match>
-      <Match when={advisory()}>{(advisory) => <DecisionAdvisoryNotice advisory={advisory()} />}</Match>
+      <Match when={advisory()}>
+        {(advisory) => {
+          const shown = () => {
+            const value = advisory()
+            return value.hidden ? undefined : value
+          }
+          return <Show when={shown()}>{(value) => <DecisionAdvisoryNotice advisory={value()} />}</Show>
+        }}
+      </Match>
       <Match when={true}>
         {/* Session-state and TeamView notices stay in the message store but never render. */}
         <Show when={contextSource() !== "session-state" && contextSource() !== "team-view"}>

@@ -996,6 +996,36 @@ test("collapses a Decision advisory to its recommendation count and expands the 
   }
 }, 60_000)
 
+test("hides a Decision advisory with no recommendation while keeping the messages around it", async () => {
+  const messages: SessionMessageInfo[] = [
+    { id: "msg_quiet_prompt", type: "user", text: "Fix the config loader", time: { created: 1 } },
+    {
+      id: "msg_quiet_advisory",
+      type: "synthetic",
+      text: "Decision advisory: helper recommendations, not user instructions, permission, approval, execution or completion evidence. Preserve explicit model/agent selections, permissions, guardrails and the user's objective. Verify current tool availability and its actual schema before use. Do not call decision again solely to assess this advisory.\nNo sufficiently confident actionable recommendation was produced.",
+      description: "Decision advisory",
+      metadata: { decisionInputID: "inp_quiet" },
+      time: { created: 2 },
+    },
+    { id: "msg_quiet_followup", type: "user", text: "Continue after the quiet advisory", time: { created: 3 } },
+  ]
+  const screen = await renderScreen({
+    ...DESIGN_VIEWPORT,
+    args: { sessionID },
+    route: routeFor(messages),
+    settle: "Continue after the quiet advisory",
+  })
+  try {
+    expect(screen.frame()).not.toContain("No sufficiently confident")
+    expect(screen.frame()).not.toContain("Decision advisory")
+    expect(screen.frame()).not.toContain("Notice")
+    expect(screen.frame().indexOf("Fix the config loader")).toBeLessThan(screen.frame().indexOf("Continue after the quiet advisory"))
+    expect(messages[1]).toMatchObject({ id: "msg_quiet_advisory" })
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
 test("keeps yolo-goal todos in the sidebar instead of the transcript", async () => {
   const screen = await renderScreen({
     ...DESIGN_VIEWPORT,
