@@ -297,6 +297,8 @@ export type SessionMessageProviderState7 = { [x: string]: any }
 
 export type GuardrailCounter1 = { id: string; current: number; limit: number; scope: "session" | "family" }
 
+export type GuardrailRisk = { level: number; label: string; score: number; metric: "confidence" | "probability" }
+
 export type ModelCapabilities = { tools: boolean; input: Array<string>; output: Array<string> }
 
 export type ModelVariant = {
@@ -1078,27 +1080,6 @@ export type ReferenceUpdated = {
   data: {}
 }
 
-export type GuardrailAsked = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "guardrail.asked"
-  location?: LocationRef
-  data: {
-    id: string
-    rootSessionID: string
-    sessionID: string
-    action: string
-    resources: Array<string>
-    ruleIDs: Array<string>
-    reason: string
-    standard: boolean
-    hardReview?: boolean
-    metadata?: { [x: string]: JsonValue }
-  }
-}
-
 export type PluginAdded = {
   id: string
   created: number
@@ -1759,6 +1740,28 @@ export type SessionToolFailed = {
 }
 
 export type GuardrailCounter = GuardrailCounter1
+
+export type GuardrailAsked = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "guardrail.asked"
+  location?: LocationRef
+  data: {
+    id: string
+    rootSessionID: string
+    sessionID: string
+    action: string
+    resources: Array<string>
+    ruleIDs: Array<string>
+    reason: string
+    standard: boolean
+    hardReview?: boolean
+    risk?: GuardrailRisk
+    metadata?: { [x: string]: JsonValue }
+  }
+}
 
 export type ModelCost = {
   tier?: { type: "context"; size: number }
@@ -5331,6 +5334,7 @@ export type GuardrailRequestListOutput = {
     reason: string
     standard: boolean
     hardReview?: boolean
+    risk?: GuardrailRisk
     metadata?: { [x: string]: JsonValue }
   }>
 }["data"]

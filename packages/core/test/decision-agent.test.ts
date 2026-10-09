@@ -36,7 +36,7 @@ import { RequestExecutor } from "@ycoding-ai/ai/route"
 import { Money } from "@ycoding-ai/schema/money"
 
 const requests: LLMRequest[] = []
-const state = { malformed: false, unsettled: false, unavailable: false, denied: false, toolCall: false, cacheRead: undefined as number | undefined, zeroCost: false, noUsage: false }
+const state = { malformed: false, unsettled: false, unavailable: false, denied: false, toolCall: false, cacheRead: undefined as number | undefined, zeroCost: false, noUsage: false, score: false }
 const permissions: Permission.AssertInput[] = []
 let entered = Deferred.makeUnsafe<void>()
 let release = Deferred.makeUnsafe<void>()
@@ -46,7 +46,8 @@ const toon = "decisions:\n  version: 1\n  answers[1]{name,type,answer,choice,sco
 const client = Layer.mock(LLMClient.Service, {
   stream: (request) => {
     requests.push(request)
-    const output = LLMEvent.textDelta({ id: "judgment", text: state.malformed ? "{\"probability\":1}" : toon })
+    const output = LLMEvent.textDelta({ id: "judgment", text: state.malformed ? "{\"probability\":1}" : state.score
+      ? toon.replace("decision,choice,null,review,null,0.8", "decision,score,null,null,3,0.84") : toon })
     if (state.unsettled) return Stream.make(output)
     return Stream.fromEffect(Deferred.succeed(entered, undefined).pipe(Effect.andThen(hold ? Deferred.await(release) : Effect.void))).pipe(Stream.flatMap(() => Stream.make(output,
       ...(state.toolCall ? [LLMEvent.toolCall({ id: "injected", name: "shell", input: { command: "untrusted" } })] : []),
@@ -97,6 +98,7 @@ const seed = (id: string) => Effect.gen(function* () {
   state.cacheRead = undefined
   state.zeroCost = false
   state.noUsage = false
+  state.score = false
   permissions.length = 0
   hold = false
   entered = Deferred.makeUnsafe<void>()
@@ -119,6 +121,19 @@ const choice = (sessionID: SessionSchema.ID) => ({
   context: { sessionID }, provider: "agent" as const, state: { action: "read" },
   instructions: "Classify the action", choices: { allow: "Ordinary read", review: "Uncertain effects" },
 })
+
+it.effect("agent score runs the helper and validates its level plus uncalibrated confidence", () => Effect.gen(function* () {
+  const sessionID = yield* seed("ses_agent_score")
+  state.score = true
+  const decisions = yield* Decision.Service
+  const ledger = yield* SessionProviderRequest.Service
+  expect(yield* decisions.score({ context: { sessionID }, provider: "agent", state: { action: "shell" },
+    instructions: "Score risk", levels: ["none", "minor", "recoverable", "irreversible", "destructive"].map((label) => ({ label, description: label })),
+  })).toEqual({ choice: "3", confidence: 0.84, refused: false })
+  expect(requests).toHaveLength(1)
+  expect(requests[0].tools).toEqual([])
+  expect(yield* ledger.list(sessionID)).toHaveLength(1)
+}))
 
 it.effect("agent decisions stay pending beyond the native timeout and settle once released", () => Effect.gen(function* () {
   const sessionID = yield* seed("ses_agent_no_deadline")

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import { SessionGuardrailMatch } from "@ycoding-ai/core/session/guardrail-match"
+import { SessionGuardrailStandard } from "@ycoding-ai/core/session/guardrail-standard"
 
 const custom = (
   input: Partial<Guardrail.Rule> & Pick<Guardrail.Rule, "id" | "decision" | "actions" | "resources">,
@@ -76,19 +77,18 @@ describe("SessionGuardrailMatch", () => {
       decision: "ask",
       hardReview: true,
       standard: true,
-      ruleIDs: ["standard.review.broad-deletion"],
+      ruleIDs: ["standard.review.project-deletion"],
     })
   })
 
   test.each([
     "rm -rf packages/one packages/two",
     "rm -rf /tmp/cache-a /tmp/cache-b /tmp/cache-c",
-  ])("requires ordinary review for multiple narrow recursive targets via %s", (command) => {
+  ])("allows multiple narrow recursive targets via %s", (command) => {
     expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths })).toMatchObject({
-      decision: "ask",
+      decision: "allow",
       hardReview: false,
-      standard: true,
-      ruleIDs: ["standard.review.broad-deletion"],
+      ruleIDs: [],
     })
   })
 
@@ -97,12 +97,12 @@ describe("SessionGuardrailMatch", () => {
     "rm -rf ~/Documents",
     'rm -rf "$HOME/Documents"',
     "rm -rf ~/Documents ~/Downloads",
-  ])("requires hard review for recursive deletion one level below home via %s", (command) => {
+  ])("requires ordinary review for recursive deletion one level below home via %s", (command) => {
     expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths })).toMatchObject({
       decision: "ask",
-      hardReview: true,
+      hardReview: false,
       standard: true,
-      ruleIDs: ["standard.review.broad-deletion"],
+      ruleIDs: ["standard.review.home-child"],
     })
   })
 
@@ -113,7 +113,7 @@ describe("SessionGuardrailMatch", () => {
         resources: ["cd ..\nrm -rf ."],
         paths: { ...paths, workdir: "/workspace/project/src" },
       }),
-    ).toMatchObject({ decision: "ask", hardReview: true, ruleIDs: ["standard.review.broad-deletion"] })
+    ).toMatchObject({ decision: "ask", hardReview: true, ruleIDs: ["standard.review.project-deletion"] })
   })
 
   test.each([
@@ -126,7 +126,7 @@ describe("SessionGuardrailMatch", () => {
     expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths })).toMatchObject({
       decision: "ask",
       hardReview: true,
-      ruleIDs: ["standard.review.broad-deletion"],
+      ruleIDs: ["standard.review.project-deletion"],
     })
   })
 
@@ -147,7 +147,7 @@ describe("SessionGuardrailMatch", () => {
       decision: "deny",
       hardReview: false,
       standard: true,
-      ruleIDs: ["standard.catastrophic.rm-root"],
+      ruleIDs: [command.endsWith(" /") ? "standard.catastrophic.rm-root" : "standard.catastrophic.rm-user-home"],
     })
   })
 
@@ -189,11 +189,11 @@ describe("SessionGuardrailMatch", () => {
       decision: "ask",
       hardReview: true,
       standard: true,
-      ruleIDs: ["standard.review.broad-deletion"],
+      ruleIDs: ["standard.review.project-deletion"],
     })
   })
 
-  test("does not let a custom allow weaken home-child hard review", () => {
+  test("lets a custom allow override ordinary home-child review", () => {
     expect(
       SessionGuardrailMatch.evaluate({
         action: "shell",
@@ -202,11 +202,84 @@ describe("SessionGuardrailMatch", () => {
         custom: [layer([custom({ id: "allow-all", decision: "allow", actions: ["shell"], resources: ["*"] })])],
       }),
     ).toMatchObject({
-      decision: "ask",
-      hardReview: true,
-      standard: true,
-      ruleIDs: ["standard.review.broad-deletion"],
+      decision: "allow",
+      hardReview: false,
+      standard: false,
+      ruleIDs: ["allow-all"],
     })
+  })
+
+  test.each(["/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp", "/var/folders/user/cache", "/scratch/temp", "$TMPDIR", "${TMPDIR}"])(
+    "excludes temp root %s even when it contains the project or is a home child", (root) => {
+      expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [`rm -rf ${root} ${root}/x`],
+        paths: { workdir: "/scratch/temp/project", project: "/scratch/temp/project", home: "/scratch", tmpdir: "/scratch/temp" },
+      })).toMatchObject({ decision: "allow", hardReview: false, ruleIDs: [] })
+    },
+  )
+
+  test("evaluates only the project in mixed temp and project deletion", () => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: ["rm -rf /tmp/a /private/tmp/y ."], paths }))
+      .toMatchObject({ decision: "ask", hardReview: true, ruleIDs: ["standard.review.project-deletion"] })
+  })
+
+  test.each(["/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp", "/var/folders", "/scratch/temp"])(
+    "temp %s overrides project and home deletion classification", (root) => {
+      expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [`rm -rf ${root}`],
+        paths: { workdir: `${root}/project`, project: `${root}/project`, home: root, tmpdir: "/scratch/temp" },
+      })).toMatchObject({ decision: "allow", ruleIDs: [] })
+    },
+  )
+
+  test.each([
+    ["rm -rf /tmp/a /var/tmp/b build", ["rm -rf build"]],
+    ['rm -rf "/tmp/path with spaces" "build output"', ['rm -rf "build output"']],
+    ['rm -rf /tmp/a; env FLAG="two words" task-runner execute', ['env FLAG="two words" task-runner execute']],
+    ["cd /tmp && rm -rf .", ["cd /tmp"]],
+    ["cd /tmp || rm -rf .", ["cd /tmp || rm -rf ."]],
+    ["rm -rf /tmp/a; git status", ["git status"]],
+    ["rm -rf /tmp/a && npm publish", ["npm publish"]],
+    ["rm -f $TMPDIR/a ${TMPDIR}/b", []],
+  ])("sanitizes recognized temp deletion evidence for %s", (command, expected) => {
+    expect(SessionGuardrailStandard.semanticResources("shell", [command], { ...paths, tmpdir: "/scratch/temp" })).toEqual(expected)
+  })
+
+  test("temp deletion exclusions preserve custom deny and unrelated standard review", () => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: ["rm -rf /tmp/a; npm publish"], paths }))
+      .toMatchObject({ decision: "ask", hardReview: false, ruleIDs: ["standard.review.publish"] })
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: ["rm -rf /tmp/a"], paths,
+      custom: [layer([custom({ id: "deny-temp", decision: "deny", actions: ["shell"], resources: ["*"] })])],
+    })).toMatchObject({ decision: "deny", ruleIDs: ["deny-temp"] })
+  })
+
+  test("temp workdirs do not erase non-path subagent or artifact resources from evidence", () => {
+    const temporaryPaths = { ...paths, workdir: "/tmp/project" }
+    expect(SessionGuardrailStandard.semanticResources("subagent", ["build"], temporaryPaths)).toEqual(["build"])
+    expect(SessionGuardrailStandard.semanticResources("project_artifact_mutation", ["skill/example"], temporaryPaths))
+      .toEqual(["skill/example"])
+  })
+
+  test.each(["/Users/other", "/home/other", "/Users/other/*"])("denies any user home %s", (target) => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [`rm -rf ${target}`], paths }))
+      .toMatchObject({ decision: "deny", hardReview: false, ruleIDs: ["standard.catastrophic.rm-user-home"] })
+  })
+
+  test.each(["/System", "/Library", "/usr", "/etc", "/bin", "/sbin", "/opt", "/Applications", "/var", "/var/log"])(
+    "denies system deletion %s", (target) => {
+      expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [`rm -rf ${target}`], paths }))
+        .toMatchObject({ decision: "deny", hardReview: false, ruleIDs: ["standard.catastrophic.rm-system"] })
+    },
+  )
+
+  test.each([
+    ["shell", "git push origin main --force", "force-push"],
+    ["shell", "npm publish", "publish"],
+    ["shell", "terraform apply", "production"],
+    ["shell", "DROP TABLE users", "database-destructive"],
+    ["shell", "ufw disable", "security-mutation"],
+    ["mcp_execute", "server command", "mcp-execute"],
+  ])("preserves ordinary review for %s %s", (action, resource, id) => {
+    expect(SessionGuardrailMatch.evaluate({ action, resources: [resource], paths }))
+      .toMatchObject({ decision: "ask", hardReview: false, ruleIDs: [`standard.review.${id}`] })
   })
 
   test("lets custom hard review override ordinary allows across source layers while preserving an effective deny", () => {

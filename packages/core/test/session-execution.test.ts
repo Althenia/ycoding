@@ -69,6 +69,7 @@ function configuredGoals(choose: Decision.Interface["choose"]) {
     Layer.provide(Layer.succeed(Decision.Service, Decision.Service.of({
       settings: () => Effect.succeed(new ConfigDecisions.Info({ goal: new ConfigDecisions.Policy({ provider: "openai", min_probability: 0.8 }) })),
       evaluate: () => Effect.die("unused"),
+      score: () => Effect.die("goal continuation must not score risk"),
       choose,
     }))),
     Layer.build,

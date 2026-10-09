@@ -105,6 +105,7 @@ function run(input: {
       const scope = yield* Scope.Scope
       return Decision.Service.of({
         settings: () => Effect.succeed(input.settings),
+        score: () => Effect.die("routing must not score risk"),
         evaluate: (value) => Effect.sync(() => evaluations.push(value)).pipe(Effect.andThen(input.evaluate?.(value) ?? Effect.die("unused direct decision transport"))),
         choose: (value) => Effect.sync(() => choices.push(value)).pipe(Effect.andThen(
           (input.choose?.(value) ?? Effect.succeed({ choice: "design", probability: 0.95, refused: false }))

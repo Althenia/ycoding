@@ -1,6 +1,6 @@
 export * as ConfigDecisions from "./decisions"
 
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { ConfigModel } from "./model"
 import { PositiveInt } from "../schema"
 
@@ -17,6 +17,21 @@ export class AgentPolicy extends Schema.Class<AgentPolicy>("Config.Decisions.Age
   provider: Schema.Literal("agent"),
   min_confidence: Probability,
   min_probability: Schema.Never.pipe(Schema.optional),
+}) {}
+
+const AllowBelow = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 4 })).pipe(
+  Schema.optional,
+  Schema.withDecodingDefault(Effect.succeed(2)),
+)
+
+export class Guardrails extends Schema.Class<Guardrails>("Config.Decisions.Guardrails")({
+  ...Policy.fields,
+  allow_below: AllowBelow,
+}) {}
+
+export class AgentGuardrails extends Schema.Class<AgentGuardrails>("Config.Decisions.AgentGuardrails")({
+  ...AgentPolicy.fields,
+  allow_below: AllowBelow,
 }) {}
 
 export class Candidate extends Schema.Class<Candidate>("Config.Decisions.Candidate")({
@@ -80,7 +95,7 @@ export class Info extends Schema.Class<Info>("Config.Decisions")({
     openai: Connection.pipe(Schema.optional),
     typesafe: Schema.Struct({ ...Connection.fields, model: Schema.NonEmptyString.pipe(Schema.optional) }).pipe(Schema.optional),
   }).pipe(Schema.optional),
-  guardrails: Schema.Union([Policy, AgentPolicy]).pipe(Schema.optional),
+  guardrails: Schema.Union([Guardrails, AgentGuardrails]).pipe(Schema.optional),
   routing: Schema.Union([Routing, AgentRouting]).pipe(Schema.optional),
   goal: Schema.Union([Policy, AgentPolicy]).pipe(Schema.optional),
   questions: Schema.Union([Policy, AgentPolicy]).pipe(Schema.optional),

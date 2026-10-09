@@ -48,11 +48,35 @@ The current runtime evaluates guardrails immediately before supported side effec
 
 A permission approval cannot bypass a guardrail decision. A guardrail approval cannot widen the agent's effective permission policy.
 
+Recursive deletion denies filesystem root (`standard.catastrophic.rm-root`), the configured home or any exact `/Users/<name>` or `/home/<name>` directory (`standard.catastrophic.rm-user-home`), and system directories under `/System`, `/Library`, `/usr`, `/etc`, `/bin`, `/sbin`, `/opt`, `/Applications`, or `/var` (`standard.catastrophic.rm-system`). Formatting disks, raw block-device writes, and fork bombs remain catastrophic denies.
+
+Deleting the project root or an ancestor requires hard review (`standard.review.project-deletion`). Deleting a direct child of the configured home requires ordinary review (`standard.review.home-child`). Multiple ordinary deletion targets do not independently trigger a review. Git-destructive, force-push, publish, production, database-destructive, security-mutation, and MCP-execute rules require ordinary review.
+
+Temporary roots are excluded before every standard deletion classification: `/tmp`, `/private/tmp`, `/var/tmp`, `/private/var/tmp`, `/var/folders`, and the Location process's `TMPDIR` when present, including their descendants. The exclusion takes precedence even when a temporary target contains the project or is a home child. A mixed command evaluates only its non-temporary deletion targets. Custom policy and permission decisions retain their authority.
+
 ### Broad-deletion recognition boundary
 
-The standard matcher recognizes direct POSIX `rm` invocations by executable basename, including `/bin/rm`, supported `sudo | command | env | nohup` wrappers, combined or separate short recursive flags, `--recursive`, quoted operands, simple `; | && ||` or newline-separated commands, and a preceding direct `cd`. It expands exact `~`, `$HOME`, `${HOME}`, `$PWD`, and `${PWD}` path forms against the Location's home, workdir, and project directory. A recursive command with multiple explicit operands is conservatively treated as broad deletion because the matcher does not own a registry that proves each operand's project identity.
+The standard matcher recognizes direct POSIX `rm` invocations by executable basename, including `/bin/rm`, supported `sudo | command | env | nohup` wrappers, combined or separate short recursive flags, `--recursive`, quoted operands, simple `; | && ||` or newline-separated commands, and a preceding direct `cd`. It expands exact `~`, `$HOME`, `${HOME}`, `$PWD`, `${PWD}`, `$TMPDIR`, and `${TMPDIR}` path forms against the Location's home, workdir, project directory, and process temporary directory. Targets resolve lexically before temporary exclusions and deletion classification. Supported compound commands retain every reachable working directory; `cd ... &&` establishes relocation only on success. Multiple ordinary operands are allowed by the standard deletion rules.
 
 This is a bounded recognizer, not a complete shell parser or executable sandbox. It does not promise detection of arbitrary aliases, substitutions, generated commands, `sh -c` payloads, `eval`, `find -exec`, `xargs`, or other obfuscation and indirection. Shell sandbox availability and enforcement remain a separate boundary.
+
+### Risk classification
+
+Only deterministic `allow` results enter an explicitly configured `decisions.guardrails` classifier. One score question uses these zero-based levels:
+
+| Level | Label | Meaning |
+| --- | --- | --- |
+| 0 | none | No state change or trivially reversible |
+| 1 | minor | Local reversible change |
+| 2 | recoverable | Data loss recoverable from VCS/backup/cache |
+| 3 | irreversible | Irreversible data loss or external side effect |
+| 4 | destructive | Destroys system, accounts, or shared infrastructure |
+
+Agent judgments return an integer level and uncalibrated model confidence. Native score distributions select the unique highest-probability integer level and its native probability; ties are uncertain. Confidence must meet `min_confidence`, or native probability must meet `min_probability`, inclusively. `allow_below` is an integer from 0 through 4, default 2. A confident level below both `allow_below` and 3 preserves allow. Confident levels 3–4 always escalate to ordinary ask with `semantic.review.risk`; all other levels, uncertainty, refusals, and decision errors also ask unless the low-risk allow condition holds. Classification never denies, creates hard review, downgrades deterministic asks or denies, or grants human authorization.
+
+Evidence contains only sanitized `{ action, resources, metadata }`. Temporary path resources and recognized temporary deletion operands are excluded; a deletion operand is excluded only when temporary in every reachable working directory. With no remaining resources, no classifier request is sent. Disabled ordinary guardrails and `skipReview` skip classification.
+
+Usable judgments add optional `risk: { level, label, score, metric }` to the review request and `guardrail.asked` event. `metric` is `confidence` or `probability`. The reason surfaces `Risk: irreversible (3) · model confidence 0.84, uncalibrated` or `Risk: irreversible (3) · native probability 0.91`. Missing or unusable judgments omit `risk`. Ordinary review keeps existing exact Always reuse and YOLO 3 handling; hard reviews remain human-only.
 
 ## Human review
 
@@ -97,7 +121,7 @@ POST /api/session/:sessionID/guardrail/request/:requestID/reply
 
 Guardrail asked, replied, and decided events are ephemeral. Durable Session history remains the authority for Session ownership; guardrail review state is process-local and rehydrated from the canonical request API after reconnect or restart.
 
-The Reply body remains the public union `once | always | reject`. `Guardrail.RuleDecision` additionally accepts `hard_review`, and pending requests may carry additive `hardReview: true`. No new guardrail route is introduced.
+The Reply body is the public union `once | always | reject`. `Guardrail.RuleDecision` additionally accepts `hard_review`, and pending requests may carry optional `hardReview: true` and `Guardrail.Risk`. No additional guardrail route is required.
 
 ## Notification contract
 
@@ -107,7 +131,8 @@ After a 500 ms pending-review checkpoint, an unresolved guardrail review emits *
 
 - Catastrophic direct shell forms are denied before process creation.
 - Catastrophic standard denies cannot be overridden by custom policy or any approval reply.
-- Broad recursive deletion of the current project, an ancestor of that project, or multiple targets requires a human-only hard review; recognized root and home deletion remains denied.
+- Recursive deletion of the current project or an ancestor requires human-only hard review after temporary exclusions; filesystem root, user-home, and system-directory deletion remains denied.
+- Semantic risk classification can only preserve deterministic allow or escalate it to ordinary ask; deterministic denies and hard reviews never consult the classifier.
 - Hard reviews cannot be bypassed by disabled ordinary guardrails, custom allow rules, reusable approvals, agent or goal automation, or YOLO 3.
 - Raw custom file content and command history are not rendered in the sidebar.
 - Invalid enabled policy never silently disables the standard profile.

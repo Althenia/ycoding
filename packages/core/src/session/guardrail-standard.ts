@@ -13,14 +13,10 @@ export interface Paths {
   readonly workdir: string
   readonly project: string
   readonly home: string
+  readonly tmpdir?: string
 }
 
 const catastrophic: ReadonlyArray<{ readonly id: string; readonly pattern: RegExp; readonly reason: string }> = [
-  {
-    id: "standard.catastrophic.rm-root",
-    pattern: /^\s*(?:sudo\s+)?rm\s+-[a-z]*r[a-z]*f[a-z]*\s+(?:--\s+)?(?:\/|~|\$HOME)(?:\s|$)/i,
-    reason: "Recursive deletion of a filesystem root or home directory",
-  },
   {
     id: "standard.catastrophic.format-disk",
     pattern: /(?:^|\s)(?:mkfs(?:\.[a-z0-9]+)?|diskutil\s+eraseDisk|format\s+[a-z]:)(?:\s|$)/i,
@@ -95,41 +91,92 @@ export function match(action: string, resource: string, paths?: Paths): Match | 
 function deletionMatch(command: string, paths?: Paths): Match | undefined {
   const matches = rmOperations(command, paths).flatMap((operation): ReadonlyArray<Match> => {
     if (!operation.recursive) return []
-    const targets = operation.targets.map((target) => classifyTarget(target, operation.workdir, paths))
-    if (targets.some((target) => target === "root" || target === "home"))
+    const operands = operation.targets.filter((target) => !isTemporary(target, operation.workdir, paths))
+    const targets = operands.map((target) => classifyTarget(target, operation.workdir, paths))
+    if (targets.includes("root"))
       return [
         {
           id: "standard.catastrophic.rm-root",
           decision: "deny",
-          reason: "Recursive deletion of a filesystem root or home directory",
+          reason: "Recursive deletion of a filesystem root",
           hardReview: false,
         },
       ]
-    if (
-      targets.some((target) => target === "project") ||
-      operation.targets.some((target) => isHomeChild(target, operation.workdir, paths))
-    )
+    if (targets.includes("home"))
       return [
         {
-          id: "standard.review.broad-deletion",
+          id: "standard.catastrophic.rm-user-home",
+          decision: "deny",
+          reason: "Recursive deletion of a user home directory",
+          hardReview: false,
+        },
+      ]
+    if (targets.includes("system"))
+      return [
+        {
+          id: "standard.catastrophic.rm-system",
+          decision: "deny",
+          reason: "Recursive deletion of system directories",
+          hardReview: false,
+        },
+      ]
+    if (targets.includes("project"))
+      return [
+        {
+          id: "standard.review.project-deletion",
           decision: "ask",
-          reason:
-            "Recursive deletion includes the current project, one of its ancestors, a direct child of the home directory, or multiple targets",
+          reason: "Recursive deletion of the current project or one of its ancestors",
           hardReview: true,
         },
       ]
-    if (operation.targets.length > 1)
+    if (operands.some((target) => isHomeChild(target, operation.workdir, paths)))
       return [
         {
-          id: "standard.review.broad-deletion",
+          id: "standard.review.home-child",
           decision: "ask",
-          reason: "Recursive deletion includes the current project, one of its ancestors, or multiple targets",
+          reason: "Recursive deletion of a direct child of the home directory",
           hardReview: false,
         },
       ]
     return []
   })
-  return matches.find((match) => match.decision === "deny") ?? matches[0]
+  return matches.find((match) => match.decision === "deny") ?? matches.find((match) => match.hardReview) ?? matches[0]
+}
+
+const temporaryRoots = ["/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp", "/var/folders"]
+const systemRoots = ["/System", "/Library", "/usr", "/etc", "/bin", "/sbin", "/opt", "/Applications", "/var"]
+
+function isTemporary(target: string, workdir: string, paths?: Paths) {
+  const resolved = resolveTarget(wholeTarget(target), workdir, paths)
+  return [...temporaryRoots, ...(paths?.tmpdir ? [path.resolve(paths.tmpdir)] : [])].some(
+    (root) => resolved === root || resolved.startsWith(`${root}${path.sep}`),
+  )
+}
+
+export function semanticResources(action: string, resources: ReadonlyArray<string>, paths: Paths) {
+  return resources.flatMap((resource) => {
+    if (action !== "shell")
+      return (action === "file_mutation" || path.isAbsolute(resource)) && isTemporary(resource, paths.workdir, paths)
+        ? [] : [resource]
+    const operations = rmOperations(resource, paths)
+    const removals = operations.flatMap((operation) =>
+      operation.targets.flatMap((target, index) => {
+        const reachable = operations.filter((other) => other.segment === operation.segment)
+        return reachable.every((other) => isTemporary(target, other.workdir, paths)) ? [operation.ranges[index]] : []
+      }),
+    )
+    if (removals.length === 0) return [resource]
+    const sanitized = shellSegments(resource).flatMap((segment, index) => {
+      const operation = operations.find((operation) => operation.segment === index)
+      if (operation && operation.ranges.every((range) => removals.includes(range))) return []
+      const tokens = segment.rawTokens.filter((_, index) => !removals.includes(segment.ranges[index]))
+      if (tokens.length === 0) return []
+      return [{ separator: segment.separator, text: tokens.join(" ") }]
+    })
+    return sanitized.length === 0
+      ? []
+      : [sanitized.map((segment, index) => `${index === 0 ? "" : segment.separator}${segment.text}`).join("")]
+  })
 }
 
 function isHomeChild(target: string, workdir: string, paths?: Paths) {
@@ -141,6 +188,8 @@ interface RmOperation {
   readonly recursive: boolean
   readonly targets: ReadonlyArray<string>
   readonly workdir: string
+  readonly segment: number
+  readonly ranges: ReadonlyArray<string>
 }
 
 interface ShellState {
@@ -152,12 +201,15 @@ type Connector = "always" | "and" | "or"
 
 interface ShellSegment {
   readonly tokens: ReadonlyArray<string>
+  readonly rawTokens: ReadonlyArray<string>
   readonly connector: Connector
+  readonly separator: string
+  readonly ranges: ReadonlyArray<string>
 }
 
 function rmOperations(command: string, paths?: Paths): ReadonlyArray<RmOperation> {
   return shellSegments(command).reduce(
-    (state, segment) => {
+    (state, segment, segmentIndex) => {
       const executing =
         segment.connector === "and"
           ? state.states.filter((item) => item.succeeded)
@@ -194,15 +246,19 @@ function rmOperations(command: string, paths?: Paths): ReadonlyArray<RmOperation
       const recursive = options.some(
         (token) => token === "--recursive" || (/^-[^-]/.test(token) && /[rR]/.test(token.slice(1))),
       )
-      const targets = invocation.args.filter((token, index) => {
-        if (separator >= 0 && index > separator) return true
-        return token !== "--" && !token.startsWith("-") && !/^[<>]/.test(token)
+      const targetIndexes = invocation.args.flatMap((token, index) => {
+        if (separator >= 0 && index > separator) return [index]
+        return token !== "--" && !token.startsWith("-") && !/^[<>]/.test(token) ? [index] : []
       })
+      const targets = targetIndexes.map((index) => invocation.args[index])
+      const ranges = targetIndexes.map((index) => segment.ranges[segment.tokens.length - invocation.args.length + index])
       return {
         states: uniqueStates([...skipped, ...uncertain(executing)]),
         operations: [
           ...state.operations,
-          ...Array.from(new Set(executing.map((item) => item.workdir)), (workdir) => ({ recursive, targets, workdir })),
+          ...Array.from(new Set(executing.map((item) => item.workdir)), (workdir) => ({
+            recursive, targets, workdir, segment: segmentIndex, ranges,
+          })),
         ],
       }
     },
@@ -247,22 +303,31 @@ function executable(tokens: ReadonlyArray<string>) {
 function shellSegments(command: string): ReadonlyArray<ShellSegment> {
   const segments: ShellSegment[] = []
   let tokens: string[] = []
+  let rawTokens: string[] = []
   let connector: Connector = "always"
+  let separator = ""
+  let ranges: string[] = []
   let token = ""
+  let tokenStart = 0
   let quote: "'" | '"' | undefined
   let escaped = false
-  const pushToken = () => {
+  const pushToken = (end: number) => {
     if (!token) return
     tokens.push(token)
+    rawTokens.push(command.slice(tokenStart, end))
+    ranges.push(`${segments.length}:${tokens.length - 1}`)
     token = ""
   }
-  const pushSegment = (next: Connector) => {
-    pushToken()
+  const pushSegment = (next: Connector, nextSeparator: string, end: number) => {
+    pushToken(end)
     if (tokens.length > 0) {
-      segments.push({ tokens, connector })
+      segments.push({ tokens, rawTokens, connector, separator, ranges })
       tokens = []
+      rawTokens = []
+      ranges = []
     }
     connector = next
+    separator = nextSeparator
   }
   for (let index = 0; index < command.length; index++) {
     const character = command[index]
@@ -272,6 +337,7 @@ function shellSegments(command: string): ReadonlyArray<ShellSegment> {
       continue
     }
     if (character === "\\" && quote !== "'") {
+      if (!token) tokenStart = index
       escaped = true
       continue
     }
@@ -281,26 +347,28 @@ function shellSegments(command: string): ReadonlyArray<ShellSegment> {
       continue
     }
     if (character === "'" || character === '"') {
+      if (!token) tokenStart = index
       quote = character
       continue
     }
     if (character === ";" || character === "\n") {
-      pushSegment("always")
+      pushSegment("always", `${character} `, index)
       continue
     }
     if (character === "|" || character === "&") {
       const repeated = command[index + 1] === character
-      pushSegment(repeated ? (character === "|" ? "or" : "and") : "always")
+      pushSegment(repeated ? (character === "|" ? "or" : "and") : "always", ` ${character}${repeated ? character : ""} `, index)
       if (repeated) index++
       continue
     }
     if (/\s/.test(character)) {
-      pushToken()
+      pushToken(index)
       continue
     }
+    if (!token) tokenStart = index
     token += character
   }
-  pushSegment("always")
+  pushSegment("always", "", command.length)
   return segments
 }
 
@@ -308,10 +376,11 @@ function classifyTarget(target: string, workdir: string, paths?: Paths) {
   const literal = wholeTarget(target)
   if (literal === "/" || literal === "~" || literal === "$HOME" || literal === "${HOME}")
     return literal === "/" ? "root" : "home"
-  if (!paths) return "narrow"
   const resolved = resolveTarget(literal, workdir, paths)
   if (resolved === path.parse(resolved).root) return "root"
-  if (resolved === path.resolve(paths.home)) return "home"
+  if ((paths && resolved === path.resolve(paths.home)) || /^\/(?:Users|home)\/[^/]+$/.test(resolved)) return "home"
+  if (systemRoots.some((root) => resolved === root || resolved.startsWith(`${root}${path.sep}`))) return "system"
+  if (!paths) return "narrow"
   const relative = path.relative(resolved, path.resolve(paths.project))
   if (relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)))
     return "project"
@@ -323,6 +392,8 @@ function wholeTarget(target: string) {
 }
 
 function resolveTarget(target: string, workdir: string, paths?: Paths) {
+  if (paths?.tmpdir && /^(?:\$TMPDIR|\$\{TMPDIR\})(?:\/|$)/.test(target))
+    return path.resolve(paths.tmpdir, target.replace(/^(?:\$TMPDIR|\$\{TMPDIR\})\/?/, ""))
   const expanded =
     target === "~" || target === "$HOME" || target === "${HOME}"
       ? (paths?.home ?? target)

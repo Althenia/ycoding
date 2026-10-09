@@ -6,6 +6,21 @@ import { Session } from "@ycoding-ai/schema/session"
 const decodeRule = Schema.decodeUnknownSync(Guardrail.Rule)
 
 describe("Guardrail schema", () => {
+  test("risk has a stable unique identifier and encodes on requests and asked events", () => {
+    const risk = { level: 3, label: "irreversible", score: 0.84, metric: "confidence" as const }
+    expect(Schema.encodeSync(Guardrail.Risk)(risk)).toEqual(risk)
+    const identifiers = [Guardrail.Risk, Guardrail.Rule, Guardrail.RuleDecision, Guardrail.Decision, Guardrail.Reply]
+      .map((schema) => schema.ast.annotations?.identifier)
+    expect(identifiers[0]).toBe("Guardrail.Risk")
+    expect(new Set(identifiers).size).toBe(identifiers.length)
+    const request = new Guardrail.Request({ id: Guardrail.RequestID.create(),
+      rootSessionID: Session.ID.descending("ses_root"), sessionID: Session.ID.descending("ses_root"),
+      action: "shell", resources: ["task-runner execute"], ruleIDs: ["semantic.review.risk"],
+      reason: "Risk: irreversible (3) · model confidence 0.84, uncalibrated", standard: false, risk,
+    })
+    expect(Schema.encodeSync(Guardrail.Request)(request).risk).toEqual(risk)
+    expect(Schema.encodeSync(Guardrail.Event.Asked.data)(request).risk).toEqual(risk)
+  })
   test("decodes a custom rule with deterministic optional defaults", () => {
     const rule = decodeRule({
       id: "protect-production",

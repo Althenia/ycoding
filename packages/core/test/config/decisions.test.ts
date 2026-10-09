@@ -4,6 +4,14 @@ import { Schema } from "effect"
 
 const decode = Schema.decodeUnknownSync(Config.Info)
 
+test("guardrail risk threshold defaults to 2 and accepts only integer rubric boundaries", () => {
+  expect(decode({ decisions: { guardrails: { provider: "agent", min_confidence: 0.8 } } }).decisions?.guardrails?.allow_below).toBe(2)
+  for (const allow_below of [0, 1, 2, 3, 4]) {
+    expect(decode({ decisions: { guardrails: { provider: "openai", min_probability: 0.9, allow_below } } })
+      .decisions?.guardrails?.allow_below).toBe(allow_below)
+  }
+})
+
 test("retains explicit decision providers and opt-in automatic consumers", () => {
   const decisions = {
     providers: { openai: { api_key: "fixture" }, typesafe: { api_key: "fixture", model: "jev-1.13.0" } },
@@ -29,6 +37,9 @@ test("rejects unbounded timeouts, invalid thresholds, and ambiguous routes", () 
   for (const decisions of [
     { timeout_ms: 60001 },
     { guardrails: { provider: "openai", min_probability: 1.1 } },
+    { guardrails: { provider: "openai", min_probability: 0.9, allow_below: 11 } },
+    { guardrails: { provider: "agent", min_confidence: 0.9, allow_below: -1 } },
+    { guardrails: { provider: "agent", min_confidence: 0.9, allow_below: 1.5 } },
     { goal: { provider: "typesafe" } },
     { routing: { provider: "openai", min_probability: 0.9, candidates: [] } },
     { routing: { provider: "openai", min_probability: 0.9, candidates: [

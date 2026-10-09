@@ -38,17 +38,24 @@ import { imagePassthrough } from "./lib/image"
 import { executeTool, registerToolPlugin, toolDefinitions, toolIdentity } from "./lib/tool"
 
 const wire: Array<{ url: string; body: unknown; authorization: string | undefined }> = []
-const behavior = { denied: false, refused: false, hold: false, telemetry: false, mismatch: false, unauthorized: false }
+const behavior = { denied: false, refused: false, hold: false, telemetry: false, mismatch: false, unauthorized: false, score: false }
 let entered = Deferred.makeUnsafe<void>()
 const executor = Layer.mock(RequestExecutor.Service, { execute: (request) => Effect.sync(() => {
   if (request.body._tag !== "Uint8Array") throw new Error("Expected a JSON body")
   wire.push({ url: request.url, body: JSON.parse(new TextDecoder().decode(request.body.body)), authorization: request.headers.authorization })
   return HttpClientResponse.fromWeb(request, new Response(JSON.stringify(request.url.includes("typesafe") ? {
-    model: "jev-1.13.0", answers: { decision: { type: "choice", choice: "review", probabilities: { allow: 0.2, review: 0.8 }, confidence: 0.6 } },
+    model: "jev-1.13.0", answers: { decision: behavior.score ? {
+      type: "score", score: 2.65, probabilities: { "0": 0.1, "1": 0, "2": 0.05, "3": 0.85, "4": 0 },
+      confidence: 0.6, legend: { "0": "none", "1": "minor", "2": "recoverable", "3": "irreversible", "4": "destructive" },
+    } : { type: "choice", choice: "review", probabilities: { allow: 0.2, review: 0.8 }, confidence: 0.6 } },
     usage: { input_tokens: 12, output_tokens: 0 },
   } : {
     model: "gpt-6-luna",
-    answers: [behavior.refused ? { type: "refusal", name: "decision" } : {
+    answers: [behavior.refused ? { type: "refusal", name: "decision" } : behavior.score ? {
+      type: "score", name: "decision", score: 2.65, confidence: 0.6,
+      probabilities: [0.1, 0, 0.05, 0.85, 0].map((probability, value) => ({ value,
+        label: ["none", "minor", "recoverable", "irreversible", "destructive"][value], probability })),
+    } : {
       type: "choice", name: "decision", choice: behavior.mismatch ? "escalate" : "review", probabilities: [{ value: "allow", probability: 0.2 }, { value: "review", probability: 0.8 }], confidence: 0.6,
     }],
     usage: behavior.telemetry ? { input_tokens: 12, output_tokens: 5, total_tokens: 17,
@@ -84,6 +91,7 @@ const seed = (id: string) => Effect.gen(function* () {
   behavior.telemetry = false
   behavior.mismatch = false
   behavior.unauthorized = false
+  behavior.score = false
   entered = Deferred.makeUnsafe<void>()
   const database = yield* Database.Service
   yield* database.db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] }).onConflictDoNothing().run().pipe(Effect.orDie)
@@ -96,6 +104,21 @@ const choice = (sessionID: Session.ID, provider: "openai" | "typesafe") => ({
   context: { sessionID, agent: toolIdentity.agent }, provider, state: { action: "patch" },
   instructions: "Choose the risk", choices: { allow: "Safe", review: "Needs review" },
 })
+
+it.effect("native score questions run through the real adapters, normalize risk and settle usage", () => Effect.gen(function* () {
+  const sessionID = yield* seed("ses_decision_score_native")
+  behavior.score = true
+  const decisions = yield* Decision.Service
+  const requests = yield* SessionProviderRequest.Service
+  const levels = ["none", "minor", "recoverable", "irreversible", "destructive"].map((label) => ({ label, description: label }))
+  for (const provider of ["openai", "typesafe"] as const)
+    expect(yield* decisions.score({ context: { sessionID }, provider, state: { action: "shell" }, instructions: "Score risk", levels }))
+      .toEqual({ choice: "3", probability: 0.85, refused: false })
+  expect(wire[0].body).toMatchObject({ questions: [{ type: "score", name: "decision", levels }] })
+  expect(wire[1].body).toMatchObject({ questions: { decision: { type: "score", criteria: levels.map((level) => `${level.label}: ${level.description}`) } } })
+  expect((yield* requests.list(sessionID)).map((request) => ({ source: request.source, attempts: request.attempts, input: request.tokens.input })))
+    .toEqual([{ source: "decision", attempts: 1, input: 12 }, { source: "decision", attempts: 1, input: 12 }])
+}))
 
 it.effect("both native providers retain probabilities and account for one physical decision request", () => Effect.gen(function* () {
   const sessionID = yield* seed("ses_decision_native")

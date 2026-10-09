@@ -57,7 +57,7 @@ function harness(input?: {
   readonly documents?: ReadonlyMap<string, string>
   readonly autoGuardrail?: boolean
   readonly decisions?: ConfigDecisions.Info
-  readonly choose?: Decision.Service["Service"]["choose"]
+  readonly score?: Decision.Service["Service"]["score"]
   readonly replyGate?: {
     readonly entered: PromiseWithResolvers<void>
     readonly release: PromiseWithResolvers<void>
@@ -65,7 +65,7 @@ function harness(input?: {
 }) {
   const documents = new Map(input?.documents)
   const scans: Array<{ readonly pattern: string; readonly cwd: string | undefined }> = []
-  const choices: Array<Parameters<Decision.Service["Service"]["choose"]>[0]> = []
+  const choices: Array<Parameters<Decision.Service["Service"]["score"]>[0]> = []
   let replyGated = false
   const filesystem = Layer.effect(
     FSUtil.Service,
@@ -85,9 +85,9 @@ function harness(input?: {
   const dependencies = Layer.mergeAll(
     Layer.mock(Decision.Service, {
       settings: () => Effect.succeed(input?.decisions),
-      choose: (request) => {
+      score: (request) => {
         choices.push(request)
-        return input?.choose?.(request) ?? Effect.succeed({ choice: "allow", probability: 1, refused: false })
+        return input?.score?.(request) ?? Effect.succeed({ choice: "0", probability: 1, refused: false })
       },
     }),
     Layer.mock(Config.Service, { entries: () => Effect.succeed([...(input?.entries ?? [])]) }),
@@ -146,10 +146,10 @@ function harness(input?: {
 const exact = harness()
 
 const semanticSettings = new ConfigDecisions.Info({
-  guardrails: new ConfigDecisions.Policy({ provider: "openai", min_probability: 0.9 }),
+  guardrails: new ConfigDecisions.Guardrails({ provider: "openai", min_probability: 0.9 }),
 })
 const agentSemanticSettings = new ConfigDecisions.Info({
-  guardrails: new ConfigDecisions.AgentPolicy({ provider: "agent", min_confidence: 0.9 }),
+  guardrails: new ConfigDecisions.AgentGuardrails({ provider: "agent", min_confidence: 0.9 }),
 })
 const semanticInput = {
   sessionID: parentID,
@@ -159,9 +159,38 @@ const semanticInput = {
 } satisfies SessionGuardrail.EvaluateInput
 
 describe("SessionGuardrail semantic decisions", () => {
+  for (const [allowBelow, level, decision] of [[2, 0, "allow"], [2, 1, "allow"], [2, 2, "ask"], [2, 3, "ask"],
+    [2, 4, "ask"], [0, 0, "ask"], [4, 2, "allow"], [4, 3, "ask"]] as const) {
+    const graded = harness({ decisions: new ConfigDecisions.Info({ guardrails: new ConfigDecisions.AgentGuardrails({ provider: "agent", min_confidence: 0.8, allow_below: allowBelow }) }),
+      score: () => Effect.succeed({ choice: String(level), confidence: 0.84, refused: false }),
+    })
+    graded.it.effect(`risk ${level} at allow_below ${allowBelow} is ${decision}`, () => Effect.gen(function* () {
+      const service = yield* SessionGuardrail.Service
+      const result = yield* service.evaluate(semanticInput)
+      expect(result).toMatchObject({ decision, hardReview: false })
+      if (decision === "ask") {
+        expect(result.ruleIDs).toEqual(["semantic.review.risk"])
+        expect(result.risk).toMatchObject({ level, score: 0.84, metric: "confidence" })
+        if (level === 3) expect(result.reason).toContain("Risk: irreversible (3) · model confidence 0.84, uncalibrated")
+      }
+    }))
+  }
+
+  const temp = harness({ decisions: semanticSettings })
+  temp.it.effect("strips temp resources and temp deletion operands from classifier evidence only", () => Effect.gen(function* () {
+    const service = yield* SessionGuardrail.Service
+    yield* service.evaluate({ ...semanticInput, action: "file_mutation", resources: ["/tmp/a", "/private/tmp/b", "/var/tmp/c",
+      "/private/var/tmp/d", "/var/folders/user/cache", "/workspace/project/file"] })
+    expect(temp.choices[0].state).toEqual({ action: "file_mutation", resources: ["/workspace/project/file"], metadata: semanticInput.metadata })
+    yield* service.evaluate({ ...semanticInput, resources: ["rm -rf /tmp/a /private/tmp/y build"] })
+    expect(temp.choices[1].state).toEqual({ action: "shell", resources: ["rm -rf build"], metadata: semanticInput.metadata })
+    yield* service.evaluate({ ...semanticInput, resources: ["rm -rf /tmp/a /var/tmp/y"] })
+    expect(temp.choices).toHaveLength(2)
+  }))
+
   const agentSafe = harness({
     decisions: agentSemanticSettings,
-    choose: () => Effect.succeed({ choice: "allow", confidence: 0.9, refused: false }),
+    score: () => Effect.succeed({ choice: "0", confidence: 0.9, refused: false }),
   })
   agentSafe.it.effect("keeps an agent semantic allow at the estimated-confidence threshold", () =>
     Effect.gen(function* () {
@@ -185,7 +214,7 @@ describe("SessionGuardrail semantic decisions", () => {
   ] as const) {
     const uncertainAgent = harness({
       decisions: agentSemanticSettings,
-      choose: () => Effect.succeed({ choice: "allow", refused: false, ...answer }),
+      score: () => Effect.succeed({ choice: "0", refused: false, ...answer }),
     })
     uncertainAgent.it.effect(`requires ordinary review for agent semantic ${name}`, () =>
       Effect.gen(function* () {
@@ -201,7 +230,7 @@ describe("SessionGuardrail semantic decisions", () => {
 
   const safe = harness({
     decisions: semanticSettings,
-    choose: () => Effect.succeed({ choice: "allow", probability: 0.9, refused: false }),
+    score: () => Effect.succeed({ choice: "1", probability: 0.9, refused: false }),
   })
   safe.it.effect("keeps a confident semantic allow and sends only bounded action state", () =>
     Effect.gen(function* () {
@@ -218,19 +247,25 @@ describe("SessionGuardrail semantic decisions", () => {
         resources: semanticInput.resources,
         metadata: semanticInput.metadata,
       })
-      expect(Object.keys(safe.choices[0].choices)).toEqual(["allow", "review"])
+      expect(safe.choices[0].levels).toEqual([
+        { label: "none", description: "No state change or trivially reversible" },
+        { label: "minor", description: "Local reversible change" },
+        { label: "recoverable", description: "Data loss recoverable from VCS/backup/cache" },
+        { label: "irreversible", description: "Irreversible data loss or external side effect" },
+        { label: "destructive", description: "Destroys system, accounts, or shared infrastructure" },
+      ])
     }),
   )
 
   for (const [name, result] of [
-    ["meaningful risk", Effect.succeed({ choice: "review", probability: 1, refused: false })],
-    ["low confidence", Effect.succeed({ choice: "allow", probability: 0.89, refused: false })],
-    ["unreported probability", Effect.succeed({ choice: "allow", refused: false })],
-    ["refusal", Effect.succeed({ choice: "allow", probability: 1, refused: true })],
+    ["meaningful risk", Effect.succeed({ choice: "2", probability: 1, refused: false })],
+    ["low confidence", Effect.succeed({ choice: "0", probability: 0.89, refused: false })],
+    ["unreported probability", Effect.succeed({ choice: "0", refused: false })],
+    ["refusal", Effect.succeed({ choice: "0", probability: 1, refused: true })],
     ["unknown choice", Effect.succeed({ choice: "other", probability: 1, refused: false })],
     ["provider error", Effect.fail(new Decision.Error({ reason: "provider-failed" }))],
   ] as const) {
-    const uncertain = harness({ decisions: semanticSettings, choose: () => result })
+    const uncertain = harness({ decisions: semanticSettings, score: () => result })
     uncertain.it.effect(`requires ordinary review for semantic ${name}`, () =>
       Effect.gen(function* () {
         const service = yield* SessionGuardrail.Service
@@ -248,7 +283,7 @@ describe("SessionGuardrail semantic decisions", () => {
     ["defects", Effect.die("decision defect")],
     ["interruption", Effect.interrupt],
   ] as const) {
-    const failed = harness({ decisions: semanticSettings, choose: () => failure })
+    const failed = harness({ decisions: semanticSettings, score: () => failure })
     failed.it.effect(`propagates semantic ${name} without creating a review`, () =>
       Effect.gen(function* () {
         const service = yield* SessionGuardrail.Service
@@ -311,13 +346,16 @@ describe("SessionGuardrail semantic decisions", () => {
 
   const human = harness({
     decisions: semanticSettings,
-    choose: () => Effect.succeed({ choice: "review", probability: 1, refused: false }),
+    score: () => Effect.succeed({ choice: "3", probability: 0.91, refused: false }),
   })
   human.it.effect("requires human authorization for semantic review and preserves exact Always reuse", () =>
     Effect.gen(function* () {
       const service = yield* SessionGuardrail.Service
       const pending = yield* waitForRequest(service, semanticInput)
-      expect(pending.request).toMatchObject({ ruleIDs: ["semantic.review.risk"] })
+      expect(pending.request).toMatchObject({ ruleIDs: ["semantic.review.risk"],
+        risk: { level: 3, label: "irreversible", score: 0.91, metric: "probability" },
+        reason: expect.stringContaining("Risk: irreversible (3) · native probability 0.91"),
+      })
       expect(pending.request.hardReview).toBeUndefined()
       expect(pending.fiber.pollUnsafe()).toBeUndefined()
       yield* service.reply({ sessionID: parentID, requestID: pending.request.id, reply: "always" })
@@ -331,7 +369,7 @@ describe("SessionGuardrail semantic decisions", () => {
   const yolo3 = harness({
     decisions: semanticSettings,
     autoGuardrail: true,
-    choose: () => Effect.succeed({ choice: "review", probability: 1, refused: false }),
+    score: () => Effect.succeed({ choice: "3", probability: 1, refused: false }),
   })
   yolo3.it.effect("allows YOLO 3 admission of ordinary semantic review without changing hard review", () =>
     Effect.gen(function* () {

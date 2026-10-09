@@ -108,10 +108,10 @@ Defaults are 8 running shells, 8 running subagents, and 16 pending reviews per r
 
 The code-owned standard profile:
 
-- hard-denies recognized catastrophic host-destruction commands before process creation, including recursive deletion of a filesystem root or the home directory;
-- requires hard human review for recognized recursive deletion of a complete current project, its ancestors, or a direct child of the home directory, unoverrideable by custom allow rules, while retaining stricter root/home catastrophic denials;
+- hard-denies recognized catastrophic host-destruction commands before process creation, including recursive deletion of a filesystem root, the configured home, any exact `/Users/<name>` or `/home/<name>`, or system directories under `/System`, `/Library`, `/usr`, `/etc`, `/bin`, `/sbin`, `/opt`, `/Applications`, or `/var`;
+- excludes targets at or under `/tmp`, `/private/tmp`, `/var/tmp`, `/private/var/tmp`, `/var/folders`, and the process `TMPDIR` before every standard deletion rule; mixed commands evaluate only non-temporary targets;
+- requires hard human review for recognized recursive deletion of a complete current project or its ancestors, unoverrideable by custom allow rules; direct home children require ordinary review, while multiple ordinary targets alone are allowed;
 - never reviews `computer` and `browser` tool calls: their guardrail evaluations (desktop `computer`, iTerm text as `shell`, Finder moves as `file_mutation`, and Chrome `browser_owned_open`, `browser_mutation`, and `browser_profile_mutation`) admit ordinary and hard review decisions without a request, while catastrophic standard denies and custom `deny` rules still block them; their `computer` permission and Chrome site and control permissions still apply;
-- requires an ordinary human review for recognized recursive deletion of multiple narrow targets;
 - requires a human review for recognized destructive Git operations, bulk deletion, publishing and deployment, destructive database operations, access-control changes, likely secret transmission, and other high-impact mutation patterns;
 - fails closed with a review for mutation actions when an enabled custom guardrail file is malformed;
 - evaluates shell, direct Session shell, edit, write, patch, subagent launch, mutation-capable MCP tools, and project-artifact mutation at their side-effect boundary.

@@ -71,6 +71,14 @@ export interface Choice {
   readonly refused: boolean
 }
 
+export interface ScoreInput {
+  readonly context: Invocation
+  readonly provider: ChoiceInput["provider"]
+  readonly state: Schema.Json
+  readonly instructions: string
+  readonly levels: ReadonlyArray<{ readonly label: string; readonly description: string }>
+}
+
 export const Score = Schema.Struct({
   metric: Schema.Literals(["probability", "confidence"]),
   value: ConfigDecisions.Probability,
@@ -104,6 +112,7 @@ export interface Interface {
   readonly settings: () => Effect.Effect<ConfigDecisions.Info | undefined>
   readonly evaluate: (input: Input, context: Invocation) => Effect.Effect<Output, Error>
   readonly choose: (input: ChoiceInput) => Effect.Effect<Choice, Error>
+  readonly score: (input: ScoreInput) => Effect.Effect<Choice, Error>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/Decision") {}
@@ -198,6 +207,22 @@ export function make(input: {
   return {
     settings: input.settings,
     evaluate,
+    score: Effect.fn("Decision.score")(function* (value) {
+      const settings = yield* input.settings()
+      const question = { type: "score" as const, name: "decision", instructions: value.instructions, levels: value.levels }
+      const result = yield* evaluate(value.provider === "agent" ? {
+        provider: "agent", request: { state: value.state, questions: [question] },
+      } : value.provider === "openai" ? {
+        provider: "openai", request: { model: "gpt-6-luna", input: JSON.stringify(value.state), questions: [question] },
+      } : {
+        provider: "typesafe", request: { model: settings?.providers?.typesafe?.model ?? "jev-1.13.0",
+          state: Schema.is(TypeSafeDecisions.Request.fields.state)(value.state) ? value.state : JSON.stringify(value.state),
+          questions: { decision: { type: "score", instructions: value.instructions,
+            criteria: value.levels.map((level) => `${level.label}: ${level.description}`) } },
+        },
+      }, value.context)
+      return normalizedScore(result, "decision")
+    }),
     choose: Effect.fn("Decision.choose")(function* (value) {
       const settings = yield* input.settings()
       if (value.provider === "agent") {
@@ -234,6 +259,24 @@ export function make(input: {
       return { choice: answer.choice, probability: answer.probabilities[answer.choice], refused: false }
     }),
   }
+}
+
+export function normalizedScore(output: Output, name: string): Choice {
+  if (output.provider === "agent") {
+    const answer = output.response.answers.find((answer) => answer.name === name)
+    return answer?.type === "score" && answer.score !== null
+      ? { choice: String(answer.score), confidence: answer.confidence, refused: false } : { refused: true }
+  }
+  const answer = output.provider === "openai"
+    ? output.response.answers.find((answer) => answer.name === name)
+    : output.response.answers[name]
+  if (answer?.type !== "score") return { refused: true }
+  const levels = Array.isArray(answer.probabilities)
+    ? answer.probabilities.map((level) => ({ choice: String(level.value), probability: level.probability }))
+    : Object.entries(answer.probabilities).map(([choice, probability]) => ({ choice, probability }))
+  const ordered = levels.toSorted((left, right) => right.probability - left.probability)
+  if (!ordered[0] || ordered[0].probability === ordered[1]?.probability) return { refused: true }
+  return { ...ordered[0], refused: false }
 }
 
 function nativeFailure(error: LLMError) {

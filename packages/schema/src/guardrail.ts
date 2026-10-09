@@ -47,6 +47,14 @@ export const Rule = Schema.Struct({
 export const Ruleset = Schema.Array(Rule).annotate({ identifier: "Guardrail.Ruleset" })
 export type Ruleset = typeof Ruleset.Type
 
+export interface Risk extends Schema.Schema.Type<typeof Risk> {}
+export const Risk = Schema.Struct({
+  level: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 4 })),
+  label: Schema.String,
+  score: Schema.Number.check(Schema.isFinite()),
+  metric: Schema.Literals(["confidence", "probability"]),
+}).annotate({ identifier: "Guardrail.Risk" })
+
 export class Request extends Schema.Class<Request>("Guardrail.Request")({
   id: RequestID,
   rootSessionID: SessionID,
@@ -57,6 +65,7 @@ export class Request extends Schema.Class<Request>("Guardrail.Request")({
   reason: Schema.String,
   standard: Schema.Boolean,
   hardReview: Schema.Boolean.pipe(optional),
+  risk: Risk.pipe(optional),
   metadata: Schema.Record(Schema.String, Schema.Json).pipe(optional),
 }) {}
 
