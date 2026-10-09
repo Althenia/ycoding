@@ -307,11 +307,18 @@ describe("remote shell layout", () => {
       try {
         await page.setViewport(width!, height!)
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&noSelection=1&theme=${theme}`)
-        for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.app--empty .app-header__menu') !== null && document.querySelector('.new-session-composer') !== null`); attempt += 1) await Bun.sleep(50)
+        const container = ".overlay--sessions-sheet[open]"
+        for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.app--empty') !== null && document.querySelector('.new-session-composer') !== null`); attempt += 1) await Bun.sleep(50)
+        if (width! >= 768) {
+          const tablet = await page.evaluate<{ readonly links: readonly string[]; readonly contextPanel: boolean; readonly centered: boolean; readonly overflow: boolean }>(`(() => { const main = document.querySelector('.workspace__main').getBoundingClientRect(), empty = document.querySelector('.new-session-composer').getBoundingClientRect(); return { links: [...document.querySelectorAll('.workspace__rail .remote-nav a')].filter(link => link.getBoundingClientRect().width > 0).map(link => link.getAttribute('href')), contextPanel: document.querySelector('.workspace__rail .session-row') !== null, centered: Math.abs((empty.left + empty.right - main.left - main.right) / 2) <= 1, overflow: document.documentElement.scrollWidth > innerWidth } })()`)
+          expect(tablet).toEqual({ links: ["/remote/sessions", "/remote/usage", "/remote/settings"], contextPanel: false, centered: true, overflow: false })
+          await Bun.write(new URL(`../../../.cache/tmp/sessions-no-selection-${theme}-${width}x${height}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+          continue
+        }
         await page.evaluate(`document.querySelector('.app-header__menu').click()`)
-        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.overlay--sessions-sheet[open] .session-row') !== null`); attempt += 1) await Bun.sleep(50)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(container + " .session-row")}) !== null`); attempt += 1) await Bun.sleep(50)
         await page.evaluate(`Promise.all([...document.querySelector('.overlay--sessions-sheet .overlay__surface').getAnimations()].map(animation => animation.finished))`)
-        const geometry = await page.evaluate<{ readonly labelLeft: number; readonly buttonRight: number; readonly headerTop: number; readonly buttonTop: number; readonly innerLeft: number; readonly innerRight: number; readonly workspaceLeft: number; readonly headingLeft: number; readonly selectorAbsent: boolean; readonly filterLeft: number; readonly filterRight: number; readonly rowTextLeft: number; readonly bodyOverflow: boolean; readonly listOverflow: boolean; readonly centered: boolean; readonly pageOverflow: boolean }>(`(() => { const overlay = document.querySelector('.overlay--sessions-sheet'); const pane = overlay.querySelector('.pane'); const content = pane.getBoundingClientRect(); const pad = parseFloat(getComputedStyle(pane).paddingLeft); const label = pane.querySelector('.pane__title').getBoundingClientRect(); const button = pane.querySelector('.pane__head button').getBoundingClientRect(); const workspace = pane.querySelector('.session-panel__workspace .workspace-select__label').getBoundingClientRect(); const heading = pane.querySelector('.session-panel__workspace h3').getBoundingClientRect(); const filter = pane.querySelector('input[placeholder="Filter sessions"]').getBoundingClientRect(); const list = pane.querySelector('.session-list'); const row = pane.querySelector('.session-row__title').getBoundingClientRect(); const body = overlay.querySelector('.overlay__body'); const main = document.querySelector('.workspace__main').getBoundingClientRect(); const empty = document.querySelector('.new-session-composer').getBoundingClientRect(); return { labelLeft: label.left, buttonRight: button.right, headerTop: label.top, buttonTop: button.top, innerLeft: content.left + pad, innerRight: content.right - pad, workspaceLeft: workspace.left, headingLeft: heading.left, selectorAbsent: !pane.querySelector('.workspace-select .custom-select__trigger'), filterLeft: filter.left, filterRight: filter.right, rowTextLeft: row.left, bodyOverflow: body.scrollWidth > body.clientWidth + 1, listOverflow: list.scrollWidth > list.clientWidth + 1, centered: Math.abs((empty.left + empty.right - main.left - main.right)/2) <= 1, pageOverflow: document.documentElement.scrollWidth > innerWidth } })()`)
+        const geometry = await page.evaluate<{ readonly labelLeft: number; readonly buttonRight: number; readonly headerTop: number; readonly buttonTop: number; readonly innerLeft: number; readonly innerRight: number; readonly workspaceLeft: number; readonly headingLeft: number; readonly selectorAbsent: boolean; readonly filterLeft: number; readonly filterRight: number; readonly rowTextLeft: number; readonly bodyOverflow: boolean; readonly listOverflow: boolean; readonly centered: boolean; readonly pageOverflow: boolean }>(`(() => { const overlay = document.querySelector('.overlay--sessions-sheet[open]'); const pane = overlay.querySelector('.pane'); const content = pane.getBoundingClientRect(); const pad = parseFloat(getComputedStyle(pane).paddingLeft); const label = pane.querySelector('.pane__title').getBoundingClientRect(); const button = pane.querySelector('.pane__head button').getBoundingClientRect(); const workspace = pane.querySelector('.session-panel__workspace .workspace-select__label').getBoundingClientRect(); const heading = pane.querySelector('.session-panel__workspace h3').getBoundingClientRect(); const filter = pane.querySelector('input[placeholder="Filter sessions"]').getBoundingClientRect(); const list = pane.querySelector('.session-list'); const row = pane.querySelector('.session-row__title').getBoundingClientRect(); const body = overlay.querySelector('.overlay__body'); const main = document.querySelector('.workspace__main').getBoundingClientRect(); const empty = document.querySelector('.new-session-composer').getBoundingClientRect(); return { labelLeft: label.left, buttonRight: button.right, headerTop: label.top, buttonTop: button.top, innerLeft: content.left + pad, innerRight: content.right - pad, workspaceLeft: workspace.left, headingLeft: heading.left, selectorAbsent: !pane.querySelector('.workspace-select .custom-select__trigger'), filterLeft: filter.left, filterRight: filter.right, rowTextLeft: row.left, bodyOverflow: body.scrollWidth > body.clientWidth + 1, listOverflow: list.scrollWidth > list.clientWidth + 1, centered: Math.abs((empty.left + empty.right - main.left - main.right)/2) <= 1, pageOverflow: document.documentElement.scrollWidth > innerWidth } })()`)
         expect(Math.abs(geometry.labelLeft - geometry.innerLeft)).toBeLessThanOrEqual(1)
         expect(Math.abs(geometry.buttonRight - geometry.innerRight)).toBeLessThanOrEqual(1)
         expect(Math.abs(geometry.headerTop - geometry.buttonTop)).toBeLessThanOrEqual(14)
@@ -420,7 +427,8 @@ describe("remote shell layout", () => {
         const initial = await layout()
         expect(initial.combined).toBe(true)
         expect(initial.bottom).toBeLessThanOrEqual(initial.scrollBoxTop + 1)
-        expect(initial.firstRowTop).toBeGreaterThanOrEqual(initial.scrollBoxTop)
+        expect(initial.firstRowTop).toBeGreaterThanOrEqual(initial.top - 1)
+        expect(initial.firstRowTop).toBeLessThan(initial.bottom)
         const transcriptRow = await page.evaluate<{ readonly scrollTop: number; readonly top: number }>(`(() => { const scroll = document.querySelector('.workspace__scroll'); const row = document.querySelector('.transcript-message'); scroll.scrollTop = Math.max(1, row.getBoundingClientRect().top - scroll.getBoundingClientRect().top - 4); return { scrollTop: scroll.scrollTop, top: row.getBoundingClientRect().top }; })()`)
         expect(transcriptRow.scrollTop).toBeGreaterThan(0)
         expect(transcriptRow.top).toBeGreaterThanOrEqual(initial.bottom)
@@ -429,6 +437,7 @@ describe("remote shell layout", () => {
         const conversation = await layout()
         expect(conversation.scrollTop).toBeGreaterThan(200)
         expect(Math.abs(conversation.top - initial.top)).toBeLessThanOrEqual(1)
+        expect(Math.abs(conversation.firstRowTop - initial.firstRowTop)).toBeLessThanOrEqual(1)
         const jump = '.conversation-jump-slot .transcript-navigation__controls [aria-label="Jump to top"]'
         for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(jump)}) !== null`); attempt += 1) await Bun.sleep(50)
         expect(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(jump)}) !== null`)).toBe(true)
@@ -469,31 +478,31 @@ describe("remote shell layout", () => {
         const initial = await geometry()
         expect(initial.rail).toBeGreaterThan(200)
         expect(initial.overflow).toBe(false)
-        expect(await page.evaluate<boolean>(`document.querySelector('.workspace__rail button[aria-label="Hide sessions sidebar"]')?.getBoundingClientRect().width >= 44`)).toBe(true)
+        expect(await page.evaluate<boolean>(`document.querySelector('.workspace__rail button[aria-label="Hide workspace sidebar"]')?.getBoundingClientRect().width >= 44`)).toBe(true)
         expect(await page.evaluate<boolean>(`document.querySelector('.app-header__rail-toggle') === null`)).toBe(true)
-        expect(initial.transition).not.toBe("0s")
+        expect(initial.transition).toBe("0s")
         const settle = () => page.evaluate(`Promise.all(document.querySelector('.workspace').getAnimations().map(animation => animation.finished))`)
-        await page.evaluate(`document.querySelector('.workspace__rail button[aria-label="Hide sessions sidebar"]')?.click()`)
+        await page.evaluate(`document.querySelector('.workspace__rail button[aria-label="Hide workspace sidebar"]')?.click()`)
         await settle()
         const collapsed = await geometry()
         expect(collapsed.rail).toBeGreaterThanOrEqual(44)
         expect(collapsed.rail).toBeLessThanOrEqual(72)
         expect(collapsed.main).toBeGreaterThanOrEqual(initial.main + initial.rail - collapsed.rail - 2)
         expect(collapsed.overflow).toBe(false)
-        const narrowRail = () => page.evaluate<{ readonly panelHidden: boolean; readonly railInteractive: boolean; readonly expandInside: boolean; readonly focused: boolean }>(`(() => { const rail = document.querySelector('.workspace__rail'), box = rail.getBoundingClientRect(), expand = rail.querySelector('button[aria-label="Show sessions sidebar"][aria-expanded="false"]'), button = expand?.getBoundingClientRect(); return { panelHidden: rail.querySelector('.pane')?.getClientRects().length === 0, railInteractive: !rail.inert && rail.getAttribute('aria-hidden') !== 'true', expandInside: button !== undefined && button.width >= 44 && button.height >= 44 && button.left >= box.left && button.right <= box.right && button.top >= box.top, focused: document.activeElement === expand } })()`)
-        expect(await narrowRail()).toEqual({ panelHidden: true, railInteractive: true, expandInside: true, focused: true })
+        const narrowRail = () => page.evaluate<{ readonly panelHidden: boolean; readonly railInteractive: boolean; readonly expandInside: boolean; readonly focused: boolean; readonly bodyInert: boolean }>(`(() => { const rail = document.querySelector('.workspace__rail'), box = rail.getBoundingClientRect(), expand = rail.querySelector('button[aria-label="Show workspace sidebar"][aria-expanded="false"]'), button = expand?.getBoundingClientRect(); return { panelHidden: rail.querySelector('.pane')?.getClientRects().length === 0, railInteractive: !rail.inert && rail.getAttribute('aria-hidden') !== 'true', expandInside: button !== undefined && button.width >= 44 && button.height >= 44 && button.left >= box.left && button.right <= box.right && button.top >= box.top, focused: document.activeElement === expand, bodyInert: rail.querySelector('.workspace__rail-body')?.inert === true } })()`)
+        expect(await narrowRail()).toEqual({ panelHidden: true, railInteractive: true, expandInside: true, focused: true, bodyInert: true })
         await Bun.write(new URL(`../../../.cache/tmp/rail-collapsed-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
         await page.navigate(address)
         for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb') !== null`); attempt += 1) await Bun.sleep(50)
         expect((await geometry()).rail).toBeLessThanOrEqual(72)
         expect(await narrowRail()).toMatchObject({ panelHidden: true, railInteractive: true, expandInside: true })
-        await page.evaluate(`document.querySelector('.workspace__rail button[aria-label="Show sessions sidebar"]')?.click()`)
+        await page.evaluate(`document.querySelector('.workspace__rail button[aria-label="Show workspace sidebar"]')?.click()`)
         await settle()
         const restored = await geometry()
         expect(restored.rail).toBeGreaterThan(200)
         expect(Math.abs(restored.main - initial.main)).toBeLessThanOrEqual(2)
         expect(restored.overflow).toBe(false)
-        expect(await page.evaluate<boolean>(`document.querySelector('.workspace__rail button[aria-label="Show sessions sidebar"]') === null && document.activeElement === document.querySelector('.workspace__rail button[aria-label="Hide sessions sidebar"]')`)).toBe(true)
+        expect(await page.evaluate<boolean>(`document.querySelector('.workspace__rail button[aria-label="Show workspace sidebar"]') === null && document.activeElement === document.querySelector('.workspace__rail button[aria-label="Hide workspace sidebar"]')`)).toBe(true)
         await Bun.write(new URL(`../../../.cache/tmp/rail-restored-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
         await page.setReducedMotion(true)
         expect((await geometry()).transition).toBe("0s")
@@ -552,12 +561,12 @@ describe("remote shell layout", () => {
             overflow: document.documentElement.scrollWidth > innerWidth }
         })()`)
         const initial = await state()
-        expect(initial).toMatchObject({ bar: false, office: false, team: true, nextToNotifications: true, inHeader: true, overflow: false })
+        expect(initial).toMatchObject({ bar: true, office: false, team: true, nextToNotifications: true, inHeader: true, overflow: false })
         expect(initial.width).toBeGreaterThanOrEqual(44)
         expect(initial.height).toBeGreaterThanOrEqual(44)
         expect(initial.count).toMatch(/^[0-9]+$/)
         expect(initial.description).toBe(`${initial.count} active`)
-        expect(initial.scrollBoxTop).toBeLessThanOrEqual(initial.headerBottom + 1)
+        expect(await page.evaluate<boolean>(`(() => { const bar = document.querySelector('.workspace__topbar').getBoundingClientRect(); return bar.top >= ${initial.headerBottom} - 1 && Math.abs(bar.bottom - ${initial.scrollBoxTop}) <= 1 && document.querySelector('.workspace__topbar .conversation-breadcrumb') !== null && document.querySelector('.workspace__topbar [aria-label="Open Team"]') === null })()`)).toBe(true)
         await page.evaluate(`(() => { const scroll = document.querySelector('.workspace__scroll'); document.querySelector('.conversation-pane').style.minHeight = '1900px'; scroll.scrollTop = scroll.scrollHeight })()`)
         const scrolled = await state()
         expect(scrolled.scrollTop).toBeGreaterThan(0)
@@ -799,8 +808,8 @@ describe("remote shell layout", () => {
         if (width === 390) {
           await page.evaluate(`document.querySelector('.app-header__menu')?.click()`)
           for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.overlay--sessions-sheet[open] .session-row') !== null`); attempt += 1) await Bun.sleep(50)
-          await page.evaluate(`document.querySelector('.overlay--sessions-sheet .pane__head button')?.click()`)
-        } else await page.evaluate(`document.querySelector('.workspace__rail .pane__head button')?.click()`)
+          await page.evaluate(`document.querySelector('.overlay--sessions-sheet .pane__head .new-session__trigger')?.click()`)
+        } else await page.evaluate(`document.querySelector('.workspace__rail .pane__head .new-session__trigger')?.click()`)
         for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.route-panel:not([inert]) .new-session-composer') !== null`); attempt += 1) await Bun.sleep(50)
         expect(await page.evaluate<{ readonly pathname: string; readonly workspaceID: string | null; readonly source: string | null; readonly deviceID: string | null }>(`({ pathname: location.pathname, workspaceID: new URLSearchParams(location.search).get('workspace_id'), source: new URLSearchParams(location.search).get('source'), deviceID: new URLSearchParams(location.search).get('device_id') })`)).toEqual({ pathname: "/remote", workspaceID: "workspace_fixture", source: "sidebar", deviceID: "dev_studio" })
         if (width === 390) {
@@ -808,13 +817,13 @@ describe("remote shell layout", () => {
           for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.overlay--sessions-sheet[open] .session-row') !== null`); attempt += 1) await Bun.sleep(50)
           await page.evaluate(`[...document.querySelectorAll('.overlay--sessions-sheet .session-row')].find(row => row.textContent.includes('Archived: release notes'))?.click()`)
         } else {
-          await page.evaluate(`document.querySelector('.remote-nav__link[href="/remote/sessions"]')?.click()`)
+          await page.evaluate(`document.querySelector('.remote-nav a[href="/remote/sessions"]')?.click()`)
           for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.route-panel:not([inert]) .sessions-page') !== null`); attempt += 1) await Bun.sleep(50)
           await page.evaluate(`[...document.querySelectorAll('.sessions-table__row')].find(row => row.querySelector('.sessions-table__name')?.textContent.trim() === 'Archived: release notes')?.querySelector('.sessions-table__select')?.click()`)
         }
         for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb strong')?.textContent?.includes('Archived: release notes') ?? false`); attempt += 1) await Bun.sleep(50)
-        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.activeElement === document.querySelector('.remote-conversation-view .conversation-breadcrumb')`); attempt += 1) await Bun.sleep(50)
-        expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('.remote-conversation-view .conversation-breadcrumb')`)).toBe(true)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.activeElement === document.querySelector('.workspace__topbar:not([inert]) .conversation-breadcrumb')`); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('.workspace__topbar:not([inert]) .conversation-breadcrumb')`)).toBe(true)
         expect(await page.evaluate<{ readonly pathname: string; readonly sessionID: string | null; readonly deviceID: string | null; readonly closed: boolean; readonly title: string }>(`(() => { const composer=document.querySelector('.new-session-composer'), panel=composer?.closest('.route-panel'), search=new URLSearchParams(location.search); return { pathname: location.pathname, sessionID: search.get('session_id'), deviceID: search.get('device_id'), closed: !composer || panel?.inert === true && panel?.getAttribute('aria-hidden') === 'true', title: document.querySelector('.conversation-breadcrumb strong')?.textContent?.trim() ?? '' } })()`)).toEqual({ pathname: "/remote/session", sessionID: "ses_archived", deviceID: "dev_studio", closed: true, title: "Archived: release notes" })
         for (let attempt = 0; attempt < 20 && !await page.evaluate<boolean>(newSessionComposerRetainedClosed); attempt += 1) await Bun.sleep(50)
         expect(await page.evaluate<boolean>(newSessionComposerRetainedClosed)).toBe(true)
@@ -859,8 +868,8 @@ describe("remote shell layout", () => {
     try {
       await page.setViewport(1440, 900)
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat`)
-      for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.remote-nav__link[href="/remote"]') !== null`); attempt += 1) await Bun.sleep(50)
-      await page.evaluate(`document.querySelector('.remote-nav__link[href="/remote"]').click()`)
+      for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.workspace-new-session .new-session__trigger') !== null`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`document.querySelector('.workspace-new-session .new-session__trigger').click()`)
       for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.new-session-composer .mini-picker__trigger[aria-label="Repository"]') !== null`); attempt += 1) await Bun.sleep(50)
       await page.evaluate(`document.querySelector('.new-session-composer .mini-picker__trigger[aria-label="Repository"]').click()`)
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`[...document.querySelectorAll('.mini-picker__option')].some(option => option.textContent.includes('Other repository'))`); attempt += 1) await Bun.sleep(50)
@@ -946,13 +955,13 @@ describe("remote shell layout", () => {
         const input = document.querySelector('.composer__input');
         input.value = 'Work only in Session A';
         input.dispatchEvent(new InputEvent('input', { bubbles: true }));
-        document.querySelectorAll('.session-row')[1]?.click();
       })()`)
+      await selectDrawerSession(page, 1)
       expect(await page.evaluate<string>(`document.querySelector('.conversation-breadcrumb strong')?.textContent ?? ''`)).toContain("Archived: release notes")
       expect(await page.evaluate<string>(`document.querySelector('.composer__input')?.value ?? ''`)).toBe("")
       expect(await page.evaluate<boolean>(`document.querySelector('[aria-label="Send prompt"]')?.disabled === true`)).toBe(true)
       expect(await page.evaluate<number>(`window.remoteMutationReport().filter(request => request.operation === 'session.prompt').length`)).toBe(0)
-      await page.evaluate(`document.querySelectorAll('.session-row')[0]?.click()`)
+      await selectDrawerSession(page, 0)
       expect(await page.evaluate<string>(`document.querySelector('.composer__input')?.value ?? ''`)).toBe("Work only in Session A")
     } finally {
       await page.close()
@@ -1052,11 +1061,11 @@ describe("remote shell layout", () => {
       await Bun.sleep(50)
     }
     expect(await page.evaluate<number>(`document.querySelectorAll('.mutation-toast--unknown button,.transcript-message__send-error button').length`)).toBe(2)
-    await page.evaluate(`document.querySelectorAll('.session-row')[1]?.click()`)
+    await selectDrawerSession(page, 1)
     expect(await page.evaluate<string>(`document.querySelector('.conversation-breadcrumb strong')?.textContent ?? ''`)).toContain("Archived: release notes")
     expect(await page.evaluate<number>(`document.querySelectorAll('.mutation-toast--unknown').length`)).toBe(0)
     expect(await page.evaluate<string>(`document.querySelector('.notice-strip--warning')?.textContent ?? ''`)).toBe("")
-    await page.evaluate(`document.querySelectorAll('.session-row')[0]?.click()`)
+    await selectDrawerSession(page, 0)
     expect(await page.evaluate<number>(`document.querySelectorAll('.mutation-toast--unknown').length`)).toBe(1)
     expect(await page.evaluate<number>(`document.querySelectorAll('.mutation-toast--unknown button,.transcript-message__send-error button').length`)).toBe(2)
     expect(await page.evaluate<string>(`document.querySelector('.notice-strip--warning')?.textContent ?? ''`)).toContain("Nothing was resent automatically")
@@ -1262,7 +1271,7 @@ describe("remote shell layout", () => {
   test("marks the active route in desktop and mobile navigation and follows keyboard activation", async () => {
     for (const [width, path, label] of [[1440, "/remote/sessions", "Sessions"], [390, "/remote/settings", "Settings"]] as const) {
       const page = await fixture(`view=${path.slice("/remote/".length)}&sessions=empty`, width, label)
-      const active = await page.evaluate<string | null>(`document.querySelector('.remote-nav a[aria-current="page"]')?.textContent?.trim() ?? null`)
+      const active = await page.evaluate<string | null>(`[...document.querySelectorAll('.remote-nav a[aria-current="page"], .bottom-nav a[aria-current="page"]')].find(link => link.getBoundingClientRect().width > 0)?.textContent?.trim() ?? null`)
       expect(active).toBe(label)
       await page.evaluate(`document.querySelector('${width === 1440 ? ".remote-nav" : ".bottom-nav"} a[href="/remote/usage"]')?.focus()`)
       await page.pressKey("Enter", "Enter", 13, "\r")
@@ -1313,7 +1322,7 @@ describe("remote shell layout", () => {
     }
   }, 30_000)
 
-  test("keeps the mobile Settings machine picker usable with five-tab navigation", async () => {
+  test("keeps the mobile Settings machine picker usable with three-destination navigation", async () => {
     for (const theme of ["dark", "light"] as const) {
       const page = await fixture("scenario=conversation-workspace-390", 390, "Token expiry refactor", theme, 620)
       await page.evaluate(`document.querySelector('a[href="/remote/settings"]')?.click()`)
@@ -1321,7 +1330,7 @@ describe("remote shell layout", () => {
       await page.evaluate(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.click()`)
       await page.evaluate(`Promise.all([...document.querySelector('.custom-select__dialog .overlay__surface')?.getAnimations() ?? []].map(animation => animation.finished))`)
       const state = await page.evaluate<{
-        readonly brandVisible: boolean
+        readonly resumeVisible: boolean
         readonly tabs: readonly string[]
         readonly sheet: { readonly top: number; readonly bottom: number }
         readonly options: readonly { readonly label: string; readonly height: number }[]
@@ -1329,15 +1338,15 @@ describe("remote shell layout", () => {
       }>(`(() => {
         const box=document.querySelector('.custom-select__dialog .overlay__surface')?.getBoundingClientRect();
         return {
-          brandVisible:document.querySelector('.app-header .brand img') instanceof HTMLImageElement && document.querySelector('.app-header .brand img').getBoundingClientRect().width > 0,
+          resumeVisible:(() => { const resume = document.querySelector('.app-header .workspace-resume'); const box = resume?.getBoundingClientRect(); return resume instanceof HTMLElement && box.width >= 44 && box.height >= 44 && getComputedStyle(resume).visibility !== 'hidden' })(),
           tabs:[...document.querySelectorAll('.bottom-nav__item')].filter(link=>link.getBoundingClientRect().width>0).map(link=>link.textContent.trim()),
           sheet:{top:box?.top ?? 0,bottom:box?.bottom ?? 0},
           options:[...document.querySelectorAll('.custom-select__option')].map(option=>({label:option.querySelector('.custom-select__option-body')?.textContent.trim() ?? '',height:option.getBoundingClientRect().height})),
           overflow:document.documentElement.scrollWidth > innerWidth,
         };
       })()`)
-      expect(state.brandVisible).toBe(true)
-      expect(state.tabs).toEqual(["Sessions", "Conversation", "Session", "Usage", "Settings"])
+      expect(state.resumeVisible).toBe(true)
+      expect(state.tabs).toEqual(["Sessions", "Usage", "Settings"])
       expect(state.sheet.bottom).toBeCloseTo(620, 0)
       expect(state.sheet.top).toBeLessThan(state.sheet.bottom)
       expect(state.options.map((option) => option.label)).toEqual(["Studio Mac", "Dev Linux"])
@@ -1403,7 +1412,7 @@ describe("remote shell layout", () => {
         }))()`)
         expect(workspaceState.overflow).toBe(false)
         expect(workspaceState.headerPickerAbsent && workspaceState.statusVisible).toBe(true)
-        expect(workspaceState.tabs).toBe(width < 768 ? 5 : 0)
+        expect(workspaceState.tabs).toBe(width < 768 ? 3 : 0)
         expect(await workspace.evaluate<string>(`document.documentElement.dataset.theme`)).toBe(theme)
         await workspace.close()
 
@@ -1462,4 +1471,11 @@ async function ready(): Promise<boolean> {
 // DESIGN.md W18: below 768px a suggestions panel may use 75% of the visual viewport; from 768px, 40% of it or 360px.
 function suggestionShare(width: number, viewport: number) {
   return width < 768 ? viewport * 0.75 : Math.min(360, viewport * 0.4)
+}
+
+async function selectDrawerSession(page: Awaited<ReturnType<NonNullable<typeof browser>["openPage"]>>, index: number) {
+  await page.evaluate(`document.querySelector('.app-header__menu').click()`)
+  for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelectorAll('.overlay--sessions-sheet[open] .session-row').length > ${index}`); attempt += 1) await Bun.sleep(50)
+  await page.evaluate(`document.querySelectorAll('.overlay--sessions-sheet[open] .session-row')[${index}]?.click()`)
+  for (let attempt = 0; attempt < 40 && await page.evaluate<boolean>(`document.querySelector('.overlay--sessions-sheet[open]') !== null`); attempt += 1) await Bun.sleep(50)
 }

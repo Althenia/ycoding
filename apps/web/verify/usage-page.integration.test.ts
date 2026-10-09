@@ -17,6 +17,22 @@ beforeAll(async () => {
 })
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 
+test("summary sparklines never overlap the exact spend and token totals", async () => {
+  for (const width of [1280, 1440]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width, 900)
+      await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html`)
+      await wait(page, `document.querySelectorAll('.usage-tile').length === 3`)
+      await page.evaluate(`document.fonts.ready`)
+      expect(await page.evaluate<{ visible: boolean; separated: boolean; contained: boolean }>(`(() => {
+        const chart=document.querySelector('.usage-tile svg'),tile=chart.closest('.usage-tile'),box=chart.getBoundingClientRect(),bounds=tile.getBoundingClientRect();
+        return {visible:box.width>0&&box.height>0,separated:[...tile.querySelectorAll('h3,strong,.usage-tile__meta span')].every(text=>{const rect=text.getBoundingClientRect();return rect.bottom<=box.top||rect.top>=box.bottom||rect.right<=box.left||rect.left>=box.right}),contained:box.left>=bounds.left&&box.right<=bounds.right&&box.top>=bounds.top&&box.bottom<=bounds.bottom};
+      })()`)).toEqual({ visible: true, separated: true, contained: true })
+    } finally { await page.close() }
+  }
+}, 30_000)
+
 test("provider distribution keeps exact large values readable in one accessible legend", async () => {
   for (const width of [320, 390, 1440]) {
     for (const theme of ["light", "dark"]) {
@@ -82,24 +98,24 @@ test("provider allowances, spend, chart and breakdown reflow without overflow ac
         expect(await page.evaluate<string>(`document.querySelector('.usage-donut__total')?.textContent ?? ''`)).toBe("$15.00")
         expect(await page.evaluate<string>(`[...document.querySelectorAll('.usage-provider')].find(card => card.textContent.includes('OpenRouter'))?.innerText ?? ''`)).toContain("$38.42 remaining")
         expect(await page.evaluate<string>(`[...document.querySelectorAll('.usage-provider')].find(card => card.textContent.includes('OpenRouter'))?.innerText ?? ''`)).toContain("$0.00")
-        const result = await page.evaluate<{ overflow: boolean; providerColumns: number; tileColumns: number; visualColumns: number; cardRadius: string; innerRadius: string; headHeight: number; mobileRows: number; requests: number; controls: boolean }>(`(() => {
+        const result = await page.evaluate<{ overflow: boolean; providerColumns: number; tileColumns: number; visualColumns: number; cardRadius: string; innerBorder: string; headHeight: number; mobileRows: number; requests: number; controls: boolean; content: number }>(`(() => {
           const providers = document.querySelector('.usage-providers'); const tiles = document.querySelector('.usage-tiles'); const visuals = document.querySelector('.usage-visuals');
-          return { overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+          return { content: document.querySelector('.usage-page').clientWidth, overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
             providerColumns: getComputedStyle(providers).gridTemplateColumns.split(' ').length,
             tileColumns: getComputedStyle(tiles).gridTemplateColumns.split(' ').length,
             visualColumns: getComputedStyle(visuals).gridTemplateColumns.split(' ').length,
             cardRadius: getComputedStyle(document.querySelector('.usage-provider')).borderTopLeftRadius,
-            innerRadius: getComputedStyle(document.querySelector('.usage-window')).borderTopLeftRadius,
+            innerBorder: getComputedStyle(document.querySelector('.usage-window')).borderTopWidth,
             headHeight: document.querySelector('.usage-head').getBoundingClientRect().height,
             mobileRows: [...document.querySelectorAll('.usage-mobile-row')].filter(row => row.getClientRects().length > 0).length,
             requests: window.usageRequests().length,
             controls: [...document.querySelectorAll('.usage-page button')].filter(button => getComputedStyle(button).display !== 'none' && button.getClientRects().length > 0).every(button => button.getBoundingClientRect().height >= 44) } })()`)
         expect(result.overflow).toBe(false)
-        expect(result.providerColumns).toBe(width! >= 1280 ? 3 : width! >= 768 ? 2 : 1)
-        expect(result.tileColumns).toBe(width! >= 1024 ? 3 : 1)
-        expect(result.visualColumns).toBe(width! >= 1024 ? 2 : 1)
+        expect(result.providerColumns).toBe(result.content >= 1280 ? 3 : result.content >= 768 ? 2 : 1)
+        expect(result.tileColumns).toBe(result.content >= 1024 ? 3 : 1)
+        expect(result.visualColumns).toBe(result.content >= 1024 ? 2 : 1)
         expect(result.cardRadius).toBe("16px")
-        expect(result.innerRadius).toBe("12px")
+        expect(result.innerBorder).toBe("0px")
         if (width! >= 768) expect(result.headHeight).toBeLessThan(100)
         expect(result.mobileRows).toBe(width! < 768 ? 25 : 0)
         if (width! < 768) expect(await page.evaluate<number>(`document.querySelectorAll('.usage-mobile-row .usage-provider-chip').length`)).toBe(25)

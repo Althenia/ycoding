@@ -37,8 +37,8 @@ async function openPicker(width: number, machineName = "Studio Mac") {
   const page = await browser.openPage()
   await page.setViewport(width, 844)
   await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=conversation-workspace-${width === 1440 ? 1440 : 390}${machineName === "Studio Mac" ? "" : `&machineName=${encodeURIComponent(machineName)}`}`)
-  for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.querySelector('.remote-nav a[href="/remote/settings"]') !== null`); attempt += 1) await Bun.sleep(50)
-  await page.evaluate(`document.querySelector('.remote-nav a[href="/remote/settings"]')?.click()`)
+  for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.querySelector('a[href="/remote/settings"]') !== null`); attempt += 1) await Bun.sleep(50)
+  await page.evaluate(`document.querySelector('a[href="/remote/settings"]')?.click()`)
   for (let attempt = 0; attempt < 50; attempt += 1) {
     if (await page.evaluate<boolean>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.textContent?.trim() === ${JSON.stringify(machineName)}`)) break
     await Bun.sleep(50)
@@ -76,7 +76,7 @@ describe("machine picker", () => {
         expect(state.pathname).toBe("/remote/session")
         expect(state.search).toContain("session_id=ses_fixture")
         expect(state.search).toContain("device_id=dev_studio")
-        expect(state.activeView).toBe("Session")
+        expect(state.activeView).toBe("Sessions")
         expect(state.alert).toBe(expectedAlert)
         expect(state.requests).toEqual([])
         expect(state.text).not.toContain("ycoding remote connect")

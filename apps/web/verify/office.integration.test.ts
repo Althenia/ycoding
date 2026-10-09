@@ -470,9 +470,9 @@ describe("remote Office presentation", () => {
       await page.evaluate<void>(`(() => {window.__entrances=[];const tick=()=>{for(const frame of window.__officeGame?.scene.getScene('office')?.latestFrames??[]){const y=Math.floor(frame.position.y/32);if(frame.moving||y>=37)window.__entrances.push({id:frame.actor.sessionID,moving:frame.moving,y})}requestAnimationFrame(tick)};tick()})()`)
       for (const [away, back] of [["/remote/settings", "/remote/session?session_id=ses_fixture&device_id=dev_studio"], ["/remote/usage", "/remote/session?session_id=ses_fixture&device_id=dev_studio"]] as const) {
         const mounts = await page.evaluate<number>(`window.__officeMounts`)
-        await page.evaluate<void>(`document.querySelector('.remote-nav__link[href=${JSON.stringify(away)}]').click()`)
+        await page.evaluate<void>(`document.querySelector('.remote-nav a[href=${JSON.stringify(away)}]').click()`)
         expect(await until(page, `document.querySelectorAll('.office-canvas-host canvas').length===0`, 100)).toBe(true)
-        await page.evaluate<void>(`document.querySelector('.remote-nav__link[href=${JSON.stringify(back)}]').click()`)
+        await page.evaluate<void>(`document.querySelector('.workspace-resume[href=${JSON.stringify(back)}]').click()`)
         expect(await until(page, `window.__officeMounts===${mounts + 1}&&window.__officeGame.scene.getScene('office').latestFrames.length===3`, 150)).toBe(true)
         await Bun.sleep(700)
         expect(await page.evaluate<unknown>(placements)).toEqual(before)

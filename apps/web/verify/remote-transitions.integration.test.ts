@@ -75,7 +75,7 @@ describe("remote route transitions with a slow relay", () => {
       await openConversation(page, 400)
       await drain(page)
       const link = await page.evaluate<{ readonly x: number; readonly y: number }>(`(() => {
-        const box = document.querySelector('a.remote-nav__link[href="/remote/usage"]').getBoundingClientRect()
+        const box = document.querySelector('.remote-nav a[href="/remote/usage"]').getBoundingClientRect()
         return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
       })()`)
       const hoveredAt = await page.evaluate<number>("performance.now()")
@@ -144,7 +144,7 @@ async function openConversation(page: Page, latency: number) {
 
 async function follow(page: Page, route: { readonly href: string; readonly frame: string; readonly content: string }) {
   return page.evaluate<Frame[]>(`(async () => {
-    const link = [...document.querySelectorAll("a.remote-nav__link")].find((anchor) => anchor.getAttribute("href") === ${JSON.stringify(route.href)})
+    const link = [...document.querySelectorAll(".remote-nav a, .workspace-resume")].find((anchor) => anchor.getAttribute("href") === ${JSON.stringify(route.href)})
     const start = performance.now()
     const frames = []
     link.click()

@@ -253,9 +253,9 @@ describe("remote responsive state behavior", () => {
           readonly bottomNavigationVisible: boolean
         }>(`(() => {
           const visible = (element) => element instanceof HTMLElement && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0 && getComputedStyle(element).display !== 'none';
-          const workspace = document.querySelector('.workspace');
+          const app = document.querySelector('.app');
           return {
-            columns: workspace instanceof HTMLElement ? getComputedStyle(workspace).gridTemplateColumns.split(' ').filter(Boolean).length : 0,
+            columns: app instanceof HTMLElement ? getComputedStyle(app).gridTemplateColumns.split(' ').filter(Boolean).length : 0,
             railVisible: visible(document.querySelector('.workspace__rail')),
             activityControl: document.querySelectorAll('button[aria-label="Open activity"]').length,
             activityNavigation: document.querySelectorAll('a[href="/remote/activity"]').length,
@@ -307,11 +307,13 @@ describe("remote responsive state behavior", () => {
     await page.close()
   }, 30_000)
 
-  test("uses the compact Sessions composition without a redundant page heading", async () => {
+  test("uses the compact Sessions composition with one page heading and a generic New session action", async () => {
     const page = await scenario("session-list", 768, "Async Auth Token Revocation Migration")
     await selectSessionWorkspace(page, "db-pruner", "Postgres Partition Pruning Worker")
-    const state = await page.evaluate<{ readonly headingVisible: boolean; readonly columns: number }>(`(() => { const heading=document.querySelector('.sessions-page .page-head'); const grid=document.querySelector('.sessions-table'); return {headingVisible:heading instanceof HTMLElement&&getComputedStyle(heading).display!=='none',columns:grid instanceof HTMLElement?getComputedStyle(grid).gridTemplateColumns.split(' ').length:0} })()`)
-    expect(state.headingVisible).toBe(false)
+    const state = await page.evaluate<{ readonly headingVisible: boolean; readonly title: string; readonly newSession: boolean; readonly columns: number }>(`(() => { const heading=document.querySelector('.sessions-page .page-head'); const grid=document.querySelector('.sessions-table'); const action=document.querySelector('.sessions-page > .page-head .new-session__trigger'); return {headingVisible:heading instanceof HTMLElement&&getComputedStyle(heading).display!=='none',title:document.querySelectorAll('.sessions-page h1').length===1?document.querySelector('.sessions-page h1').textContent.trim():'',newSession:action instanceof HTMLElement&&action.getBoundingClientRect().height>0,columns:grid instanceof HTMLElement?getComputedStyle(grid).gridTemplateColumns.split(' ').length:0} })()`)
+    expect(state.headingVisible).toBe(true)
+    expect(state.title).toBe("Sessions")
+    expect(state.newSession).toBe(true)
     expect(state.columns).toBe(1)
     await page.close()
   }, 30_000)
@@ -322,6 +324,7 @@ describe("remote responsive state behavior", () => {
     for (const width of [1280, 1440, 2048] as const) {
       await page.setViewport(width, 900)
       const state = await page.evaluate<{
+        readonly available: number
         readonly width: number
         readonly center: number
         readonly contentCenter: number
@@ -339,6 +342,7 @@ describe("remote responsive state behavior", () => {
         if (!(table instanceof HTMLElement) || !(rows[0] instanceof HTMLElement) || targets.length === 0) throw new Error('session list Sessions table missing')
         const layout = document.querySelector('.sessions-page__layout').getBoundingClientRect()
         return {
+          available: document.querySelector('.workspace__scroll').clientWidth,
           width: layout.width,
           center: layout.left + layout.width / 2,
           contentCenter: (() => { const scroller = document.querySelector('.workspace__scroll'); return scroller.getBoundingClientRect().left + scroller.clientLeft + scroller.clientWidth / 2 })(),
@@ -351,7 +355,8 @@ describe("remote responsive state behavior", () => {
           overflowing: document.documentElement.scrollWidth > innerWidth,
         }
       })()`)
-      expect(state.width).toBeGreaterThanOrEqual(width - 128)
+      expect(state.width).toBeLessThanOrEqual(1200)
+      expect(state.width).toBeGreaterThanOrEqual(Math.min(1200, state.available - 96))
       expect(Math.abs(state.center - state.contentCenter)).toBeLessThanOrEqual(2)
       expect(state.tableWidth).toBeGreaterThanOrEqual(state.contentWidth - 2)
       expect(state.rows).toBe(1)
@@ -422,7 +427,8 @@ describe("remote responsive state behavior", () => {
         expect(state.targets).toHaveLength(1)
         expect(state.targets.every((height) => height >= 44)).toBe(true)
         expect(state.rowCount).toBe(1)
-        expect(await page.evaluate<number>(`document.querySelectorAll('.sessions-page .workspace-nav__item').length`)).toBe(4)
+        if (width >= 768) expect(await page.evaluate<number>(`document.querySelectorAll('.workspace__rail .workspace-nav__item').length`)).toBe(4)
+        else expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.workspace-select [aria-label="Workspace"]')].some(trigger => trigger.getBoundingClientRect().width > 0)`)).toBe(true)
         expect(state.overflowing).toBe(false)
         await page.close()
       }
@@ -433,11 +439,11 @@ describe("remote responsive state behavior", () => {
     for (const theme of ["light", "dark"] as const) {
       const page = await scenario("conversation-workspace", 390, "Token expiry refactor", theme)
       const status = await page.evaluate<{ readonly label: string; readonly visible: boolean }>(`(() => {
-        const chip = document.querySelector('.conversation-breadcrumb .chip');
-        return { label: chip?.textContent?.trim() ?? '', visible: chip instanceof HTMLElement && chip.getBoundingClientRect().height > 0 && getComputedStyle(chip.parentElement).display !== 'none' };
+        const control = document.querySelector('.composer button[aria-label="Autonomy level"]');
+        return { label: control?.textContent?.trim().startsWith('Standard') ? 'Standard' : (control?.textContent?.trim() ?? ''), visible: control instanceof HTMLElement && control.getBoundingClientRect().height > 0 && getComputedStyle(control).display !== 'none' };
       })()`)
       expect(status).toEqual({ label: "Standard", visible: true })
-      expect(await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb__status')?.textContent?.includes('Running') === false`)).toBe(true)
+      expect(await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb') !== null && document.querySelector('.conversation-breadcrumb').textContent.includes('Running') === false`)).toBe(true)
       expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
       await page.close()
     }
@@ -839,10 +845,10 @@ async function scenario(scenarioName: string, width: number, expected: string, t
   return fixture(`scenario=${scenarioName}-${width}`, width, expected, theme)
 }
 
-async function selectSessionWorkspace(page: Awaited<ReturnType<NonNullable<typeof browser>["openPage"]>>, directory: string, expected: string, scope = ".sessions-page", row = ".sessions-table__row") {
+async function selectSessionWorkspace(page: Awaited<ReturnType<NonNullable<typeof browser>["openPage"]>>, directory: string, expected: string, scope = ".app", row = ".sessions-table__row") {
   if (scope === ".workspace__rail") {
     await page.evaluate(`document.querySelector('.remote-nav a[href="/remote/sessions"]').click()`)
-    for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.sessions-page .workspace-nav__item') !== null`); attempt += 1) await Bun.sleep(50)
+    for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.workspace__rail .workspace-nav__item') !== null`); attempt += 1) await Bun.sleep(50)
     await selectSessionWorkspace(page, directory, expected)
     await page.evaluate(`[...document.querySelectorAll('.sessions-table__select')].find(button => button.textContent.includes(${JSON.stringify(expected)}))?.click()`)
     for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.workspace__rail .session-row')?.textContent?.includes(${JSON.stringify(expected)}) ?? false`); attempt += 1) await Bun.sleep(50)

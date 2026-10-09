@@ -165,16 +165,16 @@ export function UsagePage() {
       <Show when={!providerData() && remote.state().transport.kind !== "open" && providerRead().status === "idle"}><p class="usage-message" role="status">Connect to a machine to see usage.</p></Show>
       <Show when={!providerData() && providerRead().status === "loading"}><LoadingPlaceholder kind="usage" label="Loading provider quotas…" /></Show>
       <Show when={providerData() && providerRead().status === "ready" && providers().length === 0}><p class="usage-message">No connected provider reports quotas.</p></Show>
-      <div class="usage-providers"><For each={providerKeys()}>{(key, index) => {
+      <div class="usage-providers"><For each={providerKeys()}>{(key) => {
         const initial = providers().find((provider) => providerKey(provider) === key)!
-        return <ProviderCard provider={() => providers().find((provider) => providerKey(provider) === key) ?? initial} now={now()} index={index()} />
+        return <ProviderCard provider={() => providers().find((provider) => providerKey(provider) === key) ?? initial} now={now()} />
       }}</For></div>
     </section>
 
     <section class="usage-spend" aria-labelledby="usage-spend-title">
       <h2 class="visually-hidden" id="usage-spend-title">Spend overview</h2>
       <Show when={dailyData()}>
-        <div class="usage-tiles"><For each={tileIDs}>{(id, index) => <article class="usage-tile" style={{ "--usage-index": index() }}>
+        <div class="usage-tiles"><For each={tileIDs}>{(id) => <article class="usage-tile">
           <h3>{tileLabels[id]}</h3><strong>{money(tileValue(id).cost)}</strong>
           <p class="usage-tile__meta"><span>{count(tileValue(id).requests)} requests</span><span>{count(tileValue(id).tokens)} tokens</span></p>
           <Show when={id === "last30"}><svg viewBox="0 0 100 32" aria-label="Spend trend over the last 30 days" role="img" preserveAspectRatio="none"><polyline points={sparkline()} /></svg></Show>
@@ -286,12 +286,12 @@ export function UsagePage() {
   </div>
 }
 
-function ProviderCard(props: { readonly provider: () => UsageProvider; readonly now: number; readonly index: number }) {
+function ProviderCard(props: { readonly provider: () => UsageProvider; readonly now: number }) {
   const label = (value: string) => value.replaceAll("_", " ")
   const heading = () => providerHeading(props.provider())
   const updated = () => new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(props.provider().updatedAt)
   const provenance = () => `Updated ${updated()} — source: ${label(props.provider().source).replace("api", "API")}, stability: ${label(props.provider().stability)}`
-  return <article class="usage-provider" style={{ "--usage-index": props.index }}>
+  return <article class="usage-provider">
     <header class="usage-provider__head"><div class="usage-provider__identity"><span class={`usage-status usage-status--${props.provider().status}`} title={label(props.provider().status)} aria-label={`${label(props.provider().status)} quota status`} /><h3>{heading().name}</h3><Show when={heading().plan}><span class="usage-provider__plan">{heading().plan}</span></Show><Show when={props.provider().status !== "available"}><span class="usage-provider__state">{label(props.provider().status)}</span></Show></div>
       <span class="usage-provider__freshness">{props.provider().status === "error" ? "Checked" : "Synced"} <time datetime={new Date(props.provider().updatedAt).toISOString()} title={provenance()} aria-label={provenance()}>{relativeFreshness(props.provider().updatedAt, props.now)}</time></span></header>
     <Show when={props.provider().windows.length > 0} fallback={<p class="usage-provider__empty">{props.provider().message ?? "This provider has not reported any quota metrics."}</p>}>

@@ -80,7 +80,7 @@ test("all screen entries choose their position before paint without resetting sa
       { href: "/remote", pathname: "/remote", bottom: false },
       { href: "/remote/session?session_id=ses_fixture&device_id=dev_studio", pathname: "/remote/session", bottom: true },
     ]) {
-      await page.evaluate(`(() => { window.entryPositions=[]; window.entryRoute=${JSON.stringify(route.pathname)}; window.entryBottom=${route.bottom}; window.entrySampling=true; const tick=()=>{ if(!window.entrySampling) return; const panel=[...document.querySelectorAll('.workspace__scroll > .route-panel')].find(panel=>!panel.inert); if(location.pathname===window.entryRoute && panel && panel.children.length && getComputedStyle(panel).opacity!=='0') { const root=document.querySelector('.workspace__scroll'); window.entryPositions.push(window.entryBottom ? root.scrollHeight-root.clientHeight-root.scrollTop : root.scrollTop); } requestAnimationFrame(tick); }; requestAnimationFrame(tick); document.querySelector('${width < 768 ? ".bottom-nav" : ".remote-nav"} a[href="${route.href}"]').click(); })()`)
+      await page.evaluate(`(() => { window.entryPositions=[]; window.entryRoute=${JSON.stringify(route.pathname)}; window.entryBottom=${route.bottom}; window.entrySampling=true; const tick=()=>{ if(!window.entrySampling) return; const panel=[...document.querySelectorAll('.workspace__scroll > .route-panel')].find(panel=>!panel.inert); if(location.pathname===window.entryRoute && panel && panel.children.length && getComputedStyle(panel).opacity!=='0') { const root=document.querySelector('.workspace__scroll'); window.entryPositions.push(window.entryBottom ? root.scrollHeight-root.clientHeight-root.scrollTop : root.scrollTop); } requestAnimationFrame(tick); }; requestAnimationFrame(tick); document.querySelector(${JSON.stringify(entryControl(width, route.href))}).click(); })()`)
       await wait(page, `window.entryPositions.length>=4`)
       const samples = await page.evaluate<number[]>(`(() => {window.entrySampling=false; return window.entryPositions})()`)
       expect(Math.max(...samples), route.pathname).toBeLessThanOrEqual(1)
@@ -184,14 +184,14 @@ test("sidebar collapse and reopen retain the actual virtual row and transcript a
     await page.setViewport(width, 900)
     await page.setReducedMotion(true)
     await open(page, "inventoryCount=150&pageRows=150")
-    await page.evaluate(`(() => { const root=document.querySelector('.workspace__scroll'); root.dispatchEvent(new WheelEvent('wheel',{deltaY:-500,bubbles:true})); root.scrollTop=400; root.dispatchEvent(new Event('scroll')); const rail=document.querySelector('.workspace__rail'); rail.scrollTop=500; rail.dispatchEvent(new Event('scroll')); })()`)
+    await page.evaluate(`(() => { const root=document.querySelector('.workspace__scroll'); root.dispatchEvent(new WheelEvent('wheel',{deltaY:-500,bubbles:true})); root.scrollTop=400; root.dispatchEvent(new Event('scroll')); const rail=document.querySelector('.workspace__rail-body'); rail.scrollTop=500; rail.dispatchEvent(new Event('scroll')); })()`)
     await frames(page, 8)
-    await page.evaluate(`${anchor}; (() => {const rail=document.querySelector('.workspace__rail'), bounds=rail.getBoundingClientRect(); const row=[...rail.querySelectorAll('.session-list__row')].find(row=>row.getBoundingClientRect().top>=bounds.top); window.railAnchor=row; window.railTop=row.getBoundingClientRect().top; })()`)
-    await page.evaluate(`document.querySelector('[aria-label="Hide sessions sidebar"]').click()`)
+    await page.evaluate(`${anchor}; (() => {const rail=document.querySelector('.workspace__rail-body'), bounds=rail.getBoundingClientRect(); const row=[...rail.querySelectorAll('.session-list__row')].find(row=>row.getBoundingClientRect().top>=bounds.top); window.railAnchor=row; window.railTop=row.getBoundingClientRect().top; })()`)
+    await page.evaluate(`document.querySelector('[aria-label="Hide workspace sidebar"]').click()`)
     await frames(page, 8)
     const held = await page.evaluate<{ shift: number; focus: string }>(`({shift:Math.abs(window.readingAnchor.getBoundingClientRect().top-window.readingTop),focus:document.activeElement?.getAttribute('aria-label')??document.activeElement?.tagName})`)
     expect(held.shift, `focused ${held.focus}`).toBeLessThanOrEqual(1)
-    await page.evaluate(`document.querySelector('[aria-label="Show sessions sidebar"]').click()`)
+    await page.evaluate(`document.querySelector('[aria-label="Show workspace sidebar"]').click()`)
     await frames(page, 8)
     expect(await page.evaluate<boolean>(`window.railAnchor.isConnected`)).toBe(true)
     expect(await page.evaluate<number>(`Math.abs(window.railAnchor.getBoundingClientRect().top-window.railTop)`)).toBeLessThanOrEqual(1)
@@ -227,17 +227,17 @@ test("Conversation opens the new-session landing while selected Session and land
     await page.evaluate(`(() => { const field=document.querySelector('.composer-resident textarea'); field.value='Keep my unsent draft'; field.dispatchEvent(new Event('input',{bubbles:true})); })()`)
     expect(await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb [aria-label="New conversation"]') === null`)).toBe(true)
     expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth>innerWidth`)).toBe(false)
-    await page.evaluate(`[...document.querySelectorAll('a[href="/remote"]')].find(link => link.getBoundingClientRect().width > 0)?.click()`)
+    await openNewSession(page, width)
     await wait(page, `!!document.querySelector('.route-panel:not([inert]) .new-session-composer__brand')`)
     expect(await page.evaluate<string>(`location.pathname`)).toBe("/remote")
     expect(await page.evaluate<number>(`window.requestLog.filter(row=>row.operation==='session.create').length`)).toBe(0)
     await page.evaluate(`(() => { const field=document.querySelector('.new-session-composer textarea'); window.newConversationDraft=field; field.value='Keep the new-conversation draft too'; field.dispatchEvent(new Event('input',{bubbles:true})); })()`)
-    await page.evaluate(`document.querySelector('${width < 768 ? ".bottom-nav" : ".remote-nav"} a[href^="/remote/session?"]').click()`)
+    await page.evaluate(`document.querySelector('.workspace-resume[href^="/remote/session?"]').click()`)
     await wait(page, `location.pathname === '/remote/session' && !!document.querySelector('.remote-conversation-view:not([inert]) .conversation-pane')`)
     expect(await page.evaluate<string>(`document.querySelector('.composer-resident textarea').value`)).toBe("Keep my unsent draft")
     await wait(page, `!document.querySelector('.workspace__scroll > .route-panel--exiting')`)
     expect(await page.evaluate<boolean>(`document.querySelector('.new-session-composer').closest('.route-panel').getClientRects().length===0`)).toBe(true)
-    await page.evaluate(`[...document.querySelectorAll('a[href="/remote"]')].find(link => link.getBoundingClientRect().width > 0)?.click()`)
+    await openNewSession(page, width)
     await wait(page, `!!document.querySelector('.route-panel:not([inert]) .new-session-composer textarea')`)
     expect(await page.evaluate<string>(`document.querySelector('.new-session-composer textarea').value`)).toBe("Keep the new-conversation draft too")
     expect(await page.evaluate<boolean>(`document.querySelector('.new-session-composer textarea')===window.newConversationDraft`)).toBe(true)
@@ -275,7 +275,7 @@ test("a new-conversation attachment draft survives an uncertain creation outcome
   const page = await browser.openPage()
   try {
     await open(page, "creation=unknown")
-    await page.evaluate(`[...document.querySelectorAll('a[href="/remote"]')].find(link => link.getBoundingClientRect().width > 0)?.click()`)
+    await openNewSession(page, 1440)
     await wait(page, `location.pathname === '/remote' && !!document.querySelector('.new-session-composer [aria-label="Create session"]:not([disabled])')`)
     await wait(page, `!!document.querySelector('.new-session-composer [aria-label="Create session"]:not([disabled])')`)
     await page.evaluate(`(() => {const transfer=new DataTransfer(); transfer.items.add(new File(['A scoped draft'], 'scope.txt', {type:'text/plain'})); document.querySelector('.new-session-composer .composer__row').dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}));})()`)
@@ -338,11 +338,11 @@ test("completed output and snapshot refresh leave trusted typing, agent/model co
     await page.pressEscape()
     await wait(page, `document.querySelector('[role="listbox"][aria-label="Agent"]')===null`)
     await click('.composer-resident [aria-label="Model"]')
-    await wait(page, `!!document.querySelector('[role="dialog"][aria-label="Reasoning effort"]')`)
+    await wait(page, `!!document.querySelector('[role="dialog"][aria-label="Model settings"]')`)
     await click('[aria-label="Close model picker"]')
     await click('.remote-nav [href="/remote/sessions"]')
     await wait(page, `!!document.querySelector('.route-panel--active .sessions-page')`)
-    await click('.remote-nav [href^="/remote/session?"]')
+    await click('.workspace-resume[href^="/remote/session?"]')
     await wait(page, `!!document.querySelector('.remote-conversation-view.route-panel--active')`)
     expect(await page.evaluate<string>(`document.querySelector('.composer-resident .composer__input').value`)).toBe("x")
   } finally { await page.close() }
@@ -365,3 +365,17 @@ test("Connected Sessions paints named loading content in the carousel and worksp
     expect(await page.evaluate<number>(`document.querySelectorAll('.workspace-nav .loading-placeholder,.running-sessions .loading-placeholder').length`)).toBe(0)
   } finally { await page.close() }
 }, 60_000)
+
+function entryControl(width: number, href: string) {
+  if (href === "/remote") return width < 768 ? ".sessions-page > .page-head .new-session__trigger" : ".workspace-new-session .new-session__trigger"
+  if (href.startsWith("/remote/session?")) return `.workspace-resume[href="${href}"]`
+  return `${width < 768 ? ".bottom-nav" : ".remote-nav"} a[href="${href}"]`
+}
+
+async function openNewSession(page: Awaited<ReturnType<typeof browser.openPage>>, width: number) {
+  if (width < 768 && await page.evaluate<boolean>(`location.pathname !== '/remote/sessions'`)) {
+    await page.evaluate(`document.querySelector('.bottom-nav a[href="/remote/sessions"]').click()`)
+    await wait(page, `location.pathname === '/remote/sessions'`)
+  }
+  await page.evaluate(`document.querySelector(${JSON.stringify(entryControl(width, "/remote"))}).click()`)
+}

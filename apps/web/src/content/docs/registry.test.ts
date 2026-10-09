@@ -88,11 +88,12 @@ describe("documentation index", () => {
 })
 
 describe("remote workspace documentation", () => {
-  test("documents all five destinations, distinguishes landing from transcript, and keeps Session links device-scoped", () => {
+  test("documents Focus navigation, distinguishes creation from detail, and keeps Session links device-scoped", () => {
     const remote = findDocPage("usage/remote")
     const text = JSON.stringify(remote?.sections)
-    expect(text).toContain("Sessions (/remote/sessions), Conversation (/remote), Session (/remote/session), Usage (/remote/usage), and Settings (/remote/settings)")
-    expect(text).toContain("Conversation is always the logo and new-session landing")
+    expect(text).toContain("Sessions (/remote/sessions), Usage (/remote/usage), and Settings (/remote/settings)")
+    expect(text).toContain("New session at /remote")
+    expect(text).toContain("Resume session")
     expect(text).toContain("/remote/session?session_id=<id>&device_id=<id>")
     expect(text).toContain("with optional &notice_id=<id>")
     expect(text).toContain("unknown, revoked, or offline device is reported unavailable, with no fallback to another machine")

@@ -22,10 +22,17 @@ import {
   connectionLabel,
   summarizeConnection,
   workspaceLabels,
+  workspaceDestination,
   type AccountReadState,
   type RemoteConnectionState,
   type RemoteSessionSummary,
 } from "./view-model"
+
+test("Focus navigation groups Session creation and detail under Sessions", () => {
+  for (const path of ["/remote", "/remote/session", "/remote/sessions"]) expect(workspaceDestination(path)).toBe("/remote/sessions")
+  expect(workspaceDestination("/remote/usage")).toBe("/remote/usage")
+  expect(workspaceDestination("/remote/settings")).toBe("/remote/settings")
+})
 
 test("prompt receipts distinguish sending from failed and unknown delivery", () => {
   expect(promptReceipt("pending", "steer", { state: "sending" }).label).toBe("Sending prompt")

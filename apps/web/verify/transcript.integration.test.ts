@@ -293,18 +293,18 @@ describe("transcript rendering", () => {
     } finally { await page.close() }
   })
 
-  test("keeps five icon-only accessible destinations in one phone navigation row", async () => {
+  test("keeps three labeled accessible destinations in one phone navigation row", async () => {
     const page = await browser!.openPage()
     try {
       for (const theme of ["light", "dark"] as const) for (const width of [320, 360, 390, 430]) {
         await page.setViewport(width, 844)
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?theme=${theme}`)
-        for (let i = 0; i < 300 && await page.evaluate<number>(`document.querySelectorAll('.bottom-nav__item').length`) < 4; i++) await Bun.sleep(50)
+        for (let i = 0; i < 300 && await page.evaluate<number>(`document.querySelectorAll('.bottom-nav__item').length`) < 3; i++) await Bun.sleep(50)
         const nav = await page.evaluate<{ readonly tops: readonly number[]; readonly minHeight: number; readonly names: readonly string[]; readonly labelsHidden: boolean; readonly overflow: boolean }>(`(() => { const items = [...document.querySelectorAll('.bottom-nav__item')]; return { tops: items.map(item => item.getBoundingClientRect().top), minHeight: Math.min(...items.map(item => item.getBoundingClientRect().height)), names: items.map(item => item.getAttribute('aria-label')), labelsHidden: items.every(item => { const label = item.querySelector('.bottom-nav__label'); return label instanceof HTMLElement && getComputedStyle(label).display === 'none' }), overflow: document.documentElement.scrollWidth > innerWidth } })()`)
         expect(new Set(nav.tops).size).toBe(1)
         expect(nav.minHeight).toBeGreaterThanOrEqual(44)
-        expect(nav.names.map((name) => name.replace(", waiting for your decision", ""))).toEqual(["Sessions", "Conversation", "Session", "Usage", "Settings"])
-        expect(nav.labelsHidden).toBe(true)
+        expect(nav.names.map((name) => name.replace(", waiting for your decision", ""))).toEqual(["Sessions", "Usage", "Settings"])
+        expect(nav.labelsHidden).toBe(false)
         expect(nav.overflow).toBe(false)
         await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); if (fixture) { fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden' } })()`)
         await Bun.write(new URL(`../../../.cache/tmp/bottom-nav-${theme}-${width}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
@@ -365,15 +365,15 @@ describe("transcript rendering", () => {
 
 
 
-  test("uses most of the real desktop main area and aligns transcript with composer", async () => {
+  test("bounds the desktop reading measure to 68ch and aligns transcript with composer", async () => {
     const page = await browser!.openPage()
     try {
-      for (const [width, ratio] of [[1440, 0.87], [1920, 0.8]] as const) {
+      for (const width of [1440, 1920]) {
         await page.setViewport(width, 900)
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?theme=light`)
         for (let i = 0; i < 80 && !await page.evaluate(`document.querySelector('.app--conversation.app--selected .transcript-navigation')`); i++) await Bun.sleep(50)
-        const geometry = await page.evaluate<{ readonly ratio: number; readonly left: number; readonly right: number; readonly composerLeft: number; readonly composerRight: number }>(`(() => { const main = document.querySelector('.workspace__main').getBoundingClientRect(); const transcript = document.querySelector('.transcript-navigation').getBoundingClientRect(); const composer = document.querySelector('.composer__row').getBoundingClientRect(); return { ratio: transcript.width / main.width, left: transcript.left, right: transcript.right, composerLeft: composer.left, composerRight: composer.right } })()`)
-        expect(geometry.ratio).toBeGreaterThan(ratio)
+        const geometry = await page.evaluate<{ readonly width: number; readonly measure: number; readonly left: number; readonly right: number; readonly composerLeft: number; readonly composerRight: number }>(`(() => { const app=document.querySelector('.app'), probe=document.createElement('div');probe.style.cssText='position:absolute;visibility:hidden;inline-size:68ch';app.append(probe);const measure=probe.getBoundingClientRect().width;probe.remove();const transcript = document.querySelector('.transcript-navigation').getBoundingClientRect(); const composer = document.querySelector('.composer__row').getBoundingClientRect(); return { width: transcript.width, measure, left: transcript.left, right: transcript.right, composerLeft: composer.left, composerRight: composer.right } })()`)
+        expect(Math.abs(geometry.width - geometry.measure)).toBeLessThanOrEqual(1)
         expect(Math.abs(geometry.left - geometry.composerLeft)).toBeLessThanOrEqual(1)
         expect(Math.abs(geometry.right - geometry.composerRight)).toBeLessThanOrEqual(1)
       }

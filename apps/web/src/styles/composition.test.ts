@@ -58,7 +58,7 @@ describe("responsive contract", () => {
           // A keyframes prelude is not a condition on width; only media queries carry
           // a breakpoint that must be declared.
           if (!condition.startsWith("@media")) continue
-          if (condition === PHONE_LAYOUT_QUERY) {
+          if (condition === PHONE_LAYOUT_QUERY || condition === "@media (max-width: 767px) and (max-height: 480px)" || condition === "@media (max-height: 599px)") {
             expect(name).toBe("remote.css")
             continue
           }
@@ -131,11 +131,12 @@ describe("responsive contract", () => {
     expect(hiddenBelow(docs, ".docs-bar__title", 1024)).toBe(true)
   })
 
-  test("adds only the selected conversation rail at 768 and keeps other screens full-width", async () => {
+  test("adds one shared workspace rail at 768 and keeps each screen in the remaining column", async () => {
     const remote = await readStylesheet("remote.css")
     expect(columnSteps(remote, ".workspace")).toEqual([])
-    expect(columnSteps(remote, ".app--conversation.app--selected .workspace")).toEqual([{ min: 768, tracks: 2 }])
-    expect(shownFrom(remote, ".app--conversation.app--selected .workspace__rail", 768)).toBe(true)
+    expect(columnSteps(remote, ".app")).toEqual([{ min: 768, tracks: 2 }])
+    expect(shownFrom(remote, ".workspace__rail", 768)).toBe(true)
+    expect(base(remote, ".workspace__rail-body")).toMatchObject({ "overflow-y": "auto", "overflow-anchor": "none", "min-block-size": "0" })
     for (const screen of ["sessions", "settings", "empty"]) {
       expect(declarationsWhere(remote, (rule) =>
         rule.header.split(",").map((selector) => selector.trim()).includes(`.app--${screen} .workspace__main`),
@@ -146,13 +147,13 @@ describe("responsive contract", () => {
     expect(columnSteps(remote, ".defs__row")).toEqual([{ min: 1024, tracks: 2 }])
   })
 
-  test("keeps compact navigation to one row of five centered icon targets above the bottom safe area", async () => {
+  test("keeps compact navigation to one row of three labeled targets above the bottom safe area", async () => {
     const remote = await readStylesheet("remote.css")
     const nav = base(remote, ".bottom-nav")
     const item = base(remote, ".bottom-nav__item")
     expect(nav).toMatchObject({
       display: "grid",
-      "grid-template-columns": "repeat(5, minmax(0, 1fr))",
+      "grid-template-columns": "repeat(3, minmax(0, 1fr))",
       "padding-block-end": "env(safe-area-inset-bottom)",
     })
     expect(item).toMatchObject({
@@ -160,6 +161,7 @@ describe("responsive contract", () => {
       "place-items": "center",
       "min-height": "var(--yc-bottom-nav-h)",
     })
+    expect(base(remote, ".bottom-nav__label").display).toBe("block")
   })
 
   test("keeps the header connection label readable to assistive technology when the row has no room for it", async () => {
@@ -230,14 +232,15 @@ describe("responsive contract", () => {
     expect(app["grid-template-columns"]).toBe("minmax(0, 1fr)")
   })
 
-  test("gives the remote workspace the shared rounded geometry and monospace labels", async () => {
+  test("gives Focus shared geometry, Sans navigation and Mono metadata", async () => {
     const remote = await readStylesheet("remote.css")
     for (const token of ["--yc-radius-sm", "--yc-radius-md", "--yc-radius-lg", "--yc-radius-xl", "--yc-radius-pill"]) {
       expect({ token, override: remote.rules.some((rule) => token in rule.declarations) }).toEqual({ token, override: false })
     }
-    for (const selector of [".app .pane__title", ".app .chip", ".remote-nav__link", ".request__header"]) {
+    for (const selector of [".app .pane__title", ".app .chip", ".request__header"]) {
       expect({ selector, font: base(remote, selector)["font-family"] }).toEqual({ selector, font: "var(--yc-font-mono)" })
     }
+    expect(base(remote, ".remote-nav__link")["font-family"]).toBe("var(--yc-font-sans)")
     expect(base(remote, ".app .pane__title")["text-transform"]).toBe("uppercase")
     expect(base(remote, ".session-row--active")["box-shadow"]).toBe("inset 2px 0 var(--yc-green-strong)")
   })

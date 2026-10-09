@@ -188,7 +188,7 @@ for (const viewport of ["desktop", "phone"] as const) {
 test("the landing palette selects the landing model without creating a Session", async () => {
   const page = await openChat("desktop")
   try {
-    await page.evaluate(`document.querySelector('.remote-nav a[href="/remote"]').click()`)
+    await page.evaluate(`document.querySelector('.workspace-new-session .new-session__trigger').click()`)
     await wait(page, `document.querySelector('.route-panel:not([inert]) .new-session-composer .model-control__trigger:not([disabled])') !== null`)
     await page.evaluate(`document.querySelector('.app-header__palette').click()`)
     await wait(page, paletteOpen)
