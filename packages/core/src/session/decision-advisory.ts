@@ -3,6 +3,7 @@ export * as SessionDecisionAdvisory from "./decision-advisory"
 import { Context, Effect, Layer } from "effect"
 import { Catalog } from "../catalog"
 import { Decision } from "../decision"
+import { DecisionCandidates } from "../decision-candidates"
 import { DecisionJudgment } from "../decision-judgment"
 import type { ConfigDecisions } from "../config/decisions"
 import { makeLocationNode } from "../effect/app-node"
@@ -48,7 +49,7 @@ const layer = Layer.effect(Service, Effect.gen(function* () {
       const history = yield* store.context(selected.session.id)
       if (history.some((message) => message.type === "synthetic" && message.metadata?.decisionInputID === input.id))
         return false
-      const candidates = yield* availableModels(policy.candidates).pipe(Effect.provideService(Catalog.Service, catalog))
+      const candidates = yield* DecisionCandidates.availableModels(policy.candidates).pipe(Effect.provideService(Catalog.Service, catalog))
       const inventory = selected.agent.info.steps !== undefined && step >= selected.agent.info.steps ? [] :
         (yield* registry.materialize(SessionModelRequest.toolPermissions(selected.agent.info, selected.session.permissionCeiling ?? []))).definitions
       const offeredTools = inventory.filter((tool) => tool.name !== "decision").toSorted((left, right) => left.name.localeCompare(right.name)).slice(0, 254)
@@ -123,33 +124,6 @@ const layer = Layer.effect(Service, Effect.gen(function* () {
     }),
   })
 }))
-
-export const availableModels = Effect.fn("SessionDecisionAdvisory.availableModels")(function* (
-  candidates: ConfigDecisions.Advisory["candidates"],
-) {
-  const catalog = yield* Catalog.Service
-  const available = yield* catalog.model.available()
-  return yield* Effect.forEach(candidates, (candidate) => Effect.gen(function* () {
-    if (!available.some((model) => model.providerID === candidate.model.providerID && model.id === candidate.model.model))
-      return undefined
-    const model = yield* catalog.model.get(candidate.model.providerID, candidate.model.model, candidate.model.profile)
-    if (!model || !model.enabled || !SessionRunnerModel.supported(model) ||
-      (candidate.model.profile !== undefined && !model.profiles?.some((profile) => profile.name === candidate.model.profile)) ||
-      (candidate.model.variant !== undefined && !model.variants.some((variant) => variant.id === candidate.model.variant)))
-      return undefined
-    return {
-      id: candidate.id,
-      description: candidate.description.slice(0, 8192),
-      model: { providerID: candidate.model.providerID, id: candidate.model.model,
-        ...(candidate.model.variant === undefined ? {} : { variant: candidate.model.variant }),
-        ...(candidate.model.profile === undefined ? {} : { profile: candidate.model.profile }),
-      },
-      capabilities: model.capabilities,
-      limit: model.limit,
-      variants: model.variants.map((variant) => variant.id),
-    }
-  })).pipe(Effect.map((items) => items.filter((item) => item !== undefined)))
-})
 
 export const node = makeLocationNode({
   service: Service, layer,

@@ -7,13 +7,13 @@ import { Agent } from "../agent"
 import { Catalog } from "../catalog"
 import { Config } from "../config"
 import { Decision } from "../decision"
+import { DecisionCandidates } from "../decision-candidates"
 import { DecisionJudgment } from "../decision-judgment"
 import { EventRuntime } from "../event"
 import { CatalogModel } from "../model"
 import { Permission } from "../permission"
 import type { DeepMutable } from "../schema"
 import { SessionAutonomy } from "../session/autonomy"
-import { SessionDecisionAdvisory } from "../session/decision-advisory"
 import { SessionEvent } from "../session/event"
 import { SessionGuardrail } from "../session/guardrail"
 import { SessionSchema } from "../session/schema"
@@ -128,7 +128,7 @@ export const make = Effect.fn("ScopeTool.make")(function* (spawn: Spawn) {
       const entries = yield* config.entries()
       const maxChildren = Config.latest(entries, "guardrails")?.max_concurrent_subagents ?? 8
       const depthLimit = Config.latest(entries, "experimental")?.subagent_depth ?? 1
-      const models = yield* SessionDecisionAdvisory.availableModels(settings?.advisory?.candidates ?? []).pipe(Effect.provideService(Catalog.Service, catalog))
+      const models = yield* DecisionCandidates.availableModels(settings?.advisory?.candidates ?? []).pipe(Effect.provideService(Catalog.Service, catalog))
       const conflicts = input.tasks.flatMap((task, index) => task.read_only ? [] : input.tasks.slice(index + 1).flatMap((other) =>
         other.read_only ? [] : task.ownership.flatMap((path) => other.ownership.some((target) => overlaps(path, target))
           ? [{ a: task.id, b: other.id, path }] : [])))
