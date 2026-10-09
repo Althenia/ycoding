@@ -179,6 +179,7 @@ describe("remote Office presentation", () => {
     const page = await openRemote("view=chat&presentation=office")
     try {
       expect(await until(page, `document.querySelectorAll('.office-roster__row').length === 2 && !!document.querySelector('.office-canvas-host canvas')`)).toBe(true)
+      const storage = await page.evaluate<readonly (readonly [string, string])[]>(`Object.keys(localStorage).sort().map(key=>[key,localStorage.getItem(key)])`)
       await page.evaluate<void>(`(() => {
         const canvas=document.querySelector('.office-canvas-host canvas'),rows=[...document.querySelectorAll('.office-roster__row')];
         window.officeContinuity={canvas,rows:new Map(rows.map(row=>[row.dataset.sessionId,row])),names:new Map(rows.map(row=>[row.dataset.sessionId,row.querySelector('.office-roster__name').textContent])),mounts:0};
@@ -189,6 +190,7 @@ describe("remote Office presentation", () => {
         expect(await until(page, `document.querySelector('.office-roster__row[data-session-id=${JSON.stringify(sessionID)}]')?.getAttribute('aria-current')==='true'`)).toBe(true)
         expect(await page.evaluate<{ readonly canvas: boolean; readonly rows: boolean; readonly names: boolean; readonly mounts: number }>(`(() => {const probe=window.officeContinuity,rows=[...document.querySelectorAll('.office-roster__row')];return {canvas:document.querySelector('.office-canvas-host canvas')===probe.canvas,rows:rows.length===probe.rows.size&&rows.every(row=>row===probe.rows.get(row.dataset.sessionId)),names:rows.every(row=>row.querySelector('.office-roster__name').textContent===probe.names.get(row.dataset.sessionId)),mounts:probe.mounts}})()`)).toEqual({ canvas: true, rows: true, names: true, mounts: 0 })
       }
+      expect(await page.evaluate<readonly (readonly [string, string])[]>(`Object.keys(localStorage).sort().map(key=>[key,localStorage.getItem(key)])`)).toEqual(storage)
     } finally { await page.close() }
   }, 60_000)
 

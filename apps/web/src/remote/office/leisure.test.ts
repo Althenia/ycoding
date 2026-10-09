@@ -29,6 +29,17 @@ test("the ball never travels in reduced motion or for players that are not playi
   expect(rallyBall(director.tick(0, false), 0)).toBeUndefined()
 })
 
+test("the ball disappears as soon as either end player leaves the table", () => {
+  for (const leaving of [0, 1]) {
+    const director = new OfficeDirector(officeLayout)
+    const pair = players(2)
+    director.sync(snapshot(pair))
+    expect(rallyBall(director.tick(0, false), 0)).toBeDefined()
+    director.sync(snapshot(pair.map((player, index) => index === leaving ? { ...player, status: "working" } : player)))
+    expect(rallyBall(director.tick(0, false), 0)).toBeUndefined()
+  }
+})
+
 test("the ball crosses from one end player to the other and back, arcing over the table", () => {
   const frames = framesOf(2)
   const [west, east] = frames.map((frame) => frame.position.x)

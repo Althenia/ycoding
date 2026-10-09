@@ -479,6 +479,31 @@ test("idle agents play table tennis with a moving ball and visibly changing fram
   } finally { await page.close() }
 }, 30_000)
 
+test("idle schedule paints coffee-facing and seated poses from existing frames", async () => {
+  const page = await openIdlePair()
+  try {
+    const evidence = await page.evaluate<{ readonly coffee: boolean; readonly seated: boolean; readonly coffeeFrame: boolean; readonly seatedFrame: boolean; readonly labels: readonly string[] }>(`(() => {
+      const scene=window.__officeGame.scene.getScene('office'),coffee=new Set(),seated=new Set(),labels=new Set();
+      let coffeeFrame=false,seatedFrame=false;
+      for(let tick=0;tick<10000;tick++){
+        scene.update(tick*50,50);
+        for(const frame of scene.latestFrames){
+          const phase=scene.director.leisurePhase(frame.actor.id),cell={x:Math.floor(frame.position.x/32),y:Math.floor(frame.position.y/32)};
+          if(phase?.kind==='pantry'&&frame.direction==='up'){coffee.add(cell.x+','+cell.y+':'+frame.pose);const sprite=scene.objects.get(frame.actor.id).sprite;coffeeFrame=sprite.texture.key==='characters'&&sprite.anims.currentAnim?.key.endsWith('-stand');}
+          if(phase?.kind==='rest'&&frame.pose==='sit'){seated.add(cell.x+','+cell.y);const sprite=scene.objects.get(frame.actor.id).sprite;seatedFrame=sprite.texture.key==='characters'&&!sprite.anims.isPlaying;}
+          if(frame.actor.bubble)labels.add(frame.actor.bubble);
+        }
+      }
+      return {coffee:coffee.size>0,seated:seated.size>0,coffeeFrame,seatedFrame,labels:[...labels]};
+    })()`)
+    expect(evidence.coffee).toBe(true)
+    expect(evidence.seated).toBe(true)
+    expect(evidence.coffeeFrame).toBe(true)
+    expect(evidence.seatedFrame).toBe(true)
+    expect(evidence.labels).toEqual([])
+  } finally { await page.close() }
+}, 45_000)
+
 test("any working or attention state ends play at once and removes the ball", async () => {
   for (const state of ["tool", "attention", "thinking"] as const) {
     const page = await openIdlePair()
@@ -496,13 +521,12 @@ test("any working or attention state ends play at once and removes the ball", as
   }
 }, 45_000)
 
-test("reduced motion shows static stand poses facing the table and no ball", async () => {
+test("reduced motion shows fixed desk poses without leisure travel or ball", async () => {
   const page = await openIdlePair(true)
   try {
     await advance(page, 2)
     const frames = await page.evaluate<FrameSummary>(frameSummary)
-    expect(frames.map((frame) => frame.pose)).toEqual(["stand", "stand"])
-    expect(frames.map((frame) => frame.direction)).toEqual(["right", "left"])
+    expect(frames.map((frame) => frame.pose)).toEqual(["sit", "sit"])
     expect(await page.evaluate<boolean>("window.__officeGame.scene.getScene('office').ball.visible")).toBe(false)
     const frameIDs = await page.evaluate<readonly string[]>("window.__officeGame.scene.getScene('office').latestFrames.map(frame=>String(window.__officeGame.scene.getScene('office').objects.get(frame.actor.id).sprite.frame.name))")
     const before = await page.evaluate<readonly number[]>("window.__officeGame.scene.getScene('office').latestFrames.map(frame=>frame.position.x)")

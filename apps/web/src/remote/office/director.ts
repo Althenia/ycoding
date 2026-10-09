@@ -3,6 +3,15 @@ import { officeInputsSettled } from "./model"
 import { findPath } from "./navigation"
 import type { ActorFrame, ActorSpeech, OfficeActor, OfficeCue, OfficeLayout, OfficeSnapshot, OfficeSpot, Point } from "./types"
 
+export type LeisurePhase =
+  | { readonly kind: "desk"; readonly elapsed: number; readonly duration: number }
+  | { readonly kind: "stretch"; readonly stage: "stand" | "wave" | "settle"; readonly elapsed: number; readonly duration: number }
+  | { readonly kind: "travel"; readonly destination: OfficeSpot; readonly arrival: "pantry" | "rest" | "table" }
+  | { readonly kind: "pantry"; readonly elapsed: number; readonly duration: number }
+  | { readonly kind: "rest"; readonly spot: OfficeSpot; readonly elapsed: number; readonly duration: number }
+  | { readonly kind: "table"; readonly spot: OfficeSpot; readonly elapsed: number; readonly duration: number }
+  | { readonly kind: "return" }
+
 type ActorState = {
   actor: OfficeActor
   pod: number
@@ -16,7 +25,9 @@ type ActorState = {
   leavingAge: number
   opacityAge: number
   idleAge: number
-  lounge?: OfficeSpot
+  leisurePhase?: LeisurePhase
+  reservedSpot?: OfficeSpot
+  leisureTrips: number
   speech?: ActorSpeech
   speechSource?: "decorative" | "cue"
   cueFacing?: ActorFrame["direction"]
@@ -27,6 +38,7 @@ type ActorState = {
 const center = (layout: OfficeLayout, cell: Point): Point => ({ x: cell.x * layout.tileSize + layout.tileSize / 2, y: cell.y * layout.tileSize + layout.tileSize / 2 })
 const cellAt = (layout: OfficeLayout, position: Point): Point => ({ x: Math.floor(position.x / layout.tileSize), y: Math.floor(position.y / layout.tileSize) })
 const same = (a: Point, b: Point) => a.x === b.x && a.y === b.y
+const identitySeed = (identity: string) => [...identity].reduce((seed, character) => Math.imul(seed ^ character.charCodeAt(0), 16_777_619) >>> 0, 2_166_136_261)
 
 export class OfficeDirector {
   private readonly actors = new Map<string, ActorState>()
@@ -65,7 +77,10 @@ export class OfficeDirector {
         const previousStatus = state.actor.status
         const previousSource = state.actor.source
         state.actor = actor
-        if (snapshot.connection !== "ready" || actor.status !== "idle") this.clearDecorativeGesture(state)
+        if (snapshot.connection !== "ready" || actor.status !== "idle" || actor.source !== "projection") {
+          this.clearDecorativeGesture(state)
+          this.releaseLeisure(state)
+        }
         if (terminalTask(actor) && !state.leaving) {
           if (!snapshot.cues.some((cue) => cue.kind === "report" && cue.fromActorID === actor.id)) {
             this.departed.add(actor.id)
@@ -75,7 +90,7 @@ export class OfficeDirector {
         }
         if (state.leaving && this.departed.has(actor.id)) continue
         if (state.leaving) { state.leaving = false; state.leavingAge = 0; state.opacityAge = 400 }
-        if (previousStatus !== actor.status && actor.status === "idle") state.idleAge = 0
+        if (previousStatus !== actor.status && actor.status === "idle" && actor.source === "projection" && snapshot.connection === "ready") this.beginDeskRest(state)
         if (actor.status !== "idle") state.idleAge = 0
         if (snapshot.connection === "ready" && actor.source !== "unavailable") {
           if (actor.status !== "idle" || previousSource === "unavailable" || previousStatus !== actor.status) this.route(state)
@@ -86,11 +101,15 @@ export class OfficeDirector {
       const pod = this.layout.pods.findIndex((_, index) => ![...this.actors.values()].some((current) => current.pod === index))
       if (pod < 0) continue
       const direct = !this.hydrated || snapshot.connection !== "ready" || this.reduced || actor.kind === "task" && priorRoot !== snapshot.team.rootActorID
-      const lounge = actor.status === "idle" ? this.claimLounge(actor) : undefined
-      const target = actor.status === "idle" ? lounge!.cell : this.workSpot(pod, actor).cell
+      const initialLeisure = direct && !this.hydrated && actor.status === "idle" && actor.source === "projection" && snapshot.connection === "ready"
+        ? this.claimLeisure(actor, "table") ?? this.claimLeisure(actor, "rest") ?? this.claimLeisure(actor, "pantry") : undefined
+      const target = initialLeisure?.cell ?? this.workSpot(pod, actor).cell
       const position = direct ? target : this.layout.door
       const added: ActorState = { actor, pod, position: center(this.layout, position), target: position, path: [], speed: 0, direction: "down", blocked: false,
-        leaving: false, leavingAge: 0, opacityAge: direct ? 400 : 0, idleAge: 0, lounge, speechAge: 0, lastChat: -20_000 }
+        leaving: false, leavingAge: 0, opacityAge: direct ? 400 : 0, idleAge: 0,
+        leisurePhase: initialLeisure ? this.phaseAt(initialLeisure, actor.sessionID) : actor.status === "idle" && actor.source === "projection" && snapshot.connection === "ready" ? this.deskPhase(actor.sessionID, 0) : undefined,
+        reservedSpot: initialLeisure,
+        speechAge: 0, lastChat: -20_000, leisureTrips: 0 }
       this.actors.set(actor.id, added)
       if (!direct) this.route(added)
     }
@@ -112,6 +131,8 @@ export class OfficeDirector {
 
   cueActive(actorID: string): boolean { return (this.actors.get(actorID)?.speechAge ?? 0) > 0 }
 
+  leisurePhase(actorID: string): LeisurePhase | undefined { return this.actors.get(actorID)?.leisurePhase }
+
   settle(): void {
     for (const [id, state] of this.actors) {
       if (state.leaving || terminalTask(state.actor)) { this.actors.delete(id); continue }
@@ -123,8 +144,9 @@ export class OfficeDirector {
       state.speed = 0
       state.blocked = false
       state.opacityAge = 400
+      this.releaseLeisure(state)
       if (state.actor.source !== "unavailable") {
-        state.target = state.actor.status === "idle" ? (state.lounge ??= this.claimLounge(state.actor)).cell : this.workSpot(state.pod, state.actor).cell
+        state.target = this.workSpot(state.pod, state.actor).cell
         state.position = center(this.layout, state.target)
       }
     }
@@ -149,16 +171,13 @@ export class OfficeDirector {
           if (terminalTask(state.actor)) { this.departed.add(id); this.depart(state) }
         }
       }
-      if (!state.leaving && state.actor.status === "idle" && !state.lounge && this.snapshot?.connection === "ready") {
-        state.idleAge += delta
-        if (state.idleAge >= 6_000) { state.lounge = this.claimLounge(state.actor); this.route(state) }
-      }
       this.advance(state, delta, reducedMotion)
+      this.advanceLeisure(state, delta, reducedMotion)
       if (state.leaving && state.leavingAge >= 400 && !state.path.length) this.actors.delete(id)
     }
     if (!reducedMotion && this.snapshot?.connection === "ready" && this.ambientClock >= 5_000) {
       this.ambientClock %= 5_000
-      const resting = [...this.actors.values()].filter((state) => state.actor.status === "idle" && !state.path.length && !state.leaving && !state.speech && this.layout.roomAt(cellAt(this.layout, state.position)) === "lounge")
+      const resting = [...this.actors.values()].filter((state) => state.actor.status === "idle" && state.actor.source === "projection" && !state.path.length && !state.leaving && !state.speech && this.layout.roomAt(cellAt(this.layout, state.position)) === "lounge")
       for (const [index, first] of resting.entries()) for (const second of resting.slice(index + 1)) {
         const a = cellAt(this.layout, first.position)
         const b = cellAt(this.layout, second.position)
@@ -177,18 +196,16 @@ export class OfficeDirector {
     return this.layout.pods[pod]!.spots[activity]
   }
 
-  private claimLounge(actor: OfficeActor): OfficeSpot {
-    const occupied = new Set([...this.actors.values()].flatMap((state) => state.lounge ? [`${state.lounge.cell.x},${state.lounge.cell.y}`] : []))
-    const offset = appearanceFor(actor.sessionID) % this.layout.lounge.length
-    const rotated = this.layout.lounge.map((_, index) => this.layout.lounge[(offset + index) % this.layout.lounge.length]!)
-    return [...this.layout.lounge.filter((spot) => spot.pose === "play"), ...rotated.filter((spot) => spot.pose !== "play")]
-      .find((spot) => !occupied.has(`${spot.cell.x},${spot.cell.y}`)) ?? this.layout.lounge[offset]!
+  private claimLeisure(actor: OfficeActor, kind: OfficeSpot["leisure"]): OfficeSpot | undefined {
+    const occupied = new Set([...this.actors.values()].flatMap((state) => state.reservedSpot ? [`${state.reservedSpot.cell.x},${state.reservedSpot.cell.y}`] : []))
+    const candidates = this.layout.lounge.filter((spot) => spot.leisure === kind)
+    const offset = kind === "table" ? 0 : identitySeed(actor.sessionID) % Math.max(1, candidates.length)
+    return candidates.map((_, index) => candidates[(offset + index) % candidates.length]!).find((spot) => !occupied.has(`${spot.cell.x},${spot.cell.y}`))
   }
 
   private route(state: ActorState): void {
     if (state.leaving || state.actor.source === "unavailable") return
-    if (state.actor.status !== "idle") state.lounge = undefined
-    const target = state.actor.status === "idle" ? state.lounge?.cell ?? this.layout.pods[state.pod]!.spots.implement.cell : this.workSpot(state.pod, state.actor).cell
+    const target = this.workSpot(state.pod, state.actor).cell
     if (same(target, state.target)) return
     this.move(state, target)
   }
@@ -235,13 +252,14 @@ export class OfficeDirector {
 
   private frame(state: ActorState, reducedMotion: boolean): ActorFrame {
     const atWork = !state.path.length && same(cellAt(this.layout, state.position), this.workSpot(state.pod, state.actor).cell)
-    const spot = state.actor.status === "idle" && state.lounge ? state.lounge : this.workSpot(state.pod, state.actor)
+    const phase = state.leisurePhase
+    const spot = phase?.kind === "rest" || phase?.kind === "table" ? phase.spot : state.reservedSpot ?? this.workSpot(state.pod, state.actor)
     const playing = spot.pose === "play" && !state.path.length && !reducedMotion && state.actor.source !== "unavailable" && same(cellAt(this.layout, state.position), spot.cell)
     const working = ["working", "tool", "compacting"].includes(state.actor.status)
     return {
       actor: state.actor, appearance: appearanceFor(state.actor.sessionID), position: state.position,
       direction: state.path.length ? state.direction : this.cueFacingFor(state) ?? spot.facing,
-      pose: state.path.length && !reducedMotion ? "walk" : state.actor.status === "attention" && atWork ? "wave" : state.speech ? "talk" : working && atWork && (!state.actor.activity || state.actor.activity === "implement") ? "type" : spot.pose === "play" ? playing ? "play" : "stand" : spot.pose,
+      pose: state.path.length && !reducedMotion ? "walk" : state.actor.status === "attention" && atWork ? "wave" : state.speech ? "talk" : phase?.kind === "stretch" ? phase.stage === "wave" ? "wave" : "stand" : working && atWork && (!state.actor.activity || state.actor.activity === "implement") ? "type" : spot.pose === "play" ? playing ? "play" : "stand" : spot.pose,
       moving: state.path.length > 0 && !reducedMotion && state.actor.source !== "unavailable",
       blocked: state.blocked, room: this.layout.roomAt(cellAt(this.layout, state.position)), speech: state.speech,
       leaving: state.leaving, opacity: state.leaving ? Math.max(0, 1 - state.leavingAge / 400) : state.opacityAge / 400,
@@ -254,9 +272,92 @@ export class OfficeDirector {
     state.speech = undefined
     state.speechSource = undefined
     state.speechAge = 0
-    state.lounge = undefined
+    this.releaseLeisure(state)
     this.move(state, this.layout.door)
   }
+
+  private deskPhase(identity: string, trips: number): LeisurePhase {
+    const seed = identitySeed(identity)
+    return { kind: "desk", elapsed: 0, duration: 3_000 + (seed + trips * 2_654_435_761 >>> 0) % 6_001 }
+  }
+
+  private beginDeskRest(state: ActorState): void {
+    this.releaseLeisure(state)
+    state.leisurePhase = this.deskPhase(state.actor.sessionID, state.leisureTrips)
+    state.idleAge = 0
+    this.move(state, this.workSpot(state.pod, state.actor).cell)
+  }
+
+  private phaseAt(spot: OfficeSpot, identity: string): LeisurePhase {
+    if (spot.leisure === "pantry") return { kind: "pantry", elapsed: 0, duration: 1_200 }
+    if (spot.leisure === "table") return { kind: "table", spot, elapsed: 0, duration: 8_000 + identitySeed(identity) % 6_001 }
+    return { kind: "rest", spot, elapsed: 0, duration: 4_000 + identitySeed(identity) % 7_001 }
+  }
+
+  private beginLeisureTrip(state: ActorState): void {
+    const seed = identitySeed(state.actor.sessionID) + state.leisureTrips * 2_654_435_761
+    const kind = (["pantry", "rest", "table"] as const)[(seed >>> 0) % 3]!
+    const destination = this.claimLeisure(state.actor, kind) ?? this.claimLeisure(state.actor, "rest")
+    if (!destination) {
+      state.leisurePhase = this.deskPhase(state.actor.sessionID, state.leisureTrips)
+      return
+    }
+    state.reservedSpot = destination
+    state.leisurePhase = { kind: "travel", destination, arrival: destination.leisure! }
+    this.move(state, destination.cell)
+  }
+
+  private advanceLeisure(state: ActorState, delta: number, reducedMotion: boolean): void {
+    if (state.actor.status !== "idle" || state.actor.source !== "projection" || this.snapshot?.connection !== "ready" || !officeInputsSettled(this.snapshot) || reducedMotion || state.leaving) return
+    const phase = state.leisurePhase
+    if (!phase) { this.beginDeskRest(state); return }
+    if (phase.kind === "travel") {
+      if (state.path.length) return
+      state.leisurePhase = this.phaseAt(phase.destination, state.actor.sessionID)
+      return
+    }
+    if (phase.kind === "desk" || phase.kind === "stretch" || phase.kind === "pantry" || phase.kind === "rest" || phase.kind === "table") {
+      const elapsed = phase.elapsed + delta
+      if (elapsed < phase.duration) { state.leisurePhase = { ...phase, elapsed }; return }
+      if (phase.kind === "desk") { state.leisurePhase = { kind: "stretch", stage: "stand", elapsed: 0, duration: 250 }; return }
+      if (phase.kind === "stretch") {
+        if (phase.stage === "stand") state.leisurePhase = { kind: "stretch", stage: "wave", elapsed: 0, duration: 400 }
+        else if (phase.stage === "wave") state.leisurePhase = { kind: "stretch", stage: "settle", elapsed: 0, duration: 250 }
+        else this.beginLeisureTrip(state)
+        return
+      }
+      if (phase.kind === "pantry") {
+        this.releaseReservedSpot(state)
+        const seat = this.claimLeisure(state.actor, "rest")
+        if (seat) {
+          state.reservedSpot = seat
+          state.leisurePhase = { kind: "travel", destination: seat, arrival: "rest" }
+          this.move(state, seat.cell)
+        } else this.returnHome(state)
+        return
+      }
+      this.returnHome(state)
+      return
+    }
+    if (!state.path.length) {
+      state.leisurePhase = this.deskPhase(state.actor.sessionID, state.leisureTrips)
+      state.idleAge = 0
+    }
+  }
+
+  private returnHome(state: ActorState): void {
+    state.leisureTrips++
+    this.releaseLeisure(state)
+    state.leisurePhase = { kind: "return" }
+    this.move(state, this.workSpot(state.pod, state.actor).cell)
+  }
+
+  private releaseLeisure(state: ActorState): void {
+    this.releaseReservedSpot(state)
+    state.leisurePhase = undefined
+  }
+
+  private releaseReservedSpot(state: ActorState): void { state.reservedSpot = undefined }
 
   private clearDecorativeGesture(state: ActorState): void {
     if (state.speechSource !== "decorative") return

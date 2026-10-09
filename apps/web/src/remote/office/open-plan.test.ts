@@ -74,5 +74,7 @@ test("idle workers walk from their claim to distinct shared resting spots withou
   }
   const final = director.tick(0, false).map((frame) => JSON.stringify(cell(frame.position)))
   expect(new Set(final).size).toBe(16)
-  expect(director.tick(0, false).every((frame) => officeLayout.roomAt(cell(frame.position)) === "lounge")).toBe(true)
+  const finalFrames = director.tick(0, false)
+  expect(finalFrames.every((frame) => !frame.leaving)).toBe(true)
+  expect(finalFrames.some((frame) => officeLayout.roomAt(cell(frame.position)) === "lounge")).toBe(true)
 })

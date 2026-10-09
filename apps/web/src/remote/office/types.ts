@@ -116,7 +116,7 @@ export type OfficeSnapshot = {
 
 export type Point = { readonly x: number; readonly y: number }
 
-export type OfficeSpot = { readonly cell: Point; readonly facing: Direction; readonly pose: "sit" | "stand" | "play" }
+export type OfficeSpot = { readonly cell: Point; readonly facing: Direction; readonly pose: "sit" | "stand" | "play"; readonly leisure?: "pantry" | "rest" | "table" }
 
 export type OfficeLayout = {
   readonly columns: number

@@ -155,6 +155,15 @@ test("meeting, lounge, pantry, and foyer are furnished shared rooms outside ever
   expect(loungeCells.length).toBeGreaterThanOrEqual(110)
 })
 
+test("shared leisure spots reuse seats and pantry standing positions face the existing coffee machine", () => {
+  const seated = officeLayout.lounge.filter((spot) => spot.pose === "sit")
+  expect(seated.length).toBeGreaterThanOrEqual(4)
+  expect(seated.every((spot) => officeLayout.walkable(spot.cell.x, spot.cell.y))).toBe(true)
+  const coffee = props.find((prop) => prop.kind === "coffeeMachine")!
+  const coffeeApproach = officeLayout.lounge.find((spot) => spot.cell.x === coffee.cell.x && spot.cell.y === coffee.cell.y + 1)
+  expect(coffeeApproach).toMatchObject({ facing: "up", pose: "stand" })
+})
+
 test("floors zone each neighbourhood and room with authored tile frames", () => {
   const frames = new Set<number>()
   for (let y = 1; y < rows - 1; y++) for (let x = 1; x < columns - 1; x++) frames.add(floorFrameAt(x, y))
