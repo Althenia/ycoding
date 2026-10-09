@@ -149,6 +149,10 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
 
   const office = createOfficeSettings()
   const state = () => remote.state()
+  const activeDeviceName = () => {
+    const device = state().devices.find((entry) => entry.id === state().activeDeviceID)
+    return device === undefined ? summarizeConnection(state().connection).label : remote.deviceName(device)
+  }
   const view = (): RemoteView => views.find((entry) => entry === props.path()) ?? "/remote"
   let scrollHost: HTMLDivElement | undefined
   let jumpSlot: HTMLDivElement | undefined
@@ -350,6 +354,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
     if (sessionID === undefined) return
     const draft = state().drafts[sessionID] ?? ""
     remote.store.setDraft(sessionID, draft.startsWith(text) ? draft : `${text}${draft}`)
+    window.dispatchEvent(new Event("ycoding:composer-expand"))
     if (office.presentation() === "office") office.present("conversation")
     if (view() !== "/remote/session") navigate({ to: "/remote/session", search: sessionSearch(sessionID, state().activeDeviceID) })
     focusComposerField()
@@ -409,7 +414,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
             </Show>
             <Show when={view() === "/remote/sessions"}><WorkspaceNav /></Show>
           </div>
-          <div class="workspace__rail-footer"><span class="workspace-select__label">Selected machine</span><strong>{state().devices.find((device) => device.id === state().activeDeviceID)?.name ?? summarizeConnection(state().connection).label}</strong><Link to="/remote/settings" class="text-link">Manage connection</Link></div>
+          <div class="workspace__rail-footer"><span class="workspace-select__label">Selected machine</span><strong>{activeDeviceName()}</strong><Link to="/remote/settings" class="text-link">Manage connection</Link></div>
         </aside>
         <RemoteHeader
           navExpanded={navOpen() && !navClosing()}
@@ -867,7 +872,10 @@ function SessionPanel(props: {
   let detachFeed = () => {}
   onMount(() => { if (feed) detachFeed = attachSessionFeed(feed, remote.store) })
   onCleanup(() => detachFeed())
-  const deviceName = () => state().devices.find((device) => device.id === state().activeDeviceID)?.name
+  const deviceName = () => {
+    const device = state().devices.find((entry) => entry.id === state().activeDeviceID)
+    return device === undefined ? undefined : remote.deviceName(device)
+  }
   const cached = () => cachedSessionsView(state().connection, state().sessions.length)
   const advertised = () => {
     const total = state().sessions.length
@@ -1144,7 +1152,7 @@ function useDeviceAvailability() {
       accountReadState({ connection: remote.state().connection, owner: remote.state().owner }),
       remote.state().devices.length,
       {
-        devices: remote.state().devices,
+        devices: remote.state().devices.map((device) => ({ ...device, name: remote.deviceName(device) })),
         activeDeviceID: remote.state().activeDeviceID,
         sessionCount: remote.state().sessions.length,
         unreachable: remote.state().connection.kind === "offline",

@@ -147,6 +147,36 @@ describe("responsive contract", () => {
     expect(columnSteps(remote, ".defs__row")).toEqual([{ min: 1024, tracks: 2 }])
   })
 
+  test("widens the Sessions, Usage, and Settings column at 1600 while Session detail keeps its measure", async () => {
+    const remote = await readStylesheet("remote.css")
+    const listed = (selector: string, min?: number) =>
+      declarationsWhere(remote, (rule) =>
+        rule.header.split(",").map((part) => part.trim()).includes(selector) &&
+        (min === undefined
+          ? rule.conditions.length === 0
+          : rule.conditions.some((condition) => widthThreshold(condition)?.min === min)),
+      )
+    for (const screen of ["sessions", "usage"]) {
+      expect(listed(`.app--${screen} .workspace__scroll > .route-panel`)["max-inline-size"]).toBe("var(--yc-content-max)")
+      expect(listed(`.app--${screen} .workspace__scroll > .route-panel`, 1600)["max-inline-size"]).toBe("var(--yc-content-max-wide)")
+    }
+    for (const block of [".app--settings .page-head", ".app--settings .pane"]) {
+      expect(listed(block)["inline-size"]).toBe("min(100%, var(--yc-content-max))")
+      expect(listed(block, 1600)["inline-size"]).toBe("min(100%, var(--yc-content-max-wide))")
+    }
+    expect(listed(".app--conversation.app--selected")["--remote-column"]).toBe("var(--yc-measure)")
+    expect(listed(".app--conversation.app--selected", 1600)).toEqual({})
+  })
+
+  test("reserves the command palette's scrollbar gutter beside the workspace scroller", async () => {
+    const remote = await readStylesheet("remote.css")
+    const gutter = declarationsWhere(remote, (rule) =>
+      rule.header.split(",").map((part) => part.trim()).includes(".command-palette__list") &&
+      rule.conditions.some((condition) => condition.startsWith("@supports (scrollbar-gutter: stable)")),
+    )
+    expect(gutter["scrollbar-gutter"]).toBe("stable")
+  })
+
   test("keeps compact navigation to one row of three labeled targets above the bottom safe area", async () => {
     const remote = await readStylesheet("remote.css")
     const nav = base(remote, ".bottom-nav")

@@ -11,6 +11,7 @@ import { useTheme } from "../../theme/theme-store"
 import { normalizeSchemePreference, type ThemePreference } from "../../theme/theme"
 import { SCHEMES, SCHEME_IDS } from "../../theme/schemes"
 import { useRemote } from "../context"
+import { deviceAliasLimit } from "../device-alias"
 import { createRemoteQuery } from "../query"
 import { keepAwakeView } from "../keep-awake"
 import { keepAwakeState } from "../queries"
@@ -38,6 +39,7 @@ import {
   type NotificationChannel,
 } from "../preferences"
 import "./settings.css"
+import "./device-alias.css"
 
 const themeOptions: readonly { readonly id: ThemePreference; readonly label: string }[] = [
   { id: "system", label: "System" },
@@ -50,21 +52,47 @@ const schemeOptions = SCHEME_IDS.map((id) => ({ value: id, label: SCHEMES[id].la
 export function MachineSettings(): JSX.Element {
   const remote = useRemote()
   const state = () => remote.state()
+  const [draft, setDraft] = createSignal("")
+  const selectedDevice = () => state().devices.find((device) => device.id === state().activeDeviceID)
+  createEffect(() => {
+    const deviceID = state().activeDeviceID
+    setDraft(deviceID === undefined ? "" : remote.deviceAliases()[deviceID] ?? "")
+  })
   const reachable = () => state().activeDeviceID !== undefined && state().transport.kind === "open" && state().connection.kind === "connected"
   const keepAwake = createRemoteQuery(remote.store.queryClient, () => remote.queries.keepAwake(remote.scope(), reachable()))
   const setKeepAwake = createMutation(() => remote.queries.keepAwakeMutation(remote.scope()))
   const awake = () => keepAwakeView({ keepAwake: keepAwakeState(keepAwake()), reachable: reachable() })
   const availability = () => deviceAvailabilityView(accountReadState({ connection: state().connection, owner: state().owner }), state().devices.length, {
-    devices: state().devices, activeDeviceID: state().activeDeviceID, sessionCount: state().sessions.length,
+    devices: state().devices.map((device) => ({ ...device, name: remote.deviceName(device) })), activeDeviceID: state().activeDeviceID, sessionCount: state().sessions.length,
     unreachable: state().connection.kind === "offline",
   })
+  const saveAlias = (value: string) => {
+    const deviceID = state().activeDeviceID
+    if (deviceID === undefined) return
+    remote.setDeviceAlias(deviceID, value)
+    setDraft(remote.deviceAliases()[deviceID] ?? "")
+  }
   return <Section id="machine-settings" category="Machine" title="Machine" hint="Choose an online machine to access its Sessions.">
     <CustomSelect class="remote-device__select" surfaceClass="remote-device__surface" label="Machine"
       sheetTitle="Select Active Machine" sheetSubtitle="Online machines you can connect to"
       value={state().activeDeviceID} placeholder={availability().placeholder} disabled={!availability().selectable}
-      options={state().devices.filter((device) => device.status === "active" && device.online).map((device) => ({ value: device.id, label: device.name, badge: "Online" }))}
+      options={state().devices.filter((device) => device.status === "active" && device.online).map((device) => ({ value: device.id, label: remote.deviceName(device), badge: "Online" }))}
       onChange={(deviceID) => remote.store.connect(deviceID)}
       footer={devicePickerNote(state().devices)} />
+    <Show when={selectedDevice()}>
+      {(device) => <form class="defs__row device-alias" onSubmit={(event) => { event.preventDefault(); saveAlias(draft()) }}>
+        <label class="defs__key" for="device-display-name">Display name</label>
+        <span class="defs__value">
+          <span id="device-display-name-hint" class="field__hint">Only this browser; the machine keeps its hostname {device().name}</span>
+          <input id="device-display-name" class="input" aria-describedby="device-display-name-hint" value={draft()} maxLength={deviceAliasLimit}
+            onInput={(event) => setDraft(event.currentTarget.value)} />
+          <span class="device-alias__actions">
+            <button type="submit" class="button button--secondary">Save</button>
+            <button type="button" class="button button--ghost" onClick={() => saveAlias("")}>Clear</button>
+          </span>
+        </span>
+      </form>}
+    </Show>
     <div class="defs__row" aria-busy={awake().busy}>
       <span class="defs__key" id="machine-awake-label">Keep machine awake</span>
       <span class="defs__value">
@@ -360,7 +388,8 @@ export function DeviceSettings(): JSX.Element {
             {(device) => (
               <div class="device" role="row">
                 <div class="device__body" role="cell">
-                  <span class="device__name">{device.name}</span>
+                  <span class="device__name" title={device.name}>{remote.deviceName(device)}</span>
+                  <Show when={remote.deviceName(device) !== device.name}><span class="device__hostname">{device.name}</span></Show>
                 </div>
                 <span class="device__registration" role="cell">{device.status === "revoked" ? "Revoked" : "Enrolled"}</span>
                 <span class="device__connection" role="cell">

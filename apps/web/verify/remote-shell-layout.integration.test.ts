@@ -28,6 +28,38 @@ afterAll(async () => {
 })
 
 describe("remote shell layout", () => {
+  test("keeps browser-local machine aliases in Settings and the command palette", async () => {
+    const page = await requireBrowser().openPage()
+    const url = `http://127.0.0.1:${port}/verify/remote.html?view=settings`
+    try {
+      await page.setViewport(1440, 1366)
+      await page.navigate(url)
+      for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.querySelector('#device-display-name') !== null`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`(() => { const input = document.querySelector('#device-display-name'); input.value = 'Studio Alias'; input.dispatchEvent(new InputEvent('input', { bubbles: true })); input.form.requestSubmit() })()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.device__name')?.textContent?.trim() === 'Studio Alias'`); attempt += 1) await Bun.sleep(50)
+      const aliased = await page.evaluate<{ readonly picker: string; readonly name: string; readonly hostname: string; readonly title: string | null }>(`(() => {
+        const picker = document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')
+        const name = document.querySelector('.device__name')
+        const hostname = name?.parentElement?.querySelector('.device__hostname')
+        return { picker: picker?.textContent?.trim() ?? '', name: name?.textContent?.trim() ?? '', hostname: hostname?.textContent?.trim() ?? '', title: name?.getAttribute('title') ?? null }
+      })()`)
+      expect(aliased).toEqual({ picker: "Studio Alias", name: "Studio Alias", hostname: "Studio Mac", title: "Studio Mac" })
+      await page.evaluate(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.click()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.custom-select__option') !== null`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`[...document.querySelectorAll('.custom-select__option')].find(option => option.textContent.includes('Laptop'))?.click()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.textContent?.includes('Laptop') ?? false`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`document.querySelector('.app-header__palette')?.click()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('dialog.overlay--command-palette[open]') !== null`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('dialog.overlay--command-palette [role=option] .command-palette__title')].map(title => title.textContent.trim())`)).toContain("Switch machine: Studio Alias")
+      await page.navigate(url)
+      for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.querySelector('#device-display-name') !== null`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<string>(`document.querySelector('.device__name')?.textContent?.trim() ?? ''`)).toBe("Studio Alias")
+      await page.evaluate(`document.querySelector('#device-display-name').form.querySelector('button[type="button"]').click()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.device__name')?.textContent?.trim() === 'Studio Mac'`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<{ readonly name: string; readonly hostname: boolean }>(`(() => ({ name: document.querySelector('.device__name')?.textContent?.trim() ?? '', hostname: document.querySelector('.device__hostname') !== null }))()`)).toEqual({ name: "Studio Mac", hostname: false })
+    } finally { await page.close() }
+  }, 30_000)
+
   test("keeps saved latency pages bounded while navigating older samples", async () => {
     const page = await fixture("view=settings&noSelection=1&latencyPages=1", 390, "System alerts")
     try {
@@ -121,7 +153,8 @@ describe("remote shell layout", () => {
         expect(layout.scrollable).toBe(true)
         expect(Math.abs(layout.right - layout.viewport)).toBeLessThanOrEqual(1)
         expect(layout.edgeScrolls).toBe(true)
-        expect(layout.column).toBeLessThanOrEqual(960)
+        // W48: Settings shares the 1200px content column, widening to 1600px from the expansive breakpoint.
+        expect(layout.column).toBeLessThanOrEqual(width >= 1600 ? 1600 : 1200)
         expect(Math.abs(layout.columnCenter - layout.contentCenter)).toBeLessThanOrEqual(1)
       } finally { await page.close() }
     }

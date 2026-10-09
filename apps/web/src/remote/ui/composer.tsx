@@ -13,7 +13,14 @@ import { containTab, createSheetFrame } from "./composer-sheet"
 import { attachmentLimit, encodeAttachment, type ComposerAttachment } from "./composer-attachment"
 import { ModelControl } from "./model-control"
 import { ComposerStatus } from "./status-bar"
+import { composerDockCollapsed, type ComposerDockEvent } from "./composer-dock"
 import "./composer.css"
+
+const composerDockStorageKey = "ycoding.remote.composer-collapsed"
+
+function readComposerDockCollapsed() {
+  try { return localStorage.getItem(composerDockStorageKey) === "true" } catch { return false }
+}
 
 export type ComposerSubmission = ReturnType<typeof submission>
 
@@ -51,7 +58,9 @@ export function MiniComposer(props: {
   const [contextOpen, setContextOpen] = createSignal(false)
   const [contextPinned, setContextPinned] = createSignal(false)
   const [contextLeaving, setContextLeaving] = createSignal(false)
+  const [dockCollapsed, setDockCollapsed] = createSignal(readComposerDockCollapsed())
   let input: HTMLTextAreaElement | undefined
+  let dockToggle: HTMLButtonElement | undefined
   let inputWrap: HTMLDivElement | undefined
   let autocomplete: HTMLDivElement | undefined
   let fileInput: HTMLInputElement | undefined
@@ -82,6 +91,7 @@ export function MiniComposer(props: {
   const catalog = (): CatalogView | undefined => targetKey() ? remote.state().catalogs[targetKey()!] : undefined
   const current = () => props.target && "sessionID" in props.target && remote.state().selectedSessionInfo?.id === props.target.sessionID ? remote.state().selectedSessionInfo : undefined
   const sessionTarget = () => props.target !== undefined && "sessionID" in props.target
+  const collapsed = () => dockCollapsed() && sessionTarget()
   const upload = () => props.target && "sessionID" in props.target && remote.state().upload?.sessionID === props.target.sessionID ? remote.state().upload : undefined
   const currentModel = () => {
     if (!current()) return undefined
@@ -136,6 +146,11 @@ export function MiniComposer(props: {
     const view = remote.state().view
     return sessionID && remote.state().activeSessionID === sessionID && view?.id === sessionID ? view : undefined
   }
+  const setDock = (event: ComposerDockEvent) => {
+    const next = composerDockCollapsed(dockCollapsed(), event)
+    setDockCollapsed(next)
+    try { localStorage.setItem(composerDockStorageKey, String(next)) } catch {}
+  }
   const speed = () => generationSpeedDisplay(activeView(), diagnosticsModel())
   const contextWindow = () => contextWindowDisplay(activeView(), diagnosticsModel())
   const primaryAgents = () => (catalog()?.agents ?? []).filter((item) => item.mode !== "subagent" && !item.hidden)
@@ -187,6 +202,23 @@ export function MiniComposer(props: {
     void props.text
     if (suggesting()) pacedBound.maybeExecute()
   })
+  let previousDockSession = props.target && "sessionID" in props.target ? props.target.sessionID : undefined
+  createEffect(() => {
+    const sessionID = props.target && "sessionID" in props.target ? props.target.sessionID : undefined
+    if (sessionID !== previousDockSession) {
+      previousDockSession = sessionID
+      setDock("new-session")
+    }
+  })
+  // Expand once when a request arrives, not on every render while it stays pending, so the
+  // reader can collapse the dock again while a review waits.
+  let previousRequestCount = activeView()?.requests.length ?? 0
+  createEffect(() => {
+    const count = activeView()?.requests.length ?? 0
+    const arrived = count > previousRequestCount
+    previousRequestCount = count
+    if (arrived) setDock("pending-request")
+  })
   createEffect(() => {
     if (!suggesting()) return
     measureBound()
@@ -231,6 +263,11 @@ export function MiniComposer(props: {
     const close = () => setMobileOpen(false)
     media.addEventListener("change", close)
     onCleanup(() => media.removeEventListener("change", close))
+  })
+  onMount(() => {
+    const expand = () => setDock("palette-draft")
+    window.addEventListener("ycoding:composer-expand", expand)
+    onCleanup(() => window.removeEventListener("ycoding:composer-expand", expand))
   })
   onMount(() => {
     const outside = (event: PointerEvent) => {
@@ -384,8 +421,9 @@ export function MiniComposer(props: {
         </section>
       </Portal></Show>
     </Portal></Show>
-    <div class="composer">
+    <div class="composer" classList={{ "composer--collapsed": collapsed() }}>
     <div class="composer__row" classList={{ "composer__row--dragging": dragging() }} onDragOver={(event) => { if (event.dataTransfer?.types.includes("Files")) { event.preventDefault(); setDragging(true) } }} onDragLeave={(event) => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDragging(false) }} onDrop={(event) => { setDragging(false); if (!event.dataTransfer?.files.length) return; event.preventDefault(); void addFiles(Array.from(event.dataTransfer.files)) }}>
+      <div class="composer__body" aria-hidden={collapsed()} inert={collapsed()}><div class="composer__body-inner">
       <div ref={inputWrap} class="mini-composer__input-wrap">
         <textarea ref={input} class="composer__input" rows={1} aria-label="Message your agent" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded={suggesting()} aria-controls={suggesting() ? "composer-autocomplete" : undefined} aria-activedescendant={options().length ? `composer-option-${active()}` : undefined}
           placeholder="Ask anything…" disabled={props.disabled} value={props.text}
@@ -410,18 +448,31 @@ export function MiniComposer(props: {
       </Show>
       <Show when={modelChoice().warning}>{(warning) => <p class="field__hint composer__model-warning" role="status">{warning()}</p>}</Show>
       <Show when={upload()}>{(value) => <div class="composer__upload" role="status"><span>Uploading {value().name} · {value().percent}%</span><progress aria-label={`Uploading ${value().name}`} value={value().percent} max="100" /><button type="button" onClick={() => remote.store.cancelUpload()}>Cancel upload</button></div>}</Show>
+      </div></div>
       <div class="composer__controls">
+        <div class="composer__control-set" aria-hidden={collapsed()} inert={collapsed()}>
         <ComposerPicker label="Agent" icon="user" placeholder="Default agent" value={selectedAgent()} pending={agentPending()} options={primaryAgents().map((item) => ({ value: item.id, label: item.name, detail: item.description }))} disabled={props.disabled || catalog()?.status !== "ready"} onChange={setAgent} />
         <Show when={contextWindow()}><div class="composer__context"><button ref={contextTrigger} type="button" class="composer__context-trigger" aria-label={contextAccessible()} aria-expanded={contextOpen() && !contextLeaving()} onMouseEnter={() => { if (window.matchMedia("(hover: hover)").matches) showContext() }} onMouseLeave={queueContextClose} onFocus={showContext} onBlur={() => { if (!contextPinned()) queueContextClose() }} onClick={() => { if (contextPinned()) closeContext(); else { setContextPinned(true); showContext() } }} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeContext() } }}>{ring()}</button><Show when={contextOpen()}><div class="composer__context-popover" classList={{ "composer__context-popover--leaving": contextLeaving() }} role="tooltip" aria-hidden={contextLeaving()} inert={contextLeaving()} onMouseEnter={contextClose.cancel} onMouseLeave={queueContextClose} onAnimationEnd={finishContext} onAnimationCancel={finishContext}><strong>Context window</strong><span>{contextLabel()}</span><span>{contextWindow()?.tokens}</span></div></Show></div></Show>
         <ModelControl models={catalog()?.models ?? []} selected={selectedModel()} selectionKey={modelKey()} recent={recentModels()} pending={modelPending()} disabled={props.disabled || catalog()?.status !== "ready" || sessionTarget() && current() === undefined} rememberedVariant={rememberedVariant} onChange={chooseModel} />
-        <Show when={props.showStatus}><ComposerStatus /></Show>
+        </div>
+        <Show when={props.showStatus && !collapsed()}><ComposerStatus /></Show>
+        <div class="composer__control-set" aria-hidden={collapsed()} inert={collapsed()}>
         <Show when={speed()}>{(value) => <span class="composer__speed" title="Latest generation speed">{value().label}<Show when={value().trend}><span class="composer__speed-trend" aria-hidden="true"> {value().trend}</span></Show></span>}</Show>
         <span class="composer__spacer" />
         <div class="composer__actions"><input ref={fileInput} class="composer__file-input" type="file" multiple aria-label="Choose files" onChange={(event) => { void addFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = "" }} /><button type="button" class="composer__attach" aria-label="Attach files" title="Attach files" disabled={props.disabled || reading() > 0} onClick={() => fileInput?.click()}><Icon name="plus" /></button><Show when={!props.allowEmpty}><button type="button" class="composer__delivery-toggle" aria-label={delivery() === "steer" ? "Steer mode; switch to Queue" : "Queue mode; switch to Steer"} title={delivery() === "steer" ? "Steer: switch to Queue" : "Queue: switch to Steer"} aria-pressed={delivery() === "queue"} onClick={() => setDelivery(delivery() === "steer" ? "queue" : "steer")}><Icon name={delivery()} /></button></Show>
           <Show when={props.running && props.onInterrupt}><button type="button" class="mini-composer__interrupt" aria-label="Interrupt the running step" onClick={props.onInterrupt}><Icon name="stop" /></button></Show>
           <button type="button" class="mini-composer__send" aria-label={props.allowEmpty ? "Create session" : "Send prompt"} disabled={props.disabled || reading() > 0 || (!props.allowEmpty && !props.text.trim() && !attachments().length)} onClick={() => void send()}><Icon name="send" /></button></div>
+        </div>
       </div>
     </div>
+    <Show when={sessionTarget()}><div class="composer__dock" aria-label="Composer dock">
+      <Show when={collapsed() && props.showStatus}><ComposerStatus /></Show>
+      <button ref={dockToggle} type="button" class="button button--ghost composer__dock-toggle" aria-label={collapsed() ? "Show composer" : "Hide composer"} aria-expanded={!collapsed()} onClick={() => {
+      const next = !collapsed()
+      setDock("toggle")
+      queueMicrotask(() => (next ? dockToggle : input)?.focus({ preventScroll: true }))
+    }}><Icon name="chevron-down" size={16} /><span>{collapsed() ? "Show composer" : "Hide composer"}</span></button>
+    </div></Show>
     </div>
   </>
 }

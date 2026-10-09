@@ -1160,7 +1160,7 @@ body:has(.app) {
 
 .app--settings .page-head,
 .app--settings .pane {
-  inline-size: min(100%, 960px);
+  inline-size: min(100%, var(--yc-content-max));
   margin-inline: auto;
   padding-inline: 0;
 }
@@ -1290,6 +1290,14 @@ body:has(.app) {
 .app--sessions .workspace__scroll > .route-panel,
 .app--usage .workspace__scroll > .route-panel { max-inline-size: var(--yc-content-max); margin-inline: auto; }
 
+/* Expansive screens widen the one content column; Session detail keeps its reading measure. */
+@media (min-width: 1600px) {
+  .app--sessions .workspace__scroll > .route-panel,
+  .app--usage .workspace__scroll > .route-panel { max-inline-size: var(--yc-content-max-wide); }
+  .app--settings .page-head,
+  .app--settings .pane { inline-size: min(100%, var(--yc-content-max-wide)); }
+}
+
 .sessions-page > .running-sessions { margin-block-end: var(--yc-space-5); }
 
 .sessions-page .page-head {
@@ -1389,6 +1397,11 @@ body:has(.app) {
   border: var(--yc-border-width) solid var(--yc-border);
   border-radius: var(--yc-radius-lg);
   overflow: hidden;
+}
+
+/* Flat definition lists sit on the section edge; the bordered card keeps its rows off its border. */
+.account-card .defs__row {
+  padding-inline: var(--yc-space-4);
   background: var(--yc-surface-raised);
 }
 
@@ -2255,7 +2268,8 @@ body:has(.app) {
    composer, while full-width bands still reach the window edge. */
 @supports (scrollbar-gutter: stable) and selector(::-webkit-scrollbar) {
   @media (min-width: 768px) and (pointer: fine) and (forced-colors: none) {
-    .workspace__scroll {
+    .workspace__scroll,
+    .command-palette__list {
       scrollbar-gutter: stable;
     }
 

@@ -66,6 +66,10 @@ dialog[inert]::backdrop {
   cursor: var(--yc-cursor-zoom-in);
 }
 
+:where([data-cursor="pan"]) {
+  cursor: var(--yc-cursor-pan);
+}
+
 :where([data-cursor="panning"]) {
   --yc-cursor-pan: var(--yc-cursor-panning);
   --yc-cursor-action: var(--yc-cursor-panning);

@@ -124,6 +124,7 @@ const INVARIANT_LAYOUT = {
 
 const COMPOSITIONAL_LAYOUT = {
   "--yc-content-max": "1200px",
+  "--yc-content-max-wide": "1600px",
   "--yc-rail-w": "288px",
   "--yc-docs-nav-w": "248px",
   "--yc-docs-toc-w": "200px",

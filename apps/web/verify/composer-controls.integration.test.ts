@@ -95,9 +95,82 @@ test("selected Session speed and context share one stable composer row and acces
       expect(await page.evaluate<boolean>(`document.querySelector('.mini-composer__mount .composer__context-trigger,.mini-composer__mount .composer__mobile-context-ring') !== null`)).toBe(false)
       await page.evaluate(`window.composerSetDiagnostics('unknown')`)
       expect(await page.evaluate<boolean>(`document.querySelector('.mini-composer__mount .composer__speed') !== null`)).toBe(false)
-    } finally { await page.close() }
+    } finally { await page.evaluate(`localStorage.removeItem('ycoding.remote.composer-collapsed')`).catch(() => {}); await page.close() }
   }
 }, 60_000)
+
+test("Session composer dock collapses accessibly, persists, releases transcript height, and expands for decisions and palette drafts", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.setViewport(1440, 900)
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html`)
+    await page.evaluate(`localStorage.removeItem('ycoding.remote.composer-collapsed')`)
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=conversation-workspace-1440`)
+    await wait(page, `document.querySelector('.composer__dock-toggle') !== null`)
+    await page.evaluate(`if (document.querySelector('.composer__dock-toggle').getAttribute('aria-expanded') !== 'true') document.querySelector('.composer__dock-toggle').click()`)
+    const before = await page.evaluate<{ height: number; scroll: number }>(`(() => ({ height:document.querySelector('.workspace__scroll').getBoundingClientRect().height, scroll:document.querySelector('.workspace__scroll').scrollHeight }))()`)
+    expect(await page.evaluate<number>(`document.querySelector('.composer__dock-toggle').tabIndex`)).toBe(0)
+    await page.evaluate(`document.querySelector('.composer__input').focus(); document.querySelector('.composer__dock-toggle').click()`)
+    await wait(page, `document.querySelector('.composer--collapsed') !== null`)
+    // The dock's grid-row transition runs for --yc-dur-base; measure the settled geometry.
+    await wait(page, `document.querySelector('.composer__body').getBoundingClientRect().height === 0`)
+    expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('.composer__dock-toggle')`)).toBe(true)
+    const collapsed = await page.evaluate<{ height: number; scroll: number; toggle: number; status: boolean; hidden: boolean; inert: boolean; handle: number; overflow: boolean }>(`(() => { const dock=document.querySelector('.composer'), body=dock.querySelector('.composer__body'), toggle=dock.querySelector('.composer__dock-toggle'), handle=dock.querySelector('.composer__dock'), slot=dock.querySelector('.composer__dock .session-status__slot'); return { height:document.querySelector('.workspace__scroll').getBoundingClientRect().height, scroll:document.querySelector('.workspace__scroll').scrollHeight, toggle:toggle.getBoundingClientRect().height, status:!!slot, hidden:body.getAttribute('aria-hidden')==='true', inert:body.inert, handle:handle.getBoundingClientRect().height, overflow:document.documentElement.scrollWidth>innerWidth }; })()`)
+    expect(collapsed.toggle).toBeGreaterThanOrEqual(44)
+    expect(collapsed.status).toBe(true)
+    expect(collapsed.hidden).toBe(true)
+    expect(collapsed.inert).toBe(true)
+    expect(collapsed.handle).toBeLessThanOrEqual(52)
+    expect(collapsed.height).toBeGreaterThan(before.height)
+    // Content height does not change on collapse: the scroller grows into the freed dock space, so
+    // its scrollHeight is at least the previous scrollable extent and never below its own height.
+    expect(collapsed.scroll).toBeGreaterThanOrEqual(Math.max(before.scroll, collapsed.height))
+    expect(collapsed.overflow).toBe(false)
+    await page.pressEscape()
+    expect(await page.evaluate<boolean>(`document.querySelector('.composer--collapsed') !== null`)).toBe(true)
+    expect(await page.evaluate<boolean>(`document.querySelector('.composer__body').inert`)).toBe(true)
+    await page.evaluate(`document.querySelector('.composer__dock-toggle').click()`)
+    await wait(page, `document.querySelector('.composer--collapsed') === null`)
+    expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('.composer__input')`)).toBe(true)
+    await page.evaluate(`document.querySelector('.composer__dock-toggle').click()`)
+    await wait(page, `document.querySelector('.composer--collapsed') !== null`)
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=conversation-workspace-1440`)
+    await wait(page, `document.querySelector('.composer--collapsed') !== null`)
+    await page.evaluate(`localStorage.removeItem('ycoding.remote.composer-collapsed')`)
+    for (const width of [320, 390, 768, 1024, 1440]) {
+      await page.setViewport(width, 900)
+      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth<=innerWidth`)).toBe(true)
+    }
+  } finally { await page.evaluate(`localStorage.removeItem('ycoding.remote.composer-collapsed')`).catch(() => {}); await page.close() }
+
+  for (const width of [390, 1440]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width, 900)
+      if (width === 390) await page.setCoarsePointer(true)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html`)
+      await page.evaluate(`localStorage.setItem('ycoding.remote.composer-collapsed', 'true')`)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=permission-guardrail-hard-review-form-requests-${width}`)
+      await wait(page, `document.querySelector('.request--permission') !== null`)
+      expect(await page.evaluate<boolean>(`document.querySelector('.composer--collapsed') === null && document.querySelector('.request--permission') !== null`)).toBe(true)
+      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth<=innerWidth`)).toBe(true)
+    } finally { await page.close() }
+  }
+
+  const palettePage = await browser!.openPage()
+  try {
+    await palettePage.setViewport(1440, 900)
+    await palettePage.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=conversation-workspace-1440`)
+    await wait(palettePage, `document.querySelector('.composer__dock-toggle') !== null`)
+    await palettePage.evaluate(`document.querySelector('.composer__dock-toggle').click()`)
+    await wait(palettePage, `document.querySelector('.composer--collapsed') !== null`)
+    await palettePage.evaluate(`document.querySelector('.app-header__palette').click()`)
+    await wait(palettePage, `document.querySelector('dialog.overlay--command-palette') !== null`)
+    await type(palettePage, "#command-palette-input", "Set goal")
+    await palettePage.pressKey("Enter", "Enter", 13)
+    await wait(palettePage, `document.querySelector('.composer--collapsed') === null && document.activeElement === document.querySelector('.composer__input') && document.querySelector('.composer__input').value.startsWith('/goal ')`)
+  } finally { await palettePage.evaluate(`localStorage.removeItem('ycoding.remote.composer-collapsed')`).catch(() => {}); await palettePage.close() }
+}, 90_000)
 
 test("pending prompts, mutation toasts, and the active goal remain accessible on phone and desktop", async () => {
   for (const [width, height] of [[390, 844], [1440, 900]]) for (const theme of ["light", "dark"]) {

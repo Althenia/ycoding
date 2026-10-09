@@ -87,7 +87,7 @@ export function CommandPalette(props: {
         .map((session) => ({ id: session.id, title: session.title, running: session.running, archived: session.archived })),
       devices: state.devices
         .filter((device) => device.status === "active")
-        .map((device) => ({ id: device.id, name: device.name, online: device.online, active: device.id === state.activeDeviceID })),
+        .map((device) => ({ id: device.id, name: remote.deviceName(device), online: device.online, active: device.id === state.activeDeviceID })),
       activeDeviceID: state.activeDeviceID,
       workspaces: state.sessionGroups.map((group) => ({ id: group.id, label: labels.get(group.id) ?? group.name ?? group.directory })),
       selectedWorkspaceID: state.selectedWorkspaceID,
