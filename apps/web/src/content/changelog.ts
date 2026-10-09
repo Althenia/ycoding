@@ -22,6 +22,27 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.10.5",
+    date: "2026-10-09",
+    title: "Meeting intelligence, a living Office, device aliases, and scoped delegation",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Capture meetings locally with consent-gated Chrome audio capture, configurable local Thai transcription, native TUI review, and approval-gated MCP knowledge proposals through the existing runtime." },
+      { tag: "Added", text: "Give a machine a browser-local display name in Settings → Machine. The alias appears in the machine picker, the Devices table, the command palette, and the desktop rail while the relay hostname stays visible; it never leaves the browser." },
+      { tag: "Added", text: "Hide the composer in Session detail. A named toggle collapses the dock to a one-row handle that keeps the status pill; a new Session, an arriving request, or a palette draft expands it again, and the choice persists per browser." },
+      { tag: "Added", text: "Judge a task partition before delegating with the scope tool. The primary model proposes at most ten tasks with exclusive write ownership, acceptance checks, and dependencies; the configured decision provider judges granularity, readiness, delegation, and model tier. With auto_dispatch and YOLO 1 or higher or an active goal, dispatchable tasks launch as subagents in dependency order; normal mode only advises." },
+      { tag: "Added", text: "Score guardrail risk with the decision helper. The semantic classifier rates five levels with confidence or native probability, keeps allow below allow_below, escalates confident irreversible or destructive levels to an ordinary review, and shows the judgment in the review reason." },
+      { tag: "Added", text: "Office agents work and rest like a team. Research reads at its reference spot, verification checks at the QA desk or device rack, and coordination points at its board. Idle members take finite, varied breaks; two or three idle peers occasionally gather beside the meeting table; movers yield politely on shared corridors. Every label still comes from a backend fact." },
+      { tag: "Changed", text: "Sessions, Usage, and Settings widen their content column to 1600px from the expansive breakpoint; Session detail keeps its reading measure." },
+      { tag: "Changed", text: "Recursive deletion guardrails no longer review temporary paths or multiple ordinary targets. Deleting the filesystem root, any user home, or a system directory is denied; deleting the project or an ancestor needs a hard review; deleting a direct child of the home directory is an ordinary review." },
+      { tag: "Fixed", text: "Settings account rows keep their inline padding inside the bordered card." },
+      { tag: "Fixed", text: "The command palette's active and hover bands span the full row at every list length." },
+      { tag: "Fixed", text: "The Running and recent carousel drags with the mouse and no longer leaves a focus ring on a card opened by click." },
+      { tag: "Fixed", text: "The TUI hides a Decision advisory that produced no recommendation." },
+      { tag: "Fixed", text: "Reduced motion stops every Office sprite on one fixed frame, and a work fact clears an idle gesture on the next snapshot." },
+    ],
+  },
+  {
     version: "0.10.4",
     date: "2026-10-09",
     title: "Focus workspace navigation, visible configuration problems, and complete tool errors",
