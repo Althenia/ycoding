@@ -910,7 +910,7 @@ Authentication precedence is the configured `api_key`, the selected active API-k
 
 OpenAI Decisions uses API Platform billing, separate from a ChatGPT subscription; a subscription alone supplies neither a decision API key nor included API usage. See [OpenAI billing](https://help.openai.com/en/articles/9039756-managing-billing-for-chatgpt-and-the-api-platform). Shared agent guidance directs proactive `decision` tool use for bounded classification, option choice, grading, ranking, unverifiable predicates, and calibrating a recommendation before `question`, only with configured access and authorized evidence; it does not enable billing or automatic policies.
 
-The automatic `guardrails`, `routing`, `goal`, `questions`, and `advisory` policies are disabled when omitted. Native policies require `provider` (`openai` or `typesafe`) and an explicit `min_probability` in `[0, 1]`; thresholds are inclusive and apply to the chosen option's probability, not the separate confidence field. Agent policies instead require `provider: "agent"` and `min_confidence` in `[0, 1]`. Wrong or mixed metric fields are rejected. A refusal, a missing choice, or a missing, non-finite, or out-of-range score is uncertain at every threshold; scores are never clamped.
+The automatic `guardrails`, `routing`, `goal`, `questions`, `advisory`, and `scoping` policies are disabled when omitted. Native policies require `provider` (`openai` or `typesafe`) and an explicit `min_probability` in `[0, 1]`; thresholds are inclusive and apply to the chosen option's probability, not the separate confidence field. Agent policies instead require `provider: "agent"` and `min_confidence` in `[0, 1]`. Wrong or mixed metric fields are rejected. A refusal, a missing choice, or a missing, non-finite, or out-of-range score is uncertain at every threshold; scores are never clamped.
 
 `decisions.guardrails.allow_below` accepts integers 0–4 and defaults to 2. Guardrail classification uses one score question with levels `0 none`, `1 minor`, `2 recoverable`, `3 irreversible`, and `4 destructive`. A confident level below both `allow_below` and 3 preserves deterministic allow. Levels 3–4 always request ordinary review; other non-allowed levels and uncertain, refused, or failed judgments also request ordinary review. Agent scores use the returned index and confidence. Native scores use the unique highest-probability level and its probability, not the fractional aggregate score or native confidence; ties are uncertain. Requests surface usable judgments as optional `risk` and a risk line in `reason`. Only deterministic allow is classified; denials and hard reviews remain authoritative. Temporary resources and recognized temporary deletion operands are excluded from evidence.
 
@@ -959,6 +959,27 @@ errors yield no actionable recommendation and do not fabricate one. No policy is
 the feature or by opening the web client.
 
 See [runtime policies](./runtime.md#automatic-decision-policies) and the [native decision contract](../specs/decisions.md) for disclosure, failure, safety, and usage boundaries.
+
+### Task scoping
+
+`decisions.scoping` enables `scope` to judge a partition proposed by the primary model. It uses `provider` and the provider-specific threshold above, `auto_dispatch` (Boolean, default `false`), and `max_tasks` (positive integer at most `10`, default `8`). Task IDs are short kebab-case labels matching `^[a-z0-9][a-z0-9-]*$`, at most 32 characters. Up to three questions per task plus one granularity question produce at most 31 questions; no questions are dropped. Model tiers reuse eligible `advisory.candidates`; scoping has no candidate list, and without eligible candidates tier questions are omitted. Advisory candidates may specify an optional `agent` for scoped delegation.
+
+```jsonc
+{
+  "default_agent": "delivery",
+  "agents": { "delivery": { "mode": "all" } },
+  "decisions": {
+    "scoping": {
+      "provider": "agent",
+      "min_confidence": 0.9,
+      "auto_dispatch": false,
+      "max_tasks": 8
+    }
+  }
+}
+```
+
+Supply nonempty exclusive write ownership, an observable acceptance check, read-only status, and an acyclic dependency list for every task. Duplicate IDs, unknown dependencies and cycles fail before inference; deterministic write overlaps are returned as conflicts and prevent those tasks from dispatching. Normal mode returns advice only. Automatic dispatch requires `auto_dispatch: true` plus YOLO ≥ 1 or an active goal, confident child delegation and readiness, satisfied dependencies, disjoint write ownership, and available family capacity/nesting. It reuses subagent permissions, ceilings and guardrails; a guardrail review leaves the task undispatched. The chosen tier's configured agent is used when present; otherwise `default_agent` must be subagent-eligible and permission-allowed, with no arbitrary substitute when absent or ineligible. The durable Scoping advisory is a judgment record, not approval, execution or completion evidence. The harness only nudges use of `scope`; it does not re-scope each Step. See [the scoping contract](../specs/decisions.md#task-scoping-and-dispatch).
 
 ### Decision agent
 

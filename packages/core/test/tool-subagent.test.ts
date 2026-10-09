@@ -38,6 +38,11 @@ import { Permission } from "@ycoding-ai/core/permission"
 import { Question } from "@ycoding-ai/core/question"
 import { PluginSupervisor } from "@ycoding-ai/core/plugin/supervisor"
 import { SubagentTool } from "@ycoding-ai/core/tool/subagent"
+import { ScopeTool } from "@ycoding-ai/core/tool/scope"
+import { Decision } from "@ycoding-ai/core/decision"
+import { ConfigDecisions } from "@ycoding-ai/core/config/decisions"
+import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
+import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { SubagentControlTool } from "@ycoding-ai/core/tool/subagent-control"
 import { SubagentReportTool } from "@ycoding-ai/core/tool/subagent-report"
 import { ToolHooks } from "@ycoding-ai/core/tool/hooks"
@@ -131,6 +136,8 @@ const layer = AppNodeBuilder.build(
   LayerNode.group([
     Database.node,
     EventRuntime.node,
+    SessionAutonomy.node,
+    SessionStore.node,
     Job.node,
     ToolOutputStore.cleanupNode,
     Session.node,
@@ -216,6 +223,84 @@ const withSubagent = (location: Location.Ref) =>
   })
 
 describe("SubagentTool", () => {
+  it.live("scope settles through the registry into durable background children and a projected judgment", () =>
+    Effect.acquireRelease(Effect.promise(() => tmpdir()), (dir) => Effect.promise(() => dir[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((dir) => Effect.gen(function* () {
+        yield* Effect.promise(() => Bun.write(path.join(dir.path, "ycoding.json"), JSON.stringify({
+          default_agent: "reviewer", guardrails: { enabled: false },
+        })))
+        const sessions = yield* Session.Service
+        const parent = yield* sessions.create({ location: { directory: AbsolutePath.make(dir.path) }, agent: toolIdentity.agent, model: parentModel,
+          permissionCeiling: [{ action: "shell", resource: "*", effect: "deny" }] })
+        yield* withSubagent(parent.location)
+        const events = yield* EventRuntime.Service
+        const db = (yield* Database.Service).db
+        const admitted = yield* SessionPending.admit(db, events, { sessionID: parent.id, id: SessionMessage.ID.create(),
+          input: { type: "user", delivery: "steer", data: { text: "Implement two disjoint tasks" } } })
+        yield* SessionPending.promoteSteers(db, events, parent.id)
+        const locations = yield* LocationServiceMap.Service
+        yield* SessionAutonomy.Service.use((autonomy) => autonomy.setYolo({ sessionID: parent.id, yolo: 1 })).pipe(Effect.provide(locations.get(parent.location)))
+        const scope = yield* Effect.gen(function* () {
+          const subagent = yield* SubagentTool.make(true)
+          return yield* ScopeTool.make(subagent.execute)
+        }).pipe(Effect.provideService(Decision.Service, Decision.Service.of({
+          settings: () => Effect.succeed(Schema.decodeUnknownSync(ConfigDecisions.Info)({ scoping: { provider: "agent", min_confidence: 0.8, auto_dispatch: true } })),
+          choose: () => Effect.die("Scope must batch evaluation"),
+          score: () => Effect.die("Scope must batch evaluation"),
+          evaluate: (input) => {
+            if (input.provider !== "agent") return Effect.die("Expected agent")
+            return Effect.succeed({ provider: "agent", response: { model: parentModel, semantics: "model-estimate", version: 1,
+              answers: input.request.questions.map((question) => ({ name: question.name, type: "choice", answer: null, score: null,
+                choice: question.name === "granularity" ? "right-sized" : question.name.startsWith("ready:") ? "yes" : "child", confidence: 0.9 })) } })
+          },
+        })), Effect.provide(locations.get(parent.location)))
+        const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
+        yield* registry.register({ scope }, { codemode: false }).pipe(Effect.orDie)
+        const tasks = [
+          { id: "second", title: "Second change", ownership: ["second/**"], acceptance: "Run second test", read_only: false, depends_on: ["first"] },
+          { id: "first", title: "First change", ownership: ["first/**"], acceptance: "Run first test", read_only: false, depends_on: [] },
+        ]
+        const result = yield* settleTool(registry, { sessionID: parent.id, ...toolIdentity,
+          call: { type: "tool-call", id: "scope-flow", name: "scope", input: { tasks } } })
+        expect(result.error).toBeUndefined()
+        const plan = Schema.decodeUnknownSync(ScopeTool.Output)(result.output?.structured).plan
+        expect(plan.dispatched?.map((item) => item.taskID)).toEqual(["first", "second"])
+        const orchestration = (yield* PluginRuntime.Service).orchestration
+        for (const child of plan.dispatched ?? []) {
+          const task = yield* orchestration.get(parent.id, child.sessionID)
+          expect(task.agent).toBe(Agent.ID.make("reviewer"))
+          expect(task.model?.id).toBe(childModel.id)
+          const pending = yield* db.select().from(SessionPendingTable).where(eq(SessionPendingTable.session_id, child.sessionID)).get()
+          expect(JSON.stringify(pending?.data)).toContain("Exclusive write ownership")
+          const session = yield* sessions.get(child.sessionID)
+          expect(session.parentID).toBe(parent.id)
+          expect(session.permissionCeiling?.some((rule) => rule.action === "shell" && rule.effect === "deny")).toBe(true)
+        }
+        const history = yield* SessionStore.Service.use((store) => store.context(parent.id)).pipe(Effect.provide(locations.get(parent.location)))
+        const notice = history.find((message) => message.type === "synthetic" && message.description === "Scoping advisory")
+        expect(notice).toMatchObject({ metadata: { decisionInputID: admitted.id, scoping: true } })
+        if (notice?.type === "synthetic") {
+          expect(notice.text.startsWith("Decision advisory:")).toBe(true)
+          expect(notice.text).toContain("Recommended ")
+          expect(notice.text).toContain('"dispatched"')
+        }
+        const invalid = yield* settleTool(registry, { sessionID: parent.id, ...toolIdentity,
+          call: { type: "tool-call", id: "scope-invalid", name: "scope", input: { tasks: [tasks[0]] } } })
+        expect(invalid.error?.type).toBe("tool.execution")
+        const before = (yield* orchestration.list(parent.id)).length
+        const reviewTool = yield* Effect.gen(function* () {
+          const guardrail = yield* SessionGuardrail.Service
+          return yield* SubagentTool.make(true).pipe(Effect.provideService(SessionGuardrail.Service, {
+            ...guardrail, evaluate: () => Effect.succeed({ rootSessionID: parent.id, decision: "ask", ruleIDs: ["review"], standard: false, hardReview: true }),
+          }))
+        }).pipe(Effect.provide(locations.get(parent.location)))
+        const review = yield* reviewTool.execute({ agent: "reviewer", description: "Review blocked", prompt: "Must not run" },
+          { sessionID: parent.id, agent: toolIdentity.agent, messageID: toolIdentity.messageID, callID: "scope-review", progress: () => Effect.void }).pipe(Effect.flip)
+        expect(review.metadata?.reason).toBe("review-required")
+        expect((yield* orchestration.list(parent.id)).length).toBe(before)
+      })),
+    ),
+  )
   it.effect("defines parent control and child report action unions", () =>
     Effect.sync(() => {
       expect(Schema.decodeUnknownSync(SubagentControlTool.Input)({ action: "list" })).toEqual({ action: "list" })

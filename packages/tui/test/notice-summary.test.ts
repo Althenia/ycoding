@@ -59,3 +59,9 @@ test("hides a Decision advisory that produced nothing actionable and keeps an un
   })
   expect(decisionAdvisory("TeamView: reviewer is running")).toBeUndefined()
 })
+
+test("summarizes Scoping advisory recommendations through the existing parser", () => {
+  const text = [advisoryDisclaimer, "Recommended granularity: right-sized", "Recommended task implement: child; ready yes",
+    'Scoping plan: {"conflicts":[],"dispatched":[]}'].join("\n")
+  expect(decisionAdvisory(text)?.summary).toBe("Decision advisory · 2 recommendations")
+})

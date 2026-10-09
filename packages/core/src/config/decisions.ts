@@ -62,6 +62,7 @@ export class AgentRouting extends Schema.Class<AgentRouting>("Config.Decisions.A
 const AdvisoryCandidates = Schema.Array(Schema.Struct({
   id: Candidate.fields.id,
   description: Candidate.fields.description,
+  agent: Candidate.fields.agent,
   model: ConfigModel.Selection,
 })).check(Schema.isMinLength(1), Schema.isMaxLength(254),
   Schema.makeFilter((candidates) => new Set(candidates.map((candidate) => candidate.id)).size === candidates.length))
@@ -84,6 +85,21 @@ export class AgentAdvisory extends Schema.Class<AgentAdvisory>("Config.Decisions
   directions: Directions,
 }) {}
 
+const ScopingFields = {
+  auto_dispatch: Schema.Boolean.pipe(Schema.optional),
+  max_tasks: PositiveInt.check(Schema.isLessThanOrEqualTo(10)).pipe(Schema.optional),
+}
+
+export class Scoping extends Schema.Class<Scoping>("Config.Decisions.Scoping")({
+  ...Policy.fields,
+  ...ScopingFields,
+}) {}
+
+export class AgentScoping extends Schema.Class<AgentScoping>("Config.Decisions.AgentScoping")({
+  ...AgentPolicy.fields,
+  ...ScopingFields,
+}) {}
+
 const Connection = Schema.Struct({
   api_key: Schema.NonEmptyString.pipe(Schema.optional),
   base_url: Schema.String.check(Schema.isPattern(/^https?:\/\//)).pipe(Schema.optional),
@@ -100,4 +116,5 @@ export class Info extends Schema.Class<Info>("Config.Decisions")({
   goal: Schema.Union([Policy, AgentPolicy]).pipe(Schema.optional),
   questions: Schema.Union([Policy, AgentPolicy]).pipe(Schema.optional),
   advisory: Schema.Union([Advisory, AgentAdvisory]).pipe(Schema.optional),
+  scoping: Schema.Union([Scoping, AgentScoping]).pipe(Schema.optional),
 }) {}

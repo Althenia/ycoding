@@ -62,6 +62,8 @@ import { SubagentReportTool } from "../tool/subagent-report"
 import { TodoWriteTool } from "../tool/todowrite"
 import { GoalTool } from "../tool/goal"
 import { DecisionTool } from "../tool/decision"
+import { ScopeTool } from "../tool/scope"
+import { SessionStore } from "../session/store"
 import { TaskCompleteTool } from "../tool/task-complete"
 import { MemoryTool } from "../tool/memory"
 import { ProjectArtifactTool } from "../tool/project-artifact"
@@ -119,6 +121,7 @@ const services = Effect.fn("PluginInternal.services")(function* () {
   const sessionRunnerModel = yield* SessionRunnerModel.Service
   const todo = yield* SessionTodo.Service
   const autonomy = yield* SessionAutonomy.Service
+  const sessionStore = yield* SessionStore.Service
   const shell = yield* Shell.Service
   const skill = yield* Skill.Service
   const tools = yield* Tools.Service
@@ -163,6 +166,7 @@ const services = Effect.fn("PluginInternal.services")(function* () {
     Context.make(SessionRunnerModel.Service, sessionRunnerModel),
     Context.make(SessionTodo.Service, todo),
     Context.make(SessionAutonomy.Service, autonomy),
+    Context.make(SessionStore.Service, sessionStore),
     Context.make(Shell.Service, shell),
     Context.make(Skill.Service, skill),
     Context.make(Tools.Service, tools),
@@ -209,6 +213,7 @@ const pre = [
   WriteTool.Plugin,
   GoalTool.Plugin,
   DecisionTool.Plugin,
+  ScopeTool.Plugin,
   BrowserTool.Plugin,
 ] as const satisfies readonly InternalPlugin[]
 

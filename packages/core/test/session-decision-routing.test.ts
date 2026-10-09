@@ -449,6 +449,14 @@ test("unconfigured or denied advisory performs no helper inference", async () =>
   }
 })
 
+test("configured scoping adds only the harness nudge to ordinary task advice", async () => {
+  const result = await run({ settings: Schema.decodeUnknownSync(ConfigDecisions.Info)({ advisory: advisoryPolicy,
+    scoping: { provider: "agent", min_confidence: 0.8 } }), before: advisorySetup, evaluate: () => Effect.succeed(advice()) })
+  expect(result.evaluations).toHaveLength(1)
+  const observation = result.history.find((message) => message.type === "synthetic" && message.description === "Decision advisory")
+  expect(observation?.type === "synthetic" ? observation.text : "").toContain("Scoping available: propose a task partition with the scope tool before delegating.")
+})
+
 test("uncertain advice and helper errors preserve the actual user input and main execution", async () => {
   for (const evaluate of [() => Effect.succeed(advice(0.79)), () => Effect.fail(new Decision.Error({ reason: "unavailable" }))]) {
     const result = await run({ settings: advisory, before: advisorySetup, evaluate })

@@ -2,6 +2,7 @@ export * as DecisionJudgment from "./decision-judgment"
 
 import { decode, encodeLines } from "@toon-format/toon"
 import { Result, Schema } from "effect"
+import type { Decision } from "./decision"
 
 const Name = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(64))
 const Text = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(8192))
@@ -142,4 +143,19 @@ function matchesQuestion(
   return (
     answer.answer === null && answer.choice === null && answer.score !== null && answer.score < question.levels.length
   )
+}
+
+export function normalizedChoice(output: Decision.Output, name: string): Decision.Choice {
+  if (output.provider === "agent") {
+    const answer = output.response.answers.find((answer) => answer.name === name)
+    return answer?.type === "choice" && typeof answer.choice === "string"
+      ? { choice: answer.choice, confidence: answer.confidence, refused: false } : { refused: true }
+  }
+  if (output.provider === "openai") {
+    const answer = output.response.answers.find((answer) => answer.name === name)
+    return answer?.type === "choice" && typeof answer.choice === "string"
+      ? { choice: answer.choice, probability: answer.probabilities.find((choice) => choice.value === answer.choice)?.probability, refused: false } : { refused: true }
+  }
+  const answer = output.response.answers[name]
+  return answer?.type === "choice" ? { choice: answer.choice, probability: answer.probabilities[answer.choice], refused: false } : { refused: true }
 }

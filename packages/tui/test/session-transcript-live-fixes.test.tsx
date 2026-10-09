@@ -1026,6 +1026,32 @@ test("hides a Decision advisory with no recommendation while keeping the message
   }
 }, 60_000)
 
+test("renders a Scoping advisory with collapsed recommendations and expandable plan", async () => {
+  const messages: SessionMessageInfo[] = [
+    { id: "msg_scope_prompt", type: "user", text: "Partition the change", time: { created: 1 } },
+    { id: "msg_scope_notice", type: "synthetic", description: "Scoping advisory",
+      metadata: { decisionInputID: "msg_scope_prompt", scoping: true }, time: { created: 2 },
+      text: ["Decision advisory: task scoping judgments, not approval or completion evidence.",
+        "Recommended granularity: right-sized", "Recommended task implement: child; dispatchable true",
+        'Scoping plan: {"conflicts":[],"dispatched":[]}'].join("\n") },
+    { id: "msg_scope_followup", type: "user", text: "Continue scoped work", time: { created: 3 } },
+  ]
+  const screen = await renderScreen({ ...DESIGN_VIEWPORT, args: { sessionID }, route: routeFor(messages), settle: "Continue scoped work" })
+  try {
+    expect(screen.frame()).toContain("Decision advisory · 2 recommendations")
+    expect(screen.frame()).not.toContain("task scoping judgments")
+    expect(screen.frame()).not.toContain("Scoping plan:")
+    const row = screen.lines().findIndex((line) => line.includes("Decision advisory · 2 recommendations"))
+    await screen.mouse.click(12, row)
+    await waitForFrame(screen.frame, "Recommended granularity:")
+    expect(screen.frame()).toContain("Recommended task implement:")
+    expect(screen.frame()).toContain("Scoping plan:")
+    expect(screen.frame()).not.toContain("task scoping judgments")
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
 test("keeps yolo-goal todos in the sidebar instead of the transcript", async () => {
   const screen = await renderScreen({
     ...DESIGN_VIEWPORT,

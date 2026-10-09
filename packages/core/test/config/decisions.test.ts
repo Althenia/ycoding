@@ -12,6 +12,29 @@ test("guardrail risk threshold defaults to 2 and accepts only integer rubric bou
   }
 })
 
+test("retains bounded opt-in scoping with provider-specific thresholds", () => {
+  for (const policy of [
+    { provider: "agent", min_confidence: 0.8 },
+    { provider: "openai", min_probability: 0.9 },
+    { provider: "typesafe", min_probability: 0.7 },
+  ]) {
+    const scoping = { ...policy, auto_dispatch: true, max_tasks: 10 }
+    expect(decode({ decisions: { scoping } }).decisions).toMatchObject({ scoping })
+  }
+})
+
+test("rejects scoping bounds and mixed threshold metrics", () => {
+  for (const scoping of [
+    { provider: "agent", min_confidence: 0.8, max_tasks: 11 },
+    { provider: "agent", min_confidence: 0.8, max_tasks: 0 },
+    { provider: "agent", min_confidence: 0.8, max_tasks: 1.5 },
+    { provider: "agent", min_probability: 0.8 },
+    { provider: "agent", min_confidence: 0.8, min_probability: 0.9 },
+    { provider: "openai", min_probability: 0.8, min_confidence: 0.9 },
+    { provider: "typesafe", min_probability: 1.1 },
+  ]) expect(() => decode({ decisions: { scoping } })).toThrow()
+})
+
 test("retains explicit decision providers and opt-in automatic consumers", () => {
   const decisions = {
     providers: { openai: { api_key: "fixture" }, typesafe: { api_key: "fixture", model: "jev-1.13.0" } },
