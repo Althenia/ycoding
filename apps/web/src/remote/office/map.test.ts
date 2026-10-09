@@ -164,6 +164,13 @@ test("shared leisure spots reuse seats and pantry standing positions face the ex
   expect(coffeeApproach).toMatchObject({ facing: "up", pose: "stand" })
 })
 
+test("meeting-edge gathering spots are distinct, walkable, and face inward beside the existing table", () => {
+  expect(officeLayout.gathering).toHaveLength(3)
+  expect(new Set(officeLayout.gathering.map((spot) => `${spot.cell.x},${spot.cell.y}`)).size).toBe(3)
+  expect(officeLayout.gathering.every((spot) => officeLayout.walkable(spot.cell.x, spot.cell.y) && spot.pose === "stand" && spot.facing === "down")).toBe(true)
+  expect(officeLayout.gathering.every((spot) => spot.cell.y === 21 && spot.cell.x >= 28 && spot.cell.x <= 34)).toBe(true)
+})
+
 test("floors zone each neighbourhood and room with authored tile frames", () => {
   const frames = new Set<number>()
   for (let y = 1; y < rows - 1; y++) for (let x = 1; x < columns - 1; x++) frames.add(floorFrameAt(x, y))

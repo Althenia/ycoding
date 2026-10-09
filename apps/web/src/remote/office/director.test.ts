@@ -428,6 +428,67 @@ test("an idle agent walking to leisure performs only after it arrives", () => {
   expect(arrived.moving).toBe(false)
 })
 
+test("ready idle peers gather at distinct meeting edges only after arrival, then disperse", () => {
+  const director = new OfficeDirector(officeLayout)
+  const peers = Array.from({ length: 16 }, (_, index) => actor(`gather-${index}`, { status: "idle" }))
+  director.sync(snapshot(peers))
+  let arrived = false
+  for (let index = 0; index < 30_000; index++) {
+    const frames = director.tick(50, false)
+    expect(frames.every((frame) => director.gatheringPhase(frame.actor.id)?.stage !== "travel" || frame.pose !== "talk")).toBe(true)
+    const gathering = frames.filter((frame) => director.gatheringPhase(frame.actor.id)?.stage === "talk")
+    if (gathering.length) {
+      arrived = true
+      expect(frames).toHaveLength(16)
+      expect(gathering.length).toBeGreaterThanOrEqual(2)
+      expect(gathering.length).toBeLessThanOrEqual(3)
+      expect(new Set(gathering.map((frame) => `${cell(frame.position).x},${cell(frame.position).y}`)).size).toBe(gathering.length)
+      expect(gathering.every((frame) => frame.actor.status === "idle" && !frame.actor.bubble && !frame.moving)).toBe(true)
+      expect(new Set(gathering.map((frame) => frame.pose))).toEqual(new Set(["talk", "stand"]))
+      break
+    }
+  }
+  expect(arrived).toBe(true)
+  run(director, 20_000)
+  expect(director.tick(0, false).filter((frame) => director.gatheringPhase(frame.actor.id)?.stage === "talk")).toEqual([])
+})
+
+test("work and attention release one member immediately and dissolve undersized gatherings", () => {
+  for (const status of ["working", "attention", "offline"] as const) {
+    const director = new OfficeDirector(officeLayout)
+    const peers = Array.from({ length: 2 }, (_, index) => actor(`interrupt-gather-${status}-${index}`, { status: "idle" }))
+    director.sync(snapshot(peers))
+    for (let index = 0; index < 30_000 && !peers.some((peer) => director.gatheringPhase(peer.id)?.stage === "talk"); index++) director.tick(50, false)
+    const members = peers.filter((peer) => director.gatheringPhase(peer.id)?.stage === "talk")
+    expect(members.length).toBeGreaterThanOrEqual(2)
+    director.sync(snapshot([{ ...members[0]!, status, ...(status === "offline" ? { source: "unavailable" as const } : {}) }, ...peers.filter((peer) => peer.id !== members[0]!.id)], status === "offline" ? { connection: "offline" } : {}))
+    expect(director.gatheringPhase(members[0]!.id)).toBeUndefined()
+    expect(peers.filter((peer) => director.gatheringPhase(peer.id)).length).toBe(0)
+  }
+})
+
+test("reduced motion settles without retaining group membership", () => {
+  const director = new OfficeDirector(officeLayout)
+  const peers = Array.from({ length: 8 }, (_, index) => actor(`reduced-gather-${index}`, { status: "idle" }))
+  director.sync(snapshot(peers))
+  for (let index = 0; index < 30_000 && !peers.some((peer) => director.gatheringPhase(peer.id)); index++) director.tick(50, false)
+  expect(peers.some((peer) => director.gatheringPhase(peer.id))).toBe(true)
+  director.tick(50, true)
+  expect(peers.every((peer) => director.gatheringPhase(peer.id) === undefined)).toBe(true)
+})
+
+test("a factual cue immediately removes its participants from a decorative gathering", () => {
+  const director = new OfficeDirector(officeLayout)
+  const peers = Array.from({ length: 3 }, (_, index) => actor(`cue-gather-${index}`, { status: "idle" }))
+  director.sync(snapshot(peers))
+  for (let index = 0; index < 30_000 && !peers.some((peer) => director.gatheringPhase(peer.id)?.stage === "talk"); index++) director.tick(50, false)
+  const members = peers.filter((peer) => director.gatheringPhase(peer.id)?.stage === "talk")
+  expect(members.length).toBeGreaterThanOrEqual(2)
+  expect(director.playCue({ id: "gathering-cue", kind: "delegate", fromActorID: members[0]!.id, toActorID: members[1]!.id })).toBe(true)
+  expect(director.gatheringPhase(members[0]!.id)).toBeUndefined()
+  expect(director.gatheringPhase(members[1]!.id)).toBeUndefined()
+})
+
 test("degraded loading data never retargets or re-poses members already on the floor", () => {
   const director = new OfficeDirector(officeLayout)
   const family = known()

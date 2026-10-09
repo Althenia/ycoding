@@ -226,6 +226,7 @@ const rest = (x: number, y: number, facing: OfficeSpot["facing"] = "up", pose: O
 
 export const officeLayout: OfficeLayout = {
   columns, rows, tileSize, walkable, roomAt, door: outerDoor, pods,
+  gathering: [rest(28, 21, "down"), rest(31, 21, "down"), rest(34, 21, "down")],
   lounge: [
     { ...rest(14, 26, "right", "play"), leisure: "table" }, { ...rest(19, 26, "left", "play"), leisure: "table" },
     { ...rest(16, 28, "up", "play"), leisure: "table" }, { ...rest(17, 28, "up", "play"), leisure: "table" },

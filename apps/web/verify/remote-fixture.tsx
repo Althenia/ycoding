@@ -838,8 +838,8 @@ function createFixtureStore(): Fixture {
     }
     if (operation === "session.family.activity" && accountParams.get("familyActivity") === "unsupported") return { status: "failed", error: { code: "unknown_operation", message: "Update YCoding" } }
     if (operation === "session.family.activity") return { status: "ok", value: { data: [
-      { sessionID, executing: accountParams.get("team") !== "two", ...(accountParams.get("team") === "two" ? {} : { activity: { kind: "tool", room: "developer", text: "Editing store.ts" } }) },
-      ...(Array.isArray(input?.sessionIDs) ? input.sessionIDs.filter((id): id is string => typeof id === "string") : []).map((id) => ({ sessionID: id, executing: true, activity: id === "ses_second"
+      { sessionID, executing: accountParams.get("team") !== "two" && !accountParams.has("gathering"), ...(accountParams.get("team") === "two" || accountParams.has("gathering") ? {} : { activity: { kind: "tool", room: "developer", text: "Editing store.ts" } }) },
+      ...(Array.isArray(input?.sessionIDs) ? input.sessionIDs.filter((id): id is string => typeof id === "string") : []).map((id) => ({ sessionID: id, executing: !accountParams.has("gathering"), activity: id === "ses_second"
         ? { kind: "tool", room: "research", text: "Reading projection.ts" }
         : { kind: "tool", room: "qa", text: "Running bun test" } })),
     ] } }

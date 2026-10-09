@@ -126,6 +126,7 @@ export type OfficeLayout = {
   readonly door: Point
   readonly pods: readonly { readonly left: number; readonly right: number; readonly top: number; readonly bottom: number; readonly spots: Readonly<Record<"implement" | "research" | "verify" | "coordinate", OfficeSpot>> }[]
   readonly lounge: readonly OfficeSpot[]
+  readonly gathering: readonly OfficeSpot[]
   readonly roomAt: (cell: Point) => OfficeRoomID | undefined
 }
 

@@ -504,6 +504,39 @@ test("idle schedule paints coffee-facing and seated poses from existing frames",
   } finally { await page.close() }
 }, 45_000)
 
+test("idle gathering renders inward existing poses without a speech plate and disperses on work", async () => {
+  const page = await requireBrowser().openPage()
+  try {
+    await page.navigate(url("idle", "&gathering=1&team=1&teamIdle=1&workspace=1&freeCamera=1"))
+    await waitFor(page, "window.__officeGame?.scene.getScene('office').latestFrames.length===2")
+    const result = await page.evaluate<{ readonly frames: readonly { readonly pose: string; readonly direction: string; readonly moving: boolean; readonly cell: { readonly x: number; readonly y: number } }[]; readonly bubbles: number; readonly animations: readonly string[] }>(`(() => {
+      const scene=window.__officeGame.scene.getScene('office');
+      for(let tick=0;tick<5000;tick++){scene.update(tick*50,50);if(scene.latestFrames.some(frame=>scene.director.gatheringPhase(frame.actor.id)?.stage==='talk'))break;}
+      return {frames:scene.latestFrames.map(frame=>({pose:frame.pose,direction:frame.direction,moving:frame.moving,cell:{x:Math.floor(frame.position.x/32),y:Math.floor(frame.position.y/32)}})),
+        bubbles:[...scene.objects.values()].filter(object=>object.bubble.visible).length,
+        animations:scene.latestFrames.map(frame=>scene.objects.get(frame.actor.id).sprite.anims.currentAnim?.key??'')};
+    })()`)
+    expect(result.frames).toHaveLength(2)
+    expect(result.frames.map((frame) => frame.cell)).toEqual([{ x: 28, y: 21 }, { x: 31, y: 21 }])
+    expect(result.frames.map((frame) => frame.direction)).toEqual(["down", "down"])
+    expect(result.frames.every((frame) => ["talk", "stand"].includes(frame.pose) && !frame.moving)).toBe(true)
+    expect(new Set(result.frames.map((frame) => frame.pose))).toEqual(new Set(["talk", "stand"]))
+    expect(result.animations.every((animation) => animation.endsWith("-talk") || animation.endsWith("-stand"))).toBe(true)
+    expect(result.bubbles).toBe(0)
+    await page.evaluate<void>(`(()=>{const select=document.querySelector('select[aria-label="Office state"]');select.value='tool';select.dispatchEvent(new Event('change',{bubbles:true}))})()`)
+    await waitFor(page, "window.__officeGame.scene.getScene('office').latestFrames.find(frame=>frame.actor.sessionID==='session-a')?.actor.status==='tool'")
+    await advance(page, 1)
+    const after = await page.evaluate<{ readonly stages: readonly string[]; readonly rootMoving: boolean; readonly rootStatus: string }>(`(() => {const scene=window.__officeGame.scene.getScene('office');return {
+      stages:scene.latestFrames.map(frame=>scene.director.gatheringPhase(frame.actor.id)?.stage).filter(Boolean),
+      rootMoving:scene.latestFrames.find(frame=>frame.actor.sessionID==='session-a').moving,
+      rootStatus:scene.latestFrames.find(frame=>frame.actor.sessionID==='session-a').actor.status}})()`)
+    expect(after.rootStatus).toBe("tool")
+    expect(after.rootMoving).toBe(true)
+    expect(after.stages).toEqual([])
+    expect(await page.evaluate<boolean>("(()=>{const frame=window.__officeGame.scene.getScene('office').latestFrames.find(frame=>frame.actor.sessionID==='session-a');return frame.actor.bubble===frame.actor.statusText})()")).toBe(true)
+  } finally { await page.close() }
+}, 45_000)
+
 test("any working or attention state ends play at once and removes the ball", async () => {
   for (const state of ["tool", "attention", "thinking"] as const) {
     const page = await openIdlePair()

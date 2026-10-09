@@ -225,6 +225,27 @@ describe("remote Office presentation", () => {
     } finally { await page.close() }
   }, 60_000)
 
+  test("silent idle gatherings preserve runtime labels and scene identity across selection and reconnect", async () => {
+    const page = await openRemote("view=chat&presentation=office&team=two&gathering=1&inspectOffice=1")
+    try {
+      expect(await until(page, `window.__officeGame?.scene.getScene('office').latestFrames.length===3&&window.__officeGame.scene.getScene('office').latestFrames.every(frame=>frame.actor.status==='idle')`)).toBe(true)
+      const projection = await page.evaluate<readonly { readonly id: string; readonly status: string; readonly text: string }[]>(`window.__officeGame.scene.getScene('office').latestFrames.map(frame=>({id:frame.actor.id,status:frame.actor.status,text:frame.actor.statusText}))`)
+      const operations = await page.evaluate<OperationReport>(`remoteOperationReport()`)
+      expect(await until(page, `window.__officeGame.scene.getScene('office').latestFrames.some(frame=>window.__officeGame.scene.getScene('office').director.gatheringPhase(frame.actor.id)?.stage==='talk')`, 420)).toBe(true)
+      const identity = await page.evaluate<{ readonly canvas: boolean; readonly actors: readonly string[] }>(`(() => {const scene=window.__officeGame.scene.getScene('office');window.gatheringScene={scene,canvas:document.querySelector('.office-canvas-host canvas')};return {canvas:true,actors:scene.latestFrames.map(frame=>frame.actor.id)}})()`)
+      await page.evaluate<void>(`document.querySelector('.office-roster__row[data-session-id="ses_child"]').click()`)
+      expect(await until(page, `document.querySelector('.office-roster__row[data-session-id="ses_child"]')?.getAttribute('aria-current')==='true'`)).toBe(true)
+      await page.evaluate<void>(`[...document.querySelectorAll('.fixture__controls button')].find(button=>button.textContent.includes('Simulate disconnect and reconnect')).click()`)
+      expect(await until(page, `document.querySelector('.office-workspace canvas')!==null&&window.__officeGame.scene.getScene('office').latestFrames.length===3`, 150)).toBe(true)
+      expect(await page.evaluate<boolean>(`window.__officeGame.scene.getScene('office')===window.gatheringScene.scene&&document.querySelector('.office-workspace canvas')===window.gatheringScene.canvas`)).toBe(true)
+      expect(await page.evaluate<readonly { readonly id: string; readonly status: string; readonly text: string }[]>(`window.__officeGame.scene.getScene('office').latestFrames.map(frame=>({id:frame.actor.id,status:frame.actor.status,text:frame.actor.statusText}))`)).toEqual(projection)
+      const after = await page.evaluate<OperationReport>(`remoteOperationReport()`)
+      expect(Object.keys(after.operations).filter((operation) => /standup|meeting|tool\./i.test(operation))).toEqual([])
+      expect(after.operations["session.prompt"] ?? 0).toBe(operations.operations["session.prompt"] ?? 0)
+      expect(identity.actors).toHaveLength(3)
+    } finally { await page.close() }
+  }, 90_000)
+
   test("activity bubbles and the idle root render at tablet and desktop sizes in both themes", async () => {
     for (const [width, height] of [[820, 1180], [1440, 900]] as const) {
       const page = await openRemote("view=chat&presentation=office&team=two&inspectOffice=1", width)

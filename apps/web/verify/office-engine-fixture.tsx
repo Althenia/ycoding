@@ -44,9 +44,9 @@ function Fixture() {
             : query.get("activity") === "coordinate" ? "meeting" as const : "developer" as const,
           text: query.get("activity") === "verify" ? "Running bun test" : query.get("activity") === "research" ? "Reading store.ts"
             : query.get("activity") === "coordinate" ? "Dispatching a subagent" : "Editing app.ts" } }) },
-      ...(query.has("team") ? [{ sessionID: "session-b", executing: !query.has("teamIdle") && ["starting", "running", "cancelling"].includes(taskState()),
+      ...(query.has("team") ? [{ sessionID: "session-b", executing: !query.has("gathering") && !query.has("teamIdle") && ["starting", "running", "cancelling"].includes(taskState()),
         ...(!query.has("teamIdle") && ["starting", "running", "cancelling"].includes(taskState()) ? { activity: { kind: "tool" as const, room: query.has("sequence") ? (["qa", "meeting", "developer", "research"] as const)[activityStep() % 4]! : "qa" as const, text: "Running bun test" } } : {}) }] : []),
-      ...(query.get("team") === "multi" ? [{ sessionID: "session-d", executing: true, activity: { kind: "tool" as const, room: query.has("sequence") ? (["research", "developer", "meeting", "qa"] as const)[activityStep() % 4]! : "research" as const, text: "Reading model.ts" } }] : []),
+      ...(query.get("team") === "multi" ? [{ sessionID: "session-d", executing: !query.has("gathering"), ...(!query.has("gathering") ? { activity: { kind: "tool" as const, room: query.has("sequence") ? (["research", "developer", "meeting", "qa"] as const)[activityStep() % 4]! : "research" as const, text: "Reading model.ts" } } : {}) }] : []),
       ...(extraSession() ? [{ sessionID: "session-new", executing: true, activity: { kind: "tool" as const, room: "research" as const, text: "Searching files" } }] : []),
     ] },
     ...(query.has("team") || query.has("arrival") ? { team: {
