@@ -1,28 +1,32 @@
 # YCoding
 
+[![Latest release](https://img.shields.io/github/v/release/Althenia/ycoding?style=flat&color=67D7A4)](https://github.com/Althenia/ycoding/releases/latest)
+[![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue)](./LICENSE)
+[![Platforms](https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows-supported-lightgrey)](https://github.com/Althenia/ycoding/releases/latest)
+[![Docs](https://img.shields.io/badge/docs-ycoding.althenia.app-67D7A4)](https://ycoding.althenia.app/docs)
+
+**A terminal-first coding agent that runs on your own machine.** YCoding keeps every Session durable, lets you decide how much it may do on its own, and puts the same local runtime in your browser and on your phone when you step away from the terminal.
+
+Your repository, shell, tools, and model calls stay in the local `ycoding` process. The web app is a remote control for that process, not a hosted agent.
+
 <p align="center">
-  <img src="./assets/brand/ycoding-wordmark.svg" alt="YCoding — terminal coding agent" width="520">
+  <img src="./assets/showcase/ycoding-showcase.png" alt="YCoding in a terminal, a desktop browser, and a phone: the terminal shows a Session paused on a guardrail review, the browser shows the remote Session conversation, and the phone shows a guardrail review and a question waiting for an answer" width="900">
 </p>
 
-Work on repositories from your terminal, with durable sessions and explicit control over autonomous execution.
+## Why YCoding
 
-- **Durable work:** preserve session history, pending prompts, and orchestration state.
-- **Background subagents:** delegate work with inherited permission limits.
-- **Concurrent provider profiles:** choose a named account or API key per Session or subagent without changing another Session's selection. See [provider profiles](./docs/configuration.md#provider-profiles).
-- **Structured decisions:** use native OpenAI Decisions, TypeSafe Jev, or a hidden decision agent through a permission-scoped tool and opt-in policies for guardrails, initial routing, goals, questions, and task advice. Harness advice recommends an available model/variant, a configured direction, and a permission-eligible tool without executing it or changing explicit selections. Agent confidence is an uncalibrated model estimate, separate from native probabilities. See [configuration](./docs/configuration.md#native-decisions).
-- **Repository-native customization:** configure agents, commands, skills, hooks, and MCP tools.
-- **Local browser and computer control:** use [paired Chrome-profile tabs, including the active tab, or agent-owned tabs](./docs/browser-extension.md) and [scoped macOS windows](./docs/computer-use.md) with per-site and `computer` permissions.
-- **On-demand knowledge:** save and search linked workspace Markdown with an [offline graph and reader](./docs/memory.md), which agents search before substantive work, without automatic transcript extraction or prompt injection.
+- **Durable Sessions.** History, pending prompts, todos, and subagents survive restarts and reconnects. Steer a running Session or queue work for when it goes idle.
+- **Autonomy you choose.** Work step by step, raise YOLO levels to answer routine requests automatically, or set a `/goal` and let the Session continue until it is completed, stopped, or out of attempts.
+- **Guardrails across the whole Session family.** High-impact actions such as writes outside the workspace, force pushes, or destructive commands stop for review in the main Session and every subagent. Hard reviews always need a human, even at YOLO 3.
+- **Background subagents.** Delegate work to durable child Sessions that inherit your permission limits, and watch their progress in the Session rail.
+- **Use your accounts side by side.** Keep several named profiles per provider — API keys or subscription sign-ins such as Claude Code, ChatGPT, or GitHub Copilot — and pick one per Session or subagent with `profile#provider/model#variant`. See [provider profiles](./docs/configuration.md#provider-profiles).
+- **Many providers.** OpenAI, Anthropic, Google, GitHub Copilot, OpenRouter, xAI, Amazon Bedrock, Azure, Mistral, Groq, and more, plus any OpenAI-compatible endpoint.
+- **Your phone as a remote.** Enroll your machine once, then read transcripts, send prompts, and answer permissions, guardrail reviews, and questions from any browser or the installable phone app, with opt-in push alerts when a Session needs you.
+- **Repository-native customization.** Agents, commands, skills, hooks, plugins, and MCP servers live next to your code.
+- **Browser and computer control.** Work in [paired Chrome tabs or agent-owned tabs](./docs/browser-extension.md) and in [scoped macOS windows](./docs/computer-use.md), with per-site and per-tool permissions.
+- **Workspace memory.** Save and search [linked Markdown knowledge](./docs/memory.md) with an offline graph, kept separate from transcripts and prompts.
 
-YCoding is terminal-first—the TUI is the primary surface. The [remote web client](https://ycoding.althenia.app/remote/) lets the signed-in owner of a connected machine control its existing and future local Sessions from desktop, tablet, or mobile.
-
-Both clients offer searchable command palettes and One Dark, One Dark Pro, and high-contrast appearance choices. The web palette opens the existing provider/model/profile controls and can connect provider profiles on the selected machine using remote-capable login methods. Connecting changes that machine's provider default; a Session's explicit profile selection remains separate. On phones, agent and model pickers fill the visible screen and follow the on-screen keyboard; composer suggestions stay above the field within the remaining visible space.
-
-The remote workspace has five app tabs: Sessions (`/remote/sessions`), Conversation (`/remote`), Session (`/remote/session?session_id=<id>&device_id=<id>`), Usage, and Settings. Conversation is the logo and new-session landing; Sessions, Usage, and Settings keep their existing routes. Existing Sessions open in Session, where you can read transcripts, stream output, send prompts with command, file, agent, and skill autocomplete and with pasted, picked, or dropped file attachments, see the Session's todo list above the composer, and answer permissions, guardrails, questions, and native forms. Form controls preserve typed answers, defaults, conditional fields, and explicit cancellation. New Sessions use a chosen agent and model in previously opened repositories. Starting from a project `+` carries its opaque repository ID and origin in the URL and locks the repository choice; if that repository is unavailable on the connected machine, creation is blocked rather than redirected to another repository. Starting from Conversation allows repository choice. The phone machine picker lets you review and confirm a machine change before switching connections. Opt-in push alerts can reach a closed browser or installed app when a Session needs your decision, finishes all its work, or its machine goes offline, following each category's System switch on that device. An optional Office view shows the selected Session and its reported subagent tasks as characters in a pixel office. The Usage page shows each provider's reported quota windows, such as the OpenRouter credit balance and GitHub Copilot AI credits, next to 30 days of spend and this month's spend by provider. The notification center shares unread work and attention notices across signed-in browsers on the same machine, retaining them until read. Failed or unknown mutation outcomes and live guardrail-block evidence may appear briefly as toasts.
-
-The agent, repository, filesystem, shell, tools, and model execution remain in the local `ycoding` process. The remote relay authenticates users and enrolled devices and checks device ownership and Session access; it is not a hosted agent runtime. The [public site](https://ycoding.althenia.app/) contains user documentation and the changelog.
-
-## Install
+## Quick start
 
 **macOS (Apple Silicon or Intel) and Linux (x64)** — requires `curl`, `tar`, and `shasum` or `sha256sum`:
 
@@ -30,63 +34,82 @@ The agent, repository, filesystem, shell, tools, and model execution remain in t
 curl -fsSL https://ycoding.althenia.app/install.sh | sh
 ```
 
-The installer downloads the latest release, verifies its SHA-256 checksum, and installs `ycoding` in `~/.local/bin`. Each release attaches `LICENSE` and `NOTICE` as separate files listed in its checksum file; the archives contain only the executable and its companion folders. macOS releases from v0.7.1 also install a computer helper app; window control requires Accessibility and Screen Recording grants to that installed app. Releases signed with the release identity keep the same code requirement, while earlier ad-hoc signed releases have a different one, so macOS may ask for authorization again after an update that changes the signing identity. If you download a release archive with a browser instead, clear the quarantine attribute after extracting it: `xattr -dr com.apple.quarantine <extracted-folder>`. Follow the PATH instructions, then open a new terminal and run:
+The installer downloads the latest release, verifies its SHA-256 checksum, and installs `ycoding` in `~/.local/bin`. Follow the PATH instructions it prints, then open a new terminal in your project:
 
 ```sh
 ycoding
 ```
 
-[Configure a provider](./docs/configuration.md) before sending your first model request.
+Type `/connect` in the composer to add a provider profile, then describe your task.
 
 **Windows (x64):** download the ZIP from [GitHub Releases](https://github.com/Althenia/ycoding/releases/latest), extract `ycoding.exe`, and run it in your terminal.
 
-Update installer-supported binaries with `ycoding update`, which also restarts an idle background server onto the new version; if Sessions have running work, run `ycoding service restart` once they finish. Replace development builds and Windows binaries manually.
-
-Upgrading an existing installation? Back up session data and review the [SQLite upgrade notes](./docs/configuration.md#automatic-sqlite-space-reclamation): the first startup may rebuild the database and require extra disk space.
-
-## Use
-
-With an installed binary and a configured provider, run a prompt directly using your chosen model:
+Run a single prompt without opening the interface:
 
 ```sh
 ycoding --model <[profile#]provider/model[#variant]> "Explain this repository"
 ```
 
-Run `ycoding run --help` for options. See [runtime behavior](./docs/runtime.md) for sessions and autonomy, or [repository resources](./docs/repository-resources.md) for customization.
+Keep up to date with `ycoding update`. See [installation](https://ycoding.althenia.app/docs/installation) for macOS permissions, quarantine, and upgrade notes.
 
-## Guardrails and customization
+## Three surfaces, one runtime
 
-Agent permissions and Session guardrails are separate checks. Permissions control what an agent may attempt; guardrails review or deny high-impact operations across the main Session and its subagents. An approval does not override an explicit permission denial or a built-in catastrophic denial.
+| Terminal | Web | Phone |
+| --- | --- | --- |
+| <img src="./assets/showcase/ycoding-tui.png" alt="YCoding terminal interface with the transcript, a guardrail review dialog, and the Session rail showing context, todos, subagents, and MCP servers" width="420"> | <img src="./assets/showcase/ycoding-web.png" alt="YCoding remote web workspace showing a Session conversation with completed tool output and the composer" width="420"> | <img src="./assets/showcase/ycoding-phone.png" alt="YCoding phone app showing a human-only guardrail review and a pending question" width="200"> |
+| The primary surface: transcript, Session rail, reviews, shells, and subagents in your terminal. | Sessions, conversations, usage, and settings for every Session on your enrolled machine. | The same workspace on a phone, with opt-in push alerts for reviews, finished work, and offline machines. |
 
-Customize guardrails with one Markdown rule per file:
+To use the [remote workspace](https://ycoding.althenia.app/remote/), sign in, open **Settings → Devices → Create enrollment code**, and run the displayed command on your machine. It prompts for the one-use code, so the code never lands in shell history. Then turn on the connection:
+
+```sh
+ycoding remote enroll <enrollmentID>
+ycoding remote connect
+```
+
+> [!WARNING]
+> While the machine is connected, the signed-in account can reach every existing and future Session on that machine. Connect only machines and accounts you trust.
+
+See [remote workspace](https://ycoding.althenia.app/docs/usage/remote) for sign-in options, recovery, and connection states.
+
+## Guardrails
+
+Permissions decide what an agent may attempt; guardrails review or deny high-impact operations across the main Session and its subagents. An approval never overrides an explicit permission denial or a built-in catastrophic denial.
+
+Add your own rules as one Markdown file per rule:
 
 - **Workspace:** `.ycoding/guardrails/*.md` in the project.
-- **User:** `~/.config/ycoding/guardrails/*.md` with the default global configuration location.
+- **User:** `~/.config/ycoding/guardrails/*.md`.
 
-See the [guardrail guide](./docs/guardrails-and-provider-usage.md#session-guardrails) for decisions, approval lifetime, limits and rule precedence; the [workspace/user instructions](./docs/guardrails-and-provider-usage.md#workspace-and-user-configuration) for placement; and the [AWS resource protection example](./docs/guardrails-and-provider-usage.md#aws-example-deny-destructive-resource-operations) for a tested deny-rule template. Guardrails inspect supported tool actions and resource strings; they are not a replacement for filesystem isolation or AWS IAM policies.
+See the [guardrail guide](./docs/guardrails-and-provider-usage.md#session-guardrails) and the tested [AWS resource protection example](./docs/guardrails-and-provider-usage.md#aws-example-deny-destructive-resource-operations). Guardrails inspect supported tool actions and resource strings; they do not replace filesystem isolation or cloud IAM policies.
 
-## Development
+## Documentation
 
-From a checkout, with **Bun 1.4.2** installed:
+- [Getting started](https://ycoding.althenia.app/docs/getting-started) and [quickstart](https://ycoding.althenia.app/docs/quickstart)
+- [Working in the terminal](https://ycoding.althenia.app/docs/usage/tui) and [command line](https://ycoding.althenia.app/docs/usage/cli)
+- [Providers and profiles](https://ycoding.althenia.app/docs/configuration/providers), [agents](https://ycoding.althenia.app/docs/configuration/agents), [MCP](https://ycoding.althenia.app/docs/configuration/mcp), [goal](https://ycoding.althenia.app/docs/configuration/goal), and [YOLO mode](https://ycoding.althenia.app/docs/configuration/yolo)
+- [Troubleshooting](https://ycoding.althenia.app/docs/troubleshooting) and the [changelog](https://ycoding.althenia.app/changelog)
+- Engineering references: [runtime](./docs/runtime.md), [configuration](./docs/configuration.md), [architecture](./docs/architecture.md), and the [documentation index](./docs/README.md)
+
+<details>
+<summary>Build from source</summary>
+
+With **Bun 1.4.2** installed:
 
 ```sh
 bun install --frozen-lockfile
 bun run dev
 ```
 
-Build and smoke-test the terminal application:
+Build and smoke-test the terminal application, then install it locally on macOS or Linux:
 
 ```sh
 bun run build:tui
 bun run smoke:tui
 bun run smoke:runtime
+bun run install:local
 ```
 
-Install that local build on macOS or Linux with `bun run install:local`. It places `ycoding`, the macOS `YCoding Computer Use.app`, and `ycoding-chrome-extension` together in `~/.local/bin`.
-
-For targeted tests and repository checks, see [contributing guidance](./AGENTS.md). The [documentation index](./docs/README.md) links to architecture, configuration, and runtime details.
-
-Build the SolidJS/Vite public site and remote client:
+Build and test the web app:
 
 ```sh
 bun run build:web
@@ -94,13 +117,9 @@ bun run test:web
 bun run test:remote
 ```
 
-The web build writes `apps/web/dist` and includes the maintained installer, generated configuration Schema, and machine-readable documentation for AI agents: `/llms.txt`, `/llms-full.txt`, and one `/docs/<slug>.md` per published page. Deployment requires configured sign-in credentials and the reviewed authentication-metadata migration; building does not deploy anything.
+See [contributing guidance](./AGENTS.md) for targeted tests, repository checks, and the release process.
 
-## Release
-
-TUI and web ship together under one version. Write a single nonempty release note at `docs/releases/v<version>.md` (for example, `docs/releases/v0.6.5.md`).
-
-The release workflow (`release.yml`) triggers on `push` to `v<version>` tags. It verifies TUI artifacts and the web application, deploys the web build to Cloudflare after the required checks, then creates one TUI GitHub Release with native archives, the `LICENSE` and `NOTICE` files, checksums, and the shared note. Deployment requires the `CLOUDFLARE_API_TOKEN` GitHub Actions secret; if deployment fails, no GitHub Release is published. Manual workflow runs prepare artifacts without publishing or deploying.
+</details>
 
 ## License
 

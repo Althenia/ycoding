@@ -40,6 +40,7 @@ Each approved rule binds inherited surfaces. An exception records an unresolved 
 | R7 | approved | Token values documented by the web surface MUST match its light root and dark overrides in both directions. | `apps/web/src/styles/design-md.test.ts` |
 | R8 | approved | Interactive states MUST remain distinguishable without color alone; focus MUST remain visible and controls keyboard operable. | review-only; `apps/web/verify/design-contract.integration.test.ts` samples rendered states |
 | R9 | approved | GUI typography MUST use Geist Sans (`Geist`) for interface prose and Geist Mono for code and compact metadata. Web fonts MUST be self-hosted and extension fonts MUST be embedded without external font requests or new archive entries. Terminal typography MUST document Geist Mono as its reference without changing the user's terminal font settings. | `apps/web/src/styles/typography.test.ts`, `extensions/chrome/test/design-md.test.js`; terminal host control is review-only |
+| R10 | approved | README and public showcase images MUST be captures of current product surfaces with sample data: terminal frames from the real-route TUI screen harness in the default `ycoding` theme rendered in Geist Mono, and web and phone views from the remote verification fixture with only its fixture banner and controls hidden. Compositions MUST use the mark palette and Geist; NEVER redraw, mock, or retouch a captured surface. | review-only (`assets/showcase`) |
 
 ## Colors
 
@@ -63,6 +64,10 @@ Web action icons use the owned `Icon` SVG registry: 24-unit viewBox, 1.6-unit ro
 
 `assets/brand/ycoding-mark.svg` is the transparent color source; `ycoding-mark-mono.svg` is its monochrome silhouette; `ycoding-wordmark.svg` carries the full lockup. `ycoding-icon.svg` is the rounded-square any-purpose icon, with a small even Y margin of at least 17% on each side. `ycoding-icon-maskable.svg` is full-bleed dark; keep the Y inside the centered circle with radius 40% of tile width. `packages/simulation/test/brand-assets.test.ts` checks palette, geometry, dimensions, opacity, margin, and safe zone. Generate PNG derivatives with `bun run brand:generate` (`packages/simulation/script/generate-brand-assets.ts`); never redraw, stretch, or edit the generated PNGs. The compact three-line terminal silhouette is documented in `assets/brand/README.md`.
 
+## Showcase
+
+`assets/showcase` holds the README hero and per-surface screens. `ycoding-tui.png` renders the TUI screen harness's captured cell colors and attributes for the composed Session route at 189×69 cells in Geist Mono at an 8px cell; `ycoding-web.png` (1440×900 CSS px at 2×) and `ycoding-phone.png` (390×844 CSS px at 3×) capture the dark remote verification fixture. `ycoding-showcase.png` frames those three captures on Canvas with Surface window bars, Rule borders, Frost text at full and reduced opacity, Trace labels, the canonical wordmark, and Geist type (R10). Regenerate every screen together after a visible change to a captured surface.
+
 ## Content
 
 Name actions by what they do, use YCoding and Session consistently, distinguish pending, failed, unknown, and completed outcomes, and pair errors with a next action. Unknown usage values remain unreported rather than zero (`docs/product-direction.md`, `docs/runtime.md`, `apps/web/src/remote/ui/transcript.css`). The web public site and remote workspace use direct, concise labels; terminal hints use compact keyboard-first wording.
@@ -77,7 +82,7 @@ Use WCAG 2.2 AA floors: normal text 4.5:1, large text and meaningful non-text bo
 
 ## Verification
 
-R1 and R2 require code and rendered-state review. R3–R5 use their named browser integration suites; R6 uses `bun test` in `packages/simulation` targeting `test/brand-assets.test.ts` and `bun run check:ycoding-brand`; R7 uses `bun test src/styles` from `apps/web`; R8 uses keyboard/contrast review and the named design-contract suite. Run `python3 ~/.agents/skills/daedalus/scripts/design_md.py lint` on this file and both surface files. Browser integration suites need their configured Chrome executable; a unit-suite pass does not imply these suites ran.
+R1 and R2 require code and rendered-state review. R3–R5 use their named browser integration suites; R6 uses `bun test` in `packages/simulation` targeting `test/brand-assets.test.ts` and `bun run check:ycoding-brand`; R7 uses `bun test src/styles` from `apps/web`; R8 uses keyboard/contrast review and the named design-contract suite. R10 requires reviewing each showcase image against its capture source. Run `python3 ~/.agents/skills/daedalus/scripts/design_md.py lint` on this file and both surface files. Browser integration suites need their configured Chrome executable; a unit-suite pass does not imply these suites ran.
 
 ## Maintenance
 
