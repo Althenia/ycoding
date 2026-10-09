@@ -29,10 +29,14 @@ export async function buildCompanion() {
   await Promise.all(
     [16, 32, 48, 128].map((size) =>
       copyFile(
-        new URL(`../../chrome/icons/ycoding-${size}.png`, import.meta.url),
-        new URL(`icons/ycoding-${size}.png`, directory),
+        new URL(`../../../assets/brand/ycoding-meeting-${size}.png`, import.meta.url),
+        new URL(`icons/ycoding-meeting-${size}.png`, directory),
       ),
     ),
+  )
+  await copyFile(
+    new URL("../../chrome/icons/ycoding-32.png", import.meta.url),
+    new URL("icons/ycoding-32.png", directory),
   )
   return fileURLToPath(directory)
 }

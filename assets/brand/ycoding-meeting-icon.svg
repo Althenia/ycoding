@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <title>YCoding Meeting microphone</title>
+  <rect width="256" height="256" rx="48" fill="#3A404A"/>
+  <rect x="2" y="2" width="252" height="252" rx="46" fill="#24282F"/>
+  <rect x="96" y="48" width="64" height="96" rx="32" fill="#67D7A4"/>
+  <path d="M72 120v8a56 56 0 0 0 112 0v-8M128 184v24M104 208h48" stroke="#F2F3F5" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

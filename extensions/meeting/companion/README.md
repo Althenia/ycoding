@@ -13,7 +13,7 @@ Requires Chrome 116+ and a separately running local YCoding meeting bridge. This
 
 After rebuilding an installed unpacked companion, click **Reload** for **YCoding Meet capture** in `chrome://extensions`. Reopening the popup alone does not replace its running service worker. Browser-control pairing and meeting-capture pairing are separate; a connected YCoding Chrome bridge does not authorize audio capture. Use the address and fresh code from `/meeting start`, not an address from an expired test runtime.
 
-The compact popup is 320 CSS pixels wide. Expand **Capture help** for keyboard shortcuts and call-closure limitations; consent, microphone choice and Stop remain outside help.
+The toolbar uses a branded microphone icon to distinguish Meeting capture from the browser-control Y icon; both popup headers retain the Y logo. The compact popup is 320 CSS pixels wide. Expand **Capture help** for keyboard shortcuts and call-closure limitations; consent, microphone choice and Stop remain outside help.
 
 ## Delivery and lifetime
 

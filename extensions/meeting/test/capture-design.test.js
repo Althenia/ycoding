@@ -77,12 +77,12 @@ test("popup owns accessible controls, local typography, state and shortcut witho
   expect(manifest.externally_connectable).toBeUndefined()
 })
 
-test("companion owns canonical toolbar and header marks instead of browser placeholders", () => {
+test("companion distinguishes its microphone launcher while preserving the Y header mark", () => {
   expect(manifest.icons).toEqual({
-    16: "icons/ycoding-16.png",
-    32: "icons/ycoding-32.png",
-    48: "icons/ycoding-48.png",
-    128: "icons/ycoding-128.png",
+    16: "icons/ycoding-meeting-16.png",
+    32: "icons/ycoding-meeting-32.png",
+    48: "icons/ycoding-meeting-48.png",
+    128: "icons/ycoding-meeting-128.png",
   })
   expect(manifest.action.default_icon).toEqual(manifest.icons)
   expect(html).toContain('<img src="icons/ycoding-32.png" width="24" height="24" alt=""')

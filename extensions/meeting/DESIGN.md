@@ -76,6 +76,7 @@ The separate opt-in MV3 companion captures only the selected Google Meet tab aft
 | M5 | approved | Microphone audio MUST NEVER reach playback; tab audio MUST retain playback, and the popup MUST advise headphones and explain echo cancellation. | `test/capture.test.js`, `test/capture-popup.test.js` |
 | M6 | approved | Queue overflow, expired pairing, failed retries and restart MUST show an actionable error and MUST NEVER auto-resume. | `test/capture.test.js`, `test/capture-coordinator.test.js`, `test/capture-popup.test.js` |
 | M7 | approved | The native popup MUST open at 320 CSS px, render the canonical icon at 24px beside its heading, and keep the unpaired view within 420 CSS px height with help collapsed. Secondary guidance MUST remain available through keyboard-operable help; consent and Stop MUST remain outside it. Toolbar icons MUST use canonical generated assets. | `test/chrome.integration.test.ts`, `test/capture-design.test.js` |
+| M8 | approved | The toolbar and extension-list icon MUST use the branded microphone, distinct in shape from the browser-control Y. Both popup headers and the browser-control launcher MUST retain the canonical Y. All Meeting icon sizes MUST be generated from the owned SVG and packaged by the companion build. | `test/capture-design.test.js`, `test/chrome.integration.test.ts`, `packages/simulation/test/brand-assets.test.ts` |
 
 ## Colors
 
@@ -100,6 +101,10 @@ Controls use an 8px radius and a 1px `muted` border for distinguishable boundari
 ## Motion
 
 State changes have no animation; reduced-motion preserves the same still state.
+
+## Icons
+
+Use `assets/brand/ycoding-meeting-icon.svg` for launcher assets, not popup headers. Its 256-unit grid has a 48-unit corner radius, a 2-unit Rule outline, a Trace capsule from x=96 to 160 and y=48 to 144, and a Frost cradle/stand with 16-unit rounded strokes. The cradle spans x=72 to 184; the base spans x=104 to 152 at y=208. The microphone fits within x=64..192 and y=48..216; strokes remain at least 1px at the 16px toolbar size. Keep the shape still and the existing REC state badge independent from the icon. Generate 16/32/48/128px PNGs with the root brand command; copy them through `companion/build.js`.
 
 ## Components
 

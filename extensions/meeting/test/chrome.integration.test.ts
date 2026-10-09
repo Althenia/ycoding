@@ -140,6 +140,32 @@ test("native Meeting popup has its documented width and canonical brand", async 
     expect(metrics.logo).toBe(true)
     expect(metrics.logoWidth).toBe(24)
     expect(metrics.status).toBe("Not paired")
+    expect(
+      await evaluate(
+        browser.cdp,
+        session,
+        `(async()=>{
+      const manifest=chrome.runtime.getManifest();
+      const icons=await Promise.all(Object.entries(manifest.action.default_icon).map(async([size,path])=>{
+        const image=new Image();image.src=chrome.runtime.getURL(path);await image.decode();
+        const canvas=document.createElement('canvas');canvas.width=image.width;canvas.height=image.height;
+        const context=canvas.getContext('2d');context.drawImage(image,0,0);
+        return {size:Number(size),path,width:image.width,height:image.height,
+          capsule:Array.from(context.getImageData(image.width/2,image.height/4,1,1).data)};
+      }));
+      return {icons,header:document.querySelector('h1 img').getAttribute('src')};
+    })()`,
+      ),
+    ).toEqual({
+      icons: [16, 32, 48, 128].map((size) => ({
+        size,
+        path: `icons/ycoding-meeting-${size}.png`,
+        width: size,
+        height: size,
+        capsule: [103, 215, 164, 255],
+      })),
+      header: "icons/ycoding-32.png",
+    })
     for (const [scheme, background] of [
       ["light", "rgb(255, 255, 255)"],
       ["dark", "rgb(23, 25, 29)"],

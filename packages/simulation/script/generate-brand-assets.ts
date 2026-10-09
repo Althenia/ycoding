@@ -12,6 +12,11 @@ const jobs = [
   { source: "ycoding-icon.svg", target: "../../apps/web/public/icons/icon-192.png", size: 192 },
   { source: "ycoding-icon.svg", target: "ycoding-icon-512.png", size: 512 },
   { source: "ycoding-icon-maskable.svg", target: "ycoding-icon-maskable-512.png", size: 512 },
+  ...[16, 32, 48, 128].map((size) => ({
+    source: "ycoding-meeting-icon.svg",
+    target: `ycoding-meeting-${size}.png`,
+    size,
+  })),
 ] as const
 
 for (const job of jobs) {

@@ -60,6 +60,8 @@ Product motion is functional: entrances, exits, and state feedback; reduced-moti
 
 Web action icons use the owned `Icon` SVG registry: 24-unit viewBox, 1.6-unit rounded strokes, and `currentColor` (`apps/web/src/ui/icon.tsx`). The terminal uses cell-width Unicode glyphs paired with text or status context; neither surface substitutes a generic third-party icon or an emoji for the Y mark (`packages/tui/DESIGN.md`).
 
+The Meeting extension launcher uses the feature-specific microphone in `assets/brand/ycoding-meeting-icon.svg`: a Trace capsule and Frost cradle/stand on the canonical rounded Surface/Rule tile. Keep the browser-control launcher and both popup headers on the canonical Y mark. Generate the Meeting launcher at 16, 32, 48 and 128px through `bun run brand:generate`; do not redraw PNGs or alter the Y sources.
+
 ## Mark
 
 `assets/brand/ycoding-mark.svg` is the transparent color source; `ycoding-mark-mono.svg` is its monochrome silhouette; `ycoding-wordmark.svg` carries the full lockup. `ycoding-icon.svg` is the rounded-square any-purpose icon, with a small even Y margin of at least 17% on each side. `ycoding-icon-maskable.svg` is full-bleed dark; keep the Y inside the centered circle with radius 40% of tile width. `packages/simulation/test/brand-assets.test.ts` checks palette, geometry, dimensions, opacity, margin, and safe zone. Generate PNG derivatives with `bun run brand:generate` (`packages/simulation/script/generate-brand-assets.ts`); never redraw, stretch, or edit the generated PNGs. The compact three-line terminal silhouette is documented in `assets/brand/README.md`.
