@@ -61,6 +61,7 @@ export interface Interface {
    * approval. This does not approve the mutation.
    */
   readonly resolve: (input: ResolveInput) => Effect.Effect<Target, PathError | FSUtil.Error>
+  readonly managedWorktree: (target: string) => Effect.Effect<boolean, FSUtil.Error>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/LocationMutation") {}
@@ -184,7 +185,7 @@ const layer = Layer.effect(
       } satisfies Target
     })
 
-    return Service.of({ resolve })
+    return Service.of({ resolve, managedWorktree })
   }),
 )
 

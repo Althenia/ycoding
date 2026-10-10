@@ -14,6 +14,7 @@ import { EventRuntime } from "@ycoding-ai/core/event"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { Global } from "@ycoding-ai/core/global"
 import { Location } from "@ycoding-ai/core/location"
+import { LocationMutation } from "@ycoding-ai/core/location-mutation"
 import { Permission } from "@ycoding-ai/core/permission"
 import { PermissionSaved } from "@ycoding-ai/core/permission/saved"
 import { Project } from "@ycoding-ai/core/project"
@@ -58,6 +59,7 @@ function harness(input?: {
   readonly autoGuardrail?: boolean
   readonly decisions?: ConfigDecisions.Info
   readonly score?: Decision.Service["Service"]["score"]
+  readonly managedWorktrees?: ReadonlyArray<string>
   readonly replyGate?: {
     readonly entered: PromiseWithResolvers<void>
     readonly release: PromiseWithResolvers<void>
@@ -91,6 +93,10 @@ function harness(input?: {
       },
     }),
     Layer.mock(Config.Service, { entries: () => Effect.succeed([...(input?.entries ?? [])]) }),
+    Layer.mock(LocationMutation.Service, {
+      managedWorktree: (target) =>
+        Effect.succeed((input?.managedWorktrees ?? []).some((root) => target === root || target.startsWith(`${root}/`))),
+    }),
     filesystem,
     Global.layerWith({ home: "/home/user", data: "/data", config: "/global" }),
     Layer.succeed(
@@ -145,6 +151,40 @@ function harness(input?: {
 
 const exact = harness()
 
+exact.it.effect("outside mutations, shell paths and cd require ordinary review without a classifier", () => Effect.gen(function* () {
+  const service = yield* SessionGuardrail.Service
+  for (const input of [
+    { action: "file_mutation", resources: ["/outside/file"], metadata: { operation: "write" } },
+    { action: "file_mutation", resources: ["/outside/file"], metadata: { operation: "patch" } },
+    { action: "shell", resources: ["cd /outside && task-runner execute"] },
+    { action: "shell", resources: ["touch /outside/file"] },
+  ]) expect(yield* service.evaluate({ sessionID: parentID, ...input })).toMatchObject({
+    decision: "ask", hardReview: false, ruleIDs: ["standard.review.outside-repo"],
+  })
+  expect(exact.choices).toHaveLength(0)
+}))
+
+const managed = harness({ managedWorktrees: ["/data/worktrees/repo_abc/feature"] })
+
+managed.it.effect("treats this repository's managed worktrees as inside and their siblings as outside", () => Effect.gen(function* () {
+  const service = yield* SessionGuardrail.Service
+  for (const input of [
+    { action: "file_mutation", resources: ["/data/worktrees/repo_abc/feature/src/a.ts"] },
+    { action: "shell", resources: ["touch /data/worktrees/repo_abc/feature/src/a.ts"] },
+    { action: "shell", resources: ["task-runner execute"], metadata: { workdir: "/data/worktrees/repo_abc/feature" } },
+  ]) expect(yield* service.evaluate({ sessionID: parentID, ...input })).toMatchObject({ decision: "allow", hardReview: false })
+  expect(yield* service.evaluate({ sessionID: parentID, action: "file_mutation", resources: ["/data/worktrees/repo_abc/other/a.ts"] }))
+    .toMatchObject({ decision: "ask", hardReview: false, ruleIDs: ["standard.review.outside-repo"] })
+  expect(managed.choices).toHaveLength(0)
+}))
+
+exact.it.effect("destructive rules stay human-only and never consult classification", () => Effect.gen(function* () {
+  const service = yield* SessionGuardrail.Service
+  for (const command of ["git reset --hard HEAD", "git branch -D feature", "git push origin main --force", "DROP TABLE users", "rm -rf ~/Documents"])
+    expect(yield* service.evaluate({ sessionID: parentID, action: "shell", resources: [command] })).toMatchObject({ decision: "ask", hardReview: true })
+  expect(exact.choices).toHaveLength(0)
+}))
+
 const semanticSettings = new ConfigDecisions.Info({
   guardrails: new ConfigDecisions.Guardrails({ provider: "openai", min_probability: 0.9 }),
 })
@@ -154,7 +194,7 @@ const agentSemanticSettings = new ConfigDecisions.Info({
 const semanticInput = {
   sessionID: parentID,
   action: "shell",
-  resources: ["task-runner execute"],
+  resources: ["task-runner /outside/file"],
   metadata: { workdir: "/workspace/project" },
 } satisfies SessionGuardrail.EvaluateInput
 
@@ -166,6 +206,15 @@ describe("SessionGuardrail semantic decisions", () => {
     const service = yield* SessionGuardrail.Service
     const command = 'sed -n 59,75p packages/core/src/memory.ts; grep -nE "^  (const|return \\{)|^    (status|list|search|read|write|graph|delete|trash|restore|purge|vacuum)[,:]" packages/core/src/memory.ts | head -30'
     expect(yield* service.evaluate({ ...semanticInput, resources: [command] })).toMatchObject({ decision: "allow" })
+    expect(readOnly.choices).toHaveLength(0)
+    for (const input of [
+      { ...semanticInput, resources: ["task-runner execute"] },
+      { ...semanticInput, action: "file_mutation", resources: ["/workspace/project/new.txt"] },
+      { ...semanticInput, resources: ["ls docs/design docs/design/proposals docs/design/proposals/* 2>/dev/null | head -50; git check-ignore -v docs/design/proposals/2026-redesign 2>&1; cat .git/info/exclude"] },
+      { ...semanticInput, resources: ["cat /outside/file; git -C /outside status"] },
+      { ...semanticInput, action: "read", resources: ["/outside/file"] },
+      { ...semanticInput, action: "mcp_execute", resources: ["server/tool"] },
+    ]) expect(yield* service.evaluate(input)).toMatchObject({ decision: "allow", ruleIDs: [] })
     expect(readOnly.choices).toHaveLength(0)
     expect(yield* service.evaluate(semanticInput)).toMatchObject({ decision: "ask", ruleIDs: ["semantic.review.risk"] })
     expect(readOnly.choices).toHaveLength(1)
@@ -197,13 +246,14 @@ describe("SessionGuardrail semantic decisions", () => {
   }
 
   const temp = harness({ decisions: semanticSettings })
-  temp.it.effect("strips temp resources and temp deletion operands from classifier evidence only", () => Effect.gen(function* () {
+  temp.it.effect("classifies only outside resources; repo and temporary work never enters the classifier", () => Effect.gen(function* () {
     const service = yield* SessionGuardrail.Service
     yield* service.evaluate({ ...semanticInput, action: "file_mutation", resources: ["/tmp/a", "/private/tmp/b", "/var/tmp/c",
-      "/private/var/tmp/d", "/var/folders/user/cache", "/workspace/project/file"] })
-    expect(temp.choices[0].state).toEqual({ action: "file_mutation", resources: ["/workspace/project/file"], metadata: semanticInput.metadata })
+      "/private/var/tmp/d", "/var/folders/user/cache", "/workspace/project/file", "/outside/file"] })
+    expect(temp.choices[0].state).toEqual({ action: "file_mutation", resources: ["/outside/file"], metadata: semanticInput.metadata })
+    yield* service.evaluate({ ...semanticInput, resources: ["rm -rf /tmp/a /private/tmp/y /outside/build"] })
+    expect(temp.choices[1].state).toEqual({ action: "shell", resources: ["rm -rf /outside/build"], metadata: semanticInput.metadata })
     yield* service.evaluate({ ...semanticInput, resources: ["rm -rf /tmp/a /private/tmp/y build"] })
-    expect(temp.choices[1].state).toEqual({ action: "shell", resources: ["rm -rf build"], metadata: semanticInput.metadata })
     yield* service.evaluate({ ...semanticInput, resources: ["rm -rf /tmp/a /var/tmp/y"] })
     expect(temp.choices).toHaveLength(2)
   }))
@@ -358,7 +408,7 @@ describe("SessionGuardrail semantic decisions", () => {
     inactive.it.effect(`does not infer with ${name}`, () =>
       Effect.gen(function* () {
         const service = yield* SessionGuardrail.Service
-        expect(yield* service.evaluate(semanticInput)).toMatchObject({ decision: "allow" })
+        expect(yield* service.evaluate(semanticInput)).toMatchObject({ decision: name === "omitted policy" ? "ask" : "allow" })
         expect(inactive.choices).toEqual([])
       }),
     )
@@ -408,7 +458,7 @@ describe("SessionGuardrail semantic decisions", () => {
 const destructive = {
   sessionID: parentID,
   action: "shell",
-  resources: ["git reset --hard HEAD~1", "ordered context"],
+  resources: ["touch /outside/file", "ordered context"],
   metadata: { workdir: "/repo" },
 } satisfies SessionGuardrail.EvaluateInput
 
@@ -450,7 +500,10 @@ const autonomousRuntime = testEffect(
       Permission.node,
       SessionGuardrail.node,
     ]),
-    [[Location.node, autonomousLocation]],
+    [
+      [Location.node, autonomousLocation],
+      [LocationMutation.node, Layer.mock(LocationMutation.Service, { managedWorktree: () => Effect.succeed(false) })],
+    ],
   ),
 )
 
@@ -674,7 +727,7 @@ describe("SessionGuardrail reusable approvals", () => {
 
       yield* reject(service, { ...destructive, resources: ["git reset --hard HEAD~2", "ordered context"] })
       yield* reject(service, { ...destructive, resources: destructive.resources.toReversed() })
-      yield* reject(service, { ...destructive, action: "mcp_execute" })
+      yield* reject(service, { ...destructive, action: "file_mutation", resources: ["/outside/file"] })
       yield* reject(service, { ...destructive, metadata: { workdir: "/other" } })
     }),
   )
@@ -990,7 +1043,7 @@ discovery.it.effect("discovers nearest repository layers before broader and glob
 
     expect(
       yield* service.evaluate({ sessionID: parentID, action: "shell", resources: ["git reset --hard global"] }),
-    ).toMatchObject({ decision: "allow", ruleIDs: ["user-allow-reset"] })
+    ).toMatchObject({ decision: "ask", hardReview: true, ruleIDs: ["standard.review.git-destructive"] })
     expect(
       yield* service.evaluate({ sessionID: parentID, action: "shell", resources: ["git reset --hard nested"] }),
     ).toMatchObject({ decision: "ask", ruleIDs: ["standard.review.git-destructive"] })

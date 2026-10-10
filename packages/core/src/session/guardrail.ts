@@ -13,6 +13,7 @@ import { EventRuntime } from "../event"
 import { FSUtil } from "../fs-util"
 import { Global } from "../global"
 import { Location } from "../location"
+import { LocationMutation } from "../location-mutation"
 import { Hash } from "../util/hash"
 import { SessionAutonomy } from "./autonomy"
 import { SessionErrors } from "./error"
@@ -166,6 +167,7 @@ export const layer = Layer.effect(
     const sessions = yield* SessionStore.Service
     const autonomy = yield* SessionAutonomy.Service
     const location = yield* Location.Service
+    const locationMutation = yield* LocationMutation.Service
     const entries = yield* config.entries()
     const settings = Config.latest(entries, "guardrails")
     const counters = SessionGuardrailCounter.make({
@@ -275,7 +277,7 @@ export const layer = Layer.effect(
       const rootSessionID = yield* root(input.sessionID)
       const paths = {
         workdir: typeof input.metadata?.workdir === "string" ? input.metadata.workdir : location.directory,
-        project: location.project.directory,
+        project: location.vcs ? location.project.directory : location.directory,
         home: global.home,
         tmpdir: process.env.TMPDIR,
       }
@@ -307,11 +309,17 @@ export const layer = Layer.effect(
           custom: loaded,
         }),
       }
-      if (result.decision !== "allow" || input.skipReview === true) return result
+      if (!result.standard || result.ruleIDs[0] !== "standard.review.outside-repo" || input.skipReview === true) return result
+      const candidates = Array.from(new Set(input.resources.flatMap((resource) =>
+        SessionGuardrailStandard.outsidePaths(input.action, resource, paths))))
+      const trustedPaths = yield* Effect.filter(candidates, (target) =>
+        locationMutation.managedWorktree(target).pipe(Effect.catch(() => Effect.succeed(false))))
+      const resources = SessionGuardrailStandard.semanticResources(input.action, input.resources, paths).filter((resource) =>
+        SessionGuardrailStandard.outsidePaths(input.action, resource, { ...paths, trustedPaths }).length > 0)
+      const allowed = { rootSessionID, decision: "allow" as const, ruleIDs: [], standard: false, hardReview: false }
+      if (resources.length === 0) return allowed
       const policy = (yield* decisions.settings())?.guardrails
       if (!policy) return result
-      const resources = SessionGuardrailStandard.semanticResources(input.action, input.resources, paths)
-      if (resources.length === 0) return result
       const choice = yield* decisions
         .score({
           context: { sessionID: input.sessionID },
@@ -332,11 +340,11 @@ export const layer = Layer.effect(
       const risk = rubric && level !== undefined && assessment.status !== "refused" && assessment.score
         ? { level, label: rubric.label, score: assessment.score.value, metric: assessment.score.metric } : undefined
       if (assessment.status === "confident" && risk && risk.level < 3 && risk.level < (policy.allow_below ?? 2))
-        return { ...result, risk }
+        return { ...allowed, risk }
       return {
         rootSessionID,
         decision: "ask" as const,
-        ruleIDs: [...result.ruleIDs, "semantic.review.risk"],
+        ruleIDs: ["semantic.review.risk"],
         reason: [
           "Semantic risk classification requires ordinary guardrail review.",
           ...(risk ? [`Risk: ${risk.label} (${risk.level}) · ${Decision.describe({ metric: risk.metric, value: risk.score })}`] : []),
@@ -606,6 +614,7 @@ export const node = makeLocationNode({
     Decision.node,
     FSUtil.node,
     Global.node,
+    LocationMutation.node,
     EventRuntime.node,
     SessionStore.node,
     SessionAutonomy.node,

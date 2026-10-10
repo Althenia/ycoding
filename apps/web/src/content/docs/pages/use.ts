@@ -126,7 +126,7 @@ export const usePages: readonly DocPage[] = [
               ["Form or question", "Submit an answer or cancel", "Complete required typed fields, defaults, and choices shown in the request."],
             ],
           },
-          { kind: "callout", tone: "warning", title: "YOLO does not bypass hard reviews", text: "YOLO 1 and higher automatically approve ordinary guardrail reviews. Hard reviews still require a human once or reject decision at every level." },
+          { kind: "callout", tone: "warning", title: "YOLO does not bypass hard reviews", text: "YOLO 1 and higher automatically approve ordinary reviews for work outside the repository. Hard reviews for destructive deletion, Git, force-push, and database actions still require a fresh human once or reject decision at every level." },
           { kind: "related", slugs: ["configuration/permissions", "configuration/yolo"] },
         ],
       },
@@ -283,7 +283,7 @@ export const usePages: readonly DocPage[] = [
             head: ["YOLO level", "Automatic behavior"],
             rows: [
               ["0", "No YOLO-level automation; an active goal can still auto-answer questions and permissions."],
-              ["1", "Automatically approve tool permissions and ordinary guardrail reviews."],
+              ["1", "Automatically approve tool permission asks and ordinary guardrail reviews."],
               ["2", "Also answer questions and Forms."],
               ["3", "Also allow automatic subagent dispatch from the scope tool; hard reviews still require a human."],
             ],
@@ -482,7 +482,7 @@ export const usePages: readonly DocPage[] = [
             head: ["Autonomy control", "Behavior"],
             rows: [
               ["Standard", "Questions and approvals wait for you."],
-              ["YOLO 1", "Automatically approve tool permissions and ordinary guardrail reviews."],
+              ["YOLO 1", "Automatically approve tool permission asks and ordinary guardrail reviews."],
               ["YOLO 2", "Also answer questions and Forms."],
               ["YOLO 3", "Also allow automatic subagent dispatch from the scope tool; hard reviews still require a human."],
               ["Goal", "Set a durable objective or stop the active goal for the selected Session. Goal stays available to set a new objective but appears neutral and announces Goal off when no goal is active, including after completion, stopping, or exhaustion; only an active goal uses the green status treatment and announces Goal active, and a goal being set shows the same treatment with a dot trail and announces Setting goal."],

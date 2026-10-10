@@ -138,6 +138,7 @@ const locationLayer = Layer.succeed(
 const mutation = Layer.succeed(
   LocationMutation.Service,
   LocationMutation.Service.of({
+    managedWorktree: () => Effect.succeed(false),
     resolve: (input) => {
       if (input.path === missingPath)
         return Effect.fail(new LocationMutation.PathError({ path: input.path, reason: "non_directory_ancestor" }))

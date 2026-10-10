@@ -30,6 +30,149 @@ describe("SessionGuardrailMatch", () => {
   })
 
   test.each([
+    "ls docs/design docs/design/proposals docs/design/proposals/* 2>/dev/null | head -50; git check-ignore -v docs/design/proposals/2026-redesign 2>&1; cat .git/info/exclude",
+    "git check-ignore -v docs/x 2>&1",
+    "git check-ignore --no-index --non-matching --verbose docs/x",
+    "printf 'docs/x' | git check-ignore --stdin",
+    "git check-attr --all -- docs/x",
+    "git check-attr --cached diff -- docs/x",
+    "git ls-tree -r --name-only HEAD",
+    "git cat-file -p HEAD",
+    "git cat-file -t HEAD; git cat-file -s HEAD; git cat-file -e HEAD",
+    "git cat-file blob HEAD:README.md",
+    "printf 'HEAD' | git cat-file --batch",
+    "printf 'HEAD' | git cat-file --batch-check='%(objectname) %(objecttype)'",
+    "git rev-list --count HEAD",
+    "git rev-list --objects --all",
+    "git describe --tags --always HEAD",
+    "git name-rev --name-only HEAD",
+    "git for-each-ref --sort=-committerdate --format='%(refname:short)' refs/heads",
+    "git for-each-ref --shell --format='ref=%(refname)' refs/heads",
+    "git show-ref --head --tags",
+    "git show-ref --verify --quiet refs/heads/main",
+    "git show-ref --exists refs/heads/main",
+    "printf 'refs/heads/main' | git show-ref --exclude-existing",
+    "git tag",
+    "git tag -l 'v*'",
+    "git tag --list --sort=-version:refname --format='%(refname:short)'",
+    "git tag -n3",
+    "git tag --contains HEAD",
+    "git tag --points-at=HEAD",
+    "git tag -l --sort refname --format '%(objectname)' -- 'v*'",
+    "git config --get user.name",
+    "git config --get-all remote.origin.url",
+    "git config --get-regexp '^remote\\.'",
+    "git config --list --show-origin --show-scope --name-only",
+    "git config -l",
+    "git config --global --get user.name",
+    "git config --local --get user.name",
+    "git config --system --list",
+    "git config --file .git/config --list",
+    "git config --file=.git/config --get user.name",
+    "git stash list --oneline",
+    "git stash show -p",
+    "git reflog",
+    "git reflog show --oneline HEAD",
+    "git reflog --oneline HEAD",
+    "git reflog exists refs/heads/main",
+    "git shortlog -sn HEAD",
+    "git grep -n foo -- docs",
+    "git grep -n --cached -e foo",
+    "git count-objects -vH",
+    "git var -l; git var GIT_EDITOR; git var GIT_PAGER",
+  ])("skips classification for bounded Git inspection: %s", (command) => {
+    expect(SessionGuardrailStandard.semanticResources("shell", [command], paths)).toEqual([])
+  })
+
+  test.each([
+    "git -C docs check-ignore -v x",
+    "git --no-pager -C docs -C proposals ls-tree HEAD",
+    "git -C docs --no-pager log -1",
+  ])("accepts Git -C as a path-only global option: %s", (command) => {
+    expect(SessionGuardrailStandard.semanticResources("shell", [command], paths)).toEqual([])
+  })
+
+  test.each([
+    "git -c core.pager=sh log",
+    "git -C docs -c core.fsmonitor=sh status",
+    "git --no-pager -c alias.inspect=sh inspect",
+    "git --config-env=core.pager=PAGER log",
+    "git --paginate log",
+    "git -p log",
+    "git -C",
+    "git -C docs add x",
+  ])("keeps Git configuration/program overrides and non-inspection -C forms classified: %s", (command) => {
+    expect(SessionGuardrailStandard.semanticResources("shell", [command], paths)).toEqual([command])
+  })
+
+  test.each([
+    "git config user.name x",
+    "git config user.name",
+    "git config --edit",
+    "git config --get user.name --edit",
+    "git config --list --add user.name x",
+    "git config --unset user.name",
+    "git config --replace-all user.name x",
+    "git config --rename-section old new",
+    "git config --remove-section old",
+    "git config --file .git/config user.name x",
+    "git config --file --get user.name x",
+    "git config --show-origin user.name x",
+    "git config --get user.name --unknown",
+    "git config --ge user.name",
+    "git config --list --get user.name",
+    "git tag v1",
+    "git tag --sort=refname v1",
+    "git tag --format='%(refname)' v1",
+    "git tag -- --list v1",
+    "git tag -d v1",
+    "git tag -l -d v1",
+    "git tag --list --create-reflog",
+    "git tag --list --edit",
+    "git tag -v v1",
+    "git tag --list --format='%(signature:grade)'",
+    "git tag --list --sort=signature:grade",
+    "git stash",
+    "git stash pop",
+    "git stash push",
+    "git stash list --output=out",
+    "git stash show --ext-diff",
+    "git stash show --textconv",
+    "git reflog expire --all",
+    "git reflog delete 'HEAD@{0}'",
+    "git reflog drop --all",
+    "git reflog write refs/heads/main HEAD HEAD message",
+    "git reflog --all expire",
+    "git reflog show --output=out",
+    "git cat-file --filters HEAD:x",
+    "git cat-file --filt HEAD:x",
+    "git cat-file --batch --filters",
+    "git cat-file --textconv HEAD:x",
+    "git cat-file --batch-check --text HEAD:x",
+    "git grep -O foo",
+    "git grep -Osh foo",
+    "git grep -nOsh foo",
+    "git grep --open-files-in-pager=sh foo",
+    "git grep --open=sh foo",
+    "git grep --textconv foo",
+    "git describe --dirty",
+    "git describe --dir=x",
+    "git describe --broken",
+    "git describe --bro=x",
+    "git for-each-ref --format='%(signature:grade)'",
+    "git for-each-ref --sort signature:signer",
+    "git for-each-ref --format='%(describe)'",
+    "git rev-list --show-signature HEAD",
+    "git rev-list --format='%G?' HEAD",
+    "git shortlog --group='format:%GS' HEAD",
+    "git reflog show --show-signature",
+    "git stash list --format='%GK'",
+    "git check-ignore --help",
+  ])("keeps writing, executing and unproven Git forms classified: %s", (command) => {
+    expect(SessionGuardrailStandard.semanticResources("shell", [command], paths)).toEqual([command])
+  })
+
+  test.each([
     "sed -i 's/x/y/' file", "sed -n 'w out' file", "grep x > out.txt", "cat $(echo f)",
     "find . -delete", "git branch new", "ls | xargs rm", "cat `echo f`", "cat <(echo f)",
     "cat <<EOF", "$CMD file", "sudo cat file", "env cat file", "sh -c 'cat file'",
@@ -51,11 +194,12 @@ describe("SessionGuardrailMatch", () => {
     })
   })
 
-  test("requires approval for high-impact shell commands", () => {
+  test("requires hard approval for destructive Git commands", () => {
     expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: ["git reset --hard HEAD~1"] })).toMatchObject({
       decision: "ask",
       standard: true,
       ruleIDs: ["standard.review.git-destructive"],
+      hardReview: true,
     })
   })
 
@@ -123,10 +267,10 @@ describe("SessionGuardrailMatch", () => {
     "rm -rf ~/Documents",
     'rm -rf "$HOME/Documents"',
     "rm -rf ~/Documents ~/Downloads",
-  ])("requires ordinary review for recursive deletion one level below home via %s", (command) => {
+  ])("requires hard review for recursive deletion one level below home via %s", (command) => {
     expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths })).toMatchObject({
       decision: "ask",
-      hardReview: false,
+      hardReview: true,
       standard: true,
       ruleIDs: ["standard.review.home-child"],
     })
@@ -219,7 +363,7 @@ describe("SessionGuardrailMatch", () => {
     })
   })
 
-  test("lets a custom allow override ordinary home-child review", () => {
+  test("does not let a custom allow override hard home-child review", () => {
     expect(
       SessionGuardrailMatch.evaluate({
         action: "shell",
@@ -228,10 +372,10 @@ describe("SessionGuardrailMatch", () => {
         custom: [layer([custom({ id: "allow-all", decision: "allow", actions: ["shell"], resources: ["*"] })])],
       }),
     ).toMatchObject({
-      decision: "allow",
-      hardReview: false,
-      standard: false,
-      ruleIDs: ["allow-all"],
+      decision: "ask",
+      hardReview: true,
+      standard: true,
+      ruleIDs: ["standard.review.home-child"],
     })
   })
 
@@ -270,8 +414,8 @@ describe("SessionGuardrailMatch", () => {
   })
 
   test("temp deletion exclusions preserve custom deny and unrelated standard review", () => {
-    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: ["rm -rf /tmp/a; npm publish"], paths }))
-      .toMatchObject({ decision: "ask", hardReview: false, ruleIDs: ["standard.review.publish"] })
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: ["rm -rf /tmp/a; git push --force"], paths }))
+      .toMatchObject({ decision: "ask", hardReview: true, ruleIDs: ["standard.review.force-push"] })
     expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: ["rm -rf /tmp/a"], paths,
       custom: [layer([custom({ id: "deny-temp", decision: "deny", actions: ["shell"], resources: ["*"] })])],
     })).toMatchObject({ decision: "deny", ruleIDs: ["deny-temp"] })
@@ -298,14 +442,43 @@ describe("SessionGuardrailMatch", () => {
 
   test.each([
     ["shell", "git push origin main --force", "force-push"],
-    ["shell", "npm publish", "publish"],
-    ["shell", "terraform apply", "production"],
     ["shell", "DROP TABLE users", "database-destructive"],
-    ["shell", "ufw disable", "security-mutation"],
-    ["mcp_execute", "server command", "mcp-execute"],
-  ])("preserves ordinary review for %s %s", (action, resource, id) => {
+    ["shell", "git branch -D feature", "git-destructive"],
+    ["shell", "git clean -fd", "git-destructive"],
+  ])("requires hard review for %s %s", (action, resource, id) => {
     expect(SessionGuardrailMatch.evaluate({ action, resources: [resource], paths }))
-      .toMatchObject({ decision: "ask", hardReview: false, ruleIDs: [`standard.review.${id}`] })
+      .toMatchObject({ decision: "ask", hardReview: true, ruleIDs: [`standard.review.${id}`] })
+  })
+
+  test.each([
+    ["shell", "npm publish"], ["shell", "terraform apply"], ["shell", "kubectl apply production"],
+    ["shell", "chmod 777 file"], ["shell", "ufw disable"], ["mcp_execute", "server command"],
+  ])("does not review non-destructive in-repo work: %s %s", (action, resource) => {
+    expect(SessionGuardrailMatch.evaluate({ action, resources: [resource], paths }))
+      .toMatchObject({ decision: "allow", hardReview: false, ruleIDs: [] })
+  })
+
+  test.each([
+    ["file_mutation", "/outside/new.txt"], ["file_mutation", "../new.txt"],
+    ["shell", "touch /outside/new.txt"], ["shell", "touch ../new.txt"],
+    ["shell", "cd /outside && task-runner execute"], ["shell", "cd ../other; touch file"],
+    ["shell", "task-runner --output=/outside/new.txt"], ["shell", "printf x > /outside/new.txt"],
+    ["shell", "printf x 2>>/outside/new.txt"], ["shell", "touch '$HOME/new.txt'"],
+    ["shell", "touch '${PWD}/../new.txt'"], ["shell", "touch ~/new.txt"], ["shell", "rm -f /outside/new.txt"],
+  ])("reviews recognized outside-repo paths: %s %s", (action, resource) => {
+    expect(SessionGuardrailMatch.evaluate({ action, resources: [resource], paths }))
+      .toMatchObject({ decision: "ask", hardReview: false, ruleIDs: ["standard.review.outside-repo"] })
+  })
+
+  test.each([
+    ["file_mutation", "src/file"], ["file_mutation", "/workspace/project/file"], ["file_mutation", "/tmp/file"],
+    ["shell", "task-runner execute"], ["shell", "/usr/bin/env task-runner execute"],
+    ["shell", "cd src && touch ../file"],
+    ["shell", "touch /tmp/file /private/tmp/file /var/tmp/file /private/var/tmp/file /var/folders/cache/file"],
+    ["shell", "cat /outside/file; git -C /outside status"], ["shell", "printf x >/dev/null"], ["read", "/outside/file"],
+  ])("keeps repo, temporary, device, executable and read-only paths exempt: %s %s", (action, resource) => {
+    expect(SessionGuardrailMatch.evaluate({ action, resources: [resource], paths }))
+      .toMatchObject({ decision: "allow", hardReview: false, ruleIDs: [] })
   })
 
   test("lets custom hard review override ordinary allows across source layers while preserving an effective deny", () => {
@@ -380,23 +553,23 @@ describe("SessionGuardrailMatch", () => {
     ).toMatchObject({ decision: "allow", standard: false, ruleIDs: ["nearest-allow"] })
   })
 
-  test("lets user custom decisions suppress standard review behavior", () => {
+  test("lets user custom decisions suppress the outside-repository review but never a standard hard review", () => {
+    expect(
+      SessionGuardrailMatch.evaluate({
+        action: "shell",
+        resources: ["cp notes.md ../sibling/notes.md"],
+        paths,
+        custom: [layer([custom({ id: "user-allow-copy", decision: "allow", actions: ["shell"], resources: ["cp *"] })])],
+      }),
+    ).toMatchObject({ decision: "allow", standard: false, ruleIDs: ["user-allow-copy"] })
     expect(
       SessionGuardrailMatch.evaluate({
         action: "shell",
         resources: ["git reset --hard HEAD~1"],
-        custom: [
-          layer([
-            custom({
-              id: "user-allow-reset",
-              decision: "allow",
-              actions: ["shell"],
-              resources: ["git reset --hard*"],
-            }),
-          ]),
-        ],
+        paths,
+        custom: [layer([custom({ id: "user-allow-reset", decision: "allow", actions: ["shell"], resources: ["git reset --hard*"] })])],
       }),
-    ).toMatchObject({ decision: "allow", standard: false, ruleIDs: ["user-allow-reset"] })
+    ).toMatchObject({ decision: "ask", hardReview: true, ruleIDs: ["standard.review.git-destructive"] })
   })
 
   test("uses numeric priority then lexical file and rule order within one layer", () => {

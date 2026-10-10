@@ -177,6 +177,24 @@ describe("structured decision documentation", () => {
     expect(JSON.stringify(findDocPage("configuration/guardrails")?.sections)).toContain("decisions.guardrails")
     expect(JSON.stringify(findDocPage("configuration")?.sections)).toContain("`decisions`")
   })
+
+  test("documents the current built-in guardrail tiers and outside-repository classifier scope", () => {
+    const guardrails = JSON.stringify(findDocPage("configuration/guardrails")?.sections)
+    for (const rule of [
+      "standard.review.project-deletion",
+      "standard.review.home-child",
+      "standard.review.git-destructive",
+      "standard.review.force-push",
+      "standard.review.database-destructive",
+      "standard.review.outside-repo",
+    ]) expect(guardrails).toContain(rule)
+    expect(guardrails).not.toContain("standard.review.broad-deletion")
+    expect(guardrails).not.toContain("standard.review.publish")
+    expect(guardrails).toContain("classifies only ordinary reviews for work outside the repository")
+    expect(guardrails).toContain("case-sensitive")
+    expect(guardrails).toContain("YOLO 1–3")
+    expect(guardrails).toContain("A fresh human `Allow once` or `Deny` only")
+  })
 })
 
 describe("remote recovery documentation", () => {

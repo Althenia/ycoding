@@ -50,7 +50,7 @@ A permission approval cannot bypass a guardrail decision. A guardrail approval c
 
 Recursive deletion denies filesystem root (`standard.catastrophic.rm-root`), the configured home or any exact `/Users/<name>` or `/home/<name>` directory (`standard.catastrophic.rm-user-home`), and system directories under `/System`, `/Library`, `/usr`, `/etc`, `/bin`, `/sbin`, `/opt`, `/Applications`, or `/var` (`standard.catastrophic.rm-system`). Formatting disks, raw block-device writes, and fork bombs remain catastrophic denies.
 
-Deleting the project root or an ancestor requires hard review (`standard.review.project-deletion`). Deleting a direct child of the configured home requires ordinary review (`standard.review.home-child`). Multiple ordinary deletion targets do not independently trigger a review. Git-destructive, force-push, publish, production, database-destructive, security-mutation, and MCP-execute rules require ordinary review.
+Standard rules have two review tiers. Hard reviews cover destructive actions: deleting the project root or an ancestor (`standard.review.project-deletion`), deleting a direct child of the configured home (`standard.review.home-child`), destructive Git (`standard.review.git-destructive`: `git reset --hard`, `git clean` with `f` in its first flag group, `git checkout -- .`, `git restore` with `--worktree`, and `git branch` with `D` in its first flag group), force push (`standard.review.force-push`), and destructive database statements (`standard.review.database-destructive`). Ordinary review is the outside-repository sandbox (`standard.review.outside-repo`); nothing inside the repository triggers it. Package publication, production deployment, security-policy changes, and MCP execution have no standard guardrail rule; tool permissions still govern them. Multiple deletion targets inside the repository do not independently trigger a review.
 
 Temporary roots are excluded before every standard deletion classification: `/tmp`, `/private/tmp`, `/var/tmp`, `/private/var/tmp`, `/var/folders`, and the Location process's `TMPDIR` when present, including their descendants. The exclusion takes precedence even when a temporary target contains the project or is a home child. A mixed command evaluates only its non-temporary deletion targets. Custom policy and permission decisions retain their authority.
 
@@ -60,11 +60,15 @@ The standard matcher recognizes direct POSIX `rm` invocations by executable base
 
 This is a bounded recognizer, not a complete shell parser or executable sandbox. It does not promise detection of arbitrary aliases, substitutions, generated commands, `sh -c` payloads, `eval`, `find -exec`, `xargs`, or other obfuscation and indirection. Shell sandbox availability and enforcement remain a separate boundary.
 
+### Outside-repository recognition boundary
+
+The repository is the Location's version-control worktree root, or the Location directory when it has no version control, and everything below it. This repository's managed worktrees (Git-listed linked worktrees under the YCoding data `worktrees` root, the same set `LocationMutation` trusts for `external_directory`) and the temporary roots above count as inside.
+
+`file_mutation` (edit, write, and patch commits) targeting a path outside the repository requires ordinary review. A shell command requires ordinary review when its working directory, a `cd` target (a bare `cd` means home), or any operand, redirection target, or `--option=value` path resolves outside the repository. Shell resolution reuses the deletion recognizer's working-directory tracking and `~`, `$HOME`, `$PWD`, `$TMPDIR` expansion. Device paths under `/dev` and the executable position of each command are not targets. Deterministically recognized read-only shell commands are exempt even when they name outside paths, and read-only tools are not guarded; reading outside the repository remains governed by the `external_directory` permission. Like deletion recognition, this is a bounded recognizer: it does not detect paths produced by substitution, `sh -c` payloads, `eval`, `xargs`, `find -exec`, scripts, or programs that write outside the repository without naming the path.
+
 ### Risk classification
 
-Deterministically recognized read-only shell commands skip classification and remain allow after deterministic rules; the recognizer is conservative, so unrecognized commands still classify.
-
-Only deterministic `allow` results enter an explicitly configured `decisions.guardrails` classifier. One score question uses these zero-based levels:
+The `decisions.guardrails` classifier is consulted only for an outside-repository review, never for inside-repository work, hard reviews, denies, or custom rule decisions. Its evidence contains only the resources that remain outside after managed-worktree and temporary exclusions; with none remaining, the action is allowed without a request. Without a configured classifier, an outside-repository action is an ordinary review. One score question uses these zero-based levels:
 
 | Level | Label | Meaning |
 | --- | --- | --- |
@@ -74,9 +78,9 @@ Only deterministic `allow` results enter an explicitly configured `decisions.gua
 | 3 | irreversible | Irreversible data loss or external side effect |
 | 4 | destructive | Destroys system, accounts, or shared infrastructure |
 
-Agent judgments return an integer level and uncalibrated model confidence. Native score distributions select the unique highest-probability integer level and its native probability; ties are uncertain. Confidence must meet `min_confidence`, or native probability must meet `min_probability`, inclusively. `allow_below` is an integer from 0 through 4, default 2. A confident level below both `allow_below` and 3 preserves allow. Confident levels 3–4 always escalate to ordinary ask with `semantic.review.risk`; all other levels, uncertainty, refusals, and decision errors also ask unless the low-risk allow condition holds. Classification never denies, creates hard review, downgrades deterministic asks or denies, or grants human authorization.
+Agent judgments return an integer level and uncalibrated model confidence. Native score distributions select the unique highest-probability integer level and its native probability; ties are uncertain. Confidence must meet `min_confidence`, or native probability must meet `min_probability`, inclusively. `allow_below` is an integer from 0 through 4, default 2. A confident level below both `allow_below` and 3 allows the outside-repository action without review. Confident levels 3–4, all other levels, uncertainty, refusals, and decision errors keep an ordinary review with `semantic.review.risk`. Classification never denies, creates or removes hard review, changes custom or deny decisions, or grants human authorization.
 
-Evidence contains only sanitized `{ action, resources, metadata }`. Temporary path resources and recognized temporary deletion operands are excluded; a deletion operand is excluded only when temporary in every reachable working directory. With no remaining resources, no classifier request is sent. Disabled ordinary guardrails and `skipReview` skip classification.
+Evidence contains only sanitized `{ action, resources, metadata }`. Temporary path resources and recognized temporary deletion operands are excluded; a deletion operand is excluded only when temporary in every reachable working directory. Disabled ordinary guardrails and `skipReview` skip classification.
 
 Usable judgments add optional `risk: { level, label, score, metric }` to the review request and `guardrail.asked` event. `metric` is `confidence` or `probability`. The reason surfaces `Risk: irreversible (3) · model confidence 0.84, uncalibrated` or `Risk: irreversible (3) · native probability 0.91`. Missing or unusable judgments omit `risk`. Ordinary review keeps exact Always reuse and effective YOLO 1-3 auto-approval; hard reviews remain human-only.
 
@@ -134,7 +138,7 @@ After a 500 ms pending-review checkpoint, an unresolved guardrail review emits *
 - Catastrophic direct shell forms are denied before process creation.
 - Catastrophic standard denies cannot be overridden by custom policy or any approval reply.
 - Recursive deletion of the current project or an ancestor requires human-only hard review after temporary exclusions; filesystem root, user-home, and system-directory deletion remains denied.
-- Semantic risk classification can only preserve deterministic allow or escalate it to ordinary ask; deterministic denies and hard reviews never consult the classifier.
+- Semantic risk classification is consulted only for outside-repository ordinary reviews and can only keep that review or allow it; deterministic denies, hard reviews, and inside-repository work never consult the classifier.
 - Hard reviews cannot be bypassed by disabled ordinary guardrails, custom allow rules, reusable approvals, agent or goal automation, or YOLO 3.
 - Raw custom file content and command history are not rendered in the sidebar.
 - Invalid enabled policy never silently disables the standard profile.

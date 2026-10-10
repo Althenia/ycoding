@@ -4,7 +4,7 @@ import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import { Telemetry } from "@ycoding-ai/schema/telemetry"
 import { Schema } from "effect"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { RemoteAgent, type ConnectionInput, type RelayConnection } from "../src/remote-bridge"
 import { createLocalServer } from "../src/remote-local"
@@ -868,15 +868,14 @@ Require a fresh human decision in this isolated test.
     await createSession(server, unrelatedID, directory)
     await bridge.connect()
 
-    // The harmless echo matches the standard destructive-Git review, but cannot reset a repository.
-    const ordinaryCommand = "echo git reset --hard HEAD~1"
+    const ordinaryCommand = `cd ${JSON.stringify(homedir())} && echo guarded ordinary review`
     const ordinaryShell = startShell(ordinaryCommand)
     const ordinary = await pendingReview()
     expect(ordinary).toMatchObject({
       rootSessionID: rootID,
       sessionID: childID,
       resources: [ordinaryCommand],
-      ruleIDs: ["standard.review.git-destructive"],
+      ruleIDs: ["standard.review.outside-repo"],
     })
     expect(ordinary.hardReview).not.toBe(true)
     expect(await reviews(childID)).toEqual([ordinary])
