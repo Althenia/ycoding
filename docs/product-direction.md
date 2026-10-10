@@ -54,7 +54,7 @@ The runtime supports three explicit modes:
 - `yolo` (`0-3`): `0` manual, `1` auto-approves ask permissions and ordinary guardrail reviews, `2` also auto-answers questions/forms (`true` → `2`), `3` also permits opt-in scope dispatch; active `goal` grants answers, ask permissions and opt-in scope dispatch at `0`, while ordinary guardrail auto-approval requires `1` or higher;
 - `goal`: repeated progress toward a durable goal until completion, stop, or a bounded no-progress terminal state.
 
-Autonomy remains visible, inspectable, interruptible, and subject to permission ceilings and Session guardrails. Effective YOLO 1-3 auto-approves ordinary guardrail reviews; YOLO 0, including an active `goal`, keeps reviews enforced. Hard reviews always require a fresh human decision and cannot be bypassed by autonomy or reusable approval. The expanded AUTONOMY sidebar reports Guardrails as `auto · YOLO 3` only at effective YOLO 3 and as `enforced` otherwise, with Hard reviews separately marked `human only`. Completion claims require verification evidence.
+Autonomy remains visible, inspectable, interruptible, and subject to permission ceilings and Session guardrails. Effective YOLO 1-3 auto-approves ordinary guardrail reviews; YOLO 0, including an active `goal`, keeps reviews enforced. Hard reviews always require a fresh human decision and cannot be bypassed by autonomy or reusable approval. The expanded AUTONOMY sidebar shows who decides Permissions, Guardrails, Questions, and Scope dispatch at the effective YOLO level and active goal (`ask you`, `auto`, or `auto · goal`) and always marks Hard reviews `always you`. Completion claims require verification evidence.
 
 ### 5. Durable background orchestration
 
