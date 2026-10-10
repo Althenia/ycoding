@@ -3,11 +3,118 @@ import { Deferred, Effect, Fiber } from "effect"
 import { Credential } from "@ycoding-ai/core/credential"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Integration } from "@ycoding-ai/core/integration"
+import { Database } from "@ycoding-ai/core/database/database"
+import { CredentialTable } from "@ycoding-ai/core/credential/sql"
+import { eq, sql } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
-const it = testEffect(LayerNode.compile(Credential.node))
+const it = testEffect(LayerNode.compile(LayerNode.group([Credential.node, Database.node])))
 
 describe("Credential", () => {
+  for (const rejected of [true, false])
+    it.effect(
+      `adopts another process's same-account rotation after ${rejected ? "rejected" : "successful"} refresh`,
+      () =>
+        Effect.gen(function* () {
+          const credentials = yield* Credential.Service
+          const database = yield* Database.Service
+          const value = Credential.OAuth.make({
+            type: "oauth",
+            methodID: Integration.MethodID.make("chatgpt-headless"),
+            access: "fixture-old",
+            refresh: "fixture-old-refresh",
+            expires: 0,
+          })
+          const created = yield* credentials.create({ integrationID: Integration.ID.make("openai"), value })
+          const newer = Credential.OAuth.make({
+            ...value,
+            access: "fixture-new",
+            refresh: "fixture-new-refresh",
+            expires: 600_000,
+          })
+          const refreshed = yield* credentials.refresh(
+            created,
+            Effect.gen(function* () {
+              yield* database.db
+                .update(CredentialTable)
+                .set({ value: newer, generation: sql`${CredentialTable.generation} + 1` })
+                .where(eq(CredentialTable.id, created.id))
+                .run()
+              if (rejected) return yield* Effect.fail(new Error("fixture rejected consumed refresh token"))
+              return Credential.OAuth.make({ ...newer, access: "fixture-late" })
+            }),
+          )
+          expect(refreshed?.value).toEqual(newer)
+          expect(refreshed?.generation).toBe(1)
+          expect(refreshed?.accountGeneration).toBe(created.accountGeneration)
+          expect((yield* credentials.get(created.id))?.value).toEqual(newer)
+          expect(yield* credentials.refresh(created, Effect.die("must not reuse rotated token"))).toEqual(refreshed)
+        }),
+    )
+
+  it.effect("keeps the stored credential and propagates rejection without a fresh same-account rotation", () =>
+    Effect.gen(function* () {
+      const credentials = yield* Credential.Service
+      const value = Credential.OAuth.make({
+        type: "oauth",
+        methodID: Integration.MethodID.make("chatgpt-headless"),
+        access: "fixture-old",
+        refresh: "fixture-refresh",
+        expires: 0,
+      })
+      const created = yield* credentials.create({ integrationID: Integration.ID.make("openai"), value })
+      const error = new Error("fixture refresh rejected")
+      expect(yield* credentials.refresh(created, Effect.fail(error)).pipe(Effect.flip)).toBe(error)
+      expect(yield* credentials.get(created.id)).toEqual(created)
+      yield* credentials.create({
+        integrationID: created.integrationID,
+        value: Credential.OAuth.make({
+          ...value,
+          access: "fixture-replacement",
+          expires: 600_000,
+        }),
+      })
+      expect(yield* credentials.refresh(created, Effect.die("must not refresh replaced account"))).toBeUndefined()
+    }),
+  )
+
+  for (const replaced of [true, false])
+    it.effect(`does not adopt ${replaced ? "a replacement account" : "an expired rotation"} after rejection`, () =>
+      Effect.gen(function* () {
+        const credentials = yield* Credential.Service
+        const database = yield* Database.Service
+        const value = Credential.OAuth.make({
+          type: "oauth",
+          methodID: Integration.MethodID.make("chatgpt-headless"),
+          access: "fixture-old",
+          refresh: "fixture-refresh",
+          expires: 0,
+        })
+        const created = yield* credentials.create({ integrationID: Integration.ID.make("openai"), value })
+        const newer = Credential.OAuth.make({ ...value, access: "fixture-newer", expires: replaced ? 600_000 : 0 })
+        const error = new Error("fixture rejected")
+        const rejected = yield* credentials
+          .refresh(
+            created,
+            Effect.gen(function* () {
+              yield* database.db
+                .update(CredentialTable)
+                .set({
+                  value: newer,
+                  generation: sql`${CredentialTable.generation} + 1`,
+                  account_generation: created.accountGeneration + (replaced ? 1 : 0),
+                })
+                .where(eq(CredentialTable.id, created.id))
+                .run()
+              return yield* Effect.fail(error)
+            }),
+          )
+          .pipe(Effect.flip)
+        expect(rejected).toBe(error)
+        expect((yield* credentials.get(created.id))?.value).toEqual(newer)
+      }),
+    )
+
   it.effect("shares one refresh while distinct credentials progress independently and fences stale settlement", () =>
     Effect.gen(function* () {
       const credentials = yield* Credential.Service

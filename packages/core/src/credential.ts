@@ -1,7 +1,7 @@
 export * as Credential from "./credential"
 
 import { and, asc, desc, eq, sql } from "drizzle-orm"
-import { Context, Deferred, Effect, Layer, Schema, Scope } from "effect"
+import { Clock, Context, Deferred, Effect, Layer, Schema, Scope } from "effect"
 import { Credential } from "@ycoding-ai/schema/credential"
 import { Integration } from "@ycoding-ai/schema/integration"
 import { Database } from "./database/database"
@@ -114,6 +114,29 @@ const layer = Layer.effect(
         const deferred = Deferred.makeUnsafe<Info | undefined, unknown>()
         refreshing.set(key, deferred)
         yield* Effect.gen(function* () {
+          const rotated = Effect.fnUntraced(function* () {
+            const row = yield* db
+              .select()
+              .from(CredentialTable)
+              .where(eq(CredentialTable.id, expected.id))
+              .get()
+              .pipe(Effect.orDie)
+            if (
+              !row ||
+              row.integration_id !== expected.integrationID ||
+              row.account_generation !== expected.accountGeneration ||
+              row.generation <= expected.generation
+            )
+              return undefined
+            const current = stored(row)
+            const now = yield* Clock.currentTimeMillis
+            return current?.value.type === "oauth" &&
+              expected.value.type === "oauth" &&
+              current.value.methodID === expected.value.methodID &&
+              current.value.expires > now + 300_000
+              ? current
+              : undefined
+          })
           const before = yield* db
             .select()
             .from(CredentialTable)
@@ -125,8 +148,16 @@ const layer = Layer.effect(
             before.account_generation !== expected.accountGeneration ||
             before.generation !== expected.generation
           )
-            return undefined
-          const value = yield* refresh
+            return yield* rotated()
+          const value = yield* refresh.pipe(
+            Effect.catch((error) =>
+              Effect.gen(function* () {
+                const current = yield* rotated()
+                if (current?.value.type === "oauth") return current.value
+                return yield* Effect.fail(error)
+              }),
+            ),
+          )
           const rows = yield* db
             .update(CredentialTable)
             .set({ value, generation: sql`${CredentialTable.generation} + 1` })
@@ -140,7 +171,7 @@ const layer = Layer.effect(
             .returning()
             .all()
             .pipe(Effect.orDie)
-          return rows[0] ? stored(rows[0]) : undefined
+          return rows[0] ? stored(rows[0]) : yield* rotated()
         }).pipe(
           Effect.exit,
           Effect.flatMap((exit) => Deferred.done(deferred, exit)),

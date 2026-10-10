@@ -6,7 +6,7 @@ import { Catalog } from "./catalog"
 import { Credential } from "./credential"
 import { makeLocationNode } from "./effect/app-node"
 import { httpClient } from "./effect/app-node-platform"
-import { Integration } from "@ycoding-ai/schema/integration"
+import { Integration } from "./integration"
 import { ProviderUsage } from "@ycoding-ai/schema/provider-usage"
 import { Provider } from "@ycoding-ai/schema/provider"
 import { Context, Effect, Layer, Schema } from "effect"
@@ -129,17 +129,24 @@ export function make(input: MakeInput): Interface {
   const cache = input.cache ?? ProviderUsageCache.make({ now })
   const observations = new Map<string, ProviderUsage.Snapshot>()
 
-  const unavailable = (providerID: Provider.ID, status: "unsupported" | "unauthorized" | "error", message: string) =>
-    new ProviderUsage.Snapshot({
+  const unavailable = (
+    providerID: Provider.ID,
+    status: "unsupported" | "unauthorized" | "error",
+    message: string,
+    credential?: Credential.Value,
+  ) => {
+    const chatGPT = providerID === "openai" && credential !== undefined && CodexUsage.isChatGPTCredential(credential)
+    return new ProviderUsage.Snapshot({
       providerID,
       label: providerLabel(providerID),
       status,
-      source: "provider_api",
-      stability: "stable",
+      source: chatGPT ? "provider_internal_api" : "provider_api",
+      stability: chatGPT ? "best_effort" : "stable",
       updatedAt: Math.max(0, Math.trunc(now())),
       windows: [],
       message,
     })
+  }
 
   const credentialsFor = (credentials: ReadonlyArray<Credential.Info>, providerID: Provider.ID) =>
     credentials.filter((item) => item.integrationID === Integration.ID.make(providerID))
@@ -224,6 +231,7 @@ export function make(input: MakeInput): Interface {
               error instanceof RequestError && (error.status === 401 || error.status === 403)
                 ? "Provider usage credentials are unauthorized"
                 : "Provider usage refresh failed",
+              selected.value,
             ),
           ),
         ),
@@ -307,6 +315,7 @@ const layer = Layer.effect(
     const config = yield* Config.Service
     const catalog = yield* Catalog.Service
     const credentials = yield* Credential.Service
+    const integrations = yield* Integration.Service
     const global = yield* Global.Service
     const http = yield* HttpClient.HttpClient
     const database = yield* Database.Service
@@ -323,7 +332,7 @@ const layer = Layer.effect(
         adapters: {
           anthropic: (input) => claudeOAuth(http, claude, input),
           openrouter: (input) => openRouter(http, input),
-          openai: (input) => openAI(http, input),
+          openai: (input) => openAI(http, input, integrations.connection),
           meta: (input) => meta(http, input),
           "github-copilot": (input) => githubCopilot(http, input),
           xai: (input) => grok(http, input),
@@ -378,7 +387,7 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Catalog.node, Config.node, Credential.node, Database.node, Global.node, httpClient],
+  deps: [Catalog.node, Config.node, Credential.node, Integration.node, Database.node, Global.node, httpClient],
 })
 
 const claudeOAuth = (
@@ -652,14 +661,31 @@ const copilotJson = Effect.fnUntraced(function* (
   }
 })
 
-const openAI = (http: HttpClient.HttpClient, input: AdapterInput) =>
+export const openAI = (
+  http: HttpClient.HttpClient,
+  input: AdapterInput,
+  connection: Pick<Integration.Interface["connection"], "snapshot">,
+) =>
   Effect.gen(function* () {
     if (input.credential.value.type === "oauth" && CodexUsage.isChatGPTCredential(input.credential.value)) {
+      const snapshot = yield* connection.snapshot({
+        type: "credential",
+        id: input.credential.id,
+        label: input.credential.label,
+        active: input.credential.active,
+      })
+      if (
+        !snapshot.credential ||
+        snapshot.credential.accountGeneration !== input.credential.accountGeneration ||
+        snapshot.value?.type !== "oauth" ||
+        !CodexUsage.isChatGPTCredential(snapshot.value)
+      )
+        return yield* Effect.fail(new Error("OpenAI usage account changed during refresh"))
       const response = yield* json(
         http,
         "https://chatgpt.com/backend-api/wham/usage",
-        input.credential.value.access,
-        CodexUsage.accountHeaders(input.credential.value),
+        snapshot.value.access,
+        CodexUsage.accountHeaders(snapshot.value),
       )
       return CodexUsage.normalize({
         providerID: input.providerID,

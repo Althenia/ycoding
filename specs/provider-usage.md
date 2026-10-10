@@ -72,6 +72,8 @@ When configured, YCoding invokes a Codex app-server process directly with an arg
 
 A stored ChatGPT OAuth credential uses the provider-owned backend usage endpoint independently for that profile. Account routing uses the credential's account ID when present. Profile quota caches distinguish credential identity, account generation, and token generation; provider-local organization hints and response observations cannot cross account identities. A response observation without account provenance remains unbound rather than being assigned to a named profile.
 
+ChatGPT usage resolves its credential through the same expiry-refresh boundary as model requests. Concurrent refreshes share work within the process; a newer, fresh stored OAuth generation for the same credential and account is adopted when another process has rotated the token. Rejected refreshes cannot delete or overwrite newer credentials, and replacement accounts are never adopted. ChatGPT usage failures retain the `provider_internal_api` and `best_effort` labels and do not fall through to organization API usage. A failed refresh preserves a cached quota as stale.
+
 Primary, secondary, credit, reset-credit, and every additional named limit ID are preserved. Known Spark IDs render as Spark; unknown future IDs receive a sanitized display label instead of being discarded.
 
 Codex window labels follow the reported duration rather than assuming `primary` always means five hours or `secondary` always means weekly. This preserves weekly-only Plus/Pro account responses and separately reported Spark weekly windows.
