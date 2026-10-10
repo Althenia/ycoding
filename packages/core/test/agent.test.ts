@@ -171,6 +171,7 @@ describe("Agent", () => {
         "god",
         "occam",
         "omoikane",
+        "prediction",
         "summary",
         "title",
         "wittgenstein",
