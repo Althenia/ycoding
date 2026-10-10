@@ -657,7 +657,7 @@ Session skill status derives from the durable transcript and instruction state:
 - completed compaction marks prior active skills inactive with `compacted`;
 - resolving an active skill-to-skill conflict marks only the chosen loser inactive with `conflict_resolved`;
 - conflicts are computed between active skills and against declared instruction keys;
-- already-active tool loads are not duplicated as new active entries.
+- already-active tool loads are not duplicated as new active entries, and the TUI transcript hides such a load while it is pending or running as well as after it completes.
 
 `Session.resolveSkillConflict({ sessionID, winner, loser })` verifies the current derived conflict and records `session.skill.deactivated.1`. Its projection annotates the losing skill's existing activation message, so status remains derived from durable messages and current instruction keys. A missing or inactive pair, or a pair without a current skill conflict, fails without changing Session history. Resolution does not resume model execution or change the remaining skill's instruction snapshot.
 

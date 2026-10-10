@@ -196,6 +196,50 @@ test("renders user and agent-invoked completed Skill titles with the same treatm
   }
 }, 30000)
 
+test("hides a running reload of an already-active skill and keeps a first load visible", async () => {
+  const running = (id: string, skill: string, created: number) => ({
+    type: "tool" as const,
+    id,
+    name: "skill",
+    state: { status: "running" as const, input: { id: skill }, content: [], structured: {} },
+    time: { created, ran: created },
+  })
+  const pendingMessages: SessionMessageInfo[] = [
+    ...messages,
+    {
+      id: "msg_agent_reload",
+      type: "assistant",
+      agent: "build",
+      model,
+      content: [running("call_reload_reference", "review", 5), running("call_reload_tool", "agent-review", 6)],
+      time: { created: 5 },
+    },
+    {
+      id: "msg_agent_first",
+      type: "assistant",
+      agent: "build",
+      model,
+      content: [running("call_first_load", "fresh-review", 7)],
+      time: { created: 7 },
+    },
+  ]
+  const screen = await renderScreen({
+    width: 100,
+    height: 40,
+    args: { sessionID },
+    route: (url) =>
+      url.pathname === `/api/session/${sessionID}/message` ? json({ data: pendingMessages, cursor: {} }) : route(url),
+    config: { animations: false },
+    settle: 'Skill "Agent review"',
+  })
+  try {
+    await until(screen, "Loading skill...")
+    expect(screen.frame().match(/Loading skill\.\.\./g)).toHaveLength(1)
+  } finally {
+    await screen.dispose()
+  }
+}, 30000)
+
 test("skill details keyboard expansion keeps long content bounded and pageable", async () => {
   const screen = await renderScreen({
     width: 100,

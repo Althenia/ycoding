@@ -136,7 +136,7 @@ import {
 } from "../../util/session-autonomy"
 import { daybreakPlan, daybreakSuccessLabel, daybreakTitle, modelDaybreak } from "../../util/session-daybreak"
 import { promptSkillsFromMetadata, segmentPromptSkills } from "../../prompt/skill"
-import { sessionSkillContent } from "../../util/session-skills"
+import { activeSkillIDs, sessionSkillContent } from "../../util/session-skills"
 import { Header, headerModelRef, pendingVariantSelection, sessionRetryHeaderState, type SessionHeaderOperationalState, type SessionHeaderState } from "./header"
 import { railPlacement, railWidth } from "./rail"
 import { InlineDiff, parseInlineDiff, type InlineDiffFile, type InlineDiffGroup } from "./inline-diff"
@@ -225,6 +225,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   const promptRef = usePromptRef()
   const session = createMemo(() => data.session.get(route.sessionID))
   const messages = () => data.session.message.list(route.sessionID)
+  const activeSkills = createMemo(() => activeSkillIDs(messages()))
   const dispatchedChildKey = createMemo(() => (session()?.parentID ? "" : capturedChildSessionIDs(messages()).join(",")))
   const capturedChildren = createCapturedChildHydration({
     sessionID: () => route.sessionID,
@@ -1552,6 +1553,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                       <SessionRowView
                         row={row}
                         message={(messageID) => data.session.message.get(route.sessionID, messageID)}
+                        activeSkills={activeSkills}
                         compaction={(jobID) => data.session.compaction.get(route.sessionID, jobID)}
                         compactions={() => data.session.compaction.list(route.sessionID)}
                         assistantIdentity={assistantIdentity()}
@@ -1807,6 +1809,7 @@ export function DialogSessionMemory(props: { sessionID: string }) {
 export function SessionRowView(props: {
   row: SessionRow
   message: (messageID: string) => SessionMessageInfo | undefined
+  activeSkills?: () => ReadonlySet<string>
   compaction?: (jobID: string) => DataSessionCompactionLifecycle | undefined
   compactions?: () => DataSessionCompactionLifecycle[]
   assistantIdentity?: { label: string; subagent: boolean }
@@ -1837,7 +1840,7 @@ export function SessionRowView(props: {
       const content = resolvePart(message, row.ref.partID)
       return (
         content !== undefined &&
-        (content.type !== "tool" || transcriptToolPartVisible(content))
+        (content.type !== "tool" || transcriptToolPartVisible(content, props.activeSkills?.()))
       )
     }
     if (row.type === "group") {
@@ -1847,7 +1850,7 @@ export function SessionRowView(props: {
         if (message?.type !== "assistant") return false
         const part = resolvePart(message, ref.partID)
         if (row.kind === "reasoning") return part?.type === "reasoning" && Boolean(reasoningContent(part))
-        return part?.type === "tool" && transcriptToolPartVisible(part)
+        return part?.type === "tool" && transcriptToolPartVisible(part, props.activeSkills?.())
       })
     }
     return true
@@ -1913,6 +1916,7 @@ export function SessionRowView(props: {
                 pending={row().pending}
                 completed={row().completed}
                 message={props.message}
+                activeSkills={props.activeSkills}
               />
             )}
           </Match>
@@ -2162,6 +2166,7 @@ function SessionGroupView(props: {
   pending: PartRef[]
   completed: boolean
   message: (messageID: string) => SessionMessageInfo | undefined
+  activeSkills?: () => ReadonlySet<string>
 }) {
   const { theme } = useTheme()
   const ctx = use()
@@ -2173,7 +2178,7 @@ function SessionGroupView(props: {
       const message = props.message(ref.messageID)
       if (message?.type !== "assistant") return []
       const part = resolvePart(message, ref.partID)
-      if (part?.type !== "tool" || !transcriptToolPartVisible(part)) return []
+      if (part?.type !== "tool" || !transcriptToolPartVisible(part, props.activeSkills?.())) return []
       return [part]
     })
   const grouped = createMemo(() => parts(props.refs))
@@ -4705,13 +4710,12 @@ function recordValue(value: unknown): Record<string, unknown> | undefined {
   return value as Record<string, unknown>
 }
 
-function transcriptToolPartVisible(part: SessionMessageAssistantTool) {
+function transcriptToolPartVisible(part: SessionMessageAssistantTool, activeSkills?: ReadonlySet<string>) {
   if (part.name === "goal" || capturedPartPatches(part).length > 0) return false
-  return (
-    part.name !== "skill" ||
-    part.state.status !== "completed" ||
-    recordValue(recordValue(part.state)?.structured)?.alreadyActive !== true
-  )
+  if (part.name !== "skill") return true
+  if (part.state.status === "completed") return recordValue(recordValue(part.state)?.structured)?.alreadyActive !== true
+  const id = recordValue(recordValue(part.state)?.input)?.id
+  return typeof id !== "string" || activeSkills?.has(id) !== true
 }
 
 function formatSessionTranscript(session: SessionInfo, messages: SessionMessageInfo[], thinking: boolean) {

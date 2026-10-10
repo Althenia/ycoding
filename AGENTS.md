@@ -271,7 +271,7 @@ const table = sqliteTable("session", {
 
 - Session skill status derives from durable messages and current instruction keys. Do not store a second independent skill-status authority.
 - Agent switch and completed compaction deactivate prior skills with explicit reasons. Active conflicts are computed against active skills and instruction declarations.
-- Completed duplicate skill-tool loads marked `alreadyActive` must not render or register as a new activation.
+- Completed duplicate skill-tool loads marked `alreadyActive` must not render or register as a new activation, and a pending or running skill-tool load for a skill that resident history already shows as active must not render either.
 - Project artifacts are the current managed customization system. Do not restore the removed self-improvement subsystem.
 - Supported artifact kinds are `skill`, `command`, `agent`, and `plugin`; supported scopes are project and global.
 - Artifact mutations must use the validated store lifecycle, revisions, digests, preview/confirmation tokens, provenance, and version transitions. Do not write directly into adapter-owned source directories.
