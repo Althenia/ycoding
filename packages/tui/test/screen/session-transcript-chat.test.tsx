@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import type { SessionMessageInfo } from "@ycoding-ai/client"
+import type { SessionMessageInfo, YCodingEvent } from "@ycoding-ai/client"
 import { railWidth } from "../../src/routes/session/rail"
 import { json } from "../fixture/tui-client"
 import { DESIGN_VIEWPORT } from "../viewport"
@@ -30,7 +30,7 @@ const messages = [
     agent: "build",
     model: { providerID: "anthropic", id: "claude-opus-5" },
     content: [
-      { type: "text", text: "I inspected the typed transcript data." },
+      { type: "text", text: "I inspected the typed transcript data. I inspected it again." },
       {
         type: "tool",
         id: "call_project_search",
@@ -203,6 +203,7 @@ function route(url: URL) {
           providerID: "anthropic",
           name: "Claude Opus 5",
           capabilities: { tools: true, input: ["text"], output: ["text"] },
+          variants: [],
           time: { released: 0 },
           cost: [],
           status: "active",
@@ -294,6 +295,108 @@ test("renders typed transcript chat rows at the design gutter with safe expandab
     expect(errorExpanded).toContain("status: 401")
     expect(errorExpanded).toContain("Sensitive response detail omitted.")
     expectSafe(errorExpanded)
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("finds and highlights resident transcript text from its session keybind", async () => {
+  const screen = await renderScreen({
+    ...DESIGN_VIEWPORT,
+    kittyKeyboard: true,
+    args: { sessionID },
+    route,
+    settle: "I inspected the typed transcript data.",
+  })
+
+  try {
+    const normalTextBackground = screen.spans().lines.flatMap((line) => line.spans).find((span) => span.text.includes("inspected"))?.bg.toInts()
+    screen.input.pressKey("g", { ctrl: true, shift: true })
+    await waitFor(screen.frame, "Find in transcript")
+    await screen.input.typeText("inspected")
+
+    expect(screen.frame()).toContain("1 of 2")
+    expect(screen.spans().lines.flatMap((line) => line.spans).find((span) => span.text.includes("inspected"))?.bg.toInts()).not.toEqual(normalTextBackground)
+    expect(screen.colorOf("inspected")).not.toEqual(screen.colorOf("1 of 1"))
+    const scrollTop = screen.scrollbox()?.scrollTop
+
+    screen.input.pressKey("ARROW_DOWN")
+    await waitFor(screen.frame, "2 of 2")
+    expect(screen.frame()).toContain("2 of 2")
+    screen.input.pressKey("ARROW_DOWN")
+    await waitFor(screen.frame, "1 of 2")
+    expect(screen.frame()).toContain("1 of 2")
+    screen.input.pressKey("ARROW_UP")
+    await waitFor(screen.frame, "2 of 2")
+    expect(screen.frame()).toContain("2 of 2")
+    screen.input.pressKey("ARROW_UP")
+    await waitFor(screen.frame, "1 of 2")
+    expect(screen.frame()).toContain("1 of 2")
+    screen.input.pressEnter()
+    await waitFor(screen.frame, "2 of 2")
+    expect(screen.frame()).toContain("2 of 2")
+
+    screen.input.pressKey("ESCAPE")
+    expect(screen.frame()).not.toContain("Find in transcript")
+    expect(screen.frame()).toContain("I inspected the typed transcript data.")
+    expect(screen.scrollbox()?.scrollTop).toBe(scrollTop)
+
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("find counts a live matching message without losing the current match", async () => {
+  const screen = await renderScreen({
+    ...DESIGN_VIEWPORT,
+    kittyKeyboard: true,
+    args: { sessionID },
+    route,
+    settle: "I inspected the typed transcript data.",
+  })
+
+  try {
+    screen.input.pressKey("g", { ctrl: true, shift: true })
+    await waitFor(screen.frame, "Find in transcript")
+    await screen.input.typeText("inspected")
+    await waitFor(screen.frame, "1 of 2")
+    screen.input.pressKey("ARROW_DOWN")
+    await waitFor(screen.frame, "2 of 2")
+
+    screen.events.emit({
+      id: "evt_find_admitted", created: 20, type: "session.input.admitted",
+      durable: { aggregateID: sessionID, seq: 1, version: 1 }, location: { directory },
+      data: { sessionID, inputID: "msg_find_live", input: { type: "user", data: { text: "Has the build been inspected yet?" }, delivery: "steer" } },
+    } satisfies YCodingEvent)
+    screen.events.emit({
+      id: "evt_find_promoted", created: 21, type: "session.input.promoted",
+      durable: { aggregateID: sessionID, seq: 2, version: 1 }, location: { directory }, data: { sessionID, inputID: "msg_find_live" },
+    } satisfies YCodingEvent)
+
+    await waitFor(screen.frame, "2 of 3")
+    expect(screen.frame()).toContain("2 of 3")
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("find reports no matches without changing the transcript scroll position", async () => {
+  const screen = await renderScreen({
+    ...DESIGN_VIEWPORT,
+    kittyKeyboard: true,
+    args: { sessionID },
+    route,
+    settle: "I inspected the typed transcript data.",
+  })
+
+  try {
+    const scrollTop = screen.scrollbox()?.scrollTop
+    screen.input.pressKey("g", { ctrl: true, shift: true })
+    await waitFor(screen.frame, "Find in transcript")
+    await screen.input.typeText("no transcript can contain this phrase")
+
+    expect(screen.frame()).toContain("No matches")
+    expect(screen.scrollbox()?.scrollTop).toBe(scrollTop)
   } finally {
     await screen.dispose()
   }

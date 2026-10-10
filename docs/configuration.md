@@ -1323,6 +1323,8 @@ Attention sound names are `default`, `question`, `permission`, `error`, `done`, 
 
 `keybinds` is a record of command names to key sequences. The complete current key map lives in `packages/tui/src/config/keybind.ts`; that file is authoritative when bindings are added or renamed.
 
+`session_find` opens Find in transcript in the current Session. Its default is `ctrl+shift+g`; set `keybinds.session_find` in `cli.json` to override it. The command palette also provides **Find in transcript**.
+
 The TUI `plugins` array has the same string or `{ package, options }` shape, but it configures terminal-side plugins rather than Core runtime plugins.
 
 Assistant and compaction transcript text always renders as Markdown. There is no syntax-source display setting.

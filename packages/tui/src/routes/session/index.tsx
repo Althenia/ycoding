@@ -29,7 +29,7 @@ import { DialogSelect } from "../../ui/dialog-select"
 import { useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
 import { Spinner, SPINNER_FRAMES } from "../../component/spinner"
 import { ThemeContext, useTheme } from "../../context/theme"
-import { BoxRenderable, ScrollBoxRenderable, addDefaultParsers, TextAttributes, RGBA } from "@opentui/core"
+import { BoxRenderable, InputRenderable, ScrollBoxRenderable, addDefaultParsers, TextAttributes, RGBA } from "@opentui/core"
 import { Prompt, type PromptRef } from "../../component/prompt"
 import type {
   ModelInfo,
@@ -660,6 +660,10 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   const [navigationMessage, setNavigationMessage] = createSignal<string>()
   const [navigationSlack, setNavigationSlack] = createSignal(0)
   const [restoringViewport, setRestoringViewport] = createSignal(props.viewports?.get(mountedSessionID)?.follow === false)
+  const [findOpen, setFindOpen] = createSignal(false)
+  const [findQuery, setFindQuery] = createSignal("")
+  const [findMatchKey, setFindMatchKey] = createSignal("")
+  let findInput: InputRenderable | undefined
 
   const clearMessageNavigation = () => {
     setNavigationSlack(0)
@@ -829,6 +833,80 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       .catch((error) => toast.error(error))
   }
 
+  const findMatches = createMemo(() => {
+    const query = findQuery().trim().toLocaleLowerCase()
+    if (!query) return []
+    return messages().flatMap((message) => {
+      const entries = message.type === "user"
+        ? [{ partID: "message", text: message.text }]
+        : message.type === "assistant"
+          ? message.content.flatMap((part, index) => {
+              if (part.type === "text") return [{ partID: `text:${message.content.slice(0, index).filter((item) => item.type === "text").length}`, text: part.text }]
+              if (part.type !== "tool" || !transcriptToolPartVisible(part)) return []
+              const input = typeof part.state.input === "string" ? {} : part.state.input
+              return [{ partID: part.id, text: [part.name, primitiveInputSummary(safeToolSummaryInput(input))].filter(Boolean).join(" ") }]
+            })
+          : message.type === "shell"
+            ? [{ partID: "message", text: `${message.command} ${message.output?.output ?? ""}` }]
+            : []
+      return entries.flatMap((entry) => {
+        const text = entry.text.toLocaleLowerCase()
+        const matches = []
+        let offset = 0
+        while ((offset = text.indexOf(query, offset)) !== -1) {
+          matches.push({ messageID: message.id, partID: entry.partID, offset, length: query.length })
+          offset += query.length
+        }
+        return matches
+      })
+    }).filter((match) => rows.some((row) => sessionRowMessageID(row) === match.messageID) && Boolean(scroll.getRenderable(match.messageID)))
+  })
+  const findMatchID = (match: { messageID: string; partID: string; offset: number }) => `${match.messageID}\0${match.partID}\0${match.offset}`
+  const findIndex = createMemo(() => Math.max(0, findMatches().findIndex((match) => findMatchID(match) === findMatchKey())))
+  const activeFindMatch = createMemo(() => findMatches().find((match) => findMatchID(match) === findMatchKey()) ?? findMatches()[0])
+  const openFind = () => {
+    setFindOpen(true)
+    setFindQuery("")
+    setFindMatchKey("")
+    requestAnimationFrame(() => findInput?.focus())
+  }
+  const closeFind = () => {
+    setFindOpen(false)
+    findInput?.blur()
+    prompt?.focus()
+  }
+  const moveFind = (direction: 1 | -1) => {
+    const matches = findMatches()
+    if (!matches.length) return
+    const current = matches.findIndex((match) => findMatchID(match) === findMatchKey())
+    const next = (Math.max(0, current) + direction + matches.length) % matches.length
+    const match = matches[next]
+    if (!match) return
+    setFindMatchKey(findMatchID(match))
+    if (scroll.getRenderable(match.messageID)) jumpToResidentMessage(match.messageID)
+  }
+  const keymap = Keymap.use()
+  createEffect(() => {
+    if (!findOpen()) return
+    return keymap.intercept("key", ({ event, consume }) => {
+      const key = event.name.toLowerCase()
+      if (key === "return" || key === "enter") {
+        consume()
+        moveFind(event.shift ? -1 : 1)
+        return
+      }
+      if (key === "down" || key === "arrowdown" || key === "arrow_down") {
+        consume()
+        moveFind(1)
+        return
+      }
+      if (key === "up" || key === "arrowup" || key === "arrow_up") {
+        consume()
+        moveFind(-1)
+      }
+    }, { priority: 100 })
+  })
+
   function toBottom() {
     clearMessageNavigation()
     setTimeout(() => {
@@ -942,6 +1020,12 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   ]
 
   const baseCommands = createMemo(() => [
+    {
+      title: "Find in transcript",
+      id: "session.find",
+      group: "Session",
+      run: () => openFind(),
+    },
     {
       title: "Share session",
       id: "session.share",
@@ -1558,6 +1642,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                         compactions={() => data.session.compaction.list(route.sessionID)}
                         assistantIdentity={assistantIdentity()}
                         boundaryID={mountedBoundaries()[index()]}
+                        findActiveMatch={activeFindMatch}
                         width={contentWidth()}
                         hidden={!!blockedQuestion()}
                         running={data.session.status(route.sessionID) === "running"}
@@ -1630,6 +1715,41 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                   : Math.max(1, Math.min(4, Math.floor(dimensions().height / 16)))
               }
             >
+              <Show when={findOpen()}>
+                <box flexDirection="row" alignItems="center" paddingLeft={3} paddingRight={3} gap={1} flexShrink={0}>
+                  <text fg={theme.text.label}>Find</text>
+                  <input
+                    ref={(value: InputRenderable) => {
+                      findInput = value
+                      value.traits = { status: "FILTER" }
+                    }}
+                    onInput={(value) => {
+                      setFindQuery(value)
+                      const first = findMatches()[0]
+                      setFindMatchKey(first ? findMatchID(first) : "")
+                      const match = findMatches()[0]
+                      if (match && scroll.getRenderable(match.messageID)) jumpToResidentMessage(match.messageID)
+                    }}
+                    onSubmit={() => moveFind(1)}
+                    onKeyDown={(event) => {
+                      const key = event.name.toLowerCase()
+                      if (key === "escape") {
+                        event.preventDefault()
+                        closeFind()
+                      }
+                    }}
+                    placeholder="Find in transcript"
+                    placeholderColor={theme.text.subdued}
+                    textColor={theme.text.formfield.default}
+                    focusedTextColor={theme.text.formfield.default}
+                    cursorColor={theme.text.feedback.info.default}
+                    focusedBackgroundColor="transparent"
+                    flexGrow={1}
+                  />
+                  <text fg={theme.text.subdued}>{findMatches().length ? `${findIndex() + 1} of ${findMatches().length}` : findQuery() ? "No matches" : ""}</text>
+                  <text fg={theme.text.subdued}>enter/↓ next · shift+enter/↑ previous · esc close</text>
+                </box>
+              </Show>
               <PluginSlot name="session.composer.top" input={{ sessionID: route.sessionID }} />
               <Show when={waitingChild()}>{(task) => <SubagentQuestionNotice task={task()} />}</Show>
               <Show when={blockedReason()}>
@@ -1819,6 +1939,7 @@ export function SessionRowView(props: {
   running?: boolean
   guardrail?: (requestID: string) => void
   subagent?: (sessionID: string) => void
+  findActiveMatch?: () => { messageID: string; partID: string } | undefined
 }) {
   // Rows can outlive a session eviction for one reactive frame. Resolve every message-backed row
   // before mounting its component so stale refs consume no space.
@@ -1862,7 +1983,7 @@ export function SessionRowView(props: {
           <Match when={props.row.type === "message" ? props.row : undefined}>
             {(row) => (
               <Show when={props.message(row().messageID)}>
-                {(message) => <SessionMessageView message={message()} />}
+                {(message) => <SessionMessageView message={message()} findActive={props.findActiveMatch?.()?.messageID === message().id && props.findActiveMatch?.()?.partID === "message"} />}
               </Show>
             )}
           </Match>
@@ -1896,6 +2017,7 @@ export function SessionRowView(props: {
                 partRef={row().ref}
                 message={props.message}
                 assistantIdentity={props.assistantIdentity}
+                findActive={props.findActiveMatch?.()?.messageID === row().ref.messageID && props.findActiveMatch?.()?.partID === row().ref.partID}
               />
             )}
           </Match>
@@ -1965,11 +2087,11 @@ function BackgroundToolHint(props: { messages: SessionMessageInfo[] }) {
   )
 }
 
-function SessionMessageView(props: { message: SessionMessageInfo }) {
+function SessionMessageView(props: { message: SessionMessageInfo; findActive?: boolean }) {
   return (
     <Switch>
       <Match when={props.message.type === "user"}>
-        <UserMessage message={props.message as SessionMessageUser} />
+        <UserMessage message={props.message as SessionMessageUser} findActive={props.findActive} />
       </Match>
       <Match when={props.message.type === "shell"}>
         <ShellMessage message={props.message as Extract<SessionMessageInfo, { type: "shell" }>} />
@@ -1995,6 +2117,7 @@ function SessionPartView(props: {
   partRef: PartRef
   message: (messageID: string) => SessionMessageInfo | undefined
   assistantIdentity?: { label: string; subagent: boolean }
+  findActive?: boolean
 }) {
   const message = createMemo(() => props.message(props.partRef.messageID))
   const part = createMemo(() => {
@@ -2015,6 +2138,7 @@ function SessionPartView(props: {
               part={item() as SessionMessageAssistantText}
               last={false}
               streaming={streaming()}
+              findActive={props.findActive}
               identity={props.partRef.partID === "text:0" ? props.assistantIdentity : undefined}
               subagent={props.assistantIdentity?.subagent}
               index={Number(props.partRef.partID.split(":")[1])}
@@ -2029,7 +2153,7 @@ function SessionPartView(props: {
             />
           </Match>
           <Match when={item().type === "tool"}>
-            <ToolPart part={item() as SessionMessageAssistantTool} />
+            <ToolPart part={item() as SessionMessageAssistantTool} findActive={props.findActive} />
           </Match>
         </Switch>
       )}
@@ -2781,7 +2905,7 @@ function ShellMessage(props: { message: Extract<SessionMessageInfo, { type: "she
   )
 }
 
-function UserMessage(props: { message: SessionMessageUser }) {
+function UserMessage(props: { message: SessionMessageUser; findActive?: boolean }) {
   const ctx = use()
   const data = useData()
   const send = createMemo(() => data.session.submissions.list(ctx.sessionID).find((entry) => entry.input.promptID === props.message.id), undefined, { equals: false })
@@ -2857,7 +2981,7 @@ function UserMessage(props: { message: SessionMessageUser }) {
           flexDirection="column"
           flexShrink={0}
         >
-          <text wrapMode="word" fg={theme.text.default} width={intrinsicWidth()}>
+          <text wrapMode="word" fg={props.findActive ? theme.text.action.primary.focused : theme.text.default} bg={props.findActive ? theme.background.action.primary.focused : undefined} width={intrinsicWidth()}>
             <For each={content()}>
               {(part) => (
                 <Show when={part.type === "skill"} fallback={part.value}>
@@ -3076,6 +3200,7 @@ function TextPart(props: {
   last: boolean
   part: SessionMessageAssistantText
   streaming: boolean
+  findActive?: boolean
   identity?: { label: string; subagent: boolean }
   subagent?: boolean
   index?: number
@@ -3098,6 +3223,7 @@ function TextPart(props: {
         flexDirection="column"
         gap={props.identity?.subagent ? 2 : props.identity ? 1 : 0}
         flexShrink={0}
+        backgroundColor={props.findActive ? theme.background.action.primary.focused : undefined}
       >
         <Show when={props.identity}>
           {(identity) => (
@@ -3113,7 +3239,8 @@ function TextPart(props: {
           content={markdown()}
           tableOptions={{ style: "grid" }}
           conceal={true}
-          fg={theme.markdown.text}
+          fg={props.findActive ? theme.text.action.primary.focused : theme.markdown.text}
+          bg={props.findActive ? theme.background.action.primary.focused : undefined}
         />
       </box>
     </Show>
@@ -3122,7 +3249,7 @@ function TextPart(props: {
 
 // Pending messages moved to individual tool pending functions
 
-function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean }) {
+function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean; findActive?: boolean }) {
   const ctx = use()
   const data = useData()
   const display = createMemo(() => toolDisplay(props.part.name))
@@ -3265,6 +3392,7 @@ function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean }
               detail={item().detail}
               lifecycle={item().lifecycle}
               width={ctx.width}
+              findActive={props.findActive}
             />
           )}
         </Match>
@@ -3278,6 +3406,7 @@ function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean }
               lifecycle={item().lifecycle}
               details={item().details}
               width={ctx.width}
+              findActive={props.findActive}
             />
           )}
         </Match>
@@ -3293,6 +3422,7 @@ function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean }
                   summary: commandStatus(result),
                 })}
                 width={ctx.width}
+                findActive={props.findActive}
               />
             )
           }}

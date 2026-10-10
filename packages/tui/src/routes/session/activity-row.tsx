@@ -238,6 +238,7 @@ export function SessionToolActivityRow(props: {
   variant?: "success" | "error" | "running" | "pending" | "warning" | "subagent"
   lifecycle?: ToolLifecycleInput
   details?: { request: string[]; response: string[] }
+  findActive?: boolean
 }) {
   const { theme } = useTheme()
   const renderer = useRenderer()
@@ -315,7 +316,8 @@ export function SessionToolActivityRow(props: {
           flexShrink={1}
           wrapMode="none"
           truncate={true}
-          fg={theme.text.default}
+          fg={props.findActive ? theme.text.action.primary.focused : theme.text.default}
+          bg={props.findActive ? theme.background.action.primary.focused : undefined}
         >
           {label()}
         </text>

@@ -739,6 +739,8 @@ Opening or refreshing a Session fetches its complete current projected transcrip
 
 ### Rendering guarantees
 
+Find in transcript (`ctrl+shift+g` by default, or **Find in transcript** in the command palette) searches resident user and assistant text and visible tool titles and summaries without changing durable history. The one-line search field is above the composer. Search is case-insensitive plain text; reasoning and raw tool payloads are not searched. Enter or Down advances, Shift+Enter or Up reverses, and navigation wraps. Escape closes Find, focuses the composer, and retains the current scroll position. New resident messages update the matches; matches whose transcript row unloads are dropped. A zero-result query shows `No matches` and does not move the transcript. Find does not resume tail following; ordinary bottom-follow behavior applies when the transcript reaches its bottom.
+
 Transcript rows are reduced from resident messages. A row whose backing message or assistant part has been evicted is not mounted, so it consumes no blank terminal block during navigation, resume, or reconnect.
 
 Tool and subagent activity rows update elapsed time only while their underlying lifecycle is active. Their timers stop when a tool or child task reaches a terminal state, preserving the terminal duration without a continuing redraw.

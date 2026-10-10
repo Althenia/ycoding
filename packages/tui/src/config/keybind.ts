@@ -84,6 +84,7 @@ export const Definitions = {
 
   session_export: keybind("<leader>x", "Export session to editor"),
   session_copy: keybind("none", "Copy session transcript"),
+  session_find: keybind("ctrl+shift+g", "Find in transcript"),
   session_move: keybind("none", "Move session"),
   session_new: keybind("<leader>n", "Create a new session"),
   session_list: keybind("<leader>l", "List all sessions"),
@@ -305,6 +306,7 @@ export const CommandMap = {
   debug_view: "ycoding.debug",
   session_export: "session.export",
   session_copy: "session.copy",
+  session_find: "session.find",
   session_move: "session.move",
   session_new: "session.new",
   session_list: "session.list",
