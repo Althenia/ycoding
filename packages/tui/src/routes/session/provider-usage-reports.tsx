@@ -406,6 +406,8 @@ function UsageDetails(props: { row: ProviderRequestReport["rows"][number] }) {
         <text>Reasoning {formatNumber(props.row.tokens.reasoning)}</text>
         <text>Cache read {cacheRead(props.row, formatNumber)} · write {formatNumber(props.row.tokens.cache.write)}</text>
         <text>Total tokens {tokenTotalLabel(props.row, formatNumber)} · Cost {costLabel(props.row)}</text>
+        <text>First output p50 {latency(props.row.speed?.firstOutputP50Ms)} · p95 {latency(props.row.speed?.firstOutputP95Ms)}</text>
+        <text>Total p50 {latency(props.row.speed?.totalP50Ms)} · p95 {latency(props.row.speed?.totalP95Ms)} · Output {throughput(props.row.speed?.outputTokensPerSecond)}</text>
         <Show when={props.row.cacheReadReported !== true}>
           <text fg={theme.text.subdued}>≥ marks a lower bound: the provider did not report every cache read.</text>
         </Show>
@@ -635,8 +637,8 @@ function CompactReportRow(props: {
 
 function reportGeometry(width: number) {
   const available = Math.max(1, width - 6)
-  const columns = { steps: 7, input: 8, output: 8, reasoning: 8, read: 11, write: 11, total: 9, cost: 10 }
-  const reserved = Object.values(columns).reduce((total, value) => total + value, 0) + 8
+  const columns = { steps: 7, input: 8, output: 8, reasoning: 8, read: 11, write: 11, total: 9, cost: 10, speed: 11 }
+  const reserved = Object.entries(columns).reduce((total, [key, value]) => total + value * (key === "speed" ? 5 : 1), 0) + 13
   return { ...columns, name: Math.max(22, available - reserved), fits: available >= 22 + reserved }
 }
 
@@ -658,15 +660,20 @@ function ReportHeader(props: {
     { key: "cacheWrite" as const, label: "CACHE WRITE", width: geometry.write },
     { key: "tokens" as const, label: "TOTAL", width: geometry.total },
     { key: "cost" as const, label: "COST", width: geometry.cost },
+    { key: undefined, label: "FIRST P50", width: geometry.speed },
+    { key: undefined, label: "FIRST P95", width: geometry.speed },
+    { key: undefined, label: "TOTAL P50", width: geometry.speed },
+    { key: undefined, label: "TOTAL P95", width: geometry.speed },
+    { key: undefined, label: "TOK/S", width: geometry.speed },
   ]
   return (
     <box flexShrink={0} flexDirection="row">
       <For each={columns}>{(column, index) => (
         <text
           width={column.width + (index() > 0 ? 1 : 0)}
-          onMouseUp={() => props.onSort(column.key)}
+          onMouseUp={() => column.key && props.onSort(column.key)}
         >
-          {index() > 0 ? "\u00a0" : ""}{headerLabel(column.label, column.key, column.width, props.sort, props.order)}
+          {index() > 0 ? "\u00a0" : ""}{column.key ? headerLabel(column.label, column.key, column.width, props.sort, props.order) : column.label.padStart(column.width)}
         </text>
       )}</For>
     </box>
@@ -700,7 +707,12 @@ function WideReportRow(props: {
       <span style={{ fg: theme.text.feedback.info.default }}>{cacheRead(props.row, compactNumber).padStart(geometry.read)}</span>{" "}
       <span style={{ fg: theme.text.feedback.info.subdued }}>{compactNumber(props.row.tokens.cache.write).padStart(geometry.write)}</span>{" "}
       <span style={{ fg: theme.text.default }}>{tokenTotalLabel(props.row, compactNumber).padStart(geometry.total)}</span>{" "}
-      <span style={{ fg: theme.text.feedback.success.subdued }}>{tableCost(props.row).padStart(geometry.cost)}</span>
+      <span style={{ fg: theme.text.feedback.success.subdued }}>{tableCost(props.row).padStart(geometry.cost)}</span>{" "}
+      <span style={{ fg: theme.text.subdued }}>{latency(props.row.speed?.firstOutputP50Ms).padStart(geometry.speed)}</span>{" "}
+      <span style={{ fg: theme.text.subdued }}>{latency(props.row.speed?.firstOutputP95Ms).padStart(geometry.speed)}</span>{" "}
+      <span style={{ fg: theme.text.subdued }}>{latency(props.row.speed?.totalP50Ms).padStart(geometry.speed)}</span>{" "}
+      <span style={{ fg: theme.text.subdued }}>{latency(props.row.speed?.totalP95Ms).padStart(geometry.speed)}</span>{" "}
+      <span style={{ fg: theme.text.subdued }}>{(props.row.speed?.outputTokensPerSecond === undefined ? "unreported" : props.row.speed.outputTokensPerSecond.toFixed(1)).padStart(geometry.speed)}</span>
     </text>
   )
 }
@@ -763,6 +775,14 @@ function tokenTotalLabel(value: ReportMetrics, format: (value: number) => string
 
 function tableCost(value: ReportMetrics) {
   return `$${(value.cost ?? 0).toFixed(2)}`
+}
+
+function latency(value: number | undefined) {
+  return value === undefined ? "unreported" : `${formatNumber(value)}ms`
+}
+
+function throughput(value: number | undefined) {
+  return value === undefined ? "unreported" : `${value.toFixed(1)} tok/s`
 }
 
 function costLabel(value: ReportMetrics) {

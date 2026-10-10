@@ -44,11 +44,12 @@ import { PluginRouteMissing } from "./component/plugin-route-missing"
 import { EditorContextProvider } from "./context/editor"
 import { useEvent } from "./context/event"
 import { ClientProvider, useClient } from "./context/client"
+import { TelemetryControls, TelemetryDataProvider, TelemetryProvider, useTelemetry } from "./context/telemetry"
 import { createStartupReady, StartupLoading } from "./component/startup-loading"
 import { DevToolsSidebar } from "./component/devtools-sidebar"
 import { DevTools } from "./devtools"
 import { Reconnecting } from "./component/reconnecting"
-import { DataProvider, useData } from "./context/data"
+import { useData } from "./context/data"
 import { LocationProvider, useLocation } from "./context/location"
 import { LocalProvider, useLocal } from "./context/local"
 import { DialogModel } from "./component/dialog-model"
@@ -344,7 +345,8 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                       >
                                         <PluginRuntimeProvider value={pluginRuntime}>
                                           <ClientProvider api={api} baseUrl={clientOptions.baseUrl} service={service}>
-                                              <DataProvider>
+                                            <TelemetryProvider>
+                                              <TelemetryDataProvider>
                                                 <LocationProvider>
                                                   <ThemeProvider mode={mode}>
                                                     <LocalProvider>
@@ -380,7 +382,8 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                     </LocalProvider>
                                                   </ThemeProvider>
                                                 </LocationProvider>
-                                              </DataProvider>
+                                              </TelemetryDataProvider>
+                                            </TelemetryProvider>
                                           </ClientProvider>
                                         </PluginRuntimeProvider>
                                       </RouteProvider>
@@ -447,6 +450,7 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
   const keymap = Keymap.use()
   const event = useEvent()
   const client = useClient()
+  const telemetry = useTelemetry()
   const toast = useToast()
   const themeState = useTheme()
   const { theme, mode, supports, setMode, locked, lock, unlock } = themeState
@@ -888,6 +892,19 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
         category: "System",
       },
       {
+        name: "telemetry.toggle",
+        title: `Telemetry: ${telemetry.consent()?.enabled ? "on" : "off"}`,
+        description: "Toggle telemetry on this machine",
+        category: "System",
+        run: telemetry.toggle,
+      },
+      ...(telemetry.decided() && !telemetry.consent()
+        ? [
+            { name: "telemetry.consent.agree", title: "Agree", category: "Telemetry", run: () => telemetry.decide(true) },
+            { name: "telemetry.consent.not-now", title: "Not now", category: "Telemetry", run: () => telemetry.decide(false) },
+          ]
+        : []),
+      {
         name: "ycoding.status",
         title: "View status",
         slash: { name: "status" },
@@ -1232,6 +1249,7 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       flexDirection="column"
       backgroundColor={theme.background.default}
     >
+      <TelemetryControls />
       <Show when={config.data.debug?.timing}>
         <TimeToFirstDraw />
       </Show>

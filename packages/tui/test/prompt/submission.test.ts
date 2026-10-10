@@ -61,7 +61,7 @@ function admitted(item: ReturnType<typeof submission>): YCodingEvent {
   }
 }
 
-function fixture(route: FetchHandler) {
+function fixture(route: FetchHandler, promptAdmitted?: (durationMs: number) => void) {
   const requests: Array<{ path: string; body: { id?: string; resume?: boolean; skill?: string } }> = []
   const calls = createFetch(async (url, request) => {
     const body = request.method === "POST" ? ((await request.clone().json()) as { id?: string; resume?: boolean }) : {}
@@ -76,6 +76,7 @@ function fixture(route: FetchHandler) {
   const receipts: SessionPendingUser[] = []
   const manager = createPromptSubmissions({
     api: () => createApi(calls.fetch),
+    promptAdmitted,
     admitted: (receipt) => {
       if (receipt.type === "user") receipts.push(receipt)
     },
@@ -84,6 +85,34 @@ function fixture(route: FetchHandler) {
     manager.dispatch(item, { location: { directory: "/tmp/ycoding/submission" }, cleanup: async () => {} })
   return { requests, receipts, manager, dispatch }
 }
+
+test("prompt admission timing is emitted only after the durable admission response", async () => {
+  const item = submission("ses_admission_timing", "measure admission", false)
+  const gate = deferred<void>()
+  const started = deferred<void>()
+  const durations: number[] = []
+  const flow = fixture(async (url, request) => {
+    if (!url.pathname.endsWith("/prompt")) return
+    const body = (await request.json()) as { resume?: boolean }
+    if (!body.resume) {
+      started.resolve()
+      await gate.promise
+    }
+    return json({ data: pending(item) })
+  }, (durationMs) => durations.push(durationMs))
+  try {
+    flow.dispatch(item)
+    await started.promise
+    expect(durations).toEqual([])
+    gate.resolve()
+    await until(() => flow.manager.list().length === 0)
+    expect(durations).toHaveLength(1)
+    expect(durations[0]).toBeGreaterThanOrEqual(0)
+  } finally {
+    gate.resolve()
+    flow.manager.dispose()
+  }
+})
 
 test("a correlated admission event settles the owned request before its HTTP response without skill RPCs", async () => {
   const item = submission()

@@ -60,6 +60,7 @@ export function createPromptSubmissions(input: {
   api: () => YCodingClient
   admitted: (pending: SessionPendingInfo) => void
   created?: (session: SessionInfo) => void
+  promptAdmitted?: (durationMs: number) => void
 }) {
   const [entries, setEntries] = createSignal<Submission[]>([])
   const running = new Set<string>()
@@ -238,7 +239,8 @@ export function createPromptSubmissions(input: {
               ),
             (pending) => pending!,
           )
-        return request(
+        const started = performance.now()
+        const admitted = await request(
           entry,
           resume ? "wake" : submission.promptID,
           (signal) =>
@@ -256,6 +258,8 @@ export function createPromptSubmissions(input: {
             ),
           (pending) => pending ?? entry.admitted!,
         )
+        if (!resume) input.promptAdmitted?.(performance.now() - started)
+        return admitted
       },
       onPhase: (phase) =>
         update(entry, {

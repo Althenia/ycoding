@@ -4,6 +4,7 @@ import { DialogSelect } from "../ui/dialog-select"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
 import { useKeepAwake } from "../keep-awake"
 import { useRemote } from "../remote-connector"
+import { useTelemetry } from "../context/telemetry"
 
 export type DialogStatusProps = {
   version?: string
@@ -16,6 +17,7 @@ export function DialogStatus(props: DialogStatusProps = {}) {
   const data = useData()
   const remote = useRemote()
   const keepAwake = useKeepAwake()
+  const telemetry = useTelemetry()
   const mcp = createMemo(() => data.location.mcp.server.list() ?? [])
   const diagnostics = createMemo(() => data.location.config.diagnostics.list() ?? [])
   const connected = createMemo(() => mcp().filter((server) => server.status.status === "connected").length)
@@ -40,6 +42,12 @@ export function DialogStatus(props: DialogStatusProps = {}) {
           state: keepAwake.status()?.state === "error" ? "error" as const : keepAwake.status()?.state === "on" ? "connected" as const : undefined,
           category: "Services",
           value: "keepAwake",
+        },
+        {
+          title: "Telemetry",
+          footer: telemetry.consent()?.enabled ? "on" : "off",
+          category: "Services",
+          value: "telemetry",
         },
         {
           title: "MCP servers",

@@ -32,6 +32,7 @@ import type {
   SessionTodoInfo,
   ShellInfo,
   SkillInfo,
+  TelemetryClientSample,
   YCodingEvent,
 } from "@ycoding-ai/client"
 import type { Plugin } from "@ycoding-ai/plugin/tui"
@@ -544,7 +545,9 @@ function createSync() {
 
 export const { use: useData, provider: DataProvider } = createSimpleContext({
   name: "Data",
-  init: () => {
+  init: (props: {
+    recordTelemetry?: (metric: TelemetryClientSample["metric"], durationMs: number, at?: number) => void
+  }) => {
     const [store, setStore] = createStore<Store>({
       session: {
         info: {},
@@ -572,6 +575,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     const client = useClient()
     const submissions = createPromptSubmissions({
       api: () => client.api,
+      promptAdmitted: (durationMs) => props.recordTelemetry?.("prompt.admit", durationMs),
       created: (session) => {
         setStore("session", "info", session.id, session)
         registerSession(session.id)
@@ -633,6 +637,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     }
 
     async function syncMessages(sessionID: string) {
+      const started = performance.now()
       const token = {}
       const requestVersion = messageVersion.get(sessionID) ?? 0
       messageSyncLoad.set(sessionID, token)
@@ -661,6 +666,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           })
           if (mutations?.size === 0) messageMutations.delete(sessionID)
         })
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+        props.recordTelemetry?.("transcript.load", performance.now() - started)
       } finally {
         if (messageSyncLoad.get(sessionID) === token) messageSyncLoad.delete(sessionID)
       }
@@ -2266,6 +2273,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       client.event.listen(({ details }) => {
         if (["session.input.admitted", "session.execution.started", "session.step.started", "session.moved", "session.deleted", "session.archived", "session.agent.selected", "session.model.selected"].includes(details.type) && "sessionID" in details.data)
           setStore("session", "prediction", details.data.sessionID, undefined)
+        if (details.type === "session.text.delta" || details.type === "session.reasoning.delta" || details.type === "session.tool.input.delta")
+          props.recordTelemetry?.("stream.delay", Date.now() - details.created, Date.now())
         submissions.observe(details)
         if (details.type === "server.connected") {
           const mutations = new Map<string, DataSessionStatus>()
