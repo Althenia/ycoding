@@ -157,7 +157,10 @@ export function generationSpeed(
     if (!Number.isFinite(tokensPerSecond) || tokensPerSecond <= 0) return undefined
     return { model: record.model, tokens, durationNs, tokensPerSecond }
   })
-  const recent = samples.filter((sample): sample is NonNullable<typeof sample> => sample !== undefined)
+  const newest = recentRecords.at(-1)?.model
+  const recent = samples.filter((sample): sample is NonNullable<typeof sample> =>
+    sample !== undefined && newest !== undefined && sample.model.providerID === newest.providerID &&
+    sample.model.id === newest.id && sample.model.variant === newest.variant)
   if (recent.length === 0) return undefined
   const latest = samples.at(-1)
   return { ...(latest === undefined ? {} : { latest }), recent }

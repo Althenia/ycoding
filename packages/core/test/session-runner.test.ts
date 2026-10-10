@@ -2812,9 +2812,9 @@ describe("SessionRunnerLLM", () => {
       })
       const diagnostics = yield* session.diagnostics(sessionID)
       expect(diagnostics?.generationSpeed?.latest).toMatchObject({
-        tokens: 20,
+        tokens: 30,
         durationNs: 5_000_000,
-        tokensPerSecond: 4_000,
+        tokensPerSecond: 6_000,
       })
       expect((yield* session.snapshot(sessionID)).generationSpeed).toEqual(diagnostics?.generationSpeed)
       expect(diagnostics).toMatchObject({
@@ -2938,9 +2938,9 @@ describe("SessionRunnerLLM", () => {
         yield* session.resume(sessionID)
         const separate = yield* session.diagnostics(sessionID)
         expect(separate?.generationSpeed?.latest).toMatchObject({
-          tokens: 8,
+          tokens: 12,
           durationNs: 2_000_000_000,
-          tokensPerSecond: 4,
+          tokensPerSecond: 6,
         })
         expect(separate?.generationSpeed?.recent).toHaveLength(2)
         const events = yield* EventRuntime.Service
@@ -2954,6 +2954,51 @@ describe("SessionRunnerLLM", () => {
         expect(yield* session.diagnostics(sessionID)).toBeUndefined()
         expect((yield* session.snapshot(sessionID)).generationSpeed).toBeUndefined()
       }),
+  )
+
+  it.effect("times tool-call output without counting reasoning generated before its summary streamed", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = Model.make({ id: "speed-model", provider: "openai", route: OpenAIChat.route })
+      responseStream = Stream.concat(
+        Stream.fromIterable([LLMEvent.stepStart({ index: 0 })]),
+        Stream.fromEffect(TestClock.adjust("40 seconds")).pipe(
+          Stream.flatMap(() =>
+            Stream.concat(
+              Stream.fromIterable([
+                LLMEvent.reasoningStart({ id: "summary" }),
+                LLMEvent.reasoningDelta({ id: "summary", text: "Plan the edit" }),
+                LLMEvent.reasoningEnd({ id: "summary" }),
+                LLMEvent.toolInputStart({ id: "call-1", name: "unknown_tool" }),
+                LLMEvent.toolInputDelta({ id: "call-1", name: "unknown_tool", text: "{\"path\":" }),
+              ]),
+              Stream.fromEffect(TestClock.adjust("4 seconds")).pipe(
+                Stream.flatMap(() =>
+                  Stream.fromIterable([
+                    LLMEvent.toolInputDelta({ id: "call-1", name: "unknown_tool", text: "\"a.ts\"}" }),
+                    LLMEvent.toolInputEnd({ id: "call-1", name: "unknown_tool" }),
+                    LLMEvent.stepFinish({
+                      index: 0,
+                      reason: "stop",
+                      usage: { outputTokens: 4_200, reasoningTokens: 4_000 },
+                    }),
+                    LLMEvent.finish({ reason: "stop" }),
+                  ]),
+                ),
+              ),
+            ),
+          ),
+        ),
+      )
+      responses = [reply.text("Title", "speed-title")]
+      yield* admit(session, "Tool call speed")
+      yield* session.resume(sessionID)
+      const requests = yield* SessionProviderRequest.Service
+      expect((yield* requests.recentSteps(sessionID))[0]?.timing).toEqual({
+        generatedTokens: 200,
+        observedGenerationDurationNs: 4_000_000_000,
+      })
+    }),
   )
 
   it.effect("omits a buffered output burst instead of reporting an implausible generation rate", () =>
@@ -3066,7 +3111,7 @@ describe("SessionRunnerLLM", () => {
               context: { total: 1_030, limit: 20_000, remaining: 18_970, percent: 5 },
               tokens: { uncachedInput: 100, output: 20, reasoning: 10, cacheRead: 900, cacheWrite: 0 },
               cache: { eligible: 1_000, hitRatio: 0.9, readReported: true, writeReported: false },
-              generationSpeed: { latest: { tokens: 20, durationNs: 5_000_000, tokensPerSecond: 4_000 } },
+              generationSpeed: { latest: { tokens: 30, durationNs: 5_000_000, tokensPerSecond: 6_000 } },
             },
           },
         },

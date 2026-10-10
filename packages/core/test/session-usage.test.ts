@@ -58,7 +58,7 @@ test("counts only observed output categories and keeps provider timing independe
     ...times, reasoning: undefined,
   })).toEqual({ generatedTokens: 8, observedGenerationDurationNs: 1_000_000_000 })
   expect(SessionUsage.generationTiming(new Usage({ outputTokens: 12, reasoningTokens: 4 }), times))
-    .toEqual({ generatedTokens: 12, observedGenerationDurationNs: 2_000_000_000 })
+    .toEqual({ generatedTokens: 8, observedGenerationDurationNs: 1_000_000_000 })
   expect(SessionUsage.generationTiming(new Usage({ outputTokens: 2_355 }), {
     text: 30_000_000_000n, ended: 30_071_223_792n,
   })).toEqual({ generatedTokens: 2_355 })
@@ -68,6 +68,38 @@ test("counts only observed output categories and keeps provider timing independe
     .toEqual({ generatedTokens: 12 })
   expect(SessionUsage.generationTiming(new Usage({ outputTokens: 12 }), { ...times, ended: BigInt(Number.MAX_SAFE_INTEGER) + times.text + 3n }))
     .toEqual({ generatedTokens: 12 })
+})
+
+test("times streamed thinking that the provider folded into output without a reasoning count", () => {
+  const times = { reasoning: 10_000_000_000n, text: 29_000_000_000n, ended: 30_000_000_000n }
+  expect(SessionUsage.generationTiming(new Usage({ outputTokens: 1_123 }), times))
+    .toEqual({ generatedTokens: 1_123, observedGenerationDurationNs: 20_000_000_000 })
+  expect(SessionUsage.generationTiming(new Usage({ outputTokens: 1_123, reasoningTokens: 0 }), times))
+    .toEqual({ generatedTokens: 1_123, observedGenerationDurationNs: 20_000_000_000 })
+})
+
+test("excludes separately counted reasoning whose summary streams after it was generated", () => {
+  expect(SessionUsage.generationTiming(new Usage({ outputTokens: 322, reasoningTokens: 297 }), {
+    reasoning: 59_000_000_000n, text: 59_500_000_000n, ended: 60_500_000_000n,
+  })).toEqual({ generatedTokens: 25, observedGenerationDurationNs: 1_000_000_000 })
+})
+
+test("starts the visible window at streamed tool-call arguments", () => {
+  expect(SessionUsage.generationTiming(new Usage({ outputTokens: 400 }), {
+    toolInput: 1_000_000_000n, ended: 5_000_000_000n,
+  })).toEqual({ generatedTokens: 400, observedGenerationDurationNs: 4_000_000_000 })
+  expect(SessionUsage.generationTiming(new Usage({ outputTokens: 400 }), {
+    toolInput: 3_000_000_000n, text: 1_000_000_000n, ended: 5_000_000_000n,
+  })).toEqual({ generatedTokens: 400, observedGenerationDurationNs: 4_000_000_000 })
+})
+
+test("counts every generated token against a provider-reported generation duration", () => {
+  expect(SessionUsage.generationTiming(new Usage({ outputTokens: 12, reasoningTokens: 4, generationDurationNs: 2_000_000_000 }), {
+    text: 2_000_000_000n, ended: 3_000_000_000n,
+  })).toEqual({ generatedTokens: 12 })
+  expect(SessionUsage.generationTiming(new Usage({ outputTokens: 12, outputMayIncludeUnreportedReasoning: true, generationDurationNs: 2_000_000_000 }), {
+    text: 2_000_000_000n, ended: 3_000_000_000n,
+  })).toEqual({ generatedTokens: 12 })
 })
 
 test("falls back to the OpenRouter master price only when provider pricing is unavailable", () => {

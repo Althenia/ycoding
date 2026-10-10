@@ -58,19 +58,17 @@ export const timing = (usage: Usage | undefined): ProviderRequest.Timing | undef
 
 export const generationTiming = (
   usage: Usage | undefined,
-  times: { readonly text?: bigint; readonly reasoning?: bigint; readonly ended: bigint },
-) => {
+  times: { readonly text?: bigint; readonly reasoning?: bigint; readonly toolInput?: bigint; readonly ended: bigint },
+): Pick<ProviderRequest.Timing, "generatedTokens" | "observedGenerationDurationNs"> | undefined => {
   const normalized = tokens(usage)
-  const inclusiveReasoning = usage?.outputMayIncludeUnreportedReasoning === true && usage.reasoningTokens === undefined
-  if (inclusiveReasoning && times.reasoning === undefined) return undefined
-  const output = times.text !== undefined || inclusiveReasoning ? normalized.output : 0
-  const reasoning = times.reasoning === undefined ? 0 : normalized.reasoning
-  const generatedTokens = output + reasoning
+  if (usage?.generationDurationNs !== undefined) return providerTimedTokens(normalized.output + normalized.reasoning)
+  const visibleStart = earliest([times.text, times.toolInput])
+  const thinkingFoldedIntoOutput = times.reasoning !== undefined && !normalized.reasoning
+  if (usage?.outputMayIncludeUnreportedReasoning === true && !normalized.reasoning && times.reasoning === undefined)
+    return undefined
+  const generatedTokens = thinkingFoldedIntoOutput ? normalized.output : visibleStart === undefined ? 0 : normalized.output
   if (!Number.isSafeInteger(generatedTokens) || generatedTokens <= 0) return undefined
-  const start = [
-    ...(output > 0 && times.text !== undefined ? [times.text] : []),
-    ...(times.reasoning !== undefined && (inclusiveReasoning || reasoning > 0) ? [times.reasoning] : []),
-  ].reduce((earliest, value) => earliest === undefined || value < earliest ? value : earliest, undefined as bigint | undefined)
+  const start = thinkingFoldedIntoOutput ? earliest([times.reasoning, visibleStart]) : visibleStart
   if (start === undefined) return undefined
   const observed = times.ended - start
   const observedGenerationDurationNs = observed >= BigInt(minimumObservedGenerationDurationNs) &&
@@ -80,6 +78,17 @@ export const generationTiming = (
     generatedTokens,
     ...(observedGenerationDurationNs === undefined ? {} : { observedGenerationDurationNs }),
   }
+}
+
+function providerTimedTokens(generatedTokens: number) {
+  return Number.isSafeInteger(generatedTokens) && generatedTokens > 0 ? { generatedTokens } : undefined
+}
+
+function earliest(values: ReadonlyArray<bigint | undefined>) {
+  return values.reduce<bigint | undefined>(
+    (result, value) => value === undefined || (result !== undefined && result <= value) ? result : value,
+    undefined,
+  )
 }
 
 // TODO(#35765): Use Copilot's reported billed amount once billing has a dedicated typed runtime contract.

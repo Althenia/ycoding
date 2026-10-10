@@ -563,6 +563,7 @@ const layer = Layer.effect(
       let continuationFailure: ProviderErrorEvent | undefined
       let firstTextNs: bigint | undefined
       let firstReasoningNs: bigint | undefined
+      let firstToolInputNs: bigint | undefined
       let generationTiming: ReturnType<typeof SessionUsage.generationTiming>
       const [consumedInputID, ...remainingConsumedInputIDs] = consumedInputIDs
       let inputConsumptionPending = consumedInputID !== undefined
@@ -606,6 +607,9 @@ const layer = Layer.effect(
               firstTextNs = yield* Clock.currentTimeNanos
             if (event.type === "reasoning-delta" && event.text.trim() && firstReasoningNs === undefined)
               firstReasoningNs = yield* Clock.currentTimeNanos
+            if (event.type === "tool-input-delta" && event.text.trim() && firstToolInputNs === undefined)
+              firstToolInputNs = yield* Clock.currentTimeNanos
+            const receivedNs = yield* Clock.currentTimeNanos
             yield* publish(event)
             if (LLMEvent.is.stepFinish(event)) {
               const settlement =
@@ -615,7 +619,8 @@ const layer = Layer.effect(
               generationTiming = SessionUsage.generationTiming(event.usage, {
                 text: firstTextNs,
                 reasoning: firstReasoningNs,
-                ended: yield* Clock.currentTimeNanos,
+                toolInput: firstToolInputNs,
+                ended: receivedNs,
               })
               const speedTiming = { ...settlement.timing, ...generationTiming }
               yield* serialized(
