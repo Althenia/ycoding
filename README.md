@@ -97,7 +97,7 @@ See the [guardrail guide](./docs/guardrails-and-provider-usage.md#session-guardr
 <details>
 <summary>Build from source</summary>
 
-With **Bun 1.4.2** installed:
+With **a current Bun release** installed:
 
 ```sh
 bun install --frozen-lockfile

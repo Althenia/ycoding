@@ -71,7 +71,7 @@ describe("documentation index", () => {
     const install = DOC_INDEX.sections.flatMap((section) =>
       section.blocks.flatMap((block) => (block.kind === "steps" ? block.items : [])),
     ).find((step) => step.title === "Install")
-    expect(install?.text).toBe("Install a checksum-verified release build, or run from a checkout with Bun 1.4.2.")
+    expect(install?.text).toBe("Install a checksum-verified release build, or run from a checkout with a current Bun release.")
   })
 
   test("describes every group and links the configuration domains", () => {

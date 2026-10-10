@@ -6,6 +6,8 @@ Read [`../../DESIGN.md`](../../DESIGN.md) and [`DESIGN.md`](./DESIGN.md) before 
 
 ## Browser integration verification
 
+`bun test` loads `test/solid-preload.ts` through `bunfig.toml` to compile JSX with the installed `vite-plugin-solid` compiler in SSR mode. Keep DOM rendering checks in the real-browser integration suites; the Bun source suites have no browser DOM.
+
 Browser-driven checks are explicit integration tests and must not run from `src` unit suites. Run product-state, responsive-layout, design-contract, and public-route checks with an installed Chromium or Chrome executable:
 
 ```sh

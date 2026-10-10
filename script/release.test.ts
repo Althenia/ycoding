@@ -432,6 +432,13 @@ test("obsolete Pages publishing is replaced by the web asset publisher", async (
 
 const setupBun = await Bun.file(path.join(import.meta.dir, "../.github/actions/setup-bun/action.yml")).text()
 
+test("setup installs the latest Bun on baseline and native runners without a version pin", () => {
+  expect(setupBun).toContain("https://github.com/oven-sh/bun/releases/latest/download/bun-${OS}-x64-baseline.zip")
+  expect(setupBun).toContain("bun-download-url: ${{ steps.bun-url.outputs.url }}")
+  expect(setupBun).not.toContain("bun-version")
+  expect(setupBun).not.toContain("packageManager")
+})
+
 test("setup installs Bun dependencies cold, without an Actions dependency cache or cache-warming workflow", async () => {
   expect(setupBun).not.toContain("actions/cache")
   expect(setupBun).toContain("bun install ${{ inputs.install-flags }}")

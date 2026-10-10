@@ -21,7 +21,9 @@ A proposal to change the product boundary must update the workspace test, root d
 
 ## Development setup
 
-Use the pinned Bun version from `packageManager`.
+Use a current Bun release. YCoding does not pin a Bun version; CI installs the latest release.
+
+Turbo requires `packageManager` to discover the workspace graph. Its value points to Bun's latest release URL, without selecting a version.
 
 ```bash
 bun install --frozen-lockfile
