@@ -15,6 +15,8 @@ const files = [
   "popup.html",
   "popup.js",
   "popup.css",
+  "microphone.html",
+  "microphone.js",
 ]
 export async function buildCompanion() {
   const directory = new URL(".build/", import.meta.url)

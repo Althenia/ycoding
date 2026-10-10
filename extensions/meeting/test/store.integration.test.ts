@@ -43,6 +43,28 @@ function segment(overrides: Partial<TranscriptSegment> = {}): TranscriptSegment 
 }
 
 describe("MeetingStore real SQLite integration", () => {
+  it("recovers persisted stopping capture to interrupted without discarding failed job details", () => {
+    const { file, store, resource } = fixture()
+    const detail = "ValueError: audio input outside normalized range"
+    store.updateMeeting("m", { status: "stopping", captureID: "lost", error: detail })
+    store.putJob({
+      id: "failed",
+      meetingID: "m",
+      kind: "transcription",
+      status: "failed",
+      attempts: 1,
+      error: detail,
+      updatedAt: new Date().toISOString(),
+    })
+    store.close()
+    const reopened = new MeetingStore(file)
+    resource.store = reopened
+    reopened.recover()
+    expect(reopened.getMeeting("m")?.status).toBe("interrupted")
+    expect(reopened.getMeeting("m")?.error).toContain(detail)
+    expect(reopened.jobs("m")).toMatchObject([{ status: "failed", attempts: 1, error: detail }])
+  })
+
   it("rejects changed replay, preserves raw text on correction, and survives restart", () => {
     const { file, store, resource } = fixture()
     const original = segment()

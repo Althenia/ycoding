@@ -9,6 +9,7 @@ const handlers = Runtime.handlers(TuiCommand, {
   $: () => import("./commands/handlers/tui"),
   run: () => import("./commands/handlers/run"),
   update: () => import("./commands/handlers/update"),
+  meeting: () => import("./commands/handlers/meeting"),
   service: {
     start: () => import("./commands/handlers/service/start"),
     restart: () => import("./commands/handlers/service/restart"),

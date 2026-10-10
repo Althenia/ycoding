@@ -314,3 +314,18 @@ test("AudioWorklet processor failure stops recording visibly and releases all au
   expect(f.sent.at(-1)).toMatchObject({ type: "stop", reason: "audio_processor_failed" })
   expect(f.states.at(-1)).toMatchObject({ phase: "error", reason: "audio_processor_failed" })
 })
+
+test("a backend stop during Start preserves its allow-listed reason and releases resources", async () => {
+  const f = fixture({ response: () => Response.json({ stop: true, reason: "inference_failed" }) })
+  await expect(f.capture.start(f.options)).rejects.toThrow("inference_failed")
+  expect(f.tracks.every((track) => track.stopped)).toBe(true)
+  expect(f.contexts[0].state).toBe("closed")
+  expect(f.states.at(-1)).toMatchObject({ phase: "error", reason: "inference_failed" })
+  expect(f.states.some((state) => state.reason === "capture_cancelled")).toBe(false)
+})
+
+test("backend stop without a known reason falls back to backend_stopped, not exception text", async () => {
+  const f = fixture({ response: () => Response.json({ stop: true, reason: "private callback exception" }) })
+  await expect(f.capture.start(f.options)).rejects.toThrow("backend_stopped")
+  expect(f.states.at(-1)).toMatchObject({ phase: "stopped", reason: "backend_stopped" })
+})

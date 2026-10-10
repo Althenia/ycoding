@@ -1,6 +1,18 @@
 import { afterEach, expect, setSystemTime, test } from "bun:test"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import path from "node:path"
 import { startBridge } from "../src/bridge"
 import { sendControl } from "../src/bridge-client"
+import { meetingControl, meetingDirectory } from "../src/discovery"
+import { MeetingRuntime } from "../src/runtime"
+import { MeetingStore } from "../src/store"
+import { meetingConfigSchema } from "../src/config"
+import { Message } from "../../../packages/ai/src/schema/messages"
+import type { AnalysisContext } from "../src/plugin"
+import { Agent, Model } from "@ycoding-ai/plugin"
+import { Session } from "../../../packages/schema/src/session"
+import { viewAssets, viewPolicy } from "../view/assets"
 
 const origin = `chrome-extension://${"a".repeat(32)}`
 const otherOrigin = `chrome-extension://${"b".repeat(32)}`
@@ -49,6 +61,36 @@ async function fixture(onCapture: (input: unknown) => Promise<unknown> = async (
   }
   return { bridge, request, pair, calls }
 }
+
+test("Reader static page and exact assets are key-free, no-store and protected by loopback Host", async () => {
+  const f = await fixture()
+  const view = await sendControl(f.bridge.url, controlToken, { action: "view" })
+  if (!view || typeof view !== "object" || !("url" in view) || typeof view.url !== "string")
+    throw new Error("Bridge did not return the view URL")
+  const key = new URL(view.url).hash.slice(5)
+  expect(key).toMatch(/^[0-9a-f]{64}$/)
+  for (const [route, asset] of viewAssets) {
+    const response = await fetch(`${f.bridge.url}${route}`)
+    expect(response.status).toBe(200)
+    expect(response.headers.get("content-type")).toBe(asset.type)
+    expect(response.headers.get("cache-control")).toBe("no-store")
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer")
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff")
+    expect(response.headers.get("content-security-policy")).toBe(viewPolicy)
+    expect(response.headers.get("access-control-allow-origin")).toBeNull()
+    const body = await response.text()
+    expect(body).toBe(asset.body)
+    expect(body).not.toContain(key)
+    expect(body).not.toContain(controlToken)
+    expect((await fetch(`${f.bridge.url}${route}`, { headers: { host: "localhost:1234" } })).status).toBe(403)
+    expect((await fetch(`${f.bridge.url}${route}`, { headers: { origin: "https://example.com" } })).status).toBe(403)
+    expect((await fetch(`${f.bridge.url}${route}`, { method: "POST" })).status).toBe(405)
+  }
+  expect((await fetch(`${f.bridge.url}/view/unknown.js`)).status).toBe(404)
+  expect((await fetch(`${f.bridge.url}/view?key=${key}`)).status).toBe(400)
+  const page = viewAssets.get("/view")!.body
+  expect(page).not.toMatch(/<script[^>]*>\s*[^<\s]/)
+})
 
 test("one-use pairing pins exact extension Origin and separates controller authority", async () => {
   const f = await fixture()
@@ -282,3 +324,395 @@ async function pairingToken(bridge: Awaited<ReturnType<typeof startBridge>>) {
     throw new Error("Invalid pairing response")
   return value.token
 }
+
+test("successful pairing reports redemption once and failed codes do not", async () => {
+  let paired = 0
+  const bridge = await startBridge({
+    controlToken,
+    onControl: async () => null,
+    onCapture: async () => null,
+    onPaired: () => {
+      paired++
+    },
+  })
+  bridges.push(bridge)
+  const pair = (code: string) =>
+    fetch(`${bridge.url}/pair`, {
+      method: "POST",
+      headers: { origin, "content-type": "application/json" },
+      body: JSON.stringify({ code }),
+    })
+  const code = bridge.pairing().code
+  expect((await pair("wrong-code")).status).toBe(401)
+  expect(paired).toBe(0)
+  expect((await pair(code)).status).toBe(200)
+  expect(paired).toBe(1)
+  expect((await pair(code)).status).toBe(401)
+  expect(paired).toBe(1)
+})
+
+test("the TUI controller reconnects after the runtime publishes or replaces its bridge descriptor", async () => {
+  const project = await mkdtemp(path.join(tmpdir(), "ycoding-meeting-project-"))
+  const data = await mkdtemp(path.join(tmpdir(), "ycoding-meeting-data-"))
+  const previous = process.env.XDG_DATA_HOME
+  process.env.XDG_DATA_HOME = data
+  try {
+    const control = meetingControl(project)
+    const missing = await control({ action: "status" }).then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    expect(missing).toMatchObject({ code: "ENOENT" })
+    const directory = await meetingDirectory(project)
+    await mkdir(directory, { recursive: true, mode: 0o700 })
+    const publish = async (response: unknown) => {
+      const token = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex")
+      const bridge = await startBridge({
+        controlToken: token,
+        onControl: async () => response,
+        onCapture: async () => null,
+      })
+      bridges.push(bridge)
+      await writeFile(
+        path.join(directory, "bridge.json"),
+        JSON.stringify({ url: bridge.url, token, pid: process.pid }),
+        {
+          mode: 0o600,
+        },
+      )
+      return bridge
+    }
+    const first = await publish({ runtime: "first" })
+    expect(await control({ action: "status" })).toEqual({ runtime: "first" })
+    await first.close()
+    await publish({ runtime: "restarted" })
+    expect(await control({ action: "status" })).toEqual({ runtime: "restarted" })
+  } finally {
+    if (previous === undefined) delete process.env.XDG_DATA_HOME
+    else process.env.XDG_DATA_HOME = previous
+    await Promise.all([project, data].map((directory) => rm(directory, { recursive: true, force: true })))
+  }
+})
+
+test("live-view key is independent, native-only to obtain, and enforces exact Host/Origin without CORS", async () => {
+  const calls: unknown[] = []
+  const bridge = await startBridge({
+    controlToken,
+    onControl: async (input) => {
+      calls.push(input)
+      return { meeting: { id: "m" } }
+    },
+    onCapture: async () => ({ stop: true, reason: "inference_failed" }),
+    onView: () => ({
+      meeting: { id: "m" },
+      meetings: [],
+      segments: [],
+      findings: [],
+      health: {},
+      audio: {},
+      analysis: {},
+      config: {},
+      ask: { history: [], busy: false },
+      controlToken: "must-not-be-visible",
+    }),
+    onAsk: async (question) => ({ question, answer: "Supported by transcript", status: "answered" }),
+  })
+  bridges.push(bridge)
+  const result = await sendControl(bridge.url, controlToken, { action: "view" })
+  if (typeof result !== "object" || result === null || !("url" in result) || typeof result.url !== "string")
+    throw new Error("Missing live-view URL")
+  const address = new URL(result.url)
+  const key = new URLSearchParams(address.hash.slice(1)).get("key")!
+  expect(address.pathname).toBe("/view")
+  expect(key).toMatch(/^[a-f0-9]{64}$/)
+  expect(key).not.toBe(controlToken)
+  const captureToken = await pairingToken(bridge)
+  expect(key).not.toBe(captureToken)
+  const get = (token: string, extra: Record<string, string> = {}) =>
+    fetch(`${bridge.url}/view/state`, { headers: { authorization: `Bearer ${token}`, ...extra } })
+  expect((await get(controlToken)).status).toBe(401)
+  expect((await get(captureToken)).status).toBe(401)
+  const extensionView = await get(key, { origin })
+  expect(extensionView.status).toBe(403)
+  expect(extensionView.headers.get("access-control-allow-origin")).toBeNull()
+  expect((await get(key, { origin: "https://evil.invalid" })).status).toBe(403)
+  expect((await get(key, { host: "localhost" })).status).toBe(403)
+  const state = await get(key, { origin: bridge.url })
+  expect(state.status).toBe(200)
+  expect(state.headers.get("access-control-allow-origin")).toBeNull()
+  expect(state.headers.get("cache-control")).toBe("no-store")
+  const text = await state.text()
+  expect(text).not.toContain("must-not-be-visible")
+  expect(JSON.parse(text).ask).toEqual({ history: [], busy: false })
+  expect(
+    (await fetch(`${bridge.url}/view/state?key=${key}`, { headers: { authorization: `Bearer ${key}` } })).status,
+  ).toBe(400)
+  expect((await fetch(`${bridge.url}/view/state`, { method: "OPTIONS", headers: { origin: bridge.url } })).status).toBe(
+    405,
+  )
+  const post = (route: string, body: unknown, token = key) =>
+    fetch(`${bridge.url}${route}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json", origin: bridge.url },
+      body: JSON.stringify(body),
+    })
+  for (const action of ["pair", "stop", "retry"]) expect((await post("/view/control", { action })).status).toBe(200)
+  for (const body of [
+    { action: "start" },
+    { action: "configure" },
+    { action: "approve" },
+    { action: "stop", meetingID: "other" },
+    { action: ["stop"] },
+  ])
+    expect((await post("/view/control", body)).status).toBe(400)
+  expect(calls).toEqual([{ action: "pair" }, { action: "stop" }, { action: "retry" }])
+  expect((await post("/control", { action: "stop" }, key)).status).toBe(403)
+  expect((await post("/view/ask", { question: "What is the decision?" })).status).toBe(200)
+  for (const body of [{ question: "" }, { question: "x".repeat(2001) }, { question: "Hello", meetingID: "other" }])
+    expect((await post("/view/ask", body)).status).toBe(400)
+  expect((await post("/view/control", { action: "stop", text: "x".repeat(20000) })).status).toBe(413)
+  const capture = await fetch(`${bridge.url}/capture`, {
+    method: "POST",
+    headers: { origin, authorization: `Bearer ${captureToken}`, "content-type": "application/json" },
+    body: JSON.stringify({ type: "heartbeat", captureID: "c" }),
+  })
+  expect(await capture.json()).toEqual({ stop: true, reason: "inference_failed" })
+})
+
+test("live-view ask busy and answer errors remain visible without exposing exception details", async () => {
+  const bridge = await startBridge({
+    controlToken,
+    onControl: async () => null,
+    onCapture: async () => null,
+    onView: () => ({ meeting: { id: "m" }, ask: { history: [], busy: false } }),
+    onAsk: async (question) => {
+      if (question === "busy") return { busy: true }
+      throw new Error("private provider details")
+    },
+  })
+  bridges.push(bridge)
+  const result = await sendControl(bridge.url, controlToken, { action: "view" })
+  if (typeof result !== "object" || result === null || !("url" in result) || typeof result.url !== "string")
+    throw new Error("Missing live-view URL")
+  const key = new URLSearchParams(new URL(result.url).hash.slice(1)).get("key")!
+  const ask = (question: string) =>
+    fetch(`${bridge.url}/view/ask`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+      body: JSON.stringify({ question }),
+    })
+  expect((await ask("busy")).status).toBe(409)
+  const failed = await ask("failure")
+  expect(failed.status).toBe(502)
+  expect(await failed.json()).toEqual({ error: "answer_failed" })
+})
+
+test("advisory questions use bounded labelled real transcript, isolate meeting ownership and retain only fifty results", async () => {
+  const { createMeetingQuestions } = await import("../src/plugin")
+  const directory = await mkdtemp(path.join(tmpdir(), "meeting-view-questions-"))
+  const store = new MeetingStore(path.join(directory, "meetings.sqlite"))
+  const prompts: string[] = []
+  const entered = Promise.withResolvers<void>()
+  const answer = Promise.withResolvers<string>()
+  const registered = new Set<string>()
+  const service = new MeetingRuntime({
+    directory,
+    store,
+    config: meetingConfigSchema.parse({ analysis: { maxCharacters: 8000 } }),
+    mcp: {
+      tools: async () => [],
+      callTool: async () => {
+        throw new Error("Tools must not be invoked")
+      },
+    },
+    createSession: async () => {
+      const id = crypto.randomUUID()
+      registered.add(id)
+      return id
+    },
+    generate: async (sessionID, prompt) => {
+      expect(registered.has(sessionID)).toBe(true)
+      prompts.push(prompt)
+      if (prompts.length === 1) {
+        entered.resolve()
+        return answer.promise
+      }
+      if (prompt.includes("force answer failure")) throw new Error("private provider token")
+      return "Evidence-based advisory answer"
+    },
+  })
+  try {
+    for (const id of ["m-one", "m-two"]) store.createMeeting({ id, title: id, sessionID: `s-${id}` })
+    store.putSegment({
+      id: "final",
+      meetingID: "m-one",
+      sequence: 1,
+      source: "remote",
+      speakerID: "remote",
+      startMs: 0,
+      endMs: 1000,
+      rawText: "Approved the proposal",
+      text: "Approved the proposal",
+      state: "final",
+      model: "fixture",
+      createdAt: new Date().toISOString(),
+    })
+    store.putSegment({
+      id: "temporary",
+      meetingID: "m-one",
+      sequence: 2,
+      source: "microphone",
+      speakerID: "local",
+      startMs: 1000,
+      endMs: 2000,
+      rawText: "Maybe later",
+      text: "Maybe later",
+      state: "temporary",
+      model: "fixture",
+      createdAt: new Date().toISOString(),
+    })
+    await service.control({ action: "select", meetingID: "m-one" })
+    const questions = createMeetingQuestions(service)
+    const first = questions.ask("What was approved?")
+    await entered.promise
+    expect(questions.state().ask.busy).toBe(true)
+    let settled = false
+    const settling = questions.settled().then(() => {
+      settled = true
+    })
+    expect(await questions.ask("Another question")).toEqual({ busy: true })
+    expect(prompts[0].length).toBeLessThanOrEqual(8000)
+    expect(prompts[0]).toContain('"source":"remote"')
+    expect(prompts[0]).toContain('"state":"final"')
+    expect(prompts[0]).toContain('"source":"microphone"')
+    expect(prompts[0]).toContain('"state":"temporary"')
+    expect(prompts[0]).toContain("untrusted")
+    await service.control({ action: "select", meetingID: "m-two" })
+    expect(questions.state().ask.history).toEqual([])
+    expect(settled).toBe(false)
+    answer.resolve("The proposal was approved [final]")
+    expect(await first).toMatchObject({ answer: "The proposal was approved [final]", status: "answered" })
+    await settling
+    expect(settled).toBe(true)
+    await service.control({ action: "select", meetingID: "m-one" })
+    for (let index = 0; index < 51; index++) await questions.ask(`Question ${index}`)
+    expect(questions.state().ask.history).toHaveLength(50)
+    expect(questions.state().ask.history[0].question).toBe("Question 1")
+    const failed = await questions.ask("force answer failure")
+    expect(failed).toMatchObject({ status: "error", error: "answer_failed" })
+    expect(JSON.stringify(questions.state().ask.history)).not.toContain("private provider token")
+    expect(createMeetingQuestions(service).state().ask.history).toEqual([])
+    await service.control({ action: "select", meetingID: "m-two" })
+    const beforeEmpty = prompts.length
+    expect(await questions.ask("Can you answer without evidence?")).toMatchObject({
+      status: "error",
+      error: "no_transcript",
+    })
+    expect(prompts).toHaveLength(beforeEmpty)
+    store.putSegment({
+      id: "large",
+      meetingID: "m-two",
+      sequence: 1,
+      source: "remote",
+      speakerID: "remote",
+      startMs: 0,
+      endMs: 1000,
+      rawText: "x".repeat(9000),
+      text: "x".repeat(9000),
+      state: "final",
+      model: "fixture",
+      createdAt: new Date().toISOString(),
+    })
+    expect(await questions.ask("What does the long segment say?")).toMatchObject({
+      status: "error",
+      error: "answer_failed",
+    })
+    expect(prompts).toHaveLength(beforeEmpty)
+    expect(prompts.every((prompt) => prompt.length <= 8000)).toBe(true)
+  } finally {
+    await service.close()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test("registered analysis context keeps exactly one bounded text input and strips every tool", async () => {
+  const { restrictAnalysisContext } = await import("../src/plugin")
+  const sessionID = Session.ID.make("ses_analysis_session")
+  const make = (messages: Message[]): AnalysisContext => ({
+    sessionID,
+    agent: Agent.ID.make("meeting-intelligence"),
+    model: Model.Ref.parse("fixture/fixture"),
+    messages,
+    system: [],
+    tools: { shell: { description: "must be removed", input: {} } },
+  })
+  const event = make([Message.user("old question"), Message.assistant("old answer"), Message.user("bounded evidence")])
+  restrictAnalysisContext(event, new Set([sessionID]), 8000)
+  expect(event.messages).toHaveLength(1)
+  expect(event.messages[0].content).toEqual([{ type: "text", text: "bounded evidence" }])
+  expect(event.tools).toEqual({})
+  expect(event.system[0].text).toContain("untrusted evidence")
+  expect(() => restrictAnalysisContext(make([Message.user("x".repeat(8001))]), new Set([sessionID]), 8000)).toThrow(
+    "bounded user-data input",
+  )
+  expect(() =>
+    restrictAnalysisContext(
+      make([Message.user([{ type: "media", mediaType: "image/png", data: "unsupported" }])]),
+      new Set([sessionID]),
+      8000,
+    ),
+  ).toThrow("bounded user-data input")
+  const ordinary = make([Message.user("ordinary session")])
+  restrictAnalysisContext(ordinary, new Set(), 8000)
+  expect(ordinary.tools).toHaveProperty("shell")
+})
+
+test("Ask labels evidence omitted by its bounded recent-transcript read", async () => {
+  const { createMeetingQuestions } = await import("../src/plugin")
+  const directory = await mkdtemp(path.join(tmpdir(), "meeting-view-window-"))
+  const store = new MeetingStore(path.join(directory, "meetings.sqlite"))
+  const prompts: string[] = []
+  const service = new MeetingRuntime({
+    directory,
+    store,
+    config: meetingConfigSchema.parse({ analysis: { maxCharacters: 64000 } }),
+    mcp: {
+      tools: async () => [],
+      callTool: async () => {
+        throw new Error("No tools")
+      },
+    },
+    createSession: async () => "analysis",
+    generate: async (_, prompt) => {
+      prompts.push(prompt)
+      return "Advisory answer"
+    },
+  })
+  try {
+    store.createMeeting({ id: "long", title: "Long", sessionID: "analysis" })
+    store.transaction(() => {
+      for (let sequence = 1; sequence <= 502; sequence++)
+        store.putSegment({
+          id: `s-${sequence}`,
+          meetingID: "long",
+          sequence,
+          source: "remote",
+          speakerID: "remote",
+          startMs: sequence * 1000,
+          endMs: (sequence + 1) * 1000,
+          rawText: "Evidence",
+          text: "Evidence",
+          state: "final",
+          model: "fixture",
+          createdAt: new Date().toISOString(),
+        })
+    })
+    await service.control({ action: "select", meetingID: "long" })
+    await createMeetingQuestions(service).ask("What evidence is available?")
+    expect(prompts[0]).toContain('"omittedEarlierEvidence":true')
+    expect(prompts[0].length).toBeLessThanOrEqual(64000)
+  } finally {
+    await service.close()
+    await rm(directory, { recursive: true, force: true })
+  }
+})

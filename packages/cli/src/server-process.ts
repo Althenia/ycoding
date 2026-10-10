@@ -5,6 +5,7 @@ import { Service, type DiscoverOptions, type Info } from "@ycoding-ai/client/eff
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Global } from "@ycoding-ai/core/global"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import type { SdkPlugins } from "@ycoding-ai/core/plugin/sdk"
 import { AppProcess } from "@ycoding-ai/core/process"
 import { randomBytes, randomUUID } from "node:crypto"
 import path from "node:path"
@@ -20,6 +21,7 @@ export type Options = {
   readonly mode: Mode
   readonly hostname?: string
   readonly port?: number
+  readonly plugins?: ReadonlyArray<Parameters<SdkPlugins.Interface["register"]>[0]>
 }
 
 // The process effect lives until server shutdown; tracing it would parent every request to one process-lifetime trace.
@@ -137,18 +139,23 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
               const url = new URL(HttpServer.formatAddress(address))
               if (url.hostname === "0.0.0.0") url.hostname = "127.0.0.1"
               if (url.hostname === "[::]") url.hostname = "[::1]"
-              return Effect.runPromise(makeRemoteConnector({
-                endpoint: { url: url.toString(), auth: { type: "basic", username: "ycoding", password } },
-                onDiagnostic: (message) => {
-                  logRemoteDiagnostic(Effect.logWarning("remote connector diagnostic", {
-                    component: "remote-connector",
-                    detail: message,
-                  }))
-                },
-              }).pipe(Effect.provide(services)))
+              return Effect.runPromise(
+                makeRemoteConnector({
+                  endpoint: { url: url.toString(), auth: { type: "basic", username: "ycoding", password } },
+                  onDiagnostic: (message) => {
+                    logRemoteDiagnostic(
+                      Effect.logWarning("remote connector diagnostic", {
+                        component: "remote-connector",
+                        detail: message,
+                      }),
+                    )
+                  },
+                }).pipe(Effect.provide(services)),
+              )
             },
           })
         },
+        options.plugins,
       ).pipe(
         Effect.catch((error) => {
           if (serviceOptions === undefined || port === undefined || !addressInUse(error)) return Effect.fail(error)

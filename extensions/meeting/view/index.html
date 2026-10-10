@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>YCoding Meeting</title>
+    <link rel="stylesheet" href="/view/style.css" />
+    <script type="module" src="/view/app.js"></script>
+  </head>
+  <body>
+    <a class="skip" href="#transcript">Skip to transcript</a>
+    <header class="header">
+      <div class="brand">
+        <img src="/view/mark.svg" width="32" height="32" alt="YCoding" />
+        <div>
+          <p class="eyebrow">Meeting Intelligence</p>
+          <h1 id="meeting-title">YCoding Meeting</h1>
+        </div>
+      </div>
+      <div class="actions">
+        <span id="meeting-status" class="status">Connecting</span
+        ><button id="stop" type="button" disabled aria-describedby="connection">Stop and finalize</button>
+      </div>
+    </header>
+    <div id="connection" class="connection" role="status" aria-live="polite">Connecting to the local runtime…</div>
+    <main class="cockpit">
+      <aside id="operations" class="operations" aria-label="Operations">
+        <section class="panel runtime-panel" aria-label="Local runtime">
+          <div class="runtime-line">
+            <strong>Local runtime</strong><span id="health-status">Unreported</span
+            ><span id="source-status" class="hint">Sources unreported</span>
+          </div>
+          <dl class="metrics">
+            <div>
+              <dt>Buffered</dt>
+              <dd id="buffered">Unreported</dd>
+            </div>
+            <div>
+              <dt>Backlog</dt>
+              <dd id="backlog">Unreported</dd>
+            </div>
+            <div>
+              <dt>Processed</dt>
+              <dd id="processed">Unreported</dd>
+            </div>
+            <div>
+              <dt>Transcription lag</dt>
+              <dd id="lag">Unreported</dd>
+            </div>
+          </dl>
+          <p class="hint">Lag is unreported when the runtime does not supply it.</p>
+          <div class="strip-actions">
+            <details id="runtime-details">
+              <summary>Model details</summary>
+              <div class="details-body">
+                <p id="model" class="mono">Model unreported</p>
+                <p id="device" class="hint">Device unreported</p>
+                <p id="bridge" class="mono"></p>
+              </div>
+            </details>
+            <details>
+              <summary>Start in Chrome</summary>
+              <div class="details-body">
+                <ol>
+                  <li>Select your Google Meet tab.</li>
+                  <li>Open the YCoding Meet capture companion popup.</li>
+                  <li>Check recording consent. Enable the optional microphone only if wanted.</li>
+                  <li>Press Start in Chrome. Use headphones to reduce echo.</li>
+                </ol>
+                <p class="hint">
+                  This page cannot start recording. After a runtime stop, re-arm a ready meeting in YCoding and check
+                  consent again in Chrome.
+                </p>
+              </div>
+            </details>
+          </div>
+        </section>
+        <section id="pairing" class="panel" aria-labelledby="pairing-title">
+          <h2 id="pairing-title">Connect the Chrome companion</h2>
+          <p class="hint">
+            Paste this bridge address and one-use code into the Chrome popup. Recording requires a separate consent and
+            Start.
+          </p>
+          <p id="pair-address" class="mono"></p>
+          <p id="pair-code" class="pair-code">Unreported</p>
+          <p id="pair-countdown" class="hint">Pairing status unreported</p>
+          <div class="actions">
+            <button id="new-code" type="button" disabled aria-describedby="connection">New pairing code</button
+            ><button id="copy-code" type="button" disabled aria-describedby="pair-countdown">Copy code</button>
+          </div>
+          <p id="pair-feedback" class="feedback" role="status" aria-live="polite"></p>
+        </section>
+        <section id="recovery" class="notice" hidden aria-labelledby="recovery-title">
+          <h2 id="recovery-title">Runtime needs attention</h2>
+          <p id="recovery-text"></p>
+          <p id="error-detail" class="hint"></p>
+          <button id="retry-audio" type="button" hidden>Retry failed audio</button>
+        </section>
+        <p id="control-feedback" class="feedback" role="status" aria-live="polite"></p>
+      </aside>
+      <section id="transcript" class="transcript" aria-labelledby="transcript-title" tabindex="-1">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Live transcript · source-labelled evidence</p>
+            <h2 id="transcript-title">Transcript</h2>
+          </div>
+          <div class="actions">
+            <button id="follow" type="button" aria-pressed="true">✓ Follow newest</button
+            ><button id="original" type="button" aria-pressed="false">Show original</button>
+          </div>
+        </div>
+        <p id="transcript-empty" class="hint">
+          Waiting for transcript. Select your Meet tab, check consent and press Start in Chrome.
+        </p>
+        <p id="transcript-window" class="hint" hidden>
+          Showing the runtime's most recent transcript window. Earlier evidence remains in YCoding.
+        </p>
+        <div id="segments"></div>
+      </section>
+      <aside id="insights-column" class="insights-column" aria-label="Insights and Ask AI">
+        <section class="panel" aria-labelledby="summary-title">
+          <p class="eyebrow">Advisory · transcript so far</p>
+          <h2 id="summary-title">Incremental summary</h2>
+          <p id="summary-status" class="hint">Analysis unreported</p>
+          <p id="summary-text" class="prose">No summary yet.</p>
+          <details id="findings">
+            <summary id="findings-title">Findings · unreported</summary>
+            <div id="finding-list" class="details-body"></div>
+          </details>
+        </section>
+        <section id="chat-panel" class="panel" aria-labelledby="chat-title">
+          <div class="section-head">
+            <h2 id="chat-title">Ask AI</h2>
+          </div>
+          <p class="hint">Advisory only · transcript so far · no tools or actions</p>
+          <div id="chat-history" class="chat-history"><p class="hint">No questions yet.</p></div>
+          <form id="chat-form">
+            <label for="question">Your question</label
+            ><textarea
+              id="question"
+              maxlength="2000"
+              rows="4"
+              placeholder="สรุปข้อเสนอ rollout ตอนนี้ให้หน่อย"
+              aria-describedby="chat-feedback"
+            ></textarea>
+            <div class="actions">
+              <button id="ask" type="submit" class="primary" disabled aria-describedby="chat-feedback">Ask AI</button
+              ><button id="retry-question" type="button" hidden>Retry answer</button>
+            </div>
+            <p id="chat-feedback" class="feedback" role="status" aria-live="polite">
+              Waiting for the runtime. One question at a time.
+            </p>
+          </form>
+        </section>
+      </aside>
+    </main>
+    <dialog id="stop-dialog" aria-labelledby="stop-title">
+      <h2 id="stop-title">Stop and finalize?</h2>
+      <p>
+        End capture and process the remaining buffered audio. Recording again requires a ready meeting, consent and
+        Start in Chrome.
+      </p>
+      <form method="dialog" class="actions">
+        <button value="cancel">Cancel</button
+        ><button id="confirm-stop" value="stop" class="primary">Stop and finalize</button>
+      </form>
+    </dialog>
+  </body>
+</html>

@@ -67,7 +67,9 @@ export function createCoordinator(environment) {
       if (state.capture === capture) state.capture = undefined
       await api.storage.session.remove(["capture"])
       if (state.phase !== "error") {
-        state.phase = ["capture_failed", "permissions_revoked", "service_restarted"].includes(reason)
+        state.phase = ["capture_failed", "permissions_revoked", "service_restarted", "inference_failed"].includes(
+          reason,
+        )
           ? "error"
           : state.pair
             ? "ready"
@@ -148,15 +150,19 @@ export function createCoordinator(environment) {
       return status()
     } catch (error) {
       if (offscreenCreated && !state.capture) await api.offscreen.closeDocument().catch(() => undefined)
-      const reason = [
-        "select_meet_tab",
-        "microphone_denied",
-        "tab_capture_denied",
-        "pairing_expired",
-        "capture_cancelled",
-      ].includes(error.message)
-        ? error.message
-        : "capture_start_failed"
+      const reason = ["inference_failed", "backend_stopped"].includes(state.reason)
+        ? state.reason
+        : [
+              "select_meet_tab",
+              "microphone_denied",
+              "tab_capture_denied",
+              "pairing_expired",
+              "capture_cancelled",
+              "inference_failed",
+              "backend_stopped",
+            ].includes(error.message)
+          ? error.message
+          : "capture_start_failed"
       state.phase = "error"
       state.reason = reason
       await stop(reason)

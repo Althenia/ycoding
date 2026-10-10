@@ -77,6 +77,35 @@ test("popup owns accessible controls, local typography, state and shortcut witho
   expect(manifest.externally_connectable).toBeUndefined()
 })
 
+test("secondary capture guidance is collapsed while consent and microphone choice remain visible", () => {
+  const capture = html.match(/<form id="capture"[\s\S]*?<\/form>/)?.[0]
+  const help = html.match(/<details class="help"[\s\S]*?<\/details>/)?.[0]
+  expect(capture).toContain('id="consent"')
+  expect(capture).toContain('id="microphone"')
+  expect(capture).not.toContain("Use headphones")
+  expect(capture).not.toContain("Select the Meet tab")
+  expect(help).toContain("Use headphones")
+  expect(help).toContain("echo cancellation")
+  expect(help).toContain("ycoding meeting")
+  expect(help).toContain("/meeting start")
+  expect(help).not.toContain('id="consent"')
+  expect(help).not.toContain('id="microphone"')
+  expect(help).not.toContain(" open")
+})
+
+test("the microphone access page reuses the popup treatment and is packaged", async () => {
+  const page = await Bun.file(new URL("../companion/microphone.html", import.meta.url)).text()
+  const build = await Bun.file(new URL("../companion/build.js", import.meta.url)).text()
+  expect(page).toContain('<link rel="stylesheet" href="popup.css" />')
+  expect(page).toContain('class="access-page"')
+  expect(page).toContain('id="status" role="status" aria-live="polite"')
+  expect(page).toContain('<button id="allow" class="primary" type="button">Allow microphone</button>')
+  expect(page).toContain('<button id="settings" type="button" hidden>Open Chrome site settings</button>')
+  expect(stylesheet).toContain(".access-page")
+  expect(build).toContain('"microphone.html"')
+  expect(build).toContain('"microphone.js"')
+})
+
 test("companion distinguishes its microphone launcher while preserving the Y header mark", () => {
   expect(manifest.icons).toEqual({
     16: "icons/ycoding-meeting-16.png",

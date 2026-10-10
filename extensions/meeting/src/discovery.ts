@@ -33,6 +33,10 @@ export function validateDescriptor(value: unknown) {
   return descriptor
 }
 
+export function meetingControl(directory: string) {
+  return async (input: unknown) => (await connectControl(directory))(input)
+}
+
 export async function connectControl(directory: string) {
   const file = path.join(await meetingDirectory(directory), "bridge.json")
   const info = await lstat(file)

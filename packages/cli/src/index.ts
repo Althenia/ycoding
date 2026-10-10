@@ -29,6 +29,7 @@ const handlers = Runtime.handlers(Commands, {
   mini: () => import("./commands/handlers/mini"),
   run: () => import("./commands/handlers/run"),
   update: () => import("./commands/handlers/update"),
+  meeting: () => import("./commands/handlers/meeting"),
   pair: () => import("./commands/handlers/pair"),
   remote: {
     enroll: () => import("./commands/handlers/remote/enroll"),

@@ -196,3 +196,41 @@ test("Stop during offscreen document creation closes the late document before an
   expect(f.data.capture).toBeUndefined()
   expect(f.calls.filter((call) => call[0] === "inject")).toEqual([])
 })
+
+test("a runtime-initiated stop while Start is settling cannot become capture_cancelled", async () => {
+  const data = { pair: { url: "http://127.0.0.1:1234", token: "t".repeat(43) } }
+  const f = fixture(data)
+  f.api.tabCapture = { getMediaStreamId: async () => "stream" }
+  const entered = Promise.withResolvers()
+  const response = Promise.withResolvers()
+  const setup = { ...f.api }
+  const coordinator = createCoordinator({
+    chrome: setup,
+    fetch: async () => Response.json({}),
+    sendOffscreen: async (message) => {
+      if (message.type === "stop") return { ok: true }
+      entered.resolve(message)
+      return response.promise
+    },
+  })
+  await coordinator.initialize()
+  const starting = coordinator
+    .handle({ type: "start", consent: true, microphone: false }, f.popup)
+    .catch((error) => error.message)
+  const message = await entered.promise
+  await coordinator.handle(
+    {
+      type: "capture-state",
+      epoch: message.epoch,
+      state: { phase: "error", reason: "inference_failed", captureID: message.options.captureID },
+    },
+    { id: setup.runtime.id, url: setup.runtime.getURL("offscreen.html") },
+  )
+  await coordinator.stop("inference_failed")
+  response.resolve({ ok: false, error: "inference_failed" })
+  expect(await starting).toBe("inference_failed")
+  expect(await coordinator.handle({ type: "status" }, f.popup)).toMatchObject({
+    phase: "error",
+    reason: "inference_failed",
+  })
+})

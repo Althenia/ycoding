@@ -443,7 +443,7 @@ export class MeetingStore {
         if (meeting.status === "recording" || meeting.status === "stopping") {
           this.updateMeeting(meeting.id, {
             status: "interrupted",
-            error: "Capture interrupted; volatile raw audio is unavailable after restart",
+            error: `${meeting.error ? `${meeting.error}; ` : ""}Capture interrupted; volatile raw audio is unavailable after restart`,
           })
         }
         for (const job of this.jobs(meeting.id).filter((value) => value.status === "running")) {

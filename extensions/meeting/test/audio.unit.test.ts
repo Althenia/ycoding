@@ -30,6 +30,46 @@ function processor(
 }
 
 describe("AudioProcessor unit lifecycle", () => {
+  it("keeps normalized resampled samples within the worker input contract", async () => {
+    const chunks: AudioChunk[] = []
+    const audio = processor(
+      async (chunk) => {
+        chunks.push(chunk)
+      },
+      { sampleRate: 16000, overlapSeconds: 0 },
+    )
+    await audio.push(
+      packet({
+        sampleRate: 48000,
+        samples: Float32Array.from({ length: 48000 }, (_, index) =>
+          Math.sin((2 * Math.PI * 500 * index) / 48000) >= 0 ? 1 : -1,
+        ),
+      }),
+    )
+    await audio.close()
+    expect(chunks).toHaveLength(1)
+    expect(
+      chunks.every((chunk) => chunk.samples.every((sample) => Number.isFinite(sample) && Math.abs(sample) <= 1)),
+    ).toBe(true)
+  })
+
+  it("closing failed audio does not infer it again and retains it for explicit drain", async () => {
+    let attempts = 0
+    let failing = true
+    const audio = processor(async () => {
+      attempts++
+      if (failing) throw new Error("Original inference failure")
+    })
+    await expect(audio.push(packet())).rejects.toThrow("Original inference failure")
+    await expect(audio.close()).rejects.toThrow("Original inference failure")
+    expect(attempts).toBe(1)
+    expect(audio.stats()).toMatchObject({ backlog: 1, error: "Original inference failure" })
+    failing = false
+    await audio.drain()
+    await audio.close()
+    expect(attempts).toBe(2)
+  })
+
   it("emits stable overlapping windows and flushes only new tail audio", async () => {
     const chunks: AudioChunk[] = []
     const audio = processor(async (chunk) => {
@@ -189,7 +229,7 @@ describe("AudioProcessor unit lifecycle", () => {
     fail = false
     await retry.drain()
     expect(attempts[0]).toBe(attempts[1])
-    expect(attempts[1]).toBe(attempts[2])
+    expect(attempts).toHaveLength(2)
     expect(retry.stats().error).toBeUndefined()
     await retry.close()
     expect(retry.stats().bufferedSeconds).toBe(0)

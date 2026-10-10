@@ -5,7 +5,7 @@ import { TextAttributes } from "@opentui/core"
 import { clearTimeout, setTimeout } from "node:timers"
 import { useTheme } from "@ycoding-ai/tui/context/theme"
 import { createEffect, createSignal, For, on, onCleanup, onMount } from "solid-js"
-import { connectControl } from "./discovery"
+import { meetingControl } from "./discovery"
 import type { MeetingView } from "./types"
 import {
   configCommand,
@@ -392,9 +392,16 @@ export function MeetingPage(props: {
             <text fg={theme.text.feedback.error.default}>✗ {displayValue(view()?.analysis.error)}</text>
           ) : null}
           {view()?.pairing ? (
-            <text fg={theme.text.feedback.warning.default}>
-              Pair Chrome: {view()?.pairing?.code} · {view()?.pairing?.url}
-            </text>
+            pairingSecondsLeft(view()!.pairing!) > 0 ? (
+              <text fg={theme.text.feedback.warning.default}>
+                Pair Chrome: {view()?.pairing?.code} · {view()?.pairing?.url} · expires in{" "}
+                {pairingSecondsLeft(view()!.pairing!)}s
+              </text>
+            ) : (
+              <text fg={theme.text.feedback.warning.default}>
+                Pairing code expired · run /meeting start for a new code
+              </text>
+            )
           ) : null}
           <text fg={theme.text.feedback.info.default}>Transcript · original and corrected text</text>
           <For each={meetingTranscript(view()!)}>
@@ -482,6 +489,10 @@ export function MeetingPage(props: {
   )
 }
 
+function pairingSecondsLeft(pairing: NonNullable<MeetingView["pairing"]>) {
+  return Math.ceil((pairing.expiresAt - Date.now()) / 1000)
+}
+
 export function MeetingCommands(props: { context: MeetingContext }) {
   let commandID = 0
   props.context.keymap.layer(() => ({
@@ -531,13 +542,13 @@ export function MeetingCommands(props: { context: MeetingContext }) {
 export default Plugin.define({
   id: "ycoding.meeting",
   setup(context) {
-    const controller = connectControl(context.location?.directory ?? process.cwd())
+    const control = meetingControl(context.location?.directory ?? process.cwd())
     context.ui.router.register({
       name: "meeting",
       render: ({ data }) => (
         <MeetingPage
           context={context}
-          control={async (input) => (await controller)(input)}
+          control={control}
           initialCommand={typeof data?.command === "string" ? data.command : undefined}
           commandID={typeof data?.commandID === "number" ? data.commandID : undefined}
           sourceSessionID={typeof data?.sourceSessionID === "string" ? data.sourceSessionID : undefined}

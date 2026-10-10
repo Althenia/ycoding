@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import type { AudioChunk } from "./transcription/index"
+import { sanitizeTranscriptionError, type AudioChunk } from "./transcription/index"
 import type { AudioSource } from "./types"
 
 type Input = {
@@ -79,7 +79,7 @@ export class AudioProcessor {
 
   async push(input: Input): Promise<{ duplicate: boolean }> {
     const result = this.accept(input)
-    await this.drain()
+    await this.drain({ retry: false })
     return result
   }
 
@@ -171,7 +171,7 @@ export class AudioProcessor {
 
   async flush(): Promise<void> {
     if (this.closed) return
-    await this.drain()
+    await this.drain({ retry: false })
     const queued: Pending[] = []
     for (const [name, current] of this.sources) {
       const source = { ...current }
@@ -180,12 +180,13 @@ export class AudioProcessor {
       this.sources.set(name, source)
     }
     this.pending.push(...queued)
-    await this.drain()
+    await this.drain({ retry: false })
   }
 
-  drain(): Promise<void> {
+  drain(options: { retry?: boolean } = {}): Promise<void> {
     if (this.running) return this.running
     if (this.closed) return Promise.resolve()
+    if (this.error && options.retry === false) return Promise.reject(new Error(this.error))
     this.running = this.process().finally(() => {
       this.running = undefined
     })
@@ -263,7 +264,7 @@ export class AudioProcessor {
         value += sample * coefficient
         weight += coefficient
       }
-      converted.push(value / weight)
+      converted.push(Math.max(-1, Math.min(1, value / weight)))
       source.outputThrough++
     }
     source.output = concatenate(source.output, Float32Array.from(converted))
@@ -320,7 +321,7 @@ export class AudioProcessor {
           await this.options.onChunk({ ...item.chunk, samples: item.chunk.samples.slice() })
         }
       } catch (error) {
-        this.error = error instanceof Error ? error.message : "Audio inference failed"
+        this.error = sanitizeTranscriptionError(error)
         throw error
       }
       this.pending.shift()

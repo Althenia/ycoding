@@ -116,6 +116,7 @@ test("native Meeting popup has its documented width and canonical brand", async 
       record(await browser.cdp.send("Target.attachToTarget", { targetId: text(popup.targetId), flatten: true }))
         .sessionId,
     )
+    await waitDOM(browser.cdp, session, "document.querySelector('#status')?.textContent === 'Not paired'")
     const metrics = record(
       await evaluate(
         browser.cdp,
@@ -294,6 +295,7 @@ test(
     const audio = Promise.withResolvers<void>()
     const stopped = Promise.withResolvers<void>()
     let controls = 0
+    let failInference = false
     const bridge = await startBridge({
       controlToken: randomBytes(32).toString("hex"),
       onControl: async () => {
@@ -302,11 +304,14 @@ test(
       },
       onCapture: async (message) => {
         messages.push(message)
-        const result = live
-          ? await live.runtime.capture(message)
-          : message.type === "stop"
-            ? { stop: true }
-            : { accepted: true }
+        const result =
+          failInference && message.type === "start"
+            ? { stop: true, reason: "inference_failed" }
+            : live
+              ? await live.runtime.capture(message)
+              : message.type === "stop"
+                ? { stop: true }
+                : { accepted: true }
         if (message.type === "audio") {
           const pcm = Buffer.from(message.pcm, "base64")
           if (
@@ -411,6 +416,28 @@ test(
         ),
       ).toEqual({ status: "Ready", error: "" })
       expect(await evaluate(browser.cdp, session, "document.querySelector('#code').value")).toBe("")
+      const readyLayout = record(
+        await evaluate(
+          browser.cdp,
+          session,
+          `(async()=>{
+        await document.fonts.ready;await new Promise(resolve=>requestAnimationFrame(resolve));
+        const capture=document.querySelector('#capture'),help=document.querySelector('details');
+        return {height:document.body.scrollHeight,width:innerWidth,helpClosed:!help.open,
+          guidanceInHelp:help.textContent.includes('Use headphones')&&help.textContent.includes('ycoding meeting'),
+          guidanceOutsideHelp:capture.textContent.includes('Use headphones')||capture.textContent.includes('Select the Meet tab'),
+          consentVisible:document.querySelector('#consent').getBoundingClientRect().height>0,
+          microphoneVisible:document.querySelector('#microphone').getBoundingClientRect().height>0};
+      })()`,
+        ),
+      )
+      expect(readyLayout.width).toBe(320)
+      expect(Number(readyLayout.height)).toBeLessThanOrEqual(420)
+      expect(readyLayout.helpClosed).toBe(true)
+      expect(readyLayout.guidanceInHelp).toBe(true)
+      expect(readyLayout.guidanceOutsideHelp).toBe(false)
+      expect(readyLayout.consentVisible).toBe(true)
+      expect(readyLayout.microphoneVisible).toBe(true)
       expect(await evaluate(browser.cdp, session, "document.querySelector('#start').disabled")).toBe(true)
       await click(browser.cdp, session, "#start")
       expect(messages).toEqual([])
@@ -488,6 +515,30 @@ test(
         ),
       ).toBe(false)
       expect(await evaluate(browser.cdp, workerSession, "chrome.action.getBadgeText({})")).toBe("")
+      if (!live) {
+        failInference = true
+        await click(browser.cdp, review, "#consent")
+        await click(browser.cdp, review, "#start")
+        await waitDOM(
+          browser.cdp,
+          review,
+          "document.querySelector('#status')?.textContent==='Error' && !document.querySelector('#forget').disabled",
+        )
+        const recovery = await evaluate(browser.cdp, review, "document.querySelector('#error').textContent")
+        expect(recovery).toContain("Speech recognition failed")
+        expect(recovery).toContain("transcript so far is saved")
+        expect(recovery).toContain("/meeting retry")
+        expect(await evaluate(browser.cdp, workerSession, "chrome.action.getTitle({})")).toContain("inference_failed")
+        expect(await evaluate(browser.cdp, workerSession, "chrome.offscreen.hasDocument()")).toBe(false)
+        expect(
+          await evaluate(
+            browser.cdp,
+            workerSession,
+            "chrome.tabCapture.getCapturedTabs().then(tabs=>tabs.some(tab=>tab.status==='active'))",
+          ),
+        ).toBe(false)
+        failInference = false
+      }
       await browser.cdp.send("Browser.setPermission", {
         permission: { name: "microphone" },
         setting: "denied",
@@ -496,12 +547,35 @@ test(
       await click(browser.cdp, review, "#consent")
       await click(browser.cdp, review, "#microphone")
       await click(browser.cdp, review, "#start")
-      await waitDOM(browser.cdp, review, "document.querySelector('#status')?.textContent === 'Error'")
-      expect(await evaluate(browser.cdp, review, "document.querySelector('#error').textContent")).toContain(
-        "Microphone permission was denied",
+      const access = await target(
+        browser.cdp,
+        (info) => info.url === `chrome-extension://${browser.extensionID}/microphone.html`,
+      ).catch((error) => {
+        throw new Error("Microphone access page did not open after capture failure", { cause: error })
+      })
+      const accessSession = text(
+        record(await browser.cdp.send("Target.attachToTarget", { targetId: text(access.targetId), flatten: true }))
+          .sessionId,
       )
-      expect(messages.filter((message) => message.type === "start")).toHaveLength(1)
+      await loaded(browser.cdp, accessSession, `chrome-extension://${browser.extensionID}/microphone.html`)
+      await waitDOM(
+        browser.cdp,
+        accessSession,
+        "document.querySelector('#status')?.textContent.startsWith('Microphone was not allowed') && !document.querySelector('#settings').hidden",
+      )
+      expect(messages.filter((message) => message.type === "start")).toHaveLength(live ? 1 : 2)
       expect(await evaluate(browser.cdp, workerSession, "chrome.offscreen.hasDocument()")).toBe(false)
+      await browser.cdp.send("Browser.setPermission", {
+        permission: { name: "microphone" },
+        setting: "granted",
+        origin: `chrome-extension://${browser.extensionID}`,
+      })
+      await evaluate(browser.cdp, accessSession, "document.querySelector('#allow').click(); true")
+      await waitDOM(
+        browser.cdp,
+        accessSession,
+        "document.querySelector('#status')?.textContent.startsWith('Microphone allowed')",
+      )
       if (live) {
         await live.runtime.settled()
         const state = live.runtime.status()
@@ -702,6 +776,20 @@ async function attachPage(cdp: Client, targetID: string) {
   } finally {
     unsubscribe()
   }
+}
+
+async function loaded(cdp: Client, sessionID: string, url: string) {
+  const deadline = Date.now() + 10000
+  while (Date.now() < deadline) {
+    const ready = await evaluate(
+      cdp,
+      sessionID,
+      `location.href === ${JSON.stringify(url)} && document.readyState === 'complete'`,
+    ).catch(() => false)
+    if (ready === true) return
+    await Bun.sleep(100)
+  }
+  throw new Error(`Chrome did not load ${url}`)
 }
 
 async function waitDOM(cdp: Client, sessionID: string, expression: string) {

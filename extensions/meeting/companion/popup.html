@@ -30,11 +30,6 @@
           <label class="check" for="microphone"
             ><input id="microphone" type="checkbox" />Also capture my microphone</label
           >
-          <p>
-            Use headphones to avoid recording remote audio twice. Microphone echo cancellation is enabled; microphone
-            audio is never played back.
-          </p>
-          <p>Select the Meet tab, arm a meeting in the TUI, then press Start. Capture never starts automatically.</p>
           <div class="capture-actions">
             <button id="start" class="primary" type="submit">Start selected Meet tab</button>
             <button id="stop" type="button">Stop capture</button>
@@ -44,6 +39,14 @@
       </section>
       <details class="help">
         <summary>Capture help</summary>
+        <p class="note">
+          Use headphones to avoid recording remote audio twice. Microphone echo cancellation is enabled; microphone
+          audio is never played back.
+        </p>
+        <p class="note">
+          Select the Meet tab, arm a meeting with <code>ycoding meeting</code> or <code>/meeting start</code>, then
+          press Start. Capture never starts automatically.
+        </p>
         <p class="note">
           Stop also works with Ctrl+Shift+Y (Command+Shift+Y on Mac); configure it in Chrome extension shortcuts.
           Call-connection closure stops capture conservatively, including internal reconnections. Use Stop if a call

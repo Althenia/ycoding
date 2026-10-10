@@ -1,4 +1,5 @@
 import { createDelivery } from "./delivery.js"
+import { backendStopReason } from "./protocol.js"
 
 export function createCapture(environment) {
   const state = { session: undefined }
@@ -98,6 +99,7 @@ export function createCapture(environment) {
       heartbeat: undefined,
       heartbeatSending: false,
       backendStopped: false,
+      stopReason: undefined,
       ended: () => stop("track_ended"),
       processorFailed: () => {
         session.failure = "audio_processor_failed"
@@ -106,9 +108,11 @@ export function createCapture(environment) {
       },
     }
     state.session = session
-    const onStop = () => {
+    const onStop = (reason) => {
       session.backendStopped = true
-      void stop("backend_stopped")
+      session.stopReason = backendStopReason(reason)
+      if (session.stopReason === "inference_failed") session.failure = session.stopReason
+      void stop(session.stopReason)
     }
     const onFailure = (reason) => {
       session.failure = reason
@@ -150,7 +154,7 @@ export function createCapture(environment) {
       return stream
     }
     const check = () => {
-      if (session.cancelled) throw new Error("capture_cancelled")
+      if (session.cancelled) throw new Error(session.stopReason ?? "capture_cancelled")
     }
     notify(session, "starting")
     try {
@@ -247,7 +251,8 @@ export function createCapture(environment) {
           : "capture_failed"
       await stop(session.failure ?? "capture_cancelled")
       throw new Error(
-        session.cancelled && !session.failure ? "capture_cancelled" : (session.failure ?? "capture_failed"),
+        session.stopReason ??
+          (session.cancelled && !session.failure ? "capture_cancelled" : (session.failure ?? "capture_failed")),
       )
     }
   }

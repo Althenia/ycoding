@@ -21,3 +21,7 @@ export function meetURL(value) {
     return false
   }
 }
+
+export function backendStopReason(value) {
+  return value === "inference_failed" ? value : "backend_stopped"
+}

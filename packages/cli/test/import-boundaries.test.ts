@@ -6,26 +6,30 @@ const root = path.resolve(import.meta.dir, "../../..")
 const coldBundleTimeout = 60_000
 
 describe("CLI frontend import boundaries", () => {
-  test("exposes only the intentional package entrypoints", async () => {
-    const run = await import("@ycoding-ai/cli/run")
-    const mini = await import("@ycoding-ai/tui/mini")
-    const cli: unknown = await Bun.file(path.join(root, "packages/cli/package.json")).json()
-    if (!cli || typeof cli !== "object" || !("exports" in cli) || !cli.exports || typeof cli.exports !== "object")
-      throw new Error("CLI package exports are missing")
-    const advertised = Object.entries(cli.exports)
+  test(
+    "exposes only the intentional package entrypoints",
+    async () => {
+      const run = await import("@ycoding-ai/cli/run")
+      const mini = await import("@ycoding-ai/tui/mini")
+      const cli: unknown = await Bun.file(path.join(root, "packages/cli/package.json")).json()
+      if (!cli || typeof cli !== "object" || !("exports" in cli) || !cli.exports || typeof cli.exports !== "object")
+        throw new Error("CLI package exports are missing")
+      const advertised = Object.entries(cli.exports)
 
-    expect(Object.keys(run).sort()).toEqual(["runNonInteractive"])
-    expect(Object.keys(mini).sort()).toEqual(["runMiniFrontend"])
-    expect(advertised.map(([key]) => key).filter((key) => key === "./mini" || key.startsWith("./mini/"))).toEqual([])
-    const missing = await Promise.all(
-      advertised.map(async ([name, target]) =>
-        typeof target === "string" && (await Bun.file(path.join(root, "packages/cli", target)).exists())
-          ? []
-          : [name],
-      ),
-    )
-    expect(missing.flat()).toEqual([])
-  }, coldBundleTimeout)
+      expect(Object.keys(run).sort()).toEqual(["runNonInteractive"])
+      expect(Object.keys(mini).sort()).toEqual(["runMiniFrontend"])
+      expect(advertised.map(([key]) => key).filter((key) => key === "./mini" || key.startsWith("./mini/"))).toEqual([])
+      const missing = await Promise.all(
+        advertised.map(async ([name, target]) =>
+          typeof target === "string" && (await Bun.file(path.join(root, "packages/cli", target)).exists())
+            ? []
+            : [name],
+        ),
+      )
+      expect(missing.flat()).toEqual([])
+    },
+    coldBundleTimeout,
+  )
 
   test("keeps source current-only", async () => {
     const denied = [
@@ -46,97 +50,114 @@ describe("CLI frontend import boundaries", () => {
     expect(matches).toEqual([])
   })
 
-  test("keeps run and Mini on separate evaluation graphs", async () => {
-    const run = await bundleInputs("packages/cli/src/commands/handlers/run.ts")
-    expect(run).toContain("packages/cli/src/run/run.ts")
-    expect(run).toContain("packages/tui/src/mini/tool.ts")
-    expect(run).not.toContain("packages/tui/src/mini/runtime.ts")
-    expect(run).not.toContain("packages/tui/src/mini/runtime.lifecycle.ts")
-    expect(run).not.toContain("packages/tui/src/mini/footer.ts")
-    expect(run).not.toContain("packages/tui/src/mini/scrollback.surface.ts")
-    expect(run).not.toContain("packages/tui/src/runtime.tsx")
+  test(
+    "keeps run and Mini on separate evaluation graphs",
+    async () => {
+      const run = await bundleInputs("packages/cli/src/commands/handlers/run.ts")
+      expect(run).toContain("packages/cli/src/run/run.ts")
+      expect(run).toContain("packages/tui/src/mini/tool.ts")
+      expect(run).not.toContain("packages/tui/src/mini/runtime.ts")
+      expect(run).not.toContain("packages/tui/src/mini/runtime.lifecycle.ts")
+      expect(run).not.toContain("packages/tui/src/mini/footer.ts")
+      expect(run).not.toContain("packages/tui/src/mini/scrollback.surface.ts")
+      expect(run).not.toContain("packages/tui/src/runtime.tsx")
 
-    const mini = await bundleInputs("packages/cli/src/commands/handlers/mini.ts")
-    expect(mini).toContain("packages/cli/src/mini.ts")
-    expect(mini).toContain("packages/tui/src/mini/index.ts")
-    expect(mini).toContain("packages/tui/src/mini/runtime.ts")
-    expect(mini).not.toContain("packages/cli/src/run/run.ts")
-    expect(mini).not.toContain("packages/cli/src/run/noninteractive.ts")
-    expect(mini).not.toContain("packages/cli/src/run/ui.ts")
-    expect(mini).not.toContain("packages/tui/src/runtime.tsx")
-  }, coldBundleTimeout)
+      const mini = await bundleInputs("packages/cli/src/commands/handlers/mini.ts")
+      expect(mini).toContain("packages/cli/src/mini.ts")
+      expect(mini).toContain("packages/tui/src/mini/index.ts")
+      expect(mini).toContain("packages/tui/src/mini/runtime.ts")
+      expect(mini).not.toContain("packages/cli/src/run/run.ts")
+      expect(mini).not.toContain("packages/cli/src/run/noninteractive.ts")
+      expect(mini).not.toContain("packages/cli/src/run/ui.ts")
+      expect(mini).not.toContain("packages/tui/src/runtime.tsx")
+    },
+    coldBundleTimeout,
+  )
 
-  test("keeps the standalone TUI artifact inside the retained package boundary", async () => {
-    const graph = await bundleInputs("packages/cli/src/tui.ts")
+  test(
+    "keeps the standalone TUI artifact inside the retained package boundary",
+    async () => {
+      const graph = await bundleInputs("packages/cli/src/tui.ts")
 
-    expect(graph).toContain("packages/cli/src/commands/handlers/tui.ts")
-    expect(graph.some((file) => file.startsWith("packages/tui/src/"))).toBe(true)
-    expect(graph.some((file) => file.startsWith("packages/server/src/"))).toBe(true)
-    expect(graph).not.toContain("packages/cli/src/commands/commands.ts")
-    const retained = new Set([
-      "ai",
-      "cli",
-      "client",
-      "codemode",
-      "core",
-      "effect-drizzle-sqlite",
-      "effect-sqlite-node",
-      "http-recorder",
-      "httpapi-codegen",
-      "plugin",
-      "protocol",
-      "remote",
-      "schema",
-      "script",
-      "server",
-      "simulation",
-      "tui",
-    ])
-    expect(
-      graph.filter((file) => {
-        const match = /^packages\/([^/]+)\//.exec(file)
-        return match ? !retained.has(match[1]) : false
-      }),
-    ).toEqual([])
-    expect(
-      graph.filter(
-        (file) =>
-          file.startsWith("packages/cli/src/commands/handlers/") &&
-          file !== "packages/cli/src/commands/handlers/tui.ts" &&
-          file !== "packages/cli/src/commands/handlers/tui-serve.ts" &&
-          file !== "packages/cli/src/commands/handlers/tui-shared.ts" &&
-          file !== "packages/cli/src/commands/handlers/run.ts" &&
-          file !== "packages/cli/src/commands/handlers/run-shared.ts" &&
-          file !== "packages/cli/src/commands/handlers/update.ts" &&
-          !/^packages\/cli\/src\/commands\/handlers\/service\/(?:start|restart|status|stop|get|set|unset)\.ts$/.test(file) &&
-          file !== "packages/cli/src/commands/handlers/serve-shared.ts" &&
-          file !== "packages/cli/src/commands/handlers/remote/enroll.ts" &&
-          file !== "packages/cli/src/commands/handlers/remote/connect.ts" &&
-          file !== "packages/cli/src/commands/handlers/remote/disconnect.ts" &&
-          file !== "packages/cli/src/commands/handlers/remote/connector.ts" &&
-          file !== "packages/cli/src/commands/handlers/remote/lock.ts" &&
-          file !== "packages/cli/src/commands/handlers/remote/status.ts" &&
-          file !== "packages/cli/src/commands/handlers/remote/sessions.ts" &&
-          file !== "packages/cli/src/commands/handlers/remote/allow.ts" &&
-          file !== "packages/cli/src/commands/handlers/remote/deny.ts" &&
-          file !== "packages/cli/src/commands/handlers/remote/shared.ts",
-      ),
-    ).toEqual([])
-  }, coldBundleTimeout)
+      expect(graph).toContain("packages/cli/src/commands/handlers/tui.ts")
+      expect(graph.some((file) => file.startsWith("packages/tui/src/"))).toBe(true)
+      expect(graph.some((file) => file.startsWith("packages/server/src/"))).toBe(true)
+      expect(graph).not.toContain("packages/cli/src/commands/commands.ts")
+      const retained = new Set([
+        "ai",
+        "cli",
+        "client",
+        "codemode",
+        "core",
+        "effect-drizzle-sqlite",
+        "effect-sqlite-node",
+        "http-recorder",
+        "httpapi-codegen",
+        "plugin",
+        "protocol",
+        "remote",
+        "schema",
+        "script",
+        "server",
+        "simulation",
+        "tui",
+      ])
+      expect(
+        graph.filter((file) => {
+          const match = /^packages\/([^/]+)\//.exec(file)
+          return match ? !retained.has(match[1]) : false
+        }),
+      ).toEqual([])
+      expect(
+        graph.filter(
+          (file) =>
+            file.startsWith("packages/cli/src/commands/handlers/") &&
+            file !== "packages/cli/src/commands/handlers/tui.ts" &&
+            file !== "packages/cli/src/commands/handlers/tui-serve.ts" &&
+            file !== "packages/cli/src/commands/handlers/tui-shared.ts" &&
+            file !== "packages/cli/src/commands/handlers/run.ts" &&
+            file !== "packages/cli/src/commands/handlers/run-shared.ts" &&
+            file !== "packages/cli/src/commands/handlers/update.ts" &&
+            file !== "packages/cli/src/commands/handlers/meeting.ts" &&
+            !/^packages\/cli\/src\/commands\/handlers\/service\/(?:start|restart|status|stop|get|set|unset)\.ts$/.test(
+              file,
+            ) &&
+            file !== "packages/cli/src/commands/handlers/serve-shared.ts" &&
+            file !== "packages/cli/src/commands/handlers/remote/enroll.ts" &&
+            file !== "packages/cli/src/commands/handlers/remote/connect.ts" &&
+            file !== "packages/cli/src/commands/handlers/remote/disconnect.ts" &&
+            file !== "packages/cli/src/commands/handlers/remote/connector.ts" &&
+            file !== "packages/cli/src/commands/handlers/remote/lock.ts" &&
+            file !== "packages/cli/src/commands/handlers/remote/status.ts" &&
+            file !== "packages/cli/src/commands/handlers/remote/sessions.ts" &&
+            file !== "packages/cli/src/commands/handlers/remote/allow.ts" &&
+            file !== "packages/cli/src/commands/handlers/remote/deny.ts" &&
+            file !== "packages/cli/src/commands/handlers/remote/shared.ts",
+        ),
+      ).toEqual([])
+    },
+    coldBundleTimeout,
+  )
 
-  test("keeps TUI Mini independent from Core, Server, and CLI", async () => {
-    const glob = new Bun.Glob("**/*.{ts,tsx}")
-    const imports: string[] = []
-    for await (const file of glob.scan({ cwd: path.join(root, "packages/tui/src/mini") })) {
-      const source = await Bun.file(path.join(root, "packages/tui/src/mini", file)).text()
-      if (/["']@ycoding-ai\/(?:core|server|cli)(?:\/[^"']*)?["']/.test(source)) imports.push(file)
-    }
-    expect(imports).toEqual([])
+  test(
+    "keeps TUI Mini independent from Core, Server, and CLI",
+    async () => {
+      const glob = new Bun.Glob("**/*.{ts,tsx}")
+      const imports: string[] = []
+      for await (const file of glob.scan({ cwd: path.join(root, "packages/tui/src/mini") })) {
+        const source = await Bun.file(path.join(root, "packages/tui/src/mini", file)).text()
+        if (/["']@ycoding-ai\/(?:core|server|cli)(?:\/[^"']*)?["']/.test(source)) imports.push(file)
+      }
+      expect(imports).toEqual([])
 
-    const graph = await bundleInputs("packages/tui/src/mini/index.ts")
-    expect(graph.filter((file) => file.startsWith("packages/core/"))).toEqual([])
-    expect(graph.filter((file) => file.startsWith("packages/cli/") || file.startsWith("packages/server/"))).toEqual([])
-  }, coldBundleTimeout)
+      const graph = await bundleInputs("packages/tui/src/mini/index.ts")
+      expect(graph.filter((file) => file.startsWith("packages/core/"))).toEqual([])
+      expect(graph.filter((file) => file.startsWith("packages/cli/") || file.startsWith("packages/server/"))).toEqual(
+        [],
+      )
+    },
+    coldBundleTimeout,
+  )
 })
 
 async function bundleInputs(entrypoint: string) {

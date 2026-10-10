@@ -110,6 +110,94 @@ async function arm(runtime: MeetingRuntime) {
 }
 
 describe("MeetingRuntime real SQLite lifecycle regressions", () => {
+  test("failed inference stops capture once, preserves real diagnostics and permits explicit retry after terminal stop", async () => {
+    let failing = true
+    const calls: number[] = []
+    const resource = fixture({
+      providerFactory: (config) => ({
+        id: config.provider,
+        initialize: async () => undefined,
+        healthCheck: async () => ({ healthy: true, initialized: true }),
+        dispose: async () => undefined,
+        transcribe: async (chunk) => {
+          calls.push(chunk.startMs)
+          if (chunk.startMs > 0 && failing) throw new Error("ValueError: microphone\n\u0000sample range invalid")
+          return [{ startMs: chunk.startMs, endMs: chunk.startMs + 900, text: "Speech that succeeded" }]
+        },
+      }),
+    })
+    resource.release.push(() => {
+      failing = false
+    })
+    const meetingID = await arm(resource.runtime)
+    await resource.runtime.capture(packet())
+    await resource.runtime.settled()
+    await resource.runtime.capture({ ...packet(), sequence: 1, startMs: 1000 })
+    await resource.runtime.settled()
+    for (const sequence of [2, 3]) {
+      await expect(resource.runtime.capture({ ...packet(), sequence, startMs: sequence * 1000 })).resolves.toEqual({
+        stop: true,
+        reason: "inference_failed",
+      })
+    }
+    expect(calls).toEqual([0, 1000])
+    const failed = resource.store.jobs(meetingID).find((job) => job.status === "failed")
+    expect(failed).toMatchObject({ attempts: 1, error: "ValueError: microphone sample range invalid" })
+    expect(resource.runtime.status(meetingID).health).toMatchObject({ status: "error", error: failed?.error })
+    expect(resource.store.getMeeting(meetingID)?.error).toContain(failed?.error ?? "ValueError")
+    const stopped = await resource.runtime.control({ action: "stop", meetingID })
+    expect(stopped.meeting).toMatchObject({ status: "stopped" })
+    expect(stopped.meeting?.error).toMatch(/retained.*failed audio|failed audio.*retained/i)
+    expect(resource.store.segments(meetingID)).toMatchObject([{ state: "final", text: "Speech that succeeded" }])
+    expect(calls).toEqual([0, 1000])
+    await expect(resource.runtime.capture({ type: "heartbeat", captureID: "capture" })).resolves.toEqual({
+      stop: true,
+      reason: "inference_failed",
+    })
+    failing = false
+    await resource.runtime.control({ action: "retry", meetingID })
+    expect(resource.store.jobs(meetingID).find((job) => job.id === failed?.id)).toMatchObject({
+      status: "done",
+      attempts: 2,
+    })
+    expect(resource.store.getMeeting(meetingID)?.status).toBe("stopped")
+    expect(resource.runtime.status(meetingID).audio.sources?.remote).toBe("inactive")
+  })
+
+  test("packets queued during a failing inference never cause an automatic retry", async () => {
+    const entered = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    let attempts = 0
+    const resource = fixture({
+      providerFactory: (config) => ({
+        id: config.provider,
+        initialize: async () => undefined,
+        healthCheck: async () => ({ healthy: true, initialized: true }),
+        dispose: async () => undefined,
+        transcribe: async () => {
+          attempts++
+          entered.resolve()
+          await release.promise
+          throw new Error("RuntimeError: MPS execution failed")
+        },
+      }),
+    })
+    resource.release.push(() => release.resolve())
+    resource.expectedCloseError = /MPS execution failed/
+    const meetingID = await arm(resource.runtime)
+    await resource.runtime.capture(packet())
+    await entered.promise
+    await resource.runtime.capture({ ...packet(), sequence: 1, startMs: 1000 })
+    release.resolve()
+    await resource.runtime.settled()
+    await expect(resource.runtime.capture({ type: "heartbeat", captureID: "capture" })).resolves.toEqual({
+      stop: true,
+      reason: "inference_failed",
+    })
+    expect(attempts).toBe(1)
+    expect(resource.runtime.status(meetingID).audio.backlog).toBe(2)
+  })
+
   test("an explicitly selected replacement model recovers retained failed audio without discarding it", async () => {
     const resource = fixture({
       providerFactory: (config) => ({
@@ -219,7 +307,7 @@ describe("MeetingRuntime real SQLite lifecycle regressions", () => {
     expect(resource.store.approvals("meeting")).toMatchObject([{ decision: "correct", targetID: "evidence" }])
   })
 
-  test("duplicate delivery acknowledges retained failed audio without retrying inference", async () => {
+  test("duplicate delivery stops failed capture without retrying retained inference", async () => {
     const entered = Promise.withResolvers<void>()
     const release = Promise.withResolvers<void>()
     let failing = true
@@ -259,7 +347,7 @@ describe("MeetingRuntime real SQLite lifecycle regressions", () => {
       status: "failed",
       attempts: 1,
     })
-    expect(await resource.runtime.capture(packet())).toMatchObject({ accepted: true, duplicate: true })
+    expect(await resource.runtime.capture(packet())).toEqual({ stop: true, reason: "inference_failed" })
     expect(resource.store.jobs(meetingID).find((job) => job.kind === "transcription")?.attempts).toBe(1)
   })
 
@@ -268,8 +356,6 @@ describe("MeetingRuntime real SQLite lifecycle regressions", () => {
     const analysisRelease = Promise.withResolvers<void>()
     const inferenceEntered = Promise.withResolvers<void>()
     const inferenceRelease = Promise.withResolvers<void>()
-    const shutdownInferenceEntered = Promise.withResolvers<void>()
-    const shutdownInferenceRelease = Promise.withResolvers<void>()
     let attempts = 0
     let analysisResponded = false
     const resource = fixture({
@@ -290,10 +376,6 @@ describe("MeetingRuntime real SQLite lifecycle regressions", () => {
             inferenceEntered.resolve()
             await inferenceRelease.promise
           }
-          if (attempts === 2) {
-            shutdownInferenceEntered.resolve()
-            await shutdownInferenceRelease.promise
-          }
           throw new Error("Controlled inference failure")
         },
       }),
@@ -301,7 +383,6 @@ describe("MeetingRuntime real SQLite lifecycle regressions", () => {
     resource.release.push(
       () => analysisRelease.resolve(),
       () => inferenceRelease.resolve(),
-      () => shutdownInferenceRelease.resolve(),
     )
     const meetingID = await arm(resource.runtime)
     resource.store.putSegment(segment(meetingID))
@@ -332,21 +413,11 @@ describe("MeetingRuntime real SQLite lifecycle regressions", () => {
       () => ({ analysisResponded }),
     )
     resource.pending.push(closing)
-    await shutdownInferenceEntered.promise
-    const shutdownJoined = resource.runtime.control({ action: "retry", meetingID })
-    resource.pending.push(
-      shutdownJoined.then(
-        () => undefined,
-        () => undefined,
-      ),
-    )
-    await resource.runtime.control({ action: "status", meetingID })
-    shutdownInferenceRelease.resolve()
-    await expect(shutdownJoined).rejects.toThrow("Controlled inference failure")
     analysisRelease.resolve()
     const outcome = await closing
     await analysisOutcome
     expect(outcome.analysisResponded).toBe(true)
+    expect(attempts).toBe(1)
     const reopened = new MeetingStore(resource.file)
     try {
       expect(reopened.checkpoints(meetingID).at(-1)?.summary).toBe("Retained analysis result")

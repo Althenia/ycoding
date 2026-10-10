@@ -1,5 +1,6 @@
 import { Argument, Flag } from "effect/unstable/cli"
 import { Spec } from "../framework/spec"
+import { MeetingCommand } from "./meeting"
 import { RemoteCommand } from "./remote"
 import { RunCommand, ServerParams } from "./run"
 import { ServiceCommand } from "./service"
@@ -26,7 +27,9 @@ export const Commands = Spec.make(typeof YCODING_CLI_NAME === "string" ? YCODING
       Flag.optional,
     ),
     model: Flag.string("model").pipe(
-      Flag.withDescription("Run a prompt directly with [profile#]provider/model[#variant] when a positional prompt is present"),
+      Flag.withDescription(
+        "Run a prompt directly with [profile#]provider/model[#variant] when a positional prompt is present",
+      ),
       Flag.optional,
     ),
   },
@@ -155,6 +158,7 @@ export const Commands = Spec.make(typeof YCODING_CLI_NAME === "string" ? YCODING
     UpdateCommand,
     RemoteCommand,
     ServiceCommand,
+    MeetingCommand,
     Spec.make("pair", { description: "Show server pairing information" }),
     Spec.make("serve", {
       description: "Start the API server",
@@ -163,6 +167,10 @@ export const Commands = Spec.make(typeof YCODING_CLI_NAME === "string" ? YCODING
         port: Flag.integer("port").pipe(Flag.optional),
         service: Flag.boolean("service").pipe(Flag.withDefault(false)),
         stdio: Flag.boolean("stdio").pipe(Flag.withDefault(false)),
+        meeting: Flag.boolean("meeting").pipe(
+          Flag.withDescription("Load the built-in meeting runtime"),
+          Flag.withDefault(false),
+        ),
       },
     }),
   ],

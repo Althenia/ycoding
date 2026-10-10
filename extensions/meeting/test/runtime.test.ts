@@ -2,6 +2,8 @@ import { afterEach, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
+import { z } from "zod"
 import { MeetingRuntime } from "../src/runtime"
 import { MeetingStore } from "../src/store"
 import { meetingConfigSchema } from "../src/config"
@@ -136,7 +138,8 @@ test("a user correction invalidates dependent confirmation while preserving raw 
   await runtime.capture({ type: "start", captureID: "capture-1", tabID: 1, microphone: false, consent: true })
   await runtime.capture(packet())
   await runtime.control({ action: "stop" })
-  const segment = runtime.status().segments[0]!
+  const segment = runtime.status().segments[0]
+  if (!segment) throw new Error("No transcribed segment was retained")
   store.putFinding({
     id: "finding",
     meetingID: segment.meetingID,
@@ -168,3 +171,50 @@ test("stopping a silent meeting does not send an empty transcript for model anal
   expect(calls).not.toContain("generate")
   expect(runtime.status().findings).toEqual([])
 })
+
+test("a Bun-compiled transcription provider runs its embedded source in real Python", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "meeting-compiled-worker-"))
+  const executable = path.join(directory, "python-wrapper")
+  const report = path.join(directory, "spawn.json")
+  const entrypoint = path.join(directory, "entry.ts")
+  const binary = path.join(directory, "meeting-worker-probe")
+  const cacheDir = path.join(directory, "cache")
+  await Bun.write(
+    executable,
+    `#!/usr/bin/env python3
+import json, os, sys
+with open(${JSON.stringify(report)}, "w", encoding="utf-8") as output:
+    json.dump({"arguments": sys.argv[1:]}, output)
+os.execv(sys.executable, [sys.executable, *sys.argv[1:]])
+`,
+  )
+  await Bun.spawn(["chmod", "700", executable]).exited
+  await Bun.write(
+    entrypoint,
+    `import { listModels } from ${JSON.stringify(fileURLToPath(new URL("../src/transcription/index.ts", import.meta.url)))}
+const models = await listModels({ cacheDir: ${JSON.stringify(cacheDir)}, pythonExecutable: ${JSON.stringify(executable)} })
+if (!models.some(model => model.id === "biodatlab/whisper-th-large-v3-combined" && model.installed === false)) throw new Error("Unexpected isolated inventory")
+console.log("compiled worker succeeded")
+`,
+  )
+  try {
+    const build = Bun.spawn([process.execPath, "build", "--compile", entrypoint, "--outfile", binary], {
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const compiled = await Promise.all([
+      build.exited,
+      new Response(build.stdout).text(),
+      new Response(build.stderr).text(),
+    ])
+    expect({ exitCode: compiled[0], stderr: compiled[2] }).toMatchObject({ exitCode: 0 })
+    const run = Bun.spawn([binary], { cwd: directory, stdout: "pipe", stderr: "pipe" })
+    const result = await Promise.all([run.exited, new Response(run.stdout).text(), new Response(run.stderr).text()])
+    expect({ exitCode: result[0], stderr: result[2] }).toMatchObject({ exitCode: 0 })
+    expect(result[1]).toContain("compiled worker succeeded")
+    const recorded = z.object({ arguments: z.array(z.string()) }).parse(await Bun.file(report).json())
+    expect(recorded.arguments).toEqual(["-c", await Bun.file(new URL("../python/worker.py", import.meta.url)).text()])
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+}, 30000)

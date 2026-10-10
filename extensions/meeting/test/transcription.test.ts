@@ -1,7 +1,8 @@
 import { describe, expect, it } from "bun:test"
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { z } from "zod"
 
 import {
   AudioChunkLimitError,
@@ -104,6 +105,124 @@ describe("transcription configuration", () => {
 })
 
 describe("Hugging Face worker lifecycle", () => {
+  it("starts Python with the exact embedded worker source instead of a filesystem path", async () => {
+    const worker = await makeProtocolWorker()
+    const report = path.join(worker.directory, "spawn.json")
+    const executable = path.join(worker.directory, "capture-worker-source")
+    await writeFile(
+      executable,
+      `#!/usr/bin/env node
+const fs = require("node:fs")
+const readline = require("node:readline")
+fs.writeFileSync(${JSON.stringify(report)}, JSON.stringify({arguments:process.argv.slice(2)}), {mode:0o600})
+readline.createInterface({input:process.stdin}).on("line",line=>{const request=JSON.parse(line);process.stdout.write(JSON.stringify({id:request.id,ok:true,metrics:{device:"cpu"}})+"\\n")})
+`,
+    )
+    await chmod(executable, 0o700)
+    const config = { ...defaultTranscriptionConfig, cacheDir: worker.directory, pythonExecutable: executable }
+    const provider = createProvider(config)
+    try {
+      await provider.initialize(config)
+      const recorded = z.object({ arguments: z.array(z.string()) }).parse(JSON.parse(await readFile(report, "utf8")))
+      expect(recorded.arguments).toEqual(["-c", await Bun.file(new URL("../python/worker.py", import.meta.url)).text()])
+    } finally {
+      await provider.dispose()
+      await rm(worker.directory, { recursive: true, force: true })
+    }
+  })
+
+  it("retains only bounded recent stderr diagnostics and sanitizes correlated worker failures", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "ycoding-meeting-diagnostics-"))
+    const executable = path.join(directory, "worker")
+    await writeFile(
+      executable,
+      `#!/usr/bin/env node
+const readline = require("node:readline")
+readline.createInterface({ input: process.stdin }).on("line", line => {
+  const request = JSON.parse(line)
+  if (request.op === "initialize") { process.stdout.write(JSON.stringify({ id: request.id, ok: true, metrics: { device: "cpu" } }) + "\\n"); return }
+  for (let i=0; i<100; i++) process.stderr.write("old-diagnostic-" + i + "\\n")
+  process.stderr.write("RuntimeError: recent MPS diagnostic\\n")
+  process.stderr.write("ValueError: sample\\n\\0range failure " + "x".repeat(1000) + "\\n")
+  process.stdout.write(JSON.stringify({ id: request.id, ok: false, error: "ValueError: sample\\n\\0range failure " + "x".repeat(1000) }) + "\\n")
+})
+`,
+    )
+    await chmod(executable, 0o700)
+    const config = { ...defaultTranscriptionConfig, pythonExecutable: executable, requestTimeoutMs: 10000 }
+    const provider = createProvider(config)
+    try {
+      await provider.initialize(config)
+      const error = await provider
+        .transcribe(
+          {
+            id: "failure",
+            source: "microphone",
+            startMs: 0,
+            sampleRate: 16000,
+            samples: new Float32Array(1600).fill(0.1),
+          },
+          { hints: [] },
+        )
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        )
+      expect(error).toBeInstanceOf(Error)
+      if (!(error instanceof Error)) throw new Error("Worker failure did not reject")
+      expect(error.message).toStartWith("ValueError: sample range failure")
+      expect(error.message.length).toBeLessThanOrEqual(300)
+      expect(error.message).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/)
+    } finally {
+      await provider.dispose()
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it("adds recent stderr to a crashed worker failure instead of discarding it", async () => {
+    const worker = await makeProtocolWorker(true)
+    await writeFile(
+      worker.executable,
+      `#!/usr/bin/env node
+const readline = require("node:readline")
+readline.createInterface({ input: process.stdin }).on("line", line => {
+  const request = JSON.parse(line)
+  if(request.op === "initialize") {process.stdout.write(JSON.stringify({id:request.id,ok:true,metrics:{device:"cpu"}})+"\\n");return}
+  for(let i=0;i<100;i++) process.stderr.write("discarded-diagnostic-"+i+"\\n")
+  process.stderr.write("RuntimeError: recent MPS execution failure\\n", () => process.exit(2))
+})
+`,
+    )
+    const config = { ...defaultTranscriptionConfig, pythonExecutable: worker.executable }
+    const provider = createProvider(config)
+    try {
+      await provider.initialize(config)
+      const error = await provider
+        .transcribe(
+          {
+            id: "crash-with-detail",
+            source: "microphone",
+            startMs: 0,
+            sampleRate: 16000,
+            samples: new Float32Array(1600).fill(0.1),
+          },
+          { hints: [] },
+        )
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        )
+      expect(error).toBeInstanceOf(Error)
+      if (!(error instanceof Error)) throw new Error("Worker crash did not reject")
+      expect(error.message).toContain("recent MPS execution failure")
+      expect(error.message).not.toContain("discarded-diagnostic-0")
+      expect(error.message.length).toBeLessThanOrEqual(300)
+    } finally {
+      await provider.dispose()
+      await rm(worker.directory, { recursive: true, force: true })
+    }
+  })
+
   it("uses a bounded JSON-lines subprocess and reports a missing local model", async () => {
     const provider = createProvider({
       ...defaultTranscriptionConfig,
@@ -170,7 +289,7 @@ describe("Hugging Face worker lifecycle", () => {
 
   it("rejects oversized audio rather than dropping it", async () => {
     const worker = await makeProtocolWorker()
-    const config = { ...defaultTranscriptionConfig, pythonExecutable: worker.executable, requestTimeoutMs: 1000 }
+    const config = { ...defaultTranscriptionConfig, pythonExecutable: worker.executable, requestTimeoutMs: 10000 }
     const provider = createProvider(config)
     try {
       await provider.initialize(config)
@@ -206,7 +325,7 @@ describe("Hugging Face worker lifecycle", () => {
 
   it("cancels an active worker request and cleans up", async () => {
     const worker = await makeProtocolWorker(false, true)
-    const config = { ...defaultTranscriptionConfig, pythonExecutable: worker.executable, requestTimeoutMs: 1000 }
+    const config = { ...defaultTranscriptionConfig, pythonExecutable: worker.executable, requestTimeoutMs: 10000 }
     const provider = createProvider(config)
     try {
       await provider.initialize(config)

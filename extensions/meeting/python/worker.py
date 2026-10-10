@@ -6,6 +6,7 @@ import re
 import resource
 import sys
 import time
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -236,7 +237,8 @@ def transcribe(request: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str,
     hints = [hint.strip() for hint in request.get("hints", []) if isinstance(hint, str) and hint.strip()]
     generation: dict[str, Any] = {"language": model_config["language"], "task": "transcribe"}
     if hints:
-        generation["prompt_ids"] = processor.get_prompt_ids("; ".join(hints), return_tensors="pt").to(model.device)
+        prompt_ids = processor.get_prompt_ids("; ".join(hints), return_tensors="pt")
+        generation["prompt_ids"] = prompt_ids[:model.config.max_target_positions // 2].to(model.device)
     start = time.perf_counter()
     with torch.inference_mode():
         output = model.generate(features, **generation)
@@ -288,14 +290,18 @@ def handle(request: dict[str, Any]) -> None:
             response(request_id, healthy=model is not None, metrics=metrics)
         else:
             raise ValueError("Unsupported worker operation")
-    except (KeyError, TypeError, ValueError, OSError, RuntimeError, ImportError) as error:
+    except Exception as error:
         detail = str(error)
-        if "not present in the local Hugging Face cache" in detail:
-            message = detail
-        elif "Unsupported" in detail or "unavailable" in detail or "requires explicit authorization" in detail:
-            message = detail
-        else:
-            message = f"Transcription worker operation failed ({type(error).__name__})"
+        chunk = request.get("chunk")
+        encoded = chunk.get("samples") if isinstance(chunk, dict) else None
+        trace = "".join(traceback.format_exception(error))
+        if isinstance(encoded, str) and encoded:
+            detail = detail.replace(encoded, "[audio omitted]")
+            trace = trace.replace(encoded, "[audio omitted]")
+        message = re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", f"{type(error).__name__}: {detail}")
+        message = re.sub(r"\s+", " ", message).strip()[:300]
+        sys.stderr.write(trace)
+        sys.stderr.flush()
         response(request_id, ok=False, error=message)
 
 

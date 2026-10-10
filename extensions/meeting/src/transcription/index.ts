@@ -2,8 +2,8 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { StringDecoder } from "node:string_decoder"
 import { homedir } from "node:os"
 import path from "node:path"
-import { fileURLToPath } from "node:url"
 import { z } from "zod"
+import workerSource from "../../python/worker.py" with { type: "text" }
 
 export type ModelDefinition = {
   id: string
@@ -17,8 +17,8 @@ const PROVIDERS = new Map<string, (config: TranscriptionConfig) => Transcription
 
 const MAX_REQUEST_BYTES = 12 * 1024 * 1024
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+const MAX_STDERR_CHARACTERS = 8192
 const DEFAULT_CACHE_DIR = process.env.HF_HUB_CACHE ?? path.join(homedir(), ".cache", "huggingface", "hub")
-const WORKER_PATH = fileURLToPath(new URL("../../python/worker.py", import.meta.url))
 const workerResponseSchema = z.object({
   id: z.string(),
   ok: z.boolean(),
@@ -303,6 +303,17 @@ export class AudioChunkLimitError extends RangeError {
   }
 }
 
+export function sanitizeTranscriptionError(error: unknown): string {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "Transcription failed"
+  return (
+    message
+      .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 300) || "Transcription failed"
+  )
+}
+
 type WorkerResponse = {
   id: string
   ok: boolean
@@ -327,6 +338,8 @@ class Worker {
     }
   >()
   private readonly decoder = new StringDecoder("utf8")
+  private readonly stderrDecoder = new StringDecoder("utf8")
+  private stderrTail = ""
   private outputBuffer = ""
   private dead = false
   get failed() {
@@ -335,7 +348,13 @@ class Worker {
 
   constructor(private readonly config: TranscriptionConfig) {
     const child = this.ensureChild()
-    child.stderr.on("data", () => undefined)
+    child.stderr.on("data", (chunk: Buffer) => {
+      this.stderrTail = (this.stderrTail + this.stderrDecoder.write(chunk))
+        .slice(-MAX_STDERR_CHARACTERS)
+        .split("\n")
+        .slice(-33)
+        .join("\n")
+    })
     child.stdout.on("data", (chunk: Buffer) => this.read(chunk))
     child.on("error", () => this.failAll(new Error("Transcription worker failed to start")))
     child.on("exit", (code) => this.failAll(new Error(`Transcription worker exited (${code ?? "signal"})`)))
@@ -385,7 +404,7 @@ class Worker {
 
   private ensureChild() {
     if (this.child) return this.child
-    this.child = spawn(this.config.pythonExecutable, [WORKER_PATH], {
+    this.child = spawn(this.config.pythonExecutable, ["-c", workerSource], {
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, HF_HUB_CACHE: this.config.cacheDir },
     })
@@ -404,7 +423,8 @@ class Worker {
     const pending = this.pending.get(response.id)
     if (!pending) return
     this.settle(response.id)
-    if (!response.ok) pending.reject(new Error(response.error ?? "Transcription worker failed"))
+    if (!response.ok)
+      pending.reject(new Error(sanitizeTranscriptionError(response.error ?? "Transcription worker failed")))
     else pending.resolve(response)
   }
 
@@ -438,9 +458,12 @@ class Worker {
 
   private failAll(error: Error) {
     this.dead = true
+    const detail = sanitizeTranscriptionError(
+      `${error.message}${this.stderrTail ? `: ${this.stderrTail.trim().split("\n").at(-1)}` : ""}`,
+    )
     for (const [id, pending] of this.pending) {
       this.settle(id)
-      pending.reject(error)
+      pending.reject(error instanceof DOMException ? error : new Error(detail))
     }
   }
 }

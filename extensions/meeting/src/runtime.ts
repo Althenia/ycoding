@@ -7,7 +7,14 @@ import type { CaptureMessage } from "./bridge"
 import { meetingConfigSchema, type MeetingConfig } from "./config"
 import { MeetingIntelligence, type MeetingMCP } from "./intelligence"
 import { MeetingStore } from "./store"
-import { createProvider, installModel, listModels, type AudioChunk, type TranscriptionProvider } from "./transcription"
+import {
+  createProvider,
+  installModel,
+  listModels,
+  sanitizeTranscriptionError,
+  type AudioChunk,
+  type TranscriptionProvider,
+} from "./transcription"
 import type { MeetingView, TranscriptSegment } from "./types"
 
 const controlSchema = z
@@ -55,6 +62,8 @@ export class MeetingRuntime {
   private selected?: string
   private active?: string
   private audio?: AudioProcessor
+  private audioMeetingID?: string
+  private failedCapture?: { captureID: string; meetingID: string }
   private provider?: TranscriptionProvider
   private health: MeetingView["health"]
   private changing = false
@@ -143,6 +152,8 @@ export class MeetingRuntime {
     const id = input.meetingID ?? this.selected
     if (input.action === "start") {
       if (this.active) throw new Error("Stop the current recording before arming another")
+      if (this.audio?.stats().backlog)
+        throw new Error("Explicitly retry retained failed audio before arming another meeting")
       await this.load()
       const meeting = store.createMeeting({
         id: randomUUID(),
@@ -195,7 +206,7 @@ export class MeetingRuntime {
       return this.status(id)
     }
     if (input.action === "retry") {
-      if (!this.audio || this.active !== id) throw new Error("No retained audio is available for this meeting")
+      if (!this.audio || this.audioMeetingID !== id) throw new Error("No retained audio is available for this meeting")
       if (
         !this.shutdown &&
         !(await this.provider?.healthCheck().then(
@@ -208,7 +219,12 @@ export class MeetingRuntime {
         await this.load()
       }
       await this.audio.drain()
+      if (this.active !== id) {
+        await this.audio.close()
+        this.finalizeProvisional()
+      }
       store.updateMeeting(id, { error: undefined })
+      if (this.health.status === "error") this.health = { ...this.health, status: "ready", error: undefined }
       return this.status(id)
     }
     if (input.action === "approve" || input.action === "reject") {
@@ -313,7 +329,7 @@ export class MeetingRuntime {
       this.health = {
         ...this.health,
         status: "error",
-        error: "Local speech model could not initialize. Check installation and device configuration.",
+        error: sanitizeTranscriptionError(error),
       }
       throw error
     }
@@ -321,6 +337,10 @@ export class MeetingRuntime {
 
   async capture(input: CaptureMessage) {
     if (this.shutdown) return { stop: true }
+    if (this.failedCapture?.captureID === input.captureID) {
+      if (input.type === "stop") await this.stop(this.failedCapture.meetingID)
+      return { stop: true, reason: "inference_failed" }
+    }
     if (input.type === "heartbeat") {
       const meeting = this.active ? this.options.store.getMeeting(this.active) : undefined
       if (!meeting || meeting.status !== "recording" || meeting.captureID !== input.captureID) return { stop: true }
@@ -339,6 +359,8 @@ export class MeetingRuntime {
       if (!meeting || meeting.status !== "ready" || !this.provider)
         throw new Error("Arm a ready meeting in YCoding before capture")
       this.active = meeting.id
+      this.audioMeetingID = meeting.id
+      this.failedCapture = undefined
       this.microphone = input.microphone
       this.lastHeartbeat = Date.now()
       this.audio = new AudioProcessor({
@@ -371,10 +393,8 @@ export class MeetingRuntime {
       const result = this.audio!.accept({ ...input, samples })
       if (!result.duplicate)
         this.schedule(
-          this.audio!.drain().catch((error) => {
-            this.options.store.updateMeeting(id, {
-              error: "Inference failed; retained audio requires explicit retry before more capture",
-            })
+          this.audio!.drain({ retry: false }).catch(async (error: unknown) => {
+            if (this.active === id && !this.changing) await this.stop(id)
             throw error
           }),
           id,
@@ -382,8 +402,9 @@ export class MeetingRuntime {
       return { accepted: true, duplicate: result.duplicate }
     } catch (error) {
       if (error instanceof AudioBackpressure) return { busy: true }
+      if (this.audio?.stats().error) return { stop: true, reason: "inference_failed" }
       this.options.store.updateMeeting(id, {
-        error: "Audio processing failed; partial transcripts retained. Stop and retry pending inference.",
+        error: sanitizeTranscriptionError(error),
       })
       throw error
     }
@@ -446,15 +467,20 @@ export class MeetingRuntime {
         })
       })
     } catch (error) {
+      const detail = sanitizeTranscriptionError(error)
       store.putJob({
         id: chunk.id,
         meetingID,
         kind: "transcription",
         status: "failed",
         attempts,
-        error: "Inference failed; retry while this process retains the audio chunk",
+        error: detail,
         updatedAt: new Date().toISOString(),
       })
+      store.updateMeeting(meetingID, { error: detail })
+      this.health = { ...this.health, status: "error", error: detail }
+      const captureID = store.getMeeting(meetingID)?.captureID
+      if (captureID) this.failedCapture = { captureID, meetingID }
       throw error
     }
   }
@@ -489,7 +515,7 @@ export class MeetingRuntime {
         this.health = {
           ...this.health,
           status: "error",
-          error: "Both selected and configured fallback inference failed",
+          error: sanitizeTranscriptionError(fallbackError),
         }
         throw fallbackError
       }
@@ -533,10 +559,18 @@ export class MeetingRuntime {
     this.changing = true
     this.options.store.updateMeeting(id, { status: "stopping" })
     try {
-      await this.audio?.close()
+      try {
+        await this.audio?.close()
+      } catch (error) {
+        if (!this.audio?.stats().error) throw error
+      }
       this.finalizeProvisional()
       this.active = undefined
-      this.options.store.updateMeeting(id, { status: "stopped" })
+      const detail = this.audio?.stats().error
+      this.options.store.updateMeeting(id, {
+        status: "stopped",
+        error: detail ? `${detail}; retained failed audio requires explicit retry in this process` : undefined,
+      })
       this.schedule(this.intelligence.analyze(id, true), id)
     } finally {
       this.changing = false
@@ -587,9 +621,11 @@ export class MeetingRuntime {
       this.intelligence.retrieval.clear()
       await this.saveConfig()
       if (recovering) {
-        await this.audio?.flush()
+        await this.audio?.drain()
+        if (this.active !== this.audioMeetingID) await this.audio?.close()
+        else await this.audio?.flush()
         this.finalizeProvisional()
-        if (this.active) this.options.store.updateMeeting(this.active, { error: undefined })
+        if (this.audioMeetingID) this.options.store.updateMeeting(this.audioMeetingID, { error: undefined })
       }
       if (next.storage.retentionDays !== null) this.options.store.retain(next.storage.retentionDays)
     } finally {

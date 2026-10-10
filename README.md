@@ -28,7 +28,7 @@ Latency and client-timing telemetry stays in local SQLite and is disabled until 
 - **Browser and computer control.** Work in [paired Chrome tabs or agent-owned tabs](./docs/browser-extension.md) and in [scoped macOS windows](./docs/computer-use.md), with per-site and per-tool permissions.
 - **Workspace memory.** Save and search [linked Markdown knowledge](./docs/memory.md) with an offline graph, kept separate from transcripts and prompts.
 - **Opt-in next-message prediction.** Fill, never send, a suggested next message in the TUI or web composer; optionally inform its background helper with permission-checked workspace-memory snippets.
-- **Opt-in meeting intelligence.** Use the [local meeting extension](./docs/meeting-intelligence.md) for consented Google Meet capture, configurable Thai Whisper transcription, evidence-backed plans and reviewed MCP proposals.
+- **Opt-in meeting intelligence.** Run `ycoding meeting` for consented Google Meet capture with the [local meeting extension](./docs/meeting-intelligence.md): configurable Thai Whisper transcription, a live local page, evidence-backed plans and reviewed MCP proposals.
 
 ## Quick start
 
@@ -58,10 +58,10 @@ Keep up to date with `ycoding update`. See [installation](https://ycoding.althen
 
 ## Three surfaces, one runtime
 
-| Terminal | Web | Phone |
-| --- | --- | --- |
+| Terminal                                                                                                                                                                                                           | Web                                                                                                                                                                     | Phone                                                                                                                                            |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | <img src="./assets/showcase/ycoding-tui.png" alt="YCoding terminal interface with the transcript, a guardrail review dialog, and the Session rail showing context, todos, subagents, and MCP servers" width="420"> | <img src="./assets/showcase/ycoding-web.png" alt="YCoding remote web workspace showing a Session conversation with completed tool output and the composer" width="420"> | <img src="./assets/showcase/ycoding-phone.png" alt="YCoding phone app showing a human-only guardrail review and a pending question" width="200"> |
-| The primary surface: transcript, Session rail, reviews, shells, and subagents in your terminal. | Sessions, conversations, usage, and settings for every Session on your enrolled machine. | The same workspace on a phone, with opt-in push alerts for reviews, finished work, and offline machines. |
+| The primary surface: transcript, Session rail, reviews, shells, and subagents in your terminal.                                                                                                                    | Sessions, conversations, usage, and settings for every Session on your enrolled machine.                                                                                | The same workspace on a phone, with opt-in push alerts for reviews, finished work, and offline machines.                                         |
 
 To use the [remote workspace](https://ycoding.althenia.app/remote/), sign in, open **Settings → Devices → Create enrollment code**, and run the displayed command on your machine. It prompts for the one-use code, so the code never lands in shell history. Then turn on the connection:
 

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { mountPopup } from "../companion/popup.js"
 
-function fixture({ denyMicrophone = false, respond = undefined, microphoneResult = undefined } = {}) {
+function fixture({ respond, microphoneState = "granted" } = {}) {
   const nodes = new Map(
     [
       "status",
@@ -33,13 +33,7 @@ function fixture({ denyMicrophone = false, respond = undefined, microphoneResult
     ]),
   )
   const calls = []
-  const requested = []
-  const track = {
-    stopped: false,
-    stop() {
-      this.stopped = true
-    },
-  }
+  const opened = []
   const mounted = mountPopup(
     { getElementById: (id) => nodes.get(id) },
     {
@@ -55,17 +49,16 @@ function fixture({ denyMicrophone = false, respond = undefined, microphoneResult
       },
     },
     {
-      getUserMedia: async (constraints) => {
-        requested.push(constraints)
-        if (denyMicrophone) throw new Error("denied")
-        return microphoneResult ?? { getTracks: () => [track] }
+      state: async () => microphoneState,
+      openAccessPage: async () => {
+        opened.push("access")
       },
     },
   )
   const dispatch = async (id, type) => {
     await nodes.get(id).events[type]({ preventDefault() {} })
   }
-  return { nodes, calls, requested, track, mounted, dispatch }
+  return { nodes, calls, opened, mounted, dispatch }
 }
 
 test("popup clears one-use code, requires consent and explicit mic choice, displays capture and actionable errors", async () => {
@@ -82,8 +75,7 @@ test("popup clears one-use code, requires consent and explicit mic choice, displ
   f.nodes.get("microphone").checked = true
   await f.dispatch("capture", "submit")
   expect(f.calls.at(-1)).toEqual({ type: "start", consent: true, microphone: true })
-  expect(f.requested[0].audio.echoCancellation).toBe(true)
-  expect(f.track.stopped).toBe(true)
+  expect(f.opened).toEqual([])
   expect(f.nodes.get("status").textContent).toBe("Capturing")
   expect(f.nodes.get("stop").disabled).toBe(false)
   expect(f.nodes.get("microphone").disabled).toBe(true)
@@ -100,17 +92,18 @@ test("popup clears one-use code, requires consent and explicit mic choice, displ
   expect(f.nodes.get("error").hidden).toBe(true)
 })
 
-test("popup microphone denial prevents start and Stop stays available while starting or reconnecting", async () => {
-  const f = fixture({ denyMicrophone: true })
+test("a blocked microphone opens the access page instead of starting, and Stop stays available while starting or reconnecting", async () => {
+  const f = fixture({ microphoneState: "denied" })
   f.mounted.render({ phase: "ready", paired: true })
   f.nodes.get("consent").checked = true
   f.nodes.get("microphone").checked = true
   await f.dispatch("capture", "submit")
   expect(f.calls.filter((message) => message.type === "start")).toHaveLength(0)
-  expect(f.nodes.get("error").textContent).toContain("Microphone permission was denied")
+  expect(f.opened).toEqual(["access"])
+  expect(f.nodes.get("error").textContent).toContain("Allow the microphone in the YCoding tab")
   await f.mounted.refresh()
   expect(f.nodes.get("status").textContent).toBe("Error")
-  expect(f.nodes.get("error").textContent).toContain("Microphone permission was denied")
+  expect(f.nodes.get("error").textContent).toContain("Allow the microphone in the YCoding tab")
   f.mounted.render({ phase: "starting", paired: true })
   expect(f.nodes.get("stop").disabled).toBe(false)
   expect(f.nodes.get("start").disabled).toBe(true)
@@ -163,18 +156,34 @@ test("popup polling keeps at most one status request in flight", async () => {
   await Promise.all([first, second])
 })
 
-test("Stop during microphone permission prevents a late Start and preserves the stopped view", async () => {
+test("a microphone that was never granted opens the extension access page instead of starting", async () => {
+  const f = fixture({ microphoneState: "prompt" })
+  f.mounted.render({ phase: "ready", paired: true })
+  f.nodes.get("consent").checked = true
+  f.nodes.get("microphone").checked = true
+  await f.dispatch("capture", "submit")
+  expect(f.calls.filter((message) => message.type === "start")).toHaveLength(0)
+  expect(f.opened).toEqual(["access"])
+  expect(f.nodes.get("status").textContent).toBe("Error")
+  expect(f.nodes.get("error").textContent).toContain("Allow the microphone in the YCoding tab")
+  f.nodes.get("microphone").checked = false
+  f.nodes.get("consent").checked = true
+  await f.dispatch("capture", "submit")
+  expect(f.calls.at(-1)).toEqual({ type: "start", consent: true, microphone: false })
+  expect(f.opened).toEqual(["access"])
+})
+
+test("Stop during the microphone permission check prevents a late Start and preserves the stopped view", async () => {
   const permission = Promise.withResolvers()
-  const f = fixture({ microphoneResult: permission.promise })
+  const f = fixture({ microphoneState: permission.promise })
   f.mounted.render({ phase: "ready", paired: true, microphone: false })
   f.nodes.get("consent").checked = true
   f.nodes.get("microphone").checked = true
   const starting = f.dispatch("capture", "submit")
   await f.dispatch("stop", "click")
-  permission.resolve({ getTracks: () => [f.track] })
+  permission.resolve("granted")
   await starting
   expect(f.calls).toEqual([{ type: "stop" }])
-  expect(f.track.stopped).toBe(true)
   expect(f.nodes.get("status").textContent).toBe("Ready")
   expect(f.nodes.get("consent").checked).toBe(false)
 })
@@ -194,4 +203,24 @@ test("unavailable capture service is visible and a later successful status read 
   await f.mounted.refresh()
   expect(f.nodes.get("status").textContent).toBe("Not paired")
   expect(f.nodes.get("error").hidden).toBe(true)
+})
+
+test("inference failure explains saved evidence and retry without a generic cancellation", async () => {
+  const f = fixture({ respond: () => ({ phase: "error", reason: "inference_failed", paired: true }) })
+  await f.mounted.refresh()
+  expect(f.nodes.get("error").textContent).toContain("Speech recognition failed")
+  expect(f.nodes.get("error").textContent).toContain("transcript so far is saved")
+  expect(f.nodes.get("error").textContent).toContain("Retry failed audio")
+  expect(f.nodes.get("error").textContent).toContain("/meeting retry")
+  expect(f.nodes.get("error").textContent).toContain("press Start again")
+})
+
+test("a failed Start clears consent before the next capture attempt", async () => {
+  const f = fixture({ respond: () => ({ error: "inference_failed" }) })
+  f.mounted.render({ phase: "ready", paired: true })
+  f.nodes.get("consent").checked = true
+  await f.dispatch("capture", "submit")
+  expect(f.nodes.get("status").textContent).toBe("Error")
+  expect(f.nodes.get("consent").checked).toBe(false)
+  expect(f.nodes.get("start").disabled).toBe(true)
 })

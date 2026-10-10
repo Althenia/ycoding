@@ -193,6 +193,32 @@ test("Meeting page renders actual original and corrected Thai transcript and kee
   }
 })
 
+test("pairing shows the code only while it can still be redeemed", async () => {
+  const pairing = { url: "http://127.0.0.1:59099", code: "valid-code-123" }
+  const valid = await render(
+    async () => ({ ...fixture, pairing: { ...pairing, expiresAt: Date.now() + 45_000 } }),
+    "Pair Chrome",
+  )
+  try {
+    const frame = valid.app.captureCharFrame()
+    expect(frame).toContain("valid-code-123")
+    expect(frame).toMatch(/expires in (4[0-5]|3\d)s/)
+  } finally {
+    valid.app.renderer.destroy()
+  }
+  const expired = await render(
+    async () => ({ ...fixture, pairing: { ...pairing, code: "expired-code-456", expiresAt: Date.now() - 1_000 } }),
+    "Pairing code expired",
+  )
+  try {
+    const frame = expired.app.captureCharFrame()
+    expect(frame).not.toContain("expired-code-456")
+    expect(frame).toContain("run /meeting start for a new code")
+  } finally {
+    expired.app.renderer.destroy()
+  }
+})
+
 test("knowledge approval requires review followed by a separate explicit confirmation", async () => {
   const calls: unknown[] = []
   let approve!: (input: unknown) => void

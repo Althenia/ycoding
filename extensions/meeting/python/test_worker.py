@@ -1,5 +1,8 @@
 import array
 import base64
+import contextlib
+import io
+import json
 import sys
 import tempfile
 import unittest
@@ -52,6 +55,31 @@ class AudioTests(unittest.TestCase):
 
 
 class ModelBoundaryTests(unittest.TestCase):
+    def test_worker_reports_sanitized_real_error_and_traceback_without_audio_payload(self):
+        output = io.StringIO()
+        errors = io.StringIO()
+        payload = base64.b64encode(array.array("f", [0.123] * 1600).tobytes()).decode("ascii")
+        request = {"id": "failure", "op": "transcribe", "chunk": {"samples": payload}}
+        detail = "MPS\n\x00execution failed " + payload + " " + "x" * 400
+        with patch.object(worker, "model", object()), patch.object(worker, "transcribe", side_effect=RuntimeError(detail)), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            worker.handle(request)
+        result = json.loads(output.getvalue())
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["error"].startswith("RuntimeError: MPS execution failed"))
+        self.assertLessEqual(len(result["error"]), 300)
+        self.assertFalse(any(ord(character) < 32 for character in result["error"]))
+        self.assertNotIn(payload, result["error"])
+        self.assertIn("Traceback", errors.getvalue())
+        self.assertNotIn(payload, errors.getvalue())
+
+    def test_unexpected_generation_exception_returns_a_correlated_error(self):
+        output = io.StringIO()
+        with patch.object(worker, "model", object()), patch.object(worker, "transcribe", side_effect=IndexError("token index invalid")), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
+            worker.handle({"id": "index-error", "op": "transcribe"})
+        self.assertEqual(json.loads(output.getvalue()), {"id": "index-error", "ok": False, "error": "IndexError: token index invalid"})
+
     def test_install_downloads_only_the_default_weight_variant(self):
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "config.json"
@@ -96,6 +124,13 @@ class ModelBoundaryTests(unittest.TestCase):
 
     def test_preserves_decoded_text_and_hint_prompt(self):
         class DeviceTensor:
+            shape = (700,)
+
+            def __getitem__(self, item):
+                sliced = DeviceTensor()
+                sliced.shape = (len(range(self.shape[0])[item]),)
+                return sliced
+
             def to(self, device, dtype=None):
                 self.transfer = (device, dtype)
                 return self
@@ -119,6 +154,7 @@ class ModelBoundaryTests(unittest.TestCase):
         class FakeModel:
             device = "cpu"
             dtype = "float32"
+            config = SimpleNamespace(max_target_positions=448)
 
             def generate(self, features, **kwargs):
                 self.generation = kwargs
@@ -146,6 +182,7 @@ class ModelBoundaryTests(unittest.TestCase):
         self.assertEqual(fake_model.generation["language"], "th")
         self.assertEqual(fake_model.generation["task"], "transcribe")
         self.assertIsInstance(fake_model.generation["prompt_ids"], DeviceTensor)
+        self.assertLessEqual(fake_model.generation["prompt_ids"].shape[0], 224)
         self.assertEqual(feature_tensor.transfer, ("cpu", "float32"))
 
 

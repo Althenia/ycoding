@@ -1,4 +1,4 @@
-import { bridgeURL } from "./protocol.js"
+import { backendStopReason, bridgeURL } from "./protocol.js"
 
 export function createDelivery(options) {
   const url = bridgeURL(options.url)
@@ -34,6 +34,7 @@ export function createDelivery(options) {
           const result = await response.json().catch(() => undefined)
           if (result !== undefined) {
             item.stop = result?.stop === true
+            item.stopReason = backendStopReason(result?.reason)
             acknowledged = true
             break
           }
@@ -57,7 +58,7 @@ export function createDelivery(options) {
       queue.shift()
       item.resolve()
       options.onState("connected")
-      if (item.stop) options.onStop?.()
+      if (item.stop) options.onStop?.(item.stopReason)
     }
     state.pumping = false
   }

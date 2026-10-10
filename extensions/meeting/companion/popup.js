@@ -1,4 +1,4 @@
-export function mountPopup(document, runtime, mediaDevices) {
+export function mountPopup(document, runtime, microphoneAccess) {
   const node = (id) => document.getElementById(id)
   const state = { phase: "checking", busy: false, paired: false, startCancelled: false }
   const activeStates = ["starting", "capturing", "reconnecting", "stopping"]
@@ -15,6 +15,8 @@ export function mountPopup(document, runtime, mediaDevices) {
       "Local bridge did not acknowledge audio. Recording stopped; check the bridge and pair again if needed.",
     stop_unacknowledged:
       "Recording stopped locally, but the bridge did not acknowledge Stop. Check the TUI meeting state.",
+    microphone_access_required:
+      "Allow the microphone in the YCoding tab that just opened, then come back and press Start again.",
     microphone_denied:
       "Microphone permission was denied. Allow it in Chrome, or disable microphone capture and press Start again.",
     tab_capture_denied: "Tab audio capture was denied. Select the Meet tab and press Start again.",
@@ -29,6 +31,8 @@ export function mountPopup(document, runtime, mediaDevices) {
     permissions_revoked: "Chrome permission was revoked. Recording stopped; restore permission before starting again.",
     call_connection_closed: "Call connection closed. Recording stopped; a reconnect requires a fresh Start.",
     backend_stopped: "The TUI ended the meeting. Recording stopped.",
+    inference_failed:
+      "Speech recognition failed on part of the audio. Recording stopped; the transcript so far is saved. Use Retry failed audio on the live page or /meeting retry, then press Start again.",
     tab_closed: "Meet tab closed. Recording stopped.",
     tab_navigated: "Meet tab navigated. Recording stopped.",
     track_ended: "Audio track ended. Recording stopped.",
@@ -95,8 +99,7 @@ export function mountPopup(document, runtime, mediaDevices) {
     } catch (error) {
       if (expected !== revision) return
       actionError = error.message
-      state.phase = "error"
-      state.reason = error.message
+      render({ phase: "error", reason: error.message })
     }
     if (expected !== revision) return
     state.busy = false
@@ -120,12 +123,12 @@ export function mountPopup(document, runtime, mediaDevices) {
       state.microphone = microphone
       render(state)
       if (microphone) {
-        const stream = await mediaDevices
-          .getUserMedia({ audio: { echoCancellation: true }, video: false })
-          .catch(() => {
-            throw new Error("microphone_denied")
-          })
-        stream.getTracks().forEach((track) => track.stop())
+        const permission = await microphoneAccess.state()
+        if (state.startCancelled || expected !== revision) return
+        if (permission !== "granted") {
+          await microphoneAccess.openAccessPage()
+          throw new Error("microphone_access_required")
+        }
       }
       if (state.startCancelled || expected !== revision) return
       await request({ type: "start", consent: true, microphone })
@@ -174,7 +177,14 @@ export function mountPopup(document, runtime, mediaDevices) {
 }
 
 if (typeof document !== "undefined" && typeof chrome !== "undefined") {
-  const popup = mountPopup(document, chrome.runtime, navigator.mediaDevices)
+  const popup = mountPopup(document, chrome.runtime, {
+    state: () =>
+      navigator.permissions.query({ name: "microphone" }).then(
+        (permission) => permission.state,
+        () => "prompt",
+      ),
+    openAccessPage: () => chrome.tabs.create({ url: chrome.runtime.getURL("microphone.html") }),
+  })
   void popup.refresh().catch(() => {})
   const timer = setInterval(() => {
     void popup.refresh().catch(() => {})

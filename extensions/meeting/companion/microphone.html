@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Allow microphone · YCoding Meet capture</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body class="access-page">
+    <main>
+      <h1><img src="icons/ycoding-32.png" width="24" height="24" alt="" /> YCoding Meet capture</h1>
+      <section class="card" aria-label="Microphone access">
+        <p class="description">
+          Chrome asks for microphone access here because the toolbar popup cannot show its permission prompt. Choose
+          Allow while visiting the site. The microphone is released immediately; recording still starts only from the
+          popup after consent.
+        </p>
+        <p id="status" role="status" aria-live="polite"></p>
+        <div class="capture-actions">
+          <button id="allow" class="primary" type="button">Allow microphone</button>
+          <button id="settings" type="button" hidden>Open Chrome site settings</button>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="microphone.js"></script>
+  </body>
+</html>
