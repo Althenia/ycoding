@@ -194,6 +194,19 @@ test("a machine with no connected quota providers shows one explicit empty state
   } finally { await page.close() }
 })
 
+test("quota refresh returns to idle after a failed provider read", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?unknown-usage`)
+    await wait(page, `document.querySelectorAll('.usage-provider').length === 5`)
+    await page.evaluate(`window.usageAgentBack(true)`)
+    await page.evaluate(`document.querySelector('.usage-refresh')?.click()`)
+    await wait(page, `window.usageRequests().filter(item => item.operation === 'usage.providers').length === 2`)
+    await wait(page, `document.querySelector('.usage-quotas [role="alert"]')?.textContent?.includes('Quota retry failed.') === true`)
+    expect(await page.evaluate<{ busy: string | null; disabled: boolean }>(`(() => { const button = document.querySelector('.usage-refresh'); return { busy: button.getAttribute('aria-busy'), disabled: button.disabled }; })()`)).toEqual({ busy: "false", disabled: false })
+  } finally { await page.close() }
+})
+
 test("paging keeps the table and page geometry mounted while the next report is in flight", async () => {
   for (const [width, height] of [[390, 844], [1024, 768], [1440, 900]]) for (const theme of ["light", "dark"]) {
     const page = await browser!.openPage()
@@ -331,12 +344,22 @@ test("three same-device reloads and Refresh update values without removing cards
       await wait(page, `document.querySelectorAll('.usage-provider').length === 5 && document.querySelectorAll('.usage-tile').length === 3 && document.querySelectorAll('.usage-donut__arc').length === 2`)
       await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
       await Bun.sleep(900)
+      const refresh = await page.evaluate<{ accessibleName: string | null; title: string | null; text: string; idle: string | null; target: number; width: number; icon: boolean }>(`(() => {
+        const button = document.querySelector('.usage-refresh');
+        const rect = button.getBoundingClientRect();
+        return { accessibleName: button.getAttribute('aria-label'), title: button.getAttribute('title'), text: button.innerText.trim(),
+          idle: button.getAttribute('aria-busy'), target: rect.height, width: rect.width,
+          icon: !!button.querySelector('svg[aria-hidden="true"]') };
+      })()`)
+      expect(refresh).toMatchObject({ accessibleName: "Refresh quotas", title: "Refresh quotas", text: "", idle: "false", icon: true })
+      expect(refresh.target).toBeGreaterThanOrEqual(44)
+      if (width === 390) expect(refresh.width).toBe(refresh.target)
       await page.evaluate(`(() => {
         const selectors = '.usage-provider, .usage-tile, .usage-chart, .usage-distribution, .usage-meter > span, .usage-donut__arc, .usage-distribution__legend li, .usage-chart__bar';
         const root = document.querySelector('.usage-page');
         const nodes = [...root.querySelectorAll(selectors)];
         const probe = { nodes, removed: 0, starts: 0, empty: 0 };
-        root.addEventListener('animationstart', () => { probe.starts++ });
+        root.addEventListener('animationstart', event => { if (!event.target.closest('.usage-refresh')) probe.starts++ });
         const observer = new MutationObserver(records => {
           for (const record of records) for (const node of record.removedNodes) if (node.nodeType === 1 && (node.matches(selectors) || node.querySelector(selectors))) probe.removed++;
           if (!root.querySelector('.usage-provider') || !root.querySelector('.usage-tile') || !root.querySelector('.usage-chart__bar') || !root.querySelector('.usage-donut__arc')) probe.empty++;
@@ -366,9 +389,14 @@ test("three same-device reloads and Refresh update values without removing cards
       }
       await page.evaluate(`document.querySelector('.usage-refresh')?.click()`)
       await wait(page, `window.usageRequests().filter(item => item.operation === 'usage.providers').length === 5`)
+      expect(await page.evaluate<{ busy: string | null; disabled: boolean; animation: string }>(`(() => {
+        const button = document.querySelector('.usage-refresh');
+        return { busy: button.getAttribute('aria-busy'), disabled: button.disabled, animation: getComputedStyle(button.querySelector('svg')).animationName };
+      })()`)).toEqual({ busy: "true", disabled: true, animation: "usage-refresh-spin" })
       expect(await page.evaluate<{ removed: number; starts: number; empty: number; same: boolean }>(`window.usageProbeSnapshot()`)).toMatchObject({ removed: 0, starts: 0, empty: 0, same: true })
       await page.evaluate(`window.usageReleaseReload()`)
       await wait(page, `document.querySelector('.usage-provider:first-child .usage-window__top')?.textContent?.includes('42%') === true`)
+      expect(await page.evaluate<string | null>(`document.querySelector('.usage-refresh')?.getAttribute('aria-busy') ?? null`)).toBe("false")
       expect(await page.evaluate<{ removed: number; starts: number; empty: number; same: boolean }>(`window.usageProbeSnapshot()`)).toMatchObject({ removed: 0, starts: 0, empty: 0, same: true })
       if (width === 390 && theme === "dark") await Bun.write(new URL("../../../.cache/tmp/usage-refresh-settled.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
     } finally { await page.close() }

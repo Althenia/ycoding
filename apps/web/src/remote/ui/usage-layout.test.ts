@@ -34,3 +34,13 @@ test("responsive layout follows the content width beside the global rail", () =>
   expect(css).not.toMatch(/@media \((min|max)-width: (768|1023|1024|1280)px\)/)
   for (const query of ["@container (min-width: 768px)", "@container (min-width: 1024px)", "@container (min-width: 1280px)", "@container (max-width: 1023px)"]) expect(css).toContain(query)
 })
+
+test("quota refresh keeps a square target and a reduced-motion busy indicator", () => {
+  expect(rule(".usage-refresh")).toContain("inline-size: var(--yc-hit-min)")
+  expect(rule(".usage-refresh")).toContain("block-size: var(--yc-hit-min)")
+  expect(rule(".usage-refresh")).not.toContain("width: 100%")
+  expect(css).toContain(".usage-refresh[aria-busy=\"true\"] svg")
+  expect(css).toContain("animation: usage-refresh-spin var(--yc-dur-slow) linear infinite")
+  expect(css).toContain(".usage-refresh[aria-busy=\"true\"] { border-color: var(--yc-green-strong); background: var(--yc-green-soft); }")
+  expect(css).toContain(".usage-refresh[aria-busy=\"true\"] svg { animation: none; }")
+})

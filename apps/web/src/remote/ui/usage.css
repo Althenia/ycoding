@@ -21,6 +21,9 @@
   min-height: var(--yc-hit-min); padding: 0 var(--yc-space-4); border: 1px solid var(--yc-border); border-radius: var(--yc-radius-pill);
   background: var(--yc-surface); color: var(--yc-text); white-space: nowrap; font-size: var(--yc-size-xs);
 }
+.usage-refresh { display: grid; inline-size: var(--yc-hit-min); block-size: var(--yc-hit-min); flex: 0 0 var(--yc-hit-min); place-items: center; padding: 0; }
+.usage-refresh[aria-busy="true"] { border-color: var(--yc-green-strong); background: var(--yc-green-soft); }
+.usage-refresh[aria-busy="true"] svg { animation: usage-refresh-spin var(--yc-dur-slow) linear infinite; }
 .usage-refresh:hover:not(:disabled), .usage-chart__head button:hover, .usage-pagination button:hover:not(:disabled) { background: var(--yc-surface-sunken); }
 .usage-quotas, .usage-spend, .usage-breakdown-section { margin-top: var(--yc-space-5); }
 .usage-cost-note { margin-top: var(--yc-space-6); padding-top: var(--yc-space-4); border-top: 1px solid var(--yc-border); color: var(--yc-text-muted); font: var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-mono); text-align: center; }
@@ -149,7 +152,6 @@
   .usage-head { position: relative; flex-wrap: wrap; }
   .usage-head__actions { width: 100%; justify-content: space-between; flex-wrap: wrap; }
   .usage-head__freshness { position: absolute; right: 0; top: var(--yc-space-1); }
-  .usage-refresh { width: 100%; }
   .usage-provider { padding: var(--yc-space-3); gap: var(--yc-space-2); }
   .usage-provider__freshness { margin-left: auto; }
   .usage-provider__windows { gap: var(--yc-space-2); }
@@ -181,7 +183,9 @@
 @keyframes usage-meter-enter { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 @keyframes usage-donut-enter { from { stroke-dasharray: 0 var(--usage-circumference); } to { stroke-dasharray: var(--usage-dash); } }
 @keyframes usage-tooltip-enter { from { opacity: 0; transform: translateY(var(--yc-space-1)); } to { opacity: 1; transform: translateY(0); } }
+@keyframes usage-refresh-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
   .usage-meter > span, .usage-donut__arc, .usage-chart__tooltip, .usage-distribution__tooltip { animation: none; }
+  .usage-refresh[aria-busy="true"] svg { animation: none; }
   .usage-tabs button, .usage-toggle::before { transition: none; }
 }

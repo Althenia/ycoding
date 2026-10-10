@@ -2,6 +2,7 @@ import { batch, createEffect, createMemo, createSignal, For, onCleanup, onMount,
 import { useRemote } from "../context"
 import { createRemoteQuery } from "../query"
 import { usageRead } from "../queries"
+import { Icon } from "../../ui/icon"
 import { LoadingPlaceholder } from "./loading"
 import { dailySpend, donutGeometry, modelIdentity, money, providerDistribution, providerHeading, quotaWindow, relativeFreshness, spendMetrics, tokenCount, tooltipPosition, usageReportInputs, usageZoneKey, visibleProviders, type SpendDay, type UsageProvider, type UsageReport, type UsageReportInput, type UsageBreakdown, type UsageReportRow, type UsageWindow } from "./usage-model"
 import "./usage.css"
@@ -153,7 +154,7 @@ export function UsagePage() {
           <button type="button" aria-pressed={zoneMode() === "utc"} onClick={() => setZoneMode("utc")}>UTC</button>
           <button type="button" aria-pressed={zoneMode() === "local"} onClick={() => setZoneMode("local")}>Local</button>
         </div>
-        <button class="usage-refresh" type="button" disabled={providerRead().status === "loading" || remote.state().transport.kind !== "open"} onClick={() => { const scope = remote.scope(); if (scope !== undefined) void remote.queries.refreshUsage(scope) }}>Refresh quotas</button>
+        <button class="usage-refresh" type="button" aria-label="Refresh quotas" title="Refresh quotas" aria-busy={providerRead().status === "loading" ? "true" : "false"} disabled={providerRead().status === "loading" || remote.state().transport.kind !== "open"} onClick={() => { const scope = remote.scope(); if (scope !== undefined) void remote.queries.refreshUsage(scope) }}><Icon name="refresh" /></button>
       </div>
     </header>
 
