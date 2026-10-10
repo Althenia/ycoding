@@ -22,6 +22,29 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.10.6",
+    date: "2026-10-10",
+    title: "Next-message prediction, local telemetry, transcript Find, and a livelier Office",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Get an opt-in suggestion for your next message. With prediction.enabled, a helper model proposes a short follow-up after each settled reply on an idle main Session; accept it with Right arrow in the TUI (prompt.prediction.accept) or Right arrow or Use suggestion in the web composer. Accepting fills the draft and never sends or replaces typed text. When prediction.memory is on and the agent may read memory without asking, the helper also sees bounded snippets from project and shared workspace memory. Choose its model with efficiency.helper_models.prediction; its requests appear in usage as prediction." },
+      { tag: "Added", text: "Find text in the TUI transcript with ctrl+shift+g or Find in transcript. Matches show n of m; Enter or Down moves forward, Shift+Enter or Up moves back, and Escape closes Find without moving the transcript." },
+      { tag: "Added", text: "Pin subagent tasks so they stay first. Press p in the TUI Subagents list (session_task_pin_toggle) or use Pin in web Team; pinned tasks are grouped first in the order you pinned them." },
+      { tag: "Added", text: "Create and list Git worktrees from an agent with the worktree tool. A new worktree gets its own branch under ~/.local/share/ycoding/worktrees/, needs the worktree permission (ask by default), and passes guardrails. Files inside a worktree that Git lists for the current repository no longer ask for outside-directory access." },
+      { tag: "Added", text: "Save usage, speed, and latency on your own machine after you agree. An undecided machine shows Help improve YCoding in the TUI and the web workspace; change it later with Telemetry: on/off in the TUI or Save telemetry on this machine in Settings → Diagnostics. With consent, each provider request records time to first output, total time, and retry wait, and the TUI and web record prompt, live-update, and transcript-load timings. Samples stay in the machine's local database for 30 days; the relay keeps nothing. Usage reports add first-output and total time (p50/p95) and output tokens per second, and show unknown values as unreported." },
+      { tag: "Added", text: "Inspect Office objects. Hover, click, or pick from the keyboard list to see an object's name, room, state, and who is using it. Agents use the bookshelf, whiteboard, desk, device rack, and coffee machine according to their real Session activity; decor varies per desk and lighting follows the time of day." },
+      { tag: "Changed", text: "YOLO levels are reordered. YOLO 1 auto-approves permission asks and ordinary guardrail reviews, YOLO 2 also answers questions and forms, and YOLO 3 also allows automatic subagent dispatch from the scope tool. Hard reviews always need you. Sessions keep their saved level, so a Session already at YOLO 1 now auto-approves permissions and ordinary reviews." },
+      { tag: "Changed", text: "The TUI AUTONOMY section shows who decides Permissions, Guardrails, Questions, Scope dispatch, and Hard reviews (ask you, auto, auto · goal, or always you), and a decision tool call appears as one short row." },
+      { tag: "Changed", text: "Read-only shell commands, such as sed -n, grep, head, and read-only Git commands, skip the semantic risk check and no longer stop for a guardrail review. Commands that write, substitute, or run other programs are still checked." },
+      { tag: "Changed", text: "Task advisories recommend only a model and a tool. Remove decisions.advisory.directions from your configuration after updating; a file that still contains it is ignored as a whole and listed in configuration diagnostics." },
+      { tag: "Changed", text: "The web conversation uses up to 120 characters of width on wide screens, while message paragraphs keep a readable line length." },
+      { tag: "Fixed", text: "Generation speed counts only output streamed during its measured window, so models that stream a reasoning summary, fold thinking into their output, or answer with tool calls no longer show impossibly high tok/s. The speed trend shows only the current model and variant." },
+      { tag: "Fixed", text: "A skill that is already active no longer flashes a Loading skill row in the TUI." },
+      { tag: "Fixed", text: "Office agents no longer turn grey with \"Update YCoding on this machine to show agent activity\" after one slow activity read, and selecting another agent no longer makes the Office flicker or reset positions." },
+      { tag: "Fixed", text: "Setting a goal from the web composer no longer shifts the YOLO and Goal controls or draws over the attach button; the Setting goal indicator stays inside the status slot." },
+    ],
+  },
+  {
     version: "0.10.5",
     date: "2026-10-09",
     title: "Meeting intelligence, a living Office, device aliases, and scoped delegation",
