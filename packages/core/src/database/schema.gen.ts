@@ -837,6 +837,15 @@ export default {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`telemetry_consent\` (
+          \`id\` integer PRIMARY KEY,
+          \`enabled\` integer NOT NULL,
+          \`notice_version\` integer NOT NULL,
+          \`decided_at\` integer NOT NULL,
+          CONSTRAINT "telemetry_consent_single_row" CHECK("id" = 1)
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`web_latency\` (
           \`id\` integer PRIMARY KEY AUTOINCREMENT,
           \`received_at\` integer NOT NULL,

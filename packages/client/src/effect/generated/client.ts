@@ -41,9 +41,26 @@ const Endpoint1_2 = (raw: RawClient["server.server"]) => (input?: Endpoint1_2Inp
     Effect.mapError(mapClientError),
   )
 
+const Endpoint1_3 = (raw: RawClient["server.server"]) => () =>
+  raw["telemetry.consent.get"]({}).pipe(Effect.mapError(mapClientError))
+
+type Endpoint1_4Request = Parameters<RawClient["server.server"]["telemetry.consent.set"]>[0]
+type Endpoint1_4Input = {
+  readonly enabled: Endpoint1_4Request["payload"]["enabled"]
+  readonly noticeVersion: Endpoint1_4Request["payload"]["noticeVersion"]
+}
+const Endpoint1_4 = (raw: RawClient["server.server"]) => (input: Endpoint1_4Input) =>
+  raw["telemetry.consent.set"]({ payload: { enabled: input["enabled"], noticeVersion: input["noticeVersion"] } }).pipe(
+    Effect.mapError(mapClientError),
+  )
+
 const adaptGroup1 = (raw: RawClient["server.server"]) => ({
   get: Endpoint1_0(raw),
-  telemetry: { append: Endpoint1_1(raw), list: Endpoint1_2(raw) },
+  telemetry: {
+    append: Endpoint1_1(raw),
+    list: Endpoint1_2(raw),
+    consent: { get: Endpoint1_3(raw), set: Endpoint1_4(raw) },
+  },
 })
 
 type Endpoint2_0Request = Parameters<RawClient["server.location"]["location.get"]>[0]

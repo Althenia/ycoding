@@ -81,6 +81,16 @@ export type TelemetryRequestSample = {
 
 export type TelemetryLongTaskSample = { kind: "long-task"; at: string; durationMs: number }
 
+export type TelemetryClientSample = {
+  kind: "client"
+  at: string
+  surface: "tui" | "web"
+  metric: "prompt.admit" | "stream.delay" | "transcript.load"
+  durationMs: number
+}
+
+export type TelemetryConsent = { enabled: boolean; noticeVersion: 1; decidedAt: number }
+
 export type ModelProfileName = string
 
 export type ProviderSettings = { [x: string]: JsonValue }
@@ -226,6 +236,9 @@ export type EventLogSynced = { type: "log.synced"; aggregateID: string; seq?: nu
 export type PromptBase64 = string
 
 export type ProviderRequestTiming = {
+  firstOutputMs?: number
+  totalMs?: number
+  retryWaitMs?: number
   promptEvalDurationNs?: number
   generationDurationNs?: number
   observedGenerationDurationNs?: number
@@ -249,6 +262,15 @@ export type SessionTodoInfo = {
   content: string
   status: "pending" | "in_progress" | "completed" | "cancelled"
   priority: "high" | "medium" | "low"
+}
+
+export type ProviderRequestSpeed = {
+  firstOutputP50Ms?: number
+  firstOutputP95Ms?: number
+  totalP50Ms?: number
+  totalP95Ms?: number
+  outputTokensPerSecond?: number
+  samples: number
 }
 
 export type SessionPendingSyntheticData = { text: string; description?: string; metadata?: { [x: string]: JsonValue } }
@@ -597,7 +619,9 @@ export type KeepAwakeState = "off" | "on" | "unsupported" | "error"
 
 export type ConfigDiagnosticReason = "invalid-json" | "invalid-values" | "removed-keys"
 
-export type TelemetrySample = TelemetryRequestSample | TelemetryLongTaskSample
+export type TelemetrySample = TelemetryRequestSample | TelemetryLongTaskSample | TelemetryClientSample
+
+export type TelemetryConsentState = { consent?: TelemetryConsent; noticeVersion: 1 }
 
 export type ModelRef = { id: string; providerID: string; variant?: string; profile?: ModelProfileName }
 
@@ -627,36 +651,6 @@ export type SessionMessageCompactionCompletedV1 = {
   recent: string
   messages?: number
   tokens?: TokenUsageInfo
-}
-
-export type ProviderRequestReport = {
-  group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
-  rows: Array<{
-    key: string
-    label: string
-    logical: number
-    physical: number
-    helpers: number
-    continued: number
-    fallback: number
-    tokens: TokenUsageInfo
-    cost?: MoneyUSD
-    costProvenance?: "recorded" | "current_catalog"
-    cacheReadReported?: boolean
-  }>
-  total: {
-    logical: number
-    physical: number
-    helpers: number
-    continued: number
-    fallback: number
-    tokens: TokenUsageInfo
-    cost?: MoneyUSD
-    costProvenance?: "recorded" | "current_catalog"
-    cacheReadReported?: boolean
-  }
-  rowCount: number
-  nextOffset?: number
 }
 
 export type ModelsDevRefreshed = {
@@ -1590,6 +1584,37 @@ export type TodoUpdated = {
   type: "todo.updated"
   location?: LocationRef
   data: { sessionID: string; todos: Array<SessionTodoInfo> }
+}
+
+export type ProviderRequestReport = {
+  group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+  rows: Array<{
+    key: string
+    label: string
+    logical: number
+    physical: number
+    helpers: number
+    continued: number
+    fallback: number
+    tokens: TokenUsageInfo
+    cost?: MoneyUSD
+    costProvenance?: "recorded" | "current_catalog"
+    cacheReadReported?: boolean
+    speed?: ProviderRequestSpeed
+  }>
+  total: {
+    logical: number
+    physical: number
+    helpers: number
+    continued: number
+    fallback: number
+    tokens: TokenUsageInfo
+    cost?: MoneyUSD
+    costProvenance?: "recorded" | "current_catalog"
+    cacheReadReported?: boolean
+  }
+  rowCount: number
+  nextOffset?: number
 }
 
 export type SessionPendingSynthetic = {
@@ -3739,6 +3764,10 @@ export type InvalidRequestError = {
 export const isInvalidRequestError = (value: unknown): value is InvalidRequestError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "InvalidRequestError"
 
+export type TelemetryDisabled = { readonly _tag: "TelemetryDisabled" }
+export const isTelemetryDisabled = (value: unknown): value is TelemetryDisabled =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "TelemetryDisabled"
+
 export type InvalidCursorError = { readonly _tag: "InvalidCursorError"; readonly message: string }
 export const isInvalidCursorError = (value: unknown): value is InvalidCursorError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "InvalidCursorError"
@@ -4093,6 +4122,13 @@ export type ServerTelemetryAppendInput = {
           readonly totalMs: number
         }
       | { readonly kind: "long-task"; readonly at: string; readonly durationMs: number }
+      | {
+          readonly kind: "client"
+          readonly at: string
+          readonly surface: "tui" | "web"
+          readonly metric: "prompt.admit" | "stream.delay" | "transcript.load"
+          readonly durationMs: number
+        }
     >
   }["samples"]
 }
@@ -4105,6 +4141,15 @@ export type ServerTelemetryListInput = {
 }
 
 export type ServerTelemetryListOutput = TelemetryPage
+
+export type ServerTelemetryConsentGetOutput = TelemetryConsentState
+
+export type ServerTelemetryConsentSetInput = {
+  readonly enabled: { readonly enabled: boolean; readonly noticeVersion: 1 }["enabled"]
+  readonly noticeVersion: { readonly enabled: boolean; readonly noticeVersion: 1 }["noticeVersion"]
+}
+
+export type ServerTelemetryConsentSetOutput = TelemetryConsent
 
 export type LocationGetInput = {
   readonly location?: {

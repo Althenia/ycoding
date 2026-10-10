@@ -58,6 +58,7 @@ const currentMigrations = [
   { id: "20261004094144_shell-ledger" },
   { id: "20261004154315_web-latency" },
   { id: "20261008065350_provider-profiles" },
+  { id: "20261010015127_telemetry-consent" },
 ]
 const selectiveCompactionTables = [
   "compaction_manifest_blob",
@@ -375,6 +376,10 @@ describe("DatabaseMigration", () => {
         expect(
           yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'web_latency'`),
         ).toEqual({ name: "web_latency" })
+        expect(yield* db.all(sql`SELECT * FROM telemetry_consent`)).toEqual([])
+        yield* db.run(sql`INSERT INTO telemetry_consent (id, enabled, notice_version, decided_at) VALUES (1, 1, 1, 0)`)
+        expect(yield* Effect.exit(db.run(sql`INSERT INTO telemetry_consent (id, enabled, notice_version, decided_at) VALUES (2, 0, 1, 0)`))).toMatchObject({ _tag: "Failure" })
+        expect(yield* db.all(sql`SELECT id FROM telemetry_consent`)).toEqual([{ id: 1 }])
         expect(
           yield* db.all<{ name: string }>(sql`
             SELECT name

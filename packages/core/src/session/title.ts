@@ -164,6 +164,8 @@ const make = (dependencies: Dependencies) => {
       })
     })
     const streamed = yield* dependencies.llm.stream(request).pipe(
+      Stream.tap(tracker.observeEvent),
+      Stream.onExit(() => tracker.settle()),
       Stream.runForEach((event) => {
         if (LLMEvent.is.providerError(event)) failed = true
         if (LLMEvent.is.textDelta(event)) chunks.push(event.text)

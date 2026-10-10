@@ -7,6 +7,34 @@ const At = Schema.String.check(Schema.isPattern(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:
 
 const DurationMs = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(600_000))
 
+export const NoticeVersion = Schema.Literal(1)
+export const CurrentNoticeVersion = 1
+
+export const Consent = Schema.Struct({
+  enabled: Schema.Boolean,
+  noticeVersion: NoticeVersion,
+  decidedAt: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+}).annotate({ identifier: "Telemetry.Consent" })
+export interface Consent extends Schema.Schema.Type<typeof Consent> {}
+
+export const ConsentState = Schema.Struct({
+  consent: Consent.pipe(optional),
+  noticeVersion: NoticeVersion,
+}).annotate({ identifier: "Telemetry.ConsentState" })
+export interface ConsentState extends Schema.Schema.Type<typeof ConsentState> {}
+
+export const ConsentInput = Schema.Struct({
+  enabled: Schema.Boolean,
+  noticeVersion: NoticeVersion,
+}).annotate({ identifier: "Telemetry.ConsentInput", parseOptions: { onExcessProperty: "error" } })
+export interface ConsentInput extends Schema.Schema.Type<typeof ConsentInput> {}
+
+export class TelemetryDisabled extends Schema.TaggedErrorClass<TelemetryDisabled>()(
+  "TelemetryDisabled",
+  {},
+  { httpApiStatus: 403 },
+) {}
+
 export const Operation = Schema.Literals([
   "provider.auth.list",
   "provider.auth.key",
@@ -91,7 +119,18 @@ export const LongTaskSample = Schema.Struct({
   durationMs: DurationMs.check(Schema.isGreaterThanOrEqualTo(50)),
 }).annotate({ identifier: "Telemetry.LongTaskSample", parseOptions: { onExcessProperty: "error" } })
 
-export const Sample = Schema.Union([RequestSample, LongTaskSample]).annotate({ identifier: "Telemetry.Sample" })
+export const ClientSample = Schema.Struct({
+  kind: Schema.Literal("client"),
+  at: At,
+  surface: Schema.Literals(["tui", "web"]),
+  metric: Schema.Literals(["prompt.admit", "stream.delay", "transcript.load"]),
+  durationMs: DurationMs,
+}).annotate({ identifier: "Telemetry.ClientSample", parseOptions: { onExcessProperty: "error" } })
+export interface ClientSample extends Schema.Schema.Type<typeof ClientSample> {}
+
+export const Sample = Schema.Union([RequestSample, LongTaskSample, ClientSample]).annotate({
+  identifier: "Telemetry.Sample",
+})
 export type Sample = typeof Sample.Type
 
 export const Batch = Schema.Struct({

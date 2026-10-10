@@ -5,9 +5,10 @@ import { Clock, Effect, Schema } from "effect"
 import { Telemetry } from "@ycoding-ai/schema/telemetry"
 import type { Database } from "./database/database"
 import { WebLatencyTable } from "./web-latency/sql"
+import { TelemetryConsent } from "./telemetry-consent"
 
 type Db = Database.Interface["db"]
-const retentionMs = 7 * 24 * 60 * 60 * 1_000
+const retentionMs = 30 * 24 * 60 * 60 * 1_000
 const maxRows = 10_000
 
 export class InvalidCursorError extends Schema.TaggedErrorClass<InvalidCursorError>()(
@@ -29,6 +30,8 @@ export const append = Effect.fn("WebLatency.append")(function* (db: Db, samples:
   yield* db
     .transaction((tx) =>
       Effect.gen(function* () {
+        const consent = yield* TelemetryConsent.make(tx)
+        if (!(yield* consent.enabled())) return yield* new Telemetry.TelemetryDisabled()
         yield* tx
           .delete(WebLatencyTable)
           .where(lt(WebLatencyTable.received_at, receivedAt - retentionMs))
@@ -47,7 +50,7 @@ export const append = Effect.fn("WebLatency.append")(function* (db: Db, samples:
         if (oldestRetained) yield* tx.delete(WebLatencyTable).where(lt(WebLatencyTable.id, oldestRetained.id)).run()
       }),
     )
-    .pipe(Effect.orDie)
+    .pipe(Effect.catchTag("SqlError", Effect.die), Effect.catchTag("EffectDrizzleQueryError", Effect.die))
   return { accepted: samples.length }
 })
 

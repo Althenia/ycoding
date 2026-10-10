@@ -55,6 +55,7 @@ import { SessionTodo } from "@ycoding-ai/core/session/todo"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionPermissionCeiling } from "@ycoding-ai/core/session/permission-ceiling"
 import { SessionProviderRequest } from "@ycoding-ai/core/session/provider-request"
+import { TelemetryConsent } from "@ycoding-ai/core/telemetry-consent"
 import { ProviderRequestObserver } from "@ycoding-ai/core/session/provider-request-observer"
 import { Money } from "@ycoding-ai/schema/money"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
@@ -619,7 +620,8 @@ let compactionWakeHook = Effect.void
 let compactionSummary = false
 const config = Layer.succeed(
   Config.Service,
-  Config.Service.of({ diagnostics: () => Effect.succeed([]),
+  Config.Service.of({
+    diagnostics: () => Effect.succeed([]),
     reload: () => Effect.void,
     entries: () =>
       Effect.succeed([
@@ -7111,6 +7113,55 @@ describe("SessionRunnerLLM", () => {
       expect(replayed.find((message) => message.type === "user")?.time.consumed).toBeDefined()
     }),
   )
+
+  for (const enabled of [true, false])
+    it.effect(`records logical provider latency only with consent ${enabled}`, () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        const database = yield* Database.Service
+        const consent = yield* TelemetryConsent.make(database.db)
+        yield* consent.set({ enabled, noticeVersion: 1 })
+        yield* admit(session, "Measure delayed retry")
+        responseStreams = [
+          Stream.fail(providerUnavailable()),
+          Stream.fromEffect(TestClock.adjust("50 millis")).pipe(
+            Stream.flatMap(() =>
+              Stream.concat(
+                Stream.fromIterable([
+                  LLMEvent.stepStart({ index: 0 }),
+                  LLMEvent.textStart({ id: "latency-text" }),
+                  LLMEvent.textDelta({ id: "latency-text", text: "Done" }),
+                  LLMEvent.textEnd({ id: "latency-text" }),
+                ]),
+                Stream.fromEffect(TestClock.adjust("1500 millis")).pipe(
+                  Stream.flatMap(() =>
+                    Stream.fromIterable([
+                      LLMEvent.stepFinish({ index: 0, reason: "stop", usage: { outputTokens: 10 } }),
+                      LLMEvent.finish({ reason: "stop" }),
+                    ]),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ]
+        const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+        while (requests.length < 1) yield* Effect.yieldNow
+        yield* TestClock.adjust("2 seconds")
+        yield* Fiber.join(run)
+        const ledger = yield* SessionProviderRequest.Service
+        const timing = (yield* ledger.recentSteps(sessionID)).at(-1)?.timing
+        expect(timing?.generatedTokens).toBe(10)
+        expect(timing?.observedGenerationDurationNs).toBe(1_500_000_000)
+        if (enabled) {
+          expect(timing).toMatchObject({ firstOutputMs: 2050, totalMs: 3550, retryWaitMs: 2000 })
+          return
+        }
+        expect(timing).not.toHaveProperty("firstOutputMs")
+        expect(timing).not.toHaveProperty("totalMs")
+        expect(timing).not.toHaveProperty("retryWaitMs")
+      }),
+    )
 
   it.effect("preserves logical request identity for pre-output Codex read retries", () =>
     Effect.gen(function* () {

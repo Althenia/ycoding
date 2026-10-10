@@ -50,6 +50,9 @@ export const ReportOrder = Schema.Literals(["asc", "desc"])
 export type ReportOrder = typeof ReportOrder.Type
 
 export const Timing = Schema.Struct({
+  firstOutputMs: NonNegativeInt.pipe(optional),
+  totalMs: NonNegativeInt.pipe(optional),
+  retryWaitMs: NonNegativeInt.pipe(optional),
   promptEvalDurationNs: NonNegativeInt.pipe(optional),
   generationDurationNs: NonNegativeInt.pipe(optional),
   observedGenerationDurationNs: PositiveInt.pipe(optional),
@@ -57,6 +60,16 @@ export const Timing = Schema.Struct({
   loadDurationNs: NonNegativeInt.pipe(optional),
 }).annotate({ identifier: "ProviderRequest.Timing" })
 export interface Timing extends Schema.Schema.Type<typeof Timing> {}
+
+export const Speed = Schema.Struct({
+  firstOutputP50Ms: NonNegativeInt.pipe(optional),
+  firstOutputP95Ms: NonNegativeInt.pipe(optional),
+  totalP50Ms: NonNegativeInt.pipe(optional),
+  totalP95Ms: NonNegativeInt.pipe(optional),
+  outputTokensPerSecond: Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0)).pipe(optional),
+  samples: NonNegativeInt,
+}).annotate({ identifier: "ProviderRequest.Speed" })
+export interface Speed extends Schema.Schema.Type<typeof Speed> {}
 
 const ReportLimit = PositiveInt.check(Schema.isLessThanOrEqualTo(200))
 const ReportTimeZone = Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(128))
@@ -188,8 +201,9 @@ export const ReportRow = Schema.Struct({
   key: Schema.String,
   label: Schema.String,
   ...ReportMetricsFields,
+  speed: Speed.pipe(optional),
 })
-  .check(costAndProvenanceTogether(11))
+  .check(costAndProvenanceTogether(12))
   .annotate({ identifier: "ProviderRequest.ReportRow" })
 export interface ReportRow extends Schema.Schema.Type<typeof ReportRow> {}
 

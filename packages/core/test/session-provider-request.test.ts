@@ -15,6 +15,8 @@ import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionContextState } from "@ycoding-ai/core/session/context-state"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionProviderRequest } from "@ycoding-ai/core/session/provider-request"
+import { TelemetryConsent } from "@ycoding-ai/core/telemetry-consent"
+import { LLMEvent } from "@ycoding-ai/ai"
 import { Session } from "@ycoding-ai/core/session"
 import {
   CompactionManifestBlobTable,
@@ -64,6 +66,82 @@ const insertSession = (id: Session.ID) =>
     yield* SessionContextState.initialize(db, id, Date.now())
   })
 
+it.effect("gates helper timing at record time and preserves always-on timing", () =>
+  Effect.gen(function* () {
+    const sessionID = Session.ID.make("ses_consent_timing")
+    yield* insertSession(sessionID)
+    const database = yield* Database.Service
+    const consent = yield* TelemetryConsent.make(database.db)
+    const requests = yield* SessionProviderRequest.Service
+    for (const enabled of [true, false]) {
+      const tracker = yield* requests.next({
+        sessionID,
+        source: "title",
+        agent: Agent.ID.make("build"),
+        model: CatalogModel.Ref.make({ id: CatalogModel.ID.make("gpt-5.6"), providerID: Provider.ID.make("openai") }),
+        routeID: "openai-responses",
+        promptCacheKey: "cache",
+        systemDigest: "system",
+        toolDigest: "tool",
+      })
+      yield* TestClock.adjust("50 millis")
+      yield* tracker.observeEvent(LLMEvent.reasoningDelta({ id: "reasoning", text: "" }))
+      yield* TestClock.adjust("20 millis")
+      yield* tracker.observeEvent(LLMEvent.toolInputDelta({ id: "tool", name: "read", text: "{}" }))
+      yield* TestClock.adjust("30 millis")
+      yield* tracker.observeEvent(LLMEvent.finish({ reason: "stop" }))
+      yield* TestClock.adjust("100 millis")
+      yield* consent.set({ enabled, noticeVersion: 1 })
+      yield* tracker.complete({
+        continuation: "full",
+        tokens: { input: 10, output: 5, reasoning: 2, cache: { read: 0, write: 0 } },
+        timing: { generationDurationNs: 30_000_000, firstOutputMs: 999, totalMs: 999, retryWaitMs: 999 },
+      })
+    }
+    const records = yield* requests.list(sessionID)
+    expect(records[0]?.timing).toEqual({
+      generationDurationNs: 30_000_000,
+      firstOutputMs: 70,
+      totalMs: 100,
+      retryWaitMs: 0,
+    })
+    expect(records[1]?.timing).toEqual({ generationDurationNs: 30_000_000 })
+  }),
+)
+
+it.effect("records failed no-output latency at provider settlement rather than later local work", () =>
+  Effect.gen(function* () {
+    const sessionID = Session.ID.make("ses_failed_timing")
+    yield* insertSession(sessionID)
+    const database = yield* Database.Service
+    const consent = yield* TelemetryConsent.make(database.db)
+    yield* consent.set({ enabled: true, noticeVersion: 1 })
+    const requests = yield* SessionProviderRequest.Service
+    const tracker = yield* requests.next({
+      sessionID,
+      source: "compaction",
+      agent: Agent.ID.make("build"),
+      model: CatalogModel.Ref.make({ id: CatalogModel.ID.make("gpt-5.6"), providerID: Provider.ID.make("openai") }),
+      routeID: "openai-responses",
+      promptCacheKey: "cache",
+      systemDigest: "system",
+      toolDigest: "tool",
+    })
+    yield* TestClock.adjust("40 millis")
+    yield* tracker.retryWait()
+    yield* TestClock.adjust("20 millis")
+    yield* tracker.retryResume()
+    yield* TestClock.adjust("30 millis")
+    yield* tracker.settle()
+    yield* TestClock.adjust("60 millis")
+    yield* tracker.complete({
+      continuation: "full",
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    })
+    expect((yield* requests.list(sessionID))[0]?.timing).toEqual({ totalMs: 90, retryWaitMs: 20 })
+  }),
+)
+
 it.effect("rejects step ownership when the prepared context revision is stale", () =>
   Effect.gen(function* () {
     const sessionID = Session.ID.make("ses_provider_request_stale_context")
@@ -102,18 +180,32 @@ it.effect("reads only the latest eight Step requests for the exact Session in as
     yield* insertSession(otherID)
     const service = yield* SessionProviderRequest.Service
     const model = CatalogModel.Ref.make({ id: CatalogModel.ID.make("gpt-5.6"), providerID: Provider.ID.make("openai") })
-    for (const [index, target, source] of Array.from({ length: 12 }, (_, index) => [
-      index, index === 10 ? otherID : sessionID, index === 9 ? "title" : "step",
-    ] as const)) {
-      const tracker = yield* service.next({ sessionID: target, source, agent: Agent.ID.make("build"), model,
-        routeID: "openai-responses", promptCacheKey: "cache-key", systemDigest: "system-digest", toolDigest: "tool-digest" })
-      yield* tracker.complete({ continuation: "full", tokens: { input: 0, output: index, reasoning: 0,
-        cache: { read: 0, write: 0 } }, timing: { generatedTokens: index + 1, observedGenerationDurationNs: 2_000_000 } })
+    for (const [index, target, source] of Array.from(
+      { length: 12 },
+      (_, index) => [index, index === 10 ? otherID : sessionID, index === 9 ? "title" : "step"] as const,
+    )) {
+      const tracker = yield* service.next({
+        sessionID: target,
+        source,
+        agent: Agent.ID.make("build"),
+        model,
+        routeID: "openai-responses",
+        promptCacheKey: "cache-key",
+        systemDigest: "system-digest",
+        toolDigest: "tool-digest",
+      })
+      yield* tracker.complete({
+        continuation: "full",
+        tokens: { input: 0, output: index, reasoning: 0, cache: { read: 0, write: 0 } },
+        timing: { generatedTokens: index + 1, observedGenerationDurationNs: 2_000_000 },
+      })
     }
-    expect((yield* service.recentSteps(sessionID)).map((record) => record.tokens.output))
-      .toEqual([2, 3, 4, 5, 6, 7, 8, 11])
+    expect((yield* service.recentSteps(sessionID)).map((record) => record.tokens.output)).toEqual([
+      2, 3, 4, 5, 6, 7, 8, 11,
+    ])
     expect((yield* service.recentSteps(sessionID)).at(-1)?.timing).toEqual({
-      generatedTokens: 12, observedGenerationDurationNs: 2_000_000,
+      generatedTokens: 12,
+      observedGenerationDurationNs: 2_000_000,
     })
   }),
 )
@@ -644,64 +736,66 @@ it.effect("summarizes absent, mixed, and explicit-zero cache-read reporting by m
   }),
 )
 
-it.effect("prioritizes compaction, model, and provider cache reset diagnostics and treats a variant named default as an ordinary variant", () =>
-  Effect.gen(function* () {
-    const sessionID = Session.ID.make("ses_provider_request_resets")
-    yield* insertSession(sessionID)
-    const service = yield* SessionProviderRequest.Service
-    const model = (id: string, variant?: string) =>
-      CatalogModel.Ref.make({
-        id: CatalogModel.ID.make(id),
-        providerID: Provider.ID.make("openai"),
-        ...(variant === undefined ? {} : { variant: CatalogModel.VariantID.make(variant) }),
+it.effect(
+  "prioritizes compaction, model, and provider cache reset diagnostics and treats a variant named default as an ordinary variant",
+  () =>
+    Effect.gen(function* () {
+      const sessionID = Session.ID.make("ses_provider_request_resets")
+      yield* insertSession(sessionID)
+      const service = yield* SessionProviderRequest.Service
+      const model = (id: string, variant?: string) =>
+        CatalogModel.Ref.make({
+          id: CatalogModel.ID.make(id),
+          providerID: Provider.ID.make("openai"),
+          ...(variant === undefined ? {} : { variant: CatalogModel.VariantID.make(variant) }),
+        })
+      const record = Effect.fnUntraced(function* (
+        source: "step" | "compaction",
+        selected: CatalogModel.Ref,
+        promptCacheKey: string,
+      ) {
+        const tracker = yield* service.next({
+          sessionID,
+          source,
+          agent: Agent.ID.make("build"),
+          model: selected,
+          routeID: "openai-responses",
+          promptCacheKey,
+          systemDigest: "system",
+          toolDigest: "tools",
+        })
+        yield* tracker.complete({
+          continuation: "full",
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        })
       })
-    const record = Effect.fnUntraced(function* (
-      source: "step" | "compaction",
-      selected: CatalogModel.Ref,
-      promptCacheKey: string,
-    ) {
-      const tracker = yield* service.next({
-        sessionID,
-        source,
-        agent: Agent.ID.make("build"),
-        model: selected,
-        routeID: "openai-responses",
-        promptCacheKey,
-        systemDigest: "system",
-        toolDigest: "tools",
-      })
-      yield* tracker.complete({
-        continuation: "full",
-        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-      })
-    })
 
-    yield* record("step", model("gpt-5.6"), "normal-default")
-    yield* record("step", model("gpt-5.6", "default"), "normal-default")
-    yield* record("compaction", model("summary-model"), "compaction")
-    yield* record("step", model("gpt-5.7"), "after-compaction")
-    yield* record("step", model("gpt-5.8"), "model-switch")
-    yield* record("step", model("gpt-5.8", "high"), "variant-switch")
-    yield* record(
-      "step",
-      CatalogModel.Ref.make({
-        id: CatalogModel.ID.make("gpt-5.8"),
-        providerID: Provider.ID.make("anthropic"),
-        variant: CatalogModel.VariantID.make("high"),
-      }),
-      "provider-switch",
-    )
+      yield* record("step", model("gpt-5.6"), "normal-default")
+      yield* record("step", model("gpt-5.6", "default"), "normal-default")
+      yield* record("compaction", model("summary-model"), "compaction")
+      yield* record("step", model("gpt-5.7"), "after-compaction")
+      yield* record("step", model("gpt-5.8"), "model-switch")
+      yield* record("step", model("gpt-5.8", "high"), "variant-switch")
+      yield* record(
+        "step",
+        CatalogModel.Ref.make({
+          id: CatalogModel.ID.make("gpt-5.8"),
+          providerID: Provider.ID.make("anthropic"),
+          variant: CatalogModel.VariantID.make("high"),
+        }),
+        "provider-switch",
+      )
 
-    expect((yield* service.list(sessionID)).map((item) => item.invalidation)).toEqual([
-      "first-request",
-      "model-variant-switched",
-      "model-switched",
-      "compaction-reset",
-      "model-switched",
-      "model-variant-switched",
-      "model-switched",
-    ])
-  }),
+      expect((yield* service.list(sessionID)).map((item) => item.invalidation)).toEqual([
+        "first-request",
+        "model-variant-switched",
+        "model-switched",
+        "compaction-reset",
+        "model-switched",
+        "model-variant-switched",
+        "model-switched",
+      ])
+    }),
 )
 
 it.effect("records a parent cache reset after provider-isolated hidden compaction ends", () =>

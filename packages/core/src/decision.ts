@@ -181,7 +181,7 @@ export function make(input: {
       Effect.provideService(RequestExecutor.Service, input.executor),
       Effect.mapError((error) => new Error({ reason: nativeFailure(error) })),
       Effect.timeoutOrElse({ duration: settings?.timeout_ms ?? 10_000, orElse: () => Effect.fail(new Error({ reason: "timeout" })) }),
-    )).pipe(Effect.onInterrupt(() => failed), Effect.exit)
+    )).pipe(Effect.onExit(() => tracker.settle()), Effect.onInterrupt(() => failed), Effect.exit)
     if (Exit.isFailure(exit)) {
       yield* failed
       return yield* Effect.failCause(exit.cause)

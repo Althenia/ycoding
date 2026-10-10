@@ -11,7 +11,7 @@ import {
 import { Money } from "@ycoding-ai/schema/money"
 import { classifyProviderFailure } from "@ycoding-ai/ai/provider-error"
 import { SessionError } from "@ycoding-ai/schema/session-error"
-import { Cause, Clock, Effect, Exit, Fiber, FiberSet, Layer, Option, Semaphore, Stream } from "effect"
+import { Cause, Clock, Effect, Exit, Fiber, FiberSet, Layer, Option, Schedule, Semaphore, Stream } from "effect"
 import { Config } from "../../config"
 import { Database } from "../../database/database"
 import { EventRuntime } from "../../event"
@@ -582,6 +582,7 @@ const layer = Layer.effect(
               )
             }
             if (overflowFailure || continuationFailure || publisher.hasProviderError()) return
+            yield* requestTracker.observeEvent(event)
             if (LLMEvent.is.providerError(event) && isContextOverflowFailure(event) && !publisher.hasRetryEvidence()) {
               overflowFailure = event
               return
@@ -692,6 +693,7 @@ const layer = Layer.effect(
           }),
         ),
         Effect.ensuring(serialized(publisher.flush())),
+        Effect.onExit(() => requestTracker.settle()),
       )
 
       const completeProviderRequest = (
@@ -1090,7 +1092,7 @@ const layer = Layer.effect(
         }) ?? Effect.void
       while (true) {
         const attempt = yield* Effect.suspend(() =>
-          attemptStep(
+          (requestTrackerState.current?.retryResume() ?? Effect.void).pipe(Effect.andThen(attemptStep(
             sessionID,
             currentPromotion,
             currentStep,
@@ -1101,7 +1103,7 @@ const layer = Layer.effect(
             () => {
               promoted = true
             },
-          ),
+          ))),
         ).pipe(
           Effect.tapError((error) =>
             error instanceof SessionRunnerRetry.RetryableFailure
@@ -1112,7 +1114,9 @@ const layer = Layer.effect(
                 })
               : Effect.void,
           ),
-          Effect.retryOrElse(SessionRunnerRetry.schedule(events, sessionID, requestTrackerState.attempts), (error) => {
+          Effect.retryOrElse(SessionRunnerRetry.schedule(events, sessionID, requestTrackerState.attempts).pipe(
+            Schedule.tap(() => requestTrackerState.current?.retryWait() ?? Effect.void),
+          ), (error) => {
             if (!(error instanceof SessionRunnerRetry.RetryableFailure)) return Effect.fail(error)
             return completeRetryFallback().pipe(
               Effect.andThen(

@@ -147,15 +147,8 @@ export function generationSpeed(
 ): DiagnosticsSchema.GenerationSpeedHistory | undefined {
   const recentRecords = [...records, ...(current === undefined ? [] : [current])].slice(-8)
   const samples = recentRecords.map((record) => {
-    const tokens = record.timing?.generatedTokens
-    if (record.timing?.generationDurationNs === undefined &&
-      (record.timing?.observedGenerationDurationNs ?? 0) < SessionUsage.minimumObservedGenerationDurationNs) return undefined
-    const durationNs = record.timing?.generationDurationNs ?? record.timing?.observedGenerationDurationNs
-    if (!Number.isSafeInteger(tokens) || !tokens || tokens <= 0 ||
-      !Number.isSafeInteger(durationNs) || !durationNs || durationNs <= 0) return undefined
-    const tokensPerSecond = tokens * 1_000_000_000 / durationNs
-    if (!Number.isFinite(tokensPerSecond) || tokensPerSecond <= 0) return undefined
-    return { model: record.model, tokens, durationNs, tokensPerSecond }
+    const sample = generationSample(record.timing)
+    return sample === undefined ? undefined : { model: record.model, ...sample }
   })
   const newest = recentRecords.at(-1)?.model
   const recent = samples.filter((sample): sample is NonNullable<typeof sample> =>
@@ -164,6 +157,18 @@ export function generationSpeed(
   if (recent.length === 0) return undefined
   const latest = samples.at(-1)
   return { ...(latest === undefined ? {} : { latest }), recent }
+}
+
+export function generationSample(timing: ProviderRequest.Timing | undefined) {
+  const tokens = timing?.generatedTokens
+  if (timing?.generationDurationNs === undefined &&
+    (timing?.observedGenerationDurationNs ?? 0) < SessionUsage.minimumObservedGenerationDurationNs) return undefined
+  const durationNs = timing?.generationDurationNs ?? timing?.observedGenerationDurationNs
+  if (!Number.isSafeInteger(tokens) || !tokens || tokens <= 0 ||
+    !Number.isSafeInteger(durationNs) || !durationNs || durationNs <= 0) return undefined
+  const tokensPerSecond = tokens * 1_000_000_000 / durationNs
+  if (!Number.isFinite(tokensPerSecond) || tokensPerSecond <= 0) return undefined
+  return { tokens, durationNs, tokensPerSecond }
 }
 
 export function latestAssistant(

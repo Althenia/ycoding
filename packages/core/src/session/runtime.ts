@@ -582,11 +582,15 @@ function buildUsageReport(
     }
     grouped.set(group.key, { label: group.label, records: [item.record] })
   }
-  const rows = Array.from(grouped, ([key, value]) => ({
-    key,
-    label: value.label,
-    ...SessionProviderRequest.reportMetrics(value.records),
-  })).toSorted(
+  const rows = Array.from(grouped, ([key, value]) => {
+    const speed = SessionProviderRequest.reportSpeed(value.records)
+    return {
+      key,
+      label: value.label,
+      ...SessionProviderRequest.reportMetrics(value.records),
+      ...(speed === undefined ? {} : { speed }),
+    }
+  }).toSorted(
     usageReportComparator(
       input.sort ?? "key",
       input.order ?? "asc",

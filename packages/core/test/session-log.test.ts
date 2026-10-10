@@ -57,7 +57,11 @@ const projects = Layer.succeed(
   }),
 )
 const catalog = Layer.mock(Catalog.Service, {
-  provider: { get: () => Effect.succeed(undefined), all: () => Effect.succeed([]), available: () => Effect.succeed([]) },
+  provider: {
+    get: () => Effect.succeed(undefined),
+    all: () => Effect.succeed([]),
+    available: () => Effect.succeed([]),
+  },
   model: {
     defaultSelection: () => Effect.succeed(undefined),
     forConnection: (model) => Effect.succeed(model),
@@ -65,9 +69,8 @@ const catalog = Layer.mock(Catalog.Service, {
       const cost =
         providerID === Provider.ID.make("openai") && modelID === CatalogModel.ID.make("provider-priced")
           ? 2
-          :
-              providerID === Provider.ID.openrouter &&
-                ["anthropic/fallback-priced", "openai/provider-priced"].includes(modelID)
+          : providerID === Provider.ID.openrouter &&
+              ["anthropic/fallback-priced", "openai/provider-priced"].includes(modelID)
             ? 20
             : undefined
       return Effect.succeed(
@@ -93,7 +96,15 @@ const catalog = Layer.mock(Catalog.Service, {
 })
 const it = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node, SessionStore.node, SessionProviderRequest.node, Catalog.node, Session.node]),
+    LayerNode.group([
+      Database.node,
+      EventRuntime.node,
+      SessionProjector.node,
+      SessionStore.node,
+      SessionProviderRequest.node,
+      Catalog.node,
+      Session.node,
+    ]),
     [
       [Project.node, projects],
       [SessionExecution.node, SessionExecution.noopLayer],
@@ -104,6 +115,62 @@ const it = testEffect(
 const location = Location.Ref.make({ directory: AbsolutePath.make(process.cwd()) })
 
 describe("Session.log", () => {
+  it.effect("reports speed from field-specific populations in both Session and global reports", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const events = yield* EventRuntime.Service
+      const created = yield* session.create({ location })
+      const timings = [
+        { firstOutputMs: 10, totalMs: 100, generatedTokens: 20, generationDurationNs: 1_000_000_000 },
+        {
+          firstOutputMs: 20,
+          totalMs: 300,
+          generatedTokens: 30,
+          observedGenerationDurationNs: 2_000_000_000,
+          generationDurationNs: 9_000_000_000,
+        },
+        { firstOutputMs: 100 },
+        { totalMs: 200, generatedTokens: 999 },
+        undefined,
+        { generatedTokens: 2_355, observedGenerationDurationNs: 71_223_792 },
+      ]
+      for (const [index, timing] of timings.entries())
+        yield* events.publish(SessionEvent.ProviderRequestRecorded, {
+          id: ProviderRequest.ID.make(`prq_report_speed_${index}`),
+          sessionID: created.id,
+          source: "step",
+          agent: Agent.ID.make("build"),
+          model: CatalogModel.Ref.make({ providerID: Provider.ID.make("custom"), id: CatalogModel.ID.make("speed") }),
+          routeID: "test",
+          promptCacheKey: "cache",
+          systemDigest: "system",
+          toolDigest: "tool",
+          request: index + 1,
+          attempts: 1,
+          invalidation: "first-request",
+          continuation: "full",
+          tokens: { input: 0, output: 10, reasoning: 0, cache: { read: 0, write: 0 } },
+          ...(timing === undefined ? {} : { timing }),
+          time: DateTime.makeUnsafe(0),
+        })
+      const local = yield* session.usageReport({ sessionID: created.id, group: "model" })
+      const global = yield* session.usageReportAll({ group: "model" })
+      expect(local.rows[0]?.speed).toEqual({
+        firstOutputP50Ms: 20,
+        firstOutputP95Ms: 100,
+        totalP50Ms: 200,
+        totalP95Ms: 300,
+        outputTokensPerSecond: 5,
+        samples: 3,
+      })
+      expect(global.rows).toEqual(local.rows)
+      expect(SessionProviderRequest.reportSpeed([])).toBeUndefined()
+      const ledger = yield* SessionProviderRequest.Service
+      const absent = (yield* ledger.list(created.id)).slice(3)
+      expect(SessionProviderRequest.reportSpeed(absent)).toEqual({ totalP50Ms: 200, totalP95Ms: 200, samples: 0 })
+      expect(SessionProviderRequest.reportSpeed(absent.slice(1))).toBeUndefined()
+    }),
+  )
   it.effect("reads durable provider usage through the Session service", () =>
     Effect.gen(function* () {
       const session = yield* Session.Service
@@ -149,7 +216,12 @@ describe("Session.log", () => {
       const root = yield* session.create({ location })
       const child = yield* session.create({ parentID: root.id })
       const grandchild = yield* session.create({ parentID: child.id })
-      const record = Effect.fnUntraced(function* (sessionID: Session.ID, id: string, providerID: string, model: string) {
+      const record = Effect.fnUntraced(function* (
+        sessionID: Session.ID,
+        id: string,
+        providerID: string,
+        model: string,
+      ) {
         yield* events.publish(SessionEvent.ProviderRequestRecorded, {
           id: ProviderRequest.ID.make(`prq_${id}`),
           sessionID,
@@ -203,11 +275,24 @@ describe("Session.log", () => {
       const events = yield* EventRuntime.Service
       const created = yield* session.create({ location })
       yield* events.publish(SessionEvent.ProviderRequestRecorded, {
-        id: ProviderRequest.ID.make("prq_decision_unpriced"), sessionID: created.id, source: "decision",
-        agent: Agent.ID.make("build"), model: CatalogModel.Ref.make({ providerID: Provider.ID.make("openai"), id: CatalogModel.ID.make("provider-priced") }),
-        routeID: "openai-decisions", promptCacheKey: "decision", systemDigest: "system", toolDigest: "tools",
-        request: 1, attempts: 1, invalidation: "cache-disabled", continuation: "full",
-        tokens: { input: 1000, output: 100, reasoning: 0, cache: { read: 0, write: 0 } }, time: yield* DateTime.now,
+        id: ProviderRequest.ID.make("prq_decision_unpriced"),
+        sessionID: created.id,
+        source: "decision",
+        agent: Agent.ID.make("build"),
+        model: CatalogModel.Ref.make({
+          providerID: Provider.ID.make("openai"),
+          id: CatalogModel.ID.make("provider-priced"),
+        }),
+        routeID: "openai-decisions",
+        promptCacheKey: "decision",
+        systemDigest: "system",
+        toolDigest: "tools",
+        request: 1,
+        attempts: 1,
+        invalidation: "cache-disabled",
+        continuation: "full",
+        tokens: { input: 1000, output: 100, reasoning: 0, cache: { read: 0, write: 0 } },
+        time: yield* DateTime.now,
       })
       const usage = yield* session.usage(created.id)
       expect(usage.logical).toBe(1)
@@ -352,10 +437,14 @@ describe("Session.log", () => {
       expect(byModel.rows.find((row) => row.label.includes("missing"))).not.toHaveProperty("cost")
       for (const sort of ["steps", "input", "output", "reasoning", "cacheRead", "cacheWrite"] as const) {
         expect(
-          (yield* session.usageReport({ sessionID: root.id, group: "agent", sort, order: "asc" })).rows.map((row) => row.key),
+          (yield* session.usageReport({ sessionID: root.id, group: "agent", sort, order: "asc" })).rows.map(
+            (row) => row.key,
+          ),
         ).toEqual(["review", "build"])
         expect(
-          (yield* session.usageReport({ sessionID: root.id, group: "agent", sort, order: "desc" })).rows.map((row) => row.key),
+          (yield* session.usageReport({ sessionID: root.id, group: "agent", sort, order: "desc" })).rows.map(
+            (row) => row.key,
+          ),
         ).toEqual(["build", "review"])
       }
       expect(
@@ -430,10 +519,16 @@ describe("Session.log", () => {
       )
 
       expect(yield* session.usageReport({ sessionID: created.id, group: "day" })).toMatchObject({
-        rows: [{ key: "2026-01-31", logical: 1 }, { key: "2026-02-01", logical: 3 }],
+        rows: [
+          { key: "2026-01-31", logical: 1 },
+          { key: "2026-02-01", logical: 3 },
+        ],
       })
       expect(yield* session.usageReport({ sessionID: created.id, group: "month" })).toMatchObject({
-        rows: [{ key: "2026-01", logical: 1 }, { key: "2026-02", logical: 3 }],
+        rows: [
+          { key: "2026-01", logical: 1 },
+          { key: "2026-02", logical: 3 },
+        ],
       })
       const page = yield* session.usageReport({ sessionID: created.id, group: "hour", offset: 1, limit: 1 })
       expect(page).toMatchObject({
@@ -444,13 +539,13 @@ describe("Session.log", () => {
       })
       expect(page.total).not.toHaveProperty("cost")
       expect(
-        (yield* session.usageReport({
+        yield* session.usageReport({
           sessionID: created.id,
           group: "hour",
           sort: "tokens",
           order: "desc",
           limit: 2,
-        })),
+        }),
       ).toMatchObject({
         rowCount: 3,
         nextOffset: 2,
@@ -466,12 +561,14 @@ describe("Session.log", () => {
           limit: 2,
         })).rows.map((row) => row.key),
       ).toEqual(["2026-01-31T23:00:00.000Z", "2026-02-01T01:00:00.000Z"])
-      expect(yield* session.usageReport({
-        sessionID: created.id,
-        group: "hour",
-        from: Date.UTC(2026, 1, 1),
-        to: Date.UTC(2026, 1, 1, 1),
-      })).toMatchObject({
+      expect(
+        yield* session.usageReport({
+          sessionID: created.id,
+          group: "hour",
+          from: Date.UTC(2026, 1, 1),
+          to: Date.UTC(2026, 1, 1, 1),
+        }),
+      ).toMatchObject({
         rowCount: 1,
         rows: [{ key: "2026-02-01T00:00:00.000Z", logical: 2 }],
         total: { logical: 2 },
@@ -549,7 +646,9 @@ describe("Session.log", () => {
       yield* session.archive(child.id)
 
       const requests = yield* SessionProviderRequest.Service
-      expect((yield* requests.listAll({ from: times[1], to: times[2] })).map((record) => record.id)).toEqual([ProviderRequest.ID.make("prq_global_child")])
+      expect((yield* requests.listAll({ from: times[1], to: times[2] })).map((record) => record.id)).toEqual([
+        ProviderRequest.ID.make("prq_global_child"),
+      ])
 
       expect(yield* session.usageAll()).toMatchObject({ logical: 3, physical: 3 })
       expect(yield* session.usageReportAll({ group: "project" })).toMatchObject({
@@ -560,19 +659,23 @@ describe("Session.log", () => {
         ],
         total: { logical: 3 },
       })
-      expect(yield* session.usageReportAll({ group: "session", sort: "tokens", order: "desc", limit: 2 })).toMatchObject({
+      expect(
+        yield* session.usageReportAll({ group: "session", sort: "tokens", order: "desc", limit: 2 }),
+      ).toMatchObject({
         rowCount: 3,
         nextOffset: 2,
         rows: [{ key: child.id }, { key: secondRoot.id }],
         total: { logical: 3, tokens: { input: 60 } },
       })
-      expect(yield* session.usageReportAll({
-        group: "day",
-        from: times[1],
-        to: times[2] + 1,
-        offset: 1,
-        limit: 1,
-      })).toMatchObject({
+      expect(
+        yield* session.usageReportAll({
+          group: "day",
+          from: times[1],
+          to: times[2] + 1,
+          offset: 1,
+          limit: 1,
+        }),
+      ).toMatchObject({
         rowCount: 2,
         rows: [{ key: "2026-03-03" }],
         total: { logical: 2, tokens: { input: 50 } },
@@ -586,41 +689,75 @@ describe("Session.log", () => {
       const events = yield* EventRuntime.Service
       const created = yield* session.create({ location })
       const times = [
-        Date.UTC(2026, 2, 8, 4, 30), Date.UTC(2026, 2, 8, 5, 30),
-        Date.UTC(2026, 2, 9, 3, 30), Date.UTC(2026, 2, 9, 4, 30),
-        Date.UTC(2027, 2, 8, 18, 14), Date.UTC(2027, 2, 8, 18, 15),
-        Date.UTC(2027, 3, 30, 18, 14), Date.UTC(2027, 3, 30, 18, 15),
-        Date.UTC(2026, 9, 25, 0, 30), Date.UTC(2026, 9, 25, 1, 30),
+        Date.UTC(2026, 2, 8, 4, 30),
+        Date.UTC(2026, 2, 8, 5, 30),
+        Date.UTC(2026, 2, 9, 3, 30),
+        Date.UTC(2026, 2, 9, 4, 30),
+        Date.UTC(2027, 2, 8, 18, 14),
+        Date.UTC(2027, 2, 8, 18, 15),
+        Date.UTC(2027, 3, 30, 18, 14),
+        Date.UTC(2027, 3, 30, 18, 15),
+        Date.UTC(2026, 9, 25, 0, 30),
+        Date.UTC(2026, 9, 25, 1, 30),
       ]
-      yield* Effect.forEach(times, (time, index) => events.publish(SessionEvent.ProviderRequestRecorded, {
-        id: ProviderRequest.ID.make(`prq_zoned_${index}`),
-        sessionID: created.id,
-        source: "step",
-        agent: Agent.ID.make("build"),
-        model: CatalogModel.Ref.make({ providerID: Provider.ID.make("openai"), id: CatalogModel.ID.make("provider-priced") }),
-        routeID: "test-route",
-        promptCacheKey: "test-cache",
-        systemDigest: "test-system",
-        toolDigest: "test-tools",
-        request: index + 1,
-        attempts: 1,
-        invalidation: "first-request",
-        continuation: "full",
-        tokens: { input: 1, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-        time: DateTime.makeUnsafe(time),
-      }))
+      yield* Effect.forEach(times, (time, index) =>
+        events.publish(SessionEvent.ProviderRequestRecorded, {
+          id: ProviderRequest.ID.make(`prq_zoned_${index}`),
+          sessionID: created.id,
+          source: "step",
+          agent: Agent.ID.make("build"),
+          model: CatalogModel.Ref.make({
+            providerID: Provider.ID.make("openai"),
+            id: CatalogModel.ID.make("provider-priced"),
+          }),
+          routeID: "test-route",
+          promptCacheKey: "test-cache",
+          systemDigest: "test-system",
+          toolDigest: "test-tools",
+          request: index + 1,
+          attempts: 1,
+          invalidation: "first-request",
+          continuation: "full",
+          tokens: { input: 1, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          time: DateTime.makeUnsafe(time),
+        }),
+      )
 
       const spring = { group: "day" as const, from: Date.UTC(2026, 2, 8, 5), to: Date.UTC(2026, 2, 9, 4) }
       expect(yield* session.usageAll()).toEqual(yield* session.usage(created.id))
-      expect(yield* session.usageReportAll(spring)).toEqual(yield* session.usageReport({ sessionID: created.id, ...spring }))
+      expect(yield* session.usageReportAll(spring)).toEqual(
+        yield* session.usageReport({ sessionID: created.id, ...spring }),
+      )
       const berlin = { group: "hour" as const, timeZone: "Europe/Berlin", from: times[8], to: times[9]! + 1 }
-      expect(yield* session.usageReportAll(berlin)).toEqual(yield* session.usageReport({ sessionID: created.id, ...berlin }))
-      expect((yield* session.usageReportAll({ ...spring, timeZone: "America/New_York" })).rows.map((row) => [row.key, row.logical])).toEqual([["2026-03-08", 2]])
+      expect(yield* session.usageReportAll(berlin)).toEqual(
+        yield* session.usageReport({ sessionID: created.id, ...berlin }),
+      )
+      expect(
+        (yield* session.usageReportAll({ ...spring, timeZone: "America/New_York" })).rows.map((row) => [
+          row.key,
+          row.logical,
+        ]),
+      ).toEqual([["2026-03-08", 2]])
       expect((yield* session.usageReportAll(spring)).rows.map((row) => row.key)).toEqual(["2026-03-08", "2026-03-09"])
-      expect((yield* session.usageReportAll({ group: "day", timeZone: "Asia/Kathmandu", from: times[4], to: times[5]! + 1 })).rows.map((row) => row.key)).toEqual(["2027-03-08", "2027-03-09"])
-      expect((yield* session.usageReportAll({ group: "month", timeZone: "Asia/Kathmandu", from: times[6], to: times[7]! + 1 })).rows.map((row) => row.key)).toEqual(["2027-04", "2027-05"])
+      expect(
+        (yield* session.usageReportAll({
+          group: "day",
+          timeZone: "Asia/Kathmandu",
+          from: times[4],
+          to: times[5]! + 1,
+        })).rows.map((row) => row.key),
+      ).toEqual(["2027-03-08", "2027-03-09"])
+      expect(
+        (yield* session.usageReportAll({
+          group: "month",
+          timeZone: "Asia/Kathmandu",
+          from: times[6],
+          to: times[7]! + 1,
+        })).rows.map((row) => row.key),
+      ).toEqual(["2027-04", "2027-05"])
       expect((yield* session.usageReportAll(berlin)).rows.map((row) => row.key)).toEqual([
-        "2026-10-25T02:00:00+02:00", "2026-10-25T02:00:00+01:00",
+        "2026-10-25T02:00:00+02:00",
+        "2026-10-25T02:00:00+01:00",
       ])
     }),
   )

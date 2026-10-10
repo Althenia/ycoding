@@ -7,6 +7,9 @@ import type {
   ServerTelemetryAppendOutput,
   ServerTelemetryListInput,
   ServerTelemetryListOutput,
+  ServerTelemetryConsentGetOutput,
+  ServerTelemetryConsentSetInput,
+  ServerTelemetryConsentSetOutput,
   LocationGetInput,
   LocationGetOutput,
   AgentListInput,
@@ -542,7 +545,7 @@ export function make(options: ClientOptions) {
               path: `/api/server/web-latency`,
               body: { samples: input["samples"] },
               successStatus: 200,
-              declaredStatuses: [400, 401],
+              declaredStatuses: [400, 403, 401],
               empty: false,
             },
             requestOptions,
@@ -559,6 +562,31 @@ export function make(options: ClientOptions) {
             },
             requestOptions,
           ),
+        consent: {
+          get: (requestOptions?: RequestOptions) =>
+            request<ServerTelemetryConsentGetOutput>(
+              {
+                method: "GET",
+                path: `/api/server/telemetry/consent`,
+                successStatus: 200,
+                declaredStatuses: [401, 400],
+                empty: false,
+              },
+              requestOptions,
+            ),
+          set: (input: ServerTelemetryConsentSetInput, requestOptions?: RequestOptions) =>
+            request<ServerTelemetryConsentSetOutput>(
+              {
+                method: "PUT",
+                path: `/api/server/telemetry/consent`,
+                body: { enabled: input["enabled"], noticeVersion: input["noticeVersion"] },
+                successStatus: 200,
+                declaredStatuses: [401, 400],
+                empty: false,
+              },
+              requestOptions,
+            ),
+        },
       },
     },
     location: {

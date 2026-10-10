@@ -20,7 +20,7 @@ export const ServerGroup = HttpApiGroup.make("server.server")
     HttpApiEndpoint.post("telemetry.append", "/api/server/web-latency", {
       payload: Telemetry.Batch,
       success: Schema.Struct({ accepted: Schema.Int }),
-      error: InvalidRequestError,
+      error: [InvalidRequestError, Telemetry.TelemetryDisabled],
     }).annotateMerge(
       OpenApi.annotations({
         identifier: "telemetry.append",
@@ -44,6 +44,21 @@ export const ServerGroup = HttpApiGroup.make("server.server")
         identifier: "telemetry.list",
         summary: "Read recent machine-local Web latency samples",
       }),
+    ),
+  )
+  .add(
+    HttpApiEndpoint.get("telemetry.consent.get", "/api/server/telemetry/consent", {
+      success: Telemetry.ConsentState,
+    }).annotateMerge(
+      OpenApi.annotations({ identifier: "telemetry.consent.get", summary: "Read machine-local telemetry consent" }),
+    ),
+  )
+  .add(
+    HttpApiEndpoint.put("telemetry.consent.set", "/api/server/telemetry/consent", {
+      payload: Telemetry.ConsentInput,
+      success: Telemetry.Consent,
+    }).annotateMerge(
+      OpenApi.annotations({ identifier: "telemetry.consent.set", summary: "Set machine-local telemetry consent" }),
     ),
   )
   .annotateMerge(OpenApi.annotations({ title: "server" }))

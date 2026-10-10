@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "b62baca3-c955-43bc-9168-7da04223ea3f",
+  "id": "34121609-0e89-4ff9-924e-f9943b6ff5de",
   "prevIds": [
-    "66fad4f6-a3e3-4491-8aca-0140abba7612"
+    "b62baca3-c955-43bc-9168-7da04223ea3f"
   ],
   "ddl": [
     {
@@ -184,6 +184,10 @@
     },
     {
       "name": "shell",
+      "entityType": "tables"
+    },
+    {
+      "name": "telemetry_consent",
       "entityType": "tables"
     },
     {
@@ -4659,6 +4663,46 @@
     {
       "type": "integer",
       "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "telemetry_consent"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "enabled",
+      "entityType": "columns",
+      "table": "telemetry_consent"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "notice_version",
+      "entityType": "columns",
+      "table": "telemetry_consent"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "decided_at",
+      "entityType": "columns",
+      "table": "telemetry_consent"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
       "autoincrement": true,
       "default": null,
       "generated": null,
@@ -6091,6 +6135,15 @@
       "nameExplicit": false,
       "name": "shell_pk",
       "table": "shell",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "telemetry_consent_pk",
+      "table": "telemetry_consent",
       "entityType": "pks"
     },
     {
@@ -7992,6 +8045,12 @@
       "name": "session_todo_state_time_check",
       "entityType": "checks",
       "table": "session_todo_state"
+    },
+    {
+      "value": "\"id\" = 1",
+      "name": "telemetry_consent_single_row",
+      "entityType": "checks",
+      "table": "telemetry_consent"
     }
   ],
   "renames": []

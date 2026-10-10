@@ -211,6 +211,8 @@ const make = (dependencies: Dependencies): Interface => {
       setFailure: (code) => {
         failure = code
       },
+      observeEvent: tracker.observeEvent,
+      settle: tracker.settle,
     }).pipe(
       Effect.ensuring(
         Effect.suspend(() =>
@@ -515,6 +517,8 @@ const remoteCompaction = Effect.fn("SessionCompaction.remote")(function* (
     let usage: SessionUsage.Recorded | undefined
     let timing: ReturnType<typeof SessionUsage.timing>
     yield* dependencies.llm.stream(request).pipe(
+      Stream.tap(tracker.observeEvent),
+      Stream.onExit(() => tracker.settle()),
       Stream.runForEach((event) =>
         Effect.sync(() => {
           if (LLMEvent.is.providerError(event)) failed = true
@@ -1234,9 +1238,13 @@ function startStreamed(
     readonly chunks: string[]
     readonly updateUsage: (step: SessionUsage.Recorded, timing: ReturnType<typeof SessionUsage.timing>) => void
     readonly setFailure: (code: FailureCode) => void
+    readonly observeEvent: SessionProviderRequest.Tracker["observeEvent"]
+    readonly settle: SessionProviderRequest.Tracker["settle"]
   },
 ) {
   return dependencies.llm.stream(request).pipe(
+    Stream.tap(hooks.observeEvent),
+    Stream.onExit(() => hooks.settle()),
     Stream.runForEach((event) => {
       if (LLMEvent.is.providerError(event))
         hooks.setFailure(event.classification === "context-overflow" ? "context_limit_unresolved" : "provider_failed")

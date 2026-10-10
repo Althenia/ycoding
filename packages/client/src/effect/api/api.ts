@@ -36,11 +36,28 @@ export type Endpoint1_2Input = {
 export type Endpoint1_2Output = EffectValue<ReturnType<RawClient["server.server"]["telemetry.list"]>>
 export type ServerTelemetryListOperation<E = never> = (input?: Endpoint1_2Input) => Effect.Effect<Endpoint1_2Output, E>
 
+export type Endpoint1_3Output = EffectValue<ReturnType<RawClient["server.server"]["telemetry.consent.get"]>>
+export type ServerTelemetryConsentGetOperation<E = never> = () => Effect.Effect<Endpoint1_3Output, E>
+
+type Endpoint1_4Request = Parameters<RawClient["server.server"]["telemetry.consent.set"]>[0]
+export type Endpoint1_4Input = {
+  readonly enabled: Endpoint1_4Request["payload"]["enabled"]
+  readonly noticeVersion: Endpoint1_4Request["payload"]["noticeVersion"]
+}
+export type Endpoint1_4Output = EffectValue<ReturnType<RawClient["server.server"]["telemetry.consent.set"]>>
+export type ServerTelemetryConsentSetOperation<E = never> = (
+  input: Endpoint1_4Input,
+) => Effect.Effect<Endpoint1_4Output, E>
+
 export interface ServerApi<E = never> {
   readonly get: ServerGetOperation<E>
   readonly telemetry: {
     readonly append: ServerTelemetryAppendOperation<E>
     readonly list: ServerTelemetryListOperation<E>
+    readonly consent: {
+      readonly get: ServerTelemetryConsentGetOperation<E>
+      readonly set: ServerTelemetryConsentSetOperation<E>
+    }
   }
 }
 

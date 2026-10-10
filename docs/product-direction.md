@@ -8,6 +8,8 @@ YCoding owns its runtime, terminal experience, package names, configuration, sto
 
 The product goal is a dependable, highly customizable coding-agent runtime with durable execution state, explicit orchestration, and provider-efficient model usage.
 
+Latency and client-timing telemetry is local-only and consent-gated, disabled until the user enables the machine-wide choice.
+
 Sessions and subagents can select named profiles independently for the same provider and model. Explicit selections remain bound to their accounts, with isolated authentication, provider state, and cache affinity; account replacement requires explicit reselection rather than automatic rotation.
 
 ## Priorities

@@ -119,6 +119,8 @@ const layer = Layer.effect(Service, Effect.gen(function* () {
         )
       })
       const exit = yield* llm.stream(request).pipe(
+        Stream.tap(tracker.observeEvent),
+        Stream.onExit(() => tracker.settle()),
         Stream.runForEach((event) => {
           if (LLMEvent.is.providerError(event) || LLMEvent.is.toolCall(event)) failed = true
           if (LLMEvent.is.finish(event)) {

@@ -12,6 +12,34 @@ const request = {
   totalMs: 25,
 }
 
+test("decodes closed client timings and rejects excess properties", () => {
+  const sample = { kind: "client", at: request.at, surface: "tui", metric: "prompt.admit", durationMs: 12 } as const
+  expect(Schema.decodeUnknownSync(Telemetry.Sample)(sample)).toEqual(sample)
+  for (const surface of ["tui", "web"] as const)
+    for (const metric of ["prompt.admit", "stream.delay", "transcript.load"] as const)
+      expect(Schema.decodeUnknownSync(Telemetry.Sample)({ ...sample, surface, metric })).toMatchObject({ surface, metric })
+  for (const invalid of [
+    { ...sample, surface: "mobile" },
+    { ...sample, metric: "private" },
+    { ...sample, url: "private" },
+  ])
+    expect(() => Schema.decodeUnknownSync(Telemetry.Sample)(invalid)).toThrow()
+})
+
+test("validates notice versions and omits undecided consent", () => {
+  expect(Schema.decodeUnknownSync(Telemetry.ConsentInput)({ enabled: true, noticeVersion: 1 })).toEqual({
+    enabled: true,
+    noticeVersion: 1,
+  })
+  expect(() => Schema.decodeUnknownSync(Telemetry.ConsentInput)({ enabled: true, noticeVersion: 2 })).toThrow()
+  expect(() =>
+    Schema.decodeUnknownSync(Telemetry.ConsentInput)({ enabled: true, noticeVersion: 1, extra: true }),
+  ).toThrow()
+  expect(Schema.encodeSync(Telemetry.ConsentState)({ consent: undefined, noticeVersion: 1 })).toEqual({
+    noticeVersion: 1,
+  })
+})
+
 test("accepts only bounded anonymous request and long-task telemetry batches", () => {
   const valid = [request, { kind: "long-task", at: request.at, durationMs: 50 }]
   expect(Schema.is(Telemetry.Batch)({ samples: valid })).toBe(true)

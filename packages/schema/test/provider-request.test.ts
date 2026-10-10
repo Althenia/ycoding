@@ -29,6 +29,16 @@ const record = {
   time: 1,
 }
 
+test("encodes optional consent-gated timing and report speed without undefined fields", () => {
+  const timing = { firstOutputMs: 25, totalMs: 250, retryWaitMs: 100 }
+  expect(Schema.decodeUnknownSync(ProviderRequest.Timing)(timing)).toEqual(timing)
+  expect(() => Schema.decodeUnknownSync(ProviderRequest.Timing)({ firstOutputMs: -1 })).toThrow()
+  expect(
+    Schema.encodeSync(ProviderRequest.Timing)({ firstOutputMs: undefined, totalMs: undefined, retryWaitMs: undefined }),
+  ).toEqual({})
+  expect(Schema.encodeSync(ProviderRequest.Speed)({ samples: 0, firstOutputP50Ms: undefined })).toEqual({ samples: 0 })
+})
+
 test("decodes content-free provider request records", () => {
   const decoded = decode(record)
   expect(decoded.source).toBe("step")
@@ -39,11 +49,14 @@ test("decodes content-free provider request records", () => {
   expect(decode({ ...record, cacheReadReported: true }).cacheReadReported).toBe(true)
   expect(decode({ ...record, cacheReadReported: false }).cacheReadReported).toBe(false)
   expect(decoded).not.toHaveProperty("cacheReadReported")
-  expect(decode({ ...record, timing: { promptEvalDurationNs: 0, generationDurationNs: 5 } }).timing)
-    .toEqual({ promptEvalDurationNs: 0, generationDurationNs: 5 })
+  expect(decode({ ...record, timing: { promptEvalDurationNs: 0, generationDurationNs: 5 } }).timing).toEqual({
+    promptEvalDurationNs: 0,
+    generationDurationNs: 5,
+  })
   expect(() => decode({ ...record, timing: { promptEvalDurationNs: -1 } })).toThrow()
-  expect(decode({ ...record, timing: { generatedTokens: 12, observedGenerationDurationNs: 2_000_000 } }).timing)
-    .toEqual({ generatedTokens: 12, observedGenerationDurationNs: 2_000_000 })
+  expect(
+    decode({ ...record, timing: { generatedTokens: 12, observedGenerationDurationNs: 2_000_000 } }).timing,
+  ).toEqual({ generatedTokens: 12, observedGenerationDurationNs: 2_000_000 })
   expect(() => decode({ ...record, timing: { generatedTokens: -1 } })).toThrow()
 })
 
@@ -94,8 +107,9 @@ test("preserves optional cache-read reporting certainty on summaries and model s
   }
   expect(decodeSummary({ ...metrics, cacheReadReported: true }).cacheReadReported).toBe(true)
   expect(decodeSummary(metrics)).not.toHaveProperty("cacheReadReported")
-  expect(decodeSummary({ ...metrics, latestTiming: { loadDurationNs: 12 } }).latestTiming)
-    .toEqual({ loadDurationNs: 12 })
+  expect(decodeSummary({ ...metrics, latestTiming: { loadDurationNs: 12 } }).latestTiming).toEqual({
+    loadDurationNs: 12,
+  })
   expect(
     decodeSummary({
       ...metrics,
@@ -110,8 +124,14 @@ test("preserves optional cache-read reporting certainty on summaries and model s
 
 test("validates bounded usage report inputs", () => {
   expect(decodeReportInput({ group: "day" })).toEqual({ group: "day" })
-  expect(decodeReportInput({ group: "day", timeZone: "America/New_York" })).toEqual({ group: "day", timeZone: "America/New_York" })
-  expect(decodeReportInput({ group: "month", timeZone: "Asia/Kathmandu" })).toEqual({ group: "month", timeZone: "Asia/Kathmandu" })
+  expect(decodeReportInput({ group: "day", timeZone: "America/New_York" })).toEqual({
+    group: "day",
+    timeZone: "America/New_York",
+  })
+  expect(decodeReportInput({ group: "month", timeZone: "Asia/Kathmandu" })).toEqual({
+    group: "month",
+    timeZone: "Asia/Kathmandu",
+  })
   expect(
     decodeReportInput({ group: "model", from: 0, to: 1, offset: 0, limit: 200, sort: "tokens", order: "desc" }),
   ).toEqual({

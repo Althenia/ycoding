@@ -27,5 +27,6 @@ export const migrations = (
     import("./migration/20261004094144_shell-ledger"),
     import("./migration/20261004154315_web-latency"),
     import("./migration/20261008065350_provider-profiles"),
+    import("./migration/20261010015127_telemetry-consent"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]
