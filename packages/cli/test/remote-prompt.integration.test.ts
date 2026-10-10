@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import path from "node:path"
+import { ptyOutput } from "./pty-output"
 
 // Integration proof for the remote enrollment prompt: a real pseudo-terminal
 // runs the module exactly as the CLI does, and a real pipe covers the
@@ -72,6 +73,28 @@ describe("remote-prompt hidden input (integration)", () => {
     timeout,
   )
 
+  ptyTest(
+    "rejects absent markers after the PTY output ends",
+    async () => {
+      const session = startPty()
+      try {
+        await session.waitFor("READY")
+        const pending = session.waitFor("MISSING=").then(
+          () => undefined,
+          (error: unknown) => error,
+        )
+        session.write("SYNTHETIC-CODE\r")
+        expect(await pending).toMatchObject({ message: expect.stringContaining("PTY ended") })
+        expect(await session.waitFor("TERMIOS=")).toContain("TERMIOS=restored")
+        expect(await session.exited).toBe(0)
+        await expect(session.waitFor("MISSING=")).rejects.toThrow("PTY ended")
+      } finally {
+        session.close()
+      }
+    },
+    timeout,
+  )
+
   test(
     "reads a piped value to the end, trims it, and writes no prompt",
     async () => {
@@ -102,49 +125,31 @@ function before(output: string, marker: string) {
 }
 
 function startPty() {
-  const output: string[] = []
-  const waiting = new Map<string, ReturnType<typeof Promise.withResolvers<string>>>()
-  const terminal = new Bun.Terminal({
-    cols: 100,
-    rows: 30,
-    data(_terminal, data) {
-      output.push(Buffer.from(data).toString("utf8"))
-      const text = output.join("")
-      for (const [marker, reader] of waiting) {
-        if (!text.includes(marker)) continue
-        waiting.delete(marker)
-        reader.resolve(text)
-      }
-    },
-  })
+  const output = ptyOutput()
   const child = Bun.spawn([process.execPath, fixture], {
     cwd,
-    terminal,
+    terminal: {
+      cols: 100,
+      rows: 30,
+      data(_terminal, data) {
+        output.data(data)
+      },
+      exit(_terminal, code) {
+        output.exit(code)
+      },
+    },
     env: { ...process.env, TERM: "xterm-256color" },
   })
-  void child.exited.then((code) => {
-    for (const [marker, reader] of waiting) {
-      reader.reject(new Error(`process exited ${code} waiting for ${marker}; saw ${JSON.stringify(output.join(""))}`))
-    }
-    waiting.clear()
-  })
+  const terminal = child.terminal!
   return {
     localFlags: () => terminal.localFlags,
     exited: child.exited,
     write: (data: string) => terminal.write(data),
     close: () => {
-      for (const reader of waiting.values()) reader.reject(new Error("terminal closed"))
-      waiting.clear()
+      output.close()
       child.kill()
       terminal.close()
     },
-    async waitFor(marker: string) {
-      const text = output.join("")
-      if (text.includes(marker)) return text
-      if (child.exitCode !== null) throw new Error(`process exited ${child.exitCode} waiting for ${marker}; saw ${JSON.stringify(text)}`)
-      const reader = Promise.withResolvers<string>()
-      waiting.set(marker, reader)
-      return reader.promise
-    },
+    waitFor: (marker: string) => output.waitFor(marker),
   }
 }
