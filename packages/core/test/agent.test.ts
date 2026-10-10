@@ -293,7 +293,8 @@ describe("Agent", () => {
         throw new Error("expected maintained built-in prompts")
       }
       expect(god.system).toContain("Explicit permission denies remain denied.")
-      expect(god.system).toContain("Only effective YOLO 3 auto-approves guardrail reviews.")
+      expect(god.system).toContain("1 auto-approves ask permissions and ordinary guardrail reviews")
+      expect(god.system).toContain("Hard reviews always require a human decision.")
       expect(zeus.system).toContain("You are a durable child Session")
       expect(zeus.system).toContain("Do not spawn child agents")
       expect(title.system).toContain("Output exactly one natural thread title")
