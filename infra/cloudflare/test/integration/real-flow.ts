@@ -602,6 +602,15 @@ try {
   expect(familyStatus.status === "ok" && isRecord(familyStatus.value) && Array.isArray(familyStatus.value.running) && Array.isArray(familyStatus.value.attention),
     `family status failed: ${JSON.stringify(familyStatus)}`)
   const latencySample = { kind: "request", at: new Date().toISOString(), operation: "session.list", outcome: "ok", queueMs: 431, settlementMs: 17, totalMs: 448 }
+  const consentUndecided = await probeRequest("machine.telemetry.consent.get")
+  expect(consentUndecided.status === "ok" && isRecord(consentUndecided.value) && isRecord(consentUndecided.value.data) && consentUndecided.value.data.noticeVersion === 1 && consentUndecided.value.data.consent === undefined,
+    `machine telemetry consent was not undecided through the relay: ${JSON.stringify(consentUndecided)}`)
+  const latencyRefused = await probeRequest("machine.latency.append", { input: { samples: [latencySample] } })
+  expect(latencyRefused.status === "failed" && latencyRefused.error.code === "telemetry_disabled",
+    `machine latency was saved without consent: ${JSON.stringify(latencyRefused)}`)
+  const consentGranted = await probeRequest("machine.telemetry.consent.set", { input: { enabled: true, noticeVersion: 1 } })
+  expect(consentGranted.status === "ok" && isRecord(consentGranted.value) && isRecord(consentGranted.value.data) && consentGranted.value.data.enabled === true,
+    `machine telemetry consent was not saved through the relay: ${JSON.stringify(consentGranted)}`)
   const latencySaved = await probeRequest("machine.latency.append", { input: { samples: [latencySample] } })
   expect(latencySaved.status === "ok" && isRecord(latencySaved.value) && latencySaved.value.accepted === 1,
     `machine latency was not saved through the relay: ${JSON.stringify(latencySaved)}`)
@@ -614,7 +623,7 @@ try {
   expect(localLatency.status === 200 && isRecord(localLatencyBody) && Array.isArray(localLatencyBody.data) &&
     localLatencyBody.data.some((row) => isRecord(row) && isRecord(row.sample) && row.sample.queueMs === 431 && row.sample.totalMs === 448),
   "relay latency did not persist in the connected local Server's SQLite")
-  checks.push("anonymous Web latency traversed the authenticated hosted relay and connector into local SQLite and remained readable without relay storage")
+  checks.push("machine telemetry consent was read and granted through the relay; anonymous Web latency was refused without consent, then traversed the authenticated hosted relay and connector into local SQLite and remained readable without relay storage")
   const memberActivity = await probeRequest("session.family.activity", { sessionID, input: { sessionIDs: [] } })
   expect(memberActivity.status === "ok" && isRecord(memberActivity.value) && Array.isArray(memberActivity.value.data) &&
     memberActivity.value.data.length === 1 && isRecord(memberActivity.value.data[0]) &&

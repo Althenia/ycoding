@@ -34,6 +34,10 @@ test("forwards anonymous Web latency through the connector into the local Server
   const sample = { kind: "request", at: "2026-10-04T12:00:00.000Z", operation: "session.list", outcome: "ok", queueMs: 2, settlementMs: 9, totalMs: 11 } as const
   try {
     await bridge.connect()
+    relay.deliver(request("latency_refused", "machine.latency.append", undefined, { samples: [sample] }))
+    expect(errorOf(await answer(relay, "latency_refused")).code).toBe("telemetry_disabled")
+    relay.deliver(request("consent_set", "machine.telemetry.consent.set", undefined, { enabled: true, noticeVersion: 1 }))
+    expect(valueOf(await answer(relay, "consent_set"))).toMatchObject({ data: { enabled: true, noticeVersion: 1 } })
     relay.deliver(request("latency_append", "machine.latency.append", undefined, { samples: [sample] }))
     expect(valueOf(await answer(relay, "latency_append"))).toEqual({ accepted: 1 })
     relay.deliver(request("latency_read", "machine.latency.list", undefined, { limit: 60 }))
