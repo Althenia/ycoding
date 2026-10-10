@@ -566,9 +566,9 @@ Permissions are evaluated in order. Each rule has:
 `effect` is `allow`, `deny`, or `ask`.
 
 The TUI has no separate auto-approve permission toggle. Automatic handling is controlled by durable Session autonomy:
-YOLO 1 handles questions/forms, YOLO 2 also handles `ask` permissions, and YOLO 3 also handles guardrail reviews.
+YOLO 0 is manual; YOLO 1 auto-approves `ask` permissions and ordinary guardrail reviews, YOLO 2 also answers questions/forms, and YOLO 3 also permits opt-in scope dispatch.
 An active goal also handles questions/forms and `ask` permissions at YOLO 0, but does not auto-approve guardrail reviews
-below effective YOLO 3. Explicit denies and inherited permission ceilings remain enforced. Manual permission decisions,
+below effective YOLO 1. Active goals also permit opt-in scope dispatch at YOLO 0. Stored numeric levels retain their values and use this ladder without migration or mapping. Explicit denies and inherited permission ceilings remain enforced. Manual permission decisions,
 including approval for the current Session, remain available.
 
 For noninteractive runs, `ycoding run --yolo <0-3>` sets the durable Session level before admitting the prompt. Omitting the flag preserves an adopted Session's autonomy; `--yolo 0` explicitly selects manual handling. A failed autonomy update prevents prompt admission.
@@ -916,14 +916,14 @@ The automatic `guardrails`, `routing`, `goal`, `questions`, `advisory`, and `sco
 
 Routing accepts 1–254 candidates with unique nonempty IDs and descriptions; `keep-current` is reserved for the runtime's baseline choice. Candidates select an agent, a normal model selector, or both; entries selecting neither are not offered. Only known selectable agents allowed by the current agent's effective `agent` permission and available supported models/variants are offered.
 
-`questions` requests an option suggestion for single-select `question` prompts with at least two unique labels. It skips multiselect, free-text, and prompts already containing an explicit `(Recommended)` option. An effective `decision` permission deny, including an inherited ceiling, skips the helper; policy configuration never overrides that deny. The evidence is only the prompt's header, question text, and option labels and descriptions. A suggestion at or above the threshold becomes the form's preselected default, its option description gains `(Suggested by the decision helper: native probability 0.91)` or `(Suggested by the decision helper: model confidence 0.82, uncalibrated)`, and the agent's tool result lists it separately from the answers. Normal mode still waits for the user's answer and permits a different choice. Under YOLO 1–3 or an active goal, the existing form auto-answerer uses the suggested default. Uncertain, refused, or failed evaluations leave the prompt unchanged. At most four evaluations run concurrently. Native evaluations share one overall `timeout_ms` budget; expiration discards suggestions, interrupts unfinished evaluations, and opens the original form. Agent evaluations have no local wall-clock deadline; explicit interruption still cancels the tool call. Cancellation does not establish provider-side or billing cancellation.
+`questions` requests an option suggestion for single-select `question` prompts with at least two unique labels. It skips multiselect, free-text, and prompts already containing an explicit `(Recommended)` option. An effective `decision` permission deny, including an inherited ceiling, skips the helper; policy configuration never overrides that deny. The evidence is only the prompt's header, question text, and option labels and descriptions. A suggestion at or above the threshold becomes the form's preselected default, its option description gains `(Suggested by the decision helper: native probability 0.91)` or `(Suggested by the decision helper: model confidence 0.82, uncalibrated)`, and the agent's tool result lists it separately from the answers. Normal mode still waits for the user's answer and permits a different choice. Under YOLO 2–3 or an active goal, the existing form auto-answerer uses the suggested default. Uncertain, refused, or failed evaluations leave the prompt unchanged. At most four evaluations run concurrently. Native evaluations share one overall `timeout_ms` budget; expiration discards suggestions, interrupts unfinished evaluations, and opens the original form. Agent evaluations have no local wall-clock deadline; explicit interruption still cancels the tool call. Cancellation does not establish provider-side or billing cancellation.
 
 ### Task advice in the harness
 
-`decisions.advisory` batches three bounded recommendations once per promoted nonempty user input:
-a configured model/profile/variant for task planning or delegation, a configured next direction,
+`decisions.advisory` batches two bounded recommendations once per promoted nonempty user input:
+a configured model/profile/variant for task planning or delegation
 and a tool from the permission-filtered runtime registry. It does not run a classifier on every
-model step. Model candidates and directions each require 1–254 unique nonempty IDs and descriptions;
+model step. Model candidates require 1–254 unique nonempty IDs and descriptions; `directions` is a rejected key;
 each model candidate also requires a normal model selector. `keep-current` is reserved. Only available,
 enabled, supported model/profile/variant combinations are offered. Tool advice must be checked
 against the actual current tool schema before use.
@@ -937,11 +937,6 @@ against the actual current tool schema before use.
       "candidates": [
         { "id": "bounded", "description": "Settled bounded implementation", "model": "openai/gpt-6-luna#medium" },
         { "id": "expert", "description": "Unresolved architecture or difficult diagnosis", "model": "openai/gpt-6.1-sol#high" }
-      ],
-      "directions": [
-        { "id": "inspect", "description": "Inspect evidence needed to resolve a material unknown" },
-        { "id": "implement", "description": "Implement the accepted bounded change with a regression test" },
-        { "id": "verify", "description": "Run focused acceptance checks for the completed change" }
       ]
     }
   }
@@ -979,7 +974,7 @@ See [runtime policies](./runtime.md#automatic-decision-policies) and the [native
 }
 ```
 
-Supply nonempty exclusive write ownership, an observable acceptance check, read-only status, and an acyclic dependency list for every task. Duplicate IDs, unknown dependencies and cycles fail before inference; deterministic write overlaps are returned as conflicts and prevent those tasks from dispatching. Normal mode returns advice only. Automatic dispatch requires `auto_dispatch: true` plus YOLO ≥ 1 or an active goal, confident child delegation and readiness, satisfied dependencies, disjoint write ownership, and available family capacity/nesting. It reuses subagent permissions, ceilings and guardrails; a guardrail review leaves the task undispatched. The chosen tier's configured agent is used when present; otherwise `default_agent` must be subagent-eligible and permission-allowed, with no arbitrary substitute when absent or ineligible. The durable Scoping advisory is a judgment record, not approval, execution or completion evidence. The harness only nudges use of `scope`; it does not re-scope each Step. See [the scoping contract](../specs/decisions.md#task-scoping-and-dispatch).
+Supply nonempty exclusive write ownership, an observable acceptance check, read-only status, and an acyclic dependency list for every task. Duplicate IDs, unknown dependencies and cycles fail before inference; deterministic write overlaps are returned as conflicts and prevent those tasks from dispatching. Normal mode returns advice only. Automatic dispatch requires `auto_dispatch: true` plus YOLO 3 or an active goal, confident child delegation and readiness, satisfied dependencies, disjoint write ownership, and available family capacity/nesting. It reuses subagent permissions, ceilings and guardrails; a guardrail review leaves the task undispatched. The chosen tier's configured agent is used when present; otherwise `default_agent` must be subagent-eligible and permission-allowed, with no arbitrary substitute when absent or ineligible. The durable Scoping advisory is a judgment record, not approval, execution or completion evidence. The harness only nudges use of `scope`; it does not re-scope each Step. See [the scoping contract](../specs/decisions.md#task-scoping-and-dispatch).
 
 ### Decision agent
 

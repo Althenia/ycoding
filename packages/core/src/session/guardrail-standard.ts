@@ -158,6 +158,7 @@ export function semanticResources(action: string, resources: ReadonlyArray<strin
     if (action !== "shell")
       return (action === "file_mutation" || path.isAbsolute(resource)) && isTemporary(resource, paths.workdir, paths)
         ? [] : [resource]
+    if (readOnlyShell(resource)) return []
     const operations = rmOperations(resource, paths)
     const removals = operations.flatMap((operation) =>
       operation.targets.flatMap((target, index) => {
@@ -177,6 +178,104 @@ export function semanticResources(action: string, resources: ReadonlyArray<strin
       ? []
       : [sanitized.map((segment, index) => `${index === 0 ? "" : segment.separator}${segment.text}`).join("")]
   })
+}
+
+const shellReaders = new Set([
+  "cat", "head", "tail", "wc", "ls", "grep", "egrep", "fgrep", "rg", "cut", "tr", "nl",
+  "basename", "dirname", "realpath", "readlink", "stat", "file", "du", "df", "pwd", "echo", "printf",
+  "which", "type", "true", "false", "test", "diff", "cmp", "comm", "jq", "cd", "sed", "find", "sort", "uniq", "git",
+])
+
+function readOnlyShell(command: string) {
+  const text: string[] = []
+  let quote: "'" | '"' | undefined
+  for (let index = 0; index < command.length; index++) {
+    const character = command[index]
+    if (quote === "'") {
+      text.push(character)
+      if (character === quote) quote = undefined
+      continue
+    }
+    if (character === "`" || character === "$" || (!quote && /[(){}#]/.test(character))) return false
+    if (character === "\\") {
+      if (!command[index + 1] || command[index + 1] === "\n") return false
+      text.push(character, command[++index])
+      continue
+    }
+    if (quote) {
+      text.push(character)
+      if (character === quote) quote = undefined
+      continue
+    }
+    if (character === "'" || character === '"') {
+      quote = character
+      text.push(character)
+      continue
+    }
+    if (character === "<") return false
+    if (character === ">" || (/\d/.test(character) && command[index + 1] === ">" &&
+      (index === 0 || /[\s;|&]/.test(command[index - 1])))) {
+      const redirect = command.slice(index).match(/^(?:[012])?>(?:>\s*\/dev\/null|\s*\/dev\/null|&[012])(?=\s|[;|&]|$)/)?.[0]
+      if (!redirect) return false
+      text.push(" ")
+      index += redirect.length - 1
+      continue
+    }
+    text.push(character)
+  }
+  if (quote) return false
+  const segments = shellSegments(text.join(""))
+  return segments.length > 0 && segments.every((segment) => readOnlyInvocation(segment.tokens))
+}
+
+function readOnlyInvocation(tokens: ReadonlyArray<string>) {
+  const name = path.basename(tokens[0])
+  if (!shellReaders.has(name) || (tokens[0] !== name && !["/bin", "/usr/bin"].includes(path.dirname(tokens[0])))) return false
+  const args = tokens.slice(1)
+  if (name === "sed") {
+    const scripts: string[] = []
+    for (let index = 0; index < args.length; index++) {
+      const argument = args[index]
+      if (argument === "-n" || argument === "--quiet" || argument === "--silent") continue
+      if (argument === "-e" || argument === "--expression") {
+        if (!args[index + 1]) return false
+        scripts.push(args[++index])
+        continue
+      }
+      if (argument.startsWith("-e") || argument.startsWith("--expression=")) {
+        scripts.push(argument.slice(argument.startsWith("-e") ? 2 : 13))
+        continue
+      }
+      if (argument.startsWith("-")) return false
+      if (scripts.length === 0) scripts.push(argument)
+    }
+    return scripts.length > 0 && scripts.every((script) => script.split(";").every((instruction) =>
+      /^\s*(?:\d+|\$)?\s*(?:,\s*(?:\d+|\$)\s*)?[pd=]\s*$/.test(instruction)))
+  }
+  if (name === "find") return !args.some((arg) => /^-(?:exec|execdir|ok|okdir|delete|fprint\w*|fls)$/.test(arg))
+  if (name === "rg") return !args.some((arg) => /^--pre(?:=|$)/.test(arg))
+  if (name === "sort") return !args.some((arg) => /^-[^-]*o/.test(arg) ||
+    (arg.startsWith("--") && ["--output", "--compress-program"].some((option) => option.startsWith(arg.split("=")[0]))))
+  if (name === "uniq") {
+    const operands: string[] = []
+    for (let index = 0; index < args.length; index++) {
+      const argument = args[index]
+      if (["-f", "-s", "-w", "--skip-fields", "--skip-chars", "--check-chars"].includes(argument)) { index++; continue }
+      if (argument === "--") { operands.push(...args.slice(index + 1)); break }
+      if (!argument.startsWith("-") || argument === "-") operands.push(argument)
+    }
+    return operands.length <= 1
+  }
+  if (name === "file") return !args.some((arg) => /^-[^-]*C/.test(arg) || (arg.startsWith("--") && "--compile".startsWith(arg)))
+  if (name === "jq") return !args.includes("--run-tests")
+  if (name !== "git") return true
+  if (args.some((arg) => arg.startsWith("--") && ["--output", "--ext-diff", "--textconv"].some((option) => option.startsWith(arg.split("=")[0])))) return false
+  const gitArgs = args[0] === "--no-pager" ? args.slice(1) : args
+  if (["status", "log", "diff", "show", "rev-parse", "ls-files", "blame", "merge-base"].includes(gitArgs[0])) return true
+  if (gitArgs[0] === "branch") return gitArgs.length > 1 && gitArgs.slice(1).every((arg) =>
+    ["--show-current", "--list", "-a", "-r", "-v"].includes(arg))
+  if (gitArgs[0] === "worktree") return gitArgs[1] === "list" && gitArgs.slice(2).every((arg) => ["--porcelain", "-z", "-v"].includes(arg))
+  return gitArgs[0] === "remote" && gitArgs.length === 2 && gitArgs[1] === "-v"
 }
 
 function isHomeChild(target: string, workdir: string, paths?: Paths) {

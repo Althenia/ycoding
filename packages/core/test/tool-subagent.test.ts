@@ -239,7 +239,7 @@ describe("SubagentTool", () => {
           input: { type: "user", delivery: "steer", data: { text: "Implement two disjoint tasks" } } })
         yield* SessionPending.promoteSteers(db, events, parent.id)
         const locations = yield* LocationServiceMap.Service
-        yield* SessionAutonomy.Service.use((autonomy) => autonomy.setYolo({ sessionID: parent.id, yolo: 1 })).pipe(Effect.provide(locations.get(parent.location)))
+        yield* SessionAutonomy.Service.use((autonomy) => autonomy.setYolo({ sessionID: parent.id, yolo: 3 })).pipe(Effect.provide(locations.get(parent.location)))
         const scope = yield* Effect.gen(function* () {
           const subagent = yield* SubagentTool.make(true)
           return yield* ScopeTool.make(subagent.execute)
@@ -1456,7 +1456,21 @@ describe("SubagentTool", () => {
           const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
           const db = (yield* Database.Service).db
 
-          for (const mode of ["yolo", "goal"] as const) {
+          const autonomy = yield* SessionAutonomy.Service.pipe(Effect.provide(locations.get(parent.location)))
+          for (const yolo of [0, 1, 2, 3]) {
+            yield* autonomy.setYolo({ sessionID: parent.id, yolo })
+            expect(yield* autonomy.canAutoPermission(child.sessionID)).toBe(yolo >= 1)
+            expect(yield* autonomy.canAutoGuardrail(child.sessionID)).toBe(yolo >= 1)
+            expect(yield* autonomy.canAutoAnswer(child.sessionID)).toBe(yolo >= 2)
+            expect(yield* autonomy.canAutoDispatch(child.sessionID)).toBe(yolo === 3)
+            if (yolo >= 2) continue
+            const question = yield* orchestration.question(child.sessionID, `Manual question at YOLO ${yolo}`)
+            expect(question.autoAnswered).toBe(false)
+            expect(yield* orchestration.get(parent.id, child.sessionID)).toMatchObject({ state: "waiting", question: { id: question.question.id } })
+            yield* orchestration.answer({ parentID: parent.id, childID: child.sessionID, questionID: question.question.id, text: "Human answer" })
+          }
+
+          for (const mode of [2, 3, "goal"] as const) {
             yield* db
               .update(SessionTable)
               .set({
@@ -1473,7 +1487,7 @@ describe("SubagentTool", () => {
                           maxNoProgress: 3,
                         },
                       }
-                    : { mode: "normal", yolo: 2 },
+                    : { mode: "normal", yolo: mode },
               })
               .where(eq(SessionTable.id, parent.id))
               .run()
@@ -1554,7 +1568,7 @@ describe("SubagentTool", () => {
               .all()
               .pipe(Effect.orDie))
               .filter((item) => item.type === "question"),
-          ).toEqual([])
+          ).toHaveLength(2)
         }),
       ),
     ),

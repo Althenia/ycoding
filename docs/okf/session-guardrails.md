@@ -40,7 +40,9 @@ Recognized catastrophic shell commands are denied before process creation, while
 
 ## Review Behavior
 
-Guardrail reviews remain reviews in normal, yolo 1-2, and goal modes; only yolo 3 auto-approves guardrail reviews and TUI permission auto-approve never auto-approves guardrails.[^runtime-doc]
+Ordinary guardrail reviews auto-approve at effective yolo 1-3; yolo 0, including an active goal, keeps ordinary reviews enforced. Hard reviews require a fresh human decision at every level and cannot reuse an always approval.[^runtime-doc]
+
+Deterministically recognized read-only shell commands skip semantic classification after deterministic rules; unrecognized commands retain the conservative fail-closed classification path.[^spec-v2]
 
 Replies are once, always, or reject; always is transient process-memory reuse for the exact root Session family, action, ordered rule IDs, ordered resources, and request metadata only after a fresh evaluation still asks.[^runtime-doc]
 

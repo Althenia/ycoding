@@ -392,14 +392,12 @@ test("revalidates selectable agents after inference before committing the pair",
 const advisoryPolicy = {
   provider: "agent", min_confidence: 0.8,
   candidates: [{ id: "careful", description: "Difficult tasks", model: { providerID, model: selectedID, variant: "high" } }],
-  directions: [{ id: "inspect", description: "Inspect evidence before editing" }],
 }
 const advisory = Schema.decodeUnknownSync(ConfigDecisions.Info)({ advisory: advisoryPolicy })
 const advice = (confidence = 0.9): Decision.Output => ({ provider: "agent", response: {
   model: CatalogModel.Ref.make({ providerID, id: baselineID }), semantics: "model-estimate", version: 1,
   answers: [
     { name: "model", type: "choice", choice: "careful", answer: null, score: null, confidence },
-    { name: "direction", type: "choice", choice: "inspect", answer: null, score: null, confidence },
     { name: "tool", type: "choice", choice: "tool:read", answer: null, score: null, confidence },
   ],
 } })
@@ -422,17 +420,19 @@ const advisorySetup = () => Effect.gen(function* () {
   })])), { codemode: false }).pipe(Effect.orDie)
 })
 
-test("batches model variant, direction and available tool advice into the real runner without selecting or executing", async () => {
+test("batches only model variant and tool advice without selecting or executing", async () => {
   const result = await run({ settings: advisory, before: advisorySetup, evaluate: () => Effect.succeed(advice()),
     model: CatalogModel.Ref.make({ providerID, id: baselineID }), after: ({ runner, sessionID }) => runner.drain({ sessionID, force: true }),
   })
   expect(result.evaluations).toHaveLength(1)
   expect(result.evaluations[0]).toMatchObject({ provider: "agent", request: { questions: [
-    { name: "model" }, { name: "direction" }, { name: "tool", choices: [{ value: "keep-current" }, { value: "tool:read" }] },
+    { name: "model" }, { name: "tool", choices: [{ value: "keep-current" }, { value: "tool:read" }] },
   ] } })
   expect(JSON.stringify(result.evaluations[0])).toContain('"high"')
   expect(JSON.stringify(result.evaluations[0])).not.toContain("must-not-disclose")
   expect(JSON.stringify(result.evaluations[0])).not.toContain("tool:shell")
+  expect(JSON.stringify(result.evaluations[0])).not.toContain('"direction')
+  expect(JSON.stringify(result.requests[0]?.messages)).not.toContain("Recommended direction")
   expect(result.session?.model?.id).toBe(baselineID)
   expect(result.history.filter((message) => message.type === "synthetic" && message.description === "Decision advisory")).toHaveLength(1)
   expect(JSON.stringify(result.requests[0]?.messages)).toContain("Decision advisory")
@@ -513,7 +513,6 @@ test("native batch advice uses selected probabilities instead of confidence", as
     model: "gpt-6-luna", usage: { input_tokens: 3, output_tokens: 0, total_tokens: 3 },
     answers: [
       { name: "model", type: "choice", choice: "careful", confidence: 0.01, probabilities: [{ value: "keep-current", probability: 0.2 }, { value: "careful", probability: 0.8 }] },
-      { name: "direction", type: "choice", choice: "inspect", confidence: 1, probabilities: [{ value: "keep-current", probability: 0.21 }, { value: "inspect", probability: 0.79 }] },
       { name: "tool", type: "refusal" },
     ],
   } }) })

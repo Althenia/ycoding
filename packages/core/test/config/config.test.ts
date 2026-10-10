@@ -1066,7 +1066,6 @@ describe("Config", () => {
                     provider: "agent",
                     min_confidence: 0.9,
                     candidates: [{ id: "bounded", description: "Bounded implementation" }],
-                    directions: [{ id: "implement", description: "Implement the change" }],
                   },
                 },
               }),

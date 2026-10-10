@@ -882,7 +882,7 @@ describe("QuestionTool", () => {
       deny = false
       yield* seedSession
       const autonomy = yield* SessionAutonomy.Service
-      yield* autonomy.setYolo({ sessionID, yolo: 1 })
+      yield* autonomy.setYolo({ sessionID, yolo: 2 })
       const registry = yield* ToolRegistry.Service
       const ask = (id: string) =>
         settleTool(registry, {

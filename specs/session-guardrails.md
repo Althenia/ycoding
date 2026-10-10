@@ -62,6 +62,8 @@ This is a bounded recognizer, not a complete shell parser or executable sandbox.
 
 ### Risk classification
 
+Deterministically recognized read-only shell commands skip classification and remain allow after deterministic rules; the recognizer is conservative, so unrecognized commands still classify.
+
 Only deterministic `allow` results enter an explicitly configured `decisions.guardrails` classifier. One score question uses these zero-based levels:
 
 | Level | Label | Meaning |
@@ -76,7 +78,7 @@ Agent judgments return an integer level and uncalibrated model confidence. Nativ
 
 Evidence contains only sanitized `{ action, resources, metadata }`. Temporary path resources and recognized temporary deletion operands are excluded; a deletion operand is excluded only when temporary in every reachable working directory. With no remaining resources, no classifier request is sent. Disabled ordinary guardrails and `skipReview` skip classification.
 
-Usable judgments add optional `risk: { level, label, score, metric }` to the review request and `guardrail.asked` event. `metric` is `confidence` or `probability`. The reason surfaces `Risk: irreversible (3) · model confidence 0.84, uncalibrated` or `Risk: irreversible (3) · native probability 0.91`. Missing or unusable judgments omit `risk`. Ordinary review keeps existing exact Always reuse and YOLO 3 handling; hard reviews remain human-only.
+Usable judgments add optional `risk: { level, label, score, metric }` to the review request and `guardrail.asked` event. `metric` is `confidence` or `probability`. The reason surfaces `Risk: irreversible (3) · model confidence 0.84, uncalibrated` or `Risk: irreversible (3) · native probability 0.91`. Missing or unusable judgments omit `risk`. Ordinary review keeps exact Always reuse and effective YOLO 1-3 auto-approval; hard reviews remain human-only.
 
 ## Human review
 
@@ -86,9 +88,9 @@ A review request blocks the guarded operation until the user replies:
 - `always` permits the attempt and records a transient reusable approval;
 - `reject` fails the blocked operation.
 
-A request with `hardReview: true` advertises only `once` and `reject`. It cannot use a transient `always` approval, and a direct `always` reply fails the waiting operation rather than approving it. Hard reviews are never auto-approved by YOLO 0-3, active goals, agent automation, permission auto-answering, or any reusable approval. Ordinary reviews retain YOLO 3 auto-approval.
+A request with `hardReview: true` advertises only `once` and `reject`. It cannot use a transient `always` approval, and a direct `always` reply fails the waiting operation rather than approving it. Hard reviews are never auto-approved by YOLO 0-3, active goals, agent automation, permission auto-answering, or any reusable approval. Ordinary reviews auto-approve at effective YOLO 1-3.
 
-An `always` approval is keyed by root Session family, action, ordered matched rule IDs, ordered resources, and request metadata. It is held only by the Location service in process memory, is cleared at service shutdown, is not durable or global, and is shared by descendants of the same root. Core always performs a fresh evaluation before consulting the key: a deny, changed match, or non-review result cannot reuse an approval. `once` is not reusable. `yolo 1-2`, `goal`, and TUI permission auto-approval never answer guardrail reviews; only `yolo 3` auto-approves guardrail reviews.
+An `always` approval is keyed by root Session family, action, ordered matched rule IDs, ordered resources, and request metadata. It is held only by the Location service in process memory, is cleared at service shutdown, is not durable or global, and is shared by descendants of the same root. Core always performs a fresh evaluation before consulting the key: a deny, changed match, or non-review result cannot reuse an approval. `once` is not reusable. Ordinary review auto-approval requires effective `yolo 1-3`; active `goal` or permission auto-approval alone cannot grant it.
 
 Parent Session views may answer reviews created by descendants in the same root family. An unrelated Session receives a not-found response.
 The first valid reply atomically claims the pending request. A concurrent or later reply receives a not-found response and cannot change the winning decision or create a reusable approval.

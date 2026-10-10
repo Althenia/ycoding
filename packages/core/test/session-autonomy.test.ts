@@ -14,6 +14,35 @@ import { testEffect } from "./lib/effect"
 const it = testEffect(Database.layer({ path: ":memory:" }))
 const sessionID = Session.ID.make("ses_autonomy")
 
+for (const yolo of [0, 1, 2, 3] as const) {
+  it.effect(`YOLO ${yolo} grants the new ladder without changing stored levels`, () => Effect.gen(function* () {
+    const service = yield* setup
+    const state = yield* service.setYolo({ sessionID, yolo })
+    expect(state.yolo).toBe(yolo)
+    expect(SessionAutonomy.canAutoAnswer(state)).toBe(yolo >= 2)
+    expect(SessionAutonomy.canAutoPermission(state)).toBe(yolo >= 1)
+    expect(SessionAutonomy.canAutoGuardrail(state)).toBe(yolo >= 1)
+    expect(SessionAutonomy.canAutoDispatch(state)).toBe(yolo === 3)
+    expect(yield* service.canAutoAnswer(sessionID)).toBe(yolo >= 2)
+    expect(yield* service.canAutoPermission(sessionID)).toBe(yolo >= 1)
+    expect(yield* service.canAutoGuardrail(sessionID)).toBe(yolo >= 1)
+    expect(yield* service.canAutoDispatch(sessionID)).toBe(yolo === 3)
+  }))
+}
+
+it.effect("active goal retains answers, permissions and dispatch but not ordinary guardrail approval at YOLO 0", () => Effect.gen(function* () {
+  const service = yield* setup
+  const state = yield* service.setGoal({ sessionID, text: "Finish safely" })
+  expect(SessionAutonomy.canAutoAnswer(state)).toBe(true)
+  expect(SessionAutonomy.canAutoPermission(state)).toBe(true)
+  expect(SessionAutonomy.canAutoDispatch(state)).toBe(true)
+  expect(SessionAutonomy.canAutoGuardrail(state)).toBe(false)
+  expect(yield* service.canAutoAnswer(sessionID)).toBe(true)
+  expect(yield* service.canAutoPermission(sessionID)).toBe(true)
+  expect(yield* service.canAutoDispatch(sessionID)).toBe(true)
+  expect(yield* service.canAutoGuardrail(sessionID)).toBe(false)
+}))
+
 const setup = Effect.gen(function* () {
   const { db } = yield* Database.Service
   yield* db

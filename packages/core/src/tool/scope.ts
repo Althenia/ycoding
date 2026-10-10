@@ -101,7 +101,7 @@ export const make = Effect.fn("ScopeTool.make")(function* (spawn: Spawn) {
   const events = yield* EventRuntime.Service
   const catalog = yield* Catalog.Service
   return Tool.withPermission(Tool.make({
-    description: "Judge a caller-proposed task partition using the configured decisions.scoping policy. Supply exclusive write ownership, acceptance checks, dependencies and bounded evidence. Judgments are not approval or completion evidence. Normal mode returns advice only; opt-in automatic dispatch requires YOLO ≥ 1 or an active goal and preserves subagent permissions and guardrails.",
+    description: "Judge a caller-proposed task partition using the configured decisions.scoping policy. Supply exclusive write ownership, acceptance checks, dependencies and bounded evidence. Judgments are not approval or completion evidence. Normal mode returns advice only; opt-in automatic dispatch requires YOLO 3 or an active goal and preserves subagent permissions and guardrails.",
     input: Input,
     output: Output,
     toModelOutput: ({ output }) => [{ type: "text", text: JSON.stringify(output) }],
@@ -191,7 +191,7 @@ export const make = Effect.fn("ScopeTool.make")(function* (spawn: Spawn) {
         if (reserved.size >= capacity) { planned.reasons.push("capacity-exceeded"); continue }
         planned.dispatchable = true
         const current = yield* autonomy.get(context.sessionID).pipe(Effect.mapError((error) => new ToolFailure({ message: error.message, error })))
-        if (!policy.auto_dispatch || !SessionAutonomy.canAutoAnswer(current)) { reserved.add(task.id); continue }
+        if (!policy.auto_dispatch || !SessionAutonomy.canAutoDispatch(current)) { reserved.add(task.id); continue }
         const tier = judgment(`tier:${task.id}`)
         const selected = tier.status === "confident" ? settings?.advisory?.candidates.find((candidate) => candidate.id === tier.choice) : undefined
         const defaultID = Config.latest(entries, "default_agent")
@@ -213,7 +213,7 @@ export const make = Effect.fn("ScopeTool.make")(function* (spawn: Spawn) {
       }
       const finalState = yield* autonomy.get(context.sessionID).pipe(Effect.mapError((error) => new ToolFailure({ message: error.message, error })))
       const plan: typeof Output.Type.plan = { granularity: judgment("granularity"), tasks, conflicts,
-        ...(dispatched.length || (policy.auto_dispatch && SessionAutonomy.canAutoAnswer(finalState)) ? { dispatched } : {}) }
+        ...(dispatched.length || (policy.auto_dispatch && SessionAutonomy.canAutoDispatch(finalState)) ? { dispatched } : {}) }
       const recommendations = [
         ...(plan.granularity?.status === "confident" && plan.granularity.choice !== "keep-current" ? [`Recommended granularity: ${plan.granularity.choice} (${Decision.describe(plan.granularity.score)})`] : []),
         ...tasks.flatMap((task) => task.delegate.status === "confident" && task.delegate.choice !== "keep-current"

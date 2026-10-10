@@ -69,7 +69,7 @@ function run(input: {
     ...(input.candidates ? { advisory: { provider: "agent", min_confidence: 0.8,
       candidates: [{ id: "expert", description: "Exact fixture variant", agent: "worker",
         model: { providerID: "openai", model: "fixture", variant: "high", profile: "fixture-profile" } }],
-      directions: [{ id: "inspect", description: "Inspect" }] } } : {}),
+      } } : {}),
   })
   const layers = Layer.mergeAll(
     Layer.mock(Decision.Service, { settings: () => Effect.succeed(settings), evaluate: (value) => {
@@ -166,7 +166,7 @@ test("ownership overlap respects segment boundaries and glob prefixes", () => {
 })
 
 test("decision permission deny fails without evaluation or dispatch", async () => {
-  const value = await run({ deny: true, auto: true, yolo: 1 })
+  const value = await run({ deny: true, auto: true, yolo: 3 })
   expect(Exit.isFailure(value.result)).toBe(true)
   if (Exit.isFailure(value.result)) expect(toSessionError(Cause.squash(value.result.cause)).type).toBe("permission.rejected")
   expect(value.evaluations).toHaveLength(0)
@@ -199,8 +199,8 @@ test("normal mode never dispatches and records the complete synthetic judgment",
   expect(value.observations[0].text).toContain('"dispatchable":true')
 })
 
-test("YOLO 1 dispatches dependencies first and skips conflicting ownership", async () => {
-  const value = await run({ auto: true, yolo: 1, candidates: true, tasks: [task("two", ["two/**"], ["one"]), task("one"),
+test("YOLO 3 dispatches dependencies first and skips conflicting ownership", async () => {
+  const value = await run({ auto: true, yolo: 3, candidates: true, tasks: [task("two", ["two/**"], ["one"]), task("one"),
     task("conflict-a", ["shared/**"]), task("conflict-b", ["shared/file.ts"])] })
   expect(value.launches.map((launch) => launch.description)).toEqual(["Implement one", "Implement two"])
   expect(value.launches[0]).toMatchObject({ agent: "worker", model: { providerID: "openai", id: "fixture", variant: "high", profile: "fixture-profile" } })
@@ -217,13 +217,13 @@ test("YOLO 1 dispatches dependencies first and skips conflicting ownership", asy
 })
 
 test("capacity overflow is non-dispatchable", async () => {
-  const value = await run({ auto: true, yolo: 1, capacity: 1, tasks: [task("one"), task("two")] })
+  const value = await run({ auto: true, yolo: 3, capacity: 1, tasks: [task("one"), task("two")] })
   expect(value.launches).toHaveLength(1)
   expect(planOf(value).tasks[1]).toMatchObject({ dispatchable: false, reasons: ["capacity-exceeded"] })
 })
 
 test("uncertain readiness, self delegation, blocked dependencies and depth prevent dispatch", async () => {
-  const value = await run({ auto: true, yolo: 1, tasks: [task("one"), task("two", ["two/**"], ["one"])],
+  const value = await run({ auto: true, yolo: 3, tasks: [task("one"), task("two", ["two/**"], ["one"])],
     choices: { "ready:one": "no", "delegate:two": "self" } })
   expect(value.launches).toHaveLength(0)
   planOf(value)
@@ -232,10 +232,10 @@ test("uncertain readiness, self delegation, blocked dependencies and depth preve
     expect(value.result.value.plan.tasks[1].reasons).toContain("dependency-not-ready:one")
     expect(value.result.value.plan.tasks[1].reasons).toContain("not-delegated")
   }
-  const uncertain = await run({ auto: true, yolo: 1, score: 0.79 })
+  const uncertain = await run({ auto: true, yolo: 3, score: 0.79 })
   expect(uncertain.launches).toHaveLength(0)
   expect(planOf(uncertain).tasks[0].dispatchable).toBe(false)
-  const depth = await run({ auto: true, yolo: 1, depth: 1 })
+  const depth = await run({ auto: true, yolo: 3, depth: 1 })
   expect(planOf(depth).tasks[0].reasons).toContain("depth-limit")
 })
 
@@ -248,15 +248,17 @@ test("read-only tasks do not conflict with a writer and retain acceptance checks
   planOf(value)
 })
 
-test("active goal permits dispatch while stopped goal and omitted flag do not", async () => {
+test("only YOLO 3 or active goal permits opt-in dispatch", async () => {
+  for (const yolo of [0, 1, 2, 3] as const)
+    expect((await run({ auto: true, yolo })).launches).toHaveLength(yolo === 3 ? 1 : 0)
   const goal: SessionAutonomy.Goal = { text: "Verify changes", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 }
   expect((await run({ auto: true, goal })).launches).toHaveLength(1)
   expect((await run({ auto: true, goal: { ...goal, status: "stopped" } })).launches).toHaveLength(0)
-  expect((await run({ yolo: 1 })).launches).toHaveLength(0)
+  expect((await run({ yolo: 3 })).launches).toHaveLength(0)
 })
 
 test("native review remains undispatched with a reason and no fabricated child", async () => {
-  const value = await run({ auto: true, yolo: 1, spawnFailure: "review-required" })
+  const value = await run({ auto: true, yolo: 3, spawnFailure: "review-required" })
   if (Exit.isSuccess(value.result)) {
     expect(value.result.value.plan.dispatched).toEqual([])
     expect(value.result.value.plan.tasks[0]).toMatchObject({ dispatchable: false, reasons: ["review-required"] })
@@ -266,7 +268,7 @@ test("native review remains undispatched with a reason and no fabricated child",
 
 test("unconfigured policy and provider errors fail without dispatch or fabricated advice", async () => {
   for (const input of [{ configured: false }, { fail: true }, { maxTasks: 1, tasks: [task("one"), task("two")] }]) {
-    const value = await run({ ...input, auto: true, yolo: 1 })
+    const value = await run({ ...input, auto: true, yolo: 3 })
     expect(Exit.isFailure(value.result)).toBe(true)
     expect(value.launches).toHaveLength(0)
     expect(value.observations).toHaveLength(0)
@@ -274,7 +276,7 @@ test("unconfigured policy and provider errors fail without dispatch or fabricate
 })
 
 test("an ineligible configured default never silently selects another agent", async () => {
-  const value = await run({ auto: true, yolo: 1, defaultAgent: "primary-only" })
+  const value = await run({ auto: true, yolo: 3, defaultAgent: "primary-only" })
   expect(value.launches).toHaveLength(0)
   expect(Exit.isSuccess(value.result)).toBe(true)
   if (Exit.isSuccess(value.result)) expect(value.result.value.plan.tasks[0]).toMatchObject({ dispatchable: false, reasons: ["no-eligible-agent"] })
@@ -285,23 +287,23 @@ test("native scoping adapters assess selected probabilities, not confidence", as
     const value = await run({ provider })
     expect(value.evaluations).toHaveLength(1)
     expect(planOf(value).tasks[0]).toMatchObject({ dispatchable: true, ready: { score: { metric: "probability", value: 0.9 } } })
-    const uncertain = await run({ provider, score: 0.79, auto: true, yolo: 1 })
+    const uncertain = await run({ provider, score: 0.79, auto: true, yolo: 3 })
     expect(planOf(uncertain).tasks[0].dispatchable).toBe(false)
     expect(uncertain.launches).toHaveLength(0)
   }
 })
 
 test("existing family children consume capacity and unknown choices cannot dispatch", async () => {
-  const full = await run({ auto: true, yolo: 1, currentChildren: 1, capacity: 1 })
+  const full = await run({ auto: true, yolo: 3, currentChildren: 1, capacity: 1 })
   expect(planOf(full).tasks[0].reasons).toContain("capacity-exceeded")
   expect(full.launches).toHaveLength(0)
-  const unknown = await run({ auto: true, yolo: 1, choices: { "delegate:one": "fabricated" } })
+  const unknown = await run({ auto: true, yolo: 3, choices: { "delegate:one": "fabricated" } })
   expect(planOf(unknown).tasks[0]).toMatchObject({ delegate: { status: "refused" }, dispatchable: false })
   expect(unknown.launches).toHaveLength(0)
 })
 
 test("autonomy revoked during judgment prevents automatic dispatch", async () => {
-  const value = await run({ auto: true, yolo: 1, revokeAutonomy: true })
+  const value = await run({ auto: true, yolo: 3, revokeAutonomy: true })
   expect(value.launches).toHaveLength(0)
   expect(planOf(value).dispatched).toBeUndefined()
 })

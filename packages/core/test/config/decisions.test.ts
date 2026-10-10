@@ -98,17 +98,24 @@ test("rejects missing, invalid, or mixed confidence/probability thresholds", () 
   }
 })
 
-test("retains opt-in advisory candidates, variants and bounded directions", () => {
+test("retains advisory models and rejects the removed directions key", () => {
   const advisory = { provider: "agent", min_confidence: 0.8,
     candidates: [{ id: "careful", description: "Difficult task", model: { providerID: "openai", model: "fixture", variant: "high" } }],
-    directions: [{ id: "inspect", description: "Inspect evidence before editing" }],
   }
   expect(decode({ decisions: { advisory } }).decisions).toMatchObject({ advisory })
   for (const invalid of [
     { ...advisory, directions: [] },
-    { ...advisory, directions: [{ id: "keep-current", description: "Reserved" }] },
+    { ...advisory, directions: null },
+    { ...advisory, directions: [{ id: "inspect", description: "Inspect" }] },
     { ...advisory, candidates: [{ id: "empty", description: "No model" }] },
-    { ...advisory, directions: [advisory.directions[0], advisory.directions[0]] },
     { ...advisory, min_probability: 0.8 },
   ]) expect(() => decode({ decisions: { advisory: invalid } })).toThrow()
+  expect(() => Schema.decodeUnknownSync(Config.Info, { onExcessProperty: "ignore" })({ decisions: {
+    advisory: { ...advisory, directions: [{ id: "inspect", description: "Inspect" }] },
+  } })).toThrow()
+  const document = Schema.toJsonSchemaDocument(Config.Info)
+  for (const name of ["Config.Decisions.Advisory", "Config.Decisions.AgentAdvisory"]) {
+    expect(document.definitions[name]).toMatchObject({ properties: { directions: { not: {} } } })
+    expect(document.definitions[name]?.required).not.toContain("directions")
+  }
 })

@@ -33,9 +33,9 @@ export const YoloLevel = Schema.Literals([0, 1, 2, 3])
 export type YoloLevel = typeof YoloLevel.Type
 
 export const YOLO_LEVEL_OFF = 0 as const
-export const YOLO_LEVEL_QUESTIONS = 1 as const
-export const YOLO_LEVEL_PERMISSIONS = 2 as const
-export const YOLO_LEVEL_GUARDRAIL = 3 as const
+export const YOLO_LEVEL_APPROVALS = 1 as const
+export const YOLO_LEVEL_ANSWERS = 2 as const
+export const YOLO_LEVEL_DISPATCH = 3 as const
 
 export const State = Schema.Struct({
   mode: Mode,
@@ -72,15 +72,19 @@ export function yoloLevel(state: State): number {
 }
 
 export function canAutoAnswer(state: State): boolean {
-  return yoloLevel(state) >= YOLO_LEVEL_QUESTIONS || state.goal?.status === "active"
+  return yoloLevel(state) >= YOLO_LEVEL_ANSWERS || state.goal?.status === "active"
 }
 
 export function canAutoPermission(state: State): boolean {
-  return yoloLevel(state) >= YOLO_LEVEL_PERMISSIONS || state.goal?.status === "active"
+  return yoloLevel(state) >= YOLO_LEVEL_APPROVALS || state.goal?.status === "active"
 }
 
 export function canAutoGuardrail(state: State): boolean {
-  return yoloLevel(state) >= YOLO_LEVEL_GUARDRAIL
+  return yoloLevel(state) >= YOLO_LEVEL_APPROVALS
+}
+
+export function canAutoDispatch(state: State): boolean {
+  return yoloLevel(state) >= YOLO_LEVEL_DISPATCH || state.goal?.status === "active"
 }
 
 export interface Interface {
@@ -94,6 +98,7 @@ export interface Interface {
   readonly canAutoAnswer: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, NotFoundError>
   readonly canAutoPermission: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, NotFoundError>
   readonly canAutoGuardrail: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, NotFoundError>
+  readonly canAutoDispatch: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, NotFoundError>
   readonly setMode: (input: {
     sessionID: SessionSchema.ID
     mode: "normal" | "yolo"
@@ -297,13 +302,16 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
   const yoloLevelEffect: Interface["yoloLevel"] = (sessionID) => effectiveYoloLevel(sessionID)
 
   const canAutoAnswerEffect: Interface["canAutoAnswer"] = (sessionID) =>
-    walkEffective(sessionID).pipe(Effect.map((v) => v.yolo >= YOLO_LEVEL_QUESTIONS || v.goalActive))
+    walkEffective(sessionID).pipe(Effect.map((v) => v.yolo >= YOLO_LEVEL_ANSWERS || v.goalActive))
 
   const canAutoPermissionEffect: Interface["canAutoPermission"] = (sessionID) =>
-    walkEffective(sessionID).pipe(Effect.map((v) => v.yolo >= YOLO_LEVEL_PERMISSIONS || v.goalActive))
+    walkEffective(sessionID).pipe(Effect.map((v) => v.yolo >= YOLO_LEVEL_APPROVALS || v.goalActive))
 
   const canAutoGuardrailEffect: Interface["canAutoGuardrail"] = (sessionID) =>
-    walkEffective(sessionID).pipe(Effect.map((v) => v.yolo >= YOLO_LEVEL_GUARDRAIL))
+    walkEffective(sessionID).pipe(Effect.map((v) => v.yolo >= YOLO_LEVEL_APPROVALS))
+
+  const canAutoDispatchEffect: Interface["canAutoDispatch"] = (sessionID) =>
+    walkEffective(sessionID).pipe(Effect.map((v) => v.yolo >= YOLO_LEVEL_DISPATCH || v.goalActive))
 
   const isAutonomous: Interface["isAutonomous"] = (sessionID) =>
     walkEffective(sessionID).pipe(Effect.map((v) => v.yolo > 0 || v.goalActive))
@@ -427,6 +435,7 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
     canAutoAnswer: canAutoAnswerEffect,
     canAutoPermission: canAutoPermissionEffect,
     canAutoGuardrail: canAutoGuardrailEffect,
+    canAutoDispatch: canAutoDispatchEffect,
     setMode,
     setYolo,
     setGoal,

@@ -67,22 +67,16 @@ const AdvisoryCandidates = Schema.Array(Schema.Struct({
 })).check(Schema.isMinLength(1), Schema.isMaxLength(254),
   Schema.makeFilter((candidates) => new Set(candidates.map((candidate) => candidate.id)).size === candidates.length))
 
-const Directions = Schema.Array(Schema.Struct({
-  id: Candidate.fields.id,
-  description: Candidate.fields.description,
-})).check(Schema.isMinLength(1), Schema.isMaxLength(254),
-  Schema.makeFilter((directions) => new Set(directions.map((direction) => direction.id)).size === directions.length))
-
 export class Advisory extends Schema.Class<Advisory>("Config.Decisions.Advisory")({
   ...Policy.fields,
   candidates: AdvisoryCandidates,
-  directions: Directions,
+  directions: Schema.Never.pipe(Schema.optionalKey),
 }) {}
 
 export class AgentAdvisory extends Schema.Class<AgentAdvisory>("Config.Decisions.AgentAdvisory")({
   ...AgentPolicy.fields,
   candidates: AdvisoryCandidates,
-  directions: Directions,
+  directions: Schema.Never.pipe(Schema.optionalKey),
 }) {}
 
 const ScopingFields = {

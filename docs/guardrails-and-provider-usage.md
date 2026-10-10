@@ -76,7 +76,7 @@ Permissions decide whether an agent may attempt an action. Guardrails apply inde
 
 Because a pending review blocks the family, the terminal surfaces the review prompt and transcript row in every Session view that the review can block, including a subagent chat and an autonomous Session. An autonomous Session cannot silently absorb its own review.
 
-Ordinary guardrail reviews are auto-approved only at effective YOLO 3. YOLO 0–2 and an active goal below effective YOLO 3 keep
+Ordinary guardrail reviews are auto-approved at effective YOLO 1-3. YOLO 0, including an active goal, keeps
 reviews enforced. The TUI has no separate permission auto-approve mode. The terminal shows a distinct **Session guardrail review** with:
 
 - `Allow once`

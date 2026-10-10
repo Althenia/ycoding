@@ -17,6 +17,32 @@ const layer = (rules: Guardrail.Ruleset, invalidFiles: ReadonlyArray<string> = [
 describe("SessionGuardrailMatch", () => {
   const paths = { workdir: "/workspace/project", project: "/workspace/project", home: "/home/user" }
 
+  test.each([
+    'sed -n 59,75p packages/core/src/memory.ts; grep -nE "^  (const|return \\{)|^    (status|list|search|read|write|graph|delete|trash|restore|purge|vacuum)[,:]" packages/core/src/memory.ts | head -30',
+    "cat README.md | head -20; git status --short",
+    "sed -n '1,10p;20d;$=' file",
+    "find . -name '*.ts'; rg --files; sort file; uniq file",
+    "git branch --show-current; git worktree list; git remote -v",
+    "grep x file > /dev/null 2>&1",
+    "cat file >/dev/null; grep x file >>/dev/null; head file 2>/dev/null",
+  ])("skips classification for proven read-only shell %s", (command) => {
+    expect(SessionGuardrailStandard.semanticResources("shell", [command], paths)).toEqual([])
+  })
+
+  test.each([
+    "sed -i 's/x/y/' file", "sed -n 'w out' file", "grep x > out.txt", "cat $(echo f)",
+    "find . -delete", "git branch new", "ls | xargs rm", "cat `echo f`", "cat <(echo f)",
+    "cat <<EOF", "$CMD file", "sudo cat file", "env cat file", "sh -c 'cat file'",
+    "rg --pre processor x", "sort -o out file", "uniq input output", "git diff --output=out",
+    "sed -n -e '1p' -e 'w out' file", "find . -fprint out", "jq --run-tests file",
+    "git -c core.pager=evil log", "git diff --ext-diff", "sed -n '1e' file", "sort --compress-program=evil file",
+    "sort --out=out file", "git diff --out=out", "file --comp file", "file -C -m file",
+    "cat2>/dev/null", "git3>&1 status",
+    "echo readonly && task-runner execute", "cat file; tee out", "cat file > /dev/null.txt",
+  ])("keeps unproven shell commands classified: %s", (command) => {
+    expect(SessionGuardrailStandard.semanticResources("shell", [command], paths)).toEqual([command])
+  })
+
   test("hard denies catastrophic shell commands", () => {
     expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: ["rm -rf /"] })).toMatchObject({
       decision: "deny",

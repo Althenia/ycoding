@@ -51,10 +51,10 @@ Durable state owns prompt admission, session history, instructions, compaction r
 The runtime supports three explicit modes:
 
 - `normal`: standard interactive execution;
-- `yolo` (`0-3`): tiered autonomous execution — `1` questions/forms, `2` + permissions (`true` → `2`), `3` + guardrail reviews; `goal` active also auto-answers questions/permissions at `0` but guardrails still require `3`;
+- `yolo` (`0-3`): `0` manual, `1` auto-approves ask permissions and ordinary guardrail reviews, `2` also auto-answers questions/forms (`true` → `2`), `3` also permits opt-in scope dispatch; active `goal` grants answers, ask permissions and opt-in scope dispatch at `0`, while ordinary guardrail auto-approval requires `1` or higher;
 - `goal`: repeated progress toward a durable goal until completion, stop, or a bounded no-progress terminal state.
 
-Autonomy remains visible, inspectable, interruptible, and subject to permission ceilings and Session guardrails. Only effective YOLO 3 auto-approves ordinary guardrail reviews; `normal`, YOLO 0-2, and active `goal` below YOLO 3 keep reviews enforced. Hard reviews always require a fresh human decision and cannot be bypassed by autonomy or reusable approval. The expanded AUTONOMY sidebar reports Guardrails as `auto · YOLO 3` only at effective YOLO 3 and as `enforced` otherwise, with Hard reviews separately marked `human only`. Completion claims require verification evidence.
+Autonomy remains visible, inspectable, interruptible, and subject to permission ceilings and Session guardrails. Effective YOLO 1-3 auto-approves ordinary guardrail reviews; YOLO 0, including an active `goal`, keeps reviews enforced. Hard reviews always require a fresh human decision and cannot be bypassed by autonomy or reusable approval. The expanded AUTONOMY sidebar reports Guardrails as `auto · YOLO 3` only at effective YOLO 3 and as `enforced` otherwise, with Hard reviews separately marked `human only`. Completion claims require verification evidence.
 
 ### 5. Durable background orchestration
 
@@ -87,7 +87,7 @@ Priorities include stable prompt prefixes, provider-specific cache controls, acc
 
 OpenCode Zen and OpenCode Go remain named as such only because they are external provider identities.
 
-OpenAI Decisions, TypeSafe Jev, and a hidden decision agent provide structured judgments through the `decision` tool and explicitly configured guardrail, initial routing, goal-continuation, question-option, and task-advisory policies. The harness batches model/variant, direction, and tool recommendations once per promoted user input; advice does not execute a tool or override explicit model/agent selections. Native APIs require their own API-key access; the hidden agent uses a configured helper or Session model through its normal authentication route, including supported subscription routes. Agent confidence is a self-reported, uncalibrated estimate, not a native probability. Suggestions retain human choice in normal mode and follow existing question auto-answer rules under explicit autonomy. Decisions do not grant permission, certify completion, or change the user's goal objective; explicit autonomy and human-only hard reviews remain enforced. See [configuration](./configuration.md#native-decisions).
+OpenAI Decisions, TypeSafe Jev, and a hidden decision agent provide structured judgments through the `decision` tool and explicitly configured guardrail, initial routing, goal-continuation, question-option, and task-advisory policies. The harness batches model/variant and tool recommendations once per promoted user input; advice does not execute a tool or override explicit model/agent selections. Native APIs require their own API-key access; the hidden agent uses a configured helper or Session model through its normal authentication route, including supported subscription routes. Agent confidence is a self-reported, uncalibrated estimate, not a native probability. Suggestions retain human choice in normal mode and follow existing question auto-answer rules under explicit autonomy. Decisions do not grant permission, certify completion, or change the user's goal objective; explicit autonomy and human-only hard reviews remain enforced. See [configuration](./configuration.md#native-decisions).
 
 ### 8. Documentation and distribution
 

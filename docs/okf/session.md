@@ -57,7 +57,7 @@ Promoting new user input resets the selected agent step allowance; a batch of st
 
 ## Autonomy Modes
 
-Session autonomy is durable with normal, yolo levels 0-3, and goal modes; yolo 1 auto-answers questions and forms, yolo 2 also auto-approves ask permissions, yolo 3 also auto-approves guardrail reviews, and active goal auto-answers questions and permissions but still requires yolo 3 for guardrails.[^runtime-doc]
+Session autonomy is durable with normal, yolo levels 0-3, and goal modes; yolo 0 is manual, yolo 1 auto-approves ask permissions and ordinary guardrail reviews, yolo 2 also auto-answers questions and forms, and yolo 3 also permits opt-in scope dispatch. Active goal grants answers, ask permissions and opt-in scope dispatch at yolo 0, but ordinary guardrail auto-approval requires effective yolo 1-3. Stored numeric levels retain their values without migration or mapping; hard reviews require a fresh human decision.[^runtime-doc]
 
 Goal mode terminates explicitly as completed, stopped, or exhausted; reports are reserved for unresolved blockers after reasonable self-resolution and each accepted report consumes one no-progress attempt.[^runtime-doc]
 

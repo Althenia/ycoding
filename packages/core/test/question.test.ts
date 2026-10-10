@@ -68,6 +68,23 @@ const waitForAsk = Effect.fn("QuestionTest.waitForAsk")(function* (
 })
 
 describe("Question", () => {
+  for (const yolo of [0, 1, 2, 3] as const) {
+    it.effect(`questions are automatic only at YOLO 2-3: level ${yolo}`, () => Effect.gen(function* () {
+      yield* setupAutonomy("yolo")
+      const autonomy = yield* SessionAutonomy.Service
+      yield* autonomy.setYolo({ sessionID, yolo })
+      const service = yield* Question.Service
+      if (yolo >= 2) {
+        expect(yield* service.ask({ sessionID, questions: [question] })).toEqual([["One"]])
+        expect(yield* service.list()).toEqual([])
+        return
+      }
+      const pending = yield* waitForAsk(service, { sessionID, questions: [question] })
+      expect(yield* service.list()).toEqual([pending.request])
+      yield* service.reply({ requestID: pending.request.id, answers: [["Manual"]] })
+      expect(yield* Fiber.join(pending.fiber)).toEqual([["Manual"]])
+    }))
+  }
   it.effect("auto answers questions in yolo and goal mode without pending requests", () =>
     Effect.gen(function* () {
       const service = yield* Question.Service

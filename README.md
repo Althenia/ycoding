@@ -16,8 +16,8 @@ Your repository, shell, tools, and model calls stay in the local `ycoding` proce
 ## Why YCoding
 
 - **Durable Sessions.** History, pending prompts, todos, and subagents survive restarts and reconnects. Steer a running Session or queue work for when it goes idle.
-- **Autonomy you choose.** Work step by step, raise YOLO levels to answer routine requests automatically, or set a `/goal` and let the Session continue until it is completed, stopped, or out of attempts.
-- **Guardrails across the whole Session family.** High-impact actions such as writes outside the workspace, force pushes, or destructive commands stop for review in the main Session and every subagent. Hard reviews always need a human, even at YOLO 3.
+- **Autonomy you choose.** YOLO 0 is manual; 1 auto-approves ask permissions and ordinary guardrail reviews; 2 also answers questions/forms; 3 also permits opt-in scope dispatch. Set a `/goal` to continue until completion, stop, or exhausted attempts, with automatic answers, ask permissions and opt-in scope dispatch even at YOLO 0.
+- **Guardrails across the whole Session family.** High-impact actions such as writes outside the workspace, force pushes, or destructive commands require review in the main Session and every subagent. Ordinary reviews auto-approve at YOLO 1-3; hard reviews always need a human, even at YOLO 3.
 - **Background subagents.** Delegate work to durable child Sessions that inherit your permission limits, and watch their progress in the Session rail.
 - **Use your accounts side by side.** Keep several named profiles per provider — API keys or subscription sign-ins such as Claude Code, ChatGPT, or GitHub Copilot — and pick one per Session or subagent with `profile#provider/model#variant`. See [provider profiles](./docs/configuration.md#provider-profiles).
 - **Many providers.** OpenAI, Anthropic, Google, GitHub Copilot, OpenRouter, xAI, Amazon Bedrock, Azure, Mistral, Groq, and more, plus any OpenAI-compatible endpoint.
