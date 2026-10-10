@@ -189,6 +189,16 @@ test("sections active and inactive tasks deterministically", () => {
   expect(module.taskStatusLabel("cancelled")).toBe("cancelled")
 })
 
+test("pinned subagents appear first in pin-time order", () => {
+  const tasks: SessionOrchestrationTask[] = [
+    { sessionID: "ses_recent_pin", parentID: "ses_parent", description: "Recent", agent: "reviewer", model: { providerID: "openai", id: "gpt-5.6" }, background: true, state: "completed", revision: 1, time: { created: 1, updated: 2 }, pinnedAt: 20 },
+    { sessionID: "ses_running", parentID: "ses_parent", description: "Running", agent: "reviewer", model: { providerID: "openai", id: "gpt-5.6" }, background: true, state: "running", revision: 1, time: { created: 1, updated: 2 } },
+    { sessionID: "ses_early_pin", parentID: "ses_parent", description: "Early", agent: "reviewer", model: { providerID: "openai", id: "gpt-5.6" }, background: true, state: "running", revision: 1, time: { created: 1, updated: 2 }, pinnedAt: 10 },
+  ]
+  expect(module.entriesFromTasks(tasks, "ses_parent").map((entry) => entry.sessionID)).toEqual(["ses_early_pin", "ses_recent_pin", "ses_running"])
+  expect(module.subagentSections(module.entriesFromTasks(tasks, "ses_parent")).map((section) => section.label)).toEqual(["PINNED", "ACTIVE"])
+})
+
 test("classifies every non-terminal orchestration state as active", () => {
   expect(module.isActiveSubagent("starting")).toBe(true)
   expect(module.isActiveSubagent("running")).toBe(true)
@@ -245,7 +255,7 @@ test("cancels waiting managed tasks through the durable endpoint", async () => {
   expect(interrupted).toBe(false)
 })
 
-test("cancels a starting subagent from sequential Ctrl+X then K", async () => {
+test("subagent list p toggles durable pin state and Ctrl+X then K cancels", async () => {
   function LeaderProbe() {
     const leaderActive = Keymap.useLeaderActive()
     return <text>{leaderActive() ? "leader pending" : ""}</text>
@@ -263,9 +273,16 @@ test("cancels a starting subagent from sequential Ctrl+X then K", async () => {
     time: { created: 1, updated: 1 },
   }
   const cancellations: Array<{ pathname: string; method: string }> = []
+  const pinRequests: Array<{ pathname: string; method: string }> = []
+  let pinnedAt: number | undefined
   const calls = createFetch((url, request) => {
     if (url.pathname === "/api/session/ses_parent/subagent")
-      return json({ data: [task], summary: { total: 1, active: 1, running: 0, waiting: 0 }, cursor: {} })
+      return json({ data: [{ ...task, ...(pinnedAt === undefined ? {} : { pinnedAt }) }], summary: { total: 1, active: 1, running: 0, waiting: 0 }, cursor: {} })
+    if (url.pathname === "/api/session/ses_child/pin") {
+      pinRequests.push({ pathname: url.pathname, method: request.method })
+      pinnedAt = request.method === "POST" ? 1_000 : undefined
+      return new Response(null, { status: 204 })
+    }
     if (url.pathname === "/api/session/ses_parent/subagent/ses_child/cancel") {
       cancellations.push({ pathname: url.pathname, method: request.method })
       return json({ ...task, state: "cancelled" })
@@ -288,7 +305,7 @@ test("cancels a starting subagent from sequential Ctrl+X then K", async () => {
                   <LocationProvider>
                     <RouteProvider initialRoute={{ type: "session", sessionID: "ses_parent" }}>
                       <LeaderProbe />
-                      <Composer sessionID="ses_parent" open defaultTab="subagents" />
+                      <ToastProvider><Composer sessionID="ses_parent" open defaultTab="subagents" /></ToastProvider>
                     </RouteProvider>
                   </LocationProvider>
                 </DataProvider>
@@ -304,6 +321,13 @@ test("cancels a starting subagent from sequential Ctrl+X then K", async () => {
 
   try {
     await app.waitForFrame((frame) => frame.includes("starting") && frame.includes("Start review"))
+    app.mockInput.pressKey("p")
+    await app.waitForFrame((frame) => frame.includes("PINNED"))
+    expect(pinRequests).toEqual([{ pathname: "/api/session/ses_child/pin", method: "POST" }])
+    app.mockInput.pressKey("p")
+    await app.waitFor(() => pinRequests.length === 2)
+    await app.waitForFrame((frame) => !frame.includes("PINNED"))
+    expect(pinRequests[1]).toEqual({ pathname: "/api/session/ses_child/pin", method: "DELETE" })
     app.mockInput.pressKey("x", { ctrl: true })
     await app.waitForFrame((frame) => frame.includes("leader pending"))
     app.mockInput.pressKey("k")

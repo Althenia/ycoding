@@ -1325,6 +1325,8 @@ Attention sound names are `default`, `question`, `permission`, `error`, `done`, 
 
 `session_find` opens Find in transcript in the current Session. Its default is `ctrl+shift+g`; set `keybinds.session_find` in `cli.json` to override it. The command palette also provides **Find in transcript**.
 
+`keybinds.session_task_pin_toggle` defaults to `p` and pins or unpins the selected child task while the TUI Subagents composer list is focused.
+
 The TUI `plugins` array has the same string or `{ package, options }` shape, but it configures terminal-side plugins rather than Core runtime plugins.
 
 Assistant and compaction transcript text always renders as Markdown. There is no syntax-source display setting.

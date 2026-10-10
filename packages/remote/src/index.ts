@@ -53,6 +53,8 @@ export const remoteOperations = [
   "session.message.stream",
   "session.todo.list",
   "session.subagent.list",
+  "session.pin",
+  "session.unpin",
   "session.subagent.cancel",
   "session.subagent.answer",
   "session.team.economics",
@@ -112,6 +114,8 @@ export const remoteSessionOperations = [
   "session.message.stream",
   "session.todo.list",
   "session.subagent.list",
+  "session.pin",
+  "session.unpin",
   "session.subagent.cancel",
   "session.subagent.answer",
   "session.team.economics",
@@ -695,6 +699,7 @@ function validOperationInput(operation: RemoteOperation, input: unknown): boolea
   }
   if (operation === "workspace.list") return input === undefined || (isRecord(input) && input.sessionsOnly === true && Object.keys(input).length === 1)
   if (operation === "session.subagent.list") return input === undefined || (isRecord(input) && typeof input.cursor === "string" && input.cursor.length > 0 && input.cursor.length <= 1_024 && Object.keys(input).length === 1)
+  if (operation === "session.pin" || operation === "session.unpin") return input === undefined
   if (operation === "session.subagent.cancel") return isRecord(input) && isSessionID(input.childID) && Object.keys(input).length === 1
   if (operation === "session.subagent.answer") return isRecord(input) && isSessionID(input.childID) && typeof input.questionID === "string" && /^qst_[A-Za-z0-9_-]+$/.test(input.questionID) && input.questionID.length <= 128 &&
     typeof input.text === "string" && input.text.trim().length > 0 && input.text.length <= 8_192 && Object.keys(input).every((key) => key === "childID" || key === "questionID" || key === "text")

@@ -122,6 +122,8 @@ export type LocalServer = {
   readonly messageRead: (sessionID: string, location: LocalLocation, messageID: string, signal?: AbortSignal) => Promise<SessionMessageInfo>
   readonly todoList: (sessionID: string, location: LocalLocation) => Promise<unknown>
   readonly subagentPage: (parentID: string, location: LocalLocation, cursor?: string) => Promise<unknown>
+  readonly pin: (sessionID: string, location: LocalLocation) => Promise<unknown>
+  readonly unpin: (sessionID: string, location: LocalLocation) => Promise<unknown>
   readonly subagentCancel: (parentID: string, childID: string, location: LocalLocation) => Promise<unknown>
   readonly subagentAnswer: (parentID: string, childID: string, questionID: string, text: string, location: LocalLocation) => Promise<unknown>
   readonly diagnostics: (sessionID: string, location: LocalLocation) => Promise<unknown>
@@ -259,6 +261,8 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
       call(() => client.session.todo.list({ sessionID }, request(location, timeoutMs))),
     subagentPage: (parentID, location, cursor) =>
       call(() => client.session.subagent.list({ parentID, ...(cursor === undefined ? {} : { cursor }) }, request(location, timeoutMs))),
+    pin: (sessionID, location) => call(() => client.session.pin({ sessionID }, request(location, timeoutMs))),
+    unpin: (sessionID, location) => call(() => client.session.unpin({ sessionID }, request(location, timeoutMs))),
     subagentCancel: (parentID, childID, location) =>
       call(() => client.session.subagent.cancel({ parentID, childID }, request(location, timeoutMs))),
     subagentAnswer: (parentID, childID, questionID, text, location) =>

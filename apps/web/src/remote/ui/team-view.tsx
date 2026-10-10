@@ -3,7 +3,7 @@ import { Icon, type IconName } from "../../ui/icon"
 import { Modal } from "../../ui/modal"
 import { TeamAnswerForm } from "./subagent-bar"
 import { LoadingPlaceholder } from "./loading"
-import { canCancelSubagent, formatElapsed, isActiveSubagent, teamActivityLabel, shellRows, taskRows, usageSlots, type TeamActionOutcome, type TeamPanelData, type TeamShellOutput, type TeamSubagent } from "./team-model"
+import { canCancelSubagent, formatElapsed, isActiveSubagent, pinAction, teamActivityLabel, shellRows, taskRows, usageSlots, type TeamActionOutcome, type TeamPanelData, type TeamShellOutput, type TeamSubagent } from "./team-model"
 import "./team-view.css"
 
 type Tab = "subagents" | "shell" | "side-chats"
@@ -51,6 +51,7 @@ export function TeamView(props: {
   readonly onOpen: (sessionID: string) => void
   readonly onCancel: (childID: string) => Promise<TeamActionOutcome>
   readonly onAnswer: (childID: string, questionID: string, text: string) => Promise<TeamActionOutcome>
+  readonly onPin: (childID: string, pinned: boolean) => Promise<TeamActionOutcome>
   readonly onLoadOlder: () => Promise<void>
   readonly onViewShell: (ownerID: string, shellID: string, cursor?: number) => Promise<TeamShellOutput>
   readonly onKillShell: (shellID: string) => Promise<TeamActionOutcome>
@@ -80,6 +81,7 @@ export function TeamView(props: {
   const rows = createMemo(() => taskRows(props.data().tasks))
   const shells = createMemo(() => shellRows(props.data().shells))
   const task = (id: string) => props.data().tasks.find((entry) => entry.sessionID === id)!
+  const pin = (id: string) => pinAction(task(id))
   const shell = (id: string) => props.data().shells.find((entry) => entry.id === id)!
   const sideChat = (id: string) => props.data().sideChats.find((entry) => entry.id === id)!
   const ownerLabel = (id: string) => {
@@ -164,13 +166,21 @@ export function TeamView(props: {
           <Show when={props.data().status === "ready" && props.data().tasks.length === 0}><p class="team-view__note" role="status">No subagents have been launched.</p></Show>
           <Show when={hasRows()}>
           <ul class="team-view__list"><For each={rows()}>{(id) => id.startsWith("section:")
-            ? <li class="team-view__section"><h3>{id === "section:active" ? "ACTIVE" : "INACTIVE"}</h3><span class="team-view__count">{sectionCount(id)}</span></li>
+            ? <li class="team-view__section"><h3>{id === "section:pinned" ? "Pinned" : id === "section:active" ? "ACTIVE" : "INACTIVE"}</h3><span class="team-view__count">{id === "section:pinned" ? props.data().tasks.filter((entry) => entry.pinnedAt !== undefined).length : sectionCount(id)}</span></li>
             : <li class="team-view__task" data-session-id={id} data-state={task(id).state} data-attached={id === props.currentSessionID ? "true" : undefined}>
               <div class="team-view__row">
                 <span class="team-view__state"><StateMark state={task(id).state} /><span>{working() === id ? "cancelling…" : task(id).state}</span></span>
                 <strong class="team-view__title" title={`${task(id).agent ?? "Agent unreported"} · ${task(id).description}`}>{task(id).agent ?? "Agent unreported"} · {task(id).description}</strong>
                 <div class="team-view__actions">
                   <button type="button" class="team-view__icon" data-action="open" aria-label={`Open ${task(id).description}`} title="Open" onClick={() => props.onOpen(id)}><Icon name="external" size={16} /></button>
+                  <button type="button" class="team-view__icon team-view__pin" data-action={pin(id).action} aria-label={pin(id).label} title={pin(id).title} disabled={props.data().status !== "ready" || working() !== undefined} onClick={() => {
+                    if (working() !== undefined) return
+                    const rootID = props.data().rootID
+                    setWorking(id)
+                    setError(undefined)
+                    void props.onPin(id, !pin(id).pinned).then((result) => { if (rootID === props.data().rootID && result.status !== "ok") setError(result.message) },
+                      (cause: unknown) => { if (rootID === props.data().rootID) setError(cause instanceof Error ? cause.message : "Pin state could not be changed.") }).finally(() => { if (rootID === props.data().rootID) setWorking(undefined) })
+                  }}><Icon name="pin" size={16} /></button>
                   <Show when={!controlsUnsupported() && canCancelSubagent(task(id).state)}><button type="button" class="team-view__icon team-view__icon--danger" data-action="cancel" aria-label={`Cancel ${task(id).description}`} title={controlsChecking() ? "Checking Team controls…" : "Cancel"}
                     disabled={!canControl() || working() !== undefined} onClick={(event) => setConfirm({ kind: "cancel", id, label: task(id).description, trigger: event.currentTarget })}><Icon name="stop" size={16} /></button></Show>
                   <Show when={!controlsUnsupported() && task(id).question && task(id).state === "waiting"}><button type="button" class="team-view__answer" data-action="answer" aria-expanded={answerID() === id} disabled={!canControl()} onClick={() => setAnswerID(answerID() === id ? undefined : id)}><Icon name="chat" size={14} /><span>Answer</span></button></Show>

@@ -57,6 +57,11 @@ export function canCancelSubagent(state: TeamSubagent["state"]): boolean {
   return state === "starting" || state === "running" || state === "waiting"
 }
 
+export function pinAction(task: TeamSubagent) {
+  const pinned = task.pinnedAt !== undefined
+  return { pinned, action: pinned ? "unpin" : "pin", label: `${pinned ? "Unpin" : "Pin"} ${task.description}`, title: pinned ? "Unpin" : "Pin" }
+}
+
 export function teamActiveCount(data: Pick<TeamPanelData, "status" | "activeTotal" | "tasks" | "shells" | "shellStatus">): number | undefined {
   if (data.status !== "ready" || data.shellStatus !== "ready") return undefined
   return (data.activeTotal ?? data.tasks.filter((entry) => isActiveSubagent(entry.state)).length) + data.shells.filter((shell) => shell.status === "running").length
@@ -77,10 +82,20 @@ function recency(task: TeamSubagent): number {
 }
 
 export function taskRows(tasks: readonly TeamSubagent[]): readonly string[] {
-  const ordered = [...tasks].sort((left, right) => rank[left.state] - rank[right.state] || recency(right) - recency(left) || left.sessionID.localeCompare(right.sessionID))
-  const active = ordered.filter((item) => isActiveSubagent(item.state))
-  const inactive = ordered.filter((item) => !isActiveSubagent(item.state))
+  const ordered = [...tasks].sort((left, right) => {
+    if (left.pinnedAt !== undefined || right.pinnedAt !== undefined) {
+      if (left.pinnedAt === undefined) return 1
+      if (right.pinnedAt === undefined) return -1
+      return left.pinnedAt - right.pinnedAt || left.sessionID.localeCompare(right.sessionID)
+    }
+    return rank[left.state] - rank[right.state] || recency(right) - recency(left) || left.sessionID.localeCompare(right.sessionID)
+  })
+  const pinned = ordered.filter((item) => item.pinnedAt !== undefined)
+  const unpinned = ordered.filter((item) => item.pinnedAt === undefined)
+  const active = unpinned.filter((item) => isActiveSubagent(item.state))
+  const inactive = unpinned.filter((item) => !isActiveSubagent(item.state))
   return [
+    ...(pinned.length ? ["section:pinned", ...pinned.map((item) => item.sessionID)] : []),
     ...(active.length ? ["section:active", ...active.map((item) => item.sessionID)] : []),
     ...(inactive.length ? ["section:inactive", ...inactive.map((item) => item.sessionID)] : []),
   ]

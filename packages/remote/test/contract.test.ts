@@ -159,6 +159,8 @@ test("Team operations stay root-scoped with bounded child, shell, side-chat, and
     ...(input === undefined ? {} : { input }) })
   for (const [operation, input] of [
     ["session.subagent.cancel", { childID: "ses_child" }],
+    ["session.pin", undefined],
+    ["session.unpin", undefined],
     ["session.subagent.answer", { childID: "ses_child", questionID: "qst_1", text: "staging" }],
     ["session.team.shell.list", undefined],
     ["session.team.shell.kill", { shellID: "sh_1" }],
@@ -172,6 +174,8 @@ test("Team operations stay root-scoped with bounded child, shell, side-chat, and
   }
   for (const [operation, input] of [
     ["session.subagent.cancel", { childID: "../foreign" }],
+    ["session.pin", {}],
+    ["session.unpin", { childID: "ses_child" }],
     ["session.subagent.answer", { childID: "ses_child", questionID: "qst_1", text: "" }],
     ["session.subagent.answer", { childID: "ses_child", questionID: "bad", text: "answer" }],
     ["session.team.shell.list", { directory: "/private" }],
@@ -564,6 +568,8 @@ describe("remote operations", () => {
       "session.message.stream",
       "session.todo.list",
       "session.subagent.list",
+      "session.pin",
+      "session.unpin",
       "session.subagent.cancel",
       "session.subagent.answer",
       "session.team.economics",

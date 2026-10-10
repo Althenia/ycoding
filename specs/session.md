@@ -14,9 +14,11 @@ Automatic retention deletion is deferred for v0.1.1 pending cross-process safety
 
 ## Pin Is Shared Session State
 
-`Session.Info.time.pinned` is optional and records the latest pin event time; clients order pinned Sessions by it. `POST /api/session/:sessionID/pin` pins one existing Session; `DELETE /api/session/:sessionID/pin` unpins it. Both operations are idempotent, return `204 No Content`, use Session Location middleware, and reject unknown Sessions with `SessionNotFoundError`.
+`Session.Info.time.pinned` is optional and records the latest pin event time; clients order pinned Sessions by it. `POST /api/session/:sessionID/pin` pins one existing Session; `DELETE /api/session/:sessionID/pin` unpins it. Both operations are idempotent, return `204 No Content`, use Session Location middleware, and reject unknown Sessions with `SessionNotFoundError`. Managed child Sessions use these same operations.
 
 State transitions publish version-1 `session.pinned` or `session.unpinned` events containing only `{ sessionID }`. The projector sets or clears `time_pinned` without changing `time_updated`. Repeating a pin keeps the original pin time.
+
+The direct-child `session.subagent.list` page includes optional `pinnedAt` from each child's Session projection and orders pinned children first by pin time and Session ID, followed by unpinned children in the existing task order. Its existing opaque cursor encodes pinned rank and the pin-time boundary in its rank and time fields across forward and backward pages.
 
 ## Prompt Admission Precedes Execution
 

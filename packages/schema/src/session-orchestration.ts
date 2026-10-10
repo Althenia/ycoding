@@ -99,10 +99,11 @@ export const Task = Schema.Struct({
     created: NonNegativeInt,
     updated: NonNegativeInt,
   }),
+  pinnedAt: NonNegativeInt.pipe(optional),
 }).annotate({ identifier: "SessionOrchestration.Task" })
 export interface Task extends Schema.Schema.Type<typeof Task> {}
 
-export const ListRank = Schema.Literals([0, 1, 2, 3, 4])
+export const ListRank = Schema.Literals([0, 1, 2, 3, 4, 5])
 export type ListRank = typeof ListRank.Type
 
 export const ListAnchor = Schema.Struct({

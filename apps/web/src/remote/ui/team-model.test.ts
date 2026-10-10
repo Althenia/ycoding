@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { canCancelSubagent, teamActiveCount, teamActivityLabel, formatCacheHit, formatElapsed, isManagedSubagent, shellRows, siblingTargets, taskRows, usageSlots, type TeamSubagent } from "./team-model"
+import { canCancelSubagent, teamActiveCount, teamActivityLabel, formatCacheHit, formatElapsed, isManagedSubagent, pinAction, shellRows, siblingTargets, taskRows, usageSlots, type TeamSubagent } from "./team-model"
 
 const task = (id: string, state: TeamSubagent["state"], updatedAt: number): TeamSubagent => ({
   sessionID: id, parentID: "ses_root", agent: "omoikane", description: `Review ${id}`, state, revision: 1,
@@ -78,6 +78,21 @@ test("progress on a running task never reshuffles its section, while a state cha
 test("finished tasks list the most recently finished first and keep that order", () => {
   const finished = [task("ses_a", "completed", 2_000), task("ses_b", "failed", 4_000), task("ses_c", "completed", 3_000)]
   expect(taskRows(finished)).toEqual(["section:inactive", "ses_c", "ses_a", "ses_b"])
+})
+
+test("pinned tasks lead Team under Pinned in pin-time order, followed by existing task sections", () => {
+  const tasks = [
+    { ...task("ses_recent_pin", "completed", 9_000), pinnedAt: 20 },
+    task("ses_running", "running", 8_000),
+    { ...task("ses_early_pin", "running", 1_000), pinnedAt: 10 },
+    task("ses_done", "completed", 7_000),
+  ]
+  expect(taskRows(tasks)).toEqual(["section:pinned", "ses_early_pin", "ses_recent_pin", "section:active", "ses_running", "section:inactive", "ses_done"])
+})
+
+test("Team pin controls name the action from durable pin state", () => {
+  expect(pinAction(task("ses_child", "running", 1_000))).toEqual({ pinned: false, action: "pin", label: "Pin Review ses_child", title: "Pin" })
+  expect(pinAction({ ...task("ses_child", "running", 1_000), pinnedAt: 4_000 })).toEqual({ pinned: true, action: "unpin", label: "Unpin Review ses_child", title: "Unpin" })
 })
 
 test("usage always yields the same four slots and never turns an unreported value into zero", () => {

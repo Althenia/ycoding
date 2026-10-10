@@ -127,6 +127,7 @@ export type TeamTaskView = {
   readonly state: "starting" | "running" | "waiting" | "cancelling" | "cancelled" | "completed" | "failed" | "lost"
   readonly revision: number
   readonly updatedAt: number
+  readonly pinnedAt?: number
   readonly startedAt?: number
   readonly question?: { readonly id: string; readonly text: string }
   readonly cacheHitRatio?: number
@@ -292,6 +293,7 @@ export type RemoteStore = {
   readonly loadMoreSideChats: () => Promise<void>
   readonly cancelSubagent: (childID: string) => Promise<{ readonly status: "ok" | "failed" | "unknown"; readonly message: string }>
   readonly answerSubagent: (childID: string, questionID: string, text: string) => Promise<{ readonly status: "ok" | "failed" | "unknown"; readonly message: string }>
+  readonly pinSubagent: (childID: string, pinned: boolean) => Promise<{ readonly status: "ok" | "failed" | "unknown"; readonly message: string }>
   readonly killTeamShell: (shellID: string) => Promise<{ readonly status: "ok" | "failed" | "unknown"; readonly message: string }>
   readonly teamShellOutput: (ownerID: string, shellID: string, cursor?: number) => Promise<{ readonly text: string; readonly cursor: number; readonly size: number; readonly truncated: boolean }>
   readonly createSideChat: () => Promise<{ readonly status: "ok"; readonly sessionID: string } | { readonly status: "failed" | "unknown"; readonly message: string }>
@@ -2852,6 +2854,23 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       setState({ team: { ...container.state.team, tasks: container.state.team.tasks.map((item) => item.sessionID === childID ? { ...item, ...task, question: task.question } : item) } })
       return { status: "ok", message: "" }
     },
+    pinSubagent: async (childID, pinned) => {
+      const owner = transport
+      const team = container.state.team
+      if (!teamWatching || owner === undefined || team?.status !== "ready" || !team.tasks.some((task) => task.sessionID === childID))
+        return { status: "failed", message: "Subagent is not available for pinning." }
+      const rootID = team.rootID
+      const token = selectionToken
+      const outcome = await owner.request(pinned ? "session.pin" : "session.unpin", { sessionID: childID, timeoutMs: 10_000 })
+      if (token !== selectionToken || !isCurrentConnection(owner) || container.state.team?.rootID !== rootID)
+        return { status: "unknown", message: "The family changed; check this subagent before retrying." }
+      if (outcome.status !== "ok") return teamActionFailure(outcome, pinned ? "Pin subagent" : "Unpin subagent")
+      await loadTeam(owner, token, rootID, undefined, true)
+      const refreshed = container.state.team?.tasks.find((item) => item.sessionID === childID)
+      if (!refreshed || pinned && refreshed.pinnedAt === undefined || !pinned && refreshed.pinnedAt !== undefined)
+        return { status: "unknown", message: "Pin state could not be refreshed; check the task before retrying." }
+      return { status: "ok", message: "" }
+    },
     killTeamShell: async (shellID) => {
       const owner = transport
       const team = container.state.team
@@ -3492,6 +3511,7 @@ function readTeamTask(value: unknown): TeamTaskView | undefined {
   const questionText = typeof question === "object" && question !== null ? Reflect.get(question, "text") : undefined
   const startedAt = typeof time === "object" && time !== null ? Reflect.get(time, "created") : undefined
   const updatedAt = typeof time === "object" && time !== null ? Reflect.get(time, "updated") : undefined
+  const pinnedAt = Reflect.get(value, "pinnedAt")
   if (typeof sessionID !== "string" || sessionID.length === 0 || typeof parentID !== "string" || parentID.length === 0 ||
     typeof description !== "string" || (agent !== undefined && typeof agent !== "string") ||
     (state !== "starting" && state !== "running" && state !== "waiting" && state !== "cancelling" &&
@@ -3502,6 +3522,7 @@ function readTeamTask(value: unknown): TeamTaskView | undefined {
   return { sessionID, parentID, description, ...(agent === undefined ? {} : { agent }),
     ...(model === undefined ? {} : { modelLabel: modelLabel(model) }), state, revision, updatedAt,
     ...(typeof startedAt === "number" && Number.isFinite(startedAt) ? { startedAt } : {}),
+    ...(typeof pinnedAt === "number" && Number.isFinite(pinnedAt) ? { pinnedAt } : {}),
     ...(typeof questionID === "string" && typeof questionText === "string" && state === "waiting" ? { question: { id: questionID, text: questionText } } : {}) }
 }
 

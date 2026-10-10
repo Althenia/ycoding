@@ -60,6 +60,9 @@ const taskPriority = sql<number>`case ${SessionTaskTable.state}
   when 'cancelling' then 3
   else 4
 end`
+const pinPriority = sql<number>`case when ${SessionTable.time_pinned} is null then 1 else 0 end`
+const orderedTaskPriority = sql<number>`case when ${SessionTable.time_pinned} is null then ${taskPriority} else 0 end`
+const orderedUpdated = sql<number>`case when ${SessionTable.time_pinned} is null then ${SessionTaskTable.time_updated} else 0 end`
 
 export type Page = {
   readonly data: ReadonlyArray<Task>
@@ -105,47 +108,38 @@ export const page = Effect.fn("SessionOrchestration.page")(function* (
         const cursor = input.cursor
         const previous = cursor?.direction === "previous"
         const boundary = cursor
-          ? previous
-            ? or(
-                lt(taskPriority, cursor.rank),
-                and(eq(taskPriority, cursor.rank), gt(SessionTaskTable.time_updated, cursor.updated)),
-                and(
-                  eq(taskPriority, cursor.rank),
-                  eq(SessionTaskTable.time_updated, cursor.updated),
-                  lt(SessionTaskTable.session_id, cursor.sessionID),
-                ),
-              )
-            : or(
-                gt(taskPriority, cursor.rank),
-                and(eq(taskPriority, cursor.rank), lt(SessionTaskTable.time_updated, cursor.updated)),
-                and(
-                  eq(taskPriority, cursor.rank),
-                  eq(SessionTaskTable.time_updated, cursor.updated),
-                  gt(SessionTaskTable.session_id, cursor.sessionID),
-                ),
-              )
+          ? cursor.rank === 5
+            ? previous
+              ? and(eq(pinPriority, 0), or(lt(SessionTable.time_pinned, cursor.updated), and(eq(SessionTable.time_pinned, cursor.updated), lt(SessionTaskTable.session_id, cursor.sessionID))))
+              : or(eq(pinPriority, 1), and(eq(pinPriority, 0), or(gt(SessionTable.time_pinned, cursor.updated), and(eq(SessionTable.time_pinned, cursor.updated), gt(SessionTaskTable.session_id, cursor.sessionID)))))
+            : previous
+              ? or(eq(pinPriority, 0), and(eq(pinPriority, 1), or(lt(taskPriority, cursor.rank), and(eq(taskPriority, cursor.rank), gt(SessionTaskTable.time_updated, cursor.updated)), and(eq(taskPriority, cursor.rank), eq(SessionTaskTable.time_updated, cursor.updated), lt(SessionTaskTable.session_id, cursor.sessionID)))))
+              : and(eq(pinPriority, 1), or(gt(taskPriority, cursor.rank), and(eq(taskPriority, cursor.rank), lt(SessionTaskTable.time_updated, cursor.updated)), and(eq(taskPriority, cursor.rank), eq(SessionTaskTable.time_updated, cursor.updated), gt(SessionTaskTable.session_id, cursor.sessionID))))
           : undefined
         const rows = yield* db
-          .select()
+          .select({ task: SessionTaskTable, pinnedAt: SessionTable.time_pinned })
           .from(SessionTaskTable)
+          .innerJoin(SessionTable, eq(SessionTable.id, SessionTaskTable.session_id))
           .where(and(eq(SessionTaskTable.parent_id, input.parentID), boundary))
           .orderBy(
-            previous ? desc(taskPriority) : asc(taskPriority),
-            previous ? asc(SessionTaskTable.time_updated) : desc(SessionTaskTable.time_updated),
+            previous ? desc(pinPriority) : asc(pinPriority),
+            previous ? desc(SessionTable.time_pinned) : asc(SessionTable.time_pinned),
+            previous ? desc(orderedTaskPriority) : asc(orderedTaskPriority),
+            previous ? asc(orderedUpdated) : desc(orderedUpdated),
             previous ? desc(SessionTaskTable.session_id) : asc(SessionTaskTable.session_id),
           )
           .limit(limit + 1)
           .all()
           .pipe(Effect.orDie)
         const hasMore = rows.length > limit
-        const data = (previous ? rows.slice(0, limit).toReversed() : rows.slice(0, limit)).map(taskFromRow)
+        const data = (previous ? rows.slice(0, limit).toReversed() : rows.slice(0, limit)).map((row) => ({ ...taskFromRow(row.task), pinnedAt: row.pinnedAt ?? undefined }))
         const first = data[0]
         const last = data.at(-1)
         const previousCursor =
           first && (previous ? hasMore : cursor !== undefined)
             ? ListAnchor.make({
-                rank: taskRank(first.state),
-                updated: first.time.updated,
+                rank: first.pinnedAt === undefined ? taskRank(first.state) : 5,
+                updated: first.pinnedAt ?? first.time.updated,
                 sessionID: first.sessionID,
                 direction: "previous",
               })
@@ -153,8 +147,8 @@ export const page = Effect.fn("SessionOrchestration.page")(function* (
         const nextCursor =
           last && (previous ? cursor !== undefined : hasMore)
             ? ListAnchor.make({
-                rank: taskRank(last.state),
-                updated: last.time.updated,
+                rank: last.pinnedAt === undefined ? taskRank(last.state) : 5,
+                updated: last.pinnedAt ?? last.time.updated,
                 sessionID: last.sessionID,
                 direction: "next",
               })

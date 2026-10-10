@@ -37,7 +37,7 @@ function SubagentRail(props: { sessionID: string }) {
 }
 
 export function SubagentRailContent(props: {
-  tasks: ReadonlyArray<Pick<SessionOrchestrationTask, "sessionID" | "description" | "state" | "question"> & { elapsed?: string }>
+  tasks: ReadonlyArray<Pick<SessionOrchestrationTask, "sessionID" | "description" | "state" | "question" | "pinnedAt"> & { elapsed?: string }>
   summary?: SessionOrchestrationSummary
   position?: "top" | "older"
   now?: number
@@ -55,11 +55,16 @@ export function SubagentRailContent(props: {
       }`,
   )
   const more = createMemo(() => (props.position === "top" ? Math.max(0, (props.summary?.total ?? props.tasks.length) - props.tasks.length) : 0))
+  const pinned = createMemo(() => props.tasks.filter((task) => task.pinnedAt !== undefined))
+  const remaining = createMemo(() => props.tasks.filter((task) => task.pinnedAt === undefined))
 
   return (
     <Show when={props.tasks.length > 0 || (props.summary?.total ?? 0) > 0}>
       <RailSection section="subagents" title="SUBAGENTS" summary={summary()} attention={waiting() > 0}>
-        <For each={props.tasks}>
+        <Show when={pinned().length > 0}>
+          <RailRow label="Pinned" value={String(pinned().length)} />
+        </Show>
+        <For each={[...pinned(), ...remaining()]}>
           {(task, index) => {
             const blocked = () => Boolean(task.question?.text?.trim())
             const glyph = () => getGlyph(blocked() ? "awaitingInput" : "subagent")

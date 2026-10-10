@@ -338,12 +338,13 @@ describe("Session orchestration helpers", () => {
         .insert(SessionTable)
         .values([
           { id: pageParentID, project_id: Project.ID.global, directory: "/page", title: "parent" },
-          ...rows.map(([id]) => ({
+          ...rows.map(([id], index) => ({
             id: SessionSchema.ID.make(id),
             project_id: Project.ID.global,
             parent_id: pageParentID,
             directory: "/page",
             title: id,
+            time_pinned: index < 11 ? 50 + index : null,
           })),
         ])
         .run()
@@ -376,8 +377,8 @@ describe("Session orchestration helpers", () => {
       expect(first.data).toHaveLength(10)
       expect(first.data.map((task) => task.sessionID)).toEqual(
         [
-          "ses_wait_a",
           "ses_wait_b",
+          "ses_wait_a",
           "ses_start",
           "ses_run",
           "ses_cancel",
@@ -388,6 +389,8 @@ describe("Session orchestration helpers", () => {
           "ses_terminal_3",
         ].map((id) => SessionSchema.ID.make(id)),
       )
+      expect(first.data.map((task) => task.pinnedAt)).toEqual([50, 51, 52, 53, 54, 55, 56, 57, 58, 59])
+      expect(first.cursor.next).toMatchObject({ rank: 5, updated: 59 })
       expect(first.summary).toEqual({ total: 12, active: 5, running: 1, waiting: 2 })
       expect(first.cursor.next).toBeDefined()
       expect(first.cursor.previous).toBeUndefined()
@@ -399,6 +402,7 @@ describe("Session orchestration helpers", () => {
       expect(second.data.map((task) => task.sessionID)).toEqual(
         ["ses_terminal_2", "ses_terminal_1"].map((id) => SessionSchema.ID.make(id)),
       )
+      expect(second.data[0]?.pinnedAt).toBe(60)
       expect(second.cursor.previous).toBeDefined()
 
       const roundTrip = yield* SessionOrchestration.page(db, {

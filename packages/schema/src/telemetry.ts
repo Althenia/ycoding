@@ -28,6 +28,8 @@ export const Operation = Schema.Literals([
   "session.message.stream",
   "session.todo.list",
   "session.subagent.list",
+  "session.pin",
+  "session.unpin",
   "session.subagent.cancel",
   "session.subagent.answer",
   "session.team.economics",

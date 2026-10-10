@@ -388,7 +388,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   const paletteSessionSelected = () => selected() && (view() !== "/remote/session" || (ownsSessionDevice() && ownsSessionRoute()))
   const teamContent = () => <TeamView
     data={() => state().team!} currentSessionID={state().activeSessionID ?? ""} now={Date.now} sheet={phoneLayout()}
-    onClose={closeTeam} onOpen={openFromTeam} onCancel={remote.store.cancelSubagent} onAnswer={remote.store.answerSubagent}
+    onClose={closeTeam} onOpen={openFromTeam} onCancel={remote.store.cancelSubagent} onAnswer={remote.store.answerSubagent} onPin={remote.store.pinSubagent}
     onLoadOlder={remote.store.loadMoreTeam} onViewShell={remote.store.teamShellOutput} onKillShell={remote.store.killTeamShell}
     onOpenSideChat={openFromTeam} onCreateSideChat={remote.store.createSideChat} onLoadOlderSideChats={remote.store.loadMoreSideChats} />
 

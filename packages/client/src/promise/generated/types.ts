@@ -28,6 +28,8 @@ export type TelemetryRequestSample = {
     | "session.message.stream"
     | "session.todo.list"
     | "session.subagent.list"
+    | "session.pin"
+    | "session.unpin"
     | "session.subagent.cancel"
     | "session.subagent.answer"
     | "session.team.economics"
@@ -2228,6 +2230,7 @@ export type SessionOrchestrationTask = {
   question?: SessionOrchestrationQuestion
   revision: number
   time: { created: number; updated: number }
+  pinnedAt?: number
 }
 
 export type CommandInfo = {
@@ -4028,6 +4031,8 @@ export type ServerTelemetryAppendInput = {
             | "session.message.stream"
             | "session.todo.list"
             | "session.subagent.list"
+            | "session.pin"
+            | "session.unpin"
             | "session.subagent.cancel"
             | "session.subagent.answer"
             | "session.team.economics"

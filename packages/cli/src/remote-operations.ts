@@ -730,6 +730,13 @@ async function run(input: OperationInput) {
       return await input.local.messageRead(sessionID, location, validated.messageID, input.signal)
     case "subagent.list":
       return await input.local.subagentPage(sessionID, location, validated.cursor)
+    case "session.pin":
+    case "session.unpin": {
+      if (verified.parentID === undefined || verified.agent === "btw") throw new OperationError("forbidden", "Only managed child Sessions can be pinned through Team")
+      const parent = await input.sessions.verify(verified.parentID)
+      if (parent === undefined) throw new OperationError("session_not_allowed", "Parent Session is not available at its recorded location")
+      return validated.kind === "session.pin" ? await input.local.pin(sessionID, location) : await input.local.unpin(sessionID, location)
+    }
     case "subagent.cancel": {
       await requireFamilyMember(input, verified, validated.childID, true)
       return { data: await input.local.subagentCancel(sessionID, validated.childID, location) }
@@ -948,6 +955,7 @@ type Validated =
   | { readonly kind: "attachment.read"; readonly digest: string }
   | { readonly kind: "message.stream"; readonly messageID: string }
   | { readonly kind: "subagent.list"; readonly cursor?: string }
+  | { readonly kind: "session.pin" | "session.unpin" }
   | { readonly kind: "subagent.cancel"; readonly childID: string }
   | { readonly kind: "subagent.answer"; readonly childID: string; readonly questionID: string; readonly text: string }
   | { readonly kind: "team.economics"; readonly sessionIDs: readonly string[] }
@@ -1065,6 +1073,7 @@ function validate(request: RemoteRequest): Validated {
     return request.operation === "workspace.file.find" ? { kind: "workspace.file.find", workspace: requireString(fields.workspace, "workspace", 128), query, limit } : { kind: "file.find", query, limit }
   }
   if (request.operation === "session.subagent.list") return { kind: "subagent.list", cursor: fields.cursor === undefined ? undefined : requireString(fields.cursor, "cursor", 1_024) }
+  if (request.operation === "session.pin" || request.operation === "session.unpin") return { kind: request.operation }
   if (request.operation === "session.subagent.cancel") return { kind: "subagent.cancel", childID: sessionID(fields.childID, "childID") }
   if (request.operation === "session.subagent.answer") {
     const questionID = requireString(fields.questionID, "questionID", 128)
@@ -1655,6 +1664,8 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.attachment.read": ["digest"],
   "session.message.stream": ["messageID"],
   "session.subagent.list": ["cursor"],
+  "session.pin": [],
+  "session.unpin": [],
   "session.subagent.cancel": ["childID"],
   "session.subagent.answer": ["childID", "questionID", "text"],
   "session.team.economics": ["sessionIDs"],
