@@ -1037,8 +1037,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       return
     }
     if (outcome.status !== "ok") {
-      const unsupported = outcome.status === "unknown" || outcome.status === "failed" && outcome.error.code === "unknown_operation"
-      setState({ familyActivity: { rootID, status: unsupported ? "unsupported" : "error", members: [] } })
+      const unsupported = outcome.status === "failed" && outcome.error.code === "unknown_operation"
+      setState({ familyActivity: { rootID, status: unsupported ? "unsupported" : "error",
+        members: unsupported ? [] : container.state.familyActivity?.rootID === rootID ? container.state.familyActivity.members : [] } })
       if (!unsupported) cancelFamilyRefresh = schedule(() => { void loadFamilyActivity(owner, rootID) }, 3_000)
       return
     }
@@ -2098,7 +2099,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const info = known ?? { id: sessionID, title: sessionID, updatedAt: 0, archived: false, ...(rootHint === undefined ? {} : { parentID: rootHint }) }
     const rootID = info.parentID ?? sessionID
     if (openRootInfo?.id !== rootID) openRootInfo = (rootID === sessionID ? known : container.state.sessions.find((item) => item.id === rootID) ?? container.state.carouselSessions?.find((item) => item.id === rootID))
-    const sameFamily = previousRootID === rootID && container.state.team?.status === "ready"
+    const sameFamily = previousRootID === rootID && container.state.team !== undefined
     const retainedTeam = teamWatching ? sameFamily ? container.state.team : emptyTeam(rootID, "loading") : undefined
     setState({ activeSessionID: sessionID, selectedSessionInfo: info,
       view: createSessionView(sessionID), team: retainedTeam,
@@ -2150,7 +2151,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       if (token !== selectionToken || container.state.activeSessionID !== sessionID) return
       selectionFailedToken = token
       setState({ notice: "This session is not available from the connected device.",
-        ...(teamWatching ? { team: emptyTeam(rootID, "error") } : {}) })
+        ...(teamWatching ? { team: sameFamily && container.state.team?.rootID === rootID
+          ? { ...container.state.team, status: "error", pageLoading: false, refreshing: false }
+          : emptyTeam(rootID, "error") } : {}) })
       return
     }
     if (token !== selectionToken || container.state.activeSessionID !== sessionID) {
@@ -2168,7 +2171,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       selectionReadyToken = token
       setState({ ...(notice === undefined ? { history: { status: "stale" } as const } : { notice }),
         ...(teamWatching && !sameFamily ? { team: emptyTeam(rootID, "loading") } : {}) })
-      if (teamWatching && !sameFamily) void loadTeam(active, token, rootID)
+      if (teamWatching && (!sameFamily || container.state.team?.status !== "ready")) void loadTeam(active, token, rootID)
       if (sameFamily && activityWatching) void loadFamilyActivity(active, rootID)
       void loadCapturedChanges(active, sessionID, token)
       await Promise.all([loadSessionReads(sessionID, token), loadPendingInputs(active, sessionID, token)])
@@ -2203,7 +2206,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         : container.state.selectedSessionInfo })
       void loadCompactionHistory(sessionID, token)
       void loadCapturedChanges(active, sessionID, token)
-      if (teamWatching && !retained) void loadTeam(active, token, teamRootID)
+      if (teamWatching && (!retained || container.state.team?.status !== "ready")) void loadTeam(active, token, teamRootID)
       if (retained && activityWatching) void loadFamilyActivity(active, teamRootID)
     } finally {
       if (hydration === owned) hydration = undefined

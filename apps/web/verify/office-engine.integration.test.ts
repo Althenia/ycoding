@@ -218,6 +218,7 @@ test("tablet and desktop Office fill the shell below header and status with no p
   for (const [width, height] of [[1440, 900], [1024, 768], [820, 1180]] as const) {
     await page.setViewport(width, height)
     await page.navigate(url("tool", "&shell=1&team=multi&freeCamera=1"))
+    await page.evaluate<void>(`(() => {document.querySelector('.app > div')?.classList.add('status-strip');document.querySelector('.workspace__main').style.gridArea='workspace'})()`)
     await waitFor(page, "window.__officeGame?.scene.getScene('office').latestFrames.length===3")
     const geometry = await page.evaluate<{ readonly scroll: number; readonly viewport: number; readonly panelBottom: number; readonly stageBottom: number; readonly scrollBottom: number; readonly hostBottom: number; readonly canvasHeight: number }>(`(() => {const box=(selector)=>document.querySelector(selector).getBoundingClientRect();return {
       scroll:document.documentElement.scrollHeight,viewport:innerHeight,panelBottom:box('.route-panel').bottom,
@@ -649,13 +650,12 @@ test("reduced-motion preference switches freeze and resume the current sprite po
     await Bun.sleep(600)
     const animated = await page.evaluate<string>(frameName)
     await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Toggle reduced motion')?.click()")
-    await Bun.sleep(150)
+    await waitFor(page, "document.querySelector('#office-motion').textContent==='reduced'&&![...window.__officeGame.scene.getScene('office').objects.values()].some(objects=>objects.sprite.anims.isPlaying)")
     const fixed = await page.evaluate<string>(frameName)
-    await Bun.sleep(600)
+    await page.evaluate<void>("(()=>{const scene=window.__officeGame.scene.getScene('office');for(let step=0;step<20;step++)scene.update(performance.now()+step*50,50)})()")
     expect(await page.evaluate<string>(frameName)).toBe(fixed)
     await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Toggle reduced motion')?.click()")
-    await Bun.sleep(800)
-    expect(await page.evaluate<string>(frameName)).not.toBe(fixed)
+    await waitFor(page, `(document.querySelector('#office-motion').textContent==='system'&&${frameName}!==${JSON.stringify(fixed)})`)
     expect(animated).not.toBe("")
   } finally { await page.close() }
 }, 30_000)

@@ -175,6 +175,27 @@ describe("remote Office presentation", () => {
     }
   }, 60_000)
 
+  test("opens an activity-linked object inspect card from the keyboard object list and closes with Escape", async () => {
+    const page = await openRemote("view=chat&presentation=office&inspectOffice=1")
+    try {
+      expect(await until(page, `document.querySelector('.office-workspace canvas')!==null&&document.querySelectorAll('.office-roster__row').length>0`, 150)).toBe(true)
+      await page.evaluate<void>(`document.querySelector('.office-entity-list button[aria-controls="office-entity-options"]').click()`)
+      expect(await until(page, `document.querySelector('.office-entity-list button')!==null`)).toBe(true)
+      const inspectedUser = await page.evaluate<string>(`(() => {const button=[...document.querySelectorAll('.office-entity-list button')].find(item=>item.dataset.entityUsers);button?.click();return button?.dataset.entityUsers??''})()`)
+      expect(await until(page, `document.querySelector('.office-entity-card')!==null`)).toBe(true)
+      const card = await page.evaluate<string>(`document.querySelector('.office-entity-card').textContent`)
+      expect(card).toContain("Room")
+      expect(card).toContain("State")
+      expect(card).toContain("Using")
+      expect(card).toContain("occupied")
+      expect(card).toContain(inspectedUser)
+      expect(card).not.toContain("No one")
+      await page.evaluate<void>(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`)
+      expect(await until(page, `document.querySelector('.office-entity-card')===null`)).toBe(true)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.office-roster__row').length`)).toBe(2)
+    } finally { await page.close() }
+  }, 60_000)
+
   test("keeps one Office scene and roster through child, root, and child selection", async () => {
     const page = await openRemote("view=chat&presentation=office")
     try {
@@ -191,6 +212,28 @@ describe("remote Office presentation", () => {
         expect(await page.evaluate<{ readonly canvas: boolean; readonly rows: boolean; readonly names: boolean; readonly mounts: number }>(`(() => {const probe=window.officeContinuity,rows=[...document.querySelectorAll('.office-roster__row')];return {canvas:document.querySelector('.office-canvas-host canvas')===probe.canvas,rows:rows.length===probe.rows.size&&rows.every(row=>row===probe.rows.get(row.dataset.sessionId)),names:rows.every(row=>row.querySelector('.office-roster__name').textContent===probe.names.get(row.dataset.sessionId)),mounts:probe.mounts}})()`)).toEqual({ canvas: true, rows: true, names: true, mounts: 0 })
       }
       expect(await page.evaluate<readonly (readonly [string, string])[]>(`Object.keys(localStorage).sort().map(key=>[key,localStorage.getItem(key)])`)).toEqual(storage)
+    } finally { await page.close() }
+  }, 60_000)
+
+  test("keeps the seven-actor Office mounted while selecting members through a same-family reload", async () => {
+    const page = await openRemote("view=chat&presentation=office&team=office-large-family&latency=200&inspectOffice=1")
+    try {
+      expect(await until(page, `window.__officeGame?.scene.getScene('office').latestFrames.length===7&&document.querySelector('.office-canvas-host canvas')!==null`, 150)).toBe(true)
+      await page.evaluate<void>(`(() => {const scene=window.__officeGame.scene.getScene('office');window.officeReloadContinuity={game:window.__officeGame,scene,canvas:document.querySelector('.office-canvas-host canvas'),positions:scene.latestFrames.map(frame=>[frame.actor.id,Math.floor(frame.position.x/32),Math.floor(frame.position.y/32)]),minimum:7,placeholder:false};const sample=()=>{const current=window.__officeGame?.scene.getScene('office');if(current){window.officeReloadContinuity.minimum=Math.min(window.officeReloadContinuity.minimum,current.latestFrames.length);window.officeReloadContinuity.placeholder||=!!document.querySelector('.office-stage .loading-placeholder')}requestAnimationFrame(sample)};requestAnimationFrame(sample);[...document.querySelectorAll('.fixture__controls button')].find(button=>button.textContent.toLowerCase().includes('disconnect and reconnect'))?.click()})()`)
+      expect(await until(page, `document.querySelector('.office-roster [role="status"]')?.textContent.includes('Loading subagents')`, 150)).toBe(true)
+      const ids = await page.evaluate<readonly string[]>(`[...document.querySelectorAll('.office-roster__row')].map(row=>row.dataset.sessionId).filter(id=>id?.startsWith('ses_office_child_'))`)
+      expect(ids.length).toBe(5)
+      for (const id of ids) {
+        await page.evaluate<void>(`document.querySelector('.office-roster__row[data-session-id=${JSON.stringify(id)}]').click()`)
+        expect(await until(page, `document.querySelector('.office-roster__row[data-session-id=${JSON.stringify(id)}]')?.getAttribute('aria-current')==='true'`, 150)).toBe(true)
+      }
+      await page.evaluate<void>(`new Promise(resolve=>setTimeout(resolve,1500))`)
+      const continuity = await page.evaluate<{ readonly game: boolean; readonly scene: boolean; readonly canvas: boolean; readonly minimum: number; readonly positions: unknown; readonly placeholder: boolean; readonly count: number }>(`(() => {const prior=window.officeReloadContinuity,scene=window.__officeGame.scene.getScene('office');return {game:window.__officeGame===prior.game,scene:scene===prior.scene,canvas:document.querySelector('.office-canvas-host canvas')===prior.canvas,
+        minimum:prior.minimum,positions:scene.latestFrames.map(frame=>[frame.actor.id,Math.floor(frame.position.x/32),Math.floor(frame.position.y/32)]),
+        placeholder:prior.placeholder,count:scene.latestFrames.length,
+      }})()`)
+      expect(continuity).toMatchObject({ game: true, scene: true, canvas: true, minimum: 7, placeholder: false, count: 7 })
+      expect(continuity.positions).toEqual(await page.evaluate<unknown>(`window.officeReloadContinuity.positions`))
     } finally { await page.close() }
   }, 60_000)
 
@@ -287,6 +330,7 @@ describe("remote Office presentation", () => {
       expect(await page.evaluate<number>(`remoteOperationReport().operations['session.family.activity']??0`)).toBe(before)
       await page.evaluate<void>(`Object.defineProperty(document,'hidden',{configurable:true,value:false});document.dispatchEvent(new Event('visibilitychange'))`)
       expect(await until(page, `(remoteOperationReport().operations['session.family.activity']??0)>${before}`)).toBe(true)
+      expect(await until(page, `providerAuthState().familyActivity?.status==='ready'`)).toBe(true)
       await choosePresentation(page, "Conversation")
       const stopped = await page.evaluate<number>(`remoteOperationReport().operations['session.family.activity']??0`)
       await Bun.sleep(3_150)

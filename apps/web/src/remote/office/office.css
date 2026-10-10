@@ -2,8 +2,18 @@
 .app--office .workspace__scroll > .notice-strip { flex:none; }
 .app--office .workspace__scroll > .route-panel:has(> .office-workspace) { flex:1; block-size:auto; min-block-size:0; }
 .office-workspace { display:grid; grid-template-rows:minmax(0,1fr); block-size:100%; min-inline-size:0; min-block-size:0; }
-.office-workspace__stage { display:grid; grid-template-rows:auto minmax(0,1fr) auto; gap:var(--yc-space-3); min-inline-size:0; min-block-size:0; }
+.office-workspace__stage { position:relative; display:grid; grid-template-rows:auto minmax(0,1fr) auto; gap:var(--yc-space-3); min-inline-size:0; min-block-size:0; }
 .office-workspace__canvas { grid-row:2; min-inline-size:0; min-block-size:0; block-size:100%; }
+.office-entity-list { position:absolute; z-index:5; inset-inline-start:var(--yc-space-3); inset-block-end:var(--yc-space-3); max-block-size:40%; overflow:auto; padding:var(--yc-space-2) var(--yc-space-3); border:var(--yc-border-width) solid var(--yc-border-strong); border-radius:var(--yc-radius-md); background:var(--yc-surface-raised); color:var(--yc-text); }
+.office-entity-list > button,.office-entity-card header button { min-block-size:var(--yc-hit-min); }
+.office-entity-list ul { display:grid; max-block-size:240px; overflow:auto; margin:0; padding:0; list-style:none; }
+.office-entity-list button { min-block-size:var(--yc-hit-min); padding:var(--yc-space-2); border:0; background:transparent; color:var(--yc-text); text-align:start; }
+.office-entity-card { position:absolute; z-index:6; inset-inline-end:var(--yc-space-3); inset-block-end:var(--yc-space-3); inline-size:min(320px,calc(100% - 24px)); max-block-size:60%; overflow:auto; padding:var(--yc-space-3); border:var(--yc-border-width) solid var(--yc-border-strong); border-radius:var(--yc-radius-lg); background:var(--yc-surface-raised); color:var(--yc-text); box-shadow:var(--yc-shadow-md); }
+.office-entity-card header { display:flex; align-items:center; justify-content:space-between; gap:var(--yc-space-2); }
+.office-entity-card h3 { margin:0; font-size:var(--yc-size-sm); }
+.office-entity-card dl { display:grid; grid-template-columns:minmax(64px,auto) minmax(0,1fr); gap:var(--yc-space-1) var(--yc-space-2); margin:var(--yc-space-3) 0 0; font-size:var(--yc-size-xs); }
+.office-entity-card dt { color:var(--yc-text-muted); }
+.office-entity-card dd { min-inline-size:0; margin:0; overflow-wrap:anywhere; }
 .office-stage { position:relative; display:grid; grid-template-rows:auto minmax(0,1fr); min-inline-size:0; min-block-size:0; block-size:100%; overflow:hidden; border:var(--yc-border-width) solid var(--yc-border-strong); border-radius:var(--yc-radius-md); background:var(--yc-surface-sunken); }
 .office-canvas-host { grid-row:2; min-inline-size:0; min-block-size:0; inline-size:100%; block-size:100%; }
 .office-canvas-host:focus-visible { outline:2px solid var(--yc-focus); outline-offset:-2px; }
@@ -40,5 +50,6 @@
 @keyframes office-card-enter { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
 @media (hover:hover) { .office-camera-controls button:hover::after { opacity:1; transform:translateY(0); } .office-roster__row:hover { border-color:var(--yc-border-strong); transform:translateY(-1px); } }
 @media (width < 768px) { .app--office .workspace__scroll { overflow-y:auto; } .office-workspace { min-block-size:460px; } .office-workspace__stage { grid-template-rows:auto minmax(220px,1fr) auto; } .office-roster { padding:var(--yc-space-2); overflow:hidden; } .office-roster__toggle { display:none; } .office-roster__list,.office-roster--collapsed .office-roster__list { display:flex; overflow-x:auto; scroll-snap-type:x proximity; } .office-roster__list li { flex:0 0 min(220px,72vw); scroll-snap-align:start; } .office-camera-controls { justify-content:center; gap:var(--yc-space-1); } }
+@media (hover:none) { .office-entity-list { inset-block-end:var(--yc-space-1); max-block-size:34%; } }
 @media (min-width:1024px) { .office-workspace__stage { grid-template-columns:minmax(0,1fr) minmax(240px,280px); grid-template-rows:auto minmax(0,1fr); } .office-attention { grid-column:1 / -1; } .office-workspace__canvas { grid-column:1; grid-row:2; } .office-roster { grid-column:2; grid-row:2; max-block-size:none; } .office-roster__toggle { display:none; } .office-roster--collapsed .office-roster__list { display:grid; } }
 @media (prefers-reduced-motion:reduce) { .office-workspace * { animation:none !important; transition:none !important; scroll-behavior:auto !important; } }

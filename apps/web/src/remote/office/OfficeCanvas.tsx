@@ -12,6 +12,8 @@ export function OfficeCanvas(props: {
   readonly onSelectSession: (id: string) => void
   readonly onNormalView: () => void
   readonly onLocations: (locations: Readonly<Record<string, OfficeRoomID | undefined>>) => void
+  readonly onInspectEntity?: (id: string) => void
+  readonly onEntityClaims?: (claims: ReadonlyMap<string, readonly string[]>) => void
   readonly focusRequest?: { readonly actorID: string; readonly revision: number }
 }) {
   let host!: HTMLDivElement
@@ -57,7 +59,7 @@ export function OfficeCanvas(props: {
       handle = mountOffice(host, input(), props.onSelectSession, setError, (locations) => {
         setPlaced(Object.keys(locations).length)
         props.onLocations(locations)
-      })
+      }, (id) => props.onInspectEntity?.(id), (claims) => props.onEntityClaims?.(claims))
       handle.update(input())
       if (props.focusRequest) handle.focus(props.focusRequest.actorID)
       setLoading(false)

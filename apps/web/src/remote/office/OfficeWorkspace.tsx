@@ -1,9 +1,10 @@
-import { For, Show, createMemo, createSignal, type JSX } from "solid-js"
+import { For, Show, createMemo, createSignal, onCleanup, type JSX } from "solid-js"
 import { OfficeCanvas } from "./OfficeCanvas"
 import { LoadingPlaceholder } from "../ui/loading"
 import { officeLocationLabel } from "./model"
 import { appearanceFor, characterColumnCount, characterFrame } from "./sprites"
 import type { OfficeActor, OfficePreferences, OfficeRoomID, OfficeSnapshot } from "./types"
+import { entityCatalog, entityState, entityUsers, type OfficeEntity } from "./entities"
 
 const characterSheetURL = new URL("./assets/characters.png?no-inline", import.meta.url).href
 
@@ -19,6 +20,17 @@ export function OfficeWorkspace(props: {
 }): JSX.Element {
   const [locations, setLocations] = createSignal<Readonly<Record<string, OfficeRoomID | undefined>>>({})
   const [focusRequest, setFocusRequest] = createSignal<{ readonly actorID: string; readonly revision: number }>()
+  const [inspected, setInspected] = createSignal<OfficeEntity>()
+  const [entityClaims, setEntityClaims] = createSignal<ReadonlyMap<string, readonly string[]>>(new Map())
+  let inspectFocus: HTMLElement | undefined
+  const inspect = (id: string) => {
+    if (!inspected()) inspectFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
+    setInspected(entityCatalog.find((entity) => entity.id === id))
+  }
+  const closeInspect = () => { setInspected(undefined); inspectFocus?.focus(); inspectFocus = undefined }
+  const keydown = (event: KeyboardEvent) => { if (event.key === "Escape") closeInspect() }
+  document.addEventListener("keydown", keydown)
+  onCleanup(() => document.removeEventListener("keydown", keydown))
   const focusActor = (actor: OfficeActor) => {
     props.onSelectSession(actor.sessionID)
     setFocusRequest({ actorID: actor.id, revision: (focusRequest()?.revision ?? 0) + 1 })
@@ -41,15 +53,38 @@ export function OfficeWorkspace(props: {
                 onSelectSession={props.onSelectSession}
                 onNormalView={props.onNormalView}
                 onLocations={setLocations}
+                onInspectEntity={inspect}
+                onEntityClaims={setEntityClaims}
                 focusRequest={focusRequest()}
               />
             )}
           </For>
         </div>
         <OfficeRoster snapshot={props.snapshot} locations={locations()} onFocusActor={focusActor} onLoadMoreTeam={props.onLoadMoreTeam} />
+        <OfficeEntityList snapshot={props.snapshot} claims={entityClaims()} onInspect={inspect} />
+        <Show when={inspected()}>{(entity) => <OfficeEntityCard entity={entity()} snapshot={props.snapshot} claims={entityClaims()} onClose={closeInspect} />}</Show>
       </section>
     </div>
   )
+}
+
+function OfficeEntityList(props: { readonly snapshot: OfficeSnapshot; readonly claims: ReadonlyMap<string, readonly string[]>; readonly onInspect: (id: string) => void }): JSX.Element {
+  const [expanded, setExpanded] = createSignal(false)
+  return <div class="office-entity-list">
+    <button type="button" class="button button--secondary button--small" aria-expanded={expanded()} aria-controls="office-entity-options" onClick={() => setExpanded(!expanded())}>Inspect office objects</button>
+    <ul id="office-entity-options" hidden={!expanded()} inert={!expanded()}><For each={entityCatalog}>{(entity) => <li><button type="button" data-entity-id={entity.id} data-entity-users={entityUsers(entity, props.snapshot.actors, props.claims).join(", ")} onClick={() => props.onInspect(entity.id)}>{entity.name}, {entity.room}, {entityUsers(entity, props.snapshot.actors, props.claims).join(", ") || "unoccupied"}</button></li>}</For></ul>
+  </div>
+}
+
+function OfficeEntityCard(props: { readonly entity: OfficeEntity; readonly snapshot: OfficeSnapshot; readonly claims: ReadonlyMap<string, readonly string[]>; readonly onClose: () => void }): JSX.Element {
+  const users = () => entityUsers(props.entity, props.snapshot.actors, props.claims)
+  const state = () => entityState(props.entity, props.claims.get(props.entity.id) ?? [])
+  return <section class="office-entity-card" role="region" aria-label={`${props.entity.name} inspection`} aria-live="polite">
+    <header><h3>{props.entity.name}</h3><button type="button" class="button button--secondary button--small" aria-label="Close object inspection" onClick={props.onClose}>Close</button></header>
+    <dl><dt>Kind</dt><dd>{props.entity.kind}</dd><dt>Room</dt><dd>{props.entity.room}</dd>
+      <dt>State</dt><dd>{state().status}</dd><dt>Using</dt><dd>{users().join(", ") || "No one"}</dd>
+      <dt>Description</dt><dd>{props.entity.description}</dd></dl>
+  </section>
 }
 
 function OfficeRoster(props: {

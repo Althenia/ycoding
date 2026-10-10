@@ -160,7 +160,7 @@ export class OfficeDirector {
     return phase?.kind === "gathering" ? phase : undefined
   }
 
-  settle(): void {
+  settle(preservePosition = false): void {
     for (const gathering of [...this.gatherings.values()]) this.endGathering(gathering, false)
     for (const [id, state] of this.actors) {
       if (state.leaving || terminalTask(state.actor)) { this.actors.delete(id); continue }
@@ -178,8 +178,8 @@ export class OfficeDirector {
       state.opacityAge = 400
       this.releaseLeisure(state)
       if (state.actor.source !== "unavailable") {
-        state.target = this.workSpot(state.pod, state.actor).cell
-        state.position = center(this.layout, state.target)
+        state.target = preservePosition ? cellAt(this.layout, state.position) : this.workSpot(state.pod, state.actor).cell
+        if (!preservePosition) state.position = center(this.layout, state.target)
       }
       state.anchor = cellAt(this.layout, state.position)
     }

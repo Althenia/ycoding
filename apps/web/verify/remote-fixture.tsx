@@ -146,6 +146,9 @@ const defaultSessions = [
   { id: sessionID, title: "Stream remote output safely", projectID: "prj_remote", location: { directory: "/workspace/ycoding" }, agent: "god", model, time: { created: ago(42), updated: ago(1) }, running: true },
   { id: "ses_archived", title: "Archived: release notes", time: { created: ago(300), updated: ago(280), archived: ago(280) } },
   { id: "ses_child", title: "Child: fix flaky suite", parentID: sessionID, time: { created: ago(30), updated: ago(4) } },
+  ...(accountParams.get("team") === "office-large-family" ? Array.from({ length: 5 }, (_, index) => ({
+    id: `ses_office_child_${index + 2}`, title: `Office child ${index + 2}`, parentID: sessionID, time: { created: ago(25 - index), updated: ago(3) },
+  })) : []),
   ...(accountParams.get("team") === "two" ? [{ id: "ses_second", title: "Child: inspect source", parentID: sessionID, time: { created: ago(20), updated: ago(2) } }] : []),
   ...(accountParams.get("team") === "two" ? [{ id: "ses_btw", title: "Side question", parentID: sessionID, agent: "btw", time: { created: ago(19), updated: ago(2) } }] : []),
 ]
@@ -809,6 +812,11 @@ function createFixtureStore(): Fixture {
         time: { created: ago(30), updated: ago(teamReported ? 0 : 4) },
       }, ...(accountParams.get("team") === "two" ? [{ sessionID: "ses_second", parentID: sessionID, description: "Inspect source", agent: "researcher", model, background: true,
         state: "running", revision: 1, time: { created: ago(20), updated: ago(2) } }] : [])] : []
+      const officeTasks = accountParams.get("team") === "office-large-family" ? Array.from({ length: 5 }, (_, index) => ({
+        sessionID: `ses_office_child_${index + 2}`, parentID: sessionID, description: `Inspect Office area ${index + 2}`, agent: "researcher", model, background: true,
+        state: "running", revision: 1, time: { created: ago(25 - index), updated: ago(3) },
+      })) : []
+      tasks.push(...officeTasks)
       return { status: "ok", value: { data: tasks, summary: { total: tasks.length }, cursor: {} } }
     }
     if (operation === "session.team.economics") return { status: "ok", value: { data: Array.isArray(input?.sessionIDs) ? input.sessionIDs.map((id) => ({ sessionID: id, cost: 0.25, tokens: { input: 10, output: 5, reasoning: 2, cache: { read: 3, write: 0 } }, cacheHitRatio: 0.75, contextTotal: 800, contextLimit: 2_000, cacheRead: 3, cacheWrite: 0 })) : [] } }
