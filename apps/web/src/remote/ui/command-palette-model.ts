@@ -107,7 +107,7 @@ function sessionActions(context: PaletteContext): readonly PaletteAction[] {
       .map((level) => ({
         id: `session.yolo.${level}`,
         title: yoloLabels[level],
-        description: level === 0 ? "Review every ask" : level === 3 ? "Auto-approve ordinary guardrail reviews" : "Set the automatic approval level",
+        description: level === 0 ? "Review every ask" : level === 1 ? "Auto-approve tool permissions and ordinary guardrail reviews" : level === 2 ? "Also answer questions and forms" : "Also allow automatic subagent dispatch from the scope tool",
         group: "Session" as const,
         keywords: "/yolo autonomy approval permissions",
         intent: { type: "yolo" as const, level },

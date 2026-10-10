@@ -71,6 +71,14 @@ describe("palette availability", () => {
     expect(ids(base)).not.toContain("session.goal.stop")
   })
 
+  test("YOLO actions describe the approved autonomy ladder", () => {
+    expect(paletteActions(base).filter((action) => action.id.startsWith("session.yolo.")).map((action) => action.description)).toEqual([
+      "Auto-approve tool permissions and ordinary guardrail reviews",
+      "Also answer questions and forms",
+      "Also allow automatic subagent dispatch from the scope tool",
+    ])
+  })
+
   test("commands the composer already owns are not repeated as configured commands", () => {
     expect(ids(base)).not.toContain("command.compact")
     expect(ids(base)).not.toContain("command.goal")

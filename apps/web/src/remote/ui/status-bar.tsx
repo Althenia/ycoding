@@ -7,9 +7,9 @@ import "./status-bar.css"
 
 const levels = [
   { level: 0 as const, label: "Standard", detail: "Manual questions and approval requests." },
-  { level: 1 as const, label: "YOLO 1", detail: "Automatically answers questions." },
-  { level: 2 as const, label: "YOLO 2", detail: "Answers questions and approves tool permissions." },
-  { level: 3 as const, label: "YOLO 3", detail: "Also approves ordinary guardrail reviews." },
+  { level: 1 as const, label: "YOLO 1", detail: "Automatically approves tool permissions and ordinary guardrail reviews." },
+  { level: 2 as const, label: "YOLO 2", detail: "Also answers questions and forms." },
+  { level: 3 as const, label: "YOLO 3", detail: "Also allows automatic subagent dispatch with the scope tool." },
 ]
 
 export function ComposerStatus() {
@@ -100,14 +100,14 @@ export function ComposerStatus() {
     })
   })
   return <div class="session-status" role="group" aria-label="Session status and autonomy">
-    <span class="session-status__slot" role="status" classList={{ "session-status__slot--empty": !visible(), "session-status__slot--attention": /awaiting input|failed|provider error/i.test(label()) }}>
+    <span class="session-status__slot" role="status" classList={{ "session-status__slot--empty": !visible(), "session-status__slot--attention": /awaiting input|failed|provider error/i.test(label()), "session-status__slot--setting": goalSetting() }}>
+      <Show when={goalSetting()}><span class="session-status__goal-setting" aria-hidden="true"><DotTrail /><span class="session-status__goal-setting-label">Setting goal…</span><span class="session-status__goal-setting-compact">Setting…</span></span></Show>
       <Show when={visible()}><Show when={timed()}><DotTrail /></Show><span class="session-status__label">{stateText()}</span><span class="session-status__mobile" aria-hidden="true">{elapsed() || (/awaiting input/i.test(label()) ? "Wait" : stateText().split(" · ")[0])}</span></Show>
     </span>
     <Show when={view()?.autonomy}>
     <button ref={yoloTrigger} type="button" class="session-status__yolo-trigger" aria-label="Autonomy level" aria-haspopup="dialog" aria-expanded={open() === "yolo" && !leaving()} onClick={() => toggle("yolo")}><span class="session-status__yolo-full">{yolo() ? `YOLO ${yolo()}` : "Standard"}</span><span class="session-status__yolo-compact" aria-hidden="true">Y{yolo()}</span></button>
     <button ref={goalTrigger} type="button" class="session-status__goal-trigger" classList={{ "session-status__goal-trigger--active": goalActive() || goalSetting() }} aria-label={goalSetting() ? "Setting goal" : goalActive() ? "Goal active" : "Goal off"} aria-busy={goalSetting() ? "true" : undefined} aria-haspopup="dialog" aria-expanded={open() === "goal" && !leaving()} onClick={() => toggle("goal")}>Goal<Show when={goalActive()}>{" "}<span class="session-status__goal-count" aria-hidden="true">{goal()?.iteration}</span></Show></button>
     <Show when={goalActive()}><span class="session-status__active-goal" role="status" title={goal()?.text}>Goal active · {goal()?.text}</span></Show>
-    <Show when={goalSetting()}><span class="session-status__goal-setting" aria-hidden="true"><DotTrail /><span class="session-status__goal-setting-label">Setting goal…</span><span class="session-status__goal-setting-compact">Setting…</span></span></Show>
     <Show when={open()}><Portal><div ref={popover} class="session-status__popover" classList={{ "session-status__yolo-popover": open() === "yolo", "session-status__goal-popover": open() === "goal", "session-status__popover--leaving": leaving() }} role="dialog" aria-label={open() === "yolo" ? "Autonomy level" : "Goal details"} aria-hidden={leaving() ? "true" : undefined} inert={leaving()} style={{ left: `${position().left}px`, top: `${position().top}px`, width: `${position().width}px` }} onAnimationEnd={finish} onAnimationCancel={finish} onKeyDown={(event) => { if (event.key === "Escape" && !leaving()) { event.preventDefault(); close(true) } }}>
       <Show when={open() === "yolo"}><div role="radiogroup" aria-label="Autonomy level"><For each={levels}>{(option, index) => <button type="button" role="radio" aria-checked={yolo() === option.level} tabIndex={yolo() === option.level ? 0 : -1} onClick={() => void remote.store.setYolo(option.level)} onKeyDown={(event) => {
         const next = event.key === "ArrowRight" || event.key === "ArrowDown" ? (index() + 1) % levels.length : event.key === "ArrowLeft" || event.key === "ArrowUp" ? (index() - 1 + levels.length) % levels.length : event.key === "Home" ? 0 : event.key === "End" ? levels.length - 1 : undefined
