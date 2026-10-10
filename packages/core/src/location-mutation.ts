@@ -4,9 +4,12 @@ import { makeLocationNode } from "./effect/app-node"
 import path from "path"
 import { Context, Effect, Layer, Schema } from "effect"
 import { FSUtil } from "./fs-util"
+import { Git } from "./git"
+import { Global } from "./global"
 import { Location } from "./location"
 import { Project } from "./project"
 import { AbsolutePath } from "./schema"
+import { Hash } from "./util/hash"
 
 export const Kind = Schema.Literals(["file", "directory"])
 export type Kind = typeof Kind.Type
@@ -83,7 +86,35 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const fs = yield* FSUtil.Service
     const location = yield* Location.Service
+    const git = yield* Git.Service
+    const global = yield* Global.Service
     const locationRoot = yield* fs.realPath(location.directory)
+
+    const managedWorktree = Effect.fnUntraced(function* (target: string) {
+      const managedRoot = yield* fs.resolve(path.join(global.data, "worktrees"))
+      if (!FSUtil.contains(managedRoot, target)) return false
+      const repository = yield* git.repo.discover(location.directory)
+      if (!repository) return false
+      const commonDirectory = yield* fs.realPath(repository.commonDirectory)
+      const root = path.join(managedRoot, `repo_${Hash.sha256(commonDirectory)}`)
+      if (!FSUtil.contains(root, target)) return false
+      const entries = yield* git.worktree
+        .list(repository)
+        .pipe(Effect.catchTag("Git.WorktreeError", () => Effect.succeed([])))
+      const trusted = yield* Effect.forEach(
+        entries.filter((entry) => entry.kind === "linked"),
+        (entry) =>
+          Effect.gen(function* () {
+            const linked = yield* fs.realPath(entry.directory).pipe(Effect.catch(() => Effect.succeed(undefined)))
+            if (!linked || !FSUtil.contains(root, linked) || !FSUtil.contains(linked, target)) return false
+            const found = yield* git.repo.discover(AbsolutePath.make(linked))
+            if (!found) return false
+            const foundCommon = yield* fs.realPath(found.commonDirectory)
+            return foundCommon === commonDirectory
+          }),
+      )
+      return trusted.some(Boolean)
+    })
 
     function notFound<A>(effect: Effect.Effect<A, FSUtil.Error>) {
       return effect.pipe(Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(undefined)))
@@ -129,6 +160,7 @@ const layer = Layer.effect(
       }
 
       const external = !lexicallyInternal
+      const trustedManagedWorktree = external && (yield* managedWorktree(resolved.canonical))
       const resource = external
         ? slash(resolved.canonical)
         : slash(path.relative(locationRoot, resolved.canonical) || ".")
@@ -138,16 +170,17 @@ const layer = Layer.effect(
       return {
         canonical: resolved.canonical,
         resource,
-        externalDirectory: external
-          ? {
-              action: "external_directory",
-              directory: externalDirectory,
-              resource: externalResource,
-              save: slash(
-                path.join((yield* Project.root(fs, AbsolutePath.make(externalDirectory))) ?? externalDirectory, "*"),
-              ),
-            }
-          : undefined,
+        externalDirectory:
+          external && !trustedManagedWorktree
+            ? {
+                action: "external_directory",
+                directory: externalDirectory,
+                resource: externalResource,
+                save: slash(
+                  path.join((yield* Project.root(fs, AbsolutePath.make(externalDirectory))) ?? externalDirectory, "*"),
+                ),
+              }
+            : undefined,
       } satisfies Target
     })
 
@@ -158,5 +191,5 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer: layer.pipe(Layer.orDie),
-  deps: [FSUtil.node, Location.node],
+  deps: [FSUtil.node, Location.node, Git.node, Global.node],
 })

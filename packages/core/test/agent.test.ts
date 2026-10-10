@@ -357,6 +357,7 @@ describe("Agent", () => {
 
       expect((yield* agent.get(Agent.ID.make("god")))?.permissions).toEqual([
         { action: "*", resource: "*", effect: "allow" },
+        { action: "worktree", resource: "*", effect: "ask" },
         { action: "external_directory", resource: "*", effect: "ask" },
         { action: "external_directory", resource: `${Global.Path.data}/shell/*/*`, effect: "allow" },
         { action: "external_directory", resource: `${Global.Path.tmp}/*`, effect: "allow" },

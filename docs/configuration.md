@@ -255,6 +255,8 @@ The MCP shape where server names appear directly under `mcp` is also rejected. U
 
 ### Shell memory limits
 
+`shell_sandbox` delegates isolation to an enforceable runtime backend. No shell sandbox backend is bundled: `optional` runs without sandboxing and reports a warning, while `required` rejects execution when no backend is available. A managed worktree is not sandbox-allowed by default.
+
 The model-facing shell `timeout` input is not a configuration field. It accepts whole milliseconds up to 3,600,000 (one hour); omission or `0` selects the finite 600,000 ms default. Values above one hour are rejected. A foreground command that remains active after 300,000 ms is moved to the background without being terminated; its selected timeout still applies.
 
 `shell_memory_limit_mb` sets the Location-wide default for non-interactive shell commands. The shell tool's `memory_limit_mb` input overrides it for one command; zero explicitly selects unlimited memory. Omission uses the configured default, and omission with no default remains unlimited.
@@ -576,6 +578,8 @@ For noninteractive runs, `ycoding run --yolo <0-3>` sets the durable Session lev
 The noninteractive client does not approve requests locally: any remaining permission, question, form or guardrail blocker is rejected or cancelled and the run exits unsuccessfully. Hard guardrail reviews always require a human decision and cannot be approved by this CLI path.
 
 Home-directory expansion applies to path resources for `external_directory`, `read`, and `edit`. It does not rewrite shell command text.
+
+The `worktree` permission controls listing and creating managed Git worktrees; its built-in default is `ask`. Creation also passes through the Session `file_mutation` guardrail. Managed worktrees are stored at `<data>/worktrees/<repo-key>/<name>`, where `repo-key` is `repo_` plus the SHA-256 of the canonical Git common directory, and branch names match directory names. Only a linked worktree listed for the same Git repository is treated as internal for `external_directory`; all other outside paths remain external.
 
 `glob` and `grep` search roots must resolve inside the active Location, including through symlinks. `grep` also accepts an absolute file path directly inside YCoding's managed tool-output directory. A direct file search checks `read` permission before scanning; a directory search checks `read` for each matched file before returning any results. A denied match rejects the search result. `webfetch` checks its `webfetch` URL permission before every HTTP redirect destination, refusing an unapproved destination and limiting chains to ten redirects.
 

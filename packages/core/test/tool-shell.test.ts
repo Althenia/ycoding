@@ -1,7 +1,9 @@
 import fs from "fs/promises"
+import { createHash } from "crypto"
+import os from "os"
 import { realpathSync } from "node:fs"
 import path from "path"
-import { describe, expect, test } from "bun:test"
+import { afterAll, describe, expect, test } from "bun:test"
 import { DateTime, Deferred, Duration, Effect, Fiber, Layer, Schema, Scope, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { ChildProcess } from "effect/unstable/process"
@@ -54,6 +56,7 @@ const configDocument = (shellSandbox?: "disabled" | "optional" | "required", she
     }),
   })
 const assertions: Permission.AssertInput[] = []
+const data = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-shell-worktree-data-"))
 let configEntries: Config.Entry[] = [configDocument()]
 let denyAction: string | undefined
 let afterPermission = (_input: Permission.AssertInput): Effect.Effect<void> => Effect.void
@@ -329,6 +332,7 @@ const layer = AppNodeBuilder.build(
     [Config.node, config],
     [Permission.node, permission],
     [ShellSandbox.node, sandboxNode],
+    [Global.node, Global.layerWith({ data })],
   ],
 )
 
@@ -425,6 +429,8 @@ const waitForJob = (jobs: Job.Interface, id: string): Effect.Effect<Job.Info> =>
     )
 
 describe("ShellTool", () => {
+  afterAll(async () => fs.rm(data, { recursive: true, force: true }))
+
   test("accepts process timeouts through one hour and rejects invalid values", () => {
     const decode = Schema.decodeUnknownSync(ShellTool.Input)
     expect(decode({ command: "true", timeout: 600_001 }).timeout).toBe(600_001)
@@ -824,6 +830,37 @@ describe("ShellTool", () => {
         Effect.promise(() =>
           Promise.all([active[Symbol.asyncDispose](), outside[Symbol.asyncDispose]()]).then(() => undefined),
         ),
+    ),
+  )
+
+  it.live("runs in a linked managed worktree without external-directory approval", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        const worktree = path.join(
+          data,
+          "worktrees",
+          `repo_${createHash("sha256").update(path.join(tmp.path, ".git")).digest("hex")}`,
+          "linked",
+        )
+        return Effect.promise(async () => {
+          await Bun.$`git init`.cwd(tmp.path).quiet()
+          await Bun.$`git config user.email test@ycoding.test`.cwd(tmp.path).quiet()
+          await Bun.$`git config user.name Test`.cwd(tmp.path).quiet()
+          await Bun.$`git commit --allow-empty -m root`.cwd(tmp.path).quiet()
+          await fs.mkdir(path.dirname(worktree), { recursive: true })
+          await Bun.$`git worktree add -b linked ${worktree} HEAD`.cwd(tmp.path).quiet()
+        }).pipe(
+          Effect.andThen(
+            withSession(tmp.path, (registry) =>
+              executeTool(registry, call({ command: cwdCommand, workdir: worktree })),
+            ),
+          ),
+          Effect.andThen(Effect.sync(() => expect(assertions.map((input) => input.action)).toEqual(["shell"]))),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
     ),
   )
 

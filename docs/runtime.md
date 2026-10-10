@@ -85,6 +85,8 @@ The command palette's **Manage workspaces** command (`/workspaces`) opens a full
 - `ctrl+x` forgets a directory other than the current one after confirmation: it permanently deletes every Session of that project in the directory, including their child Sessions, and removes the directory record. Files on disk are not touched.
 - `ctrl+r` reloads the list; `esc` returns to the previous screen.
 
+The built-in `worktree` tool lists the current Git repository's worktrees and creates a managed linked worktree with a named branch. Names match `^[a-z0-9][a-z0-9-]{0,62}$`; both path and branch use that name. Managed paths are `<data>/worktrees/<repo-key>/<name>`, with `repo-key` derived from the canonical Git common directory as `repo_<sha256>`. Creation does not switch the Session Location. A same-repository linked worktree listed by Git is treated as part of the repository for `external_directory` checks; an arbitrary sibling directory or another repository's worktree is not. Listing requires `worktree` permission; creation also requires that permission and the existing `file_mutation` Session guardrail. Worktree deletion remains a human action in Manage workspaces.
+
 ### Daybreak access program
 
 Daybreak is OpenAI's Trusted Access for Cyber program with the access levels `daybreak_blue` and `daybreak_red`. A Session stores its selection in `session.daybreak`; an absent value is off and requests keep standard safeguards. Every change appends the durable `session.daybreak.set` event containing the Session ID and the optional selected program, where an absent program means off.

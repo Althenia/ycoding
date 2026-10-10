@@ -28,6 +28,8 @@ import { Image } from "../image"
 import { Integration } from "../integration"
 import { Location } from "../location"
 import { LocationMutation } from "../location-mutation"
+import { Git } from "../git"
+import { ProjectCopy } from "../project/copy"
 import { ModelsDev } from "../models-dev"
 import { Memory } from "../memory"
 import { MCP } from "../mcp"
@@ -334,6 +336,7 @@ export const node = makeLocationNode({
     Decision.node,
     EventRuntime.node,
     FileMutation.node,
+    Git.node,
     FileSystem.node,
     FSUtil.node,
     Global.node,
@@ -342,6 +345,7 @@ export const node = makeLocationNode({
     Integration.node,
     Location.node,
     LocationMutation.node,
+    ProjectCopy.node,
     ModelsDev.node,
     Memory.node,
     MCP.node,

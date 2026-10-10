@@ -53,6 +53,10 @@ There is no generic `.ycoding/tool` loader. Custom tools must be provided by a p
 
 The built-in `memory` tool stores explicit folder-scoped knowledge outside repository resource discovery. Configure it through the runtime `memory` object; it does not scan `.ycoding` for concepts or automatically load knowledge as instructions. Its actions are `status`, `list`, `search`, `read`, `write`, and offline `graph` export. See [Workspace knowledge memory](./memory.md) for storage, format, permissions, and update semantics.
 
+## Built-in Git worktrees
+
+The built-in `worktree` tool accepts `{ action: "list" }` or `{ action: "create", name }`. Names must match `^[a-z0-9][a-z0-9-]{0,62}$`. Listing returns each repository worktree's path, branch when known, and whether it contains the current Location. Creation uses the project-copy service and creates `<data>/worktrees/<repo-key>/<name>` on branch `<name>`; it does not switch the current Session Location. `repo-key` is `repo_` plus SHA-256 of the canonical Git common directory. Permission action `worktree` defaults to ask, and creation also uses the Session `file_mutation` guardrail. The tool has no remove action; deletion remains a human action in Manage workspaces.
+
 ## Built-in task completion signal
 
 The provider-visible `task_complete` tool records an explicit local completion signal after the agent verifies its work. It has no input, remote configuration, HTTP request, or external permission; its successful durable tool call can trigger the TUI completion alert after root settlement if no child task or root-owned background shell remains active. Do not call it for idle, partial results, or routine progress.

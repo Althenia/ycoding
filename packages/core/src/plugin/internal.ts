@@ -29,6 +29,7 @@ import { Image } from "../image"
 import { Integration } from "../integration"
 import { Location } from "../location"
 import { LocationMutation } from "../location-mutation"
+import { Git } from "../git"
 import { ModelsDev } from "../models-dev"
 import { Memory } from "../memory"
 import { MCP } from "../mcp"
@@ -73,6 +74,8 @@ import { WebFetchTool } from "../tool/webfetch"
 import { WebSearchTool } from "../tool/websearch"
 import { WellKnown } from "../wellknown"
 import { WriteTool } from "../tool/write"
+import { WorktreeTool } from "../tool/worktree"
+import { ProjectCopy } from "../project/copy"
 import { AgentPlugin } from "./agent"
 import { CommandPlugin } from "./command"
 import { ModelsDevPlugin } from "./models-dev"
@@ -100,6 +103,7 @@ const services = Effect.fn("PluginInternal.services")(function* () {
   const filesystem = yield* FileSystem.Service
   const fs = yield* FSUtil.Service
   const global = yield* Global.Service
+  const git = yield* Git.Service
   const http = yield* HttpClient.HttpClient
   const image = yield* Image.Service
   const integration = yield* Integration.Service
@@ -111,6 +115,7 @@ const services = Effect.fn("PluginInternal.services")(function* () {
   const npm = yield* Npm.Service
   const permission = yield* Permission.Service
   const providerUsage = yield* ProviderUsageRuntime.Service
+  const projectCopy = yield* ProjectCopy.Service
   const guardrail = yield* SessionGuardrail.Service
   const runtime = yield* PluginRuntime.Service
   const form = yield* Form.Service
@@ -145,6 +150,7 @@ const services = Effect.fn("PluginInternal.services")(function* () {
     Context.make(FileSystem.Service, filesystem),
     Context.make(FSUtil.Service, fs),
     Context.make(Global.Service, global),
+    Context.make(Git.Service, git),
     Context.make(HttpClient.HttpClient, http),
     Context.make(Image.Service, image),
     Context.make(Integration.Service, integration),
@@ -156,6 +162,7 @@ const services = Effect.fn("PluginInternal.services")(function* () {
     Context.make(Npm.Service, npm),
     Context.make(Permission.Service, permission),
     Context.make(ProviderUsageRuntime.Service, providerUsage),
+    Context.make(ProjectCopy.Service, projectCopy),
     Context.make(SessionGuardrail.Service, guardrail),
     Context.make(PluginRuntime.Service, runtime),
     Context.make(Form.Service, form),
@@ -215,6 +222,7 @@ const pre = [
   DecisionTool.Plugin,
   ScopeTool.Plugin,
   BrowserTool.Plugin,
+  WorktreeTool.Plugin,
 ] as const satisfies readonly InternalPlugin[]
 
 const post = [

@@ -12,7 +12,7 @@ export function makeGitWorktreeStrategy(input: {
     create: Effect.fn("ProjectCopy.GitWorktree.create")(function* (options) {
       const repository = yield* input.git.repo.discover(options.sourceDirectory)
       if (!repository) return yield* new DirectoryUnavailableError({ directory: options.sourceDirectory })
-      yield* input.git.worktree.create({ repository, directory: options.directory })
+      yield* input.git.worktree.create({ repository, directory: options.directory, branch: options.branch })
       return { directory: yield* input.canonical(options.directory) }
     }),
     remove: Effect.fn("ProjectCopy.GitWorktree.remove")(function* (options) {

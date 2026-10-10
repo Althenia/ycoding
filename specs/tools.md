@@ -128,6 +128,8 @@ Trusted tools formulate and sequence permission requests. `Permission` evaluates
 
 The built-in `glob` and `grep` tools canonicalize their search roots and reject escapes from the active Location. `grep` also accepts a direct absolute managed tool-output file; a direct file search checks `read` before scanning, while a directory search checks `read` on each matched file before returning results. A denied file fails the whole result. `webfetch` checks the destination URL's permission before following each HTTP redirect, with at most ten redirects.
 
+The built-in `worktree` tool accepts `{ action: "list" }` or `{ action: "create", name }`, with names matching `^[a-z0-9][a-z0-9-]{0,62}$`. Listing returns paths, known branches, and current-Location flags for the current repository's Git worktrees. Creation uses `ProjectCopy.Service` with the internal Git worktree strategy, stores `<data>/worktrees/<repo-key>/<name>`, and creates branch `<name>` without moving the Session. The repository key is `repo_` followed by SHA-256 of the canonical Git common directory. Permission action `worktree` defaults to ask; creation additionally reserves the Session `file_mutation` guardrail. There is no remove action. A path under the managed repository key is exempt from `external_directory` only when Git lists its containing directory as a linked worktree of the current repository; file/tool permission rules still apply.
+
 Sharing a tool type does not imply equal authority. Built-ins and trusted Location plugins may capture services that are not available to application tools.
 
 ## Requests Capture Tool Values

@@ -157,6 +157,7 @@ export const Plugin = define({
     ]
     const defaults: Permission.Ruleset = [
       { action: "*", resource: "*", effect: "allow" },
+      { action: "worktree", resource: "*", effect: "ask" },
       ...readonlyExternalDirectory,
       { action: "question", resource: "*", effect: "deny" },
       { action: "plan_enter", resource: "*", effect: "deny" },
