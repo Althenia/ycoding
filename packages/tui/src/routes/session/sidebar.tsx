@@ -8,7 +8,7 @@ import type { SessionAutonomyState } from "@ycoding-ai/client"
 
 import { useTerminalDimensions } from "@opentui/solid"
 import { getScrollAcceleration } from "../../util/scroll"
-import { autonomyModeLabel, yoloLevel } from "../../util/session-autonomy"
+import { autonomyDecision, autonomyDecisionLabel, autonomyModeLabel, yoloLevel } from "../../util/session-autonomy"
 import { railMetrics, railWidth } from "./rail"
 import { RailProvider, RailRow, RailSection } from "./rail-section"
 
@@ -145,20 +145,25 @@ export function AutonomyRailContent(props: { autonomy: SessionAutonomyState }) {
         )}
       </Show>
       <Show when={true}>
-        <RailSection section="autonomy" title="AUTONOMY" summary={autonomyModeLabel(props.autonomy)} attention={level() > 0}>
-          <RailRow
-            label="Approvals"
-            value={level() > 0 ? `auto · YOLO ${level()}` : "manual"}
-            valueColor={level() > 0 ? theme.text.feedback.warning.default : theme.text.default}
-          />
-          <RailRow
-            label="Guardrails"
-            value={level() === 3 ? "auto · YOLO 3" : "enforced"}
-            valueColor={
-              level() === 3 ? theme.text.feedback.warning.default : theme.text.feedback.success.default
-            }
-          />
-          <RailRow label="Hard reviews" value="human only" valueColor={theme.text.feedback.success.default} />
+        <RailSection section="autonomy" title="AUTONOMY" summary={autonomyModeLabel(props.autonomy)} attention={level() > 0 || props.autonomy.goal?.status === "active"}>
+          <For each={[
+            ["Permissions", "permissions"],
+            ["Guardrails", "guardrails"],
+            ["Questions", "questions"],
+            ["Scope dispatch", "scope"],
+          ] as const}>
+            {([label, action]) => {
+              const decision = autonomyDecision(props.autonomy, action)
+              return (
+                <RailRow
+                  label={label}
+                  value={autonomyDecisionLabel(props.autonomy, action)}
+                  valueColor={decision === "you" ? theme.text.feedback.success.default : theme.text.feedback.warning.default}
+                />
+              )
+            }}
+          </For>
+          <RailRow label="Hard reviews" value="always you" valueColor={theme.text.feedback.success.default} />
         </RailSection>
       </Show>
     </>

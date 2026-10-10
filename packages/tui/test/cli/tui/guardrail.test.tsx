@@ -108,7 +108,7 @@ test("renders a warning-framed guardrail approval", async () => {
     const frame = app.captureCharFrame()
     expect(frame).not.toContain("!!")
     expect(frame).toContain("Destructive Git operation")
-    expect(frame).toContain("guardrails apply even in YOLO mode.")
+    expect(frame).toContain("ordinary reviews auto-approve from YOLO 1")
     expect(frame).toContain("Blocked")
     expect(frame).toContain("git reset --hard")
     expect(frame).toContain("Allow once")
@@ -358,7 +358,8 @@ for (const decision of ["once", "reject"] as const) {
       expect(frame).toContain("Deny")
       expect(frame).toContain("Allow once")
       expect(frame).toContain("pgup/pgdn")
-      expect(frame).toContain("guardrails apply even in YOLO mode.")
+      expect(frame).toContain("hard reviews always need you")
+      expect(frame).not.toContain("ordinary reviews auto-approve from YOLO 1")
       expect(frame).not.toContain("Allow for this session")
       expect(descendants(app.renderer.root).some((item) => item.id === "session.guardrail.action.reject.band")).toBe(true)
       for (let page = 0; page < 200 && !app.captureCharFrame().includes("NEW_COMMAND_END"); page++) {

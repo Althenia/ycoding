@@ -13,14 +13,43 @@ export function yoloLevel(state: { yolo?: unknown }): YoloLevel {
   return 0
 }
 
+export type AutonomyDecision = "you" | "yolo" | "goal"
+
+export function autonomyDecision(
+  state: SessionAutonomyState,
+  action: "permissions" | "guardrails" | "questions" | "scope",
+): AutonomyDecision {
+  const level = yoloLevel(state)
+  const activeGoal = state.goal?.status === "active"
+  const automatedByYolo =
+    action === "permissions" || action === "guardrails" ? level >= 1 : action === "questions" ? level >= 2 : level >= 3
+  if (automatedByYolo) return "yolo"
+  if (activeGoal && action !== "guardrails") return "goal"
+  return "you"
+}
+
+export function autonomyLevelDescription(level: YoloLevel) {
+  return [
+    "manual",
+    "permissions and ordinary guardrails",
+    "permissions, ordinary guardrails, and questions/forms",
+    "permissions, ordinary guardrails, questions/forms, and scope dispatch",
+  ][level]
+}
+
+export function autonomyDecisionLabel(
+  state: SessionAutonomyState,
+  action: "permissions" | "guardrails" | "questions" | "scope",
+) {
+  const decision = autonomyDecision(state, action)
+  if (decision === "you") return "ask you"
+  return decision === "goal" ? "auto · goal" : "auto"
+}
+
 export function autonomyModeLabel(state: SessionAutonomyState) {
   const level = yoloLevel(state)
   const active = state.goal?.status === "active"
-  const yoloLabel = level > 0 ? `YOLO ${level}` : ""
-  if (level > 0 && active) return `${yoloLabel} + Goal`
-  if (level > 0) return yoloLabel
-  if (active) return "Goal"
-  return "Normal"
+  return `${level === 0 ? "Manual" : `YOLO ${level}`}${active ? " · goal" : ""}`
 }
 
 export function autonomyProgressLabel(state: SessionAutonomyState) {
@@ -121,7 +150,8 @@ export function currentSessionAutonomy(
   connected: boolean,
   response: SessionAutonomyResponse | undefined,
 ): SessionAutonomyState {
-  if (!connected || response?.sessionID !== sessionID) return { mode: "normal", yolo: 0 } as unknown as SessionAutonomyState
+  if (!connected || response?.sessionID !== sessionID)
+    return { mode: "normal", yolo: 0 } as unknown as SessionAutonomyState
   return response.state
 }
 

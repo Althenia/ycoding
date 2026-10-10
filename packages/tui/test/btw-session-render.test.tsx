@@ -680,74 +680,70 @@ test.each(["streaming", "running", "completed", "error"] as const)("hides %s goa
   }
 }, 30_000)
 
-test("renders expanded decision TOON with model-estimate semantics", async () => {
+test("renders a compact completed decision row without request or response details", async () => {
   const state = fixture({
-    goalSteer: "Treat the decision as an estimate, not completion evidence.",
+    goalSteer: "Verify compact decision rendering.",
     goalTool: {
       type: "tool", id: "call_decision_toon", name: "decision",
-      state: { status: "completed", input: { provider: "agent", request: { state: "read file", questions: [
-        { type: "predicate", name: "safe", instructions: "Is the operation read-only?" },
-      ] } }, content: [{ type: "text", text: [
-        "provider: agent", "response:", "  semantics: model-estimate", "  version: 1",
-        "  answers[1]{name,type,answer,choice,score,confidence}:", "    safe,predicate,true,null,null,0.83",
-        "  model:", "    providerID: openai", "    id: gpt-6-luna-fast",
-      ].join("\n") }], structured: {} },
+      state: { status: "completed", input: { provider: "agent", request: { state: "PRIVATE_REQUEST_VALUE", questions: [
+        { type: "predicate", name: "safe", instructions: "PRIVATE_QUESTION_VALUE" },
+      ] } }, content: [{ type: "text", text: "PRIVATE_RESPONSE_VALUE" }], structured: {} },
       time: { created: 2, ran: 2, completed: 3 },
     },
   })
-  const screen = await renderScreen({
-    width: 120, height: 40, args: { sessionID: parentID }, route: state.route,
-    settle: "Visible assistant response.",
-  })
+  const screen = await renderScreen({ width: 120, height: 40, args: { sessionID: parentID }, route: state.route, settle: "Visible assistant response." })
   try {
     await screen.waitForEventStream()
-    expect(screen.frame()).toContain("decision")
-    await screen.mouse.click(12, screen.lines().findIndex((line) => line.includes("decision [")))
-    await screen.renderOnce()
-    const detailsRow = screen.lines().findIndex((line) => line.includes("− Request"))
-    for (let count = 0; count < 24 && !screen.frame().includes("gpt-6-luna-fast"); count++) {
-      await screen.mouse.scroll(12, detailsRow + 1, "down")
-      await screen.renderOnce()
-    }
-    await waitFor(() => screen.frame().includes("semantics: model-estimate"), "expanded decision result")
-    expect(screen.frame()).toContain("provider: agent")
-    expect(screen.frame()).toContain("semantics: model-estimate")
-    expect(screen.frame()).toContain("safe,predicate,true")
-    expect(screen.frame()).toContain("gpt-6-luna-fast")
-    expect(screen.frame()).not.toContain("min_probability")
-    expect(state.creations).toEqual([])
-    expect(state.prompts).toEqual([])
+    expect(screen.frame()).toContain("Decision · agent · 1 question")
+    expect(screen.frame()).toContain("done")
+    expect(screen.frame()).not.toContain("PRIVATE_REQUEST_VALUE")
+    expect(screen.frame()).not.toContain("PRIVATE_QUESTION_VALUE")
+    expect(screen.frame()).not.toContain("PRIVATE_RESPONSE_VALUE")
+    expect(screen.frame()).not.toContain("Request")
+    expect(screen.frame()).not.toContain("Response")
   } finally {
     await screen.dispose()
   }
 }, 30_000)
 
-test("renders a failed decision without presenting an estimated answer", async () => {
+test("renders a running decision without exposing its request", async () => {
+  const state = fixture({
+    goalSteer: "Verify a pending decision row.",
+    goalTool: {
+      type: "tool", id: "call_decision_running", name: "decision",
+      state: { status: "running", input: { provider: "openai", request: { state: "PRIVATE_RUNNING_REQUEST", questions: [] } }, content: [], structured: {} },
+      time: { created: 2, ran: 2 },
+    },
+  })
+  const screen = await renderScreen({ width: 120, height: 40, args: { sessionID: parentID }, route: state.route, settle: "Visible assistant response." })
+  try {
+    await screen.waitForEventStream()
+    expect(screen.frame()).toContain("Decision · openai · 0 questions")
+    expect(screen.frame()).toContain("running")
+    expect(screen.frame()).not.toContain("PRIVATE_RUNNING_REQUEST")
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("renders only a sanitized error line for a failed decision", async () => {
   const state = fixture({
     goalSteer: "Retain the baseline when a decision fails.",
     goalTool: {
       type: "tool", id: "call_decision_failed", name: "decision",
-      state: { status: "error", input: { provider: "agent" }, content: [], structured: {},
+      state: { status: "error", input: { provider: "agent", request: { state: "PRIVATE_REQUEST_VALUE" } }, content: [], structured: {},
         error: { type: "Error", message: "Decision output was invalid" },
       },
       time: { created: 2, ran: 2, completed: 3 },
     },
   })
-  const screen = await renderScreen({
-    width: 120, height: 40, args: { sessionID: parentID }, route: state.route,
-    settle: "Visible assistant response.",
-  })
+  const screen = await renderScreen({ width: 120, height: 40, args: { sessionID: parentID }, route: state.route, settle: "Visible assistant response." })
   try {
     await screen.waitForEventStream()
-    expect(screen.lines().find((line) => line.includes("decision ["))).toContain("!!")
-    await screen.mouse.click(12, screen.lines().findIndex((line) => line.includes("decision [")))
-    await screen.renderOnce()
-    await screen.input.pressKey("END")
-    await screen.renderOnce()
-    await waitFor(() => screen.frame().includes("Decision output was invalid"), "failed decision result")
-    expect(screen.frame()).not.toContain("model-estimate")
-    expect(state.creations).toEqual([])
-    expect(state.prompts).toEqual([])
+    expect(screen.frame()).toContain("Decision Decision output was invalid")
+    expect(screen.frame()).toContain("failed")
+    expect(screen.frame()).not.toContain("PRIVATE_REQUEST_VALUE")
+    expect(screen.frame()).not.toContain("fabricated")
   } finally {
     await screen.dispose()
   }

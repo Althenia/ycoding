@@ -126,6 +126,7 @@ import { findMessageBoundary, messageNavigationSlack } from "./message-navigatio
 import { decisionAdvisory, noticeSummary } from "./notice-summary"
 import { stringWidth } from "../../util/string-width"
 import {
+  autonomyLevelDescription,
   autonomyModeLabel,
   createSessionAutonomyRefreshGuard,
   currentSessionAutonomy,
@@ -1007,7 +1008,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     {
       title: (() => {
         const lvl = yoloLevel(autonomy() as unknown as { yolo?: unknown })
-        return `YOLO: ${lvl > 0 ? `${lvl} on` : "off"} (cycle 0→1→2→3, /yolo 0|1|2|3)`
+        return `YOLO ${lvl}: ${autonomyLevelDescription(lvl)} (cycle 0→1→2→3, /yolo 0|1|2|3)`
       })(),
       id: "session.autonomy.yolo.toggle",
       group: "Session",
@@ -3152,10 +3153,10 @@ function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean }
   }
 
   const rawOutput = createMemo(
-    () => !["shell", "write", "edit", "patch", "question", "subagent", "skill", "todowrite"].includes(display()),
+    () => !["shell", "write", "edit", "patch", "question", "subagent", "skill", "todowrite", "decision"].includes(display()),
   )
   const presentation = createMemo(() =>
-    props.part.state.status === "error"
+    props.part.state.status === "error" || display() === "decision"
       ? undefined
       : transcriptToolPresentation({
           tool: props.part.name,
@@ -3234,9 +3235,34 @@ function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean }
     }
   })
 
+  const decisionPresentation = createMemo(() => {
+    if (display() !== "decision") return
+    const state = props.part.state
+    const input = typeof state.input === "string" ? {} : state.input
+    const provider = stringValue(input.provider)
+    const request = recordValue(input.request)
+    const questions = Array.isArray(request?.questions) ? request.questions.length : 0
+    const detail = `· ${provider ?? "unknown provider"} · ${questions} ${questions === 1 ? "question" : "questions"}`
+    const error = state.status === "error" ? safeToolDetailText(state.error.message).split(/\r?\n/, 1)[0] || "Decision failed" : ""
+    return {
+      detail: error || detail,
+      lifecycle: toolLifecycle(props.part),
+    }
+  })
+
   return (
     <Show when={!hideParentSubagent()}>
       <Switch>
+        <Match when={decisionPresentation()}>
+          {(item) => (
+            <SessionToolActivityRow
+              tool="Decision"
+              detail={item().detail}
+              lifecycle={item().lifecycle}
+              width={ctx.width}
+            />
+          )}
+        </Match>
         <Match when={diffPresentation()}>{(item) => <FileChangeBlock files={item().files} />}</Match>
         <Match when={activityPresentation()}>
           {(item) => (
@@ -4664,6 +4690,7 @@ const toolDisplays = new Set([
   "execute",
   "patch",
   "question",
+  "decision",
   "todowrite",
   "skill",
 ])

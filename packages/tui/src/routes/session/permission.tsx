@@ -394,6 +394,7 @@ export function Prompt<const T extends Record<string, string>>(props: {
   footer?: JSX.Element
   options: T
   defaultOption?: keyof T
+  hardReview?: boolean
   escapeKey?: keyof T
   onSelect: (option: keyof T) => void
 }) {
@@ -408,7 +409,7 @@ export function Prompt<const T extends Record<string, string>>(props: {
   })
   const footer = () =>
     props.footer ??
-    (kind === "guardrail" ? <text fg={theme.text.subdued}>guardrails apply even in YOLO mode.</text> : undefined)
+    (kind === "guardrail" ? <text fg={theme.text.subdued}>{props.hardReview ? "hard reviews always need you" : "ordinary reviews auto-approve from YOLO 1"}</text> : undefined)
   const compact = () => dimensions().height < 30
   const chromeHeight = () =>
     3 + keys().length * (compact() ? 1 : 2) + Number(props.footer !== undefined || kind === "guardrail") + (compact() ? 0 : 3)

@@ -37,6 +37,21 @@ test("derives the goal chip from the active goal status and labels YOLO by level
     label: "guardrail blocked",
     tone: "warning",
   })
+  expect(modeChips({ autonomy: { mode: "normal", yolo: 1 }, guardrailPending: true })[0]).toEqual({
+    key: "goal",
+    label: "guardrail blocked",
+    tone: "warning",
+  })
+  expect(modeChips({ autonomy: { mode: "normal", yolo: 0, goal: retained }, guardrailPending: true })[0]).toEqual({
+    key: "goal",
+    label: "guardrail blocked",
+    tone: "warning",
+  })
+  expect(modeChips({ autonomy: { mode: "normal", yolo: 0 }, guardrailPending: true })[0]).toEqual({
+    key: "goal",
+    label: "goal off",
+    tone: "off",
+  })
 })
 
 test("renders the idle, goal, YOLO, and guardrail footer states at 80 columns", async () => {
