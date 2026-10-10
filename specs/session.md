@@ -4,6 +4,12 @@ Protocol owns public operations, Schema owns public shapes and durable events, a
 
 `Session.Info.time.updated` is the Session record update and list order/cursor key. Optional `Session.Info.time.active` is the millisecond creation time of the latest terminal `session.step.ended.1`, `session.step.failed.1`, `session.execution.succeeded.1`, `session.execution.failed.1`, or `session.execution.interrupted.1` event. Terminal projection updates `time.active` without changing `time.updated`; existing records are backfilled from those events and remain without activity when none exists. The remote connector forwards this optional field in Session list/get data and forwards the original event creation time on live events.
 
+## Next-message prediction event
+
+`session.prediction.updated` is a public ephemeral event with exactly `{ sessionID: Session.ID, sourceMessageID: SessionMessage.ID, text: string }` as data. It belongs in the Protocol live-event manifest, not the durable manifest or Session log; it never creates a transcript message, instruction, or model-visible history entry. Optional envelope properties are omitted when absent.
+
+Opt-in prediction forks at successful idle settlement after an assistant reply on a root Session, with no pending input and no active autonomy goal. At most one helper request per source reply is attempted within the process; admission of new input interrupts the request and suppresses publication. The text must be a single line of 2–20 words and at most 200 characters, excluding meta/refusal text, quotes/labels, errors, control sequences, and a copy of the prior user message. Helper failures cannot fail the Session. Clients show only a matching latest assistant source with an empty draft; acceptance fills only, never admits input or sends. Typing, Escape, and new activity dismiss the ephemeral suggestion.
+
 ## Archive Is Reversible
 
 `Session.Info.time.archived` is optional and records the latest archive event time. `POST /api/session/:sessionID/archive` archives one existing Session; `DELETE /api/session/:sessionID/archive` unarchives it. Both operations are idempotent, return `204 No Content`, use Session Location middleware, and reject unknown Sessions with `SessionNotFoundError`.

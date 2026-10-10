@@ -455,6 +455,19 @@ export function Prompt(props: PromptProps) {
     interrupt: 0,
   })
   const temporaryAttachments = new Map<string, ClipboardTemporary>()
+  const predictionShortcut = Keymap.useShortcut("prompt.prediction.accept")
+  const prediction = createMemo(() => {
+    const sessionID = props.sessionID
+    if (!sessionID || store.prompt.text !== "" || store.mode !== "normal" || props.disabled || status() !== "idle" || props.autonomy?.goal?.status === "active") return
+    const value = data.session.prediction.get(sessionID)
+    if (data.session.message.list(sessionID).findLast(message => message.type === "assistant")?.id !== value?.sourceMessageID) return
+    return value
+  })
+  const dismissPrediction = () => { if (props.sessionID) data.session.prediction.dismiss(props.sessionID) }
+  createEffect(() => {
+    if (props.sessionID) data.session.prediction.get(props.sessionID)
+    if (store.prompt.text !== "" || props.autonomy?.goal?.status === "active") dismissPrediction()
+  })
   let addingAttachment = 0
 
   async function releaseTemporaryAttachment(uri: string) {
@@ -1388,6 +1401,22 @@ export function Prompt(props: PromptProps) {
   })
 
   Keymap.createLayer(() => ({
+    priority: 3,
+    target: inputTarget,
+    enabled: inputTarget() !== undefined && prediction() !== undefined,
+    commands: [
+      { id: "prompt.prediction.accept", title: "Use suggestion", run: () => {
+        const value = prediction()
+        if (!value || input.plainText !== "") return
+        dismissPrediction()
+        input.setText(value.text)
+        input.gotoBufferEnd()
+      } },
+      { bind: "escape", title: "Dismiss suggestion", run: dismissPrediction },
+    ],
+  }))
+
+  Keymap.createLayer(() => ({
     priority: 2,
     target: inputTarget,
     enabled: inputTarget() !== undefined && !props.disabled && Boolean(operation()) && !auto()?.visible,
@@ -2235,6 +2264,7 @@ export function Prompt(props: PromptProps) {
   const borderHighlight = createMemo(() => tint(theme.border.default, highlight(), agentMetaAlpha()))
 
   const placeholderText = createMemo(() => {
+    if (prediction()) return `${prediction()!.text}${predictionShortcut() ? `  · ${formatShortcut(predictionShortcut()!)} use suggestion` : ""}`
     if (props.showPlaceholder === false) return undefined
     if (store.mode === "shell") {
       if (!shell().length) return undefined
@@ -2291,6 +2321,7 @@ export function Prompt(props: PromptProps) {
               maxHeight={MAX_VISIBLE_INPUT_ROWS}
               onContentChange={() => {
                 const value = input.plainText
+                if (value !== "") dismissPrediction()
                 draftRevision += 1
                 setStore("prompt", "text", value)
                 auto()?.onInput(value)

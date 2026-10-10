@@ -172,6 +172,7 @@ type Store = {
     family: Record<string, string[]>
     active: Record<string, DataSessionStatus>
     diagnostics: Record<string, SessionDiagnosticsOutput>
+    prediction: Record<string, { sourceMessageID: string; text: string } | undefined>
     usage: Record<string, ProviderRequestSummary>
     message: Record<string, SessionMessageInfo[]>
     compaction: Record<string, Record<string, DataSessionCompactionLifecycle>>
@@ -550,6 +551,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         family: {},
         active: {},
         diagnostics: {},
+        prediction: {},
         usage: {},
         message: {},
         compaction: {},
@@ -863,6 +865,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           delete draft.message[sessionID]
           delete draft.compaction[sessionID]
           delete draft.diagnostics[sessionID]
+          delete draft.prediction[sessionID]
           delete draft.usage[sessionID]
           delete draft.pending[sessionID]
           delete draft.subagent[sessionID]
@@ -990,6 +993,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           break
         case "session.diagnostics.updated":
           setStore("session", "diagnostics", event.data.sessionID, event.data.diagnostics)
+          break
+        case "session.prediction.updated":
+          if (!event.data.text || event.data.text.length > 200 || /[\r\n\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(event.data.text)) break
+          setStore("session", "prediction", event.data.sessionID, { sourceMessageID: event.data.sourceMessageID, text: event.data.text })
           break
         case "catalog.updated":
           result.location.model.invalidate(event.location)
@@ -1676,6 +1683,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         status(sessionID: string) {
           return store.session.active[sessionID] ?? "idle"
         },
+        prediction: {
+          get(sessionID: string) { return store.session.prediction[sessionID] },
+          dismiss(sessionID: string) { setStore("session", "prediction", sessionID, undefined) },
+        },
         input: {
           list(sessionID: string) {
             return store.session.input[sessionID] ?? []
@@ -1826,6 +1837,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             return result.session.message.get(sessionID, messageID) !== undefined
           },
           evict(sessionID: string) {
+            setStore("session", "prediction", sessionID, undefined)
             messageIndex.delete(sessionID)
             messageSyncLoad.delete(sessionID)
             messageVersion.delete(sessionID)
@@ -2243,6 +2255,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
 
     createEffect(() => {
       if (client.connection.status() === "connected") return
+      setStore("session", "prediction", produce(draft => { Object.keys(draft).forEach(id => { delete draft[id] }) }))
       activeSnapshot = undefined
       sync.invalidate()
       subagentGeneration.forEach((generation, parentID) => subagentGeneration.set(parentID, generation + 1))
@@ -2251,6 +2264,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
 
     onCleanup(
       client.event.listen(({ details }) => {
+        if (["session.input.admitted", "session.execution.started", "session.step.started", "session.moved", "session.deleted", "session.archived", "session.agent.selected", "session.model.selected"].includes(details.type) && "sessionID" in details.data)
+          setStore("session", "prediction", details.data.sessionID, undefined)
         submissions.observe(details)
         if (details.type === "server.connected") {
           const mutations = new Map<string, DataSessionStatus>()

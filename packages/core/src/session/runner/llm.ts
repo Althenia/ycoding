@@ -40,6 +40,7 @@ import { SessionMessage } from "../message"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
 import { SessionTitle } from "../title"
+import { SessionPrediction } from "../prediction"
 import { Service } from "./index"
 import { createLLMEventPublisher } from "./publish-llm-event"
 import { RelativePath } from "../../schema"
@@ -1262,6 +1263,7 @@ export const node = makeLocationNode({
     SessionStore.node,
     SessionCompaction.node,
     SessionTitle.node,
+    SessionPrediction.node,
     Config.node,
     Snapshot.node,
     Database.node,

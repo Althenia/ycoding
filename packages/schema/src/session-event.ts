@@ -166,7 +166,7 @@ export const UsageRecorded = Event.durable({
   ...options,
   schema: {
     ...Base,
-    source: Schema.Literals(["title", "compaction", "goal", "decision"]),
+    source: Schema.Literals(["title", "compaction", "goal", "decision", "prediction"]),
     cost: Money.USD,
     tokens: TokenUsage.Info,
   },
@@ -189,6 +189,12 @@ export const UsageUpdated = Event.ephemeral({
   },
 })
 export type UsageUpdated = typeof UsageUpdated.Type
+
+export const PredictionUpdated = Event.ephemeral({
+  type: "session.prediction.updated",
+  schema: { ...Base, sourceMessageID: SessionMessage.ID, text: Schema.String },
+})
+export type PredictionUpdated = typeof PredictionUpdated.Type
 
 export const DiagnosticsUpdated = Event.ephemeral({
   type: "session.diagnostics.updated",
@@ -835,6 +841,7 @@ export const Definitions = Event.inventory(
   Moved,
   Renamed,
   UsageUpdated,
+  PredictionUpdated,
   DiagnosticsUpdated,
   Deleted,
   Archived,

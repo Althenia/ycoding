@@ -4,6 +4,8 @@ Provider usage is a read-only Location-scoped service that normalizes quota, cre
 
 ## Ownership
 
+The local provider-request ledger's closed request-source set is `step`, `title`, `goal`, `compaction`, `decision`, and `prediction`. The opt-in hidden prediction helper records its physical request identity and normalized usage/cost through the existing ledger under `prediction`; memory search itself makes no provider request. Partial usage before interruption remains accounted, unavailable prices follow the report's unpriced rules, and prediction output is excluded from durable transcript history. Quota snapshot sources below are a separate contract, not request-source labels.
+
 - Schema owns normalized snapshot, window, source, stability, and status shapes.
 - Core owns catalog-based provider discovery, credential selection, provider adapters, caching, observation precedence, redaction, and source isolation.
 - Protocol and Server expose normalized list/get operations through Location middleware.

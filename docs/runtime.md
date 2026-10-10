@@ -314,6 +314,18 @@ The runtime reloads projected history before durable continuation. It does not d
 
 ### Helper model traffic
 
+#### Opt-in next-message prediction
+
+`prediction.enabled` defaults to false. When enabled, a successful idle settlement after a root Session's assistant reply may fork one prediction request for that reply. Child Sessions, active autonomy goals, unfinished assistant replies, and Sessions with pending input do not predict. New input admission interrupts an in-flight helper and suppresses its result; helper failures never fail or delay Session execution. Duplicate settlements for the same reply do not repeat the helper request within the running process.
+
+The hidden primary `prediction` agent resolves its model like `title`: its explicit agent model, then `efficiency.helper_models.prediction`, then the Session/default model. It receives only bounded recent user and assistant text (2,000 and 4,000 characters), no tools, and optional [permission-checked memory search snippets](./memory.md). No concept content is automatically injected into Session prompts.
+
+Accepted output is a single line of 2–20 words, at most 200 characters; empty, meta/refusal, quoted/labelled, error-looking, control-bearing, and repeated previous-user text is rejected. A valid result publishes ephemeral `session.prediction.updated` with `sessionID`, `sourceMessageID`, and `text`. It is not durable, is not replayed on reconnect, and never enters transcript or model-visible history. Provider requests and normalized usage are accounted under source `prediction` using the existing ledger and pricing rules.
+
+The TUI and remote web composer show the latest matching assistant-source prediction as subdued ghost text only when the input is empty. TUI `prompt.prediction.accept` defaults to Right; Tab retains agent cycling and autocomplete. The web supports Right and a visible 44px-target **Use suggestion** control. Acceptance fills the composer only, never sends, and never overwrites a nonempty draft. Typing, Escape, or new Session activity dismisses the suggestion. Configuration controls opt-in; no prediction command-palette toggle is provided.
+
+#### Other helper traffic
+
 Session titles are local by default; explicit goal calculation uses a model:
 
 - local title generation selects one sanitized line from the first user prompt and makes no provider request;

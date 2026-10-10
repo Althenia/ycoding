@@ -53,6 +53,7 @@ import { SessionRunnerLLM } from "./session/runner/llm"
 import { SessionRunnerModel } from "./session/runner/model"
 import { SessionProviderState } from "./session/provider-state"
 import { SessionTitle } from "./session/title"
+import { SessionPrediction } from "./session/prediction"
 import { SessionTodo } from "./session/todo"
 import { Skill } from "./skill"
 import { SkillInstructions } from "./skill/instructions"
@@ -121,6 +122,7 @@ const locationServiceNodes = [
   SessionContext.node,
   SessionGoal.node,
   SessionTitle.node,
+  SessionPrediction.node,
   SessionTodo.node,
   Snapshot.node,
   SessionProviderState.node,

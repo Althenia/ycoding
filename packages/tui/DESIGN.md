@@ -131,6 +131,8 @@ Each rule describes current TUI behavior and names its enforcing test or review 
 T1 and T2 separate complete durable projection from resident row rendering. T3 applies to the captured-change diff, not every inline tool diff; the tested `diffs.view` cases and threshold are specified in `docs/runtime.md`. T7 keeps the segment summary as the only completed-edit presentation; child edits join the segment whose `subagent` or `subagent_control` call dispatched them, and a child segment ends at the child's next `user` input or answer.
 
 ## Colors
+Use the prompt's existing placeholder area and `text.subdued` ink for next-message ghost text only when the draft is empty and its source matches the latest assistant message. Show the configured `prompt.prediction.accept` shortcut as a subdued prompt hint; default Right fills the draft without submitting. Dismiss on typing, Escape, or new Session activity; preserve Tab agent cycling and autocomplete. Verify with `test/screen/prediction.screen.test.ts`.
+
 
 The default "ycoding" dark theme (users can switch among ~30 built-in themes, including `one-dark`, `one-dark-pro`, and `high-contrast`, so designs must rely on roles, not exact hues):
 

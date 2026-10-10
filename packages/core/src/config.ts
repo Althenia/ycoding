@@ -31,6 +31,7 @@ import { ConfigLSP } from "./config/lsp"
 import { ConfigMCP } from "./config/mcp"
 import { ConfigModel } from "./config/model"
 import { ConfigMemory } from "./config/memory"
+import { ConfigPrediction } from "./config/prediction"
 import { ConfigPlugin } from "./config/plugin"
 import { ConfigProvider } from "./config/provider"
 import { ConfigProviderUsage } from "./config/provider-usage"
@@ -116,6 +117,7 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   memory: ConfigMemory.Info.pipe(Schema.optional).annotate({
     description: "On-demand workspace knowledge and offline graph configuration",
   }),
+  prediction: ConfigPrediction.Info.pipe(Schema.optional),
   guardrails: ConfigGuardrail.Info.pipe(Schema.optional).annotate({
     description: "Session-wide guardrail enablement and runtime caps",
   }),

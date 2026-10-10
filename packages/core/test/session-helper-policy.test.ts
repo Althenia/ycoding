@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
-import { LLM, LLMClient } from "@ycoding-ai/ai"
+import { LLM, LLMClient, Model } from "@ycoding-ai/ai"
+import { OpenAIChat } from "@ycoding-ai/ai/protocols"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
 import { CatalogModel } from "@ycoding-ai/core/model"
@@ -86,6 +87,22 @@ test("decision helper settings retain model variants and the explicit session se
     } } })
   }
   expect(() => Schema.decodeUnknownSync(Config.Info)({ efficiency: { helper_models: { decision: 42 } } })).toThrow()
+})
+
+test("prediction helper selection preserves session inheritance, profile and agent precedence", async () => {
+  const selected = "Personal#openai/prediction-model#low"
+  const info = Schema.decodeUnknownSync(Config.Info)({ efficiency: { helper_models: { prediction: selected } } })
+  expect(settings([new Config.Document({ type: "document", info })]).models.prediction).toEqual(ref("openai", "prediction-model", "low", "Personal"))
+  const session = SessionSchema.Info.make({ id: SessionSchema.ID.make("ses_prediction_model"), projectID: Project.ID.global,
+    location: { directory: AbsolutePath.make("/project") }, title: "Prediction", time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) }, cost: Money.USD.zero,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, model: ref("fixture", "owner", "medium", "Owner") })
+  const seen: Array<SessionSchema.Info["model"]> = []
+  const models: SessionRunnerModel.Interface = { resolve: input => Effect.sync(() => { seen.push(input.model); return SessionRunnerModel.resolved(Model.make({ id: "prediction-helper", provider: "fixture", route: OpenAIChat.route })) }) }
+  const agent = { ...Agent.Info.empty(Agent.ID.make("prediction")), model: ref("fixture", "pinned", "high") }
+  await Effect.runPromise(make(settings([new Config.Document({ type: "document", info })]), models).resolveModel(session, "prediction", agent))
+  await Effect.runPromise(make(settings([new Config.Document({ type: "document", info })]), models).resolveModel(session, "prediction"))
+  await Effect.runPromise(make(settings([]), models).resolveModel(session, "prediction"))
+  expect(seen).toEqual([agent.model, ref("openai", "prediction-model", "low", "Personal"), session.model])
 })
 
 test("decision helper resolution preserves agent, configured, session, and default model precedence with native routes", async () => {

@@ -8,6 +8,14 @@ import { SessionEvent } from "@ycoding-ai/schema/session-event"
 
 const sourceEpoch = SourceEpoch.make("source_test")
 
+test("decodes the ephemeral prediction on the public stream, not the Session log", () => {
+  const raw = { id: "evt_prediction", created: 1, sourceEpoch, type: "session.prediction.updated",
+    data: { sessionID: "ses_prediction", sourceMessageID: "msg_reply", text: "Run the focused tests" } }
+  expect(isYCodingEvent(raw)).toBe(true)
+  expect(Schema.decodeUnknownSync(YCodingEvent)(raw).data).toEqual(raw.data)
+  expect(() => Schema.decodeUnknownSync(SessionLogItem)(raw)).toThrow()
+})
+
 test("refuses private profile binding and provenance on public event and Session log streams", () => {
   const event = {
     id: "evt_profile",

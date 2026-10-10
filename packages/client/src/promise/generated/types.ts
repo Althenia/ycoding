@@ -763,6 +763,16 @@ export type SessionUsageUpdated = {
   data: { sessionID: string; cost: MoneyUSD; tokens: TokenUsageInfo }
 }
 
+export type SessionPredictionUpdated = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.prediction.updated"
+  location?: LocationRef
+  data: { sessionID: string; sourceMessageID: string; text: string }
+}
+
 export type SessionDeleted = {
   id: string
   created: number
@@ -3626,6 +3636,7 @@ export type ServerEvent =
   | SessionMoved
   | SessionRenamed
   | SessionUsageUpdated
+  | SessionPredictionUpdated
   | SessionDiagnosticsUpdated
   | SessionDeleted
   | SessionArchived

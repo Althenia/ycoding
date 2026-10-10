@@ -228,6 +228,7 @@ export const Definitions = {
   "workspaces.forget": keybind("ctrl+x", "Forget selected workspace directory"),
   "workspaces.refresh": keybind("ctrl+r", "Refresh workspaces"),
   "prompt.autocomplete.prev": keybind("up,ctrl+p", "Move to previous autocomplete item"),
+  "prompt.prediction.accept": keybind("right", "Fill the empty prompt with the next-message prediction"),
   "prompt.autocomplete.next": keybind("down,ctrl+n", "Move to next autocomplete item"),
   "prompt.autocomplete.hide": keybind("escape", "Hide autocomplete"),
   "prompt.autocomplete.select": keybind("return", "Select autocomplete item"),

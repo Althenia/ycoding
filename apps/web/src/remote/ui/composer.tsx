@@ -6,6 +6,7 @@ import { catalogKey, type CatalogTarget, type CatalogView, type FileOption } fro
 import { useRemote } from "../context"
 import { defaultComposerModel, readPreferredModel, readRecentModels, rememberRecentModel, writePreferredModel } from "../preferences"
 import { contextWindowDisplay, generationSpeedDisplay } from "../projection"
+import { nextMessagePrediction, acceptNextMessagePrediction } from "../view-model"
 import type { ModelRefView } from "../projection"
 import { applyMention, autocompleteBound, modelSelection, modelSelectionKey, needsCatalogRead, optionsForTrigger, pairedFastModel, reconcileMentions, sameModel, submission, suggestionTrigger, tokenKey, triggerAt, type MentionPart } from "./composer-logic"
 import { ComposerPicker } from "./composer-picker"
@@ -91,6 +92,21 @@ export function MiniComposer(props: {
   const catalog = (): CatalogView | undefined => targetKey() ? remote.state().catalogs[targetKey()!] : undefined
   const current = () => props.target && "sessionID" in props.target && remote.state().selectedSessionInfo?.id === props.target.sessionID ? remote.state().selectedSessionInfo : undefined
   const sessionTarget = () => props.target !== undefined && "sessionID" in props.target
+  const [dismissedPrediction, setDismissedPrediction] = createSignal<string>()
+  const predictionView = () => props.target && "sessionID" in props.target && remote.state().view?.id === props.target.sessionID ? remote.state().view : undefined
+  const prediction = createMemo(() => !props.disabled && !props.running ? nextMessagePrediction(predictionView(), props.text, dismissedPrediction()) : undefined)
+  const dismissPrediction = () => setDismissedPrediction(predictionView()?.prediction?.sourceMessageID)
+  const usePrediction = () => {
+    const text = acceptNextMessagePrediction(predictionView(), props.text, dismissedPrediction())
+    if (!prediction() || text === props.text) return
+    dismissPrediction()
+    props.onText(text)
+    setCursor(text.length)
+    queueMicrotask(() => { input?.focus({ preventScroll: true }); input?.setSelectionRange(text.length, text.length) })
+  }
+  createEffect(() => { if (props.text !== "") dismissPrediction() })
+  createEffect(() => { if (remote.state().transport.kind !== "open") dismissPrediction() })
+  createEffect(() => { if (predictionView()?.autonomy?.goal?.status === "active") dismissPrediction() })
   const collapsed = () => dockCollapsed() && sessionTarget()
   const upload = () => props.target && "sessionID" in props.target && remote.state().upload?.sessionID === props.target.sessionID ? remote.state().upload : undefined
   const currentModel = () => {
@@ -303,6 +319,7 @@ export function MiniComposer(props: {
     findFiles.maybeExecute(match.query, id)
   })
   const edit = (text: string, position: number) => {
+    dismissPrediction()
     setParts(reconcileMentions(props.text, text, parts()))
     props.onText(text)
     setAttachmentError(undefined)
@@ -385,6 +402,12 @@ export function MiniComposer(props: {
   }
   const keyDown: JSX.EventHandler<HTMLTextAreaElement, KeyboardEvent> = (event) => {
     if (event.isComposing || event.keyCode === 229) return
+    if (prediction() && event.key === "ArrowRight" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+      event.preventDefault()
+      usePrediction()
+      return
+    }
+    if (prediction() && event.key === "Escape") { event.preventDefault(); dismissPrediction(); return }
     if (options().length && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
       event.preventDefault()
       setActive((active() + (event.key === "ArrowDown" ? 1 : -1) + options().length) % options().length)
@@ -426,7 +449,7 @@ export function MiniComposer(props: {
       <div class="composer__body" aria-hidden={collapsed()} inert={collapsed()}><div class="composer__body-inner">
       <div ref={inputWrap} class="mini-composer__input-wrap">
         <textarea ref={input} class="composer__input" rows={1} aria-label="Message your agent" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded={suggesting()} aria-controls={suggesting() ? "composer-autocomplete" : undefined} aria-activedescendant={options().length ? `composer-option-${active()}` : undefined}
-          placeholder="Ask anything…" disabled={props.disabled} value={props.text}
+          placeholder={prediction()?.text ?? "Ask anything…"} disabled={props.disabled} value={props.text}
           onInput={(event) => edit(event.currentTarget.value, event.currentTarget.selectionStart)}
           onPaste={(event) => { const files = Array.from(event.clipboardData?.files ?? []); if (!files.length) return; event.preventDefault(); void addFiles(files) }}
           onClick={(event) => setCursor(event.currentTarget.selectionStart)}
@@ -466,6 +489,7 @@ export function MiniComposer(props: {
       </div>
     </div>
     <Show when={sessionTarget()}><div class="composer__dock" aria-label="Composer dock">
+      <span class="composer__prediction-slot"><Show when={prediction() && !collapsed()}><button type="button" class="button button--ghost composer__use-prediction" onClick={usePrediction}>Use suggestion</button></Show></span>
       <Show when={collapsed() && props.showStatus}><ComposerStatus /></Show>
       <button ref={dockToggle} type="button" class="button button--ghost composer__dock-toggle" aria-label={collapsed() ? "Show composer" : "Hide composer"} aria-expanded={!collapsed()} onClick={() => {
       const next = !collapsed()

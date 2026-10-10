@@ -30,6 +30,8 @@ Sessions and subagents can select named profiles independently for the same prov
 
 The terminal application is the primary product and release surface.
 
+Opt-in next-message prediction may use permission-checked workspace-memory snippets in a background helper; TUI and web acceptance fills the composer without sending.
+
 Changes that affect sessions, prompts, tools, permissions, subagents, skills, project artifacts, cache diagnostics, or transcript history must be proven through the CLI/TUI path.
 
 Supported presentation surfaces are the terminal application and the SolidJS remote web client. The public site and remote client share `ycoding.althenia.app`. The public site publishes its documentation both as pages and as Markdown for AI agents (`/llms.txt`, `/llms-full.txt`, `/docs/<slug>.md`). Opening the remote client while signed out shows only an OAuth sign-in screen; Google is the supported provider. The browser and relay own no repository, shell, tool, model, or Session execution authority. There is no hosted-agent runtime, Electron shell, or native office client in the current product.

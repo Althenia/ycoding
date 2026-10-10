@@ -25,6 +25,7 @@ Your repository, shell, tools, and model calls stay in the local `ycoding` proce
 - **Repository-native customization.** Agents, commands, skills, hooks, plugins, and MCP servers live next to your code.
 - **Browser and computer control.** Work in [paired Chrome tabs or agent-owned tabs](./docs/browser-extension.md) and in [scoped macOS windows](./docs/computer-use.md), with per-site and per-tool permissions.
 - **Workspace memory.** Save and search [linked Markdown knowledge](./docs/memory.md) with an offline graph, kept separate from transcripts and prompts.
+- **Opt-in next-message prediction.** Fill, never send, a suggested next message in the TUI or web composer; optionally inform its background helper with permission-checked workspace-memory snippets.
 - **Opt-in meeting intelligence.** Use the [local meeting extension](./docs/meeting-intelligence.md) for consented Google Meet capture, configurable Thai Whisper transcription, evidence-backed plans and reviewed MCP proposals.
 
 ## Quick start

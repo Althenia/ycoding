@@ -249,6 +249,7 @@ The MCP shape where server names appear directly under `mcp` is also rejected. U
 | `plugins`               | array                                 | Ordered plugin additions, options, and removals.                                            |
 | `providers`             | record                                | Provider and model overrides.                                                               |
 | `memory`                | object                                | On-demand workspace knowledge enablement, base path, and concept/bundle limits.             |
+| `prediction`            | object                                | Opt-in next-message prediction and permission-checked memory snippets for its helper. |
 | `efficiency`            | object                                | Helper-model, prompt-cache, and provider-continuation policy.                               |
 | `image_analyzer`        | object                                | Image analysis fallback for text-only models.                                               |
 | `experimental`          | object                                | Subagent depth and resource policies.                                                       |
@@ -358,7 +359,7 @@ The field reference below expands the overview. `unset` means the field is optio
 | `provider_usage.codex_app_server.cwd`                                                   | string                                                                                                          | unset                           | Client working directory.                                                                                                                                                         |
 | `provider_usage.codex_app_server.timeout_ms`                                            | positive integer `<= 30000`                                                                                     | unset                           | App-server timeout.                                                                                                                                                               |
 | `efficiency.title`                                                                      | `local` \| `model` \| `off`                                                                                     | `local`                         | Title policy.                                                                                                                                                                     |
-| `efficiency.helper_models.title`, `.goal`, `.decision`, `.compaction.main`, `.compaction.subagent` | model selector \| `session` | `session` | Independent model selection for title, goal, decision, and ContextManifest helpers. |
+| `efficiency.helper_models.title`, `.goal`, `.decision`, `.prediction`, `.compaction.main`, `.compaction.subagent` | model selector \| `session` | `session` | Independent model selection for title, goal, decision, next-message prediction, and ContextManifest helpers. |
 | `efficiency.prompt_cache.anthropic_ttl`                                                 | `adaptive` \| `5m` \| `1h`                                                                                      | `adaptive`                      | Cache lifetime policy.                                                                                                                                                            |
 | `efficiency.prompt_cache.openai_mode`                                                   | `auto` \| `implicit` \| `explicit`                                                                              | `auto`                          | OpenAI cache lowering.                                                                                                                                                            |
 | `efficiency.prompt_cache.openai_extended_retention`                                     | boolean                                                                                                         | `false`                         | Pre-GPT-5.6 OpenAI and Meta Muse Spark `24h` retention request.                                                                                                                                              |
@@ -434,6 +435,7 @@ The optional `efficiency` block controls provider-request amplification and prom
 | ---------------------------------------- | ------------------------------ | ---------- | ---------------------------------------------------------------------------------------------------------------- |
 | `title`                                  | `local`, `model`, `off`        | `local`    | Generate Session titles locally, with a model, or not at all.                                                    |
 | `helper_models.title`                    | model selector, `session`      | `session`  | Model for model-generated Session titles.                                                                        |
+| `helper_models.prediction`               | model selector, `session`      | `session`  | Model for opt-in next-message prediction; an explicit `agents.prediction.model` takes precedence. |
 | `helper_models.goal`                     | model selector, `session`      | `session`  | Model for model-based goal synthesis.                                                                            |
 | `helper_models.decision`                 | model selector, `session`      | `session`  | Model for hidden decision-agent judgments; an explicit `agents.decision.model` takes precedence.                  |
 | `helper_models.compaction.main`          | model selector, `session`      | `session`  | Model for ContextManifest generation in main chats.                                                              |
@@ -533,6 +535,26 @@ When `openai_extended_retention` is true, supported pre-GPT-5.6 direct OpenAI re
 `openai_responses_continuation` never changes `openai_responses_state`. The default `stored` state sends `store: true` on direct OpenAI Responses requests; choose `stateless` to send `store: false` and disable response-ID continuation. Enabling extended cache retention or stored Responses state may change provider data-retention behavior; make that choice explicitly.
 
 The default `local` title mode makes no provider request. Set `title` to `model` for model-generated titles; `title: "off"` leaves the initial generated Session title unchanged. Explicit `/goal <text>` calculation always uses a model, while resuming a retained goal does not recalculate it.
+
+### Next-message prediction
+
+| Key | Type | Default | Contract |
+| --- | --- | --- | --- |
+| `prediction.enabled` | boolean | `false` | Opt in to background next-message suggestions after root Session replies settle idle without pending input or an active goal. |
+| `prediction.memory` | boolean | `true` | Consulted only when enabled; allow bounded repository (project) and knowledge (shared/global) search snippets only when the calling selected agent's effective `memory_read` is `allow`. `ask` and `deny` skip reading without a prompt. |
+| `efficiency.helper_models.prediction` | model selector or `session` | `session` | Resolve like the title helper: explicit `agents.prediction.model` wins, otherwise use this selection or the Session/default model. |
+| TUI `keybinds["prompt.prediction.accept"]` | key binding | `right` | Consume only while the prompt is empty and a matching ghost suggestion is shown; fill without sending. Right retains normal behavior otherwise; Tab keeps agent cycling/autocomplete. |
+
+The hidden primary `prediction` agent has its own prediction system prompt and no tools. Override its prompt with `agents.prediction.system` if needed. The helper provider receives bounded recent transcript text and, when allowed, at most three search hits per available memory scope with snippets of at most 600 characters. Memory failures degrade to no-memory prediction. Prediction requests use ordinary provider pricing, usage, and privacy policies. The TUI and web dismiss on typing, Escape, or new Session activity; web touch acceptance uses **Use suggestion**. Neither acceptance path sends or replaces a nonempty draft.
+
+```json
+{
+  "prediction": { "enabled": true, "memory": true },
+  "efficiency": { "helper_models": { "prediction": "session" } }
+}
+```
+
+### Goal helper selection
 
 Configure the goal pre-prompt with `agents.goal.system`. This helper synthesizes objectives and generates context-aware synthetic steers for activation, resume, and continuation. Select its model with `agents.goal.model` or `efficiency.helper_models.goal`; leave both unset to use the current Session model. For example:
 

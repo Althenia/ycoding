@@ -309,6 +309,7 @@ export type SessionAutonomyView = {
 }
 
 export type SessionView = {
+  readonly prediction?: { readonly sessionID: string; readonly sourceMessageID: string; readonly text: string }
   readonly id: string
   readonly title?: string
   readonly agent?: string
@@ -798,10 +799,19 @@ export function readAutonomy(payload: unknown): SessionAutonomyView | undefined 
 export function applySessionEvent(view: SessionView, payload: unknown, now: number): SessionView {
   const event = readEvent(payload)
   if (!event) return bump(view)
+  if (["session.input.admitted", "session.execution.started", "session.step.started", "session.moved", "session.deleted", "session.archived", "session.agent.selected", "session.model.selected"].includes(event.type) && view.prediction)
+    view = { ...view, prediction: undefined }
   if (ignoredEventTypes.includes(event.type)) return view
   const data = event.data
   const activeAt = event.created === undefined ? view.activeAt : Math.max(view.activeAt ?? event.created, event.created)
   switch (event.type) {
+    case "session.prediction.updated": {
+      const sessionID = stringField(data.sessionID)
+      const sourceMessageID = stringField(data.sourceMessageID)
+      const text = stringField(data.text)
+      if (sessionID !== view.id || sourceMessageID === undefined || text === undefined || text.length > 200 || /[\r\n\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(text)) return view
+      return { ...view, prediction: { sessionID, sourceMessageID, text } }
+    }
     case "session.created": {
       const created = readModelRef(data.model)
       return {

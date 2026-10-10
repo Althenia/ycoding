@@ -14,6 +14,18 @@ import type { FormAnswerView, FormFieldView, FormView, SessionView, ShellOutputF
 
 export type FormDraft = Readonly<Record<string, FormAnswerView[string] | undefined>>
 
+export function nextMessagePrediction(view: SessionView | undefined, draft: string, dismissedSource?: string) {
+  const prediction = view?.prediction
+  if (!view || !prediction || draft !== "" || prediction.sourceMessageID === dismissedSource || view.status !== "idle" || view.autonomy?.goal?.status === "active") return
+  const latest = view.messages.findLast(message => message.kind === "assistant")
+  if (latest?.id !== prediction.sourceMessageID) return
+  return prediction
+}
+
+export function acceptNextMessagePrediction(view: SessionView | undefined, draft: string, dismissedSource?: string) {
+  return nextMessagePrediction(view, draft, dismissedSource)?.text ?? draft
+}
+
 export function workspaceDestination(path: string) {
   if (path === "/remote/usage") return "/remote/usage"
   if (path === "/remote/settings") return "/remote/settings"

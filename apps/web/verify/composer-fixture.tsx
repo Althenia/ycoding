@@ -54,6 +54,10 @@ const seed: RemoteStoreState = {
   teamCues: [], notifications: [], noticeSync: { status: "ready", total: 0, loaded: 0, hidden: 0, loadingMore: false, message: undefined }, unhandledEvents: 0,
 }
 base.container.setState(() => seed)
+Object.assign(window, { composerPrediction: (text = "Run the focused tests", sourceMessageID?: string) => base.container.setState(state => ({
+  ...state, view: { ...state.view!, status: "idle", messages: [{ kind: "assistant", id: `msg_${text}`, created: 1, completed: 2, parts: [{ kind: "text", ordinal: 0, text: "The build is fixed." }] }],
+    prediction: { sessionID: "ses_fixture", sourceMessageID: sourceMessageID ?? `msg_${text}`, text } },
+})) })
 const state = () => base.container.state
 const update = (next: RemoteStoreState) => base.container.setState(() => next)
 let workspaceGate: Promise<void> | undefined
