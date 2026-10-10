@@ -115,11 +115,11 @@ test("renders the session title only inside the section body", async () => {
 test("renders who decides each action at every YOLO level and with an active goal", async () => {
   const { AutonomyRailContent } = await import("../src/routes/session/sidebar")
   const cases = [
-    { level: 0, goal: false, values: ["ask you", "ask you", "ask you", "ask you", "always you"] },
-    { level: 1, goal: false, values: ["auto", "auto", "ask you", "ask you", "always you"] },
-    { level: 2, goal: false, values: ["auto", "auto", "auto", "ask you", "always you"] },
-    { level: 3, goal: false, values: ["auto", "auto", "auto", "auto", "always you"] },
-    { level: 0, goal: true, values: ["auto · goal", "ask you", "auto · goal", "auto · goal", "always you"] },
+    { level: 0, goal: false, values: ["ask you", "ask you", "ask you", "ask you"] },
+    { level: 1, goal: false, values: ["auto", "auto", "ask you", "ask you"] },
+    { level: 2, goal: false, values: ["auto", "auto", "auto", "ask you"] },
+    { level: 3, goal: false, values: ["auto", "auto", "auto", "auto"] },
+    { level: 0, goal: true, values: ["auto · goal", "ask you", "auto · goal", "auto · goal"] },
   ] as const
 
   for (const item of cases) {
@@ -131,8 +131,12 @@ test("renders who decides each action at every YOLO level and with an active goa
     const app = await mount(() => <AutonomyRailContent autonomy={autonomy as SessionAutonomyState} />, { width: 60, height: 40 })
     await app.waitForFrame((frame) => frame.includes("Permissions"))
     try {
-      const rows = app.captureCharFrame().split("\n")
-      const expected = ["Permissions", "Guardrails", "Questions", "Scope dispatch", "Hard reviews"]
+      const frame = app.captureCharFrame()
+      expect(frame).not.toContain("Hard reviews")
+      expect(frame).not.toContain("always you")
+      const rows = frame.split("\n")
+      const expected = ["Permissions", "Guardrails", "Questions", "Scope dispatch"]
+      expect(rows.flatMap((line) => expected.filter((label) => line.includes(label)))).toEqual(expected)
       expect(expected.map((label) => rows.find((line) => line.includes(label))?.trimEnd().split(label).at(-1)?.trim())).toEqual([...item.values])
       expect(rows.find((line) => line.includes("AUTONOMY"))).toContain(`${item.level === 0 ? "Manual" : `YOLO ${item.level}`}${item.goal ? " · goal" : ""}`)
       const spans = app.captureSpans().lines.flatMap((line) => line.spans)
@@ -150,9 +154,6 @@ test("renders who decides each action at every YOLO level and with an active goa
           RGBA.fromHex(value === "ask you" ? "#67D7A4" : "#F0BE62").toInts(),
         )
       }
-      expect(spans.find((candidate) => candidate.text.trim() === "always you")?.fg.toInts()).toEqual(
-        RGBA.fromHex("#67D7A4").toInts(),
-      )
     } finally {
       app.renderer.destroy()
     }

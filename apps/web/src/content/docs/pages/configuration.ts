@@ -1209,7 +1209,7 @@ ycoding mcp add docs --global -- bunx @example/docs-mcp`,
         blocks: [
           {
             kind: "paragraph",
-            text: "`/yolo` shows the toast `YOLO <n> enabled` or `YOLO disabled`. The rail's `AUTONOMY` section shows who decides Permissions, Guardrails, Questions, and Scope dispatch (`ask you`, `auto`, or `auto · goal`); Hard reviews always show `always you`.",
+            text: "`/yolo` shows the toast `YOLO <n> enabled` or `YOLO disabled`. The rail's `AUTONOMY` section shows who decides Permissions, Guardrails, Questions, and Scope dispatch (`ask you`, `auto`, or `auto · goal`).",
           },
           { kind: "related", slugs: ["configuration/guardrails", "configuration/permissions", "configuration/goal"] },
         ],

@@ -163,7 +163,6 @@ export function AutonomyRailContent(props: { autonomy: SessionAutonomyState }) {
               )
             }}
           </For>
-          <RailRow label="Hard reviews" value="always you" valueColor={theme.text.feedback.success.default} />
         </RailSection>
       </Show>
     </>
