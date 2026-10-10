@@ -365,15 +365,17 @@ describe("transcript rendering", () => {
 
 
 
-  test("bounds the desktop reading measure to 68ch and aligns transcript with composer", async () => {
+  test("bounds the desktop Conversation column to 120ch and aligns transcript with composer", async () => {
     const page = await browser!.openPage()
     try {
       for (const width of [1440, 1920]) {
         await page.setViewport(width, 900)
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?theme=light`)
         for (let i = 0; i < 80 && !await page.evaluate(`document.querySelector('.app--conversation.app--selected .transcript-navigation')`); i++) await Bun.sleep(50)
-        const geometry = await page.evaluate<{ readonly width: number; readonly measure: number; readonly left: number; readonly right: number; readonly composerLeft: number; readonly composerRight: number }>(`(() => { const app=document.querySelector('.app'), probe=document.createElement('div');probe.style.cssText='position:absolute;visibility:hidden;inline-size:68ch';app.append(probe);const measure=probe.getBoundingClientRect().width;probe.remove();const transcript = document.querySelector('.transcript-navigation').getBoundingClientRect(); const composer = document.querySelector('.composer__row').getBoundingClientRect(); return { width: transcript.width, measure, left: transcript.left, right: transcript.right, composerLeft: composer.left, composerRight: composer.right } })()`)
-        expect(Math.abs(geometry.width - geometry.measure)).toBeLessThanOrEqual(1)
+        const geometry = await page.evaluate<{ readonly width: number; readonly measure: number; readonly left: number; readonly right: number; readonly composerLeft: number; readonly composerRight: number }>(`(() => { const app=document.querySelector('.app'), probe=document.createElement('div');probe.style.cssText='position:absolute;visibility:hidden;inline-size:120ch';app.append(probe);const measure=probe.getBoundingClientRect().width;probe.remove();const transcript = document.querySelector('.transcript-navigation').getBoundingClientRect(); const composer = document.querySelector('.composer__row').getBoundingClientRect(); return { width: transcript.width, measure, left: transcript.left, right: transcript.right, composerLeft: composer.left, composerRight: composer.right } })()`)
+        expect(geometry.width).toBeLessThanOrEqual(geometry.measure + 1)
+        expect(geometry.width).toBeGreaterThan(geometry.measure * 0.5)
+        if (width === 1920) expect(Math.abs(geometry.width - geometry.measure)).toBeLessThanOrEqual(1)
         expect(Math.abs(geometry.left - geometry.composerLeft)).toBeLessThanOrEqual(1)
         expect(Math.abs(geometry.right - geometry.composerRight)).toBeLessThanOrEqual(1)
       }

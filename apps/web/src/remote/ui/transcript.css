@@ -60,6 +60,7 @@
 .transcript-reasoning__body--closing { animation:transcript-collapse var(--yc-dur-base) var(--yc-ease-exit) both; }
 .transcript-md { min-inline-size:0; font-size:var(--yc-size-sm); line-height:var(--yc-leading-md); overflow-wrap:anywhere; }
 .transcript-md :is(p,ul,ol,blockquote) { margin:0 0 var(--yc-space-2); }
+.transcript-md :is(p,ul,ol) { max-inline-size:var(--yc-measure); }
 .transcript-md :is(ul,ol) { padding-inline-start:var(--yc-space-6); }
 .transcript-md li { margin-block:var(--yc-space-1); }
 .transcript-md li p { display:inline; }

@@ -120,6 +120,7 @@ const INVARIANT_LAYOUT = {
   "--yc-radius-pill": "999px",
   "--yc-measure": "68ch",
   "--yc-measure-narrow": "54ch",
+  "--yc-measure-wide": "120ch",
 } as const
 
 const COMPOSITIONAL_LAYOUT = {

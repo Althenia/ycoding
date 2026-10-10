@@ -131,9 +131,10 @@
   --yc-tracking-tight: -0.02em;
   --yc-tracking-wide: 0.06em;
 
-  /* measure — the reading limit for every prose block */
+  /* measure — prose limits and the fluid conversation column */
   --yc-measure: 68ch;
   --yc-measure-narrow: 54ch;
+  --yc-measure-wide: 120ch;
 
   /* spacing — 4px base */
   --yc-space-1: 4px;

@@ -147,7 +147,7 @@ describe("responsive contract", () => {
     expect(columnSteps(remote, ".defs__row")).toEqual([{ min: 1024, tracks: 2 }])
   })
 
-  test("widens the Sessions, Usage, and Settings column at 1600 while Session detail keeps its measure", async () => {
+  test("widens the Sessions, Usage, Settings, and Session detail columns at 1600 while message prose keeps its measure", async () => {
     const remote = await readStylesheet("remote.css")
     const listed = (selector: string, min?: number) =>
       declarationsWhere(remote, (rule) =>
@@ -164,8 +164,10 @@ describe("responsive contract", () => {
       expect(listed(block)["inline-size"]).toBe("min(100%, var(--yc-content-max))")
       expect(listed(block, 1600)["inline-size"]).toBe("min(100%, var(--yc-content-max-wide))")
     }
-    expect(listed(".app--conversation.app--selected")["--remote-column"]).toBe("var(--yc-measure)")
+    expect(listed(".app--conversation.app--selected")["--remote-column"]).toBe("var(--yc-measure-wide)")
     expect(listed(".app--conversation.app--selected", 1600)).toEqual({})
+    const transcript = await readStylesheet("../remote/ui/transcript.css")
+    expect(declarationsWhere(transcript, (rule) => rule.header === ".transcript-md :is(p,ul,ol)")["max-inline-size"]).toBe("var(--yc-measure)")
   })
 
   test("reserves the command palette's scrollbar gutter beside the workspace scroller", async () => {
