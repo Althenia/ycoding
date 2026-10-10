@@ -53,7 +53,7 @@ test("counts only observed output categories and keeps provider timing independe
     ...times, reasoning: undefined,
   })).toBeUndefined()
   expect(SessionUsage.generationTiming(new Usage({ outputTokens: 12, outputMayIncludeUnreportedReasoning: true }), times))
-    .toEqual({ generatedTokens: 12, observedGenerationDurationNs: 2_000_000_000 })
+    .toBeUndefined()
   expect(SessionUsage.generationTiming(new Usage({ outputTokens: 12, reasoningTokens: 4 }), {
     ...times, reasoning: undefined,
   })).toEqual({ generatedTokens: 8, observedGenerationDurationNs: 1_000_000_000 })

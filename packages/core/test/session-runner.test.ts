@@ -2871,7 +2871,6 @@ describe("SessionRunnerLLM", () => {
                   reason: "stop",
                   usage: {
                     outputTokens: 12,
-                    outputMayIncludeUnreportedReasoning: true,
                   },
                 }),
                 LLMEvent.finish({ reason: "stop" }),
@@ -2895,23 +2894,33 @@ describe("SessionRunnerLLM", () => {
           observedGenerationDurationNs: 2_000_000_000,
         })
 
-        responses = [
-          [
+        responseStream = Stream.concat(
+          Stream.fromIterable([
             LLMEvent.stepStart({ index: 0 }),
-            LLMEvent.textStart({ id: "speed-hidden-text" }),
-            LLMEvent.textDelta({ id: "speed-hidden-text", text: "Answer" }),
-            LLMEvent.textEnd({ id: "speed-hidden-text" }),
-            LLMEvent.stepFinish({
-              index: 0,
-              reason: "stop",
-              usage: {
-                outputTokens: 15,
-                outputMayIncludeUnreportedReasoning: true,
-              },
-            }),
-            LLMEvent.finish({ reason: "stop" }),
-          ],
-        ]
+            LLMEvent.reasoningStart({ id: "speed-hidden-summary" }),
+            LLMEvent.reasoningDelta({ id: "speed-hidden-summary", text: "Summary" }),
+            LLMEvent.reasoningEnd({ id: "speed-hidden-summary" }),
+          ]),
+          Stream.fromEffect(TestClock.adjust("2 seconds")).pipe(
+            Stream.flatMap(() =>
+              Stream.fromIterable([
+                LLMEvent.textStart({ id: "speed-hidden-text" }),
+                LLMEvent.textDelta({ id: "speed-hidden-text", text: "Answer" }),
+                LLMEvent.textEnd({ id: "speed-hidden-text" }),
+                LLMEvent.stepFinish({
+                  index: 0,
+                  reason: "stop",
+                  usage: {
+                    outputTokens: 15,
+                    outputMayIncludeUnreportedReasoning: true,
+                  },
+                }),
+                LLMEvent.finish({ reason: "stop" }),
+              ]),
+            ),
+          ),
+        )
+        responses = [reply.text("Title", "speed-hidden-title")]
         yield* admit(session, "Hidden thinking")
         yield* session.resume(sessionID)
         const hidden = yield* session.diagnostics(sessionID)
@@ -3033,7 +3042,6 @@ describe("SessionRunnerLLM", () => {
                             reason: "stop",
                             usage: {
                               outputTokens: 2_355,
-                              outputMayIncludeUnreportedReasoning: true,
                             },
                           }),
                           LLMEvent.finish({ reason: "stop" }),

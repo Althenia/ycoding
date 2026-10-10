@@ -169,7 +169,7 @@ OpenAI server-side compaction is provider request semantics, not a prompt-cache 
 
 ## Request diagnostics
 
-Step generation speed prefers a provider-reported generation duration, paired with all output tokens including reasoning. Without one, it measures visible output (text and tool-call arguments) over the observed streamed window, excluding separately counted reasoning whose summary streams after it was generated, and only when that window lasts at least one second; shorter bursts do not yield a trustworthy rate, including when read from retained request records. This rate is separate from prompt-cache efficiency and provider quota.
+Step generation speed prefers a provider-reported generation duration, paired with all output tokens including reasoning. Without one, it measures visible output (text and tool-call arguments) over the observed streamed window, excluding separately counted reasoning whose summary streams after it was generated, and only when that window lasts at least one second; an output total that may include hidden reasoning without a separate count, such as Anthropic thinking, has no observed rate; shorter bursts do not yield a trustworthy rate, including when read from retained request records. This rate is separate from prompt-cache efficiency and provider quota.
 
 The Provider Usage command contains two separate sections:
 

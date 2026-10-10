@@ -64,8 +64,7 @@ export const generationTiming = (
   if (usage?.generationDurationNs !== undefined) return providerTimedTokens(normalized.output + normalized.reasoning)
   const visibleStart = earliest([times.text, times.toolInput])
   const thinkingFoldedIntoOutput = times.reasoning !== undefined && !normalized.reasoning
-  if (usage?.outputMayIncludeUnreportedReasoning === true && !normalized.reasoning && times.reasoning === undefined)
-    return undefined
+  if (usage?.outputMayIncludeUnreportedReasoning === true && !normalized.reasoning) return undefined
   const generatedTokens = thinkingFoldedIntoOutput ? normalized.output : visibleStart === undefined ? 0 : normalized.output
   if (!Number.isSafeInteger(generatedTokens) || generatedTokens <= 0) return undefined
   const start = thinkingFoldedIntoOutput ? earliest([times.reasoning, visibleStart]) : visibleStart
