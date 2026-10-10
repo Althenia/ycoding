@@ -8,10 +8,21 @@ import { NODE_BINARY } from "./src/binary"
 
 const dir = import.meta.dirname
 
+const rawTextPrefix = "\0ycoding-raw-text:"
+
 function rawTextPlugin(): Plugin {
   return {
     name: "ycoding:raw-text",
+    enforce: "pre",
+    async resolveId(source, importer, options) {
+      if (options.attributes?.type !== "text") return
+      const resolved = await this.resolve(source, importer, { ...options, skipSelf: true })
+      // A virtual id ending in .js keeps Vite's HTML and CSS plugins from processing the imported file.
+      return resolved ? `${rawTextPrefix}${resolved.id}.js` : undefined
+    },
     async load(id) {
+      if (id.startsWith(rawTextPrefix))
+        return `export default ${JSON.stringify(await readFile(id.slice(rawTextPrefix.length, -".js".length), "utf8"))}`
       if (!id.endsWith(".md")) return
       return `export default ${JSON.stringify(await readFile(id, "utf8"))}`
     },
@@ -27,6 +38,20 @@ function runtimeRequirePlugin(): Plugin {
       const transformed = code.replace("    var domino = require('@mixmark-io/domino');", "")
       if (transformed === code) this.error("Failed to rewrite Turndown's Domino require")
       return `import domino from "@mixmark-io/domino"\n${transformed}`
+    },
+  }
+}
+
+function nativeOnlyMeetingPlugin(): Plugin {
+  return {
+    name: "ycoding:native-only-meeting",
+    enforce: "pre",
+    transform(code) {
+      const transformed = code.replace(
+        /\bimport\(\s*["']@ycoding-ai\/meeting\/(?:plugin|discovery)["']\s*\)/g,
+        'Promise.reject(new Error("Meeting requires the native ycoding executable; it is not supported by the Node CLI."))',
+      )
+      return transformed === code ? undefined : transformed
     },
   }
 }
@@ -175,6 +200,7 @@ export function mainConfig(input: NodeBuildInput): UserConfig {
     plugins: [
       rawTextPlugin(),
       runtimeRequirePlugin(),
+      nativeOnlyMeetingPlugin(),
       solid({
         solid: {
           generate: "universal",

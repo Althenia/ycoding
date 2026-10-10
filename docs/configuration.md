@@ -152,6 +152,8 @@ The background update check resolves the newest release from the same GitHub Rel
 
 ### Meeting capture
 
+Meeting requires the native Bun-built `ycoding` executable. The Node CLI excludes Meeting; `meeting` and `serve --meeting` exit nonzero with an error directing you to the native executable, without starting a meeting server or arming capture.
+
 `ycoding meeting [directory] [--no-open]` starts a private server with the bundled meeting runtime for the directory (default: the current directory), arms a meeting, and opens or prints its local live page; it reuses a meeting runtime that already serves the directory. `ycoding serve --meeting` starts a server with the same runtime plugin. Speech prerequisites, the Chrome companion, and recording consent are described in [meeting intelligence](./meeting-intelligence.md#ycoding-meeting).
 
 ### Remote access
@@ -725,7 +727,7 @@ Relative local paths resolve from the containing configuration file.
 
 ## Plugins and hooks
 
-The [meeting extension](./meeting-intelligence.md#configuration) configures speech, processing, analysis, knowledge bindings and retention through runtime plugin `options`. Its TUI entrypoint belongs in global `cli.json` `plugins`; there is no top-level `meeting` configuration key. `ycoding meeting [directory] [--no-open]` loads the bundled runtime plugin without a `plugins` entry; it uses the meeting data directory's saved `settings.json`, or the documented defaults. `ycoding serve --meeting` starts a server with that plugin. Plugin loading never downloads weights or starts recording.
+The native-only [meeting extension](./meeting-intelligence.md#configuration) configures speech, processing, analysis, knowledge bindings and retention through runtime plugin `options`. Its TUI entrypoint belongs in global `cli.json` `plugins`; there is no top-level `meeting` configuration key. In the native Bun-built executable, `ycoding meeting [directory] [--no-open]` loads the bundled runtime plugin without a `plugins` entry; it uses the meeting data directory's saved `settings.json`, or the documented defaults. `ycoding serve --meeting` starts a server with that plugin. Plugin loading never downloads weights or starts recording.
 
 Plugins are applied in order.
 
