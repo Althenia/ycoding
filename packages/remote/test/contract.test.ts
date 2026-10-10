@@ -124,6 +124,19 @@ test("machine keep-awake controls are global and accept only the explicit enable
   expect(parseClientMessage(JSON.stringify({ ...read, input: {} })).ok).toBe(false)
 })
 
+test("machine telemetry consent controls are global and strictly versioned", () => {
+  const read = { type: "request", id: "req_consent", operation: "machine.telemetry.consent.get" }
+  const write = { ...read, operation: "machine.telemetry.consent.set", input: { enabled: true, noticeVersion: 1 } }
+  for (const frame of [read, write, { ...write, input: { enabled: false, noticeVersion: 1 } }]) {
+    expect(parseClientMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
+    expect(parseRelayToAgentMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
+    expect(parseClientMessage(JSON.stringify({ ...frame, sessionID: "ses_1" })).ok).toBe(false)
+  }
+  for (const input of [undefined, {}, { enabled: true }, { enabled: true, noticeVersion: 2 }, { enabled: true, noticeVersion: 1, extra: true }])
+    expect(parseClientMessage(JSON.stringify({ ...write, input })).ok).toBe(false)
+  expect(parseClientMessage(JSON.stringify({ ...read, input: {} })).ok).toBe(false)
+})
+
 test("machine latency ingest and reads accept only bounded anonymous samples for the connected device", () => {
   const sample = { kind: "request", at: "2026-10-04T12:00:00.000Z", operation: "session.list", outcome: "ok", queueMs: 5, settlementMs: 20, totalMs: 25 }
   const task = { kind: "long-task", at: sample.at, durationMs: 70 }
@@ -143,6 +156,16 @@ test("machine latency ingest and reads accept only bounded anonymous samples for
     expect(parseClientMessage(JSON.stringify({ ...append, input })).ok).toBe(false)
   for (const input of [{ limit: 0 }, { limit: 201 }, { before: "" }, { before: "x".repeat(257) }, { limit: 1, workspace: "/private" }, {}])
     expect(parseClientMessage(JSON.stringify({ ...list, input })).ok).toBe(input !== undefined && Object.keys(input).length === 0)
+})
+
+test("machine latency accepts exact web client samples and rejects other client surfaces", () => {
+  const sample = { kind: "client", at: "2026-10-04T12:00:00.000Z", surface: "web", metric: "stream.delay", durationMs: 12 }
+  const append = { type: "request", id: "req_client_latency", operation: "machine.latency.append", input: { samples: [sample] } }
+  expect(parseClientMessage(JSON.stringify(append))).toMatchObject({ ok: true })
+  for (const bad of [{ ...sample, surface: "tui" }, { ...sample, metric: "private" }, { ...sample, extra: true }, { ...sample, durationMs: -1 }])
+    expect(parseClientMessage(JSON.stringify({ ...append, input: { samples: [bad] } })).ok).toBe(false)
+  const requestSample = { kind: "request", at: sample.at, operation: "machine.telemetry.consent.get", outcome: "ok", queueMs: 0, totalMs: 0 }
+  expect(parseClientMessage(JSON.stringify({ ...append, input: { samples: [requestSample] } })).ok).toBe(false)
 })
 
 test("captured changes is a read-only Session-scoped paged operation without caller placement", () => {
@@ -611,7 +634,9 @@ describe("remote operations", () => {
       "usage.summary",
       "usage.report",
       "machine.keepAwake.get",
-      "machine.keepAwake.set",
+    "machine.keepAwake.set",
+    "machine.telemetry.consent.get",
+    "machine.telemetry.consent.set",
       "machine.latency.append",
       "machine.latency.list",
     ])

@@ -190,6 +190,19 @@ export function LatencySettings(): JSX.Element {
   }
   return <Section id="latency-settings" category="Diagnostics" title="Web latency" hint="Fixed, anonymous timings are sent through the relay to the selected machine's SQLite, never stored by the relay.">
     <div class="defs">
+      <div class="defs__row" aria-busy={remote.state().telemetryConsent.status === "loading"}>
+        <span class="defs__key" id="telemetry-consent-label">Save telemetry on this machine</span>
+        <span class="defs__value">
+          <label class="switch">
+            <input type="checkbox" aria-labelledby="telemetry-consent-label" aria-describedby="telemetry-consent-help telemetry-consent-status"
+              checked={remote.state().telemetryConsent.consent?.enabled ?? remote.state().telemetryConsent.status === "enabled"} disabled={remote.state().transport.kind !== "open" || ["loading", "unsupported", "failed"].includes(remote.state().telemetryConsent.status)}
+              onChange={(event) => { void remote.store.setTelemetryConsent(event.currentTarget.checked) }} />
+            <span>{remote.state().telemetryConsent.consent?.enabled ?? remote.state().telemetryConsent.status === "enabled" ? "On" : remote.state().telemetryConsent.status === "disabled" || remote.state().telemetryConsent.consent?.enabled === false ? "Off" : remote.state().telemetryConsent.status === "undecided" ? "Not decided" : "Unavailable"}</span>
+          </label>
+          <span class="field__hint" id="telemetry-consent-help">Save usage, speed, and latency for each provider, model, and profile on this machine only. Nothing leaves your machine.</span>
+          <span class="field__hint" id="telemetry-consent-status" role="status" aria-live="polite">{remote.state().telemetryConsent.error ?? (remote.state().telemetryConsent.status === "unsupported" ? "Update YCoding on this machine to manage telemetry consent." : remote.state().telemetryConsent.status === "failed" ? "Could not confirm the telemetry setting." : "")}</span>
+        </span>
+      </div>
       <div class="defs__row">
         <span class="defs__key">Measurements</span>
         <span class="defs__value">Queue time is local pacing. Settlement time includes network, relay, machine, response assembly, or time until a timeout or disconnect; it does not isolate model time or screen paint.
@@ -208,7 +221,7 @@ export function LatencySettings(): JSX.Element {
       </div>
       <div class="defs__row">
         <span class="defs__key">Machine save</span>
-        <span class="defs__value" role="status">{({ idle: "Waiting for samples.", saving: "Saving on this machine…", saved: "Latest batch saved on this machine.", waiting: "Waiting for this machine to reconnect.", unsupported: "Update YCoding on this machine to save Web latency.", unknown: "Last save was not confirmed; it will not be replayed.", failed: "Machine save failed; inspect this tab's report." } as const)[remote.state().latencySync]}</span>
+        <span class="defs__value" role="status">{remote.state().telemetryConsent.status !== "enabled" ? "Saving requires this consent." : ({ idle: "Waiting for samples.", saving: "Saving on this machine…", saved: "Latest batch saved on this machine.", waiting: "Waiting for this machine to reconnect.", unsupported: "Update YCoding on this machine to save Web latency.", unknown: "Last save was not confirmed; it will not be replayed.", failed: "Machine save failed; inspect this tab's report." } as const)[remote.state().latencySync]}</span>
       </div>
       <div class="defs__row">
         <span class="defs__key">Saved on machine</span>

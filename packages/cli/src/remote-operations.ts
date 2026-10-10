@@ -44,6 +44,8 @@ import { executeProviderAuth, ProviderAuthError, type ProviderAuthEntry } from "
 /** Operations the relay proxies without addressing one session. */
 const unscopedOperations: ReadonlySet<RemoteOperation> = new Set([
   "machine.latency.append",
+  "machine.telemetry.consent.get",
+  "machine.telemetry.consent.set",
   "machine.latency.list",
   "workspace.list",
   "workspace.catalog",
@@ -684,6 +686,8 @@ async function run(input: OperationInput) {
   if (validated.kind === "latency.list") return input.local.latencyList(validated.input)
   if (validated.kind === "keepAwake.get") return { data: await input.local.keepAwakeGet() }
   if (validated.kind === "keepAwake.set") return { data: await input.local.keepAwakeSet(validated.enabled) }
+  if (validated.kind === "telemetryConsent.get") return { data: await input.local.telemetryConsentGet() }
+  if (validated.kind === "telemetryConsent.set") return { data: await input.local.telemetryConsentSet({ enabled: validated.enabled, noticeVersion: 1 }) }
   if (!scopedOperation(request.operation)) return unknownOperation()
   const sessionID = request.sessionID
   if (sessionID === undefined) throw new OperationError("session_required", "Operation requires a session")
@@ -931,6 +935,8 @@ type Validated =
   | { readonly kind: "latency.list"; readonly input: { readonly limit?: number; readonly before?: string } }
   | { readonly kind: "keepAwake.get" }
   | { readonly kind: "keepAwake.set"; readonly enabled: boolean }
+  | { readonly kind: "telemetryConsent.get" }
+  | { readonly kind: "telemetryConsent.set"; readonly enabled: boolean }
   | { readonly kind: "compact"; readonly id: string }
   | { readonly kind: "workspace.list"; readonly sessionsOnly: boolean }
   | { readonly kind: "list"; readonly query: ListQuery }
@@ -1026,6 +1032,15 @@ function validate(request: RemoteRequest): Validated {
     if (request.operation === "machine.keepAwake.set") return { kind: "keepAwake.set", enabled: requireBoolean(fields.enabled, "enabled") }
     if (request.input !== undefined) throw new OperationError("invalid_message", "Keep-awake status does not accept input")
     return { kind: "keepAwake.get" }
+  }
+  if (request.operation === "machine.telemetry.consent.get" || request.operation === "machine.telemetry.consent.set") {
+    if (request.sessionID !== undefined) throw new OperationError("invalid_message", "Machine telemetry consent does not accept a Session")
+    if (request.operation === "machine.telemetry.consent.get") {
+      if (request.input !== undefined) throw new OperationError("invalid_message", "Telemetry consent status does not accept input")
+      return { kind: "telemetryConsent.get" }
+    }
+    if (fields.noticeVersion !== 1 || Object.keys(fields).length !== 2) throw new OperationError("invalid_message", "Invalid telemetry consent input")
+    return { kind: "telemetryConsent.set", enabled: requireBoolean(fields.enabled, "enabled") }
   }
   if (request.operation === "session.attachment.upload") {
     if (typeof fields.uploadID !== "string" || typeof fields.index !== "number" || typeof fields.last !== "boolean" || typeof fields.data !== "string")
@@ -1642,6 +1657,8 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "machine.latency.list": ["limit", "before"],
   "machine.keepAwake.get": [],
   "machine.keepAwake.set": ["enabled"],
+  "machine.telemetry.consent.get": [],
+  "machine.telemetry.consent.set": ["enabled", "noticeVersion"],
   "workspace.list": ["sessionsOnly"],
   "session.list": ["limit", "order", "search", "searchFields", "parentID", "cursor", "workspace", "status"],
   "session.active": [],
@@ -1714,6 +1731,7 @@ const mutations: ReadonlySet<string> = new Set([
   "provider.auth.complete",
   "provider.auth.cancel",
   "machine.latency.append",
+  "machine.telemetry.consent.set",
   "machine.keepAwake.set",
   "session.compact",
   "session.create",
@@ -1771,6 +1789,8 @@ function localError(cause: LocalFailure, request: RemoteRequest): readonly [Remo
       return isMutation(request)
         ? ["outcome_unknown", "The local server did not confirm the outcome; do not replay it automatically"]
         : ["internal_error", "The local server did not answer the read request"]
+    case "telemetry_disabled":
+      return ["telemetry_disabled", "Machine telemetry consent is disabled"]
     default:
       return ["internal_error", "The local server failed the request"]
   }

@@ -551,6 +551,19 @@ describe("relay core: request admission", () => {
     expect(h.requestsTo("agent-1")).toHaveLength(1)
   })
 
+  test("forwards machine telemetry consent operations without retaining a consent decision", async () => {
+    const h = harness()
+    await attachBoth(h)
+    h.reset()
+    await h.relay.handleClientMessage("client-1", request("consent_get", "machine.telemetry.consent.get"))
+    await h.relay.handleClientMessage("client-1", request("consent_set", "machine.telemetry.consent.set", undefined, { enabled: true, noticeVersion: 1 }))
+    expect(h.requestsTo("agent-1")).toMatchObject([
+      { operation: "machine.telemetry.consent.get" },
+      { operation: "machine.telemetry.consent.set", input: { enabled: true, noticeVersion: 1 } },
+    ])
+    expect(h.database.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%telemetry%'").all()).toEqual([])
+  })
+
   test("reports malformed frames with the client id and closes frames without one", async () => {
     const h = harness()
     await attachBoth(h)

@@ -33,7 +33,7 @@ import {
 import { createHash } from "node:crypto"
 import { Service, type Endpoint } from "@ycoding-ai/client/effect/service"
 import { Telemetry } from "@ycoding-ai/schema/telemetry"
-import { RemoteLimits, type RemoteLatencySample, type RemoteUsageReportInput } from "@ycoding-ai/remote"
+import { RemoteLimits, type RemoteLatencySample, type RemoteTelemetryConsent, type RemoteTelemetryConsentState, type RemoteUsageReportInput } from "@ycoding-ai/remote"
 
 // The bridge's only view of the local YCoding server: the same Protocol routes
 // the TUI uses, addressed with a Location derived from the backend inventory.
@@ -55,7 +55,7 @@ export type LocalAutonomy =
   | { readonly yolo: number | boolean; readonly maxNoProgress?: number | null }
   | { readonly goal: string | null; readonly maxNoProgress?: number | null }
 
-export type LocalFailureKind = "not_found" | "invalid" | "conflict" | "transport" | "too_large" | "server"
+export type LocalFailureKind = "not_found" | "invalid" | "conflict" | "transport" | "too_large" | "telemetry_disabled" | "server"
 
 export class LocalFailure extends Error {
   override readonly name = "LocalFailure"
@@ -89,6 +89,8 @@ export type LocalServer = {
   readonly integrationCommandCancel: (location: LocalLocation, integrationID: string, attemptID: string) => Promise<void>
   readonly latencyAppend: (samples: readonly RemoteLatencySample[]) => Promise<{ readonly accepted: number }>
   readonly latencyList: (input: { readonly limit?: number; readonly before?: string }) => Promise<Telemetry.Page>
+  readonly telemetryConsentGet: () => Promise<RemoteTelemetryConsentState>
+  readonly telemetryConsentSet: (input: { readonly enabled: boolean; readonly noticeVersion: 1 }) => Promise<RemoteTelemetryConsent>
   readonly keepAwakeGet: () => Promise<KeepAwakeStatus>
   readonly keepAwakeSet: (enabled: boolean) => Promise<KeepAwakeStatus>
   readonly listPage: (input: { limit: number; cursor?: string }) => Promise<{
@@ -204,6 +206,8 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
   return {
     latencyAppend: (samples) => call(() => client.server.telemetry.append({ samples }, { signal: AbortSignal.timeout(timeoutMs) })),
     latencyList: (input) => call(() => client.server.telemetry.list(input, { signal: AbortSignal.timeout(timeoutMs) })),
+    telemetryConsentGet: () => call(() => client.server.telemetry.consent.get({ signal: AbortSignal.timeout(timeoutMs) })),
+    telemetryConsentSet: (input) => call(() => client.server.telemetry.consent.set(input, { signal: AbortSignal.timeout(timeoutMs) })),
     listPage: (input) =>
       call(async () => {
         const page = await client.session.list(
@@ -439,6 +443,8 @@ function request(location: LocalLocation, timeoutMs: number, signal?: AbortSigna
 
 function classify(cause: unknown, timeoutMs: number): LocalFailure {
   if (cause instanceof LocalFailure) return cause
+  if (typeof cause === "object" && cause !== null && Reflect.get(cause, "_tag") === "TelemetryDisabled")
+    return new LocalFailure("telemetry_disabled", "Machine telemetry consent is disabled", { cause })
   if (cause instanceof ClientError) {
     const message =
       cause.reason === "Transport" || cause.reason === "UnexpectedStatus"

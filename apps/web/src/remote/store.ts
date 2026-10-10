@@ -1,4 +1,4 @@
-import { RemoteLimits, isRemoteLatencySample, isWellFormedBase64, noticeSequence, type CreateEnrollmentResponse, type RemoteDeviceInfo, type RemoteFamilyActivity, parseNoticePage, type RemoteLatencySample, type RemoteNotice, type RemoteNoticeFrame, type RemoteNoticePage, type RemoteOperation, type RemoteWorkspaceInfo } from "@ycoding-ai/remote"
+import { RemoteLimits, isRemoteLatencySample, isWellFormedBase64, noticeSequence, type CreateEnrollmentResponse, type RemoteDeviceInfo, type RemoteFamilyActivity, type RemoteTelemetryConsent, type RemoteTelemetryConsentState, parseNoticePage, type RemoteLatencySample, type RemoteNotice, type RemoteNoticeFrame, type RemoteNoticePage, type RemoteOperation, type RemoteWorkspaceInfo } from "@ycoding-ai/remote"
 import { catalogKey, readCatalog, readFileFind, type AgentAttachmentInput, type CatalogTarget, type CatalogView, type FileAttachmentInput, type FileFindResult } from "./catalog"
 import { signInURL, type RemoteHttp, type RemoteHttpResult, type SignInProvider } from "./http"
 import {
@@ -225,6 +225,7 @@ export type RemoteStoreState = {
   readonly teamCues: readonly TeamCue[]
   readonly transport: RemoteTransportStatus
   readonly latencySync: "idle" | "saving" | "saved" | "waiting" | "unsupported" | "unknown" | "failed"
+  readonly telemetryConsent: { readonly status: "loading" | "undecided" | "enabled" | "disabled" | "unsupported" | "failed"; readonly consent?: RemoteTelemetryConsent; readonly error?: string }
   readonly lastRelayDrop?: { readonly code: number; readonly reason: string }
   readonly mutations: readonly PendingMutation[]
   readonly mutationToasts?: readonly MutationToast[]
@@ -277,6 +278,8 @@ export type RemoteStore = {
     | { readonly status: "ok"; readonly data: readonly { readonly receivedAt: number; readonly sample: RemoteLatencySample }[]; readonly next?: string }
     | { readonly status: "unavailable" | "unsupported" | "unknown" | "failed" }
   >
+  readonly readTelemetryConsent: () => Promise<{ readonly status: "ok"; readonly state: RemoteTelemetryConsentState } | { readonly status: "unsupported" | "failed" | "unavailable" }>
+  readonly setTelemetryConsent: (enabled: boolean) => Promise<{ readonly status: "ok"; readonly consent: RemoteTelemetryConsent } | { readonly status: "failed" | "unknown" | "unavailable" }>
   readonly signInURL: (provider: SignInProvider, redirectAfter?: string) => string
   readonly load: () => Promise<void>
   readonly logout: () => Promise<void>
@@ -418,6 +421,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     noticeSync: { status: "idle", total: 0, loaded: 0, hidden: 0, loadingMore: false, message: undefined },
     transport: { kind: "idle" },
     latencySync: "idle",
+    telemetryConsent: { status: "loading" },
     unhandledEvents: 0,
   })
   let transport: RemoteTransport | undefined
@@ -533,7 +537,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
 
   const scheduleLatencyUpload = () => {
     const owner = transport
-    if (owner === undefined || container.state.transport.kind !== "open" || pendingLatency.length === 0 ||
+    if (owner === undefined || container.state.transport.kind !== "open" || container.state.telemetryConsent.status !== "enabled" || pendingLatency.length === 0 ||
       cancelLatencyUpload !== undefined || latencyUpload !== undefined || latencyUnsupported) return
     cancelLatencyUpload = schedule(() => {
       cancelLatencyUpload = undefined
@@ -542,7 +546,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   }
 
   const flushLatency = async (owner: RemoteTransport) => {
-    if (transport !== owner || container.state.transport.kind !== "open" || latencyUpload !== undefined || pendingLatency.length === 0) return
+    if (transport !== owner || container.state.transport.kind !== "open" || container.state.telemetryConsent.status !== "enabled" || latencyUpload !== undefined || pendingLatency.length === 0) return
     const deviceID = container.state.activeDeviceID
     if (deviceID === undefined) return
     const flight = { owner, deviceID }
@@ -561,6 +565,12 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       return
     }
     if (outcome.status === "failed") {
+      if (outcome.error.code === "telemetry_disabled") {
+        latencyUnsupported = true
+        setState({ telemetryConsent: { status: "disabled" }, latencySync: "failed" })
+        void api.readTelemetryConsent()
+        return
+      }
       pendingLatency.unshift(...samples)
       pendingLatency.splice(60)
       latencyUnsupported = true
@@ -1286,7 +1296,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       // remains valid. Tear down only that device, then let the authoritative account
       // answer decide whether the browser is truly signed out.
       sessionsToken += 1
-      endScope({
+    endScope({
         transport: status,
         connection: deviceConnection(container.state.devices.filter((device) => device.status === "active" && device.online).length),
         activeDeviceID: undefined,
@@ -1316,6 +1326,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     setState({ transport: status, connection: connectionFor(status, container.state.activeDeviceID), notifications: delivery.entries(),
       ...(status.kind === "closed" ? { lastRelayDrop: { code: status.code, reason: status.reason } } : {}) })
     if (reopened) latencyUnsupported = false
+    if (opened) queueMicrotask(() => { if (isCurrentConnection(owner) && container.state.transport.kind === "open") void api.readTelemetryConsent() })
     if (status.kind === "open") scheduleLatencyUpload()
     if (opened) void loadNotices(owner)
     if (status.kind === "open" && container.state.activeSessionID !== undefined) void readSessionStatus(owner)
@@ -1764,6 +1775,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     token: number,
   ): Promise<"applied" | "refused" | "unavailable"> => {
     if (sessionID === undefined || container.state.activeSessionID !== sessionID) return "unavailable"
+    const transcriptStarted = monotonicNow()
+    const transcriptDeviceID = container.state.activeDeviceID
+    const transcriptGeneration = container.state.generation
     const owned: HydrationWindow = { sessionID, events: [], replayed: new Set(), streamed: streamedPartText(container.state.view?.id === sessionID ? container.state.view.messages : []) }
     hydration = owned
     try {
@@ -1788,6 +1802,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       for (const event of owned.events) view = applyEvent(view, event, true)
       owned.replayed.forEach((key) => sealed?.parts.delete(key))
       setState({ view, history: { status: "idle", ...(hasCompactionCheckpoint(view.messages) || applied.before === undefined ? {} : { before: applied.before }) } })
+      if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (container.state.activeSessionID === sessionID && container.state.activeDeviceID === transcriptDeviceID && container.state.generation === transcriptGeneration)
+          latency.recordClient("transcript.load", monotonicNow() - transcriptStarted)
+      }))
       void loadCompactionHistory(sessionID, token)
       view.messages.filter((message) => message.kind === "oversized" && message.state === "pending").forEach((message) => { void loadOversizedMessage(message.id) })
       const owner = transport
@@ -2280,6 +2298,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
 
   type SendProgress = {
     mutation: PendingMutation
+    readonly admittedFrom: number
     readonly deviceID: string
     readonly files?: readonly FileAttachmentInput[]
     readonly prerequisites: readonly { readonly operation: RemoteOperation; readonly input: Readonly<Record<string, unknown>>; readonly force?: boolean; completed: boolean; attempted: boolean }[]
@@ -2383,7 +2402,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         }
         const input = { ...progress.mutation.input, ...(progress.files === undefined ? {} : { files: progress.uploaded }) }
         if (progress.prerequisites.length === 0 && progress.mutation.kind !== "skill") prepared.resolve()
-        await request({ ...progress.mutation, state: "sending", phase: "admitting" }, { sessionID, input })
+        const admission = await request({ ...progress.mutation, state: "sending", phase: "admitting" }, { sessionID, input })
+        if (progress.mutation.kind === "prompt" && admission.status === "ok") latency.recordClient("prompt.admit", monotonicNow() - progress.admittedFrom)
       } catch (cause) {
         finishMutation(progress.mutation.id, "failed", cause instanceof Error ? cause.message : "The send failed.")
       } finally {
@@ -2400,6 +2420,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const view = container.state.view ?? createSessionView(mutation.sessionID)
     const progress: SendProgress = {
       mutation,
+      admittedFrom: monotonicNow(),
       deviceID: container.state.activeDeviceID!,
       files: input.files,
       prerequisites: [
@@ -2454,6 +2475,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     endScope({
       activeDeviceID: undefined,
       transport: { kind: "idle" },
+      telemetryConsent: { status: "loading" },
       advertised: [],
       sessions: [],
       carouselSessions: [],
@@ -2520,6 +2542,78 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       })
       if (rows.length !== data.length) return { status: "failed" }
       return { status: "ok", data: rows, ...(next === undefined ? {} : { next }) }
+    },
+    readTelemetryConsent: async () => {
+      const owner = transport
+      const deviceID = container.state.activeDeviceID
+      const generation = container.state.generation
+      if (owner === undefined || deviceID === undefined || container.state.transport.kind !== "open") return { status: "unavailable" }
+      const outcome = await owner.request("machine.telemetry.consent.get", { timeoutMs: 5_000 })
+      if (transport !== owner || container.state.activeDeviceID !== deviceID || container.state.generation !== generation) return { status: "unavailable" }
+      if (outcome.status !== "ok") {
+        const unsupported = outcome.status === "unknown" || outcome.status === "failed" && outcome.error.code === "unknown_operation"
+        setState({ telemetryConsent: { status: unsupported ? "unsupported" : "failed", ...(unsupported ? {} : { error: "Could not read telemetry consent." }) } })
+        return { status: unsupported ? "unsupported" : "failed" }
+      }
+      const value = outcome.value
+      if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        setState({ telemetryConsent: { status: "failed", error: "The machine returned an invalid consent response." } })
+        return { status: "failed" }
+      }
+      const data = Reflect.get(value, "data")
+      if (!validTelemetryConsentState(data)) {
+        setState({ telemetryConsent: { status: "failed", error: "The machine returned an invalid consent response." } })
+        return { status: "failed" }
+      }
+      setState({ telemetryConsent: data.consent === undefined ? { status: "undecided" } : { status: data.consent.enabled ? "enabled" : "disabled", consent: data.consent } })
+      if (data.consent?.enabled) {
+        latencyUnsupported = false
+        scheduleLatencyUpload()
+      }
+      else {
+        cancelLatencyUpload?.()
+        cancelLatencyUpload = undefined
+        pendingLatency.length = 0
+        if (latencyUpload === undefined) setState({ latencySync: "idle" })
+      }
+      return { status: "ok", state: data }
+    },
+    setTelemetryConsent: async (enabled) => {
+      const owner = transport
+      const deviceID = container.state.activeDeviceID
+      const generation = container.state.generation
+      const previousConsent = container.state.telemetryConsent
+      if (owner === undefined || deviceID === undefined || container.state.transport.kind !== "open") return { status: "unavailable" }
+      if (!enabled) {
+        cancelLatencyUpload?.()
+        cancelLatencyUpload = undefined
+        pendingLatency.length = 0
+        setState({ telemetryConsent: { ...previousConsent, status: "disabled", error: undefined }, latencySync: "idle" })
+      }
+      const outcome = await owner.request("machine.telemetry.consent.set", { input: { enabled, noticeVersion: 1 }, timeoutMs: 10_000 })
+      if (transport !== owner || container.state.activeDeviceID !== deviceID || container.state.generation !== generation) return { status: "unavailable" }
+      if (outcome.status !== "ok") {
+        setState({ telemetryConsent: { ...previousConsent, error: outcome.status === "unknown" ? "The decision was not confirmed; it was not resent." : "The decision could not be saved." } })
+        return { status: outcome.status === "unknown" ? "unknown" : "failed" }
+      }
+      const value = outcome.value
+      const data = typeof value === "object" && value !== null ? Reflect.get(value, "data") : undefined
+      if (!validTelemetryConsent(data)) {
+        setState({ telemetryConsent: { ...previousConsent, error: "The machine returned an invalid consent decision." } })
+        return { status: "failed" }
+      }
+      setState({ telemetryConsent: { status: data.enabled ? "enabled" : "disabled", consent: data } })
+      if (data.enabled) {
+        latencyUnsupported = false
+        scheduleLatencyUpload()
+      }
+      else {
+        cancelLatencyUpload?.()
+        cancelLatencyUpload = undefined
+        pendingLatency.length = 0
+        if (latencyUpload === undefined) setState({ latencySync: "idle" })
+      }
+      return { status: "ok", consent: data }
     },
     signInURL: (provider, redirectAfter = "/remote/") => signInURL(provider, redirectAfter),
     load: async () => {
@@ -2692,7 +2786,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       subscribedSessionID = undefined
       queued = []
       sessionsToken += 1
-      endScope({ activeDeviceID: deviceID, transport: { kind: "idle" }, sessions: [], carouselSessions: [], carouselStatus: "loading", sessionStatus: undefined, advertised: [], activeSessionID: undefined, view: undefined, notice: undefined, drafts,
+      endScope({ activeDeviceID: deviceID, transport: { kind: "idle" }, telemetryConsent: { status: "loading" }, sessions: [], carouselSessions: [], carouselStatus: "loading", sessionStatus: undefined, advertised: [], activeSessionID: undefined, view: undefined, notice: undefined, drafts,
         mutations: container.state.mutations.filter((mutation) => mutation.operation !== "session.goal.set"),
         mutationToasts: [],
         lastRelayDrop: container.state.activeDeviceID === deviceID ? container.state.lastRelayDrop : undefined,
@@ -2704,7 +2798,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       endAlerts(false, switching)
       const created = options.createTransport(deviceID, {
         onRequestTiming: (sample) => {
-          if (isCurrentConnection(created)) latency.recordRequest(sample)
+          if (isCurrentConnection(created) && sample.operation !== "machine.telemetry.consent.get" && sample.operation !== "machine.telemetry.consent.set" &&
+            sample.operation !== "machine.latency.append" && sample.operation !== "machine.latency.list") latency.recordRequest(sample)
         },
         onStatus: (status) => handleStatus(created, status),
         onSessionStatus: (status) => applyStatusFrame(created, status),
@@ -2726,7 +2821,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         },
         onEvents: (sessionID, events) => {
           if (!isCurrentConnection(created)) return
-          for (const event of events) queueEvent(sessionID, event)
+          for (const event of events) {
+            const createdAt = typeof event === "object" && event !== null ? Reflect.get(event, "created") : undefined
+            if (typeof createdAt === "string" && Number.isFinite(Date.parse(createdAt))) latency.recordClient("stream.delay", now() - Date.parse(createdAt))
+            queueEvent(sessionID, event)
+          }
         },
         onReconnect: () => {
           if (!isCurrentConnection(created)) return
@@ -3600,6 +3699,19 @@ export function parseSessionStatus(payload: unknown): RemoteStoreState["sessionS
     (outstanding !== undefined && (!Array.isArray(outstanding) || !outstanding.every((id) => typeof id === "string" && id.startsWith("ses_")))) ||
     (failed !== undefined && (!Array.isArray(failed) || !failed.every((id) => typeof id === "string" && id.startsWith("ses_"))))) return undefined
   return { running: new Set(running), attention: new Set(attention), outstanding: new Set(outstanding ?? []), failed: new Set(failed ?? []) }
+}
+
+function validTelemetryConsent(value: unknown): value is RemoteTelemetryConsent {
+  return typeof value === "object" && value !== null && !Array.isArray(value) &&
+    Object.keys(value).length === 3 && typeof Reflect.get(value, "enabled") === "boolean" &&
+    Reflect.get(value, "noticeVersion") === 1 && typeof Reflect.get(value, "decidedAt") === "number" &&
+    Number.isSafeInteger(Reflect.get(value, "decidedAt")) && Reflect.get(value, "decidedAt") >= 0
+}
+
+function validTelemetryConsentState(value: unknown): value is RemoteTelemetryConsentState {
+  return typeof value === "object" && value !== null && !Array.isArray(value) && Reflect.get(value, "noticeVersion") === 1 &&
+    (Object.keys(value).length === 1 && Reflect.get(value, "consent") === undefined ||
+      Object.keys(value).length === 2 && validTelemetryConsent(Reflect.get(value, "consent")))
 }
 
 function readAutonomyFromResponse(value: unknown): SessionAutonomyView | undefined {

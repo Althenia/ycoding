@@ -147,6 +147,32 @@ test("machine keep-awake forwards global backend controls without a caller Locat
   expect(fixture.calls).toHaveLength(2)
 })
 
+test("machine telemetry consent forwards global reads and writes only the current notice version", async () => {
+  const consent = { enabled: true, noticeVersion: 1, decidedAt: 10 }
+  const fixture = await harness({ sessions: [], results: { telemetryConsentGet: { noticeVersion: 1, consent }, telemetryConsentSet: consent } })
+  const run = (operation: RemoteRequest["operation"], input?: Record<string, unknown>, sessionID?: string) => executeRemoteOperation({
+    request: { ...request(operation, input), ...(sessionID === undefined ? {} : { sessionID }) }, local: fixture.local,
+    sessions: fixture.registry, subscriptions: fixture.subscriptions,
+  })
+  expect(valueOf(await run("machine.telemetry.consent.get"))).toEqual({ data: { noticeVersion: 1, consent } })
+  expect(valueOf(await run("machine.telemetry.consent.set", { enabled: true, noticeVersion: 1 }))).toEqual({ data: consent })
+  expect(fixture.calls).toEqual([
+    { method: "telemetryConsentGet", args: [] },
+    { method: "telemetryConsentSet", args: [{ enabled: true, noticeVersion: 1 }] },
+  ])
+  expect(errorOf(await run("machine.telemetry.consent.set", { enabled: true, noticeVersion: 2 })).code).toBe("invalid_message")
+  expect(errorOf(await run("machine.telemetry.consent.get", undefined, "ses_1")).code).toBe("invalid_message")
+  expect(fixture.calls).toHaveLength(2)
+})
+
+test("disabled local telemetry append maps to a distinct non-replayable remote failure", async () => {
+  const fixture = await harness({ sessions: [], results: { latencyAppend: new LocalFailureClass("telemetry_disabled", "disabled") } })
+  const result = await executeRemoteOperation({ request: request("machine.latency.append", { samples: [{ kind: "long-task", at: "2026-10-04T12:00:00.000Z", durationMs: 60 }] }),
+    local: fixture.local, sessions: fixture.registry, subscriptions: fixture.subscriptions })
+  expect(errorOf(result).code).toBe("telemetry_disabled")
+  expect(fixture.calls.filter((call) => call.method === "latencyAppend")).toHaveLength(1)
+})
+
 test("machine latency writes and reads only validated anonymous samples at the authenticated local backend", async () => {
   const sample = { kind: "request", at: "2026-10-04T12:00:00.000Z", operation: "session.list", outcome: "ok", queueMs: 4, settlementMs: 9, totalMs: 13 }
   const task = { kind: "long-task", at: sample.at, durationMs: 70 }
@@ -171,7 +197,7 @@ test("machine latency writes and reads only validated anonymous samples at the a
 test("local telemetry operation names cover the relay's current forwarded operations without self-upload", () => {
   const decode = Schema.decodeUnknownSync(Telemetry.Operation)
   for (const operation of remoteOperations) {
-    if (operation === "machine.latency.append" || operation === "machine.latency.list") continue
+    if (operation === "machine.latency.append" || operation === "machine.latency.list" || operation === "machine.telemetry.consent.get" || operation === "machine.telemetry.consent.set") continue
     expect(decode(operation)).toBe(operation)
   }
   expect(() => decode("machine.latency.append")).toThrow()

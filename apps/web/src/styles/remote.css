@@ -166,6 +166,39 @@ body:has(.app) {
   border-radius: var(--yc-radius-md);
 }
 
+.telemetry-consent {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--yc-space-4);
+  margin-block-end: var(--yc-space-4);
+  padding: var(--yc-space-4);
+  border: var(--yc-border-width) solid var(--yc-border);
+  border-radius: var(--yc-radius-md);
+  background: var(--yc-surface-raised);
+}
+
+.telemetry-consent h2 {
+  margin: 0;
+  font-size: var(--yc-size-sm);
+}
+
+.telemetry-consent p {
+  margin: var(--yc-space-2) 0 0;
+  color: var(--yc-text-muted);
+  font-size: var(--yc-size-xs);
+}
+
+.telemetry-consent__actions {
+  display: flex;
+  flex: none;
+  gap: var(--yc-space-2);
+}
+
+@media (max-width: 767px) {
+  .telemetry-consent { flex-direction: column; }
+}
+
 
 /* --- remote header ------------------------------------------------------ */
 

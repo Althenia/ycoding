@@ -47,6 +47,7 @@ let devices: readonly RemoteDeviceInfo[] = [
 ]
 
 const accountParams = new URLSearchParams(window.location.search)
+let telemetryConsentEnabled = accountParams.get("telemetryConsent") !== "undecided"
 const requestLatencyMs = Number(accountParams.get("latency") ?? 0)
 const requestLog: { readonly at: number; readonly operation: string; readonly input?: unknown }[] = []
 Object.assign(window, { requestLog })
@@ -686,6 +687,11 @@ function createFixtureStore(): Fixture {
       const limit = typeof input?.limit === "number" ? input.limit : 60
       const next = offset + limit < storedLatency.length ? btoa(String(offset + limit)) : undefined
       return { status: "ok", value: { data: storedLatency.slice(offset, offset + limit), cursor: next === undefined ? {} : { next } } }
+    }
+    if (operation === "machine.telemetry.consent.get") return { status: "ok", value: { data: { noticeVersion: 1, ...(accountParams.get("telemetryConsent") === "undecided" && !telemetryConsentEnabled && operationCounts.get(operation) === 1 ? {} : { consent: { enabled: telemetryConsentEnabled, noticeVersion: 1, decidedAt: 1 } }) } } }
+    if (operation === "machine.telemetry.consent.set") {
+      telemetryConsentEnabled = input?.enabled === true
+      return { status: "ok", value: { data: { enabled: telemetryConsentEnabled, noticeVersion: 1, decidedAt: 1 } } }
     }
     if (operation === "machine.latency.append") {
       const samples = Array.isArray(input?.samples) ? input.samples.filter(isRemoteLatencySample) : []

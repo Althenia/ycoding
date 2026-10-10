@@ -28,6 +28,25 @@ afterAll(async () => {
 })
 
 describe("remote shell layout", () => {
+  test("renders the undecided consent notice and records explicit Agree and Not now decisions", async () => {
+    const page = await fixture("view=settings&noSelection=1&telemetryConsent=undecided", 390, "Help improve YCoding")
+    try {
+      expect(await page.evaluate<string>(`document.querySelector('.telemetry-consent')?.innerText ?? ''`)).toContain("Nothing leaves your machine.")
+      await page.evaluate(`document.querySelectorAll('.telemetry-consent button')[0].click()`)
+      for (let attempt = 0; attempt < 30 && await page.evaluate<boolean>(`document.querySelector('.telemetry-consent') !== null`); attempt += 1) await Bun.sleep(25)
+      expect(await page.evaluate<unknown>(`window.requestLog.find(request => request.operation === 'machine.telemetry.consent.set')?.input`)).toEqual({ enabled: true, noticeVersion: 1 })
+      expect(await page.evaluate<boolean>(`document.querySelector('.telemetry-consent') === null`)).toBe(true)
+    } finally { await page.close() }
+
+    const second = await fixture("view=settings&noSelection=1&telemetryConsent=undecided", 390, "Help improve YCoding")
+    try {
+      await second.evaluate(`document.querySelectorAll('.telemetry-consent button')[1].click()`)
+      for (let attempt = 0; attempt < 30 && await second.evaluate<boolean>(`document.querySelector('.telemetry-consent') !== null`); attempt += 1) await Bun.sleep(25)
+      expect(await second.evaluate<unknown>(`window.requestLog.find(request => request.operation === 'machine.telemetry.consent.set')?.input`)).toEqual({ enabled: false, noticeVersion: 1 })
+      expect(await second.evaluate<boolean>(`document.querySelector('.telemetry-consent') === null`)).toBe(true)
+    } finally { await second.close() }
+  }, 20_000)
+
   test("keeps browser-local machine aliases in Settings and the command palette", async () => {
     const page = await requireBrowser().openPage()
     const url = `http://127.0.0.1:${port}/verify/remote.html?view=settings`
@@ -89,6 +108,17 @@ describe("remote shell layout", () => {
       await page.evaluate(`document.querySelector('button[aria-label="Read saved latency"]')?.click()`)
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('textarea[aria-label="Machine latency report"]')?.value.includes('long-task') === true`); attempt += 1) await Bun.sleep(25)
       expect(await page.evaluate<boolean>(`document.querySelector('textarea[aria-label="Machine latency report"]')?.value.includes('long-task') === true`)).toBe(true)
+    } finally { await page.close() }
+  }, 20_000)
+
+  test("records a rendered transcript load in the machine telemetry report", async () => {
+    const page = await fixture("view=chat&team=two", 390, "Stream remote output safely")
+    try {
+      await page.evaluate(`window.remoteReloadMessages()`)
+      await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+      await page.evaluate(`document.querySelector('a[href="/remote/settings"]')?.click()`)
+      for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.querySelector('#latency-report')?.value.includes('transcript.load') === true`); attempt += 1) await Bun.sleep(25)
+      expect(await page.evaluate<boolean>(`document.querySelector('#latency-report')?.value.includes('transcript.load') === true`)).toBe(true)
     } finally { await page.close() }
   }, 20_000)
 

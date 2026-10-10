@@ -32,6 +32,7 @@ import {
   summarizeConnection,
   workspaceLabels,
   workspaceDestination,
+  telemetryConsentNoticeView,
   type DeviceAvailabilityView,
 } from "../view-model"
 import { officeInputFromRemote } from "../office/adapter"
@@ -781,6 +782,19 @@ function Notices(): JSX.Element {
     mutation.state === "unknown" && mutation.sessionID === state().activeSessionID).length
   return (
     <>
+      <Show when={telemetryConsentNoticeView(state().telemetryConsent, state().transport.kind === "open" && state().connection.kind === "connected")}>
+        <section class="telemetry-consent" aria-labelledby="telemetry-consent-title">
+          <div><h2 id="telemetry-consent-title">Help improve YCoding</h2>
+            <p>Save usage, speed, and latency for each provider, model, and profile on this machine only. Nothing leaves your machine. You can change this anytime in Settings → Diagnostics.</p></div>
+          <div class="telemetry-consent__actions">
+            <button type="button" class="button button--primary button--small" onClick={() => void remote.store.setTelemetryConsent(true)}>Agree</button>
+            <button type="button" class="button button--secondary button--small" onClick={() => void remote.store.setTelemetryConsent(false)}>Not now</button>
+          </div>
+        </section>
+      </Show>
+      <Show when={state().telemetryConsent.error}>
+        {(error) => <p class="notice-strip notice-strip--warning" role="alert">{error()}</p>}
+      </Show>
       <Show when={state().notice}>
         {(notice) => (
           <p class="notice-strip" role="status">

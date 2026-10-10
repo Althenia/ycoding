@@ -33,6 +33,7 @@ function remoteState(patch: Partial<RemoteStoreState> = {}): RemoteStoreState {
     generation: 0,
     transport: { kind: "open" },
     latencySync: "idle",
+    telemetryConsent: { status: "disabled" },
     mutations: [],
     notifications: [],
     noticeSync: { status: "idle", total: 0, loaded: 0, hidden: 0, loadingMore: false, message: undefined },

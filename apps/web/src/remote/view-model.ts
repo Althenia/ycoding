@@ -32,6 +32,10 @@ export function workspaceDestination(path: string) {
   return "/remote/sessions"
 }
 
+export function telemetryConsentNoticeView(consent: { readonly status: string; readonly error?: string }, connected: boolean) {
+  return consent.status === "undecided" && connected
+}
+
 export function promptReceipt(state: "pending" | "promoted" | "consumed" | undefined, delivery: "steer" | "queue" | undefined, mutation?: Pick<PendingMutation, "state">) {
   if (state === "consumed") return { label: "Read by YCoding", text: "Read", mark: "✓✓" }
   if (mutation?.state === "failed") return { label: "Send failed", text: "Send failed", mark: "!" }

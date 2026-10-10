@@ -187,6 +187,98 @@ async function fakeConnectionHarness(options: { readonly latencyUploadIntervalMs
 }
 
 describe("remote store integration", () => {
+  test("undecided consent shows the consent state and holds telemetry uploads", async () => {
+    const test = await harness({ latencyUploadIntervalMs: 20, handler: (request) => request.operation === "machine.telemetry.consent.get"
+      ? { ok: true, value: { data: { noticeVersion: 1 } } } : "default" })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().telemetryConsent.status === "undecided")
+      test.store.latency.recordClient("prompt.admit", 9)
+      await test.flush()
+      expect(test.store.state().telemetryConsent.status).toBe("undecided")
+      expect(test.relay.requests.filter((request) => request.operation === "machine.latency.append")).toEqual([])
+    } finally { await test.stop() }
+  })
+
+  test("telemetry consent writes are one-shot and reflect confirmed decisions", async () => {
+    let attempts = 0
+    const test = await harness({ handler: (request) => {
+      if (request.operation !== "machine.telemetry.consent.set") return "default"
+      attempts += 1
+      return { ok: false, code: "forbidden", message: "failed" }
+    } })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().telemetryConsent.status === "enabled")
+      expect(await test.store.setTelemetryConsent(false)).toEqual({ status: "failed" })
+      expect(attempts).toBe(1)
+      expect(test.store.state().telemetryConsent.error).toContain("could not be saved")
+    } finally { await test.stop() }
+  })
+
+  test("confirmed Agree and Not now choices save their explicit machine-wide decisions", async () => {
+    const test = await harness()
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().telemetryConsent.status === "enabled")
+      expect(await test.store.setTelemetryConsent(false)).toMatchObject({ status: "ok", consent: { enabled: false, noticeVersion: 1 } })
+      expect(test.store.state().telemetryConsent.status).toBe("disabled")
+      expect(await test.store.setTelemetryConsent(true)).toMatchObject({ status: "ok", consent: { enabled: true, noticeVersion: 1 } })
+      expect(test.relay.requests.filter((request) => request.operation === "machine.telemetry.consent.set").map((request) => request.input)).toEqual([
+        { enabled: false, noticeVersion: 1 }, { enabled: true, noticeVersion: 1 },
+      ])
+    } finally { await test.stop() }
+  })
+
+  test("old connector consent operations stay unsupported and telemetry remains unuploaded", async () => {
+    const test = await harness({ latencyUploadIntervalMs: 20, handler: (request) => request.operation === "machine.telemetry.consent.get"
+      ? { ok: false, code: "unknown_operation", message: "unsupported" } : "default" })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().telemetryConsent.status === "unsupported")
+      test.store.latency.recordClient("transcript.load", 8)
+      await test.flush()
+      expect(test.store.state().telemetryConsent.status).toBe("unsupported")
+      expect(test.relay.requests.filter((request) => request.operation === "machine.latency.append")).toEqual([])
+    } finally { await test.stop() }
+  })
+
+  test("a TelemetryDisabled append halts the upload and refreshes machine consent", async () => {
+    let consentReads = 0
+    let appendAttempted = false
+    const test = await harness({ latencyUploadIntervalMs: 20, handler: (request) => {
+      if (request.operation === "machine.telemetry.consent.get") {
+        consentReads += 1
+        return { ok: true, value: { data: { noticeVersion: 1, consent: { enabled: !appendAttempted, noticeVersion: 1, decidedAt: 1 } } } }
+      }
+      if (request.operation === "machine.latency.append") { appendAttempted = true; return { ok: false, code: "telemetry_disabled", message: "disabled" } }
+      return "default"
+    } })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().telemetryConsent.status === "disabled")
+      expect(consentReads).toBeGreaterThanOrEqual(2)
+      const attempts = test.relay.requests.filter((request) => request.operation === "machine.latency.append").length
+      await test.flush()
+      expect(attempts).toBe(1)
+      expect(test.relay.requests.filter((request) => request.operation === "machine.latency.append")).toHaveLength(1)
+    } finally { await test.stop() }
+  })
+
+  test("records event delay only when a live event carries its server timestamp", async () => {
+    const test = await harness()
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().telemetryConsent.status === "enabled")
+      test.relay.pushEvent("ses_a", { id: "evt_timed", type: "unknown.event", created: "1970-01-01T00:00:00.500Z", data: {} })
+      await test.runUntil(() => test.store.latency.snapshot().samples.some((sample) => sample.kind === "client" && sample.metric === "stream.delay"))
+      expect(test.store.latency.snapshot().samples).toContainEqual(expect.objectContaining({ kind: "client", surface: "web", metric: "stream.delay", durationMs: 500 }))
+      test.relay.pushEvent("ses_a", { id: "evt_untimed", type: "unknown.event", data: {} })
+      await test.flush()
+      expect(test.store.latency.snapshot().samples.filter((sample) => sample.kind === "client" && sample.metric === "stream.delay")).toHaveLength(1)
+    } finally { await test.stop() }
+  })
+
   test("reports an old machine as unsupported without repeatedly uploading the same samples", async () => {
     const test = await harness({ latencyUploadIntervalMs: 20, handler: (request) => request.operation === "machine.latency.append"
       ? { ok: false, code: "unknown_operation", message: "Update YCoding" } : "default" })
@@ -2323,12 +2415,14 @@ describe("remote store integration", () => {
       await test.store.selectSession("ses_a")
       await test.store.sendPrompt({ text: "Run the tests", delivery: "queue" })
       await waitFor(() => test.relay.requests.some((request) => request.operation === "session.prompt"))
+      await test.runUntil(() => test.store.latency.snapshot().samples.some((sample) => sample.kind === "client" && sample.metric === "prompt.admit"))
       const prompt = test.relay.requests.find((request) => request.operation === "session.prompt")
       expect(prompt?.input).toEqual({ id: "msg_local_1", text: "Run the tests", delivery: "queue" })
       expect(prompt?.sessionID).toBe("ses_a")
       expect(test.store.state().mutations).toHaveLength(0)
       expect(test.store.state().view?.messages.at(-1)).toMatchObject({ kind: "user", id: "msg_local_1", text: "Run the tests", delivery: "queue" })
       expect(test.store.state().mutationToasts).toEqual([])
+      expect(test.store.latency.snapshot().samples).toContainEqual(expect.objectContaining({ kind: "client", surface: "web", metric: "prompt.admit" }))
     } finally {
       await test.stop()
     }

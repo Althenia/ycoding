@@ -97,6 +97,8 @@ export const remoteOperations = [
   "usage.report",
   "machine.keepAwake.get",
   "machine.keepAwake.set",
+  "machine.telemetry.consent.get",
+  "machine.telemetry.consent.set",
   "machine.latency.append",
   "machine.latency.list",
 ] as const
@@ -154,9 +156,13 @@ export const remoteSessionOperations = [
 export type RemoteOperation = (typeof remoteOperations)[number]
 
 export type RemoteLatencySample =
-  | { readonly kind: "request"; readonly at: string; readonly operation: Exclude<RemoteOperation, "machine.latency.append" | "machine.latency.list">; readonly outcome: "ok" | "failed" | "unknown" | "unavailable";
+  | { readonly kind: "request"; readonly at: string; readonly operation: Exclude<RemoteOperation, "machine.latency.append" | "machine.latency.list" | "machine.telemetry.consent.get" | "machine.telemetry.consent.set">; readonly outcome: "ok" | "failed" | "unknown" | "unavailable";
     readonly reason?: "not-connected" | "in-flight-limit" | "request-limit" | "cancelled"; readonly queueMs: number; readonly settlementMs?: number; readonly totalMs: number }
   | { readonly kind: "long-task"; readonly at: string; readonly durationMs: number }
+  | { readonly kind: "client"; readonly at: string; readonly surface: "web"; readonly metric: "prompt.admit" | "stream.delay" | "transcript.load"; readonly durationMs: number }
+
+export type RemoteTelemetryConsent = { readonly enabled: boolean; readonly noticeVersion: 1; readonly decidedAt: number }
+export type RemoteTelemetryConsentState = { readonly noticeVersion: 1; readonly consent?: RemoteTelemetryConsent }
 
 export type RemoteCapturedChangesPage = {
   readonly data: readonly {
@@ -284,6 +290,7 @@ export type RemoteErrorCode =
   | "agent_unavailable"
   | "outcome_unknown"
   | "forbidden"
+  | "telemetry_disabled"
   | "unauthorized"
   | "internal_error"
 
@@ -300,6 +307,7 @@ const remoteErrorCodes: readonly RemoteErrorCode[] = [
   "agent_unavailable",
   "outcome_unknown",
   "forbidden",
+  "telemetry_disabled",
   "unauthorized",
   "internal_error",
 ]
@@ -631,6 +639,7 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
   if ((operation.startsWith("provider.auth.") || operation === "session.status" || operation === "workspace.catalog" || operation === "workspace.file.find" ||
     operation === "usage.providers" || operation === "usage.summary" || operation === "usage.report" ||
     operation === "machine.keepAwake.get" || operation === "machine.keepAwake.set" ||
+    operation === "machine.telemetry.consent.get" || operation === "machine.telemetry.consent.set" ||
     operation === "machine.latency.append" || operation === "machine.latency.list") && frame.sessionID !== undefined)
     return failRequest("invalid_message", "Global operation does not accept a session")
   if (frame.input !== undefined && !isRecord(frame.input)) return invalid()
@@ -663,6 +672,8 @@ function validOperationInput(operation: RemoteOperation, input: unknown): boolea
     (input.before === undefined || typeof input.before === "string" && input.before.length > 0 && input.before.length <= 256)
   if (operation === "machine.keepAwake.get") return input === undefined
   if (operation === "machine.keepAwake.set") return isRecord(input) && typeof input.enabled === "boolean" && Object.keys(input).length === 1
+  if (operation === "machine.telemetry.consent.get") return input === undefined
+  if (operation === "machine.telemetry.consent.set") return isRecord(input) && typeof input.enabled === "boolean" && input.noticeVersion === 1 && Object.keys(input).length === 2
   if (operation === "session.capturedChanges.list") return input === undefined || isRecord(input) && typeof input.cursor === "string" && input.cursor.length > 0 && input.cursor.length <= 256 && Object.keys(input).length === 1
   if (operation === "session.compaction.list") return input === undefined
   if (operation === "session.compact") return isRecord(input) && typeof input.id === "string" &&
@@ -748,8 +759,11 @@ export function isRemoteLatencySample(value: unknown): value is RemoteLatencySam
   const duration = (input: unknown) => typeof input === "number" && Number.isSafeInteger(input) && input >= 0 && input <= RemoteLimits.maxLatencyDurationMs
   if (value.kind === "long-task") return Object.keys(value).every((key) => key === "kind" || key === "at" || key === "durationMs") &&
     duration(value.durationMs) && typeof value.durationMs === "number" && value.durationMs >= 50
+  if (value.kind === "client") return Object.keys(value).every((key) => key === "kind" || key === "at" || key === "surface" || key === "metric" || key === "durationMs") &&
+    value.surface === "web" && ["prompt.admit", "stream.delay", "transcript.load"].includes(value.metric as string) && duration(value.durationMs)
   if (value.kind !== "request" || typeof value.operation !== "string" || !isOperation(value.operation) ||
     value.operation === "machine.latency.append" || value.operation === "machine.latency.list" ||
+    value.operation === "machine.telemetry.consent.get" || value.operation === "machine.telemetry.consent.set" ||
     (typeof value.outcome !== "string" || !["ok", "failed", "unknown", "unavailable"].includes(value.outcome)) ||
     !duration(value.queueMs) || !duration(value.totalMs) ||
     (value.settlementMs !== undefined && !duration(value.settlementMs)) ||

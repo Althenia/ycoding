@@ -147,6 +147,8 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
         return { ok: true, value: { data: options.activeSessions ?? {} } }
       }
       if (request.operation === "session.status") return { ok: true, value: { running: [], attention: [] } }
+      if (request.operation === "machine.telemetry.consent.get") return { ok: true, value: { data: { noticeVersion: 1, consent: { enabled: true, noticeVersion: 1, decidedAt: 1 } } } }
+      if (request.operation === "machine.telemetry.consent.set") return { ok: true, value: { data: { enabled: request.input?.enabled === true, noticeVersion: 1, decidedAt: 1 } } }
       if (request.operation === "usage.providers") return { ok: true, value: { data: options.usageProviders ?? [
         { providerID: "openai", label: "Codex", status: "available", source: "provider_api", stability: "stable", updatedAt: 1000,
           windows: [{ id: "week", label: "Weekly", unit: "percent", used: 40, limit: 100 }] },

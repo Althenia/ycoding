@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { ShellOutputFetch, ShellOutputView } from "./projection"
 import {
   promptReceipt,
+  telemetryConsentNoticeView,
   REMOTE_CAPABILITY_NAMES,
   accountReadState,
   accountSectionView,
@@ -38,6 +39,14 @@ test("prompt receipts distinguish sending from failed and unknown delivery", () 
   expect(promptReceipt("pending", "steer", { state: "sending" }).label).toBe("Sending prompt")
   expect(promptReceipt("pending", "queue", { state: "unknown" }).label).toBe("Outcome unknown")
   expect(promptReceipt("pending", "queue", { state: "failed" }).label).toBe("Send failed")
+})
+
+test("telemetry consent notice appears only for connected undecided machines", () => {
+  expect(telemetryConsentNoticeView({ status: "undecided" }, true)).toBe(true)
+  expect(telemetryConsentNoticeView({ status: "undecided", error: "failure" }, true)).toBe(true)
+  for (const status of ["enabled", "disabled", "unsupported", "failed", "loading"])
+    expect(telemetryConsentNoticeView({ status }, true)).toBe(false)
+  expect(telemetryConsentNoticeView({ status: "undecided" }, false)).toBe(false)
 })
 
 test("prompt receipts preserve queue and read facts over late send outcomes", () => {
