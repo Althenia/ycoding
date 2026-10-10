@@ -102,6 +102,47 @@ describe("transcript row residency", () => {
     }
   })
 
+  test.each(["streaming", "running", "completed", "error"] as const)(
+    "a hidden root subagent in %s consumes no lines or child context",
+    async (status) => {
+      const message: Extract<SessionMessageInfo, { type: "assistant" }> = {
+        id: "msg_hidden_subagent", type: "assistant", agent: "build",
+        model: { providerID: "openai", id: "fixture-model" },
+        content: [{
+          type: "tool", id: "call_hidden_subagent", name: "subagent",
+          state: status === "streaming"
+            ? { status, input: "{" }
+            : status === "error"
+              ? { status, input: {}, content: [], structured: {}, error: { type: "tool.execution", message: "Launch failed" } }
+              : { status, input: {}, content: [], structured: {} },
+          time: { created: 1 },
+        }],
+        time: { created: 1 },
+      }
+      const app = await testRender(
+        () => (
+          <box flexDirection="column">
+            <text>before</text>
+            <SessionRowView
+              row={{ type: "part", ref: { messageID: message.id, partID: "call_hidden_subagent" } }}
+              message={() => message}
+              hideSubagentTools
+            />
+            <text>after</text>
+          </box>
+        ),
+        { width: 72, height: 12 },
+      )
+      try {
+        await app.renderOnce()
+        expect(frame(app)).toBe("before\nafter")
+        expect(message.content).toHaveLength(1)
+      } finally {
+        app.renderer.destroy()
+      }
+    },
+  )
+
   test("does not render a completed duplicate Skill tool part", async () => {
     const message: Extract<SessionMessageInfo, { type: "assistant" }> = {
       id: "msg_duplicate_skill",

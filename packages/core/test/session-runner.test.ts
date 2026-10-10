@@ -4888,6 +4888,47 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("publishes a fast tool's durable success while a parallel sibling remains running", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const events = yield* EventRuntime.Service
+      toolExecutionGate = yield* Deferred.make<void>()
+      toolExecutionsStarted = yield* Deferred.make<void>()
+      toolExecutionsReady = 1
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.toolCall({ id: "call-slow", name: "echo", input: { text: "blocked sibling" } }),
+          LLMEvent.toolCall({ id: "call-fast", name: "snapshot", input: {} }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        reply.text("Done", "text-after-parallel"),
+      ]
+      const success = yield* events.subscribe(SessionEvent.Tool.Success).pipe(
+        Stream.filter((event) => event.data.sessionID === sessionID && event.data.callID === "call-fast"),
+        Stream.runHead,
+        Effect.forkScoped,
+      )
+      yield* admit(session, "Settle independent tools")
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(toolExecutionsStarted)
+      expect(yield* Fiber.join(success).pipe(Effect.timeout("2 seconds"))).toMatchObject({
+        _tag: "Some", value: { data: { callID: "call-fast" } },
+      })
+      const messages = yield* session.messages({ sessionID })
+      const tools = messages.flatMap((message) => message.type === "assistant" ? message.content.filter((part) => part.type === "tool") : [])
+      expect(tools.find((part) => part.id === "call-fast")?.state.status).toBe("completed")
+      expect(tools.find((part) => part.id === "call-slow")?.state.status).toBe("running")
+      expect(requests).toHaveLength(1)
+      yield* Deferred.succeed(toolExecutionGate, undefined)
+      yield* Fiber.join(run)
+      toolExecutionGate = undefined
+      toolExecutionsStarted = undefined
+      expect(requests).toHaveLength(2)
+    }),
+  )
+
   it.effect("settles repeated provider-local tool call IDs against their owning assistant messages", () =>
     Effect.gen(function* () {
       const session = yield* setup

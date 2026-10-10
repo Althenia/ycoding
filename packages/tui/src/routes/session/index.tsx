@@ -842,7 +842,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         : message.type === "assistant"
           ? message.content.flatMap((part, index) => {
               if (part.type === "text") return [{ partID: `text:${message.content.slice(0, index).filter((item) => item.type === "text").length}`, text: part.text }]
-              if (part.type !== "tool" || !transcriptToolPartVisible(part)) return []
+              if (part.type !== "tool" || !transcriptToolPartVisible(part, activeSkills(), !session()?.parentID)) return []
               const input = typeof part.state.input === "string" ? {} : part.state.input
               return [{ partID: part.id, text: [part.name, primitiveInputSummary(safeToolSummaryInput(input))].filter(Boolean).join(" ") }]
             })
@@ -1641,6 +1641,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                         compaction={(jobID) => data.session.compaction.get(route.sessionID, jobID)}
                         compactions={() => data.session.compaction.list(route.sessionID)}
                         assistantIdentity={assistantIdentity()}
+                        hideSubagentTools={!session()?.parentID}
                         boundaryID={mountedBoundaries()[index()]}
                         findActiveMatch={activeFindMatch}
                         width={contentWidth()}
@@ -1933,6 +1934,7 @@ export function SessionRowView(props: {
   compaction?: (jobID: string) => DataSessionCompactionLifecycle | undefined
   compactions?: () => DataSessionCompactionLifecycle[]
   assistantIdentity?: { label: string; subagent: boolean }
+  hideSubagentTools?: boolean
   boundaryID?: string
   width?: number
   hidden?: boolean
@@ -1961,7 +1963,7 @@ export function SessionRowView(props: {
       const content = resolvePart(message, row.ref.partID)
       return (
         content !== undefined &&
-        (content.type !== "tool" || transcriptToolPartVisible(content, props.activeSkills?.()))
+        (content.type !== "tool" || transcriptToolPartVisible(content, props.activeSkills?.(), props.hideSubagentTools))
       )
     }
     if (row.type === "group") {
@@ -1971,7 +1973,7 @@ export function SessionRowView(props: {
         if (message?.type !== "assistant") return false
         const part = resolvePart(message, ref.partID)
         if (row.kind === "reasoning") return part?.type === "reasoning" && Boolean(reasoningContent(part))
-        return part?.type === "tool" && transcriptToolPartVisible(part, props.activeSkills?.())
+        return part?.type === "tool" && transcriptToolPartVisible(part, props.activeSkills?.(), props.hideSubagentTools)
       })
     }
     return true
@@ -2039,6 +2041,7 @@ export function SessionRowView(props: {
                 completed={row().completed}
                 message={props.message}
                 activeSkills={props.activeSkills}
+                hideSubagentTools={props.hideSubagentTools}
               />
             )}
           </Match>
@@ -2291,6 +2294,7 @@ function SessionGroupView(props: {
   completed: boolean
   message: (messageID: string) => SessionMessageInfo | undefined
   activeSkills?: () => ReadonlySet<string>
+  hideSubagentTools?: boolean
 }) {
   const { theme } = useTheme()
   const ctx = use()
@@ -2302,7 +2306,7 @@ function SessionGroupView(props: {
       const message = props.message(ref.messageID)
       if (message?.type !== "assistant") return []
       const part = resolvePart(message, ref.partID)
-      if (part?.type !== "tool" || !transcriptToolPartVisible(part, props.activeSkills?.())) return []
+      if (part?.type !== "tool" || !transcriptToolPartVisible(part, props.activeSkills?.(), props.hideSubagentTools)) return []
       return [part]
     })
   const grouped = createMemo(() => parts(props.refs))
@@ -3253,7 +3257,6 @@ function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean; 
   const ctx = use()
   const data = useData()
   const display = createMemo(() => toolDisplay(props.part.name))
-  const hideParentSubagent = createMemo(() => display() === "subagent" && !data.session.get(ctx.sessionID)?.parentID)
 
   const toolprops = {
     get metadata() {
@@ -3383,7 +3386,7 @@ function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean; 
   })
 
   return (
-    <Show when={!hideParentSubagent()}>
+    <>
       <Switch>
         <Match when={decisionPresentation()}>
           {(item) => (
@@ -3477,7 +3480,7 @@ function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean; 
           nested={props.nested}
         />
       </Show>
-    </Show>
+    </>
   )
 }
 
@@ -4570,6 +4573,14 @@ function Edit(props: ToolProps) {
 
   return (
     <Switch>
+      <Match when={props.part.state.status === "streaming" || props.part.state.status === "running"}>
+        <SessionToolActivityRow
+          tool="Edit"
+          detail={path() ? pathFormatter.format(path()) : "Preparing edit..."}
+          lifecycle={toolLifecycle(props.part)}
+          width={ctx.width}
+        />
+      </Match>
       <Match when={file()}>
         {(item) => (
           <BlockTool path={{ label: "← Edit", value: pathFormatter.format(path()) }} part={props.part}>
@@ -4607,7 +4618,6 @@ function Edit(props: ToolProps) {
           }
           title={stringValue(props.input.path) ? undefined : "# Preparing edit..."}
           part={props.part}
-          spinner={props.part.state.status === "streaming"}
         />
       </Match>
     </Switch>
@@ -4840,7 +4850,8 @@ function recordValue(value: unknown): Record<string, unknown> | undefined {
   return value as Record<string, unknown>
 }
 
-function transcriptToolPartVisible(part: SessionMessageAssistantTool, activeSkills?: ReadonlySet<string>) {
+function transcriptToolPartVisible(part: SessionMessageAssistantTool, activeSkills?: ReadonlySet<string>, hideSubagentTools = false) {
+  if (hideSubagentTools && toolDisplay(part.name) === "subagent") return false
   if (part.name === "goal" || capturedPartPatches(part).length > 0) return false
   if (part.name !== "skill") return true
   if (part.state.status === "completed") return recordValue(recordValue(part.state)?.structured)?.alreadyActive !== true

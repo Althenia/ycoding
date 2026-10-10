@@ -1341,6 +1341,165 @@ test("renders subagent notifications as compact safe activity rows", async () =>
   }
 }, 60_000)
 
+test("hidden parallel subagent launches add no lines between assistant text and the next Thought row", async () => {
+  const messages: SessionMessageInfo[] = [
+    { id: "msg_delegation_user", type: "user", text: "Delegate both items", time: { created: 1 } },
+    {
+      id: "msg_delegation", type: "assistant", agent: "build", model: session.model,
+      content: [
+        { type: "text", text: "Delegating both new items in parallel." },
+        ...["first", "second"].map((item) => ({
+          type: "tool" as const, id: `call_delegate_${item}`, name: "subagent",
+          state: {
+            status: "completed" as const,
+            input: { agent: "build", description: `Hidden ${item} task` },
+            content: [], structured: { status: "running" },
+          },
+          time: { created: 2, ran: 2, completed: 3 },
+        })),
+      ],
+      finish: "tool-calls", time: { created: 2, completed: 3 },
+    },
+    {
+      id: "msg_after_delegation", type: "assistant", agent: "build", model: session.model,
+      content: [
+        { type: "reasoning", text: "Checking the delegated work.", time: { created: 4, completed: 5 } },
+        { type: "tool", id: "call_visible_shell", name: "shell", state: { status: "completed", input: { command: "bun test visible-check" }, content: [], structured: {} }, time: { created: 5, ran: 5, completed: 6 } },
+      ],
+      finish: "stop", time: { created: 4, completed: 6 },
+    },
+  ]
+  const screen = await renderScreen({ ...DESIGN_VIEWPORT, args: { sessionID }, route: routeFor(messages), settle: "visible-check" })
+  try {
+    await waitForFrame(screen.frame, "Delegating both new items")
+    const lines = screen.lines().map((line) => transcriptSlice(line, DESIGN_VIEWPORT.width))
+    const text = lines.findIndex((line) => line.includes("Delegating both new items"))
+    const thought = lines.findIndex((line) => line.includes("Thought"))
+    const shell = lines.findIndex((line) => line.includes("visible-check"))
+    expect(text, screen.frame()).toBeGreaterThan(-1)
+    expect(thought, screen.frame()).toBe(text + 3)
+    expect(lines[thought - 1]?.trim()).toMatch(/^─+$/)
+    expect(lines[text + 1]?.trim()).toBe("")
+    expect(shell).toBeGreaterThan(thought)
+    expect(lines[shell]?.indexOf("ok")).toBe(3)
+    expect(lines[shell - 1]?.trim()).toMatch(/^─+$/)
+    expect(screen.frame()).not.toContain("Hidden first task")
+    expect(screen.frame()).not.toContain("Hidden second task")
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("keeps subagent tool rows visible inside a child Session", async () => {
+  const parent = { ...session, id: "ses_delegation_parent" }
+  const messages: SessionMessageInfo[] = [{
+    id: "msg_child_delegation", type: "assistant", agent: "build", model: session.model,
+    content: [{
+      type: "tool", id: "call_child_delegation", name: "subagent",
+      state: { status: "completed", input: { agent: "build", description: "Visible child delegation" }, content: [], structured: { status: "completed" } },
+      time: { created: 1, ran: 1, completed: 2 },
+    }],
+    finish: "tool-calls", time: { created: 1, completed: 2 },
+  }]
+  const screen = await renderScreen({
+    ...DESIGN_VIEWPORT,
+    args: { sessionID },
+    route: (url) => {
+      if (url.pathname === "/api/session") return json({ data: [parent, { ...session, parentID: parent.id }], cursor: {} })
+      if (url.pathname === `/api/session/${sessionID}`) return json({ data: { ...session, parentID: parent.id } })
+      if (url.pathname === `/api/session/${parent.id}`) return json({ data: parent })
+      const remapped = new URL(url)
+      remapped.pathname = remapped.pathname.replace(`/api/session/${parent.id}`, `/api/session/${sessionID}`)
+      return routeFor(messages)(remapped)
+    },
+    settle: "Visible child delegation",
+  })
+  try {
+    const row = screen.lines().find((line) => line.includes("Visible child delegation")) ?? ""
+    expect(row, screen.frame()).toContain("subagent")
+    expect(row.indexOf("subagent")).toBe(10)
+    expect(row).toContain("done")
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("renders a running Edit beside Shell on the compact activity grid", async () => {
+  const started = Date.now() - 3_000
+  const messages: SessionMessageInfo[] = [
+    { id: "msg_parallel_user", type: "user", text: "Edit while checking", time: { created: 1 } },
+    {
+      id: "msg_parallel_assistant", type: "assistant", agent: "build", model: session.model,
+      content: [
+        { type: "tool", id: "call_parallel_edit", name: "edit", state: { status: "running", input: { path: "src/agent.ts" }, content: [], structured: {} }, time: { created: started, ran: started } },
+        { type: "tool", id: "call_parallel_shell", name: "shell", state: { status: "running", input: { command: "bun test parallel-check" }, content: [], structured: {} }, time: { created: started, ran: started } },
+      ],
+      time: { created: 2 },
+    },
+  ]
+  for (const viewport of [NARROW_VIEWPORT, DESIGN_VIEWPORT]) {
+    const screen = await renderScreen({ ...viewport, args: { sessionID }, route: routeFor(messages), settle: "parallel-check" })
+    try {
+      const lines = screen.lines()
+      const editIndex = lines.findIndex((line) => line.includes("src/agent.ts"))
+      const edit = transcriptSlice(lines[editIndex] ?? "", viewport.width)
+      const shellIndex = lines.findIndex((line) => line.includes("parallel-check"))
+      const shell = transcriptSlice(lines[shellIndex] ?? "", viewport.width)
+      expect(edit.indexOf(".."), screen.frame()).toBe(3)
+      expect(edit.indexOf("Edit")).toBe(10)
+      expect(SPINNER_FRAMES.some((frame) => edit.slice(0, 10).includes(frame))).toBe(true)
+      expect(edit.trimEnd()).toMatch(/running · \d+[smhdw]$/)
+      expect(edit.indexOf("running")).toBe(shell.indexOf("running"))
+      expect(transcriptSlice(lines[editIndex - 1] ?? "", viewport.width).trim()).toMatch(/^─+$/)
+      const background = (index: number) => screen.spans().lines[index]?.spans.find((span) => span.text.includes("running"))?.bg.toInts()
+      expect(background(editIndex)).toEqual(background(shellIndex))
+    } finally {
+      await screen.dispose()
+    }
+  }
+}, 60_000)
+
+test("replaces a live completed Edit with Captured changes while its Shell sibling stays running", async () => {
+  const started = Date.now() - 3_000
+  const screen = await renderScreen({
+    ...DESIGN_VIEWPORT,
+    args: { sessionID },
+    route: routeFor([
+      { id: "msg_parallel_user", type: "user", text: "Edit while checking", time: { created: 1 } },
+      {
+        id: "msg_parallel_assistant", type: "assistant", agent: "build", model: session.model,
+        content: [
+          { type: "tool", id: "call_parallel_edit", name: "edit", state: { status: "running", input: { path: "src/agent.ts" }, content: [], structured: {} }, time: { created: started, ran: started } },
+          { type: "tool", id: "call_parallel_shell", name: "shell", state: { status: "running", input: { command: "bun test parallel-check" }, content: [], structured: {} }, time: { created: started, ran: started } },
+        ],
+        time: { created: 2 },
+      },
+    ]),
+    settle: "parallel-check",
+  })
+  try {
+    expect(screen.frame()).toContain("src/agent.ts")
+    await screen.waitForEventStream()
+    screen.events.emit({
+      id: "evt_parallel_edit_success", created: started + 1, type: "session.tool.success",
+      durable: { aggregateID: sessionID, seq: 1, version: 1 },
+      data: {
+        sessionID, assistantMessageID: "msg_parallel_assistant", callID: "call_parallel_edit",
+        executed: false,
+        content: [{ type: "text", text: "Edited file successfully" }],
+        structured: { files: [{ file: "src/agent.ts", patch: "--- a/src/agent.ts\n+++ b/src/agent.ts\n@@ -1 +1 @@\n-old\n+new", status: "modified", additions: 1, deletions: 1 }] },
+      },
+    })
+    await waitForFrame(screen.frame, "Captured changes 1 file")
+    expect(screen.frame()).not.toContain("src/agent.ts")
+    const shell = transcriptSlice(screen.lines().find((line) => line.includes("parallel-check")) ?? "", DESIGN_VIEWPORT.width)
+    expect(shell.trimEnd()).toMatch(/running · \d+[smhdw]$/)
+    expect(shell.indexOf("..")).toBe(3)
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
 test("keeps a running patch row honest beside the segment summary of its completed edits", async () => {
   const screen = await renderScreen({
     ...DESIGN_VIEWPORT,
