@@ -31,6 +31,7 @@ runs:
     - name: Setup Bun
       uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       with:
+        bun-version: latest
         bun-download-url: ${{ steps.bun-url.outputs.url }}
 
     - name: Keep the Bun cache on the workspace disk

@@ -435,7 +435,8 @@ const setupBun = await Bun.file(path.join(import.meta.dir, "../.github/actions/s
 test("setup installs the latest Bun on baseline and native runners without a version pin", () => {
   expect(setupBun).toContain("https://github.com/oven-sh/bun/releases/latest/download/bun-${OS}-x64-baseline.zip")
   expect(setupBun).toContain("bun-download-url: ${{ steps.bun-url.outputs.url }}")
-  expect(setupBun).not.toContain("bun-version")
+  expect(setupBun).toMatch(/\n {8}bun-version: latest\n/)
+  expect(setupBun).not.toContain("bun-version-file")
   expect(setupBun).not.toContain("packageManager")
 })
 
