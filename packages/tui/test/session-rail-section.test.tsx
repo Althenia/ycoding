@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { TextRenderable } from "@opentui/core"
+import { RGBA, TextRenderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import type { GuardrailStatusOutput, SessionAutonomyState, SessionCacheDiagnostics, SessionTodoInfo } from "@ycoding-ai/client"
 import { expect, test, beforeEach } from "bun:test"
@@ -112,34 +112,48 @@ test("renders the session title only inside the section body", async () => {
   }
 })
 
-test("renders guardrail auto-approval only at effective YOLO 3", async () => {
+test("renders who decides each action at every YOLO level and with an active goal", async () => {
   const { AutonomyRailContent } = await import("../src/routes/session/sidebar")
   const cases = [
-    { name: "normal", autonomy: { mode: "normal", yolo: 0 }, expected: "enforced" },
-    { name: "YOLO 0", autonomy: { mode: "normal", yolo: 0 }, expected: "enforced" },
-    { name: "YOLO 1", autonomy: { mode: "normal", yolo: 1 }, expected: "enforced" },
-    { name: "YOLO 2", autonomy: { mode: "normal", yolo: 2 }, expected: "enforced" },
-    {
-      name: "active goal below YOLO 3",
-      autonomy: {
-        mode: "normal",
-        yolo: 2,
-        goal: { text: "Ship safely", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 3 },
-      },
-      expected: "enforced",
-    },
-    { name: "YOLO 3", autonomy: { mode: "normal", yolo: 3 }, expected: "auto · YOLO 3" },
-  ] satisfies { name: string; autonomy: SessionAutonomyState; expected: string }[]
+    { level: 0, goal: false, values: ["ask you", "ask you", "ask you"] },
+    { level: 1, goal: false, values: ["auto", "auto", "ask you"] },
+    { level: 2, goal: false, values: ["auto", "auto", "auto"] },
+    { level: 3, goal: false, values: ["auto", "auto", "auto"] },
+    { level: 0, goal: true, values: ["auto · goal", "ask you", "auto · goal"] },
+  ] as const
 
   for (const item of cases) {
-    const app = await mount(() => <AutonomyRailContent autonomy={item.autonomy} />, { width: 40, height: 24 })
-    await app.waitForFrame((frame) => frame.includes("Guardrails"))
-
+    const autonomy = {
+      mode: "normal" as const,
+      yolo: item.level,
+      ...(item.goal ? { goal: { text: "Ship safely", status: "active" as const, iteration: 1, noProgress: 0, maxNoProgress: 3 } } : {}),
+    }
+    const app = await mount(() => <AutonomyRailContent autonomy={autonomy as SessionAutonomyState} />, { width: 60, height: 40 })
+    await app.waitForFrame((frame) => frame.includes("Permissions"))
     try {
-      const row = app.captureCharFrame().split("\n").find((line) => line.includes("Guardrails"))
-      expect(row?.trimEnd(), item.name).toEndWith(item.expected)
-      const hard = app.captureCharFrame().split("\n").find((line) => line.includes("Hard reviews"))
-      expect(hard?.trimEnd(), item.name).toEndWith("human only")
+      const frame = app.captureCharFrame()
+      expect(frame).not.toContain("Hard reviews")
+      expect(frame).not.toContain("always you")
+      const rows = frame.split("\n")
+      const expected = ["Permissions", "Guardrails", "Questions"]
+      expect(frame).not.toContain("Scope dispatch")
+      expect(rows.flatMap((line) => expected.filter((label) => line.includes(label)))).toEqual(expected)
+      expect(expected.map((label) => rows.find((line) => line.includes(label))?.trimEnd().split(label).at(-1)?.trim())).toEqual([...item.values])
+      expect(rows.find((line) => line.includes("AUTONOMY"))).toContain(`${item.level === 0 ? "Manual" : `YOLO ${item.level}`}${item.goal ? " · goal" : ""}`)
+      const spans = app.captureSpans().lines.flatMap((line) => line.spans)
+      const decision = (action: "permissions" | "guardrails" | "questions") => {
+        const level = item.level
+        if (action === "guardrails") return level >= 1 ? "auto" : "ask you"
+        if (action === "permissions") return level >= 1 ? "auto" : item.goal ? "auto · goal" : "ask you"
+        return level >= 2 ? "auto" : item.goal ? "auto · goal" : "ask you"
+      }
+      for (const action of ["permissions", "guardrails", "questions"] as const) {
+        const value = decision(action)
+        const span = spans.find((candidate) => candidate.text.trim() === value)
+        expect(span?.fg.toInts(), `${item.level} ${action} ${value}`).toEqual(
+          RGBA.fromHex(value === "ask you" ? "#67D7A4" : "#F0BE62").toInts(),
+        )
+      }
     } finally {
       app.renderer.destroy()
     }
@@ -711,10 +725,10 @@ test("renders distinct GOAL and AUTONOMY sections, SUBAGENTS rail rows, and a TO
     expect(frame).toContain("Fix provider cache accounting")
     expect(frame).toContain("Status")
     expect(frame).toContain("active")
-    expect(frame).toContain("Approvals")
+    expect(frame).toContain("Permissions")
     expect(frame).toContain("auto")
     expect(frame).toContain("Guardrails")
-    expect(frame).toContain("enforced")
+    expect(frame).toContain("auto")
     expect(frame).not.toContain("ses_0085fc701234567")
     expect(frame).not.toContain("workspace")
     expect(frame).toContain("docs-sync")

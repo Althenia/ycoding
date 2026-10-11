@@ -8,7 +8,7 @@ import { DataProvider, useData } from "../../../src/context/data"
 import { ThemeProvider } from "../../../src/context/theme"
 import { SessionRowView } from "../../../src/routes/session/index"
 import { createSessionRows, type SessionRow } from "../../../src/routes/session/rows"
-import { createApi, createEventStream, createFetch, directory, json } from "../../fixture/tui-client"
+import { createApi, createEventStream, createFetch, directory, json, sessionSnapshot } from "../../fixture/tui-client"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 
@@ -31,8 +31,8 @@ async function mountRows(
 ) {
   const events = createEventStream()
   const calls = createFetch((url) => {
-    if (url.pathname === `/api/session/${sessionID}/message`)
-      return options.messages?.() ?? json({ data: [], cursor: {} })
+    if (url.pathname === `/api/session/${sessionID}/snapshot`)
+      return options.messages?.() ?? sessionSnapshot(sessionID, [])
     if (url.pathname === `/api/session/${sessionID}/subagent`)
       return json({
         data: subagentTasks,
@@ -160,8 +160,7 @@ test("reconciles compaction rows by jobID through terminal lifecycle events", as
     expect(compaction()).not.toHaveProperty("trigger")
 
     resolveMessages(
-      json({
-        data: [
+      sessionSnapshot(sessionID, [
           {
             id: "msg_compaction_lifecycle",
             type: "compaction",
@@ -170,9 +169,7 @@ test("reconciles compaction rows by jobID through terminal lifecycle events", as
             status: "running",
             time: { created: 1 },
           },
-        ],
-        cursor: {},
-      }),
+        ]),
     )
     await wait(() => compaction()?.messageID === "msg_compaction_lifecycle")
     expect(compaction()).toMatchObject({
@@ -250,8 +247,7 @@ test("reconciles compaction rows by jobID through terminal lifecycle events", as
     const failedReconcile = mounted.data.session.message.sync(sessionID)
     await wait(() => messageRequests === 2)
     resolveMessages(
-      json({
-        data: [
+      sessionSnapshot(sessionID, [
           {
             id: "msg_compaction_lifecycle",
             type: "compaction",
@@ -273,9 +269,7 @@ test("reconciles compaction rows by jobID through terminal lifecycle events", as
             error: { type: "context_limit_unresolved", message: "Unable to compact context" },
             time: { created: 4 },
           },
-        ],
-        cursor: {},
-      }),
+        ]),
     )
     await failedReconcile
     expect(mounted.data.session.compaction.get(sessionID, "cmp_failed")).toMatchObject({
@@ -299,7 +293,7 @@ test("rehydrates one identity-stable compaction row when an event arrives before
   const mounted = await mountRows(sessionID, [], {
     messages: () => {
       requests++
-      if (requests === 1) return json({ data: [], cursor: {} })
+      if (requests === 1) return sessionSnapshot(sessionID, [])
       return new Promise<Response>((resolve) => {
         resolveMessages = resolve
       })
@@ -328,8 +322,7 @@ test("rehydrates one identity-stable compaction row when an event arrives before
     expect(provisional).toBeDefined()
 
     resolveMessages(
-      json({
-        data: [
+      sessionSnapshot(sessionID, [
           {
             id: "msg_compaction_reconnect",
             type: "compaction",
@@ -346,9 +339,7 @@ test("rehydrates one identity-stable compaction row when an event arrives before
             agents: [],
             time: { created: 2 },
           },
-        ],
-        cursor: {},
-      }),
+        ]),
     )
     await wait(() => compaction()?.messageID === "msg_compaction_reconnect")
     const rehydrated = row()
@@ -399,7 +390,7 @@ test("keeps a persisted compaction failure diagnostic-only through reconnect hyd
   const mounted = await mountRows(sessionID, [], {
     messages: () => {
       requests++
-      if (requests === 1) return json({ data: [], cursor: {} })
+      if (requests === 1) return sessionSnapshot(sessionID, [])
       return new Promise<Response>((resolve) => {
         resolveMessages = resolve
       })
@@ -446,8 +437,7 @@ test("keeps a persisted compaction failure diagnostic-only through reconnect hyd
     expect(mounted.rows.some((item) => item.type === "compaction" && item.jobID === jobID)).toBe(false)
 
     resolveMessages(
-      json({
-        data: [
+      sessionSnapshot(sessionID, [
           {
             id: "msg_compaction_failed_reconnect",
             type: "compaction",
@@ -458,9 +448,7 @@ test("keeps a persisted compaction failure diagnostic-only through reconnect hyd
             error: { type: "provider_failed", message: "Persisted diagnostic" },
             time: { created: 1 },
           },
-        ],
-        cursor: {},
-      }),
+        ]),
     )
     await wait(() => {
       const message = mounted.data.session.message.get(sessionID, "msg_compaction_failed_reconnect")
@@ -483,8 +471,7 @@ test("keeps a resident background compaction before newer user and assistant cha
   const jobID = "cmp_background_order"
   const mounted = await mountRows(sessionID, [], {
     messages: () =>
-      json({
-        data: [
+      sessionSnapshot(sessionID, [
           {
             id: "msg_before_compaction",
             type: "user",
@@ -501,9 +488,7 @@ test("keeps a resident background compaction before newer user and assistant cha
             status: "pending",
             time: { created: 2 },
           },
-        ],
-        cursor: {},
-      }),
+        ]),
   })
   const compaction = () => mounted.rows.find((row) => row.type === "compaction" && row.jobID === jobID)
   const position = (type: "compaction" | "message" | "part", id: string) =>
@@ -667,8 +652,7 @@ test("keeps a production compaction before newer assistant and tool rows after c
   const callID = "call_after_compaction"
   const mounted = await mountRows(sessionID, [], {
     messages: () =>
-      json({
-        data: [
+      sessionSnapshot(sessionID, [
           {
             id: "msg_before_compaction",
             type: "user",
@@ -677,9 +661,7 @@ test("keeps a production compaction before newer assistant and tool rows after c
             agents: [],
             time: { created: 1 },
           },
-        ],
-        cursor: {},
-      }),
+        ]),
   })
   const compaction = () => mounted.rows.find((row) => row.type === "compaction" && row.jobID === jobID)
   const order = () =>
@@ -858,7 +840,7 @@ test("renders only the latest completed compaction before later chat", async () 
       time: { created: 4 },
     },
   ]
-  const mounted = await mountRows(sessionID, [], { messages: () => json({ data: messages, cursor: {} }) })
+  const mounted = await mountRows(sessionID, [], { messages: () => sessionSnapshot(sessionID, messages) })
   const order = () =>
     mounted.rows.map((row) =>
       row.type === "compaction"
@@ -952,7 +934,7 @@ test("moves a completed compaction marker to its historical message position bef
       time: { created: 4 },
     },
   ]
-  const mounted = await mountRows(sessionID, [], { messages: () => json({ data: messages, cursor: {} }) })
+  const mounted = await mountRows(sessionID, [], { messages: () => sessionSnapshot(sessionID, messages) })
 
   try {
     await wait(() => mounted.rows.some((row) => row.type === "compaction" && row.jobID === "cmp_ordered"))

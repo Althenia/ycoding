@@ -31,7 +31,7 @@ function rawParentSlice(messages: readonly SessionMessageInfo[]): string {
         .map((part) => ({ role: "Assistant", text: part.text }))
     })
     .slice(-12)
-  return ["Recent parent session history:", ...recent.map((item) => `${item.role}:\n${item.text}`)].join("\n\n")
+  return ["Recent parent session history (latest projected window):", ...recent.map((item) => `${item.role}:\n${item.text}`)].join("\n\n")
 }
 
 export async function openBtwSession(input: {

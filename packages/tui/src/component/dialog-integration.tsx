@@ -152,22 +152,22 @@ function manageConnections(
             connection.active
               ? [
                   {
-                    title: `Use ${connection.label}`,
-                    value: `${connection.id}:use`,
-                    description: "Active profile",
+                    title: connection.label,
+                    value: `${connection.id}:default`,
+                    description: "Default profile",
                     state: "connected" as const,
                     onSelect: () => undefined,
                   },
                 ]
               : [
                   {
-                    title: `Use ${connection.label}`,
-                    value: `${connection.id}:use`,
-                    description: "Switch this provider's active profile",
+                    title: `Make ${connection.label} the default`,
+                    value: `${connection.id}:default`,
+                    description: "Used when a model has no profile",
                     onSelect: () => {
                       void client.api.credential
                         .activate({ credentialID: connection.id, location: location(data) })
-                        .then(() => disconnected(integration.name, data, dialog, toast, "Profile activated"))
+                        .then(() => disconnected(integration.name, data, dialog, toast, "Default profile changed"))
                         .catch(toast.error)
                     },
                   },
@@ -821,7 +821,7 @@ function providerID(data: ReturnType<typeof useData>, integrationID: string) {
   )
 }
 
-async function disconnected(
+function disconnected(
   name: string,
   data: ReturnType<typeof useData>,
   dialog: ReturnType<typeof useDialog>,
@@ -831,7 +831,9 @@ async function disconnected(
   data.location.integration.invalidate()
   data.location.model.invalidate()
   data.location.provider.invalidate()
-  await Promise.all([data.location.integration.sync(), data.location.model.sync(), data.location.provider.sync()])
+  void Promise.all([data.location.integration.sync(), data.location.model.sync(), data.location.provider.sync()]).catch(
+    toast.error,
+  )
   toast.show({ variant: "success", message })
   dialog.clear()
 }

@@ -29,7 +29,7 @@ import { DialogSelect } from "../../ui/dialog-select"
 import { useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
 import { Spinner, SPINNER_FRAMES } from "../../component/spinner"
 import { ThemeContext, useTheme } from "../../context/theme"
-import { BoxRenderable, ScrollBoxRenderable, addDefaultParsers, TextAttributes, RGBA } from "@opentui/core"
+import { BoxRenderable, InputRenderable, ScrollBoxRenderable, addDefaultParsers, TextAttributes, RGBA } from "@opentui/core"
 import { Prompt, type PromptRef } from "../../component/prompt"
 import type {
   ModelInfo,
@@ -126,6 +126,7 @@ import { findMessageBoundary, messageNavigationSlack } from "./message-navigatio
 import { noticeSummary } from "./notice-summary"
 import { stringWidth } from "../../util/string-width"
 import {
+  autonomyLevelDescription,
   autonomyModeLabel,
   createSessionAutonomyRefreshGuard,
   currentSessionAutonomy,
@@ -133,9 +134,9 @@ import {
   type SessionAutonomyResponse,
   yoloLevel,
 } from "../../util/session-autonomy"
-import { daybreakPlan, daybreakSuccessLabel, daybreakTitle } from "../../util/session-daybreak"
+import { daybreakPlan, daybreakSuccessLabel, daybreakTitle, modelDaybreak } from "../../util/session-daybreak"
 import { promptSkillsFromMetadata, segmentPromptSkills } from "../../prompt/skill"
-import { sessionSkillContent } from "../../util/session-skills"
+import { activeSkillIDs, sessionSkillContent } from "../../util/session-skills"
 import { Header, headerModelRef, pendingVariantSelection, sessionRetryHeaderState, type SessionHeaderOperationalState, type SessionHeaderState } from "./header"
 import { railPlacement, railWidth } from "./rail"
 import { InlineDiff, parseInlineDiff, type InlineDiffFile, type InlineDiffGroup } from "./inline-diff"
@@ -154,29 +155,6 @@ addDefaultParsers(parsers.parsers)
 
 // Exclude temporary bottom space when measuring the real transcript height.
 const NAVIGATION_SLACK_ID = "session-navigation-slack"
-
-function SessionLoading() {
-  const { theme } = useTheme()
-  const dimensions = useTerminalDimensions()
-  return (
-    <box
-      width={dimensions().width}
-      height={dimensions().height}
-      position="absolute"
-      top={0}
-      left={0}
-      flexDirection="column"
-      alignItems="center"
-      justifyContent="center"
-      backgroundColor={theme.background.default}
-    >
-      <box width={62} maxWidth="90%" flexDirection="column" alignItems="center" gap={1}>
-        <Spinner color={theme.text.subdued}>Waiting for server...</Spinner>
-        <text fg={theme.text.subdued}>Loading session...</text>
-      </box>
-    </box>
-  )
-}
 
 const context = createContext<{
   width: number
@@ -224,6 +202,8 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   const promptRef = usePromptRef()
   const session = createMemo(() => data.session.get(route.sessionID))
   const messages = () => data.session.message.list(route.sessionID)
+  const [currentSkillIDs, setCurrentSkillIDs] = createSignal<ReadonlySet<string>>()
+  const activeSkills = createMemo(() => currentSkillIDs() ?? activeSkillIDs(messages()))
   const dispatchedChildKey = createMemo(() => (session()?.parentID ? "" : capturedChildSessionIDs(messages()).join(",")))
   const capturedChildren = createCapturedChildHydration({
     sessionID: () => route.sessionID,
@@ -338,13 +318,47 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   const daybreakPrograms = createMemo(() => {
     const selected = local.model.pendingTarget(route.sessionID) ?? local.model.current()
     if (!selected) return []
-    return models().find((item) => item.providerID === selected.providerID && item.id === selected.modelID)
-      ?.daybreak ?? []
+    const model = models().find((item) => item.providerID === selected.providerID && item.id === selected.modelID)
+    return modelDaybreak({ model, selection: selected })
   })
 
   const scrollAcceleration = createMemo(() => getScrollAcceleration(config))
   const toast = useToast()
   const client = useClient()
+  let skillReadRevision = 0
+  createEffect(on([() => client.connection.status(), () => {
+    const history = data.session.message.history(route.sessionID)
+    return history && (history.status === "ready" || history.status === "paging")
+      ? `${history.sourceEpoch}:${history.watermark}` : undefined
+  }], ([status, history]) => {
+    const revision = ++skillReadRevision
+    if (status !== "connected" || !history) return
+    const sessionID = route.sessionID
+    void client.api.session.skills({ sessionID }).then((skills) => {
+      if (revision === skillReadRevision && route.sessionID === sessionID && client.connection.status() === "connected")
+        setCurrentSkillIDs(new Set(skills.filter((skill) => skill.state === "active").map((skill) => skill.id)))
+    }).catch(() => undefined)
+  }))
+  onCleanup(data.on("session.skill.activated", (event) => {
+    if (event.data.sessionID !== route.sessionID) return
+    skillReadRevision++
+    setCurrentSkillIDs(new Set([...activeSkills(), event.data.id]))
+  }))
+  onCleanup(data.on("session.skill.deactivated", (event) => {
+    if (event.data.sessionID !== route.sessionID) return
+    skillReadRevision++
+    setCurrentSkillIDs(new Set([...activeSkills()].filter((id) => id !== event.data.id)))
+  }))
+  onCleanup(data.on("session.agent.selected", (event) => {
+    if (event.data.sessionID !== route.sessionID) return
+    skillReadRevision++
+    setCurrentSkillIDs(new Set<string>())
+  }))
+  onCleanup(data.on("session.compaction.ended", (event) => {
+    if (event.data.sessionID !== route.sessionID) return
+    skillReadRevision++
+    setCurrentSkillIDs(new Set<string>())
+  }))
   const [sessionMessagesSynced, setSessionMessagesSynced] = createSignal(false)
   createEffect(() => {
     const sid = route.sessionID
@@ -354,9 +368,13 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       return
     }
     setSessionMessagesSynced(false)
+    let active = true
+    onCleanup(() => {
+      active = false
+    })
     void data.session.message.sync(sid)
       .then(() => {
-        if (route.sessionID === sid && client.connection.status() === "connected") setSessionMessagesSynced(true)
+        if (active && route.sessionID === sid && client.connection.status() === "connected") setSessionMessagesSynced(true)
       })
       .catch(() => undefined)
   })
@@ -366,10 +384,24 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     const msgs = data.session.message.list(route.sessionID)
     if (msgs === undefined) return false
     if (!sessionMessagesSynced()) return false
+    const history = data.session.message.history(route.sessionID)
+    if (history?.status === "error" && history.sourceEpoch === undefined) return false
     const locReady = !!data.location.info(s.location)
     if (!locReady) return false
     if (client.connection.status() !== "connected") return false
     return true
+  })
+  const contextReady = createMemo(() => {
+    const current = session()
+    return !!current && !!data.location.info(current.location)
+  })
+  const connectionNotice = createMemo(() => {
+    const status = client.connection.status()
+    if (status === "reconnecting") return "Reconnecting…"
+    if (status === "connecting") return "Connecting…"
+    const history = data.session.message.history(route.sessionID)
+    if (history?.status === "error" && history.failedRead !== "older") return "History unavailable"
+    return sessionReady() ? undefined : "Loading session…"
   })
   const [branch, setBranch] = createSignal<string>()
   createEffect(
@@ -519,7 +551,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     if (!program) return
     const model = currentHeaderModel()
     const info = models().find((item) => item.providerID === model?.providerID && item.id === model?.id)
-    return { program, active: model?.providerID === "openai" && info?.daybreak?.includes(program) === true }
+    return { program, active: model?.providerID === "openai" && modelDaybreak({ model: info, selection: model }).includes(program) }
   })
   const pendingHeaderModel = createMemo(() => {
     // While a switch is in flight, show the desired target as pending progress. The durable Session
@@ -542,22 +574,11 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     const agent = local.agent.current()
     return agent?.name ?? (agent ? Locale.titlecase(agent.id) : undefined)
   })
-  // The active credential profile is the account a provider request resolves through, so the header
-  // names it beside the agent. A provider with a single credential keeps the plain `provider/model`
-  // label, and only the user-facing credential label is exposed — never a credential ID or token.
-  const headerProfile = createMemo(() => {
-    const model = currentHeaderModel()
-    if (!model) return undefined
-    const target = location()
-    const integrationID =
-      (data.location.provider.list(target) ?? []).find((provider) => provider.id === model.providerID)
-        ?.integrationID ?? model.providerID
-    const credentials = (data.location.integration.list(target) ?? [])
-      .filter((integration) => integration.id === integrationID)
-      .flatMap((integration) => integration.connections)
-      .filter((connection) => connection.type === "credential")
-    if (credentials.length <= 1) return undefined
-    return credentials.find((connection) => connection.active)?.label
+  const headerProfile = createMemo(() => currentHeaderModel()?.profile)
+  const pendingHeaderProfile = createMemo(() => {
+    const pending = local.model.pendingTarget(route.sessionID)
+    if (!pending || pending.profile === currentHeaderModel()?.profile) return undefined
+    return `→ ${pending.profile ?? "Provider default"}`
   })
   const parentID = createMemo(() => session()?.parentID)
   const btw = createMemo(() => Boolean(session()?.parentID && session()?.agent === "btw"))
@@ -638,12 +659,15 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       groups.at(-1)!.push(message)
       return groups
     }, [])
-    groups.forEach((group) => {
+    groups.forEach((group, index) => {
       const assistants = group.filter((message) => message.type === "assistant")
       const placement = assistants.at(-1)?.id
       if (!placement || !data.session.message.get(route.sessionID, placement)) return
       const children = capturedChildSessionIDs(group)
-      const hydration = capturedChildren.status(children)
+      const childHydration = capturedChildren.status(children)
+      const hydration = index === 0 && group[0]?.type !== "user" && data.session.message.history(route.sessionID)?.before
+        ? { loading: childHydration?.loading ?? false, failed: childHydration?.failed ?? 0, error: childHydration?.error }
+        : childHydration
       const unit = units.get(placement)
       if (!unit && !hydration) return
       const anchor = rows.findLast(
@@ -657,18 +681,35 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   })
   const boundaries = createMemo(() => messageBoundaryIDs(rows, messages()))
   const MAX_MOUNTED_ROWS = 400
-  const mountedRows = createMemo(() =>
-    rows.length > MAX_MOUNTED_ROWS ? rows.slice(rows.length - MAX_MOUNTED_ROWS) : rows.slice(),
-  )
+  const [windowTail, setWindowTail] = createSignal<SessionRow>()
+  const setWindowEnd = (end: number) => setWindowTail(end >= rows.length ? undefined : rows[end - 1])
+  const mountedEnd = createMemo(() => {
+    const tail = windowTail()
+    const position = tail ? rows.indexOf(tail) : -1
+    return position < 0 ? rows.length : position + 1
+  })
+  const mountedStart = createMemo(() => Math.max(0, mountedEnd() - MAX_MOUNTED_ROWS))
+  const mountedRows = createMemo(() => rows.slice(mountedStart(), mountedEnd()))
   const mountedBoundaries = createMemo(() => {
     const all = boundaries()
-    const count = mountedRows().length
-    return count >= all.length ? all.slice() : all.slice(all.length - count)
+    return all.slice(mountedStart(), mountedEnd())
   })
   const hiddenCount = createMemo(() => rows.length - mountedRows().length)
+  const history = createMemo(() => data.session.message.history(route.sessionID))
+  const [loadedOlderHistory, setLoadedOlderHistory] = createSignal(false)
+  createEffect(() => { if (history()?.before) setLoadedOlderHistory(true) })
+  const [following, setFollowing] = createSignal(props.viewports?.get(mountedSessionID)?.follow !== false)
+  const [paging, setPaging] = createSignal(false)
+  let disposed = false
+  let positioned = false
+  onCleanup(() => { disposed = true })
   const [navigationMessage, setNavigationMessage] = createSignal<string>()
   const [navigationSlack, setNavigationSlack] = createSignal(0)
   const [restoringViewport, setRestoringViewport] = createSignal(props.viewports?.get(mountedSessionID)?.follow === false)
+  const [findOpen, setFindOpen] = createSignal(false)
+  const [findQuery, setFindQuery] = createSignal("")
+  const [findMatchKey, setFindMatchKey] = createSignal("")
+  let findInput: InputRenderable | undefined
 
   const clearMessageNavigation = () => {
     setNavigationSlack(0)
@@ -698,7 +739,6 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     const sessionID = route.sessionID
     void (async () => {
       await Promise.all([
-        data.session.sync(sessionID),
         data.session.message.sync(sessionID),
         data.session.permission.sync(sessionID),
         data.session.guardrail.sync(sessionID),
@@ -715,7 +755,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         return
       }
       editor.reconnect(info.location.directory)
-      restoreViewport(sessionID)
+      if (!positioned) restoreViewport(sessionID)
     })().catch((error) => {
       if (route.sessionID !== sessionID) return
       toast.show({
@@ -723,7 +763,6 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         variant: "error",
         duration: 5000,
       })
-      navigate({ type: "home" })
     })
   })
 
@@ -739,10 +778,12 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
           setNavigationMessage(saved.navigationMessage)
           scroll.scrollTo(saved.scrollTop)
           setRestoringViewport(false)
+          positioned = true
           return
         }
         clearMessageNavigation()
         scroll.scrollTo(scroll.scrollHeight)
+        positioned = true
       })
     })
   }
@@ -765,6 +806,64 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   }
   const dialog = useDialog()
   const renderer = useRenderer()
+  const settledTranscript = () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+  const revealMessage = (messageID: string) => {
+    const position = rows.findIndex((row) => sessionRowMessageID(row) === messageID)
+    if (position < 0) return false
+    if (position < mountedStart() || position >= mountedEnd()) setWindowEnd(position + MAX_MOUNTED_ROWS)
+    return true
+  }
+  const pageHistory = async (direction: "older" | "newer" = "older") => {
+    if (paging() || !scroll || scroll.isDestroyed || client.connection.status() !== "connected") return
+    const sessionID = route.sessionID
+    const anchor = scroll.getChildren().find((child) => child.id && data.session.message.get(sessionID, child.id) && child.y + child.height > scroll.viewport.y)
+    const y = anchor?.y
+    setPaging(true)
+    setFollowing(false)
+    scroll.stickyScroll = false
+    try {
+      if (direction === "older" && mountedStart() === 0) await data.session.message.loadOlder(sessionID)
+      if (disposed || route.sessionID !== sessionID) return
+      const position = anchor?.id ? rows.findIndex((row) => sessionRowMessageID(row) === anchor.id) : 0
+      const start = direction === "older" ? Math.max(0, position - 100) : Math.min(Math.max(0, rows.length - MAX_MOUNTED_ROWS), mountedStart() + 100)
+      setWindowEnd(start + MAX_MOUNTED_ROWS)
+      await settledTranscript()
+      if (disposed || route.sessionID !== sessionID || scroll.isDestroyed) return
+      const current = anchor?.id ? scroll.getRenderable(anchor.id) : undefined
+      if (current && y !== undefined) scroll.scrollTo(scroll.scrollTop + current.y - y)
+    } catch (error) {
+      if (!disposed && route.sessionID === sessionID) toast.error(error)
+    } finally {
+      if (!disposed && route.sessionID === sessionID) setPaging(false)
+    }
+  }
+  let observedScrollTop: number | undefined
+  const watchHistory = async () => {
+    if (!positioned || disposed || !scroll || scroll.isDestroyed || paging()) return
+    const position = scroll.scrollTop
+    const changed = observedScrollTop !== undefined && observedScrollTop !== position
+    observedScrollTop = position
+    const atBottom = position >= Math.max(0, scroll.scrollHeight - scroll.viewport.height) - 1
+    setFollowing(mountedEnd() === rows.length && atBottom)
+    if (!changed || history()?.status === "loading" || history()?.status === "error") return
+    if (position <= 8 && !atBottom && (mountedStart() > 0 || history()?.before)) void pageHistory()
+    if (position >= Math.max(0, scroll.scrollHeight - scroll.viewport.height) - 8 && mountedEnd() < rows.length) void pageHistory("newer")
+  }
+  renderer.setFrameCallback(watchHistory)
+  onCleanup(() => renderer.removeFrameCallback(watchHistory))
+  const retryHistory = () => {
+    if (history()?.failedRead === "older") return void pageHistory()
+    data.session.message.invalidate(route.sessionID)
+    void data.session.message.sync(route.sessionID).catch(toast.error)
+  }
+  const historyLabel = createMemo(() => {
+    if (history()?.status === "paging") return "Loading older history…"
+    if (history()?.status === "error") return history()?.failedRead === "older" ? "Retry older history" : "Retry history"
+    if (mountedStart() > 0) return "Earlier loaded history available"
+    if (history()?.before) return "Load older history"
+    if (history()?.checkpoint) return ""
+    return history()?.status === "ready" && loadedOlderHistory() ? "Beginning of history" : ""
+  })
   const unavailable = (feature: string) => {
     toast.show({ message: `${feature} is not implemented for sessions yet`, variant: "error", duration: 5000 })
     dialog.clear()
@@ -801,6 +900,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     })
 
     if (!target) {
+      if (direction === "prev" && (mountedStart() > 0 || history()?.before)) void pageHistory().then(() => scrollToMessage(direction, dialog, userOnly))
       dialog.clear()
       return
     }
@@ -822,10 +922,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     void resolveMessageJump({
       resident: () => Boolean(scroll.getRenderable(messageID)),
       load: () => data.session.message.find(route.sessionID, messageID),
-      settled: () =>
-        new Promise<void>((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
-        }),
+      settled: async () => { revealMessage(messageID); await settledTranscript() },
       jump: () => jumpToResidentMessage(messageID),
     })
       .then((result) => {
@@ -837,9 +934,95 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       })
       .catch((error) => toast.error(error))
   }
+  const previousMessage = async (matches: (message: SessionMessageInfo) => boolean) => {
+    const sessionID = route.sessionID
+    while (route.sessionID === sessionID) {
+      if (disposed) return undefined
+      const message = data.session.message.list(sessionID).findLast(matches)
+      if (message || !data.session.message.history(sessionID)?.before || client.connection.status() !== "connected") return message
+      await data.session.message.loadOlder(sessionID)
+    }
+    return undefined
+  }
+
+  const findMatches = createMemo(() => {
+    const query = findQuery().trim().toLocaleLowerCase()
+    if (!query) return []
+    return messages().flatMap((message) => {
+      const entries = message.type === "user"
+        ? [{ partID: "message", text: message.text }]
+        : message.type === "assistant"
+          ? message.content.flatMap((part, index) => {
+              if (part.type === "text") return [{ partID: `text:${message.content.slice(0, index).filter((item) => item.type === "text").length}`, text: part.text }]
+              if (part.type !== "tool" || !transcriptToolPartVisible(part, activeSkills(), !session()?.parentID)) return []
+              const input = typeof part.state.input === "string" ? {} : part.state.input
+              return [{ partID: part.id, text: [part.name, primitiveInputSummary(safeToolSummaryInput(input))].filter(Boolean).join(" ") }]
+            })
+          : message.type === "shell"
+            ? [{ partID: "message", text: `${message.command} ${message.output?.output ?? ""}` }]
+            : []
+      return entries.flatMap((entry) => {
+        const text = entry.text.toLocaleLowerCase()
+        const matches = []
+        let offset = 0
+        while ((offset = text.indexOf(query, offset)) !== -1) {
+          matches.push({ messageID: message.id, partID: entry.partID, offset, length: query.length })
+          offset += query.length
+        }
+        return matches
+      })
+    }).filter((match) => rows.some((row) => sessionRowMessageID(row) === match.messageID) && Boolean(scroll.getRenderable(match.messageID)))
+  })
+  const findMatchID = (match: { messageID: string; partID: string; offset: number }) => `${match.messageID}\0${match.partID}\0${match.offset}`
+  const findIndex = createMemo(() => Math.max(0, findMatches().findIndex((match) => findMatchID(match) === findMatchKey())))
+  const activeFindMatch = createMemo(() => findMatches().find((match) => findMatchID(match) === findMatchKey()) ?? findMatches()[0])
+  const openFind = () => {
+    setFindOpen(true)
+    setFindQuery("")
+    setFindMatchKey("")
+    requestAnimationFrame(() => findInput?.focus())
+  }
+  const closeFind = () => {
+    setFindOpen(false)
+    findInput?.blur()
+    prompt?.focus()
+  }
+  const moveFind = (direction: 1 | -1) => {
+    const matches = findMatches()
+    if (!matches.length) return
+    const current = matches.findIndex((match) => findMatchID(match) === findMatchKey())
+    const next = (Math.max(0, current) + direction + matches.length) % matches.length
+    const match = matches[next]
+    if (!match) return
+    setFindMatchKey(findMatchID(match))
+    if (scroll.getRenderable(match.messageID)) jumpToResidentMessage(match.messageID)
+  }
+  const keymap = Keymap.use()
+  createEffect(() => {
+    if (!findOpen()) return
+    return keymap.intercept("key", ({ event, consume }) => {
+      const key = event.name.toLowerCase()
+      if (key === "return" || key === "enter") {
+        consume()
+        moveFind(event.shift ? -1 : 1)
+        return
+      }
+      if (key === "down" || key === "arrowdown" || key === "arrow_down") {
+        consume()
+        moveFind(1)
+        return
+      }
+      if (key === "up" || key === "arrowup" || key === "arrow_up") {
+        consume()
+        moveFind(-1)
+      }
+    }, { priority: 100 })
+  })
 
   function toBottom() {
     clearMessageNavigation()
+    setWindowTail(undefined)
+    setFollowing(true)
     setTimeout(() => {
       if (!scroll || scroll.isDestroyed || !rows.length) return
       scroll.scrollTo(scroll.scrollHeight)
@@ -847,6 +1030,15 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   }
 
   const globalCommands = [
+    {
+      title: "Load older history", id: "session.history.older", group: "Session",
+      enabled: () => !!history()?.before || mountedStart() > 0,
+      run: () => void pageHistory(),
+    },
+    {
+      title: "Retry history", id: "session.history.retry", group: "Session",
+      enabled: () => history()?.status === "error", run: retryHistory,
+    },
     {
       id: "session.captured-changes.retry",
       title: "Retry captured changes",
@@ -929,28 +1121,47 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     {
       id: "session.first",
       title: "First message",
+      description: "Scroll to the start of the transcript",
       group: "Session",
-      palette: undefined,
       run: () => {
         clearMessageNavigation()
-        scroll.scrollTo(0)
+        setFollowing(false)
+        void (async () => {
+          const sessionID = route.sessionID
+          while (route.sessionID === sessionID && data.session.message.history(sessionID)?.before && client.connection.status() === "connected") {
+            if (disposed) return
+            await data.session.message.loadOlder(sessionID)
+          }
+          if (disposed || route.sessionID !== sessionID) return
+          setWindowEnd(MAX_MOUNTED_ROWS)
+          await settledTranscript()
+          if (!disposed && route.sessionID === sessionID) scroll.scrollTo(0)
+        })().catch(toast.error)
         dialog.clear()
       },
     },
     {
       id: "session.last",
       title: "Last message",
+      description: "Scroll to the end of the transcript",
       group: "Session",
-      palette: undefined,
       run: () => {
         clearMessageNavigation()
-        scroll.scrollTo(scroll.scrollHeight)
+        setWindowTail(undefined)
+        setFollowing(true)
+        void settledTranscript().then(() => { if (!disposed && !scroll.isDestroyed) scroll.scrollTo(scroll.scrollHeight) })
         dialog.clear()
       },
     },
   ]
 
   const baseCommands = createMemo(() => [
+    {
+      title: "Find in loaded history",
+      id: "session.find",
+      group: "Session",
+      run: () => openFind(),
+    },
     {
       title: "Share session",
       id: "session.share",
@@ -1018,7 +1229,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     {
       title: (() => {
         const lvl = yoloLevel(autonomy() as unknown as { yolo?: unknown })
-        return `YOLO: ${lvl > 0 ? `${lvl} on` : "off"} (cycle 0→1→2→3, /yolo 0|1|2|3)`
+        return `YOLO ${lvl}: ${autonomyLevelDescription(lvl)} (cycle 0→1→2→3, /yolo 0|1|2|3)`
       })(),
       id: "session.autonomy.yolo.toggle",
       group: "Session",
@@ -1104,13 +1315,13 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       id: "session.undo",
       group: "Session",
       slash: { name: "undo" },
-      run: () => {
+      run: async () => {
         const boundary = session()?.revert?.messageID
-        const message = messages().findLast(
-          (message): message is SessionMessageUser =>
+        const message = await previousMessage(
+          (message) =>
             message.type === "user" && !!message.text.trim() && (!boundary || message.id < boundary),
         )
-        if (!message) {
+        if (message?.type !== "user") {
           toast.show({ message: "Nothing to undo", variant: "error", duration: 3000 })
           dialog.clear()
           return
@@ -1167,7 +1378,6 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       })(),
       id: "session.toggle.thinking",
       group: "Session",
-      palette: undefined,
       slash: {
         name: "thinking",
         aliases: ["toggle-thinking"],
@@ -1185,7 +1395,6 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       title: "Toggle session scrollbar",
       id: "session.toggle.scrollbar",
       group: "Session",
-      palette: undefined,
       run: () => {
         void configState
           .update((draft) => {
@@ -1199,7 +1408,6 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       title: groupExploration() ? "Show tool calls individually" : "Group related tool calls",
       id: "session.toggle.exploration_grouping",
       group: "Session",
-      palette: undefined,
       run: () => {
         void configState
           .update((draft) => {
@@ -1213,20 +1421,9 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       title: "Jump to last user message",
       id: "session.messages_last_user",
       group: "Session",
-      palette: undefined,
-      run: () => {
-        const messages = data.session.message.list(route.sessionID)
-        if (!messages || !messages.length) return
-
-        // Find the most recent user message with non-ignored, non-synthetic text parts
-        for (let i = messages.length - 1; i >= 0; i--) {
-          const message = messages[i]
-          if (!message || message.type !== "user" || !message.text.trim()) continue
-          {
-            jumpToMessage(message.id)
-            break
-          }
-        }
+      run: async () => {
+        const message = await previousMessage((message) => message.type === "user" && !!message.text.trim())
+        if (message) jumpToMessage(message.id)
       },
     },
     {
@@ -1261,12 +1458,12 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       title: "Copy last assistant message",
       id: "messages.copy",
       group: "Session",
-      run: () => {
+      run: async () => {
         const revertID = session()?.revert?.messageID
-        const lastAssistantMessage = messages().findLast(
-          (msg): msg is SessionMessageAssistant => msg.type === "assistant" && (!revertID || msg.id < revertID),
+        const lastAssistantMessage = await previousMessage(
+          (msg) => msg.type === "assistant" && (!revertID || msg.id < revertID),
         )
-        if (!lastAssistantMessage) {
+        if (lastAssistantMessage?.type !== "assistant") {
           toast.show({ message: "No assistant messages found", variant: "error" })
           dialog.clear()
           return
@@ -1310,7 +1507,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         try {
           const sessionData = session()
           if (!sessionData) return
-          const transcript = formatSessionTranscript(sessionData, messages(), showThinking())
+          const transcript = formatSessionTranscript(sessionData, await client.api.message.list({ sessionID: sessionData.id }), showThinking())
           await clipboard.write?.(transcript)
           toast.show({ message: "Session transcript copied to clipboard!", variant: "success" })
         } catch {
@@ -1337,7 +1534,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
 
           const content =
             options.format === "markdown"
-              ? formatSessionTranscript(sessionData, messages(), options.thinking)
+              ? formatSessionTranscript(sessionData, await client.api.message.list({ sessionID: sessionData.id }), options.thinking)
               : await (async () => {
                   if (options.debug) {
                     const events: { readonly created: number }[] = []
@@ -1394,7 +1591,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       title: "Background blocking tools",
       id: "session.background",
       group: "Session",
-      palette: undefined,
+      enabled: data.session.status(route.sessionID) === "running",
       run: () => {
         void client.api.session.background({ sessionID: route.sessionID })
         dialog.clear()
@@ -1418,7 +1615,6 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       title: "Go to parent session",
       id: "session.parent",
       group: "Session",
-      palette: undefined,
       enabled: !!session()?.parentID,
       run: () => {
         const parentID = session()?.parentID
@@ -1435,7 +1631,6 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       title: "Next subagent",
       id: "session.child.next",
       group: "Session",
-      palette: undefined,
       enabled: subagent(),
       run: () => {
         navigateSibling(1)
@@ -1445,7 +1640,6 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       title: "Previous subagent",
       id: "session.child.previous",
       group: "Session",
-      palette: undefined,
       enabled: subagent(),
       run: () => {
         navigateSibling(-1)
@@ -1480,8 +1674,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   }))
 
   return (
-    <Show when={sessionReady()} fallback={<SessionLoading />}>
-      <context.Provider
+    <context.Provider
         value={{
           get width() {
             return contentWidth()
@@ -1496,7 +1689,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         }}
       >
         <SessionMemoryCommand sessionID={route.sessionID} />
-        <Show when={location()}>
+        <Show when={contextReady() && location()}>
           {(ownerLocation) => <SessionIsolatedBrowserCommand sessionID={route.sessionID} location={ownerLocation()} />}
         </Show>
         <Header
@@ -1504,19 +1697,30 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         branch={branch()}
         agent={headerAgent()}
         pendingAgent={pendingHeaderAgent()}
-        profile={headerProfile()}
+        profile={pendingHeaderProfile() ?? headerProfile()}
         model={headerModel()}
         daybreak={headerDaybreak()}
         variant={headerVariant()}
         pendingModel={pendingHeaderModel()}
         pendingVariant={pendingHeaderVariant()}
         state={headerState()}
+        connection={connectionNotice()}
         subagent={subagent()}
         sideChat={btw()}
       />
       <box flexDirection="row" flexGrow={1} minHeight={0}>
         <box flexGrow={1} minHeight={0}>
-          <Show when={session()}>
+          <Show
+            when={contextReady()}
+            fallback={
+              <>
+                <box flexGrow={1} minHeight={0} />
+                <box paddingLeft={3} paddingBottom={2} flexShrink={0}>
+                  <text fg={theme.text.subdued}>Message YCoding…</text>
+                </box>
+              </>
+            }
+          >
             <box flexGrow={1} minHeight={0} paddingLeft={2} paddingRight={2} gap={1}>
               <Show when={subagent()}>
                 <SubagentSiblingSwitcher />
@@ -1527,7 +1731,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
               <Show when={hiddenCount() > 0}>
                 <box paddingLeft={1} flexShrink={0}>
                   <text fg={theme.text.subdued}>
-                    {hiddenCount()} older rows hidden — scroll history is capped at {MAX_MOUNTED_ROWS} mounted rows
+                    {hiddenCount()} loaded rows outside this render window — {MAX_MOUNTED_ROWS} rows mounted at most
                   </text>
                 </box>
               </Show>
@@ -1546,12 +1750,20 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                     foregroundColor: theme.border.default,
                   },
                 }}
-                stickyScroll={rows.length > 0 && !navigationMessage() && !restoringViewport()}
+                stickyScroll={!paging() && rows.length > 0 && !navigationMessage() && !restoringViewport()}
                 stickyStart="bottom"
                 marginTop={session()?.parentID ? 1 : 0}
                 flexGrow={1}
                 scrollAcceleration={scrollAcceleration()}
               >
+                <Show when={!blockedQuestion() && historyLabel()}>
+                  <box id="session-history-status" height={1} paddingLeft={1} flexShrink={0}>
+                    <text
+                      fg={history()?.status === "error" ? theme.text.action.primary.default : theme.text.subdued}
+                      onMouseUp={() => history()?.status === "error" ? retryHistory() : void pageHistory()}
+                    >{historyLabel()}</text>
+                  </box>
+                </Show>
                 <Show when={blockedQuestion()}>
                   {(question) => (
                     <SubagentBlockedSurface
@@ -1569,10 +1781,13 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                       <SessionRowView
                         row={row}
                         message={(messageID) => data.session.message.get(route.sessionID, messageID)}
+                        activeSkills={activeSkills}
                         compaction={(jobID) => data.session.compaction.get(route.sessionID, jobID)}
                         compactions={() => data.session.compaction.list(route.sessionID)}
                         assistantIdentity={assistantIdentity()}
+                        hideSubagentTools={!session()?.parentID}
                         boundaryID={mountedBoundaries()[index()]}
+                        findActiveMatch={activeFindMatch}
                         width={contentWidth()}
                         hidden={!!blockedQuestion()}
                         running={data.session.status(route.sessionID) === "running"}
@@ -1588,29 +1803,27 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                               collapsed
                               incomplete={!!capture().hydration}
                             />
-                            <Show when={capture().hydration}>
-                              {(hydration) => (
-                                <box paddingLeft={8} flexDirection="column">
+                            <Show when={capture().hydration?.loading || (capture().hydration?.failed ?? 0) > 0 || capture().hydration?.error}>
+                              <box paddingLeft={8} flexDirection="column">
+                                <text
+                                  fg={capture().hydration?.loading ? theme.text.subdued : theme.text.feedback.warning.default}
+                                >
+                                  {capture().hydration?.loading
+                                    ? "Child changes loading…"
+                                    : (capture().hydration?.failed ?? 0) > 0
+                                      ? `${capture().hydration?.failed} ${capture().hydration?.failed === 1 ? "child" : "children"} unavailable`
+                                      : "Child membership unavailable"}
+                                </text>
+                                <Show when={capture().hydration?.error}>
+                                  <text fg={theme.text.subdued}>{capture().hydration?.error}</text>
                                   <text
-                                    fg={hydration().loading ? theme.text.subdued : theme.text.feedback.warning.default}
+                                    fg={theme.text.action.primary.default}
+                                    onMouseUp={() => capturedChildren.retry(capture().children)}
                                   >
-                                    {hydration().loading
-                                      ? "Child changes loading…"
-                                      : hydration().failed > 0
-                                        ? `${hydration().failed} ${hydration().failed === 1 ? "child" : "children"} unavailable`
-                                        : "Child membership unavailable"}
+                                    Retry child changes
                                   </text>
-                                  <Show when={hydration().error}>
-                                    <text fg={theme.text.subdued}>{hydration().error}</text>
-                                    <text
-                                      fg={theme.text.action.primary.default}
-                                      onMouseUp={() => capturedChildren.retry(capture().children)}
-                                    >
-                                      Retry child changes
-                                    </text>
-                                  </Show>
-                                </box>
-                              )}
+                                </Show>
+                              </box>
                             </Show>
                           </box>
                         )}
@@ -1619,6 +1832,9 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                   )}
                 </For>
                 <BackgroundToolHint messages={messages()} />
+                <Show when={mountedEnd() < rows.length}>
+                  <text fg={theme.text.subdued} onMouseUp={() => void pageHistory("newer")}>Newer loaded history available</text>
+                </Show>
                 <Show when={subagent()}>
                   <SubagentTodos sessionID={route.sessionID} />
                 </Show>
@@ -1645,6 +1861,41 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                   : Math.max(1, Math.min(4, Math.floor(dimensions().height / 16)))
               }
             >
+              <Show when={findOpen()}>
+                <box flexDirection="row" alignItems="center" paddingLeft={3} paddingRight={3} gap={1} flexShrink={0}>
+                  <text fg={theme.text.label}>Find</text>
+                  <input
+                    ref={(value: InputRenderable) => {
+                      findInput = value
+                      value.traits = { status: "FILTER" }
+                    }}
+                    onInput={(value) => {
+                      setFindQuery(value)
+                      const first = findMatches()[0]
+                      setFindMatchKey(first ? findMatchID(first) : "")
+                      const match = findMatches()[0]
+                      if (match && scroll.getRenderable(match.messageID)) jumpToResidentMessage(match.messageID)
+                    }}
+                    onSubmit={() => moveFind(1)}
+                    onKeyDown={(event) => {
+                      const key = event.name.toLowerCase()
+                      if (key === "escape") {
+                        event.preventDefault()
+                        closeFind()
+                      }
+                    }}
+                    placeholder="Find in loaded history"
+                    placeholderColor={theme.text.subdued}
+                    textColor={theme.text.formfield.default}
+                    focusedTextColor={theme.text.formfield.default}
+                    cursorColor={theme.text.feedback.info.default}
+                    focusedBackgroundColor="transparent"
+                    flexGrow={1}
+                  />
+                  <text fg={theme.text.subdued}>{findMatches().length ? `${findIndex() + 1} of ${findMatches().length}` : findQuery() ? "No matches" : ""}</text>
+                  <text fg={theme.text.subdued}>enter/↓ next · shift+enter/↑ previous · esc close</text>
+                </box>
+              </Show>
               <PluginSlot name="session.composer.top" input={{ sessionID: route.sessionID }} />
               <Show when={waitingChild()}>{(task) => <SubagentQuestionNotice task={task()} />}</Show>
               <Show when={blockedReason()}>
@@ -1666,7 +1917,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                 open={composer.open}
                 defaultTab={composer.tab}
                 onClose={() => setComposer("open", false)}
-                prompt={composer.open && !disabled() ? sessionPrompt() : undefined}
+                prompt={composer.open && !disabled() ? <SessionPrompt /> : undefined}
               /></Show>
               <Switch>
                 <Match when={activeGuardrailRequest()}>{(request) => <GuardrailPrompt request={request()} />}</Match>
@@ -1694,7 +1945,9 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                   </Show>
                 </Match>
                 <Match when={session()?.parentID && !btw()}>{null}</Match>
-                <Match when={!disabled() && !composer.open}>{sessionPrompt()}</Match>
+                <Match when={!disabled() && !composer.open}>
+                  <SessionPrompt />
+                </Match>
               </Switch>
               <Show when={subagent() && !blockedQuestion()}>
                 <SubagentEconomicsSurface economics={economics()} />
@@ -1702,7 +1955,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
             </box>
             </Show>
         </box>
-        <Show when={sidebarVisible()}>
+        <Show when={contextReady() && sidebarVisible()}>
           <Switch>
             <Match when={wide()}>
               <Sidebar sessionID={route.sessionID} autonomy={autonomy()} />
@@ -1730,11 +1983,10 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         <Match when={subagent()}><SubagentFooter reviewing={disabled()} /></Match>
         <Match when={true}><Footer branch={branch()} sessionID={route.sessionID} autonomy={autonomy()} /></Match>
       </Switch>
-      </context.Provider>
-    </Show>
+    </context.Provider>
   )
 
-  function sessionPrompt() {
+  function SessionPrompt() {
     return (
       <pluginRuntime.Slot
         name="session_prompt"
@@ -1749,6 +2001,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
           visible={true}
           ref={bind}
           disabled={false}
+          submitDisabled={!sessionReady()}
           onSubmit={toBottom}
           sessionID={route.sessionID}
           branch={branch()}
@@ -1824,15 +2077,18 @@ export function DialogSessionMemory(props: { sessionID: string }) {
 export function SessionRowView(props: {
   row: SessionRow
   message: (messageID: string) => SessionMessageInfo | undefined
+  activeSkills?: () => ReadonlySet<string>
   compaction?: (jobID: string) => DataSessionCompactionLifecycle | undefined
   compactions?: () => DataSessionCompactionLifecycle[]
   assistantIdentity?: { label: string; subagent: boolean }
+  hideSubagentTools?: boolean
   boundaryID?: string
   width?: number
   hidden?: boolean
   running?: boolean
   guardrail?: (requestID: string) => void
   subagent?: (sessionID: string) => void
+  findActiveMatch?: () => { messageID: string; partID: string } | undefined
 }) {
   // Rows can outlive a session eviction for one reactive frame. Resolve every message-backed row
   // before mounting its component so stale refs consume no space.
@@ -1854,7 +2110,7 @@ export function SessionRowView(props: {
       const content = resolvePart(message, row.ref.partID)
       return (
         content !== undefined &&
-        (content.type !== "tool" || transcriptToolPartVisible(content))
+        (content.type !== "tool" || transcriptToolPartVisible(content, props.activeSkills?.(), props.hideSubagentTools))
       )
     }
     if (row.type === "group") {
@@ -1864,7 +2120,7 @@ export function SessionRowView(props: {
         if (message?.type !== "assistant") return false
         const part = resolvePart(message, ref.partID)
         if (row.kind === "reasoning") return part?.type === "reasoning" && Boolean(reasoningContent(part))
-        return part?.type === "tool" && transcriptToolPartVisible(part)
+        return part?.type === "tool" && transcriptToolPartVisible(part, props.activeSkills?.(), props.hideSubagentTools)
       })
     }
     return true
@@ -1876,7 +2132,7 @@ export function SessionRowView(props: {
           <Match when={props.row.type === "message" ? props.row : undefined}>
             {(row) => (
               <Show when={props.message(row().messageID)}>
-                {(message) => <SessionMessageView message={message()} />}
+                {(message) => <SessionMessageView message={message()} findActive={props.findActiveMatch?.()?.messageID === message().id && props.findActiveMatch?.()?.partID === "message"} />}
               </Show>
             )}
           </Match>
@@ -1910,6 +2166,7 @@ export function SessionRowView(props: {
                 partRef={row().ref}
                 message={props.message}
                 assistantIdentity={props.assistantIdentity}
+                findActive={props.findActiveMatch?.()?.messageID === row().ref.messageID && props.findActiveMatch?.()?.partID === row().ref.partID}
               />
             )}
           </Match>
@@ -1930,6 +2187,8 @@ export function SessionRowView(props: {
                 pending={row().pending}
                 completed={row().completed}
                 message={props.message}
+                activeSkills={props.activeSkills}
+                hideSubagentTools={props.hideSubagentTools}
               />
             )}
           </Match>
@@ -1978,11 +2237,11 @@ function BackgroundToolHint(props: { messages: SessionMessageInfo[] }) {
   )
 }
 
-function SessionMessageView(props: { message: SessionMessageInfo }) {
+function SessionMessageView(props: { message: SessionMessageInfo; findActive?: boolean }) {
   return (
     <Switch>
       <Match when={props.message.type === "user"}>
-        <UserMessage message={props.message as SessionMessageUser} />
+        <UserMessage message={props.message as SessionMessageUser} findActive={props.findActive} />
       </Match>
       <Match when={props.message.type === "shell"}>
         <ShellMessage message={props.message as Extract<SessionMessageInfo, { type: "shell" }>} />
@@ -2008,6 +2267,7 @@ function SessionPartView(props: {
   partRef: PartRef
   message: (messageID: string) => SessionMessageInfo | undefined
   assistantIdentity?: { label: string; subagent: boolean }
+  findActive?: boolean
 }) {
   const message = createMemo(() => props.message(props.partRef.messageID))
   const part = createMemo(() => {
@@ -2028,6 +2288,7 @@ function SessionPartView(props: {
               part={item() as SessionMessageAssistantText}
               last={false}
               streaming={streaming()}
+              findActive={props.findActive}
               identity={props.partRef.partID === "text:0" ? props.assistantIdentity : undefined}
               subagent={props.assistantIdentity?.subagent}
               index={Number(props.partRef.partID.split(":")[1])}
@@ -2042,7 +2303,7 @@ function SessionPartView(props: {
             />
           </Match>
           <Match when={item().type === "tool"}>
-            <ToolPart part={item() as SessionMessageAssistantTool} />
+            <ToolPart part={item() as SessionMessageAssistantTool} findActive={props.findActive} />
           </Match>
         </Switch>
       )}
@@ -2179,6 +2440,8 @@ function SessionGroupView(props: {
   pending: PartRef[]
   completed: boolean
   message: (messageID: string) => SessionMessageInfo | undefined
+  activeSkills?: () => ReadonlySet<string>
+  hideSubagentTools?: boolean
 }) {
   const { theme } = useTheme()
   const ctx = use()
@@ -2190,7 +2453,7 @@ function SessionGroupView(props: {
       const message = props.message(ref.messageID)
       if (message?.type !== "assistant") return []
       const part = resolvePart(message, ref.partID)
-      if (part?.type !== "tool" || !transcriptToolPartVisible(part)) return []
+      if (part?.type !== "tool" || !transcriptToolPartVisible(part, props.activeSkills?.(), props.hideSubagentTools)) return []
       return [part]
     })
   const grouped = createMemo(() => parts(props.refs))
@@ -2346,6 +2609,7 @@ function SessionNoticeMessage(props: { message: SessionMessageInfo }) {
     return ""
   }
   const notice = createMemo(() => noticeSummary(contextSource(), text()))
+  const advisory = () => props.message.type === "synthetic" && metadata()?.decisionInputID !== undefined
   const description = () => (source() === "shell" ? text().replace(/\s+/g, " ").trim() : text())
   const status = () => {
     if (state() === "completed") return "finished"
@@ -2391,6 +2655,7 @@ function SessionNoticeMessage(props: { message: SessionMessageInfo }) {
           </text>
         </box>
       </Match>
+      <Match when={advisory()}>{null}</Match>
       <Match when={true}>
         {/* Session-state and TeamView notices stay in the message store but never render. */}
         <Show when={contextSource() !== "session-state" && contextSource() !== "team-view"}>
@@ -2742,7 +3007,7 @@ function ShellMessage(props: { message: Extract<SessionMessageInfo, { type: "she
   )
 }
 
-function UserMessage(props: { message: SessionMessageUser }) {
+function UserMessage(props: { message: SessionMessageUser; findActive?: boolean }) {
   const ctx = use()
   const data = useData()
   const send = createMemo(() => data.session.submissions.list(ctx.sessionID).find((entry) => entry.input.promptID === props.message.id), undefined, { equals: false })
@@ -2775,11 +3040,19 @@ function UserMessage(props: { message: SessionMessageUser }) {
   const content = createMemo(() => segmentPromptSkills(props.message.text, skills()))
   const receipt = createMemo(() => {
     const current = send()
-    if (current?.consumed && current.state !== "attention") return { glyph: "✓✓", read: true }
-    if (current) return { glyph: current.state === "attention" ? current.phase : "◷", read: false, retry: current.state === "attention" }
-    if (data.session.input.has(ctx.sessionID, props.message.id)) return { glyph: "◷", read: false }
-    if (props.message.time.consumed !== undefined) return { glyph: "✓✓", read: true }
-    return { glyph: "✓", read: false }
+    const pending = data.session.pending.list(ctx.sessionID).find((item) => item.id === props.message.id)
+    const pendingUser = pending?.type === "user" ? pending : undefined
+    const admitted = Boolean(pendingUser) || data.session.input.has(ctx.sessionID, props.message.id)
+    const processing =
+      data.session.status(ctx.sessionID) === "running" &&
+      data.session.message.list(ctx.sessionID).findLast((message) => message.type === "user")?.id === props.message.id
+    if (current?.state === "attention") return { glyph: current.phase, read: false, retry: true, label: undefined }
+    if (current && !current.admitted && !current.consumed) return { glyph: "◷", read: false, retry: false, label: "Sending" }
+    if (admitted && pendingUser?.delivery === "queue") return { glyph: "◷", read: false, retry: false, label: "Queued" }
+    if (admitted) return { glyph: "◷", read: false, retry: false, label: "Processing" }
+    if (processing) return { glyph: "◷", read: false, retry: false, label: "Processing" }
+    if (current?.consumed || props.message.time.consumed !== undefined) return { glyph: "✓✓", read: true, retry: false, label: undefined }
+    return { glyph: "✓", read: false, retry: false, label: undefined }
   })
 
   return (
@@ -2818,7 +3091,7 @@ function UserMessage(props: { message: SessionMessageUser }) {
           flexDirection="column"
           flexShrink={0}
         >
-          <text wrapMode="word" fg={theme.text.default} width={intrinsicWidth()}>
+          <text wrapMode="word" fg={props.findActive ? theme.text.action.primary.focused : theme.text.default} bg={props.findActive ? theme.background.action.primary.focused : undefined} width={intrinsicWidth()}>
             <For each={content()}>
               {(part) => (
                 <Show when={part.type === "skill"} fallback={part.value}>
@@ -2865,7 +3138,7 @@ function UserMessage(props: { message: SessionMessageUser }) {
             data.session.submissions.retry(ctx.sessionID, props.message.id)
           }}
         >
-          <Show when={receipt().retry} fallback={receipt().glyph}>
+          <Show when={receipt().retry} fallback={receipt().label ? `${receipt().glyph} ${receipt().label}` : receipt().glyph}>
             {receipt().glyph.replace(" · Retry send", "")}
             <span style={{ fg: theme.text.action.primary.default }}> · Retry send</span>
           </Show>
@@ -3037,6 +3310,7 @@ function TextPart(props: {
   last: boolean
   part: SessionMessageAssistantText
   streaming: boolean
+  findActive?: boolean
   identity?: { label: string; subagent: boolean }
   subagent?: boolean
   index?: number
@@ -3059,6 +3333,7 @@ function TextPart(props: {
         flexDirection="column"
         gap={props.identity?.subagent ? 2 : props.identity ? 1 : 0}
         flexShrink={0}
+        backgroundColor={props.findActive ? theme.background.action.primary.focused : undefined}
       >
         <Show when={props.identity}>
           {(identity) => (
@@ -3074,7 +3349,8 @@ function TextPart(props: {
           content={markdown()}
           tableOptions={{ style: "grid" }}
           conceal={true}
-          fg={theme.markdown.text}
+          fg={props.findActive ? theme.text.action.primary.focused : theme.markdown.text}
+          bg={props.findActive ? theme.background.action.primary.focused : undefined}
         />
       </box>
     </Show>
@@ -3083,11 +3359,10 @@ function TextPart(props: {
 
 // Pending messages moved to individual tool pending functions
 
-function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean }) {
+function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean; findActive?: boolean }) {
   const ctx = use()
   const data = useData()
   const display = createMemo(() => toolDisplay(props.part.name))
-  const hideParentSubagent = createMemo(() => display() === "subagent" && !data.session.get(ctx.sessionID)?.parentID)
 
   const toolprops = {
     get metadata() {
@@ -3119,10 +3394,10 @@ function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean }
   }
 
   const rawOutput = createMemo(
-    () => !["shell", "write", "edit", "patch", "question", "subagent", "skill", "todowrite"].includes(display()),
+    () => !["shell", "write", "edit", "patch", "question", "subagent", "skill", "todowrite", "decision"].includes(display()),
   )
   const presentation = createMemo(() =>
-    props.part.state.status === "error"
+    props.part.state.status === "error" || display() === "decision"
       ? undefined
       : transcriptToolPresentation({
           tool: props.part.name,
@@ -3201,9 +3476,35 @@ function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean }
     }
   })
 
+  const decisionPresentation = createMemo(() => {
+    if (display() !== "decision") return
+    const state = props.part.state
+    const input = typeof state.input === "string" ? {} : state.input
+    const provider = stringValue(input.provider)
+    const request = recordValue(input.request)
+    const questions = Array.isArray(request?.questions) ? request.questions.length : 0
+    const detail = `· ${provider ?? "unknown provider"} · ${questions} ${questions === 1 ? "question" : "questions"}`
+    const error = state.status === "error" ? safeToolDetailText(state.error.message).split(/\r?\n/, 1)[0] || "Decision failed" : ""
+    return {
+      detail: error || detail,
+      lifecycle: toolLifecycle(props.part),
+    }
+  })
+
   return (
-    <Show when={!hideParentSubagent()}>
+    <>
       <Switch>
+        <Match when={decisionPresentation()}>
+          {(item) => (
+            <SessionToolActivityRow
+              tool="Decision"
+              detail={item().detail}
+              lifecycle={item().lifecycle}
+              width={ctx.width}
+              findActive={props.findActive}
+            />
+          )}
+        </Match>
         <Match when={diffPresentation()}>{(item) => <FileChangeBlock files={item().files} />}</Match>
         <Match when={activityPresentation()}>
           {(item) => (
@@ -3214,6 +3515,7 @@ function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean }
               lifecycle={item().lifecycle}
               details={item().details}
               width={ctx.width}
+              findActive={props.findActive}
             />
           )}
         </Match>
@@ -3229,6 +3531,7 @@ function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean }
                   summary: commandStatus(result),
                 })}
                 width={ctx.width}
+                findActive={props.findActive}
               />
             )
           }}
@@ -3283,7 +3586,7 @@ function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean }
           nested={props.nested}
         />
       </Show>
-    </Show>
+    </>
   )
 }
 
@@ -4376,6 +4679,14 @@ function Edit(props: ToolProps) {
 
   return (
     <Switch>
+      <Match when={props.part.state.status === "streaming" || props.part.state.status === "running"}>
+        <SessionToolActivityRow
+          tool="Edit"
+          detail={path() ? pathFormatter.format(path()) : "Preparing edit..."}
+          lifecycle={toolLifecycle(props.part)}
+          width={ctx.width}
+        />
+      </Match>
       <Match when={file()}>
         {(item) => (
           <BlockTool path={{ label: "← Edit", value: pathFormatter.format(path()) }} part={props.part}>
@@ -4413,7 +4724,6 @@ function Edit(props: ToolProps) {
           }
           title={stringValue(props.input.path) ? undefined : "# Preparing edit..."}
           part={props.part}
-          spinner={props.part.state.status === "streaming"}
         />
       </Match>
     </Switch>
@@ -4631,6 +4941,7 @@ const toolDisplays = new Set([
   "execute",
   "patch",
   "question",
+  "decision",
   "todowrite",
   "skill",
 ])
@@ -4645,13 +4956,13 @@ function recordValue(value: unknown): Record<string, unknown> | undefined {
   return value as Record<string, unknown>
 }
 
-function transcriptToolPartVisible(part: SessionMessageAssistantTool) {
+function transcriptToolPartVisible(part: SessionMessageAssistantTool, activeSkills?: ReadonlySet<string>, hideSubagentTools = false) {
+  if (hideSubagentTools && toolDisplay(part.name) === "subagent") return false
   if (part.name === "goal" || capturedPartPatches(part).length > 0) return false
-  return (
-    part.name !== "skill" ||
-    part.state.status !== "completed" ||
-    recordValue(recordValue(part.state)?.structured)?.alreadyActive !== true
-  )
+  if (part.name !== "skill") return true
+  if (part.state.status === "completed") return recordValue(recordValue(part.state)?.structured)?.alreadyActive !== true
+  const id = recordValue(recordValue(part.state)?.input)?.id
+  return typeof id !== "string" || activeSkills?.has(id) !== true
 }
 
 function formatSessionTranscript(session: SessionInfo, messages: SessionMessageInfo[], thinking: boolean) {

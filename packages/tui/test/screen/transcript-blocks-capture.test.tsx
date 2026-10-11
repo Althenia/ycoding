@@ -7,7 +7,7 @@ import { InlineDiff } from "../../src/routes/session/inline-diff"
 import { InlineCommand } from "../../src/routes/session/inline-command"
 import { transcriptToolPresentation } from "../../src/routes/session"
 import { captureRoute } from "./capture"
-import { json, type FetchHandler } from "../fixture/tui-client"
+import { json, type FetchHandler, sessionSnapshot } from "../fixture/tui-client"
 import { ConfigProvider } from "../../src/config"
 import { ThemeProvider } from "../../src/context/theme"
 import { TestTuiContexts } from "../fixture/tui-environment"
@@ -66,9 +66,8 @@ const route: FetchHandler = (url) => {
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/session") return json({ data: [session, ...children], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
-  if (url.pathname === `/api/session/${sessionID}/message`)
-    return json({
-      data: [
+  if (url.pathname === `/api/session/${sessionID}/snapshot`)
+    return sessionSnapshot(sessionID, [
         {
           id: "msg_assistant",
           type: "assistant",
@@ -133,9 +132,7 @@ const route: FetchHandler = (url) => {
           ],
           time: { created: now - 8_400 },
         },
-      ],
-      cursor: {},
-    })
+      ], { session })
   if (
     [
       `/api/session/${sessionID}/pending`,

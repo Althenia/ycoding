@@ -76,7 +76,14 @@ export function runProviders(providers: CurrentProvider[], models: CurrentModel[
       name: model.name,
       cost: cost === undefined ? undefined : { input: cost },
       status: model.status,
+      enabled: model.enabled,
       variants: Object.fromEntries((model.variants ?? []).map((variant) => [variant.id, {}])),
+      ...(model.profiles === undefined ? {} : {
+        profiles: Object.fromEntries(model.profiles.map((profile) => [
+          profile.name,
+          { variants: Object.fromEntries((profile.variants ?? []).map((variant) => [variant, {}])) },
+        ])),
+      }),
     }
     grouped.set(provider.id, provider)
   }
@@ -91,7 +98,7 @@ export async function waitForDefaultModel(input: {
   requestTimeoutMs?: number
   active?: () => boolean
   signal?: AbortSignal
-}): Promise<{ providerID: string; modelID: string } | undefined> {
+}): Promise<{ providerID: string; modelID: string; profile?: string; variant?: string } | undefined> {
   const deadline = Date.now() + (input.timeoutMs ?? 5_000)
   while (Date.now() < deadline && !input.signal?.aborted && (input.active?.() ?? true)) {
     const controller = new AbortController()
@@ -111,7 +118,13 @@ export async function waitForDefaultModel(input: {
       clearTimeout(timeout)
       input.signal?.removeEventListener("abort", abort)
     })
-    if (model) return { providerID: model.providerID, modelID: model.id }
+    if (model)
+      return {
+        providerID: model.selection.providerID,
+        modelID: model.selection.id,
+        ...(model.selection.profile === undefined ? {} : { profile: model.selection.profile }),
+        ...(model.selection.variant === undefined ? {} : { variant: model.selection.variant }),
+      }
     await wait(25, input.signal)
   }
 }

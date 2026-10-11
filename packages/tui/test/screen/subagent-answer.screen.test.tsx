@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import type { SessionInfo, SessionOrchestrationTask } from "@ycoding-ai/client"
-import { json } from "../fixture/tui-client"
+import { json, sessionSnapshot } from "../fixture/tui-client"
 import { renderScreen } from "./harness"
 
 const parentID = "ses_answer_parent"
@@ -74,7 +74,7 @@ function fixture(input?: {
       }
       if (url.pathname === `/api/session/${childID}/subagent`)
         return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
-      if (url.pathname.endsWith("/message")) return json({ data: [], cursor: {} })
+      if (url.pathname.endsWith("/snapshot")) return sessionSnapshot(url.pathname.slice("/api/session/".length, -"/snapshot".length), [], { session: sessions.find((item) => url.pathname === `/api/session/${item.id}/snapshot`) })
       if (url.pathname.endsWith("/guardrail/request"))
         return json({
           data:

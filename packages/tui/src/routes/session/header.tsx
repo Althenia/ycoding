@@ -43,12 +43,6 @@ export type SessionHeaderIdentity = {
   path?: string
   branch?: string
   agent?: string
-  /**
-   * The active credential profile for the current provider, named only when the provider stores
-   * more than one. It is credential identity, not model identity, so it sits beside the agent it
-   * runs as rather than inside the provider/model label. The label is user-facing; credential
-   * IDs and tokens never reach the header.
-   */
   profile?: string
   model?: string
   daybreak?: { program: ModelDaybreak; active: boolean }
@@ -184,7 +178,7 @@ export function sessionRetryHeaderState(
 }
 
 export function Header(
-  props: SessionHeaderIdentity & { state: SessionHeaderState; focused?: SessionHeaderSegmentKey; subagent?: boolean; sideChat?: boolean },
+  props: SessionHeaderIdentity & { state: SessionHeaderState; connection?: string; focused?: SessionHeaderSegmentKey; subagent?: boolean; sideChat?: boolean },
 ) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
@@ -347,11 +341,11 @@ export function Header(
           <For each={pending()}>{(value) => <span style={{ fg: theme.text.subdued }}> {"·"} {value}</span>}</For>
         </text>
         <box flexDirection="row" alignItems="center" gap={1} flexShrink={0}>
-          <Show when={(effectiveOperational().type === "working" && !props.subagent) || effectiveOperational().type === "retrying"}>
+          <Show when={!props.connection && ((effectiveOperational().type === "working" && !props.subagent) || effectiveOperational().type === "retrying")}>
             <Spinner color={statusColor()} frames={DOT_TRAIL_FRAMES} interval={160} />
           </Show>
-          <text fg={statusColor()} wrapMode="none">
-            {headerStatusLabel(state(), dimensions().width, identity().runningShells, now())}
+          <text fg={props.connection ? theme.text.subdued : statusColor()} wrapMode="none">
+            {props.connection ?? headerStatusLabel(state(), dimensions().width, identity().runningShells, now())}
           </text>
         </box>
       </box>
@@ -379,6 +373,7 @@ function resolveIdentity(props: SessionHeaderIdentity): ResolvedSessionHeaderIde
   return {
     ...props,
     agent: props.agent ?? (session.agent ? Locale.titlecase(session.agent) : undefined),
+    profile: props.profile ?? sessionModel.profile,
     model: props.model ?? modelLabel,
     variant: props.variant ?? sessionModel.variant,
     runningShells: data.shell.list(session.location).filter((shell) => shell.status === "running").length,

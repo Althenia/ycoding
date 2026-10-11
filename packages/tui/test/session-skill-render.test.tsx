@@ -3,7 +3,7 @@ import { InputRenderable, ScrollBoxRenderable, TextBufferRenderable, type Render
 import type { SessionMessageInfo } from "@ycoding-ai/client"
 import { DEFAULT_THEMES } from "../src/theme/builtins"
 import { resolveThemeFile } from "../src/theme/resolve"
-import { json } from "./fixture/tui-client"
+import { json, sessionSnapshot } from "./fixture/tui-client"
 import { renderScreen } from "./screen/harness"
 
 const sessionID = "ses_skill_render"
@@ -32,6 +32,10 @@ const skills = [
     conflicts: [],
     declarations: {},
     state: "active",
+  },
+  {
+    id: "agent-review", name: "Agent review", activatedBy: "tool", activationMessageID: "msg_agent_skill",
+    content, conflicts: [], declarations: {}, state: "active",
   },
 ]
 const messages: SessionMessageInfo[] = [
@@ -82,7 +86,7 @@ async function route(url: URL) {
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
-  if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: messages, cursor: {} })
+  if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, messages, { session })
   if (url.pathname === `/api/session/${sessionID}/skills`) return json({ data: skills })
   if (url.pathname === `/api/session/${sessionID}/subagent`)
     return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
@@ -191,6 +195,50 @@ test("renders user and agent-invoked completed Skill titles with the same treatm
       .filter((span) => span.text.includes("Loaded"))
     expect(badges).toHaveLength(2)
     expect(badges.every((badge) => badge.fg.toInts().join(",") === theme.hue.accent[200].toInts().join(","))).toBe(true)
+  } finally {
+    await screen.dispose()
+  }
+}, 30000)
+
+test("hides a running reload of an already-active skill and keeps a first load visible", async () => {
+  const running = (id: string, skill: string, created: number) => ({
+    type: "tool" as const,
+    id,
+    name: "skill",
+    state: { status: "running" as const, input: { id: skill }, content: [], structured: {} },
+    time: { created, ran: created },
+  })
+  const pendingMessages: SessionMessageInfo[] = [
+    ...messages,
+    {
+      id: "msg_agent_reload",
+      type: "assistant",
+      agent: "build",
+      model,
+      content: [running("call_reload_reference", "review", 5), running("call_reload_tool", "agent-review", 6)],
+      time: { created: 5 },
+    },
+    {
+      id: "msg_agent_first",
+      type: "assistant",
+      agent: "build",
+      model,
+      content: [running("call_first_load", "fresh-review", 7)],
+      time: { created: 7 },
+    },
+  ]
+  const screen = await renderScreen({
+    width: 100,
+    height: 40,
+    args: { sessionID },
+    route: (url) =>
+      url.pathname === `/api/session/${sessionID}/snapshot` ? sessionSnapshot(sessionID, pendingMessages, { session }) : route(url),
+    config: { animations: false },
+    settle: 'Skill "Agent review"',
+  })
+  try {
+    await until(screen, "Loading skill...")
+    expect(screen.frame().match(/Loading skill\.\.\./g)).toHaveLength(1)
   } finally {
     await screen.dispose()
   }

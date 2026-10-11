@@ -24,9 +24,7 @@ function sessionStateSummary(value: Record<string, unknown>) {
 
 function teamViewSummary(value: Record<string, unknown>) {
   const children = Array.isArray(value.children) ? value.children : []
-  const states = children
-    .map(record)
-    .flatMap((child) => (typeof child?.state === "string" ? [child.state] : []))
+  const states = children.map(record).flatMap((child) => (typeof child?.state === "string" ? [child.state] : []))
   const omitted = typeof value.omitted === "number" && value.omitted > 0 ? value.omitted : 0
   if (!states.length) return omitted ? `TeamView · ${omitted} omitted` : "TeamView · no children"
   return `TeamView · ${[...new Set(states)]

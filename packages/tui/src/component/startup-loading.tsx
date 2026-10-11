@@ -1,6 +1,4 @@
-import { createEffect, createMemo, createSignal, onCleanup, Show, type ParentProps } from "solid-js"
-import { useTheme } from "../context/theme"
-import { Spinner } from "./spinner"
+import { createEffect, createSignal, Show, type ParentProps } from "solid-js"
 
 export function createStartupReady(ready: () => boolean) {
   const [started, setStarted] = createSignal(ready())
@@ -13,64 +11,4 @@ export function createStartupReady(ready: () => boolean) {
 export function StartupGate(props: ParentProps<{ ready: () => boolean }>) {
   const ready = createStartupReady(props.ready)
   return <Show when={ready()}>{props.children}</Show>
-}
-
-export function StartupLoading(props: { ready: () => boolean }) {
-  const { theme } = useTheme().contextual("elevated")
-  const [show, setShow] = createSignal(false)
-  const text = createMemo(() => (props.ready() ? "Finishing startup..." : "Loading plugins..."))
-  let wait: NodeJS.Timeout | undefined
-  let hold: NodeJS.Timeout | undefined
-  let stamp = 0
-
-  createEffect(() => {
-    if (props.ready()) {
-      if (wait) {
-        clearTimeout(wait)
-        wait = undefined
-      }
-      if (!show()) return
-      if (hold) return
-
-      const left = 3000 - (Date.now() - stamp)
-      if (left <= 0) {
-        setShow(false)
-        return
-      }
-
-      hold = setTimeout(() => {
-        hold = undefined
-        setShow(false)
-      }, left).unref()
-      return
-    }
-
-    if (hold) {
-      clearTimeout(hold)
-      hold = undefined
-    }
-    if (show()) return
-    if (wait) return
-
-    wait = setTimeout(() => {
-      wait = undefined
-      stamp = Date.now()
-      setShow(true)
-    }, 500).unref()
-  })
-
-  onCleanup(() => {
-    if (wait) clearTimeout(wait)
-    if (hold) clearTimeout(hold)
-  })
-
-  return (
-    <Show when={show()}>
-      <box position="absolute" zIndex={5000} left={0} right={0} bottom={1} justifyContent="center" alignItems="center">
-        <box backgroundColor={theme.background.default} paddingLeft={1} paddingRight={1}>
-          <Spinner color={theme.text.subdued}>{text()}</Spinner>
-        </box>
-      </box>
-    </Show>
-  )
 }

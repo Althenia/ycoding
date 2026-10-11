@@ -20,7 +20,7 @@ import { createPluginRuntime, PluginRuntimeProvider } from "../src/plugin/runtim
 import { railWidth } from "../src/routes/session/rail"
 import { Sidebar } from "../src/routes/session/sidebar"
 import type { SessionSkill } from "../src/util/session-skills"
-import { createApi, createEventStream, createFetch, json } from "./fixture/tui-client"
+import { createApi, createEventStream, createFetch, json, sessionSnapshot } from "./fixture/tui-client"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 
@@ -482,7 +482,7 @@ function route(url: URL, mcp: ReadonlyArray<McpFixture> = []) {
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
-  if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: [], cursor: {} })
+  if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, [], { session })
   if (url.pathname === `/api/session/${sessionID}/subagent`)
     return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
   if (

@@ -43,7 +43,15 @@ function report(
   ],
   options?: { rowCount?: number; nextOffset?: number },
 ): ProviderRequestReport {
-  const values = rows.map((row) => ({ key: row.key, label: row.label, ...metrics(row.logical) }))
+  const values: ProviderRequestReport["rows"] = rows.map((row) => ({ key: row.key, label: row.label, ...metrics(row.logical) }))
+  if (values[0]) values[0].speed = {
+    firstOutputP50Ms: 125,
+    firstOutputP95Ms: 250,
+    totalP50Ms: 1_200,
+    totalP95Ms: 2_500,
+    outputTokensPerSecond: 42.5,
+    samples: 4,
+  }
   return {
     group,
     rows: values,
@@ -128,7 +136,10 @@ test("defaults tables to all retained history and exposes normalized metrics plu
   try {
     let frame = await waitFor(app, (value) => value.includes("All retained history") && value.includes("Alpha"), "the initial table")
     expect(calls[0]).toEqual({ group: "model", offset: 0, limit: 100, sort: "tokens", order: "desc" })
-    for (const column of ["STEPS", "INPUT", "OUTPUT", "REASON", "CACHE READ", "CACHE WRITE", "TOTAL", "COST"]) expect(frame).toContain(column)
+    for (const column of ["STEPS", "INPUT", "OUTPUT", "REASON", "CACHE READ", "CACHE WRITE", "TOTAL", "COST", "FIRST P50", "FIRST P95", "TOTAL P50", "TOTAL P95", "TOK/S"]) expect(frame).toContain(column)
+    expect(frame).toContain("125ms")
+    expect(frame).toContain("42.5")
+    expect(frame).toContain("unreported")
     expect(frame).toContain("STEPS model calls")
     expect(frame.split("\n").find((line) => line.includes("Alpha"))).toMatch(/\sUnknown\s.*\s≥5,540\s/)
     expect(frame.split("\n").find((line) => line.includes("Beta"))).toContain("$0.30")
@@ -142,6 +153,8 @@ test("defaults tables to all retained history and exposes normalized metrics plu
     expect(frame).toContain("Cache read Unknown")
     expect(frame).toContain("Total tokens ≥5,540 · Cost $0.00")
     expect(frame).toContain("≥ marks a lower bound")
+    expect(frame).toContain("First output p50 125ms · p95 250ms")
+    expect(frame).toContain("Total p50 1,200ms · p95 2,500ms · Output 42.5 tok/s")
     app.mockInput.pressKey("ESCAPE")
     await waitFor(app, (value) => !value.includes("Usage details"), "details dismissal")
 

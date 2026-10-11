@@ -11,7 +11,7 @@ import { SessionRailContent } from "../../src/routes/session/sidebar"
 import { Toast, ToastProvider, useToast } from "../../src/ui/toast"
 import { UpdateNotice } from "../../src/app"
 import { RouteProvider } from "../../src/context/route"
-import { json } from "../fixture/tui-client"
+import { json, sessionSnapshot } from "../fixture/tui-client"
 import { TestTuiContexts } from "../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE } from "../viewport"
@@ -397,7 +397,7 @@ function toastRoute(url: URL) {
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
   if (url.pathname === "/api/session/ses_toast") return json({ data: session })
-  if (url.pathname === "/api/session/ses_toast/message") return json({ data: [], cursor: {} })
+  if (url.pathname === "/api/session/ses_toast/snapshot") return sessionSnapshot("ses_toast", [], { session })
   if (
     [
       "/api/session/ses_toast/pending",

@@ -2,7 +2,7 @@
 import { expect, test } from "bun:test"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
-import { json, type FetchHandler } from "../fixture/tui-client"
+import { json, type FetchHandler, sessionSnapshot } from "../fixture/tui-client"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE } from "../viewport"
 import { captureRoute } from "./capture"
 
@@ -114,7 +114,7 @@ const route: FetchHandler = (url) => {
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
-  if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: [], cursor: {} })
+  if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, [], { session })
   if ([`/api/session/${sessionID}/pending`, `/api/session/${sessionID}/permission`, `/api/session/${sessionID}/todo`, `/api/session/${sessionID}/skills`, `/api/session/${sessionID}/subagent`, `/api/session/${sessionID}/guardrail/request`].includes(url.pathname)) return json({ data: [] })
   if (url.pathname === `/api/session/${sessionID}/guardrail`) return json({ data: { rootSessionID: sessionID, profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [] } })
   if (url.pathname === `/api/session/${sessionID}/diagnostics`) return json({ data: null })

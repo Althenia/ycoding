@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import type { SessionAutonomyState, YCodingEvent } from "@ycoding-ai/client"
 import { materializeClipboardImage } from "../../src/clipboard"
-import { json, type FetchHandler } from "../fixture/tui-client"
+import { json, type FetchHandler, sessionSnapshot } from "../fixture/tui-client"
 import { renderScreen } from "./harness"
 
 // Distinct Location and Session from every other screen suite so the shared module mocks
@@ -122,7 +122,7 @@ const route: FetchHandler = async (url, request) => {
       },
     })
   }
-  if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: [], cursor: {} })
+  if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, [], { session })
   if (url.pathname === `/api/session/${sessionID}/subagent`)
     return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
   if (url.pathname === `/api/session/${sessionID}/guardrail`)

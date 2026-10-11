@@ -16,10 +16,7 @@ test("summarizes Session state", () => {
 
 test("summarizes TeamView states", () => {
   expect(
-    noticeSummary(
-      "team-view",
-      `${teamViewPrefix}{"children":[{"state":"running"},{"state":"completed"}],"omitted":1}`,
-    ),
+    noticeSummary("team-view", `${teamViewPrefix}{"children":[{"state":"running"},{"state":"completed"}],"omitted":1}`),
   ).toBe("TeamView · 1 running · 1 completed · 1 omitted")
 })
 

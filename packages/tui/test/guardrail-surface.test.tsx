@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import type { YCodingEvent } from "@ycoding-ai/client"
-import { json } from "./fixture/tui-client"
+import { json, sessionSnapshot } from "./fixture/tui-client"
 import { renderScreen } from "./screen/harness"
 
 const parentID = "ses_guardrail_parent"
@@ -66,8 +66,8 @@ async function route(url: URL, init?: Request) {
   if (url.pathname === "/api/session") return json({ data: [parent, child], cursor: {} })
   if (url.pathname === `/api/session/${parentID}`) return json({ data: parent })
   if (url.pathname === `/api/session/${childID}`) return json({ data: child })
-  if (url.pathname === `/api/session/${parentID}/message` || url.pathname === `/api/session/${childID}/message`)
-    return json({ data: [], cursor: {} })
+  if (url.pathname === `/api/session/${parentID}/snapshot` || url.pathname === `/api/session/${childID}/snapshot`)
+    return sessionSnapshot(url.pathname === `/api/session/${childID}/snapshot` ? childID : parentID, [], { session: url.pathname === `/api/session/${childID}/snapshot` ? child : parent })
   if (url.pathname === `/api/session/${childID}/guardrail/request`) return json({ data: listed })
   if (url.pathname === `/api/session/${parentID}/guardrail/request`) return json({ data: listed })
   if (

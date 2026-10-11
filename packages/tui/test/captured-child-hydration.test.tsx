@@ -5,15 +5,16 @@ import { createSignal } from "solid-js"
 import { ClientProvider } from "../src/context/client"
 import { DataProvider, useData } from "../src/context/data"
 import { createCapturedChildHydration } from "../src/routes/session/captured-child-hydration"
-import { createApi, createEventStream, createFetch, json } from "./fixture/tui-client"
+import { createApi, createEventStream, createFetch, json, sessionSnapshot } from "./fixture/tui-client"
 import { TestTuiContexts } from "./fixture/tui-environment"
 
-async function mount() {
+async function mount(partialChild = false) {
   const [selection, select] = createSignal("ses_first")
   const events = createEventStream()
   const membershipGates = new Map<string, Promise<void>>()
   const messageGates = new Map<string, Promise<void>>()
   const failures = new Set<string>()
+  const partial = new Set(partialChild ? ["ses_old"] : [])
   const membershipFailures = new Set<string>()
   const requests: string[] = []
   let hydration!: ReturnType<typeof createCapturedChildHydration>
@@ -38,15 +39,16 @@ async function mount() {
             time: { created: 1, updated: 1 },
           },
         ],
+        summary: { total: 1, active: 1, running: 1, waiting: 0 },
         cursor: {},
       })
     }
-    const childID = ["ses_old", "ses_new"].find((id) => url.pathname === `/api/session/${id}/message`)
+    const childID = ["ses_old", "ses_new"].find((id) => url.pathname === `/api/session/${id}/snapshot`)
     if (childID) {
       await messageGates.get(childID)
       return failures.has(childID)
         ? json({ message: "Read failed" }, { status: 500 })
-        : json({ data: [{ id: `msg_${childID}`, type: "user", text: childID, time: { created: 1 } }], cursor: {} })
+        : sessionSnapshot(childID, [{ id: `msg_${childID}`, type: "user", text: childID, time: { created: 1 } }], { before: partial.has(childID) && !url.searchParams.has("before") ? "opaque_older" : undefined })
     }
     if (url.pathname === "/api/session/ses_old" || url.pathname === "/api/session/ses_new")
       return json({
@@ -91,11 +93,23 @@ async function mount() {
     membershipGates,
     messageGates,
     failures,
+    partial,
     membershipFailures,
     requests,
     child,
   }
 }
+
+test("a ready child with older history stays incomplete and does not page earlier child changes", async () => {
+  const fixture = await mount(true)
+  fixture.app.renderer.start()
+  try {
+    await fixture.app.waitForFrame(() => fixture.data().session.message.history("ses_old")?.status === "ready" && !fixture.hydration().status(["ses_old"])?.loading)
+    expect(fixture.hydration()).not.toHaveProperty("loadOlder")
+    expect(fixture.hydration().status(["ses_old"])).toMatchObject({ loading: false, failed: 0 })
+    expect(fixture.requests.filter((url) => url === "/api/session/ses_old/snapshot")).toHaveLength(1)
+  } finally { fixture.app.renderer.destroy(); fixture.events.disconnect() }
+})
 
 test("an obsolete membership result cannot authorize or read a previous selection's child", async () => {
   const fixture = await mount()
@@ -114,7 +128,7 @@ test("an obsolete membership result cannot authorize or read a previous selectio
     release()
     await fixture.app.renderOnce()
     expect(fixture.hydration().ids()).toEqual(["ses_new"])
-    expect(fixture.requests).not.toContain("/api/session/ses_old/message")
+    expect(fixture.requests).not.toContain("/api/session/ses_old/snapshot")
   } finally {
     release()
     fixture.app.renderer.destroy()
@@ -148,7 +162,7 @@ test("a late failed child read cannot overwrite the new selection and shared in-
     expect(await pending).toBe("failed")
     expect(fixture.hydration().ids()).toEqual(["ses_new"])
     expect(fixture.hydration().status(["ses_new"])).toBeUndefined()
-    expect(fixture.requests.filter((url) => url === "/api/session/ses_old/message")).toHaveLength(1)
+    expect(fixture.requests.filter((url) => url === "/api/session/ses_old/snapshot")).toHaveLength(1)
   } finally {
     release()
     fixture.app.renderer.destroy()
@@ -181,7 +195,7 @@ test("failed membership reads expose their error, read no unverified child, and 
       return error !== undefined && frame.includes(error)
     })
     expect(fixture.hydration().ids()).toEqual([])
-    expect(fixture.requests).not.toContain("/api/session/ses_old/message")
+    expect(fixture.requests).not.toContain("/api/session/ses_old/snapshot")
     fixture.membershipFailures.clear()
     fixture.events.emit({
       id: "evt_membership_progress",
@@ -191,7 +205,7 @@ test("failed membership reads expose their error, read no unverified child, and 
       data: { sessionID: "ses_old", change: { type: "progressed", progress: { text: "Progress", time: 2 } } },
     })
     await fixture.app.waitForFrame((frame) => frame.includes('ses_first ses_old "ready"'))
-    expect(fixture.requests.filter((url) => url === "/api/session/ses_old/message")).toHaveLength(1)
+    expect(fixture.requests.filter((url) => url === "/api/session/ses_old/snapshot")).toHaveLength(1)
   } finally {
     fixture.app.renderer.destroy()
     fixture.events.disconnect()

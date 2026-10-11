@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { json } from "../fixture/tui-client"
+import { json, sessionSnapshot } from "../fixture/tui-client"
 import { renderScreen } from "./harness"
 
 const sessionID = "ses_compact_command"
@@ -32,7 +32,7 @@ test("compaction command displays a backend conflict as an error toast", async (
         return json({ _tag: "ConflictError", message: "Compaction already running" }, { status: 409 })
       }
       if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
-      if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: [], cursor: {} })
+      if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, [], { session })
       if (url.pathname === `/api/session/${sessionID}/subagent`)
         return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
       if (/^\/api\/session\/[^/]+\/(pending|permission|form|todo|skills|guardrail\/request)$/.test(url.pathname))

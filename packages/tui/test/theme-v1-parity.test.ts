@@ -41,6 +41,9 @@ const THEME_NAMES = [
   "zenburn",
 ] as const
 
+// Built-in themes authored after the V1 migration have no legacy fixture entries.
+const ADDED_THEMES = ["high-contrast", "one-dark-pro"] as const
+
 const LEGACY_ROLES = [
   "accent",
   "background",
@@ -178,7 +181,7 @@ const fixture = Schema.decodeUnknownSync(Fixture)(
 test("V1 fixture freezes the complete 33-theme, 52-role, two-request inventory", () => {
   expect(fixture.schemaVersion).toBe(1)
   expect(fixture.themeNames).toEqual([...THEME_NAMES])
-  expect(Object.keys(DEFAULT_THEMES).sort()).toEqual([...THEME_NAMES])
+  expect(Object.keys(DEFAULT_THEMES).sort()).toEqual([...THEME_NAMES, ...ADDED_THEMES].sort())
   expect(LEGACY_ROLES).toHaveLength(52)
   expect(fixture.roles).toEqual([...LEGACY_ROLES])
   expect(fixture.entries).toHaveLength(66)

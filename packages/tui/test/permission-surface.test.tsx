@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import type { YCodingEvent } from "@ycoding-ai/client"
-import { json } from "./fixture/tui-client"
+import { json, sessionSnapshot } from "./fixture/tui-client"
 import { renderScreen } from "./screen/harness"
 
 const parentID = "ses_block_parent"
@@ -62,8 +62,8 @@ async function route(url: URL) {
   if (url.pathname === "/api/session") return json({ data: [parent, child], cursor: {} })
   if (url.pathname === `/api/session/${parentID}`) return json({ data: parent })
   if (url.pathname === `/api/session/${childID}`) return json({ data: child })
-  if (url.pathname === `/api/session/${parentID}/message` || url.pathname === `/api/session/${childID}/message`)
-    return json({ data: [], cursor: {} })
+  if (url.pathname === `/api/session/${parentID}/snapshot` || url.pathname === `/api/session/${childID}/snapshot`)
+    return sessionSnapshot(url.pathname === `/api/session/${childID}/snapshot` ? childID : parentID, [], { session: url.pathname === `/api/session/${childID}/snapshot` ? child : parent })
   if (url.pathname === `/api/session/${childID}/permission`) return json({ location, data: childPermissions })
   if (url.pathname === `/api/session/${parentID}/permission`) return json({ location, data: [] })
   if (url.pathname.endsWith(`/permission/${childPermission.id}/reply`)) {

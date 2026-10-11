@@ -67,6 +67,7 @@ function residentCompactionBoundary(sessionID: string, messages: SessionMessageI
 }
 
 export function createSessionRows(sessionID: Accessor<string>) {
+  const mountedSessionID = sessionID()
   const data = useData()
   const client = useClient()
   const [rows, setRows] = createStore<SessionRow[]>([])
@@ -346,19 +347,22 @@ export function createSessionRows(sessionID: Accessor<string>) {
   ]
   onCleanup(() => {
     subscriptions.forEach((unsubscribe) => unsubscribe())
-    data.session.message.evict(sessionID())
+    data.session.message.evict(mountedSessionID)
   })
 
   return rows
 }
 
 export function reduceSessionRows(messages: SessionMessageInfo[], inputs = new Set<string>(), idle = false) {
+  const transcript = messages.filter(
+    (message) => !(message.type === "synthetic" && message.metadata?.decisionInputID !== undefined),
+  )
   const isInput = (message: SessionMessageInfo) => inputs.has(message.id)
   // An idle Session has stopped replying, so its last assistant message is terminal even when that
   // step settled on a tool call. Without this the conversation ends on a dangling tool row instead
   // of on YCoding's own block. A Session with no assistant message gets no invented footer.
-  const closing = idle ? messages.findLast((message) => message.type === "assistant")?.id : undefined
-  const pendingCompactions = messages.filter(
+  const closing = idle ? transcript.findLast((message) => message.type === "assistant")?.id : undefined
+  const pendingCompactions = transcript.filter(
     (message) =>
       message.type === "compaction" &&
       (message.status === "running" ||
@@ -366,9 +370,9 @@ export function reduceSessionRows(messages: SessionMessageInfo[], inputs = new S
   )
   const pending = new Set([...pendingCompactions.map((message) => message.id), ...inputs])
   return [
-    ...messages.filter((message) => !pending.has(message.id)),
+    ...transcript.filter((message) => !pending.has(message.id)),
     ...pendingCompactions,
-    ...messages.filter(isInput),
+    ...transcript.filter(isInput),
   ].reduce<SessionRow[]>((rows, message) => {
     if (message.type !== "assistant") {
       if (message.type === "synthetic" && !message.description?.trim()) return rows

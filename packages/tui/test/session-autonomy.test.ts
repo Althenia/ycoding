@@ -2,6 +2,8 @@ import { expect, test } from "bun:test"
 import type { SessionAutonomyState } from "@ycoding-ai/client"
 import {
   activateGoal,
+  autonomyDecisionLabel,
+  autonomyLevelDescription,
   autonomyModeLabel,
   autonomyProgressLabel,
   createSessionAutonomyRefreshGuard,
@@ -13,6 +15,30 @@ import {
 test("normalizes untrusted YOLO input to a supported level", () => {
   expect([1.5, 9, Number.NaN, -1, true].map((yolo) => yoloLevel({ yolo }))).toEqual([1, 3, 0, 0, 2])
 })
+
+test("keeps numeric YOLO 3 with the same capabilities as YOLO 2", () => {
+  expect(yoloLevel({ yolo: 3 })).toBe(3)
+  expect(autonomyLevelDescription(3)).toContain("same as YOLO 2")
+})
+
+test("maps each decision to the effective YOLO level and goal", () => {
+  const labels = (yolo: number, goal = false) => {
+    const state = {
+      mode: "normal",
+      yolo,
+      ...(goal ? { goal: { text: "ship", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 3 } } : {}),
+    } as unknown as SessionAutonomyState
+    return (["permissions", "guardrails", "questions"] as const).map((action) =>
+      autonomyDecisionLabel(state, action),
+    )
+  }
+  expect(labels(0)).toEqual(["ask you", "ask you", "ask you"])
+  expect(labels(1)).toEqual(["auto", "auto", "ask you"])
+  expect(labels(2)).toEqual(["auto", "auto", "auto"])
+  expect(labels(3)).toEqual(["auto", "auto", "auto"])
+  expect(labels(0, true)).toEqual(["auto · goal", "ask you", "auto · goal"])
+})
+
 
 test("represents explicit goal reports through the progress label", () => {
   expect(
@@ -50,15 +76,22 @@ test("rejects an older refresh after a newer refresh starts", () => {
 })
 
 test("labels normal, yolo, and goal modes", () => {
-  expect(autonomyModeLabel({ mode: "normal", yolo: 0 } as unknown as SessionAutonomyState)).toBe("Normal")
+  expect(autonomyModeLabel({ mode: "normal", yolo: 0 } as unknown as SessionAutonomyState)).toBe("Manual")
   expect(autonomyModeLabel({ mode: "normal", yolo: 2 } as unknown as SessionAutonomyState)).toBe("YOLO 2")
   expect(autonomyModeLabel({ mode: "normal", yolo: 1 } as unknown as SessionAutonomyState)).toBe("YOLO 1")
   expect(autonomyModeLabel({ mode: "normal", yolo: 3 } as unknown as SessionAutonomyState)).toBe("YOLO 3")
   // legacy boolean true maps to YOLO 2, false to Normal
-  expect(autonomyModeLabel({ mode: "normal", yolo: 2 as unknown as number } as unknown as SessionAutonomyState)).toBe("YOLO 2")
-  expect(autonomyModeLabel({ mode: "normal", yolo: 0 as unknown as number } as unknown as SessionAutonomyState)).toBe("Normal")
+  expect(autonomyModeLabel({ mode: "normal", yolo: 2 as unknown as number } as unknown as SessionAutonomyState)).toBe(
+    "YOLO 2",
+  )
+  expect(autonomyModeLabel({ mode: "normal", yolo: 0 as unknown as number } as unknown as SessionAutonomyState)).toBe(
+    "Manual",
+  )
   expect(
-    autonomyModeLabel({ mode: "normal", yolo: 0, goal: {
+    autonomyModeLabel({
+      mode: "normal",
+      yolo: 0,
+      goal: {
         text: "Finish the migration",
         status: "active",
         iteration: 2,
@@ -66,12 +99,18 @@ test("labels normal, yolo, and goal modes", () => {
         maxNoProgress: 3,
       },
     } as unknown as SessionAutonomyState),
-  ).toBe("Goal")
-  expect(autonomyModeLabel({ mode: "normal", yolo: 2, goal: { text: "Finish the migration", status: "active", iteration: 2, noProgress: 0, maxNoProgress: 3 } } as unknown as SessionAutonomyState)).toBe("YOLO 2 + Goal")
+  ).toBe("Manual · goal")
+  expect(
+    autonomyModeLabel({
+      mode: "normal",
+      yolo: 2,
+      goal: { text: "Finish the migration", status: "active", iteration: 2, noProgress: 0, maxNoProgress: 3 },
+    } as unknown as SessionAutonomyState),
+  ).toBe("YOLO 2 · goal")
   // A terminal goal no longer appears in the autonomy label.
-  expect(autonomyModeLabel(terminal("completed"))).toBe("Normal")
-  expect(autonomyModeLabel(terminal("exhausted"))).toBe("Normal")
-  expect(autonomyModeLabel(terminal("stopped"))).toBe("Normal")
+  expect(autonomyModeLabel(terminal("completed"))).toBe("Manual")
+  expect(autonomyModeLabel(terminal("exhausted"))).toBe("Manual")
+  expect(autonomyModeLabel(terminal("stopped"))).toBe("Manual")
   expect(autonomyModeLabel({ ...terminal("stopped"), yolo: 3 } as unknown as SessionAutonomyState)).toBe("YOLO 3")
   expect(autonomyModeLabel({ ...terminal("completed"), yolo: 2 } as unknown as SessionAutonomyState)).toBe("YOLO 2")
 })
@@ -80,7 +119,10 @@ function terminal(
   status: "completed" | "exhausted" | "stopped",
   overrides: { iteration?: number; noProgress?: number; maxNoProgress?: number } = {},
 ): SessionAutonomyState {
-  return { mode: "normal", yolo: 0, goal: {
+  return {
+    mode: "normal",
+    yolo: 0,
+    goal: {
       text: "Finish the migration",
       status,
       iteration: overrides.iteration ?? 3,
@@ -92,7 +134,10 @@ function terminal(
 
 test("formats goal progress", () => {
   expect(
-    autonomyProgressLabel({ mode: "normal", yolo: 0, goal: {
+    autonomyProgressLabel({
+      mode: "normal",
+      yolo: 0,
+      goal: {
         text: "Finish the migration",
         status: "active",
         iteration: 2,
@@ -106,7 +151,10 @@ test("formats goal progress", () => {
 
 test("renders goal iteration separately from no-progress", () => {
   expect(
-    autonomyProgressLabel({ mode: "normal", yolo: 0, goal: {
+    autonomyProgressLabel({
+      mode: "normal",
+      yolo: 0,
+      goal: {
         text: "Finish the migration",
         status: "active",
         iteration: 50,
@@ -130,7 +178,9 @@ test("reports how a finished goal ended", () => {
 
 test("parses single-line, multiline, non-goal, and empty goal commands", () => {
   expect(parseGoalCommand("/goal Finish the migration")).toEqual({ goal: "Finish the migration" })
-  expect(parseGoalCommand("/goal Finish the migration\nRun the tests")).toEqual({ goal: "Finish the migration\nRun the tests" })
+  expect(parseGoalCommand("/goal Finish the migration\nRun the tests")).toEqual({
+    goal: "Finish the migration\nRun the tests",
+  })
   expect(parseGoalCommand("/goals Finish the migration")).toBeUndefined()
   expect(parseGoalCommand("/goal")).toEqual({ goal: "" })
 })
@@ -262,7 +312,10 @@ test("exposes autonomy only for the connected active session", async () => {
   expect(typeof currentSessionAutonomy).toBe("function")
   if (typeof currentSessionAutonomy !== "function") return
 
-  const goal: SessionAutonomyState = { mode: "normal", yolo: 0, goal: {
+  const goal: SessionAutonomyState = {
+    mode: "normal",
+    yolo: 0,
+    goal: {
       text: "Old session goal",
       status: "active",
       iteration: 1,

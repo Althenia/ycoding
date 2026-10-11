@@ -3,7 +3,7 @@ import { testRender } from "@opentui/solid"
 import { expect, test } from "bun:test"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
-import { createEffect, onMount, type JSX } from "solid-js"
+import { createEffect, createMemo, onMount, type JSX } from "solid-js"
 import { DialogAgent } from "../../src/component/dialog-agent"
 import { DialogConfig } from "../../src/component/dialog-config"
 import { DialogCustomEndpoint } from "../../src/component/dialog-custom-endpoint"
@@ -18,6 +18,7 @@ import { DialogSessionRename } from "../../src/component/dialog-session-rename"
 import { DialogSkill } from "../../src/component/dialog-skill"
 import { DialogStash } from "../../src/component/dialog-stash"
 import { DialogStatus } from "../../src/component/dialog-status"
+import { TelemetryProvider } from "../../src/context/telemetry"
 import { DialogVariant } from "../../src/component/dialog-variant"
 import { PromptStashProvider } from "../../src/prompt/stash"
 import { ArgsProvider } from "../../src/context/args"
@@ -34,7 +35,7 @@ import { DialogMessage } from "../../src/routes/session/dialog-message"
 import { DialogSubagent } from "../../src/routes/session/dialog-subagent"
 import { DialogTimeline } from "../../src/routes/session/dialog-timeline"
 import { DialogProvider, useDialog } from "../../src/ui/dialog"
-import { ToastProvider } from "../../src/ui/toast"
+import { Toast, ToastProvider } from "../../src/ui/toast"
 import { ConfigProvider } from "../../src/config"
 import { DialogExportOptions } from "../../src/ui/dialog-export-options"
 import { DialogExportResult } from "../../src/ui/dialog-export-result"
@@ -44,7 +45,7 @@ import { DialogRetryAction } from "../../src/component/dialog-retry-action"
 import { DialogSessionDeleteFailed } from "../../src/component/dialog-session-delete-failed"
 import { DialogThemeList } from "../../src/component/dialog-theme-list"
 import { DialogWorkspaceFileChanges } from "../../src/component/dialog-workspace-file-changes"
-import { createApi, createEventStream, createFetch, directory, json, worktree } from "../fixture/tui-client"
+import { createApi, createEventStream, createFetch, directory, json, worktree, sessionSnapshot } from "../fixture/tui-client"
 import { TestTuiContexts } from "../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
 
@@ -54,6 +55,14 @@ const sessionID = "ses_dialog_capture"
 const location = { directory, project: { id: "proj_test", directory: worktree } }
 const oauthCancelled: string[] = []
 const oauthSubmitted: string[] = []
+const defaultProfileRequests: string[] = []
+let profileActivationSucceeded = false
+let profileActivationResponseAt = 0
+let activationDialogCloseMs = 0
+const profileRefreshPaths: string[] = []
+const profileRefreshResolvers: Array<() => void> = []
+let displayedWorkProfileActive = false
+let resolveProfileListUpdate: (() => void) | undefined
 let oauthManualCode = false
 let oauthStatus: "pending" | "complete" = "pending"
 const viewports = [
@@ -97,7 +106,7 @@ const states = [
   { name: "subagents", settle: "Triage 2 failing tests", evidence: "Benchmark cache warm", view: () => <DialogSubagent sessionID="ses_subagent_capture" /> },
   { name: "message-actions", settle: "Copy as markdown", evidence: "Revert to here", view: () => <DialogMessage sessionID={sessionID} messageID="msg_audit" shortcuts={{ editor: "⌃x e", fork: "⌃x f" }} /> },
   { name: "fork-session", settle: "From this message", evidence: "message 88 of 88", view: () => <DialogFork sessionID={sessionID} boundary={{ messageID: "msg_audit", index: 42, total: 88 }} /> },
-  { name: "status", settle: "v1.18.4", evidence: "Durable store", view: () => <DialogStatus version="v1.18.4" bunVersion="1.3.14" pluginCount={1} serviceSummary={{ configured: 6, connected: 5 }} /> },
+  { name: "status", settle: "v1.18.4", evidence: "Durable store", view: () => <TelemetryProvider><DialogStatus version="v1.18.4" bunVersion="1.3.14" pluginCount={1} serviceSummary={{ configured: 6, connected: 5 }} /></TelemetryProvider> },
   { name: "move-session", settle: "~/Workspace/Personal/YCoding", evidence: "~/Workspace/work/bkof", view: () => <DialogMoveSession projectID="proj_test" current={{ type: "directory", directory: "/tmp/ycoding/home/Workspace/Personal/YCoding", subdirectory: false }} initialDirectories={directories} onSelect={() => {}} /> },
   { name: "rename-session", settle: "Provider cache audit", evidence: "Rename session", view: () => <DialogSessionRename sessionID={sessionID} currentTitle="Provider cache audit" /> },
   { name: "name-copy", settle: "Provider cache audit (copy)", view: () => <DialogProjectCopyName value="Provider cache audit (copy)" onConfirm={() => {}} /> },
@@ -302,13 +311,122 @@ test("the Connect integration menu opens the custom endpoint dialog", async () =
   await app.waitForFrame((frame) => frame.includes("Connect a service"))
   await app.mockInput.typeText("Custom OpenAI-compatible endpoint")
   await app.waitForFrame((frame) => frame.includes("Configure an OpenAI-compatible provider"))
+  await app.renderOnce()
   const rows = app.captureCharFrame().split("\n")
   const optionRow = rows.findIndex((row) => row.includes("Configure an OpenAI-compatible provider"))
-  await app.mockMouse.click(rows[optionRow]!.indexOf("Custom OpenAI-compatible endpoint") + 1, optionRow)
-  expect(opened).toBe(true)
+  await app.mockMouse.click(rows[optionRow].indexOf("Custom OpenAI-compatible endpoint") + 1, optionRow)
   await app.waitForFrame((frame) => frame.includes("Custom OpenAI-Compatible Endpoint"))
+  expect(opened).toBe(true)
   expect(app.captureCharFrame()).toContain("Endpoint URL")
   app.renderer.destroy()
+})
+
+test("a provider's profiles offer default selection instead of an active profile", async () => {
+  defaultProfileRequests.length = 0
+  function Connect() {
+    const dialog = useDialog()
+    onMount(() => dialog.replace(() => <DialogIntegration />))
+    return <SyncLocation />
+  }
+
+  const app = await testRender(() => <DialogProviders><Connect /></DialogProviders>, { width: 100, height: 35, kittyKeyboard: true, useMouse: true })
+  app.renderer.start()
+  try {
+    await app.waitForFrame((frame) => frame.includes("Linked · Claude Max, Work"))
+    const rows = app.captureCharFrame().split("\n")
+    const claudeRow = rows.findIndex((row) => row.includes("Linked · Claude Max, Work"))
+    await app.mockMouse.click(rows[claudeRow].indexOf("Claude") + 1, claudeRow)
+    await app.waitForFrame((frame) => frame.includes("Disconnect Work"))
+    const frame = app.captureCharFrame()
+    expect(frame).toMatch(/Claude Max\s+Default profile/)
+    expect(frame).toContain("Used when a model has no profile")
+    expect(frame).not.toMatch(/[Aa]ctive profile/)
+    expect(frame).not.toContain("Use Claude Max")
+    app.mockInput.pressArrow("down")
+    app.mockInput.pressArrow("down")
+    app.mockInput.pressEnter()
+    await app.waitForFrame(() => defaultProfileRequests.length > 0)
+    expect(defaultProfileRequests).toEqual(["/api/credential/cred_Work/activate"])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("profile activation closes the dialog before profile lists finish refreshing", async () => {
+  defaultProfileRequests.length = 0
+  profileActivationSucceeded = false
+  profileActivationResponseAt = 0
+  activationDialogCloseMs = 0
+  profileRefreshPaths.length = 0
+  profileRefreshResolvers.length = 0
+  displayedWorkProfileActive = false
+  const profileListUpdated = new Promise<void>((resolve) => {
+    resolveProfileListUpdate = resolve
+  })
+  function Connect() {
+    const dialog = useDialog()
+    const data = useData()
+    const workIsActive = createMemo(() =>
+      data.location
+        .integration.list()
+        ?.find((item) => item.id === "anthropic")
+        ?.connections.some(
+          (connection) => connection.type === "credential" && connection.label === "Work" && connection.active,
+        ),
+    )
+    createEffect(() => {
+      displayedWorkProfileActive = workIsActive() ?? false
+      if (displayedWorkProfileActive) resolveProfileListUpdate?.()
+    })
+    onMount(() => dialog.replace(() => <DialogIntegration />))
+    return (
+      <>
+        <Toast />
+        <SyncLocation />
+        <text>{workIsActive() ? "Work profile active" : "Work profile inactive"}</text>
+      </>
+    )
+  }
+
+  const app = await testRender(() => <DialogProviders><Connect /></DialogProviders>, {
+    width: 100,
+    height: 35,
+    kittyKeyboard: true,
+    useMouse: true,
+  })
+  app.renderer.start()
+  try {
+    await app.waitForFrame((frame) => frame.includes("Linked · Claude Max, Work"))
+    const rows = app.captureCharFrame().split("\n")
+    const claudeRow = rows.findIndex((row) => row.includes("Linked · Claude Max, Work"))
+    await app.mockMouse.click(rows[claudeRow]!.indexOf("Claude") + 1, claudeRow)
+    await app.waitForFrame((frame) => frame.includes("Disconnect Work"))
+    app.mockInput.pressArrow("down")
+    app.mockInput.pressArrow("down")
+    app.mockInput.pressEnter()
+    await app.waitForFrame(() => defaultProfileRequests.length > 0)
+    await app.waitForFrame((frame) => frame.includes("Default profile changed") && !frame.includes("Disconnect Work"))
+    activationDialogCloseMs = performance.now() - profileActivationResponseAt
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("Default profile changed")
+    await app.waitForFrame(() => profileRefreshPaths.length === 4)
+    expect(profileRefreshPaths.toSorted()).toEqual([
+      "/api/integration",
+      "/api/model",
+      "/api/model/default",
+      "/api/provider",
+    ])
+    expect(app.captureCharFrame()).toContain("Work profile inactive")
+    for (const resolve of profileRefreshResolvers) resolve()
+    await profileListUpdated
+    expect(displayedWorkProfileActive).toBe(true)
+    console.info("Profile activation dialog-close timing", { activationDialogCloseMs })
+  } finally {
+    for (const resolve of profileRefreshResolvers) resolve()
+    resolveProfileListUpdate = undefined
+    profileActivationSucceeded = false
+    app.renderer.destroy()
+  }
 })
 
 const designChecks: Partial<Record<(typeof states)[number]["name"], { title: string; row: number; column: number; text: string }>> = {
@@ -461,12 +579,45 @@ async function route(url: URL, request: Request) {
     oauthCancelled.push("attempt_layout")
     return new Response(null, { status: 204 })
   }
+  if (url.pathname.startsWith("/api/credential/") && url.pathname.endsWith("/activate") && request.method === "POST") {
+    defaultProfileRequests.push(url.pathname)
+    profileActivationSucceeded = true
+    profileActivationResponseAt = performance.now()
+    return new Response(null, { status: 204 })
+  }
+  if (
+    profileActivationSucceeded &&
+    ["/api/integration", "/api/model", "/api/model/default", "/api/provider"].includes(url.pathname)
+  ) {
+    profileRefreshPaths.push(url.pathname)
+    await new Promise<void>((resolve) => profileRefreshResolvers.push(resolve))
+    if (url.pathname === "/api/integration") {
+      return json({
+        location,
+        data: integrations.map((item) =>
+          item.id !== "anthropic"
+            ? item
+            : {
+                ...item,
+                connections: item.connections.map((connection) =>
+                  connection.type === "credential" && connection.label === "Work"
+                    ? { ...connection, active: true }
+                    : connection.type === "credential"
+                      ? { ...connection, active: false }
+                      : connection,
+                ),
+              },
+        ),
+      })
+    }
+  }
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/session") return json({ data: sessions, cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
-  if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: messages, cursor: {} })
+  if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, messages, { session })
   if (url.pathname === "/api/mcp") return json({ location, data: mcp })
   if (url.pathname === "/api/model") return json({ location, data: models })
+  if (url.pathname === "/api/model/default") return json({ location, data: undefined })
   if (url.pathname === "/api/provider") return json({ location, data: providers })
   if (url.pathname === "/api/agent") return json({ location, data: agents })
   if (url.pathname === "/api/integration") return json({ location, data: integrations })
@@ -477,10 +628,11 @@ async function route(url: URL, request: Request) {
   if (url.pathname === "/api/project/proj_test/directories") return json(directories)
   if (url.pathname === "/api/project-copy/proj_test/refresh") return json({})
   if (url.pathname === "/api/server") return json({ urls: ["http://127.0.0.1:4096"] })
-  if ([`/api/session/${sessionID}/pending`, `/api/session/${sessionID}/permission`, `/api/session/${sessionID}/form`, `/api/session/${sessionID}/todo`, `/api/session/${sessionID}/skills`, `/api/session/${sessionID}/guardrail/request`, `/api/session/${sessionID}/subagent`, "/api/reference", "/api/command", "/api/shell", "/api/permission/request", "/api/form/request"].includes(url.pathname)) return json({ location, data: [] })
+  if ([`/api/session/${sessionID}/pending`, `/api/session/${sessionID}/permission`, `/api/session/${sessionID}/form`, `/api/session/${sessionID}/todo`, `/api/session/${sessionID}/skills`, `/api/session/${sessionID}/guardrail/request`, "/api/reference", "/api/command", "/api/shell", "/api/permission/request", "/api/form/request"].includes(url.pathname)) return json({ location, data: [] })
   if (url.pathname === "/api/session/active") return json({ data: {} })
   if (url.pathname === `/api/session/${sessionID}/autonomy`) return json({ data: { mode: "normal", yolo: false } })
-  if (url.pathname === "/api/session/ses_subagent_capture/subagent") return json({ data: subagents })
+  if (url.pathname === `/api/session/${sessionID}/subagent`) return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
+  if (url.pathname === "/api/session/ses_subagent_capture/subagent") return json({ data: subagents, summary: { total: 4, active: 2, running: 1, waiting: 1 }, cursor: {} })
   return undefined
 }
 
@@ -532,7 +684,7 @@ const integrations = [
   { id: "ycoding", name: "YCoding Go", methods: [{ type: "key" as const, label: "API key" }], connections: [] },
   { id: "openai", name: "OpenAI", methods: [{ type: "key" as const, label: "API key" }], connections: credential("default") },
   { id: "github-copilot", name: "GitHub Copilot", methods: [{ id: "github", type: "oauth" as const, label: "Login with GitHub Copilot" }, { type: "key" as const, label: "API key" }], connections: [] },
-  { id: "anthropic", name: "Claude", methods: [{ type: "key" as const, label: "API key" }], connections: credential("Claude Max") },
+  { id: "anthropic", name: "Claude", methods: [{ type: "key" as const, label: "API key" }], connections: [...credential("Claude Max"), { type: "credential" as const, id: "cred_Work", label: "Work", active: false }] },
   { id: "google", name: "Google", methods: [{ type: "key" as const, label: "API key" }], connections: [] },
   { id: "302ai", name: "302.AI", methods: [{ type: "key" as const, label: "API key" }], connections: [] },
   { id: "amazon-bedrock", name: "Amazon Bedrock", methods: [{ type: "key" as const, label: "API key" }], connections: [] },

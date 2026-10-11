@@ -2,7 +2,7 @@
 import { expect, test } from "bun:test"
 import type { SessionMessageInfo } from "@ycoding-ai/client"
 import { railPlacement, railWidth } from "../src/routes/session/rail"
-import { json } from "./fixture/tui-client"
+import { json, sessionSnapshot } from "./fixture/tui-client"
 import { DESIGN_VIEWPORT } from "./viewport"
 import { renderScreen } from "./screen/harness"
 
@@ -134,6 +134,23 @@ const receiptTranscript = [
   },
 ] as SessionMessageInfo[]
 
+const profileSwitchTranscript = [
+  {
+    id: "msg_profile_switch",
+    type: "model-switched",
+    model: { providerID: "anthropic", id: "claude-opus-5", profile: "Work", variant: "high" },
+    previous: { providerID: "anthropic", id: "claude-opus-5", profile: "Personal", variant: "low" },
+    time: { created: 1 },
+  },
+  {
+    id: "msg_profile_default_switch",
+    type: "model-switched",
+    model: { providerID: "anthropic", id: "claude-opus-5" },
+    previous: { providerID: "anthropic", id: "claude-opus-5", profile: "Work" },
+    time: { created: 2 },
+  },
+] as SessionMessageInfo[]
+
 const skillTranscript = [
   {
     id: "msg_skill_loaded",
@@ -215,7 +232,7 @@ function routeFor(messages: SessionMessageInfo[]) {
     if (url.pathname === "/api/location") return json(location)
     if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
     if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
-    if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: messages, cursor: {} })
+    if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, messages, { session })
     if (url.pathname === `/api/session/${sessionID}/pending`) return json({ data: [] })
     if (url.pathname === `/api/session/${sessionID}/guardrail/request`) return json({ location, data: [] })
     if (url.pathname === `/api/session/${sessionID}/subagent`)
@@ -288,6 +305,7 @@ function routeFor(messages: SessionMessageInfo[]) {
             modelID: "claude-opus-5",
             providerID: "anthropic",
             name: "Claude Opus 5",
+            variants: [],
             capabilities: { tools: true, input: ["text"], output: ["text"] },
             time: { released: 0 },
             cost: [],
@@ -366,6 +384,17 @@ test("renders the delivery receipt below the user bubble", async () => {
     const receipt = lines[bubble.bottom + 1] ?? ""
     expect(receipt).toContain("✓")
     expect(bubble.body.join("\n")).not.toContain("✓")
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("renders the selected profile and changed variant in the transcript switch row", async () => {
+  const screen = await transcriptScreen(profileSwitchTranscript, "Switched profile to Work")
+
+  try {
+    expect(screen.frame()).toContain("Switched profile to Work (variant high)")
+    expect(screen.frame()).toContain("Switched profile to provider default")
   } finally {
     await screen.dispose()
   }

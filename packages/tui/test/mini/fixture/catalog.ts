@@ -21,6 +21,8 @@ export function catalogModel(input: {
   name?: string
   context?: number
   variants?: string[]
+  profiles?: Array<{ name: string; active: boolean; variants?: string[] }>
+  enabled?: boolean
 }): ModelListOutput["data"][number] {
   return {
     id: input.id,
@@ -33,10 +35,11 @@ export function catalogModel(input: {
       output: ["text"],
     },
     variants: (input.variants ?? []).map((id) => ({ id })),
+    ...(input.profiles === undefined ? {} : { profiles: input.profiles }),
     time: { released: 1 },
     cost: [{ input: 0, output: 0, cache: { read: 0, write: 0 } }],
     status: "active",
-    enabled: true,
+    enabled: input.enabled ?? true,
     limit: { context: input.context ?? 128_000, output: 8_192 },
   }
 }

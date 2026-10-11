@@ -1,5 +1,5 @@
 import path from "path"
-import type { SessionSkillsOutput } from "@ycoding-ai/client"
+import type { SessionMessageInfo, SessionSkillsOutput } from "@ycoding-ai/client"
 
 export type SessionSkill = {
   id: string
@@ -51,6 +51,26 @@ export function groupSessionSkills(skills: ReadonlyArray<SessionSkill>) {
 export function sessionSkillLabel(skill: SessionSkill) {
   if (skill.state === "active") return skill.conflicts.length ? "ACTIVE - CONFLICT" : "ACTIVE"
   return skill.inactiveReason === "compacted" ? "INACTIVE - COMPACTED" : "INACTIVE - AGENT SWITCH"
+}
+
+export function activeSkillIDs(messages: ReadonlyArray<SessionMessageInfo>): ReadonlySet<string> {
+  return messages.reduce((active, message) => {
+    if (message.type === "skill") active.add(message.skill)
+    if (message.type === "assistant")
+      message.content.forEach((part) => {
+        if (part.type !== "tool" || part.name !== "skill" || part.state.status !== "completed") return
+        const id = recordValue(part.state.input)?.id
+        if (typeof id === "string" && recordValue(part.state.structured)?.alreadyActive !== true) active.add(id)
+      })
+    if (message.type === "skill" || message.type === "assistant")
+      message.skillDeactivations?.forEach((deactivation) => active.delete(deactivation.skill))
+    if (message.type === "agent-switched" || (message.type === "compaction" && message.status === "completed")) active.clear()
+    return active
+  }, new Set<string>())
+}
+
+function recordValue(value: unknown) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined
 }
 
 export function sessionSkillContent(content: unknown) {

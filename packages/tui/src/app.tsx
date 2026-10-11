@@ -34,7 +34,6 @@ import {
   TuiPathsProvider,
   TuiStartupProvider,
   TuiTerminalEnvironmentProvider,
-  useTuiStartup,
 } from "./context/runtime"
 import { DialogProvider, useDialog } from "./ui/dialog"
 import { DialogIntegration } from "./component/dialog-integration"
@@ -44,11 +43,12 @@ import { PluginRouteMissing } from "./component/plugin-route-missing"
 import { EditorContextProvider } from "./context/editor"
 import { useEvent } from "./context/event"
 import { ClientProvider, useClient } from "./context/client"
-import { createStartupReady, StartupLoading } from "./component/startup-loading"
+import { TelemetryControls, TelemetryDataProvider, TelemetryProvider, useTelemetry } from "./context/telemetry"
+import { createStartupReady } from "./component/startup-loading"
 import { DevToolsSidebar } from "./component/devtools-sidebar"
 import { DevTools } from "./devtools"
 import { Reconnecting } from "./component/reconnecting"
-import { DataProvider, useData } from "./context/data"
+import { useData } from "./context/data"
 import { LocationProvider, useLocation } from "./context/location"
 import { LocalProvider, useLocal } from "./context/local"
 import { DialogModel } from "./component/dialog-model"
@@ -60,6 +60,7 @@ import { DialogDebug } from "./component/dialog-debug"
 import { DialogPair, type DialogPairCredentials } from "./component/dialog-pair"
 import { DialogThemeList } from "./component/dialog-theme-list"
 import { DialogHelp } from "./ui/dialog-help"
+import open from "open"
 import { DialogAgent } from "./component/dialog-agent"
 import { DialogSessionList } from "./component/dialog-session-list"
 import { ThemeProvider, useTheme } from "./context/theme"
@@ -75,7 +76,7 @@ import { FrecencyProvider } from "./prompt/frecency"
 import { PromptStashProvider } from "./prompt/stash"
 import { Toast, ToastProvider, useToast } from "./ui/toast"
 import { isDefaultTitle } from "./util/session"
-import * as Model from "./util/model"
+import { parse } from "./util/model"
 import { ArgsProvider, useArgs, type Args } from "./context/args"
 import { PromptRefProvider, usePromptRef } from "./context/prompt"
 import { Config, ConfigProvider, useConfig } from "./config"
@@ -92,6 +93,7 @@ import { writeHeapSnapshot } from "node:v8"
 import { saveCustomEndpoint } from "./custom-endpoint-save"
 import { KeepAwakeProvider, type KeepAwakeStatus } from "./keep-awake"
 import { RemoteProvider, type RemoteStatus } from "./remote-connector"
+import path from "node:path"
 
 const themePerformance = DevTools.register({ id: "theme-performance", title: "Theme performance" })
 
@@ -330,19 +332,11 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                   <Keymap.Provider>
                                     <ToastProvider>
                                       <UpdateNotice message={input.updateNotice} />
-                                      <RouteProvider
-                                        initialRoute={
-                                          input.args.continue
-                                            ? {
-                                                type: "session",
-                                                sessionID: "dummy",
-                                              }
-                                            : undefined
-                                        }
-                                      >
+                                      <RouteProvider>
                                         <PluginRuntimeProvider value={pluginRuntime}>
                                           <ClientProvider api={api} baseUrl={clientOptions.baseUrl} service={service}>
-                                              <DataProvider>
+                                            <TelemetryProvider>
+                                              <TelemetryDataProvider>
                                                 <LocationProvider>
                                                   <ThemeProvider mode={mode}>
                                                     <LocalProvider>
@@ -378,7 +372,8 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                     </LocalProvider>
                                                   </ThemeProvider>
                                                 </LocationProvider>
-                                              </DataProvider>
+                                              </TelemetryDataProvider>
+                                            </TelemetryProvider>
                                           </ClientProvider>
                                         </PluginRuntimeProvider>
                                       </RouteProvider>
@@ -434,7 +429,6 @@ export function UpdateNotice(props: { message?: Promise<string | undefined> }) {
 function App(props: { pair?: DialogPairCredentials; started: number }) {
   const sessionViewports: SessionViewportStore = new Map()
   const log = useLog({ component: "app" })
-  const startup = useTuiStartup()
   const config = useConfig()
   const devtools = createMemo(() => config.data.debug?.devtools ?? false)
   const route = useRoute()
@@ -445,6 +439,7 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
   const keymap = Keymap.use()
   const event = useEvent()
   const client = useClient()
+  const telemetry = useTelemetry()
   const toast = useToast()
   const themeState = useTheme()
   const { theme, mode, supports, setMode, locked, lock, unlock } = themeState
@@ -454,39 +449,80 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
   const promptRef = usePromptRef()
   const pluginRuntime = usePluginRuntime()
   const plugins = usePlugin()
-  const pluginsStarted = createStartupReady(plugins.ready)
+  const pluginsStarted = createStartupReady(plugins.coreReady)
   const clipboard = useClipboard()
+
+  createEffect(() => {
+    const error = plugins.error()
+    if (!error) return
+    toast.show({
+      title: "YCoding startup failed",
+      message: `${error}. Open Status for details, then restart YCoding.`,
+      variant: "error",
+    })
+  })
 
   createEffect(() => {
     if (!themeState.ready) return
     themePerformance.set("Total", `${(performance.now() - props.started).toFixed(2)} ms`)
   })
 
-  // Toast once when an MCP server enters a failed or needs-auth state so the user knows to act,
-  // without having to open the status panel. Tracking the last alerted status avoids re-toasting
-  // the same problem on every refresh while still re-alerting if the state changes.
-  const mcpAlerted: Record<string, string> = {}
+  let mcpLocation: string | undefined
+  let mcpPrevious: Map<string, { status: string; settled: boolean }> | undefined
   createEffect(() => {
-    for (const server of data.location.mcp.server.list() ?? []) {
+    const target = location.current ?? data.location.default()
+    const key = `${target.workspaceID ?? ""}\0${target.directory}`
+    if (mcpLocation !== key) {
+      mcpLocation = key
+      mcpPrevious = undefined
+    }
+    const servers = data.location.mcp.server.list(target)
+    if (!servers) return
+    const previous = mcpPrevious
+    mcpPrevious = new Map(
+      servers.map((server) => [
+        server.name,
+        {
+          status: server.status.status,
+          settled: server.status.status !== "pending" || previous?.get(server.name)?.settled === true,
+        },
+      ]),
+    )
+    if (!previous) return
+    for (const server of servers) {
       const status = server.status
-      if (status.status !== "failed" && status.status !== "needs_auth") {
-        delete mcpAlerted[server.name]
-        continue
-      }
-      if (mcpAlerted[server.name] === status.status) continue
-      mcpAlerted[server.name] = status.status
+      const prior = previous.get(server.name)
+      if (!prior?.settled || prior.status === status.status) continue
       if (status.status === "needs_auth")
         toast.show({
           variant: "warning",
           title: "MCP server needs authentication",
           message: `Connect "${server.name}" to use its tools.`,
         })
-      else
+      if (status.status === "failed")
         toast.show({
           variant: "error",
           title: `MCP server failed: ${server.name}`,
           message: "Open MCP servers to view details.",
         })
+    }
+  })
+
+  const configAlerted = new Set<string>()
+  createEffect(() => {
+    const diagnostics = data.location.config.diagnostics.list() ?? []
+    const active = new Set(diagnostics.map((diagnostic) => `${diagnostic.path}\0${diagnostic.jsonPath}\0${diagnostic.failClosed}\0${diagnostic.reason}\0${diagnostic.message}`))
+    for (const key of configAlerted) if (!active.has(key)) configAlerted.delete(key)
+    for (const diagnostic of diagnostics) {
+      const key = `${diagnostic.path}\0${diagnostic.jsonPath}\0${diagnostic.failClosed}\0${diagnostic.reason}\0${diagnostic.message}`
+      if (configAlerted.has(key)) continue
+      configAlerted.add(key)
+      const firstLine = diagnostic.message.split("\n", 1)[0]
+      toast.show({
+        variant: "error",
+        title: diagnostic.failClosed ? "Configuration fails closed" : diagnostic.jsonPath ? "Configuration item dropped" : "Configuration file ignored",
+        message: `${path.basename(diagnostic.path)}${diagnostic.jsonPath ? `: ${diagnostic.jsonPath}` : ""}: ${firstLine.slice(0, 120)}${firstLine.length > 120 ? "…" : ""}. Open Status to view details.`,
+      })
     }
   })
 
@@ -551,14 +587,14 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
     batch(() => {
       if (args.agent) local.agent.set(args.agent)
       if (args.model) {
-        const { providerID, modelID } = Model.parse(args.model)
-        if (!providerID || !modelID)
+        const model = parse(args.model)
+        if (!model)
           return toast.show({
             variant: "warning",
             message: `Invalid model format: ${args.model}`,
             duration: 3000,
           })
-        local.model.set({ providerID, modelID }, { recent: true })
+        local.model.set(model, { recent: true })
       }
       if (args.sessionID && !args.fork) {
         route.navigate({
@@ -570,6 +606,7 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
   })
 
   let continued = false
+  const [continuePending, setContinuePending] = createSignal(Boolean(args.continue))
   createEffect(() => {
     if (continued || !args.continue) return
     continued = true
@@ -582,19 +619,18 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
         directory: location.directory,
         workspace: location.workspaceID,
       })
-      .then((response) => {
+      .then(async (response) => {
         const match = response.data[0]?.id
         if (!match) return
         if (!args.fork) {
           route.navigate({ type: "session", sessionID: match })
           return
         }
-        void client.api.session
-          .fork({ sessionID: match })
-          .then((result) => route.navigate({ type: "session", sessionID: result.id }))
-          .catch(toast.error)
+        const result = await client.api.session.fork({ sessionID: match })
+        route.navigate({ type: "session", sessionID: result.id })
       })
       .catch(toast.error)
+      .finally(() => setContinuePending(false))
   })
 
   // Handle --session with --fork once.
@@ -679,9 +715,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       },
       {
         name: "model.cycle_recent",
+        description: "Next recently used model",
         title: "Model cycle",
         category: "Agent",
-        palette: undefined,
         run: () => {
           void local.model.cycle(1).catch((error: unknown) =>
             toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" }),
@@ -690,9 +726,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       },
       {
         name: "model.cycle_recent_reverse",
+        description: "Previous recently used model",
         title: "Model cycle reverse",
         category: "Agent",
-        palette: undefined,
         run: () => {
           void local.model.cycle(-1).catch((error: unknown) =>
             toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" }),
@@ -701,9 +737,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       },
       {
         name: "model.cycle_favorite",
+        description: "Next favorite model",
         title: "Favorite cycle",
         category: "Agent",
-        palette: undefined,
         run: () => {
           void local.model.cycleFavorite(1).catch((error: unknown) =>
             toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" }),
@@ -712,9 +748,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       },
       {
         name: "model.cycle_favorite_reverse",
+        description: "Previous favorite model",
         title: "Favorite cycle reverse",
         category: "Agent",
-        palette: undefined,
         run: () => {
           void local.model.cycleFavorite(-1).catch((error: unknown) =>
             toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" }),
@@ -741,9 +777,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       },
       {
         name: "agent.cycle",
+        description: "Next agent",
         title: "Agent cycle",
         category: "Agent",
-        palette: undefined,
         run: () => {
           local.agent.move(1)
         },
@@ -781,9 +817,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       },
       {
         name: "agent.cycle.reverse",
+        description: "Previous agent",
         title: "Agent cycle reverse",
         category: "Agent",
-        palette: undefined,
         run: () => {
           local.agent.move(-1)
         },
@@ -868,11 +904,24 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
         category: "System",
       },
       {
+        name: "telemetry.toggle",
+        title: `Telemetry: ${telemetry.consent()?.enabled ? "on" : "off"}`,
+        description: "Toggle telemetry on this machine",
+        category: "System",
+        run: telemetry.toggle,
+      },
+      ...(telemetry.decided() && !telemetry.consent()
+        ? [
+            { name: "telemetry.consent.agree", title: "Agree", category: "Telemetry", run: () => telemetry.decide(true) },
+            { name: "telemetry.consent.not-now", title: "Not now", category: "Telemetry", run: () => telemetry.decide(false) },
+          ]
+        : []),
+      {
         name: "ycoding.status",
         title: "View status",
         slash: { name: "status" },
         run: () => {
-          dialog.replace(() => <DialogStatus />)
+          dialog.replace(() => <DialogStatus startupPlugins={plugins.list()} />)
         },
         category: "System",
       },
@@ -926,8 +975,8 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       },
       {
         name: "theme.switch_mode",
+        description: "Toggle between dark and light",
         title: mode() === "dark" ? "Switch to light mode" : "Switch to dark mode",
-        palette: undefined,
         enabled: () => supports(mode() === "dark" ? "light" : "dark"),
         run: () => {
           setMode(mode() === "dark" ? "light" : "dark")
@@ -937,8 +986,8 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       },
       {
         name: "theme.mode.lock",
+        description: "Keep the current mode instead of following the terminal theme",
         title: locked() ? "Unlock theme mode" : "Lock theme mode",
-        palette: undefined,
         run: () => {
           if (locked()) unlock()
           else lock()
@@ -952,6 +1001,17 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
         slash: { name: "help" },
         run: () => {
           dialog.replace(() => <DialogHelp />)
+        },
+        category: "System",
+      },
+      {
+        name: "docs.open",
+        title: "Open documentation",
+        description: "Open the YCoding documentation in your browser",
+        slash: { name: "docs" },
+        run: () => {
+          void open("https://ycoding.althenia.app/docs").catch(toast.error)
+          dialog.clear()
         },
         category: "System",
       },
@@ -996,9 +1056,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       },
       {
         name: "terminal.suspend",
+        description: "Send YCoding to the background",
         title: "Suspend terminal",
         category: "System",
-        palette: undefined,
         enabled: process.platform !== "win32",
         run: () => {
           renderer.suspend()
@@ -1008,9 +1068,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       },
       {
         name: "terminal.title.toggle",
+        description: "Toggle terminal title updates",
         title: terminalTitleEnabled() ? "Disable terminal title" : "Enable terminal title",
         category: "System",
-        palette: undefined,
         run: () => {
           const next = !terminalTitleEnabled()
           if (!next) renderer.setTerminalTitle("")
@@ -1024,9 +1084,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       },
       {
         name: "app.toggle.animations",
+        description: "Toggle interface animations",
         title: (config.data.animations ?? true) ? "Disable animations" : "Enable animations",
         category: "System",
-        palette: undefined,
         run: () => {
           void config
             .update((draft) => {
@@ -1038,9 +1098,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       },
       {
         name: "app.toggle.file_context",
+        description: "Toggle editor file context in prompts",
         title: (config.data.prompt?.editor ?? true) ? "Disable file context" : "Enable file context",
         category: "System",
-        palette: undefined,
         run: () => {
           void config
             .update((draft) => {
@@ -1052,9 +1112,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       },
       {
         name: "app.toggle.diffwrap",
+        description: "Toggle diff line wrapping",
         title: (config.data.diffs?.wrap ?? "word") === "word" ? "Disable diff wrapping" : "Enable diff wrapping",
         category: "System",
-        palette: undefined,
         run: () => {
           void config
             .update((draft) => {
@@ -1069,9 +1129,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       },
       {
         name: "app.toggle.paste_summary",
+        description: "Toggle compact summaries of pasted text",
         title: pasteSummaryEnabled() ? "Disable paste summary" : "Enable paste summary",
         category: "System",
-        palette: undefined,
         run: () => {
           void config
             .update((draft) => {
@@ -1096,6 +1156,25 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
   Keymap.createLayer(() => ({
     mode: "global",
     commands: appCommands(),
+  }))
+
+  Keymap.createLayer(() => ({
+    mode: "global",
+    commands: (data.location.command.list(location.current) ?? []).map(
+      (command) =>
+        ({
+          id: `command.run.${command.name}`,
+          title: `/${command.name}`,
+          description: command.description,
+          group: "Commands",
+          bind: false,
+          palette: true as const,
+          run: () => {
+            promptRef.current?.set({ text: `/${command.name} `, files: [], agents: [], pasted: [] })
+            dialog.clear()
+          },
+        }) satisfies KeymapCommand,
+    ),
   }))
 
   Keymap.createLayer(() => ({
@@ -1182,6 +1261,7 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       flexDirection="column"
       backgroundColor={theme.background.default}
     >
+      <TelemetryControls />
       <Show when={config.data.debug?.timing}>
         <TimeToFirstDraw />
       </Show>
@@ -1191,7 +1271,7 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
             <box flexGrow={1} minHeight={0} flexDirection="column">
               <Switch>
                 <Match when={route.data.type === "home"}>
-                  <Home />
+                  <Home submitDisabled={continuePending()} />
                 </Match>
                 <Match when={route.data.type === "session"}>
                   <Show when={route.data.type === "session" ? route.data.sessionID : undefined} keyed>
@@ -1201,7 +1281,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
                 <Match when={route.data.type === "plugin"}>
                   <PluginRoute
                     fallback={(id, name) => (
-                      <PluginRouteMissing id={id} name={name} onHome={() => route.navigate({ type: "home" })} />
+                      <Show when={plugins.ready()} fallback={<text fg={theme.text.subdued}>Loading extension…</text>}>
+                        <PluginRouteMissing id={id} name={name} onHome={() => route.navigate({ type: "home" })} />
+                      </Show>
                     )}
                   />
                 </Match>
@@ -1232,10 +1314,7 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
           <DevToolsSidebar />
         </Show>
       </box>
-      <Show when={!startup.skipInitialLoading}>
-        <StartupLoading ready={pluginsStarted} />
-      </Show>
-      <Show when={showReconnecting()}>
+      <Show when={showReconnecting() && route.data.type !== "session"}>
         <Reconnecting />
       </Show>
       <Toast />

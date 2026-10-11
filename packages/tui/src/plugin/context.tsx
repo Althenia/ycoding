@@ -38,6 +38,8 @@ type State =
 
 type Value = {
   readonly ready: () => boolean
+  readonly coreReady: () => boolean
+  readonly error: () => string | undefined
   readonly list: () => ReadonlyArray<State>
   readonly route: (id: string, name: string) => Page["render"] | undefined
   readonly slot: (name: string) => ReadonlyArray<Slot>
@@ -51,6 +53,7 @@ type Registration = {
   plugin: Plugin.Definition
   options?: Readonly<Record<string, any>>
   active: boolean
+  core: boolean
   routes: Record<string, Page>
   slots: Record<string, Slot>
   cleanups: Dispose[]
@@ -71,15 +74,21 @@ export function PluginProvider(props: ParentProps<{ packages: PackageResolver }>
   const directory = config.path ? path.dirname(config.path) : process.cwd()
   const [store, setStore] = createStore({
     ready: false,
+    coreReady: false,
+    error: undefined as string | undefined,
     states: [] as ReadonlyArray<State>,
     registrations: {} as Record<string, Registration>,
   })
   const attention = createTuiAttention({ renderer, config: config.data, update: config.update })
+  let disposed = false
+  const pendingSetups = new Set<Dispose[]>()
 
   const activate = async (id: string) => {
+    if (disposed) return false
     const item = store.registrations[id]
     if (!item) return false
     await deactivate(id)
+    if (disposed) return false
     batch(() => {
       setStore("registrations", id, "routes", reconcileStore({}))
       setStore("registrations", id, "slots", reconcileStore({}))
@@ -105,6 +114,7 @@ export function PluginProvider(props: ParentProps<{ packages: PackageResolver }>
       ui: {
         router: {
           register(page) {
+            if (disposed) throw new Error("TUI plugin is disposed")
             if (store.registrations[item.plugin.id]?.routes[page.name])
               throw new Error(`Route already registered: ${page.name}`)
             setStore("registrations", item.plugin.id, "routes", page.name, page)
@@ -125,6 +135,7 @@ export function PluginProvider(props: ParentProps<{ packages: PackageResolver }>
             return unregister
           },
           navigate(destination) {
+            if (disposed) return
             if (destination.type === "plugin") {
               route.navigate({ ...destination, id: "id" in destination ? destination.id : item.plugin.id })
               return
@@ -142,6 +153,7 @@ export function PluginProvider(props: ParentProps<{ packages: PackageResolver }>
           },
         },
         slot(name, render) {
+          if (disposed) throw new Error("TUI plugin is disposed")
           if (store.registrations[item.plugin.id]?.slots[name]) throw new Error(`Slot already registered: ${name}`)
           setStore("registrations", item.plugin.id, "slots", name, () => render)
           let registered = true
@@ -162,12 +174,21 @@ export function PluginProvider(props: ParentProps<{ packages: PackageResolver }>
         },
       },
     }
+    pendingSetups.add(owned)
     const cleanup = await setup(item.plugin, context, owned).catch((error) => {
-      setStore("registrations", id, "routes", reconcileStore({}))
-      setStore("registrations", id, "slots", reconcileStore({}))
+      pendingSetups.delete(owned)
+      if (!disposed) {
+        setStore("registrations", id, "routes", reconcileStore({}))
+        setStore("registrations", id, "slots", reconcileStore({}))
+      }
       throw error
     })
     if (cleanup) owned.push(async () => cleanup())
+    pendingSetups.delete(owned)
+    if (disposed) {
+      await disposeAll(owned)
+      return false
+    }
     batch(() => {
       setStore("registrations", id, "cleanups", owned)
       setStore("registrations", id, "active", true)
@@ -221,30 +242,58 @@ export function PluginProvider(props: ParentProps<{ packages: PackageResolver }>
         target: plugin.id,
         plugin,
         active: false,
+        core: true,
         routes: {},
         slots: {},
         cleanups: [],
       })
       await activate(plugin.id)
+      if (disposed) return
     }
 
     for (const entry of entries) {
       const target = typeof entry === "string" ? entry : entry.package
+      const disabling = target.startsWith("-")
+      const selected = Object.keys(store.registrations).filter((id) =>
+        matches(disabling ? target.slice(1) : target, id),
+      )
+      for (const id of selected) {
+        if (disabling) await deactivate(id)
+        if (!disabling) await activate(id)
+        if (disposed) return
+      }
+    }
+    setStore("coreReady", true)
+
+    for (const entry of entries) {
+      if (disposed) return
+      const target = typeof entry === "string" ? entry : entry.package
       if (target.startsWith("-")) {
-        for (const id of Object.keys(store.registrations).filter((id) => matches(target.slice(1), id)))
+        for (const id of Object.keys(store.registrations).filter(
+          (id) => !store.registrations[id].core && matches(target.slice(1), id),
+        ))
           await deactivate(id)
         continue
       }
 
-      const selected = Object.keys(store.registrations).filter((id) => matches(target, id))
-      if (selected.length || target === "*" || target.endsWith(".*") || target.startsWith("ycoding.")) {
+      const selected = Object.keys(store.registrations).filter(
+        (id) => !store.registrations[id].core && matches(target, id),
+      )
+      if (
+        selected.length ||
+        Object.keys(store.registrations).some((id) => store.registrations[id].core && matches(target, id)) ||
+        target === "*" ||
+        target.endsWith(".*") ||
+        target.startsWith("ycoding.")
+      ) {
         for (const id of selected) await activate(id)
         continue
       }
 
       const options = typeof entry === "string" ? undefined : entry.options
       setStore("states", (items) => [...items, { target, status: "loading" }])
-      const plugin = await loadPlugin(target, directory, props.packages).catch((error) => {
+      const plugin = await loadPlugin(target, directory, props.packages, () => !disposed).catch((error) => {
+        if (disposed) return undefined
         setStore("states", (items) =>
           items.map((state) =>
             state.target === target
@@ -254,6 +303,7 @@ export function PluginProvider(props: ParentProps<{ packages: PackageResolver }>
         )
         return undefined
       })
+      if (disposed) return
       if (!plugin) {
         setStore("states", (items) =>
           items.map((state) =>
@@ -267,6 +317,7 @@ export function PluginProvider(props: ParentProps<{ packages: PackageResolver }>
       setStore("registrations", item.plugin.id, {
         ...item,
         active: false,
+        core: false,
         routes: {},
         slots: {},
         cleanups: [],
@@ -275,6 +326,7 @@ export function PluginProvider(props: ParentProps<{ packages: PackageResolver }>
         () => undefined,
         (error) => (error instanceof Error ? error.message : String(error)),
       )
+      if (disposed) return
       setStore("states", (items) => [
         ...items.filter((state) => state.target !== item.target && (!("id" in state) || state.id !== item.plugin.id)),
         error
@@ -283,27 +335,21 @@ export function PluginProvider(props: ParentProps<{ packages: PackageResolver }>
       ])
     }
   }
-  let loading = Promise.resolve()
   let disposing: Promise<void> | undefined
   const dispose = () => {
     if (disposing) return disposing
-    disposing = loading
-      .then(
-        () => undefined,
-        (error) => error,
-      )
-      .then(async (loadingError) => {
-        const results = await Promise.allSettled(
-          Object.entries(store.registrations)
-            .filter(([, registration]) => registration.active)
-            .map(([id]) => deactivate(id)),
-        )
-        attention.dispose()
-        setStore("registrations", reconcileStore({}))
-        const failed = results.find((result) => result.status === "rejected")
-        if (failed?.status === "rejected") throw failed.reason
-        if (loadingError) throw loadingError
-      })
+    disposed = true
+    attention.dispose()
+    disposing = Promise.allSettled([
+      ...[...pendingSetups].map(disposeAll),
+      ...Object.entries(store.registrations)
+        .filter(([, registration]) => registration.active)
+        .map(([id]) => deactivate(id)),
+    ]).then((results) => {
+      setStore("registrations", reconcileStore({}))
+      const failed = results.find((result) => result.status === "rejected")
+      if (failed?.status === "rejected") throw failed.reason
+    })
     return disposing
   }
   const unregister = lifecycle.add(dispose)
@@ -312,10 +358,20 @@ export function PluginProvider(props: ParentProps<{ packages: PackageResolver }>
     void dispose().catch(() => undefined)
   })
   onMount(() => {
-    loading = reconcile()
-    void loading.then(
-      () => setStore("ready", true),
-      () => setStore("ready", true),
+    void reconcile().then(
+      () => {
+        if (!disposed) setStore("ready", true)
+      },
+      (error) => {
+        if (disposed) return
+        const message = error instanceof Error ? error.message : String(error)
+        batch(() => {
+          setStore("error", message)
+          setStore("states", (states) => [...states, { target: "Built-in startup", status: "failed", error: message }])
+          setStore("coreReady", true)
+          setStore("ready", true)
+        })
+      },
     )
   })
 
@@ -323,8 +379,11 @@ export function PluginProvider(props: ParentProps<{ packages: PackageResolver }>
     <PluginContext.Provider
       value={{
         ready: () => store.ready,
+        coreReady: () => store.coreReady,
+        error: () => store.error,
         list: () => store.states,
-        route: (id, name) => store.registrations[id]?.routes[name]?.render,
+        route: (id, name) =>
+          store.registrations[id]?.active ? store.registrations[id].routes[name]?.render : undefined,
         slot: (name) =>
           Object.values(store.registrations).flatMap((registration) =>
             registration.active && registration.slots[name] ? [registration.slots[name]] : [],
@@ -357,14 +416,14 @@ function matches(selector: string, id: string) {
   return selector === "*" || selector === id || (selector.endsWith(".*") && id.startsWith(selector.slice(0, -1)))
 }
 
-async function loadPlugin(spec: string, directory: string, packages: PackageResolver) {
+async function loadPlugin(spec: string, directory: string, packages: PackageResolver, current: () => boolean) {
   const local = spec.startsWith("file://")
     ? new URL(spec)
     : spec.startsWith("./") || spec.startsWith("../") || path.isAbsolute(spec)
       ? pathToFileURL(path.resolve(directory, spec))
       : undefined
   const entrypoint = local ? await resolveLocal(local) : await packages.resolve(spec)
-  if (!entrypoint) return
+  if (!entrypoint || !current()) return
   const mod: { readonly default?: unknown } = await import(entrypoint)
   if (!isPlugin(mod.default)) throw new Error(`Invalid TUI plugin module: ${spec}`)
   return mod.default

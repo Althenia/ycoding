@@ -12,6 +12,7 @@ import { Keymap } from "../../../context/keymap"
 import { stringWidth } from "../../../util/string-width"
 import { formatDiagnosticsModel } from "../../../util/cache-diagnostics"
 import { activeSubagentSessionIDs, isActiveSubagent } from "../../../util/subagent"
+import { useToast } from "../../../ui/toast"
 import { railPlacement, railWidth } from "../rail"
 import { useComposerTab } from "./index"
 
@@ -28,6 +29,7 @@ interface SubagentEntry {
   startedAt?: number
   endedAt?: number
   current: boolean
+  pinnedAt?: number
 }
 
 type CancelClient = {
@@ -74,6 +76,11 @@ export function entriesFromTasks(
 ): SubagentEntry[] {
   return [...tasks]
     .sort((a, b) => {
+      if (a.pinnedAt !== undefined || b.pinnedAt !== undefined) {
+        if (a.pinnedAt === undefined) return 1
+        if (b.pinnedAt === undefined) return -1
+        return a.pinnedAt - b.pinnedAt || a.sessionID.localeCompare(b.sessionID)
+      }
       const state = taskStateOrder[a.state] - taskStateOrder[b.state]
       if (state !== 0) return state
       const created = b.time.created - a.time.created
@@ -91,13 +98,17 @@ export function entriesFromTasks(
       startedAt: task.time.created,
       endedAt: isActiveSubagent(task.state) ? undefined : task.time.updated,
       current: task.sessionID === currentSessionID,
+      ...(task.pinnedAt === undefined ? {} : { pinnedAt: task.pinnedAt }),
     }))
 }
 
 export function subagentSections(entries: ReadonlyArray<SubagentEntry>) {
-  const active = entries.filter((entry) => isActiveSubagent(entry.status))
-  const inactive = entries.filter((entry) => !isActiveSubagent(entry.status))
+  const pinned = entries.filter((entry) => entry.pinnedAt !== undefined)
+  const remaining = entries.filter((entry) => entry.pinnedAt === undefined)
+  const active = remaining.filter((entry) => isActiveSubagent(entry.status))
+  const inactive = remaining.filter((entry) => !isActiveSubagent(entry.status))
   return [
+    ...(pinned.length > 0 ? [{ label: "PINNED", entries: pinned }] : []),
     ...(active.length > 0 ? [{ label: "ACTIVE", entries: active }] : []),
     ...(inactive.length > 0 ? [{ label: "INACTIVE", entries: inactive }] : []),
   ]
@@ -195,12 +206,14 @@ export function SubagentMetadata(props: { model?: string; cacheHit?: string; ela
 
 export function SubagentsTab(props: { sessionID: string }) {
   const route = useRouteData("session")
+  const shortcuts = Keymap.useShortcuts()
   const data = useData()
   const client = useClient()
   const { theme } = useTheme()
   const navigation = useRoute()
   const navigate = (input: Parameters<typeof navigation.navigate>[0]) => navigation.navigate(input)
   const composer = useComposerTab()
+  const toast = useToast()
   const dimensions = useTerminalDimensions()
 
   const session = createMemo(() => data.session.get(props.sessionID))
@@ -300,6 +313,7 @@ export function SubagentsTab(props: { sessionID: string }) {
           { label: "Enter", shortcut: "attach", gapAfter: 3 },
           { label: "↑↓", shortcut: "move", gapAfter: 3 },
           ...(canCancelSubagent(entry.status) ? [{ label: "⌃x k", shortcut: "cancel", gapAfter: 4 }] : []),
+          { label: shortcuts.get("composer.subagent.pin.toggle") ?? "p", shortcut: entry.pinnedAt === undefined ? "pin" : "unpin", gapAfter: 3 },
           ...(entry.status === "waiting" && entry.awaitingInput ? [{ label: "r", shortcut: "answer", gapAfter: 3 }] : []),
           ...(pager().older ? [{ label: "⌃n", shortcut: "older", gapAfter: 3 }] : []),
           ...(pager().newer ? [{ label: "⌃p", shortcut: "newer", gapAfter: 3 }] : []),
@@ -380,6 +394,25 @@ export function SubagentsTab(props: { sessionID: string }) {
         run() {
           const entry = selectedEntry()
           if (entry?.awaitingInput) navigate({ type: "session", sessionID: entry.sessionID })
+        },
+      },
+      {
+        id: "composer.subagent.pin.toggle",
+        title: "Pin or unpin subagent task",
+        group: "Composer",
+        bind: "p",
+        run() {
+          const entry = selectedEntry()
+          if (!entry) return
+          void (entry.pinnedAt === undefined
+            ? client.api.session.pin({ sessionID: entry.sessionID })
+            : client.api.session.unpin({ sessionID: entry.sessionID }))
+            .then(() => {
+              const id = parentID()
+              data.session.subagent.invalidate(id)
+              return data.session.subagent.sync(id)
+            })
+            .catch(toast.error)
         },
       },
       {

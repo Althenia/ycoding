@@ -23,7 +23,10 @@ export async function discoverThemes(directories: string[]) {
       .map((entry) => path.join(themeDirectory, entry.name))
       .sort()
     for (const file of files) {
-      result[path.basename(file, ".json")] = JSON.parse(await readFile(file, "utf8")) as unknown
+      const parsed = await readFile(file, "utf8")
+        .then((text) => JSON.parse(text) as unknown)
+        .catch(() => undefined)
+      if (parsed !== undefined) result[path.basename(file, ".json")] = parsed
     }
   }
   return result

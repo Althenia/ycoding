@@ -8,12 +8,13 @@ export type ModeChip = { key: "goal" | "yolo"; label: string; tone: "off" | "on"
 
 /**
  * Autonomy chips for the composer status row. Off states stay muted and on states invert, because an
- * active autonomy mode is the most consequential fact on screen. Guardrails require YOLO 3.
+ * active autonomy mode is the most consequential fact on screen. A review still waiting while autonomy is on marks
+ * the goal chip as blocked: hard reviews at any level, or ordinary reviews under a goal at YOLO 0.
  */
 export function modeChips(input: { autonomy?: SessionAutonomyState; guardrailPending?: boolean }): ModeChip[] {
   const active = input.autonomy?.goal?.status === "active"
   const level = yoloLevel(input.autonomy ?? { yolo: 0 })
-  const blocked = level > 0 && level < 3 && !!input.guardrailPending
+  const blocked = (level > 0 || active) && !!input.guardrailPending
   return [
     {
       key: "goal",

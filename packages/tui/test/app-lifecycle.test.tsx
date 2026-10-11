@@ -3,7 +3,7 @@ import { createTestRenderer } from "@opentui/core/testing"
 import { Effect, FileSystem } from "effect"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { Global } from "@ycoding-ai/core/global"
-import { createEventStream, createFetch, directory, json } from "./fixture/tui-client"
+import { createEventStream, createFetch, directory, json, sessionSnapshot } from "./fixture/tui-client"
 
 test("SIGHUP clears title and disposes scoped resources once", async () => {
   const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
@@ -137,7 +137,7 @@ test("session lifecycle updates the terminal title and prints the epilogue after
         cursor: {},
       })
     if (url.pathname === "/api/session/dummy") return json({ data: session })
-    if (url.pathname === "/api/session/dummy/message") return json({ data: [], cursor: {} })
+    if (url.pathname === "/api/session/dummy/snapshot") return sessionSnapshot("dummy", [], { session })
     if (url.pathname === "/api/session/dummy/pending") return json({ data: [] })
     if (url.pathname === "/api/session/dummy/permission") return json({ data: [] })
     // The session route hydrates durable subagent tasks for the root transcript, so the fixture
@@ -256,7 +256,7 @@ test("explicit session bootstrap restores its location-scoped model without an i
     if (url.pathname === "/api/location") return json(location)
     if (url.pathname === "/api/session") return json({ data: [], cursor: {} })
     if (url.pathname === "/api/session/ses_resume") return json({ data: session })
-    if (url.pathname === "/api/session/ses_resume/message") return json({ data: [citation], cursor: {} })
+    if (url.pathname === "/api/session/ses_resume/snapshot") return sessionSnapshot("ses_resume", [citation], { session })
     if (url.pathname === "/api/session/ses_resume/pending") return json({ data: [] })
     if (url.pathname === "/api/session/ses_resume/permission") return json({ data: [] })
     if (url.pathname === "/api/vcs/branch") return json({ location, data: {} })

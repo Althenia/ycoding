@@ -37,6 +37,7 @@ async function setup(options: {
   let activeSubagents = 0
   const autonomy = new Map<string, SessionAutonomyState>()
   const waits = new Map<string, PromiseWithResolvers<void>>()
+  const terminalSignals: WeakRef<AbortSignal>[] = []
   let notificationAttempts = 0
   const session = (id: string, title: string, parentID?: string): Session => ({
     id,
@@ -121,7 +122,10 @@ async function setup(options: {
             },
           },
           get: async ({ sessionID }: { sessionID: string }) => sessions[sessionID],
-          wait: async ({ sessionID }: { sessionID: string }) => waits.get(sessionID)?.promise,
+          wait: async ({ sessionID }: { sessionID: string }, options?: { signal?: AbortSignal }) => {
+            if (options?.signal) terminalSignals.push(new WeakRef(options.signal))
+            return waits.get(sessionID)?.promise
+          },
           autonomy: {
             get: async ({ sessionID }: { sessionID: string }) =>
               autonomy.get(sessionID) ?? { mode: "normal", yolo: false },
@@ -162,6 +166,10 @@ async function setup(options: {
     },
     autonomy,
     waits,
+    terminalSignals,
+    addSession(id: string) {
+      sessions[id] = session(id, `Session ${id}`)
+    },
     scheduled,
     resolvePending(kind: "permission" | "guardrail", id: string) {
       if (kind === "permission") permissions.delete(id)
@@ -348,6 +356,16 @@ function executionInterrupted(
 
 async function settle() {
   for (const _ of Array.from({ length: 12 })) await Promise.resolve()
+}
+
+async function runSuccessfulSessions(harness: Awaited<ReturnType<typeof setup>>, count: number) {
+  for (let index = 0; index < count; index += 1) {
+    const sessionID = `normal-${index}`
+    harness.addSession(sessionID)
+    harness.emit(executionStarted(`started-${index}`, sessionID))
+    harness.emit(executionSucceeded(`succeeded-${index}`, sessionID))
+  }
+  await settle()
 }
 
 const questionNotification: TuiAttentionNotifyInput = {
@@ -761,6 +779,19 @@ describe("internal notifications TUI plugin", () => {
     harness.emit(executionSucceeded("root-idle"))
     await settle()
     expect(harness.notifications).toEqual([])
+  })
+
+  test("releases settled terminal episodes for many successful normal Sessions", async () => {
+    const harness = await setup()
+    await runSuccessfulSessions(harness, 100)
+    Bun.gc(true)
+    await settle()
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    Bun.gc(true)
+
+    expect(harness.terminalSignals).toHaveLength(100)
+    expect(harness.terminalSignals.flatMap((signal, index) => signal.deref() ? [index] : [])).toEqual([])
+    await harness.cleanup()
   })
 
   test("does not treat an unfinished or another Session's completion call as root completion", async () => {

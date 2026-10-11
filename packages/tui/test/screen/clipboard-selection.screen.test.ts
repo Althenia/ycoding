@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { InputRenderable } from "@opentui/core"
-import { json } from "../fixture/tui-client"
+import { json, sessionSnapshot } from "../fixture/tui-client"
 import { renderScreen } from "./harness"
 
 const sessionID = "ses_clipboard_selection"
@@ -23,9 +23,8 @@ async function route(url: URL) {
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
-  if (url.pathname === `/api/session/${sessionID}/message`)
-    return json({
-      data: [
+  if (url.pathname === `/api/session/${sessionID}/snapshot`)
+    return sessionSnapshot(sessionID, [
         {
           id: "msg_selection",
           type: "assistant",
@@ -35,9 +34,7 @@ async function route(url: URL) {
           finish: "stop",
           time: { created: 1, completed: 2 },
         },
-      ],
-      cursor: {},
-    })
+      ], { session })
   if (url.pathname === `/api/session/${sessionID}/subagent`)
     return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
   if (

@@ -497,7 +497,7 @@ function spendPresentation(
   spend: NonNullable<ProviderRequestSummary["models"]>[number],
 ): OverviewItem {
   return {
-    model: `${spend.model.providerID}/${spend.model.id}${spend.model.variant ? `#${spend.model.variant}` : ""}`,
+    model: `${spend.model.providerID}/${spend.model.id}${spend.model.variant ? `#${spend.model.variant}` : ""}${spend.model.profile === undefined ? "" : ` · profile ${spend.model.profile}`}`,
     steps: spend.requests.toLocaleString("en-US"),
     input: spend.tokens.input.toLocaleString("en-US"),
     output: spend.tokens.output.toLocaleString("en-US"),

@@ -93,6 +93,7 @@ function page(
 async function renderUsage(input: {
   width?: number
   height?: number
+  summary?: ProviderRequestSummary
   load: (query: ReportInput) => Promise<ProviderRequestReport>
   onBack?: () => void
 }) {
@@ -107,7 +108,7 @@ async function renderUsage(input: {
                 <DialogProvider>
                   <ProviderUsageScreenContent
                     snapshots={() => snapshots}
-                    backendUsage={() => usage}
+                    backendUsage={() => input.summary ?? usage}
                     now={() => Date.UTC(2026, 8, 22, 12)}
                     loadReport={input.load}
                     onBack={input.onBack}
@@ -134,6 +135,30 @@ async function waitFor(app: Awaited<ReturnType<typeof renderUsage>>, predicate: 
   }
   throw new Error(`Timed out waiting for ${label}\n${app.captureCharFrame()}`)
 }
+
+test("overview distinguishes recorded profile selections without changing total spend", async () => {
+  const tokens = { input: 6_000, output: 1_000, reasoning: 200, cache: { read: 4_000, write: 250 } }
+  const app = await renderUsage({
+    summary: {
+      ...usage,
+      models: [
+        { model: { providerID: "openai", id: "shared", variant: "high", profile: "Work" }, requests: 3, tokens, cost: 1, cacheReadReported: true },
+        { model: { providerID: "openai", id: "shared", variant: "high", profile: "Personal" }, requests: 3, tokens, cost: 2.25, cacheReadReported: true },
+      ],
+    },
+    load: async (query) => page(query.group, []),
+  })
+  try {
+    await app.waitForFrame((frame) => frame.includes("openai/shared"))
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("openai/shared#high · profile Work")
+    expect(frame).toContain("openai/shared#high · profile Personal")
+    expect(frame).toContain("Total")
+    expect(frame).toContain("$3.25")
+  } finally {
+    app.renderer.destroy()
+  }
+})
 
 test("cycles ten direct views by arrows and tabs and opens views by mouse", async () => {
   const calls: ReportInput[] = []

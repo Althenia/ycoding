@@ -3,7 +3,7 @@ import { expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { json } from "./fixture/tui-client"
+import { json, sessionSnapshot } from "./fixture/tui-client"
 import { renderScreen } from "./screen/harness"
 import { materializeClipboardImage } from "../src/clipboard"
 import { testRender } from "@opentui/solid"
@@ -187,7 +187,7 @@ async function route(url: URL, request: Request) {
     skillRequests.push(body)
     return new Response(null, { status: 204 })
   }
-  if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: [], cursor: {} })
+  if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, [], { session })
   if (url.pathname === `/api/session/${sessionID}/subagent`)
     return json({ data: tasks, summary: { total: 1, active: 1, running: 1, waiting: 0 }, cursor: {} })
   if (url.pathname === `/api/session/${sessionID}/diagnostics`)

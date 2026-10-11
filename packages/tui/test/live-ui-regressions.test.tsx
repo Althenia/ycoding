@@ -18,7 +18,7 @@ import { Header } from "../src/routes/session/header"
 import { railWidth } from "../src/routes/session/rail"
 import { FilePath } from "../src/ui/file-path"
 import { Toast, ToastProvider, useToast } from "../src/ui/toast"
-import { createApi, createEventStream, createFetch, directory, json } from "./fixture/tui-client"
+import { createApi, createEventStream, createFetch, directory, json, sessionSnapshot } from "./fixture/tui-client"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 
@@ -236,7 +236,7 @@ async function bootPromptRegression(dimensions = { width: 120, height: 56 }) {
   const calls = createFetch((url) => {
     if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
     if (url.pathname === `/api/session/${session.id}`) return json({ data: session })
-    if (url.pathname === `/api/session/${session.id}/message`) return json({ data: [], cursor: {} })
+    if (url.pathname === `/api/session/${session.id}/snapshot`) return sessionSnapshot(session.id, [], { session })
     if (
       [`pending`, `permission`, `form`, `todo`, `skills`, `subagent`, `guardrail/request`].some((suffix) =>
         url.pathname.endsWith(`/${suffix}`),

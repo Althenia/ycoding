@@ -82,6 +82,7 @@ export interface DialogSelectOption<T = any> {
   titleWidth?: number
   truncateTitle?: boolean | "left"
   category?: string
+  keywords?: string
   categoryView?: JSX.Element
   state?: GlyphName
   disabled?: boolean
@@ -182,12 +183,12 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
     )
     if (!needle) return options
 
-    // prioritize title matches (weight: 2) over category matches (weight: 1).
+    // prioritize title matches (weight: 2) over category and keyword matches (weight: 1).
     // users typically search by the item name, and not its category.
     const result = fuzzysort
       .go(needle, options, {
-        keys: ["title", "category"],
-        scoreFn: (r) => r[0].score * 2 + r[1].score,
+        keys: ["title", "category", "keywords"],
+        scoreFn: (r) => r[0].score * 2 + r[1].score + r[2].score,
       })
       .map((x) => x.obj)
 

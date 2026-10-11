@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { directory as defaultDirectory, json } from "../fixture/tui-client"
+import { directory as defaultDirectory, json, sessionSnapshot } from "../fixture/tui-client"
 import { DESIGN_VIEWPORT } from "../viewport"
 import { renderScreen } from "./harness"
 
@@ -30,9 +30,8 @@ test("a running session never reports ready", async () => {
       if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
       if (url.pathname === "/api/session/active") return json({ data: { [sessionID]: {} } })
       if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
-      if (url.pathname === `/api/session/${sessionID}/message`)
-        return json({
-          data: [
+      if (url.pathname === `/api/session/${sessionID}/snapshot`)
+        return sessionSnapshot(sessionID, [
             { id: "msg_user", type: "user", text: "Summarize the session.", time: { created: 1 } },
             {
               id: "msg_assistant",
@@ -42,9 +41,7 @@ test("a running session never reports ready", async () => {
               content: [{ type: "text", text: "Working on it." }],
               time: { created: 2, completed: 3 },
             },
-          ],
-          cursor: {},
-        })
+          ], { session })
       if (url.pathname === `/api/session/${sessionID}/pending`) return json({ data: [] })
       if (url.pathname === `/api/session/${sessionID}/permission`) return json({ data: [] })
       if (url.pathname === `/api/session/${sessionID}/subagent`) return json({ data: [] })

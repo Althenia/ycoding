@@ -53,6 +53,7 @@ export function GuardrailPrompt(props: { request: GuardrailRequest }) {
   return (
     <Prompt
       kind="guardrail"
+      hardReview={props.request.hardReview}
       title={presentation().title}
       semanticLabel={`guardrail · ${presentation().reason}`}
       instance={props.request.id}

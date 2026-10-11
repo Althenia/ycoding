@@ -17,7 +17,7 @@ import { DialogProvider, useDialog } from "../../src/ui/dialog"
 import { DialogAlert } from "../../src/ui/dialog-alert"
 import { ToastProvider } from "../../src/ui/toast"
 import { RouteProvider } from "../../src/context/route"
-import { createApi, createEventStream, createFetch, json } from "../fixture/tui-client"
+import { createApi, createEventStream, createFetch, json, sessionSnapshot } from "../fixture/tui-client"
 import { TestTuiContexts } from "../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE, NARROW_VIEWPORT } from "../viewport"
@@ -180,9 +180,8 @@ function route(url: URL) {
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
-  if (url.pathname === `/api/session/${sessionID}/message`)
-    return json({
-      data: [
+  if (url.pathname === `/api/session/${sessionID}/snapshot`)
+    return sessionSnapshot(sessionID, [
         {
           id: "msg_assistant",
           type: "assistant",
@@ -192,9 +191,7 @@ function route(url: URL) {
           time: { created: 2, completed: 3 },
         },
         { id: "msg_user", type: "user", text: "Check the responsive rail.", time: { created: 1 } },
-      ],
-      cursor: {},
-    })
+      ], { session })
   if (
     [
       `/api/session/${sessionID}/pending`,

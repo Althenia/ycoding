@@ -1,5 +1,5 @@
 import { createStore } from "solid-js/store"
-import { createEffect, createMemo, For, Match, on, Show, Switch } from "solid-js"
+import { createEffect, createMemo, For, Match, on, onCleanup, Show, Switch } from "solid-js"
 import { useTerminalDimensions, type JSX } from "@opentui/solid"
 import type { ScrollBoxRenderable, TextareaRenderable } from "@opentui/core"
 import { useTheme } from "../../context/theme"
@@ -103,6 +103,13 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
     }
     return { input: undefined, structured: undefined }
   })
+  createEffect(on(() => props.request.source?.messageID, (messageID) => {
+    if (!messageID || data.session.message.get(props.request.sessionID, messageID)) return
+    const sessionID = props.request.sessionID
+    const ownsHistory = !data.session.message.history(sessionID)
+    if (ownsHistory) onCleanup(() => data.session.message.evict(sessionID))
+    void data.session.message.find(sessionID, messageID).catch(() => undefined)
+  }))
 
   const { theme } = useTheme()
 
@@ -394,6 +401,7 @@ export function Prompt<const T extends Record<string, string>>(props: {
   footer?: JSX.Element
   options: T
   defaultOption?: keyof T
+  hardReview?: boolean
   escapeKey?: keyof T
   onSelect: (option: keyof T) => void
 }) {
@@ -408,7 +416,7 @@ export function Prompt<const T extends Record<string, string>>(props: {
   })
   const footer = () =>
     props.footer ??
-    (kind === "guardrail" ? <text fg={theme.text.subdued}>guardrails apply even in YOLO mode.</text> : undefined)
+    (kind === "guardrail" ? <text fg={theme.text.subdued}>{props.hardReview ? "hard reviews always need you" : "ordinary reviews auto-approve from YOLO 1"}</text> : undefined)
   const compact = () => dimensions().height < 30
   const chromeHeight = () =>
     3 + keys().length * (compact() ? 1 : 2) + Number(props.footer !== undefined || kind === "guardrail") + (compact() ? 0 : 3)

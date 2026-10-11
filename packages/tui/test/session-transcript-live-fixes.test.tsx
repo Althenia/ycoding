@@ -12,10 +12,12 @@ import type {
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { Global } from "@ycoding-ai/core/global"
 import { Effect, FileSystem } from "effect"
+import { createEffect } from "solid-js"
+import type { useData } from "../src/context/data"
 import { SPINNER_FRAMES } from "../src/component/spinner-frames"
 import { toolLifecyclePresentation } from "../src/routes/session/activity-row"
 import { railPlacement, railWidth } from "../src/routes/session/rail"
-import { createEventStream, createFetch, json, type FetchHandler } from "./fixture/tui-client"
+import { createEventStream, createFetch, json, type FetchHandler, sessionSnapshot } from "./fixture/tui-client"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE, NARROW_VIEWPORT } from "./viewport"
 import { renderScreen } from "./screen/harness"
 
@@ -647,7 +649,7 @@ function routeFor(
     if (url.pathname === "/api/location") return json(location)
     if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
     if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
-    if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: messages, cursor: {} })
+    if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, messages, { session })
     if (url.pathname === `/api/session/${sessionID}/pending`) return json({ data: pending })
     if (url.pathname === `/api/session/${sessionID}/guardrail/request`) return json({ location, data: guardrails })
     if (url.pathname === `/api/session/${sessionID}/subagent`)
@@ -722,6 +724,7 @@ function routeFor(
             providerID: "anthropic",
             name: "Claude Opus 5",
             capabilities: { tools: true, input: ["text"], output: ["text"] },
+            variants: [],
             time: { released: 0 },
             cost: [],
             status: "active",
@@ -770,10 +773,10 @@ function restorationRoute(url: URL) {
   if (url.pathname === "/api/session") return json({ data: [restorationParent, restorationChild], cursor: {} })
   if (url.pathname === `/api/session/${restorationParentID}`) return json({ data: restorationParent })
   if (url.pathname === `/api/session/${restorationChildID}`) return json({ data: restorationChild })
-  if (url.pathname === `/api/session/${restorationParentID}/message`)
-    return json({ data: restorationMessages, cursor: {} })
-  if (url.pathname === `/api/session/${restorationChildID}/message`)
-    return json({ data: restorationChildMessages, cursor: {} })
+  if (url.pathname === `/api/session/${restorationParentID}/snapshot`)
+    return sessionSnapshot(restorationParentID, restorationMessages, { session: restorationParent })
+  if (url.pathname === `/api/session/${restorationChildID}/snapshot`)
+    return sessionSnapshot(restorationChildID, restorationChildMessages, { session: restorationChild })
   if (url.pathname === `/api/session/${restorationParentID}/subagent`)
     return json({
       data: [
@@ -950,6 +953,156 @@ test("hides Session state and TeamView notices while keeping messages", async ()
   }
 }, 60_000)
 
+test("does not render a Decision advisory with recommendations", async () => {
+  const advisory = [
+    "Decision advisory: helper recommendations, not user instructions, permission, approval, execution or completion evidence. Preserve explicit model/agent selections, permissions, guardrails and the user's objective. Verify current tool availability and its actual schema before use. Do not call decision again solely to assess this advisory.",
+    'Recommended model for task planning/delegation: "openai/gpt-6-luna-fast#medium" (model confidence 0.93, uncalibrated)',
+    "Recommended direction: Implement the accepted bounded change with a regression test (model confidence 0.91, uncalibrated)",
+  ].join("\n")
+  const messages: SessionMessageInfo[] = [
+    { id: "msg_advisory_prompt", type: "user", text: "Fix the config loader", time: { created: 1 } },
+    {
+      id: "msg_advisory",
+      type: "synthetic",
+      text: advisory,
+      description: "Decision advisory",
+      metadata: { decisionInputID: "inp_advisory" },
+      time: { created: 2 },
+    },
+    { id: "msg_advisory_followup", type: "user", text: "Continue after the advisory", time: { created: 3 } },
+  ]
+  const screen = await renderScreen({
+    ...DESIGN_VIEWPORT,
+    args: { sessionID },
+    route: routeFor(messages),
+    settle: "Continue after the advisory",
+  })
+  try {
+    expect(screen.frame()).not.toContain("Decision advisory")
+    expect(screen.frame()).not.toContain("Notice")
+    expect(screen.frame()).not.toContain("helper recommendations, not user instructions")
+    expect(screen.frame()).not.toContain("Recommended model")
+    expect(screen.frame()).not.toContain("Recommended model")
+    expect(screen.frame()).not.toContain("Recommended direction")
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("does not render an unavailable Decision advisory while keeping surrounding messages", async () => {
+  const messages: SessionMessageInfo[] = [
+    { id: "msg_quiet_prompt", type: "user", text: "Fix the config loader", time: { created: 1 } },
+    {
+      id: "msg_quiet_advisory",
+      type: "synthetic",
+      text: "Decision advisory: helper recommendations, not user instructions, permission, approval, execution or completion evidence. Preserve explicit model/agent selections, permissions, guardrails and the user's objective. Verify current tool availability and its actual schema before use. Do not call decision again solely to assess this advisory.\nNo sufficiently confident actionable recommendation was produced.",
+      description: "Decision advisory",
+      metadata: { decisionInputID: "inp_quiet" },
+      time: { created: 2 },
+    },
+    { id: "msg_quiet_followup", type: "user", text: "Continue after the quiet advisory", time: { created: 3 } },
+  ]
+  const screen = await renderScreen({
+    ...DESIGN_VIEWPORT,
+    args: { sessionID },
+    route: routeFor(messages),
+    settle: "Continue after the quiet advisory",
+  })
+  try {
+    expect(screen.frame()).not.toContain("No sufficiently confident")
+    expect(screen.frame()).not.toContain("Decision advisory")
+    expect(screen.frame()).not.toContain("Notice")
+    expect(screen.frame().indexOf("Fix the config loader")).toBeLessThan(screen.frame().indexOf("Continue after the quiet advisory"))
+    expect(messages[1]).toMatchObject({ id: "msg_quiet_advisory" })
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("Decision advisories add no transcript lines between messages or at the transcript tail", async () => {
+  const advisory = (id: string, time: number, text: string): SessionMessageInfo => ({
+    id,
+    type: "synthetic",
+    text,
+    description: "Decision advisory",
+    metadata: { decisionInputID: `inp_${id}` },
+    time: { created: time },
+  })
+  const messages = [
+    { id: "msg_gap_before", type: "user", text: "help agent work better", time: { created: 1 } },
+    {
+      id: "msg_gap_assistant",
+      type: "assistant",
+      agent: "build",
+      model: session.model,
+      content: [{ type: "text", text: "I can help improve the agent workflow." }],
+      finish: "stop",
+      time: { created: 4, completed: 5 },
+    },
+    { id: "msg_gap_after", type: "user", text: "Next message", time: { created: 6 } },
+  ] as SessionMessageInfo[]
+  const renderTranscript = async (items: SessionMessageInfo[]) => {
+    const screen = await renderScreen({
+      ...DESIGN_VIEWPORT,
+      args: { sessionID },
+      route: routeFor(items),
+      settle: "Next message",
+    })
+    try {
+      return {
+        anchors: ["help agent work better", "I can help improve the agent workflow.", "Next message"].map((text) =>
+          screen.lines().findIndex((line) => transcriptSlice(line, DESIGN_VIEWPORT.width).includes(text)),
+        ),
+        height: screen.scrollbox()?.scrollHeight,
+      }
+    } finally {
+      await screen.dispose()
+    }
+  }
+  const expected = await renderTranscript(messages)
+  const withAdjacentAdvisories = await renderTranscript([
+    messages[0]!,
+    advisory("msg_gap_nothing", 2, "Decision advisory: no recommendation.\nNo sufficiently confident actionable recommendation was produced."),
+    advisory("msg_gap_recommendations", 3, "Decision advisory: recommendation.\nRecommended direction: continue."),
+    messages[1]!,
+    messages[2]!,
+  ])
+  const withTrailingAdvisory = await renderTranscript([
+    ...messages,
+    advisory("msg_gap_trailing", 7, "Decision advisory: no recommendation.\nNo sufficiently confident actionable recommendation was produced."),
+  ])
+
+  expect(withAdjacentAdvisories.anchors[1]! - withAdjacentAdvisories.anchors[0]!).toBe(expected.anchors[1]! - expected.anchors[0]!)
+  expect(withAdjacentAdvisories.anchors[2]! - withAdjacentAdvisories.anchors[1]!).toBe(expected.anchors[2]! - expected.anchors[1]!)
+  expect(withAdjacentAdvisories.height).toBe(expected.height)
+  expect(withTrailingAdvisory.height).toBe(expected.height)
+}, 60_000)
+
+test("does not render a Scoping advisory", async () => {
+  const messages: SessionMessageInfo[] = [
+    { id: "msg_scope_prompt", type: "user", text: "Partition the change", time: { created: 1 } },
+    { id: "msg_scope_notice", type: "synthetic", description: "Scoping advisory",
+      metadata: { decisionInputID: "msg_scope_prompt", scoping: true }, time: { created: 2 },
+      text: ["Decision advisory: task scoping judgments, not approval or completion evidence.",
+        "Recommended granularity: right-sized", "Recommended task implement: child; dispatchable true",
+        'Scoping plan: {"conflicts":[],"dispatched":[]}'].join("\n") },
+    { id: "msg_scope_followup", type: "user", text: "Continue scoped work", time: { created: 3 } },
+  ]
+  const screen = await renderScreen({ ...DESIGN_VIEWPORT, args: { sessionID }, route: routeFor(messages), settle: "Continue scoped work" })
+  try {
+    expect(screen.frame()).not.toContain("Decision advisory")
+    expect(screen.frame()).not.toContain("Notice")
+    expect(screen.frame()).not.toContain("task scoping judgments")
+    expect(screen.frame()).not.toContain("Scoping plan:")
+    expect(screen.frame()).not.toContain("Recommended granularity:")
+    expect(screen.frame()).not.toContain("Recommended task implement:")
+    expect(screen.frame()).not.toContain("Scoping plan:")
+    expect(screen.frame()).not.toContain("task scoping judgments")
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
 test("keeps yolo-goal todos in the sidebar instead of the transcript", async () => {
   const screen = await renderScreen({
     ...DESIGN_VIEWPORT,
@@ -1092,7 +1245,7 @@ test("keeps non-subagent activity rows on one marker/label grid with symmetric c
     ...DESIGN_VIEWPORT,
     args: { sessionID },
     route: routeFor(transcript, [guardrailRequest]),
-    settle: "~ compacted",
+    settle: "guardrail",
   })
 
   try {
@@ -1109,10 +1262,10 @@ test("keeps non-subagent activity rows on one marker/label grid with symmetric c
 
     // Marker column 3 for every activity class.
     expect(thought.indexOf("ok"), screen.frame()).toBe(3)
-    expect(explored.indexOf("ok")).toBe(3)
-    expect(tool.indexOf("ok")).toBe(3)
-    expect(guardrail.indexOf("!!")).toBe(3)
-    expect(running.indexOf("..")).toBe(3)
+    expect(explored.indexOf("ok"), screen.frame()).toBe(3)
+    expect(tool.indexOf("ok"), screen.frame()).toBe(3)
+    expect(guardrail.indexOf("!!"), screen.frame()).toBe(3)
+    expect(running.indexOf(".."), screen.frame()).toBe(3)
 
     // Label column 10 for every activity class.
     expect(thought.indexOf("Thought")).toBe(10)
@@ -1234,6 +1387,182 @@ test("renders subagent notifications as compact safe activity rows", async () =>
     expect(screen.frame()).not.toContain("Subagent notification")
     expect(screen.frame()).not.toContain("Child completed after reviewing provider usage.")
     expect(screen.frame()).not.toContain("ses_sensitive_child")
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("hidden parallel subagent launches add no lines between assistant text and the next Thought row", async () => {
+  const messages: SessionMessageInfo[] = [
+    { id: "msg_delegation_user", type: "user", text: "Delegate both items", time: { created: 1 } },
+    {
+      id: "msg_delegation", type: "assistant", agent: "build", model: session.model,
+      content: [
+        { type: "text", text: "Delegating both new items in parallel." },
+        ...["first", "second"].map((item) => ({
+          type: "tool" as const, id: `call_delegate_${item}`, name: "subagent",
+          state: {
+            status: "completed" as const,
+            input: { agent: "build", description: `Hidden ${item} task` },
+            content: [], structured: { status: "running" },
+          },
+          time: { created: 2, ran: 2, completed: 3 },
+        })),
+      ],
+      finish: "tool-calls", time: { created: 2, completed: 3 },
+    },
+    {
+      id: "msg_after_delegation", type: "assistant", agent: "build", model: session.model,
+      content: [
+        { type: "reasoning", text: "Checking the delegated work.", time: { created: 4, completed: 5 } },
+        { type: "tool", id: "call_visible_shell", name: "shell", state: { status: "completed", input: { command: "bun test visible-check" }, content: [], structured: {} }, time: { created: 5, ran: 5, completed: 6 } },
+      ],
+      finish: "stop", time: { created: 4, completed: 6 },
+    },
+  ]
+  const screen = await renderScreen({ ...DESIGN_VIEWPORT, args: { sessionID }, route: routeFor(messages), settle: "visible-check" })
+  try {
+    await waitForFrame(screen.frame, "Delegating both new items")
+    const lines = screen.lines().map((line) => transcriptSlice(line, DESIGN_VIEWPORT.width))
+    const text = lines.findIndex((line) => line.includes("Delegating both new items"))
+    const thought = lines.findIndex((line) => line.includes("Thought"))
+    const shell = lines.findIndex((line) => line.includes("visible-check"))
+    expect(text, screen.frame()).toBeGreaterThan(-1)
+    expect(thought, screen.frame()).toBe(text + 3)
+    expect(lines[thought - 1]?.trim()).toMatch(/^─+$/)
+    expect(lines[text + 1]?.trim()).toBe("")
+    expect(shell).toBeGreaterThan(thought)
+    expect(lines[shell]?.indexOf("ok")).toBe(3)
+    expect(lines[shell - 1]?.trim()).toMatch(/^─+$/)
+    expect(screen.frame()).not.toContain("Hidden first task")
+    expect(screen.frame()).not.toContain("Hidden second task")
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("keeps subagent tool rows visible inside a child Session", async () => {
+  const parent = { ...session, id: "ses_delegation_parent" }
+  const child = { ...session, parentID: parent.id }
+  const listed = Promise.withResolvers<void>()
+  let data: ReturnType<typeof useData> | undefined
+  const messages: SessionMessageInfo[] = [{
+    id: "msg_child_delegation", type: "assistant", agent: "build", model: session.model,
+    content: [{
+      type: "tool", id: "call_child_delegation", name: "subagent",
+      state: { status: "completed", input: { agent: "build", description: "Visible child delegation" }, content: [], structured: { status: "completed" } },
+      time: { created: 1, ran: 1, completed: 2 },
+    }],
+    finish: "tool-calls", time: { created: 1, completed: 2 },
+  }]
+  const screen = await renderScreen({
+    ...DESIGN_VIEWPORT,
+    args: { sessionID },
+    data: (value) => {
+      data = value
+      createEffect(() => {
+        if (value.session.get(parent.id)) listed.resolve()
+      })
+    },
+    route: async (url) => {
+      if (url.pathname === "/api/session") return json({ data: [parent], cursor: {} })
+      if (url.pathname === `/api/session/${sessionID}`) return json({ data: child })
+      if (url.pathname === `/api/session/${parent.id}`) return json({ data: parent })
+      if (url.pathname === `/api/session/${sessionID}/snapshot`) {
+        await listed.promise
+        return sessionSnapshot(sessionID, messages, { session: child })
+      }
+      if (url.pathname === `/api/session/${parent.id}/snapshot`)
+        return sessionSnapshot(parent.id, [], { session: parent })
+      const remapped = new URL(url)
+      remapped.pathname = remapped.pathname.replace(`/api/session/${parent.id}`, `/api/session/${sessionID}`)
+      return routeFor(messages)(remapped)
+    },
+    settle: "Visible child delegation",
+  })
+  try {
+    const row = screen.lines().find((line) => line.includes("Visible child delegation")) ?? ""
+    expect(row, screen.frame()).toContain("subagent")
+    expect(row.indexOf("subagent")).toBe(10)
+    expect(row).toContain("done")
+    expect(data?.session.message.history(sessionID)?.status).toBe("ready")
+    expect(data?.session.get(sessionID)?.parentID).toBe(parent.id)
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("renders a running Edit beside Shell on the compact activity grid", async () => {
+  const started = Date.now() - 3_000
+  const messages: SessionMessageInfo[] = [
+    { id: "msg_parallel_user", type: "user", text: "Edit while checking", time: { created: 1 } },
+    {
+      id: "msg_parallel_assistant", type: "assistant", agent: "build", model: session.model,
+      content: [
+        { type: "tool", id: "call_parallel_edit", name: "edit", state: { status: "running", input: { path: "src/agent.ts" }, content: [], structured: {} }, time: { created: started, ran: started } },
+        { type: "tool", id: "call_parallel_shell", name: "shell", state: { status: "running", input: { command: "bun test parallel-check" }, content: [], structured: {} }, time: { created: started, ran: started } },
+      ],
+      time: { created: 2 },
+    },
+  ]
+  for (const viewport of [NARROW_VIEWPORT, DESIGN_VIEWPORT]) {
+    const screen = await renderScreen({ ...viewport, args: { sessionID }, route: routeFor(messages), settle: "parallel-check" })
+    try {
+      const lines = screen.lines()
+      const editIndex = lines.findIndex((line) => line.includes("src/agent.ts"))
+      const edit = transcriptSlice(lines[editIndex] ?? "", viewport.width)
+      const shellIndex = lines.findIndex((line) => line.includes("parallel-check"))
+      const shell = transcriptSlice(lines[shellIndex] ?? "", viewport.width)
+      expect(edit.indexOf(".."), screen.frame()).toBe(3)
+      expect(edit.indexOf("Edit")).toBe(10)
+      expect(SPINNER_FRAMES.some((frame) => edit.slice(0, 10).includes(frame))).toBe(true)
+      expect(edit.trimEnd()).toMatch(/running · \d+[smhdw]$/)
+      expect(edit.indexOf("running")).toBe(shell.indexOf("running"))
+      expect(transcriptSlice(lines[editIndex - 1] ?? "", viewport.width).trim()).toMatch(/^─+$/)
+      const background = (index: number) => screen.spans().lines[index]?.spans.find((span) => span.text.includes("running"))?.bg.toInts()
+      expect(background(editIndex)).toEqual(background(shellIndex))
+    } finally {
+      await screen.dispose()
+    }
+  }
+}, 60_000)
+
+test("replaces a live completed Edit with Captured changes while its Shell sibling stays running", async () => {
+  const started = Date.now() - 3_000
+  const screen = await renderScreen({
+    ...DESIGN_VIEWPORT,
+    args: { sessionID },
+    route: routeFor([
+      { id: "msg_parallel_user", type: "user", text: "Edit while checking", time: { created: 1 } },
+      {
+        id: "msg_parallel_assistant", type: "assistant", agent: "build", model: session.model,
+        content: [
+          { type: "tool", id: "call_parallel_edit", name: "edit", state: { status: "running", input: { path: "src/agent.ts" }, content: [], structured: {} }, time: { created: started, ran: started } },
+          { type: "tool", id: "call_parallel_shell", name: "shell", state: { status: "running", input: { command: "bun test parallel-check" }, content: [], structured: {} }, time: { created: started, ran: started } },
+        ],
+        time: { created: 2 },
+      },
+    ]),
+    settle: "parallel-check",
+  })
+  try {
+    expect(screen.frame()).toContain("src/agent.ts")
+    await screen.waitForEventStream()
+    screen.events.emit({
+      id: "evt_parallel_edit_success", created: started + 1, type: "session.tool.success",
+      durable: { aggregateID: sessionID, seq: 1, version: 1 },
+      data: {
+        sessionID, assistantMessageID: "msg_parallel_assistant", callID: "call_parallel_edit",
+        executed: false,
+        content: [{ type: "text", text: "Edited file successfully" }],
+        structured: { files: [{ file: "src/agent.ts", patch: "--- a/src/agent.ts\n+++ b/src/agent.ts\n@@ -1 +1 @@\n-old\n+new", status: "modified", additions: 1, deletions: 1 }] },
+      },
+    })
+    await waitForFrame(screen.frame, "Captured changes 1 file")
+    expect(screen.frame()).not.toContain("src/agent.ts")
+    const shell = transcriptSlice(screen.lines().find((line) => line.includes("parallel-check")) ?? "", DESIGN_VIEWPORT.width)
+    expect(shell.trimEnd()).toMatch(/running · \d+[smhdw]$/)
+    expect(shell.indexOf("..")).toBe(3)
   } finally {
     await screen.dispose()
   }
@@ -1678,7 +2007,7 @@ test("caps large transcript at bounded mounted window", async () => {
     config: { animations: false },
   })
   try {
-    expect(screen.frame()).toContain("older rows hidden")
+    expect(screen.frame()).toContain("loaded rows outside this render window")
     expect(screen.frame()).toContain("Large answer 0599")
     // 600 messages produce >400 rows; mounted window keeps handle count bounded.
     expect(countTextBuffers(screen.renderer.root)).toBeLessThan(900)

@@ -10,7 +10,7 @@
         "400": "#eaeaeb",
         "500": "#c5c5c8",
         "600": "#a0a1a7",
-        "700": "#6a6b73",
+        "700": "#696c77",
         "800": "#383a42",
         "900": "#0d0f17"
       },
@@ -125,7 +125,7 @@
     ],
     "text": {
       "default": "$hue.neutral.800",
-      "subdued": "$hue.neutral.600",
+      "subdued": "$hue.neutral.700",
       "action": {
         "primary": {
           "default": "$text.default",
@@ -157,9 +157,12 @@
           "default": "#50a14f"
         },
         "info": {
-          "default": "#986801"
+          "default": "#4078f2"
         }
-      }
+      },
+      "separator": "$hue.neutral.500",
+      "hint": "$hue.neutral.600",
+      "label": "$hue.neutral.700"
     },
     "background": {
       "default": "$hue.neutral.200",
@@ -393,7 +396,7 @@
     ],
     "text": {
       "default": "$hue.neutral.200",
-      "subdued": "$hue.neutral.400",
+      "subdued": "$hue.neutral.300",
       "action": {
         "primary": {
           "default": "$text.default",
@@ -425,9 +428,12 @@
           "default": "#98c379"
         },
         "info": {
-          "default": "#d19a66"
+          "default": "#61afef"
         }
-      }
+      },
+      "separator": "$hue.neutral.400",
+      "hint": "$hue.neutral.300",
+      "label": "$hue.neutral.200"
     },
     "background": {
       "default": "$hue.neutral.800",

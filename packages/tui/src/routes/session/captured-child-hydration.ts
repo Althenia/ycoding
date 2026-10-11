@@ -18,6 +18,8 @@ export function createCapturedChildHydration(input: {
     reads: Record<string, ReadState>
   }>({ ids: [], membership: { status: "ready" }, reads: {} })
   let retry: (children?: readonly string[]) => void = () => {}
+  const ownedChildren = new Set<string>()
+  onCleanup(() => ownedChildren.forEach((id) => data.session.message.evict(id)))
   let ownerSessionID: string | undefined
   let ownerConnected = false
 
@@ -45,10 +47,11 @@ export function createCapturedChildHydration(input: {
         })
         if (parentID || status !== "connected" || children.length === 0) return
 
-        function read(childID: string) {
-          if (!active || state().reads[childID]?.status === "loading") return
+        function read(childID: string, older = false) {
+          if (!active || state().reads[childID]?.status === "loading") return Promise.resolve()
+          ownedChildren.add(childID)
           setState((current) => ({ ...current, reads: { ...current.reads, [childID]: { status: "loading" } } }))
-          void data.session.message.sync(childID).then(
+          return (older ? data.session.message.loadOlder(childID) : data.session.message.sync(childID)).then(
             () => {
               if (active)
                 setState((current) => ({ ...current, reads: { ...current.reads, [childID]: { status: "ready" } } }))
@@ -74,7 +77,7 @@ export function createCapturedChildHydration(input: {
                 const family = new Set(tasks.map((task) => task.sessionID))
                 const ids = children.filter((childID) => family.has(childID))
                 setState((current) => ({ ...current, ids, membership: { status: "ready" } }))
-                ids.forEach(read)
+                ids.forEach((id) => void read(id))
               },
               (error: unknown) => {
                 if (active)
@@ -91,7 +94,7 @@ export function createCapturedChildHydration(input: {
           if (state().membership.status === "failed") return membership()
           requested
             .filter((childID) => state().ids.includes(childID) && state().reads[childID]?.status === "failed")
-            .forEach(read)
+            .forEach((id) => void read(id, data.session.message.history(id)?.failedRead === "older"))
         }
         membership()
       },
@@ -115,7 +118,8 @@ export function createCapturedChildHydration(input: {
       const reads = children.filter((childID) => current.ids.includes(childID)).map((childID) => current.reads[childID])
       const failed = reads.filter((read) => read?.status === "failed")
       const loading = reads.some((read) => !read || read.status === "loading")
-      return loading || failed.length > 0
+      const partial = children.some((id) => !!data.session.message.history(id)?.before)
+      return loading || failed.length > 0 || partial
         ? { loading, failed: failed.length, error: failed.map((read) => read?.error).join("; ") || undefined }
         : undefined
     },

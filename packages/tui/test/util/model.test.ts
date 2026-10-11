@@ -1,17 +1,49 @@
 import { describe, expect, test } from "bun:test"
-import { parse, switchLabel } from "../../src/util/model"
+import { formatRef, parse, switchLabel } from "../../src/util/model"
 
 describe("util.model", () => {
   test("splits provider from a nested model identifier", () => {
     expect(parse("provider/org/model")).toEqual({ providerID: "provider", modelID: "org/model" })
-    expect(parse("invalid")).toEqual({ providerID: "invalid", modelID: "" })
+    expect(parse("invalid")).toBeUndefined()
+  })
+
+  test("parses profile and variant from model references", () => {
+    expect(parse("Work#openrouter/openai/gpt-6-luna#high")).toEqual({
+      providerID: "openrouter",
+      modelID: "openai/gpt-6-luna",
+      profile: "Work",
+      variant: "high",
+    })
   })
 
   test("includes the selected variant in model switch notices", () => {
     expect(switchLabel({ providerID: "anthropic", id: "sonnet", variant: "thinking" })).toBe(
-      "Switched model to anthropic/sonnet/thinking",
+      "Switched model to anthropic/sonnet#thinking",
     )
     expect(switchLabel({ providerID: "anthropic", id: "sonnet" })).toBe("Switched model to anthropic/sonnet")
+  })
+
+  test("formats profile-qualified model references", () => {
+    expect(formatRef({ providerID: "openai", id: "gpt-6-luna", profile: "Work", variant: "high" })).toBe(
+      "Work#openai/gpt-6-luna#high",
+    )
+    expect(switchLabel({ providerID: "missing", id: "model", profile: "Work", variant: "high" })).toBe(
+      "Switched model to Work#missing/model#high",
+    )
+    expect(
+      switchLabel(
+        { providerID: "openai", id: "gpt-5", profile: "Work", variant: "high" },
+        undefined,
+        { providerID: "openai", id: "gpt-5", profile: "Personal", variant: "low" },
+      ),
+    ).toBe("Switched profile to Work (variant high)")
+    expect(
+      switchLabel(
+        { providerID: "openai", id: "gpt-5" },
+        undefined,
+        { providerID: "openai", id: "gpt-5", profile: "Work" },
+      ),
+    ).toBe("Switched profile to provider default")
   })
 
   test("uses the catalog display name in model switch notices", () => {
@@ -24,7 +56,7 @@ describe("util.model", () => {
     )
     expect(switchLabel({ providerID: "anthropic", id: "sonnet" }, models)).toBe("Switched model to Claude Sonnet")
     expect(switchLabel({ providerID: "removed", id: "gone", variant: "high" }, models)).toBe(
-      "Switched model to removed/gone/high",
+      "Switched model to removed/gone#high",
     )
   })
 
@@ -37,7 +69,7 @@ describe("util.model", () => {
       "Switched variant to default",
     )
     expect(switchLabel({ providerID: "anthropic", id: "sonnet", variant: "high" }, undefined, previous)).toBe(
-      "Switched model to anthropic/sonnet/high",
+      "Switched model to anthropic/sonnet#high",
     )
   })
 })

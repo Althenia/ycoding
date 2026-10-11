@@ -64,17 +64,25 @@ export function DialogFork(props: {
         footer: Locale.time(message.time.created),
         onSelect: () => fork(message.id),
       }))
+    const history = data.session.message.history(props.sessionID)
+    const older: DialogSelectOption<string | undefined>[] = history?.before ? [{
+      title: history.status === "error" ? "Retry older history" : "Load older history",
+      value: "history:older", description: "Fork points list loaded prompts",
+      disabled: history.status === "paging" || history.status === "loading",
+      onSelect: () => { void data.session.message.loadOlder(props.sessionID).catch(toast.error) },
+    }] : []
     if (!props.boundary)
       return [
         { title: "From latest", value: undefined, onSelect: () => fork() },
         ...messages,
+        ...older,
       ]
     return [
       {
         title: "From this message",
         value: props.boundary.messageID,
         category: "Fork point",
-        description: `message ${props.boundary.index} of ${props.boundary.total}`,
+        description: `loaded message ${props.boundary.index} of ${props.boundary.total}`,
         onSelect: () => fork(props.boundary?.messageID),
       },
       {
@@ -85,6 +93,7 @@ export function DialogFork(props: {
         onSelect: () => fork(),
       },
       ...messages.filter((message) => message.value !== props.boundary?.messageID),
+      ...older,
     ]
   })
 
@@ -98,8 +107,9 @@ export function DialogFork(props: {
       }
     >
       <DialogSelect
-        onMove={(option) => props.onMove?.(option.value)}
-        title="Fork session"
+        onMove={(option) => option.value !== "history:older" && props.onMove?.(option.value)}
+        title="Fork session · loaded history"
+        preserveSelection
         options={options()}
       />
     </Show>

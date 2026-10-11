@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test"
 import { RGBA } from "@opentui/core"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
-import { json } from "../fixture/tui-client"
+import { json, sessionSnapshot } from "../fixture/tui-client"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE } from "../viewport"
 import { railWidth } from "../../src/routes/session/rail"
 import { renderScreen } from "./harness"
@@ -31,6 +31,7 @@ const profileSession = {
   projectID: "proj_session_chrome_profile",
   location: { directory: profileDirectory },
   title: "Chrome profile match",
+  model: { ...session.model, profile: "Personal" },
 }
 
 function route(url: URL) {
@@ -38,8 +39,8 @@ function route(url: URL) {
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
-  if (url.pathname === `/api/session/${sessionID}/message`)
-    return json({ data: [], cursor: {} })
+  if (url.pathname === `/api/session/${sessionID}/snapshot`)
+    return sessionSnapshot(sessionID, [], { session })
   if (
     [
       `/api/session/${sessionID}/pending`,
@@ -101,6 +102,7 @@ function route(url: URL) {
           name: "Claude Opus 5",
           capabilities: { tools: true, input: ["text"], output: ["text"] },
           variants: [{ id: "max" }],
+          profiles: [{ name: "Work", active: true }, { name: "Personal", active: false }],
           time: { released: 0 },
           cost: [],
           status: "active",
@@ -194,6 +196,7 @@ function profileRoute(url: URL) {
           name: "Claude Opus 5",
           capabilities: { tools: true, input: ["text"], output: ["text"] },
           variants: [{ id: "max" }],
+          profiles: [{ name: "Work", active: true, variants: ["max"] }, { name: "Personal", active: false, variants: ["max"] }],
           time: { released: 0 },
           cost: [],
           status: "active",
@@ -205,6 +208,7 @@ function profileRoute(url: URL) {
   if (url.pathname === "/api/fs/list") return json({ location: profileLocation, data: [] })
   if (url.pathname === "/api/session") return json({ data: [profileSession], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: profileSession })
+  if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, [], { session: profileSession })
   if (url.pathname === "/api/agent")
     return json({
       location: profileLocation,
@@ -229,6 +233,7 @@ function gsdRoute(url: URL) {
     })
   if (url.pathname === "/api/session") return json({ data: [gsdSession], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: gsdSession })
+  if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, [], { session: gsdSession })
   return route(url)
 }
 
@@ -249,19 +254,15 @@ async function expectProfilePlacement(viewport: typeof DESIGN_VIEWPORT) {
     // happen after the composer settles. Wait for the profile to paint before measuring placement.
     const deadline = Date.now() + 10_000
     while (Date.now() < deadline) {
-      if (screen.frame().includes("Work")) break
+      if (screen.frame().includes("Personal")) break
       await Bun.sleep(50)
     }
     const lines = screen.lines()
     const railStart = viewport.width - railWidth(viewport.width)
     const header = lines.find((line) => line.includes(`v${InstallationVersion}`) && line.includes("ready"))
-    // The header names the active credential profile immediately after the agent and keeps the
-    // provider/model identity label intact.
-    expect(header).toContain("Build · Work · anthropic/Claude Opus 5 · max")
-    // Only the user-facing label is exposed; credential IDs, the inactive profile, and tokens never
-    // reach the header.
+    expect(header).toContain("Build · Personal · anthropic/Claude Opus 5 · max")
     expect(screen.frame()).not.toContain("cred_")
-    expect(screen.frame()).not.toContain("Personal")
+    expect(screen.frame()).not.toContain("Work")
     const rail = lines.map((line) => line.slice(railStart))
     expect(rail.some((line) => line.includes("Profile"))).toBe(false)
     expect(rail.some((line) => line.includes("Provider") && line.includes("anthropic"))).toBe(true)
@@ -279,7 +280,7 @@ async function expectProfilePlacement(viewport: typeof DESIGN_VIEWPORT) {
         .lines()
         .find((line) => line.includes(`v${InstallationVersion}`) && line.includes("ready"))
       expect(narrowHeader).toContain("Build · anthropic/Claude Opus 5 · max")
-      expect(narrowHeader).not.toContain("Work")
+      expect(narrowHeader).not.toContain("Personal")
       expect(narrow.lines().some((line) => line.includes("Profile"))).toBe(false)
     } finally {
       await narrow.dispose()
@@ -296,7 +297,7 @@ describe("active-session chrome Penpot design match", () => {
     await expectComposerSurface(DESIGN_VIEWPORT)
     await expectComposerSurface(DESIGN_VIEWPORT_WIDE)
   }, 60_000)
-  test("names the active profile after the agent in the header and not in the Context rail", async () => {
+  test("names the selected Session profile after the agent without exposing the provider default", async () => {
     await expectProfilePlacement(DESIGN_VIEWPORT)
     await expectProfilePlacement(DESIGN_VIEWPORT_WIDE)
   }, 120_000)

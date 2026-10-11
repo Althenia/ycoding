@@ -2,7 +2,7 @@
 import { expect, test } from "bun:test"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
-import { json } from "../fixture/tui-client"
+import { json, sessionSnapshot } from "../fixture/tui-client"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE } from "../viewport"
 import { captureRoute } from "./capture"
 
@@ -86,9 +86,8 @@ function route(url: URL) {
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: child })
   if (["ses_docs", "ses_keymap"].some((id) => url.pathname === `/api/session/${id}`))
     return json({ data: { ...session(url.pathname.slice("/api/session/".length), "Sibling", now), parentID } })
-  if (url.pathname === `/api/session/${sessionID}/message`)
-    return json({
-      data: [
+  if (url.pathname === `/api/session/${sessionID}/snapshot`)
+    return sessionSnapshot(sessionID, [
         {
           id: "msg_assistant",
           type: "assistant",
@@ -98,9 +97,7 @@ function route(url: URL) {
           time: { created: now - 230_000, completed: now - 222_000 },
         },
         { id: "msg_user", type: "user", text: "Investigate the provider test baseline.", time: { created: now - 242_000 } },
-      ],
-      cursor: {},
-    })
+      ], { session: child })
   if ([parentID, sessionID].some((id) => url.pathname === `/api/session/${id}/subagent`))
     return json({ data: siblings, summary: { total: 3, active: 3, running: 2, waiting: 1 }, cursor: {} })
   if ([`/api/session/${sessionID}/pending`, `/api/session/${sessionID}/permission`, `/api/session/${sessionID}/todo`, `/api/session/${sessionID}/skills`, `/api/session/${sessionID}/guardrail/request`].includes(url.pathname)) return json({ data: [] })

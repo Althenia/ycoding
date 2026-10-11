@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { InputRenderable } from "@opentui/core"
-import { json } from "./fixture/tui-client"
+import { json, sessionSnapshot } from "./fixture/tui-client"
 import { renderScreen } from "./screen/harness"
 
 const sessionID = "ses_provider_usage_interaction"
@@ -143,7 +143,7 @@ async function route(url: URL, request: Request) {
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
-  if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: [], cursor: {} })
+  if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, [], { session })
   if (url.pathname === `/api/session/${sessionID}/diagnostics`)
     return json({
       data: {

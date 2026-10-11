@@ -48,6 +48,7 @@ const Context = createContext<{
   readonly mode: Mode
   readonly dispatch: (id: string, input?: string) => void
   readonly input: (id: string) => string | undefined
+  readonly dispatched: (id: string) => boolean
 }>()
 
 function consumeEmptyNamedKey(context: KeyInputContext) {
@@ -157,6 +158,7 @@ function Provider(props: ParentProps<{ config?: KeymapConfig }>) {
           mode,
           dispatch,
           input: (id) => (invocation?.id === id ? invocation.input : undefined),
+          dispatched: (id) => invocation?.id === id,
         }}
       >
         {props.children}
@@ -227,7 +229,8 @@ function createLayer(input: () => KeymapLayer) {
           ...definition,
           name: id,
           ycoding: command,
-          run: (context: CommandContext<Renderable, KeyEvent>) => run(value.input(id), context.event),
+          run: (context: CommandContext<Renderable, KeyEvent>) =>
+            run(value.input(id), value.dispatched(id) ? undefined : context.event),
           ...(description === undefined ? {} : { desc: description }),
           ...(group === undefined ? {} : { category: group }),
           ...(palette === undefined ? {} : { namespace: "palette" }),

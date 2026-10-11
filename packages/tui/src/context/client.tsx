@@ -35,6 +35,7 @@ export const { use: useClient, provider: ClientProvider } = createSimpleContext(
     let api = props.api
     let baseUrl = props.baseUrl
     const events = createGlobalEmitter<ClientEventMap>()
+    const filters = new Set<(event: YCodingEvent) => boolean>()
     const [connection, setConnection] = createStore<{
       status: ClientConnectionStatus
       attempt: number
@@ -90,7 +91,7 @@ export const { use: useClient, provider: ClientProvider } = createSimpleContext(
                   aggregateID: event.value.durable.aggregateID,
                   seq: event.value.durable.seq,
                 })
-              events.emit(event.value.type, event.value)
+              if ([...filters].every((accept) => accept(event.value))) events.emit(event.value.type, event.value)
             }
             return undefined
           })()
@@ -150,6 +151,10 @@ export const { use: useClient, provider: ClientProvider } = createSimpleContext(
       event: {
         on: events.on,
         listen: events.listen,
+        filter(accept: (event: YCodingEvent) => boolean) {
+          filters.add(accept)
+          return () => { filters.delete(accept) }
+        },
       },
       connection: {
         status() {

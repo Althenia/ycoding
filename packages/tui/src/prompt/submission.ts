@@ -1,6 +1,7 @@
 import type {
   LocationRef,
   ModelDaybreak,
+  ModelRef,
   SessionInfo,
   SessionMessageInfo,
   SessionMessageUser,
@@ -27,7 +28,7 @@ export type PromptSubmissionPayload = {
   agentID: string
   daybreak?: ModelDaybreak
   autonomy?: { yolo: YoloLevel; goal?: string }
-  model: { providerID: string; id: string; variant?: string }
+  model: ModelRef
   modelSelectionPending: boolean
   editor?: { key: string; text: string }
   history: PromptInfo
@@ -59,6 +60,7 @@ export function createPromptSubmissions(input: {
   api: () => YCodingClient
   admitted: (pending: SessionPendingInfo) => void
   created?: (session: SessionInfo) => void
+  promptAdmitted?: (durationMs: number) => void
 }) {
   const [entries, setEntries] = createSignal<Submission[]>([])
   const running = new Set<string>()
@@ -181,16 +183,19 @@ export function createPromptSubmissions(input: {
         await request(entry, "revert", (signal) => input.api().session.revert.commit({ sessionID }, { signal }))
         entry.completed.add("revert")
       }
-      if (
-        payload.modelSelectionPending &&
-        (session.model?.providerID !== payload.model.providerID ||
-          session.model?.id !== payload.model.id ||
-          session.model?.variant !== payload.model.variant)
-      ) {
+      const modelMatches =
+        session.model?.providerID === payload.model.providerID &&
+        session.model.id === payload.model.id &&
+        session.model.variant === payload.model.variant &&
+        session.model.profile === payload.model.profile
+      if (entry.completed.has("model") && payload.model.profile !== undefined && !modelMatches)
+        throw new Error("The Session model changed while this prompt was pending; select the model again before retrying")
+      if (payload.modelSelectionPending && (!entry.completed.has("model") || (payload.model.profile === undefined && !modelMatches))) {
         update(entry, { phase: "Switching model" })
         await request(entry, "model", (signal) =>
           input.api().session.switchModel({ sessionID, model: payload.model }, { signal }),
         )
+        entry.completed.add("model")
       }
       if (payload.editor && !entry.command && !entry.completed.has("editor")) {
         update(entry, { phase: "Sending editor context" })
@@ -234,7 +239,8 @@ export function createPromptSubmissions(input: {
               ),
             (pending) => pending!,
           )
-        return request(
+        const started = performance.now()
+        const admitted = await request(
           entry,
           resume ? "wake" : submission.promptID,
           (signal) =>
@@ -252,6 +258,8 @@ export function createPromptSubmissions(input: {
             ),
           (pending) => pending ?? entry.admitted!,
         )
+        if (!resume) input.promptAdmitted?.(performance.now() - started)
+        return admitted
       },
       onPhase: (phase) =>
         update(entry, {

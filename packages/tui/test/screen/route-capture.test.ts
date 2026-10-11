@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { Global } from "@ycoding-ai/core/global"
 import { mkdir, rm } from "node:fs/promises"
 import path from "node:path"
-import { json, type FetchHandler } from "../fixture/tui-client"
+import { json, type FetchHandler, sessionSnapshot } from "../fixture/tui-client"
 import { captureRoute } from "./capture"
 
 const HEIGHT = 69
@@ -40,7 +40,7 @@ const session = {
   projectID: "proj_route_capture",
   location: { directory },
   agent: "build",
-  model: { providerID: "anthropic", id: "claude-opus-5" },
+  model: { providerID: "anthropic", id: "claude-opus-5", variant: "max" },
   cost: 7.84,
   tokens: { input: 1_411, output: 53, reasoning: 0, cache: { read: 220_672, write: 4_096 } },
   time: { created: 1, updated: 4 },
@@ -128,6 +128,7 @@ const homeRoute: FetchHandler = (url) => {
   if (url.pathname === "/api/vcs/branch") return json({ location, data: { current: "main", default: "main" } })
   if (url.pathname === "/api/agent") return json({ location, data: [agent] })
   if (url.pathname === "/api/model") return json({ location, data: [model] })
+  if (url.pathname === "/api/model/default") return json({ location, data: { ...model, selection: session.model } })
   if (url.pathname === "/api/provider") return json({ location, data: [{ id: "anthropic", name: "Claude" }] })
   if (url.pathname === "/api/integration")
     return json({ location, data: [{ id: "anthropic", name: "Anthropic", connections: [{ type: "credential", id: "cred_capture", label: "Capture" }] }] })
@@ -141,9 +142,8 @@ const sessionRoute: FetchHandler = (url, request) => {
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/session") return json({ data: [session, childSession], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
-  if (url.pathname === `/api/session/${sessionID}/message`) {
-    return json({
-      data: [
+  if (url.pathname === `/api/session/${sessionID}/snapshot`) {
+    return sessionSnapshot(sessionID, [
         {
           id: "msg_compaction",
           type: "compaction",
@@ -201,10 +201,9 @@ const sessionRoute: FetchHandler = (url, request) => {
           time: { created: Date.now() - 4_060 },
         },
         { id: "msg_user", type: "user", text: "Where is provider cache telemetry recorded?", time: { created: 1 } },
-      ],
-    })
+      ], { session })
   }
-  if (subagents.some((child) => url.pathname === `/api/session/${child.sessionID}/message`)) return json({ data: [], cursor: {} })
+  if (subagents.some((child) => url.pathname === `/api/session/${child.sessionID}/snapshot`)) return sessionSnapshot(url.pathname.slice("/api/session/".length, -"/snapshot".length), [])
   if (url.pathname === `/api/session/${sessionID}/file-change`) return json({ data: [] })
   if ([`/api/session/${sessionID}/pending`, `/api/session/${sessionID}/permission`].includes(url.pathname))
     return json({ data: [] })

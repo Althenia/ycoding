@@ -10,6 +10,11 @@ function hasPaletteStatus(command: KeymapCommand): command is PaletteStatusComma
   return "paletteStatus" in command && typeof command.paletteStatus === "function"
 }
 
+function slashKeywords(command: KeymapCommand) {
+  if (!command.slash) return undefined
+  return [command.slash.name, ...(command.slash.aliases ?? [])].map((name) => `/${name}`).join(" ")
+}
+
 const canonicalPromotions = [
   { id: "session.list", title: "Switch session" },
   { id: "model.list", title: "Switch model" },
@@ -49,6 +54,7 @@ export function CommandPaletteDialog() {
         title: command.title ?? command.id,
         description: command.description,
         category: command.group,
+        keywords: slashKeywords(command),
         footer: hasPaletteStatus(command) ? command.paletteStatus() : shortcuts.all(command.id)?.replaceAll("ctrl+", "⌃"),
         value: command.id,
         onSelect: (dialog: DialogContext) => {

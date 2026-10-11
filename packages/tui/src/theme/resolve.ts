@@ -25,6 +25,10 @@ import type {
 } from "./index"
 import { selectTheme, selectThemeMode } from "./select"
 
+const STANDALONE_SECONDARY_INK = {
+  text: { separator: "$text.subdued", hint: "$text.subdued", label: "$text.subdued" },
+}
+
 const decodeThemeDefinitionSchema = Schema.decodeUnknownSync(ThemeDefinition)
 const decodeThemeFileSchema = Schema.decodeUnknownSync(ThemeFile)
 
@@ -56,7 +60,9 @@ export function resolveThemeFile(file: ThemeFile, mode?: "light" | "dark", name 
   const definition = selected.expanded ? selected.theme : expandTheme(selected.theme)
   const defaults = expandTheme(selectTheme(DEFAULT_THEME, selected.mode))
   const core = expandTokens(fallback())
-  const merged = decoded.standalone ? mergeTheme(core, definition) : mergeTheme(core, defaults, definition)
+  const merged = decoded.standalone
+    ? mergeTheme(core, STANDALONE_SECONDARY_INK, definition)
+    : mergeTheme(core, defaults, definition)
   if (!merged["hue"]) throw new Error("Standalone themes must provide hues")
   return resolveExpandedTheme({
     ...merged,

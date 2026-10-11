@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test"
 import { railWidth } from "../../src/routes/session/rail"
-import { json } from "../fixture/tui-client"
+import { json, sessionSnapshot } from "../fixture/tui-client"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE } from "../viewport"
 import { renderScreen } from "./harness"
 
@@ -25,9 +25,8 @@ function route(url: URL) {
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
-  if (url.pathname === `/api/session/${sessionID}/message`)
-    return json({
-      data: [
+  if (url.pathname === `/api/session/${sessionID}/snapshot`)
+    return sessionSnapshot(sessionID, [
         {
           id: "msg_assistant",
           type: "assistant",
@@ -37,9 +36,7 @@ function route(url: URL) {
           time: { created: 2, completed: 3 },
         },
         { id: "msg_user", type: "user", text: "Where is provider cache telemetry recorded?", time: { created: 1 } },
-      ],
-      cursor: {},
-    })
+      ], { session })
   if (
     [
       `/api/session/${sessionID}/pending`,

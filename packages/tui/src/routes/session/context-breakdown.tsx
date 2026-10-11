@@ -35,7 +35,6 @@ export function SessionContextScreen() {
   const router = useRoute()
   const data = useData()
   onMount(() => {
-    void data.session.sync(route.sessionID).catch(() => undefined)
     void data.session.message.sync(route.sessionID).catch(() => undefined)
     void data.session.diagnostics.sync(route.sessionID).catch(() => undefined)
     void data.session.usage.sync(route.sessionID).catch(() => undefined)
@@ -43,6 +42,7 @@ export function SessionContextScreen() {
   return <ContextBreakdownContent
     session={data.session.get(route.sessionID)}
     messages={data.session.message.list(route.sessionID)}
+    partial={!!data.session.message.history(route.sessionID)?.before}
     diagnostics={data.session.diagnostics.get(route.sessionID) ?? undefined}
     usage={data.session.usage.get(route.sessionID)}
     onBack={() => router.navigate({ type: "session", sessionID: route.sessionID })}
@@ -55,6 +55,7 @@ export function ContextBreakdownContent(props: {
   diagnostics?: SessionCacheDiagnostics
   usage?: ProviderRequestSummary
   onBack: () => void
+  partial?: boolean
 }) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
@@ -84,7 +85,7 @@ export function ContextBreakdownContent(props: {
       }
   const rows = createMemo(() => [
     ["Session", props.session?.title ?? "—"],
-    ["Messages", props.messages.length.toLocaleString()],
+    [props.partial ? "Loaded Messages" : "Messages", props.messages.length.toLocaleString()],
     ["Provider", props.diagnostics?.model.providerID ?? props.session?.model?.providerID ?? "—"],
     ["Model", formatDiagnosticsModel(props.diagnostics?.model ?? props.session?.model) ?? "—"],
     ["Context Limit", props.diagnostics?.context.limit?.toLocaleString() ?? "—"],
@@ -94,8 +95,8 @@ export function ContextBreakdownContent(props: {
     ["Output Tokens", tokens()?.output.toLocaleString() ?? "—"],
     ["Reasoning Tokens", tokens()?.reasoning.toLocaleString() ?? "—"],
     ["Cache Tokens read/write", tokens() ? `${tokens()!.cacheRead.toLocaleString()} / ${tokens()!.cacheWrite.toLocaleString()}` : "—"],
-    ["User Messages", props.messages.filter((message) => message.type === "user").length.toLocaleString()],
-    ["Assistant Messages", props.messages.filter((message) => message.type === "assistant").length.toLocaleString()],
+    [props.partial ? "Loaded User Messages" : "User Messages", props.messages.filter((message) => message.type === "user").length.toLocaleString()],
+    [props.partial ? "Loaded Assistant Messages" : "Assistant Messages", props.messages.filter((message) => message.type === "assistant").length.toLocaleString()],
     ["Total Cost", new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(props.usage ? props.usage.cost ?? 0 : props.session?.cost ?? 0)],
     ["Session Created", props.session ? Locale.datetime(props.session.time.created) : "—"],
     ["Last Activity", props.session?.time.active === undefined ? "—" : Locale.datetime(props.session.time.active)],

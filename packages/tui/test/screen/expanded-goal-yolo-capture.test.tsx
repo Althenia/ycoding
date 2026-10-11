@@ -2,7 +2,7 @@
 import { expect, test } from "bun:test"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
-import { json, type FetchHandler } from "../fixture/tui-client"
+import { json, type FetchHandler, sessionSnapshot } from "../fixture/tui-client"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE, NARROW_VIEWPORT } from "../viewport"
 import { railWidth } from "../../src/routes/session/rail"
 import { resetRailExpansion } from "../../src/routes/session/rail-section"
@@ -35,9 +35,8 @@ const route: FetchHandler = (url) => {
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
   if (childSessions.some((child) => url.pathname === `/api/session/${child.id}`))
     return json({ data: childSessions.find((child) => url.pathname === `/api/session/${child.id}`) })
-  if (url.pathname === `/api/session/${sessionID}/message`)
-    return json({
-      data: [
+  if (url.pathname === `/api/session/${sessionID}/snapshot`)
+    return sessionSnapshot(sessionID, [
         {
           id: "msg_assistant",
           type: "assistant",
@@ -46,15 +45,13 @@ const route: FetchHandler = (url) => {
           content: [{ type: "text", text: "All rail sections expanded. The rail scrolls independently of the transcript." }],
           time: { created: 2, completed: 3 },
         },
-      ],
-      cursor: {},
-    })
+      ], { session })
   if ([`/api/session/${sessionID}/pending`, `/api/session/${sessionID}/permission`, `/api/session/${sessionID}/guardrail/request`].includes(url.pathname))
     return json({ data: [] })
   if (/^\/api\/session\/[^/]+\/(permission|form)$/.test(url.pathname)) return json({ data: [] })
   if (url.pathname === `/api/session/${sessionID}/autonomy`)
     return json({
-      data: { mode: "normal", yolo: false, goal: { text: "Fix provider cache accounting", status: "active", iteration: 3, noProgress: 3, maxNoProgress: 5 },
+      data: { mode: "goal", yolo: 0, goal: { text: "Fix provider cache accounting", status: "active", iteration: 3, noProgress: 3, maxNoProgress: 5 },
       },
     })
   if (url.pathname === `/api/session/${sessionID}/todo`)
@@ -232,7 +229,7 @@ test("captures the expanded goal and YOLO session with populated rail fixtures",
         expect(rail).not.toContain("3 / 5")
         // Explicitly expanded sections retain their active-state summaries.
         expect(rail).toMatch(/−\s+GOAL\s+active/)
-        expect(rail).toMatch(/−\s+AUTONOMY\s+Goal/)
+        expect(rail).toMatch(/−\s+AUTONOMY\s+Manual · goal/)
       }
       if (viewport.width === DESIGN_VIEWPORT.width) {
         expect(lines.join("\n")).toContain("YCODING")

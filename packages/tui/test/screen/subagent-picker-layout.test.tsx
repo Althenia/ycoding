@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import { json } from "../fixture/tui-client"
+import { json, sessionSnapshot } from "../fixture/tui-client"
 import { renderScreen } from "./harness"
 
 const sessionID = "ses_picker_layout"
@@ -168,7 +168,7 @@ test("pages past a full active top page to make terminal tasks reachable in INAC
           return json({ data: [terminalTask], summary: { total: 11, active: 10, running: 10, waiting: 0 }, cursor: { previous: "top" } })
         return json({ data: activeTasks, summary: { total: 11, active: 10, running: 10, waiting: 0 }, cursor: { next: "older-terminal" } })
       }
-      if (url.pathname === `/api/session/${terminalTask.sessionID}/message`) return json({ data: [], cursor: {} })
+      if (url.pathname === `/api/session/${terminalTask.sessionID}/snapshot`) return sessionSnapshot(terminalTask.sessionID, [], { session: { ...session, id: terminalTask.sessionID, parentID: sessionID, title: terminalTask.description } })
       return route(url)
     },
     settle: "Message YCoding…",
@@ -270,8 +270,8 @@ async function route(url: URL) {
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
-  if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: [], cursor: {} })
-  if (tasks.some((task) => url.pathname === `/api/session/${task.sessionID}/message`)) return json({ data: [], cursor: {} })
+  if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, [], { session })
+  if (tasks.some((task) => url.pathname === `/api/session/${task.sessionID}/snapshot`)) return sessionSnapshot(url.pathname.slice("/api/session/".length, -"/snapshot".length), [], { session: { parentID: sessionID } })
   if (url.pathname === `/api/session/${sessionID}/subagent`)
     return json({ data: tasks, summary: { total: 2, active: 1, running: 1, waiting: 0 }, cursor: {} })
   if (url.pathname.startsWith("/api/session/") && url.pathname.endsWith("/diagnostics"))

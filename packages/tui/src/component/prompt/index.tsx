@@ -44,7 +44,6 @@ import { createFadeIn } from "../../util/signal"
 import { DialogSkill } from "../dialog-skill"
 import { DialogBtwExport } from "../dialog-btw-export"
 import { DialogSessionGoal } from "../dialog-session-goal"
-import { useArgs } from "../../context/args"
 import { useConfig } from "../../config"
 import { usePromptMove } from "./move"
 import { readLocalAttachment } from "./local-attachment"
@@ -62,9 +61,10 @@ import {
   type YoloLevel,
   type SessionSubmissionRetry,
 } from "../../util/session-autonomy"
-import { daybreakPlan, daybreakSuccessLabel, daybreakTitle } from "../../util/session-daybreak"
+import { daybreakPlan, daybreakSuccessLabel, daybreakTitle, modelDaybreak } from "../../util/session-daybreak"
+import { modelVariantIDs } from "../../util/model"
 import { openBtwSession, steerBtwConclusion } from "../../util/session"
-import type { ModelDaybreak, SessionAutonomyState } from "@ycoding-ai/client"
+import type { ModelDaybreak, ModelRef, SessionAutonomyState } from "@ycoding-ai/client"
 
 registerYCodingSpinner()
 
@@ -81,6 +81,7 @@ export type PromptProps = {
   onLandingDaybreakChange?: (next: ModelDaybreak | undefined) => void
   visible?: boolean
   disabled?: boolean
+  submitDisabled?: boolean
   onSubmit?: () => void
   ref?: (ref: PromptRef | undefined) => void
   hint?: JSX.Element
@@ -251,7 +252,6 @@ export function Prompt(props: PromptProps) {
 
   const leader = Keymap.useLeaderActive()
   const local = useLocal()
-  const args = useArgs()
   const paths = useTuiPaths()
   const terminalEnvironment = useTuiTerminalEnvironment()
   const clipboard = useClipboard()
@@ -454,6 +454,32 @@ export function Prompt(props: PromptProps) {
     interrupt: 0,
   })
   const temporaryAttachments = new Map<string, ClipboardTemporary>()
+  const predictionShortcut = Keymap.useShortcut("prompt.prediction.accept")
+  const predictionEligible = createMemo(() => {
+    const sessionID = props.sessionID
+    return !!sessionID && store.prompt.text === "" && store.mode === "normal" && !props.disabled && !props.submitDisabled &&
+      client.connection.status() === "connected" && status() === "idle" && data.session.pending.list(sessionID).length === 0 &&
+      props.autonomy?.goal?.status !== "active" && !operation() && !auto()?.visible && dialog.stack.length === 0
+  })
+  const prediction = createMemo(() => {
+    const sessionID = props.sessionID
+    if (!sessionID || !predictionEligible()) return
+    const value = data.session.prediction.get(sessionID)
+    if (data.session.message.list(sessionID).findLast(message => message.type === "assistant")?.id !== value?.sourceMessageID) return
+    return value
+  })
+  const dismissPrediction = () => { if (props.sessionID) data.session.prediction.dismiss(props.sessionID) }
+  const acceptPrediction = () => {
+    const value = prediction()
+    if (!value || input.plainText !== "") return
+    dismissPrediction()
+    input.setText(value.text)
+    input.gotoBufferEnd()
+  }
+  createEffect(() => {
+    if (props.sessionID) data.session.prediction.get(props.sessionID)
+    if (store.prompt.text !== "" || props.autonomy?.goal?.status === "active") dismissPrediction()
+  })
   let addingAttachment = 0
 
   async function releaseTemporaryAttachment(uri: string) {
@@ -477,20 +503,6 @@ export function Prompt(props: PromptProps) {
       { defer: true },
     ),
   )
-
-  let syncedSessionID: string | undefined
-  createEffect(() => {
-    const sessionID = props.sessionID
-    if (!sessionID || sessionID === syncedSessionID || !local.model.ready) return
-    const session = data.session.get(sessionID)
-    if (!session) return
-    const agents = data.location.agent.list(session.location)
-    const models = data.location.model.list(session.location)
-    if (!agents || !models) return
-    const agent = session.agent && agents.find((agent) => agent.id === session.agent)
-    if (agent && session.agent !== "btw" && !args.agent) local.agent.set(agent.id)
-    syncedSessionID = sessionID
-  })
 
   const promptCommands = createMemo(() =>
     [
@@ -528,7 +540,7 @@ export function Prompt(props: PromptProps) {
         run: async (_input: string | undefined, event?: KeyEvent) => {
           event?.preventDefault()
           event?.stopPropagation()
-          if (!input.focused) return
+          if (event && !input.focused) return
           const handled = await submit({ steerNow: true })
           if (!handled) return
 
@@ -633,9 +645,15 @@ export function Prompt(props: PromptProps) {
         title: "Interrupt session",
         name: "session.interrupt",
         category: "Session",
-        palette: undefined,
         enabled: status() === "running" || yoloGoalActive(),
-        run: () => {
+        run: (_input: string | undefined, event?: KeyEvent) => {
+          if (!event && props.sessionID) {
+            void client.api.session
+              .interrupt({ sessionID: props.sessionID })
+              .catch((error) => toast.show({ title: "Failed to interrupt", message: errorMessage(error), variant: "error" }))
+            dialog.clear()
+            return
+          }
           if (auto()?.visible) return
           if (!input.focused) return
           // TODO: this should be its own command
@@ -664,11 +682,10 @@ export function Prompt(props: PromptProps) {
         title: "Background blocking tools",
         name: "session.background",
         category: "Session",
-        palette: undefined,
         enabled: status() === "running",
-        run: () => {
+        run: (_input: string | undefined, event?: KeyEvent) => {
           if (auto()?.visible) return
-          if (!input.focused) return
+          if (event && !input.focused) return
           if (!props.sessionID) return
 
           void client.api.session.background({
@@ -746,17 +763,18 @@ export function Prompt(props: PromptProps) {
                 if (result.type === "cancelled") return
                 const model = result.selection
                 clearPrompt()
-                void openBtwSession({
+                void client.api.session.snapshot({ sessionID: parentID, limit: 100 }).then((snapshot) => openBtwSession({
                   api: client.api.session,
                   parentID,
-                  messages: data.session.message.list(parentID),
+                  messages: snapshot.messages,
                   text,
                   model: {
                     providerID: model.providerID,
                     id: model.modelID,
                     variant: model.variant,
+                    ...(model.profile === undefined ? {} : { profile: model.profile }),
                   },
-                }).then(
+                })).then(
                   (session) => route.navigate({ type: "session", sessionID: session.id }),
                   (error) =>
                     toast.show({ title: "Failed to open BTW", message: errorMessage(error), variant: "error" }),
@@ -859,11 +877,12 @@ export function Prompt(props: PromptProps) {
         run: async (input?: string) => {
           const sessionID = props.sessionID
           const selected = (sessionID ? local.model.pendingTarget(sessionID) : undefined) ?? local.model.current()
-          const advertised = selected
-            ? (data.location.model.list(currentLocation.current)?.find(
+          const info = selected
+            ? data.location.model.list(currentLocation.current)?.find(
                 (item) => item.providerID === selected.providerID && item.id === selected.modelID,
-              )?.daybreak ?? [])
-            : []
+              )
+            : undefined
+          const advertised = modelDaybreak({ model: info, selection: selected })
           const plan = daybreakPlan({
             current: sessionID ? data.session.get(sessionID)?.daybreak : props.landingDaybreak,
             advertised,
@@ -888,7 +907,7 @@ export function Prompt(props: PromptProps) {
       },
       {
         title: "Move session",
-        desc: "Move to another project dir",
+        description: "Move to another project dir",
         name: "session.move",
         category: "Session",
         slash: { name: "move" },
@@ -1380,6 +1399,18 @@ export function Prompt(props: PromptProps) {
   })
 
   Keymap.createLayer(() => ({
+    priority: 3,
+    target: inputTarget,
+    enabled: inputTarget() !== undefined && predictionEligible() &&
+      data.session.message.list(props.sessionID!).some(message => message.type === "assistant"),
+    commands: [
+      { id: "prompt.prediction.accept", title: "Use suggestion", enabled: prediction() !== undefined, run: acceptPrediction },
+      { bind: "tab", title: "Use suggestion", enabled: prediction() !== undefined, run: acceptPrediction },
+      { bind: "escape", title: "Dismiss suggestion", run: dismissPrediction },
+    ],
+  }))
+
+  Keymap.createLayer(() => ({
     priority: 2,
     target: inputTarget,
     enabled: inputTarget() !== undefined && !props.disabled && Boolean(operation()) && !auto()?.visible,
@@ -1544,6 +1575,7 @@ export function Prompt(props: PromptProps) {
     route.navigate({ type: "session", sessionID })
   })
   async function submit(options?: { steerNow?: boolean }) {
+    if (props.disabled || props.submitDisabled || client.connection.status() !== "connected") return false
     // Prevent overlapping invocations (e.g. a double-pressed Enter, or the
     // input's native onSubmit racing another dispatch). Without this guard,
     // a second call slips past the empty-input check before the first call
@@ -1649,34 +1681,49 @@ export function Prompt(props: PromptProps) {
       await slash.command.run(slash.input)
       return true
     }
-    // Deadlock removal: never block prompt on missing agent/model — fallback to session or first available, warn but still send.
-    let agentID = btwSession()?.agent ?? local.agent.current()?.id
+    const resumedSession = props.sessionID ? data.session.get(props.sessionID) : undefined
+    if (props.sessionID && !resumedSession) return false
+    const submissionLocation = resumedSession?.location ?? currentLocation.current
+    const agents = data.location.agent.list(submissionLocation)
+    const models = data.location.model.list(submissionLocation)
+    if (!agents || !models) {
+      toast.show({
+        title: "Model selection needs attention",
+        message: "The agent and model catalog is not available yet. Refresh models and providers or retry; draft retained.",
+        variant: "warning",
+      })
+      return false
+    }
+    const agentID = btwSession()?.agent ?? local.agent.current()?.id
     if (!agentID) {
-      const sessionAgent = props.sessionID ? data.session.get(props.sessionID)?.agent : undefined
-      const fallbackAgent = sessionAgent
-        ? data.location.agent
-            .list(data.session.get(props.sessionID!)?.location ?? currentLocation.current)
-            ?.find((agent) => agent.id === sessionAgent)?.id
-        : undefined
-      agentID = fallbackAgent ?? data.location.agent.list(currentLocation.current)?.[0]?.id
-      if (!agentID) {
-        void promptModelWarning()
-        // still allow send with fallback; if truly no agent, let server error rather than deadlock
-        agentID = "default"
+      if (!resumedSession) {
+        promptModelWarning()
+        return false
       }
+      toast.show({
+        title: "Agent selection needs attention",
+        message: `Agent ${resumedSession.agent ?? "selection"} is unavailable in this Session's Location; choose an available agent; draft retained.`,
+        variant: "warning",
+      })
+      return false
     }
     const fixedModel = btwSession()?.model
     const selectedModel = fixedModel
-      ? { providerID: fixedModel.providerID, modelID: fixedModel.id }
+      ? { providerID: fixedModel.providerID, modelID: fixedModel.id, ...(fixedModel.profile === undefined ? {} : { profile: fixedModel.profile }) }
       : local.model.current()
     const variant = fixedModel ? fixedModel.variant : local.model.variant.current()
-    const info = selectedModel && data.location.model
-      .list(currentLocation.current)
-      ?.find((item) => item.providerID === selectedModel.providerID && item.id === selectedModel.modelID)
-    if (!info || variant !== undefined && !info.variants.some((item) => item.id === variant)) {
+    const info = selectedModel && models.find((item) => item.providerID === selectedModel.providerID && item.id === selectedModel.modelID)
+    const profileUnavailable = selectedModel?.profile !== undefined && !info?.profiles?.some((item) => item.name === selectedModel.profile)
+    const modelUnavailable = selectedModel?.profile === undefined && info?.enabled === false
+    const variants = modelVariantIDs({ model: info, profile: selectedModel?.profile })
+    if (!selectedModel || !info || profileUnavailable || modelUnavailable || variant !== undefined && !variants.includes(variant)) {
       toast.show({
         title: "Model selection needs attention",
-        message: "The selected model or effort is unavailable in the current catalog. Refresh the catalog or choose an available model and effort; draft retained.",
+        message: profileUnavailable
+          ? `Profile ${selectedModel?.profile} is unavailable for ${info?.name ?? selectedModel?.modelID}. Choose another profile or Use provider default; draft retained.`
+          : modelUnavailable
+            ? `Model ${info?.name ?? selectedModel?.modelID} is unavailable for the provider default; choose an available profile or model; draft retained.`
+            : "The selected model or effort is unavailable in the current catalog. Refresh the catalog or choose an available model and effort; draft retained.",
         variant: "warning",
       })
       return false
@@ -1715,7 +1762,8 @@ export function Prompt(props: PromptProps) {
         providerID: selectedModel.providerID,
         id: selectedModel.modelID,
         variant,
-      },
+        ...(selectedModel.profile === undefined ? {} : { profile: selectedModel.profile }),
+      } satisfies ModelRef,
       modelSelectionPending: !!local.model.pendingTarget(props.sessionID),
       editor: candidateEditorSelection
         ? {
@@ -2112,7 +2160,12 @@ export function Prompt(props: PromptProps) {
           toast.show({ message: "Connect a provider and select a model before setting a goal", variant: "warning", duration: 3000 })
           return false
         }
-        const modelRef = { id: currentModel.modelID, providerID: currentModel.providerID, variant: local.model.variant.current() || undefined }
+        const modelRef = {
+          id: currentModel.modelID,
+          providerID: currentModel.providerID,
+          variant: local.model.variant.current() || undefined,
+          ...(currentModel.profile === undefined ? {} : { profile: currentModel.profile }),
+        }
         const daybreak = props.landingDaybreak
         try {
           const created = await client.api.session.create({
@@ -2161,19 +2214,17 @@ export function Prompt(props: PromptProps) {
     if (action.type === "replace" || action.type === "resume") {
       const pending = local.model.pendingTarget(sessionID)
       if (pending) {
-        const model = { providerID: pending.providerID, id: pending.modelID, variant: pending.variant }
-        const current = data.session.get(sessionID)?.model
-        if (
-          current?.providerID !== model.providerID ||
-          current?.id !== model.id ||
-          current?.variant !== model.variant
-        ) {
-          try {
-            await client.api.session.switchModel({ sessionID, model })
-          } catch (error) {
-            toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" })
-            return false
-          }
+        const model = {
+          providerID: pending.providerID,
+          id: pending.modelID,
+          variant: pending.variant,
+          ...(pending.profile === undefined ? {} : { profile: pending.profile }),
+        }
+        try {
+          await client.api.session.switchModel({ sessionID, model })
+        } catch (error) {
+          toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" })
+          return false
         }
         local.model.commitPending(sessionID, model)
       }
@@ -2216,6 +2267,7 @@ export function Prompt(props: PromptProps) {
   const borderHighlight = createMemo(() => tint(theme.border.default, highlight(), agentMetaAlpha()))
 
   const placeholderText = createMemo(() => {
+    if (prediction()) return `${prediction()!.text}  · tab${predictionShortcut() && predictionShortcut() !== "tab" ? ` / ${formatShortcut(predictionShortcut()!)}` : ""} use suggestion`
     if (props.showPlaceholder === false) return undefined
     if (store.mode === "shell") {
       if (!shell().length) return undefined
@@ -2262,9 +2314,12 @@ export function Prompt(props: PromptProps) {
             flexGrow={1}
             width="100%"
           >
+            <box width="100%" minHeight={1}>
             <textarea
               width="100%"
-              placeholder={placeholderText()}
+              position={prediction() ? "absolute" : "relative"}
+              height={prediction() ? "100%" : "auto"}
+              placeholder={prediction() ? undefined : placeholderText()}
               placeholderColor={theme.text.subdued}
               textColor={leader() ? theme.text.subdued : theme.text.default}
               focusedTextColor={leader() ? theme.text.subdued : theme.text.default}
@@ -2272,6 +2327,7 @@ export function Prompt(props: PromptProps) {
               maxHeight={MAX_VISIBLE_INPUT_ROWS}
               onContentChange={() => {
                 const value = input.plainText
+                if (value !== "") dismissPrediction()
                 draftRevision += 1
                 setStore("prompt", "text", value)
                 auto()?.onInput(value)
@@ -2289,6 +2345,7 @@ export function Prompt(props: PromptProps) {
                 }
               }}
               onSubmit={() => {
+                if (props.disabled || props.submitDisabled || client.connection.status() !== "connected") return
                 if (submitting || operation()) return
                 // IME: double-defer so the last composed character (e.g. Korean
                 // hangul) is flushed to plainText before we read it for submission!.
@@ -2343,6 +2400,12 @@ export function Prompt(props: PromptProps) {
               cursorColor={props.disabled ? theme.background.surface.offset : theme.text.default}
               syntaxStyle={syntax()}
             />
+            <Show when={prediction()}>
+              <text width="100%" fg={theme.text.subdued} wrapMode="word" selectable={false} onMouseDown={() => input.focus()}>
+                {placeholderText()}
+              </text>
+            </Show>
+            </box>
           </box>
           <Show when={operationText()}>
             {(message) => (

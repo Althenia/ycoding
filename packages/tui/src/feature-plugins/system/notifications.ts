@@ -200,6 +200,11 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
         episode.state = "terminal"
       }
 
+      function releaseTerminal(episode: TerminalEpisode) {
+        stopTerminal(episode)
+        if (terminals.get(episode.sessionID) === episode) terminals.delete(episode.sessionID)
+      }
+
       function goalNotification(state: SessionAutonomyState): Pick<TuiAttentionNotifyInput, "message" | "sound"> {
         const status = state.goal?.status
         if (status === "completed") return { message: "Session done", sound: { name: "done", when: "always" } }
@@ -209,56 +214,65 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
       }
 
       async function finishTerminal(episode: TerminalEpisode, controller: AbortController) {
-        const waited = await context.client.session
-          .wait({ sessionID: episode.sessionID }, { signal: controller.signal })
-          .then(
-            () => true,
-            () => false,
+        let keep = false
+        try {
+          const waited = await context.client.session
+            .wait({ sessionID: episode.sessionID }, { signal: controller.signal })
+            .then(
+              () => true,
+              () => false,
+            )
+          if (!waited || disposed || terminals.get(episode.sessionID) !== episode || episode.controller !== controller)
+            return
+          const [session, initial, final] = await Promise.all([
+            resolveSession(episode.sessionID, controller.signal),
+            episode.initial,
+            context.client.session.autonomy
+              .get({ sessionID: episode.sessionID }, { signal: controller.signal })
+              .catch(() => undefined),
+          ])
+          if (disposed || terminals.get(episode.sessionID) !== episode || episode.controller !== controller) return
+          if (!session || !initial || !final) return
+          if (session.parentID) return
+          if (final.goal?.status === "active") {
+            keep = true
+            return
+          }
+          if (initial.goal?.status !== "active" && !episode.completed) return
+          const work = await Promise.all([
+            context.client.session.subagent.list({ parentID: episode.sessionID }, { signal: controller.signal }),
+            context.client.shell.list(
+              {
+                location: { directory: session.location.directory, workspace: session.location.workspaceID },
+              },
+              { signal: controller.signal },
+            ),
+          ]).then(
+            (value) => value,
+            () => undefined,
           )
-        if (!waited || disposed || terminals.get(episode.sessionID) !== episode || episode.controller !== controller)
-          return
-        const [session, initial, final] = await Promise.all([
-          resolveSession(episode.sessionID, controller.signal),
-          episode.initial,
-          context.client.session.autonomy
-            .get({ sessionID: episode.sessionID }, { signal: controller.signal })
-            .catch(() => undefined),
-        ])
-        if (disposed || terminals.get(episode.sessionID) !== episode || episode.controller !== controller) return
-        if (!session || !initial || !final) return
-        if (session.parentID || final.goal?.status === "active") return
-        if (initial.goal?.status !== "active" && !episode.completed) return
-        const work = await Promise.all([
-          context.client.session.subagent.list({ parentID: episode.sessionID }, { signal: controller.signal }),
-          context.client.shell.list(
+          if (disposed || terminals.get(episode.sessionID) !== episode || episode.controller !== controller) return
+          episode.state = "terminal"
+          if (!work || work[0].summary.active > 0) return
+          if (work[1].data.some((shell) => shell.status === "running" && shell.metadata.sessionID === episode.sessionID))
+            return
+          const output =
+            initial.goal?.status === "active"
+              ? goalNotification(final)
+              : { message: "Session done", sound: { name: "done" as const, when: "always" as const } }
+          await send(
             {
-              location: { directory: session.location.directory, workspace: session.location.workspaceID },
+              title: session.title,
+              message: output.message,
+              notification: { when: "blurred" },
+              sound: output.sound,
             },
-            { signal: controller.signal },
-          ),
-        ]).then(
-          (value) => value,
-          () => undefined,
-        )
-        if (disposed || terminals.get(episode.sessionID) !== episode || episode.controller !== controller) return
-        episode.controller = undefined
-        episode.state = "terminal"
-        if (!work || work[0].summary.active > 0) return
-        if (work[1].data.some((shell) => shell.status === "running" && shell.metadata.sessionID === episode.sessionID))
-          return
-        const output =
-          initial.goal?.status === "active"
-            ? goalNotification(final)
-            : { message: "Session done", sound: { name: "done" as const, when: "always" as const } }
-        await send(
-          {
-            title: session.title,
-            message: output.message,
-            notification: { when: "blurred" },
-            sound: output.sound,
-          },
-          () => terminals.get(episode.sessionID) === episode && episode.state === "terminal",
-        )
+            () => terminals.get(episode.sessionID) === episode && episode.state === "terminal",
+          )
+        } finally {
+          if (!keep && terminals.get(episode.sessionID) === episode && episode.controller === controller)
+            releaseTerminal(episode)
+        }
       }
 
       function succeed(sessionID: string) {
@@ -274,17 +288,22 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
         const sessionID = episode.sessionID
         stopTerminal(episode)
         const controller = new AbortController()
-        const session = await resolveSession(sessionID, controller.signal)
-        if (!session || session.parentID || disposed || terminals.get(sessionID) !== episode) return
-        await send(
-          {
-            title: session.title,
-            message,
-            notification: { when: "blurred" },
-            sound: { name: "error", when: "always" },
-          },
-          () => terminals.get(sessionID) === episode && episode.state === "terminal",
-        )
+        try {
+          const session = await resolveSession(sessionID, controller.signal)
+          if (!session || session.parentID || disposed || terminals.get(sessionID) !== episode) return
+          await send(
+            {
+              title: session.title,
+              message,
+              notification: { when: "blurred" },
+              sound: { name: "error", when: "always" },
+            },
+            () => terminals.get(sessionID) === episode && episode.state === "terminal",
+          )
+        } finally {
+          controller.abort()
+          releaseTerminal(episode)
+        }
       }
 
       const cleanups = [
@@ -369,6 +388,7 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
           const episode = current ?? createTerminal(event.data.sessionID)
           stopTerminal(episode)
           if (event.data.reason === "shutdown") void fail(episode, "Session interrupted")
+          else releaseTerminal(episode)
         }),
       ]
 

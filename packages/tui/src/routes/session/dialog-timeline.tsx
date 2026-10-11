@@ -26,7 +26,7 @@ export function DialogTimeline(props: {
     dialog.setSize("large")
   })
 
-  type TimelineValue = { type: "message"; id: string }
+  type TimelineValue = { type: "message"; id: string } | { type: "history" }
 
   const options = createMemo((): DialogSelectOption<TimelineValue>[] => {
     if (props.presentation)
@@ -54,13 +54,21 @@ export function DialogTimeline(props: {
       })
     }
     result.reverse()
+    const history = data.session.message.history(props.sessionID)
+    if (history?.before) result.push({
+      title: history.status === "error" ? "Retry older history" : "Load older history",
+      value: { type: "history" },
+      description: history.status === "error" ? history.error : "Timeline lists loaded prompts",
+      disabled: history.status === "paging" || history.status === "loading",
+      onSelect: () => { void data.session.message.loadOlder(props.sessionID).catch(() => undefined) },
+    })
     return result
   })
 
   return (
     <DialogSelect
       onMove={(option) => option.value.type === "message" && props.onMove(option.value.id)}
-      title="Session timeline"
+      title="Session timeline · loaded history"
       // Newly arriving messages rebuild this list and shift every index, so selection follows the
       // option's value rather than its position.
       preserveSelection

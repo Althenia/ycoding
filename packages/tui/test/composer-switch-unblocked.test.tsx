@@ -3,7 +3,7 @@ import { expect, test } from "bun:test"
 import type { ModelInfo, ModelRef, YCodingEvent } from "@ycoding-ai/client"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
-import { json } from "./fixture/tui-client"
+import { json, sessionSnapshot } from "./fixture/tui-client"
 import { renderScreen } from "./screen/harness"
 import { isRecord } from "../src/util/record"
 
@@ -70,7 +70,7 @@ async function route(url: URL, request: Request) {
     if (switchGate) await switchGate
     return new Response(null, { status: 204 })
   }
-  if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: [], cursor: {} })
+  if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, [], { session })
   if (url.pathname === `/api/session/${sessionID}/subagent`)
     return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
   if (url.pathname === `/api/session/${sessionID}/guardrail`)
@@ -218,13 +218,16 @@ async function renderModelAuthority(input: { state: string; initial?: ModelRef; 
   let seq = 0
   const switches: ModelRef[] = []
   const prompts: { resume?: boolean; model: ModelRef | undefined }[] = []
+  const receipts = Promise.withResolvers<void>()
   const plain: ModelInfo = { ...model, id: "model-without-effort", modelID: "model-without-effort", name: "Plain model", variants: [], status: "active" }
   const projected = new Map<string, unknown>()
   const screen = await renderScreen({ width: 120, height: 45, state, args: { sessionID }, settle: "Message YCoding…", route: async (url, request) => {
     if (url.pathname === "/api/session/active") return json({ data: {} })
     if (url.pathname === "/api/session") return json({ data: [{ ...session, model: selected }], cursor: {} })
     if (url.pathname === `/api/session/${sessionID}`) return json({ data: { ...session, model: selected } })
+    if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, [...projected.values()], { session: { ...session, model: selected } })
     if (url.pathname === "/api/model") return json({ location, data: [{ ...model, status: "active" }, plain] satisfies ModelInfo[] })
+    if (url.pathname === "/api/model/default") return json({ location, data: { ...model, selection: session.model } })
     if (url.pathname.startsWith(`/api/session/${sessionID}/message/`)) return json({ data: projected.get(url.pathname.split("/").at(-1)!) })
     if (url.pathname === `/api/session/${sessionID}/model` && request.method === "POST") {
       const body: unknown = await request.json()
@@ -238,13 +241,14 @@ async function renderModelAuthority(input: { state: string; initial?: ModelRef; 
       const prompt = promptBody(body)
       if (!isRecord(body) || typeof body.id !== "string" || !prompt) throw new Error("Invalid prompt admission request")
       prompts.push({ resume: prompt.resume, model: selected })
+      if (prompt.resume) receipts.resolve()
       return json({ data: { id: body.id, sessionID, admittedSeq: prompts.length, timeCreated: 1, type: "user", data: { text: prompt.text, files: [] }, delivery: "steer" } })
     }
     return route(url, request)
   } })
   await screen.waitForEventStream()
   return {
-    screen, switches, prompts,
+    screen, switches, prompts, settled: receipts.promise,
     selectExternal(next: ModelRef) {
       selected = next
       seq += 1
@@ -266,6 +270,7 @@ for (const target of externalTargets) {
       expect(probe.switches).toEqual([])
       await typeAndSend(probe.screen, "follow the durable selection")
       expect(await waitForFrameText(probe.screen, "Message YCoding…")).toBe(true)
+      await probe.settled
       expect(probe.switches).toEqual([])
       expect(probe.prompts).toEqual([{ resume: false, model: target }, { resume: true, model: target }])
     } finally { await probe.screen.dispose() }
@@ -285,6 +290,7 @@ test("a genuine pending effort survives an external durable model update and swi
     await typeAndSend(probe.screen, "use my pending choice")
     expect(await waitForFrameText(probe.screen, "Message YCoding…")).toBe(true)
     const desired = { ...session.model, variant: "low" }
+    await probe.settled
     expect(probe.switches).toEqual([desired])
     expect(probe.prompts).toEqual([{ resume: false, model: desired }, { resume: true, model: desired }])
   } finally { await probe.screen.dispose() }
@@ -306,6 +312,7 @@ test("an existing Session without a saved model admits on its default without pe
   try {
     await typeAndSend(probe.screen, "use the Session default")
     expect(await waitForFrameText(probe.screen, "Message YCoding…")).toBe(true)
+    await probe.settled
     expect(probe.switches).toEqual([])
     expect(probe.prompts).toEqual([{ resume: false, model: undefined }, { resume: true, model: undefined }])
   } finally { await probe.screen.dispose() }

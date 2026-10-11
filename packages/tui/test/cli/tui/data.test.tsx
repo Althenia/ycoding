@@ -14,7 +14,7 @@ import { ClientProvider, useClient } from "../../../src/context/client"
 import { DataProvider as DataProviderBase, useData } from "../../../src/context/data"
 import { LocationProvider, useLocation } from "../../../src/context/location"
 import { createSessionRows, type SessionRow } from "../../../src/routes/session/rows"
-import { createApi, createEventStream, createFetch, directory, json } from "../../fixture/tui-client"
+import { createApi, createEventStream, createFetch, directory, json, sessionSnapshot } from "../../fixture/tui-client"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 
 type KeyedSessionRow = SessionRow & { key: string }
@@ -121,11 +121,11 @@ test("releases rows through a completed compaction boundary after each canonical
   const events = createEventStream()
   let messageRequests = 0
   const calls = createFetch((url) => {
-    if (url.pathname === `/api/session/${sessionID}/message`) {
+    if (url.pathname === `/api/session/${sessionID}/snapshot`) {
       messageRequests++
       // A fresh process receives complete durable history plus the projected
       // compaction marker; resident pruning must happen in the same publication.
-      return json({ data: canonical, cursor: {} })
+      return sessionSnapshot(sessionID, canonical)
     }
     return undefined
   }, events)
@@ -299,6 +299,46 @@ test("syncs MCP status when a connection settles during bootstrap", async () => 
   }
 })
 
+test("loads configuration diagnostics and refreshes them after config.updated", async () => {
+  const events = createEventStream()
+  let requests = 0
+  const calls = createFetch((url) => {
+    if (url.pathname !== "/api/config/diagnostics") return undefined
+    requests++
+    return json({
+      location: { directory, project: { id: "proj_test", directory } },
+      data: requests === 1 ? [] : [{ path: "/tmp/ycoding.jsonc", reason: "invalid-values", message: "Rejected value" }],
+    })
+  }, events)
+  let data!: ReturnType<typeof useData>
+
+  function Probe() {
+    data = useData()
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await wait(() => requests === 1 && data.location.config.diagnostics.list()?.length === 0)
+    emitEvent(events, { id: "evt_config_updated", created: 1, type: "config.updated", data: {} })
+    await wait(() => data.location.config.diagnostics.list()?.[0]?.path === "/tmp/ycoding.jsonc")
+    expect(requests).toBe(2)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("refreshes resources into reactive getters", async () => {
   const events = createEventStream()
   const location = {
@@ -323,9 +363,8 @@ test("refreshes resources into reactive getters", async () => {
           location: { directory },
         },
       })
-    if (url.pathname === "/api/session/ses_test/message")
-      return json({
-        data: [
+    if (url.pathname === "/api/session/ses_test/snapshot")
+      return sessionSnapshot("ses_test", [
           {
             id: "msg_second",
             created: 0,
@@ -340,9 +379,7 @@ test("refreshes resources into reactive getters", async () => {
             text: "First",
             time: { created: 1 },
           },
-        ],
-        cursor: {},
-      })
+        ], { session: { title: "Test session", time: { created: 0, updated: 0 }, location: { directory } } })
     if (url.pathname === "/api/agent")
       return json({
         location,
@@ -515,7 +552,7 @@ test("truncates committed revert messages without changing lifetime usage", asyn
     cache: { read: 0, write: 0 },
   }
   const calls = createFetch((url) => {
-    if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: [], cursor: {} })
+    if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, [])
     if (url.pathname !== `/api/session/${sessionID}`) return
     return json({
       data: {
@@ -550,6 +587,7 @@ test("truncates committed revert messages without changing lifetime usage", asyn
 
   try {
     await data.session.sync(sessionID)
+    await data.session.message.sync(sessionID)
     emitEvent(events, {
       id: "evt_revert_boundary_started",
       created: 1,
@@ -827,20 +865,17 @@ test("reconnects the event stream and resyncs active data", async () => {
         resolveActive = resolve
       })
     }
-    if (url.pathname === "/api/session/session-stale/message") {
+    if (url.pathname === "/api/session/session-stale/snapshot") {
       requests.message++
       if (requests.message === 1)
-        return json({
-          data: [
+        return sessionSnapshot("session-stale", [
             {
               id: "message-stale",
               type: "user",
               text: "Stale",
               time: { created: 1 },
             },
-          ],
-          cursor: {},
-        })
+          ])
       return new Promise<Response>((resolve) => {
         resolveMessages = resolve
       })
@@ -909,17 +944,14 @@ test("reconnects the event stream and resyncs active data", async () => {
     await wait(() => requests.message === 2)
     expect(data.session.message.get("session-stale", "message-stale")?.id).toBe("message-stale")
     resolveMessages(
-      json({
-        data: [
+      sessionSnapshot("session-stale", [
           {
             id: "message-fresh",
             type: "user",
             text: "Fresh",
             time: { created: 2 },
           },
-        ],
-        cursor: {},
-      }),
+        ]),
     )
     await wait(() => data.session.message.get("session-stale", "message-fresh") !== undefined)
     expect(data.session.message.get("session-stale", "message-stale")).toBeUndefined()
@@ -938,7 +970,7 @@ test("completes exploration when a queued prompt is promoted", async () => {
   const events = createEventStream()
   const sessionID = "session-promotion"
   const calls = createFetch((url) => {
-    if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: [], cursor: {} })
+    if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, [])
   }, events)
   let rows!: ReturnType<typeof createSessionRows>
   let client!: ReturnType<typeof useClient>
@@ -1047,7 +1079,7 @@ test("classifies live tool rows independently of their call ID", async () => {
   const events = createEventStream()
   const sessionID = "session-tool-call-id"
   const calls = createFetch((url) => {
-    if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: [], cursor: {} })
+    if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, [])
   }, events)
   let rows!: ReturnType<typeof createSessionRows>
   let client!: ReturnType<typeof useClient>
@@ -1101,7 +1133,7 @@ test("removes committed revert messages from local state", async () => {
   const events = createEventStream()
   const sessionID = "session-revert"
   const calls = createFetch((url) => {
-    if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: [], cursor: {} })
+    if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, [])
   }, events)
   let data!: ReturnType<typeof useData>
 
@@ -1123,6 +1155,7 @@ test("removes committed revert messages from local state", async () => {
   ))
 
   try {
+    await data.session.message.sync(sessionID)
     for (const [seq, inputID] of ["msg_001", "msg_002", "msg_003"].entries()) {
       emitEvent(events, {
         id: EventRuntime.ID.create(),
@@ -1325,6 +1358,7 @@ test("tracks session status from active sessions and execution events", async ()
   const events = createEventStream()
   let settled = false
   const calls = createFetch((url) => {
+    if (["session-live", "session-failed", "session-retry"].some((id) => url.pathname === `/api/session/${id}/snapshot`)) return sessionSnapshot(url.pathname.slice("/api/session/".length, -"/snapshot".length), [])
     if (url.pathname === "/api/session/active") return json({ data: { "session-active": { type: "running" } } })
     if (url.pathname === "/api/session/session-live")
       return json({
@@ -1393,6 +1427,7 @@ test("tracks session status from active sessions and execution events", async ()
     await wait(() => data.session.status("session-active") === "running")
     expect(data.session.status("session-idle")).toBe("idle")
     await data.session.sync("session-live")
+    await Promise.all([data.session.message.sync("session-live"), data.session.message.sync("session-failed")])
 
     settled = true
     emitEvent(events, {
@@ -2698,6 +2733,7 @@ test("reconciles active session forms when the event stream reconnects", async (
 test("settles pending tools when a live failure arrives", async () => {
   const events = createEventStream()
   const calls = createFetch((url) => {
+    if (url.pathname === "/api/session/session-1/snapshot") return sessionSnapshot("session-1", [])
     if (url.pathname === "/api/session/session-1/message/msg_model_1")
       return json({
         data: {
@@ -2739,6 +2775,7 @@ test("settles pending tools when a live failure arrives", async () => {
 
   try {
     await mounted
+    await sync.session.message.sync("session-1")
     emitEvent(events, {
       id: "evt_agent_1",
       created: 0,
@@ -2880,12 +2917,10 @@ test("renders admitted prompts immediately and tracks them until promoted", asyn
   const events = createEventStream()
   const sessionID = "session-1"
   const messageID = "msg_user_1"
+  let canonical = false
   const calls = createFetch((url) => {
-    if (url.pathname === `/api/session/${sessionID}/message`)
-      return json({
-        data: [{ id: messageID, type: "user", text: "hello", time: { created: 0 } }],
-        cursor: {},
-      })
+    if (url.pathname === `/api/session/${sessionID}/snapshot`)
+      return sessionSnapshot(sessionID, canonical ? [{ id: messageID, type: "user", text: "hello", time: { created: 0 } }] : [])
   }, events)
   let sync!: ReturnType<typeof useData>
   let ready!: () => void
@@ -2913,6 +2948,9 @@ test("renders admitted prompts immediately and tracks them until promoted", asyn
 
   try {
     await mounted
+    await sync.session.message.sync(sessionID)
+    canonical = true
+    sync.session.message.invalidate(sessionID)
     const received: string[] = []
     const unsubscribe = sync.listen((event) => received.push(event.name))
     emitEvent(events, {
@@ -2975,7 +3013,7 @@ test("renders admitted prompts immediately and tracks them until promoted", asyn
     expect(sync.session.message.list("missing")).toEqual([])
     expect(sync.session.message.get(sessionID, messageID)).toBe(message)
     expect(sync.session.message.get(sessionID, "missing")).toBeUndefined()
-    expect(received).toHaveLength(3)
+    expect(received).toEqual(["session.input.admitted", "session.input.promoted"])
   } finally {
     app.renderer.destroy()
   }
@@ -2986,11 +3024,13 @@ test("does not remove a resident promoted user message when canonical projection
   const sessionID = "session-race"
   const messageID = "msg-user-race"
   let requests = 0
+  let resident = false
   const calls = createFetch((url) => {
-    if (url.pathname !== `/api/session/${sessionID}/message`) return
+    if (url.pathname !== `/api/session/${sessionID}/snapshot`) return
+    if (!resident) return sessionSnapshot(sessionID, [])
     requests++
-    if (requests === 1) return json({ data: [], cursor: {} })
-    return json({ data: [{ id: messageID, type: "user", text: "stay visible", time: { created: 1 } }], cursor: {} })
+    if (requests === 1) return sessionSnapshot(sessionID, [])
+    return sessionSnapshot(sessionID, [{ id: messageID, type: "user", text: "stay visible", time: { created: 1 } }])
   }, events)
   let sync!: ReturnType<typeof useData>
   let ready!: () => void
@@ -3018,6 +3058,9 @@ test("does not remove a resident promoted user message when canonical projection
 
   try {
     await mounted
+    await sync.session.message.sync(sessionID)
+    resident = true
+    sync.session.message.invalidate(sessionID)
     emitEvent(events, {
       id: "evt-race-admitted",
       created: 1,
@@ -3069,7 +3112,7 @@ test("restores a pending steer after leaving and reopening a child session", asy
   }
   const calls = createFetch((url) => {
     if (url.pathname === `/api/session/${childID}/pending`) return json({ data: [pending] })
-    if (url.pathname === `/api/session/${childID}/message`) return json({ data: [], cursor: {} })
+    if (url.pathname === `/api/session/${childID}/snapshot`) return sessionSnapshot(childID, [])
   }, events)
   let sync!: ReturnType<typeof useData>
   let ready!: () => void
@@ -3097,6 +3140,7 @@ test("restores a pending steer after leaving and reopening a child session", asy
 
   try {
     await mounted
+    await sync.session.message.sync(childID)
     emitEvent(events, {
       id: "evt-child-steer",
       created: 100,
@@ -3128,7 +3172,7 @@ test("restores a pending steer after leaving and reopening a child session", asy
 
 test("skips initial instruction state and projects later updates with their message ID", async () => {
   const events = createEventStream()
-  const calls = createFetch(undefined, events)
+  const calls = createFetch((url) => url.pathname === "/api/session/session-1/snapshot" ? sessionSnapshot("session-1", []) : undefined, events)
   let sync!: ReturnType<typeof useData>
   let ready!: () => void
   const mounted = new Promise<void>((resolve) => {
@@ -3155,6 +3199,7 @@ test("skips initial instruction state and projects later updates with their mess
 
   try {
     await mounted
+    await sync.session.message.sync("session-1")
     emitEvent(events, {
       id: "evt_instructions_1",
       created: 0,
@@ -3319,6 +3364,7 @@ test("loads and refreshes normalized session diagnostics", async () => {
   let hitRatio = 0.5
   let diagnosticRequests = 0
   const calls = createFetch((url) => {
+    if (url.pathname === "/api/session/ses_test/snapshot") return sessionSnapshot("ses_test", [])
     if (url.pathname === "/api/session/ses_test")
       return json({
         data: {
@@ -3383,6 +3429,7 @@ test("loads and refreshes normalized session diagnostics", async () => {
 
   try {
     await data.session.sync("ses_test")
+    await data.session.message.sync("ses_test")
     await data.session.diagnostics.sync("ses_test")
     expect(data.session.diagnostics.get("ses_test")?.cache.hitRatio).toBe(0.5)
 

@@ -125,8 +125,16 @@ function variantsFor(providers: RunProvider[], model: RunInput["model"]) {
   if (!model) {
     return []
   }
+  const info = providers.find((item) => item.id === model.providerID)?.models?.[model.modelID]
+  if (model.profile !== undefined) return Object.keys(info?.profiles?.[model.profile]?.variants ?? {})
+  return Object.keys(info?.variants ?? {})
+}
 
-  return Object.keys(providers.find((item) => item.id === model.providerID)?.models?.[model.modelID]?.variants ?? {})
+function modelAvailable(providers: RunProvider[], model: NonNullable<RunInput["model"]>) {
+  const info = providers.find((item) => item.id === model.providerID)?.models?.[model.modelID]
+  if (!info) return false
+  if (model.profile !== undefined) return info.profiles?.[model.profile] !== undefined
+  return info.enabled !== false
 }
 
 function formRequestOptions(location: LocationRef | undefined) {
@@ -529,11 +537,20 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         abortable(resolveModelInfo(sdk, state.location, signal), signal),
       ])
       if (!info || !currentModelLoad(generation, sdk)) return
-      if (model && !state.model) state.model = model
-      const boot = !!model && state.model?.providerID === model.providerID && state.model.modelID === model.modelID
+      if (model && !state.model)
+        state.model = {
+          providerID: model.providerID,
+          modelID: model.modelID,
+          ...(model.profile === undefined ? {} : { profile: model.profile }),
+        }
+      const boot =
+        !!model &&
+        state.model?.providerID === model.providerID &&
+        state.model.modelID === model.modelID &&
+        state.model.profile === model.profile
       applyModelInfo(
         info,
-        boot ? session.variant : state.activeVariant,
+        boot ? session.variant ?? model?.variant : state.activeVariant,
         { sdk, generation, signal },
         boot,
         fallbackSavedVariant,
@@ -940,6 +957,18 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         await state.switching?.catch(() => {})
 
         try {
+          if (
+            prompt.mode !== "shell" &&
+            prompt.command?.source !== "skill" &&
+            state.model &&
+            !modelAvailable(state.providers, state.model)
+          ) {
+            throw new Error(
+              state.model.profile === undefined
+                ? `Model ${state.model.providerID}/${state.model.modelID} is unavailable for the provider default`
+                : `Profile ${state.model.profile} is unavailable for ${state.model.providerID}/${state.model.modelID}`,
+            )
+          }
           if (
             prompt.mode !== "shell" &&
             prompt.command?.source !== "skill" &&

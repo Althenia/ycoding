@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
-import { directory as defaultDirectory, json } from "../fixture/tui-client"
+import { directory as defaultDirectory, json, sessionSnapshot } from "../fixture/tui-client"
 import { DESIGN_VIEWPORT } from "../viewport"
 import { renderScreen } from "./harness"
 
@@ -30,9 +30,8 @@ describe("active session screen", () => {
         if (url.pathname === "/api/location") return json(location)
         if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
         if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
-        if (url.pathname === `/api/session/${sessionID}/message`)
-          return json({
-            data: [
+        if (url.pathname === `/api/session/${sessionID}/snapshot`)
+          return sessionSnapshot(sessionID, [
               {
                 id: "msg_user",
                 type: "user",
@@ -48,13 +47,12 @@ describe("active session screen", () => {
                 finish: "stop",
                 time: { created: 2, completed: 3 },
               },
-            ],
-            cursor: {},
-          })
+            ], { session })
         if (url.pathname === `/api/session/${sessionID}/file-change`) return json({ data: [] })
         if (url.pathname === `/api/session/${sessionID}/pending`) return json({ data: [] })
         if (url.pathname === `/api/session/${sessionID}/permission`) return json({ data: [] })
-        if (url.pathname === `/api/session/${sessionID}/subagent`) return json({ data: [] })
+        if (url.pathname === `/api/session/${sessionID}/subagent`)
+          return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
         if (url.pathname === `/api/session/${sessionID}/todo`) return json({ data: [] })
         if (url.pathname === `/api/session/${sessionID}/skills`) return json({ data: [] })
         if (url.pathname === `/api/session/${sessionID}/guardrail/request`) return json({ data: [] })

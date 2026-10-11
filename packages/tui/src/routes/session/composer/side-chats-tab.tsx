@@ -122,12 +122,13 @@ function SideChatsTabContent(props: { sessionID: string }) {
 
   function openNew() {
     if (creating()) return
+    const parent = parentID()
     setCreating(true)
-    void openBtwSession({
+    void client.api.session.snapshot({ sessionID: parent, limit: 100 }).then((snapshot) => openBtwSession({
       api: client.api.session,
-      parentID: parentID(),
-      messages: data.session.message.list(parentID()),
-    }).then(
+      parentID: parent,
+      messages: snapshot.messages,
+    })).then(
       (created) => {
         if (disposed) return
         setSessions((current) => [...current, created])

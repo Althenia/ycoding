@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { json } from "../fixture/tui-client"
+import { json, sessionSnapshot } from "../fixture/tui-client"
 import { renderScreen } from "./harness"
 
 const sessionID = "ses_shell_keybind"
@@ -43,7 +43,7 @@ test("rebound shell-output kill and back keys act on the real shell and Session 
         if (url.pathname === "/api/location") return json(location)
         if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
         if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
-        if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: [], cursor: {} })
+        if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, [], { session })
         if (url.pathname === `/api/session/${sessionID}/subagent`)
           return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
         if (/^\/api\/session\/[^/]+\/(pending|permission|form|todo|skills|guardrail\/request)$/.test(url.pathname))

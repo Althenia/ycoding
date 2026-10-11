@@ -5,11 +5,13 @@
 import type {
   AgentInfo,
   CommandInfo,
+  ConfigDiagnostic,
   FormInfo,
   GuardrailRequestListOutput,
   IntegrationInfo,
   LocationRef,
   LocationGetOutput,
+  ModelRef,
   McpResource,
   McpServer,
   ModelInfo,
@@ -30,14 +32,28 @@ import type {
   SessionTodoInfo,
   ShellInfo,
   SkillInfo,
+  TelemetryClientSample,
   YCodingEvent,
 } from "@ycoding-ai/client"
 import type { Plugin } from "@ycoding-ai/plugin/tui"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { createSimpleContext } from "./helper"
 import { useClient } from "./client"
-import { batch, createEffect, createSignal, onCleanup } from "solid-js"
+import { batch, createEffect, createSignal, onCleanup, untrack } from "solid-js"
 import { createPromptSubmissions } from "../prompt/submission"
+import { errorMessage } from "../util/error"
+
+export type DataSessionHistory = {
+  status: "loading" | "paging" | "ready" | "error"
+  before?: string
+  checkpoint: boolean
+  error?: string
+  failedRead?: "latest" | "older"
+  sourceEpoch?: string
+  watermark?: number
+}
+
+const HISTORY_PAGE_SIZE = 100
 
 export type DataSessionStatus = "idle" | "running"
 
@@ -150,7 +166,9 @@ type LocationData = {
     server?: McpServer[]
     resource?: McpResource[]
   }
+  config?: { diagnostics?: ConfigDiagnostic[] }
   model?: ModelInfo[]
+  modelDefault?: ModelRef
   provider?: ProviderInfo[]
   reference?: ReferenceInfo[]
   // Currently running shell commands for this location, keyed by shell id. Entries are removed
@@ -168,8 +186,11 @@ type Store = {
     family: Record<string, string[]>
     active: Record<string, DataSessionStatus>
     diagnostics: Record<string, SessionDiagnosticsOutput>
+    prediction: Record<string, { sourceMessageID: string; text: string } | undefined>
+    predictionDismissed: Record<string, string | undefined>
     usage: Record<string, ProviderRequestSummary>
     message: Record<string, SessionMessageInfo[]>
+    history: Record<string, DataSessionHistory>
     compaction: Record<string, Record<string, DataSessionCompactionLifecycle>>
     pending: Record<string, SessionPendingInfo[]>
     subagent: Record<string, SubagentPage>
@@ -300,6 +321,7 @@ function reconcileCanonicalMessages(
   current: SessionMessageInfo[],
   touched: ReadonlySet<string>,
   active: ReadonlySet<string>,
+  older: ReadonlySet<string> = new Set(),
 ) {
   const positions = new Map<string, number>()
   const messages: SessionMessageInfo[] = []
@@ -314,7 +336,9 @@ function reconcileCanonicalMessages(
   })
   current.forEach((message) => {
     const position = positions.get(message.id)
-    const preserve = touched.has(message.id) || active.has(message.id) || !isMessageComplete(message)
+    const preserve = touched.has(message.id) || active.has(message.id) ||
+      (position === undefined && !isMessageComplete(message)) ||
+      (position === undefined && older.has(message.id))
     if (!preserve) return
     if (position === undefined) {
       positions.set(message.id, messages.length)
@@ -323,7 +347,25 @@ function reconcileCanonicalMessages(
     }
     messages[position] = message
   })
-  return messages
+  return messages.map((message) => {
+    if (message.type !== "assistant" || message.time.completed !== undefined) return message
+    const resident = current.find((item) => item.id === message.id)
+    if (resident?.type !== "assistant" || resident === message) return message
+    const ordinal = { text: 0, reasoning: 0 }
+    return {
+      ...message,
+      content: message.content.map((part) => {
+        if (part.type === "tool") {
+          const live = resident.content.find((item) => item.type === "tool" && item.id === part.id)
+          if (part.state.status !== "streaming" || live?.type !== "tool" || live.state.status !== "streaming") return part
+          return live.state.input.startsWith(part.state.input) ? { ...part, state: { ...part.state, input: live.state.input } } : part
+        }
+        const live = resident.content.filter((item) => item.type === part.type)[ordinal[part.type]++]
+        if (!live || live.type === "tool" || (part.type === "reasoning" && part.time?.completed)) return part
+        return live.text.startsWith(part.text) ? { ...part, text: live.text } : part
+      }),
+    }
+  })
 }
 
 export function estimateResidentSessionMemory(input: {
@@ -506,48 +548,98 @@ export function sessionMemoryLines(memory: DataSessionMemoryEstimate) {
   ]
 }
 
-function createSync() {
-  const state = new Map<string, true | Promise<void>>()
+function createSync(settled: () => void) {
+  type Load = (current: () => boolean) => Promise<void>
+  type Entry = {
+    generation: number
+    requestGeneration: number
+    loaded: boolean
+    pending?: Promise<void>
+    trailing?: Promise<void>
+  }
+  const state = new Map<string, Entry>()
+  function finish(key: string, entry: Entry) {
+    if (state.get(key) !== entry) return
+    if (!entry.pending && !entry.trailing && !entry.loaded) state.delete(key)
+    settled()
+  }
+  function run(key: string, load: Load): Promise<void> {
+    const entry: Entry = state.get(key) ?? { generation: 0, requestGeneration: 0, loaded: false }
+    state.set(key, entry)
+    if (entry.pending) {
+      if (entry.requestGeneration === entry.generation) return entry.pending
+      if (entry.trailing) return entry.trailing
+      const refresh = () => (state.get(key) === entry ? run(key, load) : Promise.resolve())
+      const trailing = entry.pending.then(refresh, refresh).finally(() => {
+        if (entry.trailing === trailing) entry.trailing = undefined
+        finish(key, entry)
+      })
+      entry.trailing = trailing
+      return trailing
+    }
+    if (entry.loaded) return Promise.resolve()
+    const generation = entry.generation
+    entry.requestGeneration = generation
+    const current = () => state.get(key) === entry && entry.generation === generation
+    const pending = load(current)
+      .then(() => {
+        if (current()) entry.loaded = true
+      })
+      .finally(() => {
+        if (entry.pending === pending) entry.pending = undefined
+        finish(key, entry)
+      })
+    entry.pending = pending
+    return pending
+  }
   return {
-    run(key: string, load: () => Promise<void>) {
-      const active = state.get(key)
-      if (active === true) return Promise.resolve()
-      if (active) return active
-      const pending = load()
-        .then(() => {
-          if (state.get(key) === pending) state.set(key, true)
-        })
-        .finally(() => {
-          if (state.get(key) === pending) state.delete(key)
-        })
-      state.set(key, pending)
-      return pending
-    },
+    run,
     complete(key: string) {
       if (state.has(key)) return
-      state.set(key, true)
+      state.set(key, { generation: 0, requestGeneration: 0, loaded: true })
     },
     invalidate(key?: string) {
-      if (key) {
-        state.delete(key)
-        return
+      for (const id of key ? [key] : [...state.keys()]) {
+        const entry = state.get(id)
+        if (!entry) continue
+        if (!entry.pending && !entry.trailing) {
+          state.delete(id)
+          continue
+        }
+        entry.generation++
+        entry.loaded = false
       }
-      state.clear()
+    },
+    forget(key: string) {
+      state.delete(key)
+    },
+    pendingSessions() {
+      return [...state].flatMap(([key, entry]) =>
+        (entry.pending || entry.trailing) && key.startsWith("session")
+          ? [key.startsWith("session.form:") ? key.slice("session.form:".length, -1) : key.slice(key.indexOf(":") + 1)]
+          : [],
+      )
     },
   }
 }
 
 export const { use: useData, provider: DataProvider } = createSimpleContext({
   name: "Data",
-  init: () => {
+  init: (props: {
+    recordTelemetry?: (metric: TelemetryClientSample["metric"], durationMs: number, at?: number) => void
+    selectedSessionID?: () => string | undefined
+  }) => {
     const [store, setStore] = createStore<Store>({
       session: {
         info: {},
         family: {},
         active: {},
         diagnostics: {},
+        prediction: {},
+        predictionDismissed: {},
         usage: {},
         message: {},
+        history: {},
         compaction: {},
         pending: {},
         subagent: {},
@@ -566,6 +658,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     const client = useClient()
     const submissions = createPromptSubmissions({
       api: () => client.api,
+      promptAdmitted: (durationMs) => props.recordTelemetry?.("prompt.admit", durationMs),
       created: (session) => {
         setStore("session", "info", session.id, session)
         registerSession(session.id)
@@ -585,8 +678,17 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     const messageSyncLoad = new Map<string, object>()
     const messageVersion = new Map<string, number>()
     const messageMutations = new Map<string, Map<string, number>>()
+    const messageMutationSeq = new Map<string, Map<string, number>>()
+    const olderMessageIDs = new Map<string, Set<string>>()
+    const historyOwner = new Map<string, object>()
+    const olderLoads = new Map<string, Promise<void>>()
+    const streamSequence = new Map<string, number>()
+    let applyingSequence: number | undefined
+    let sourceEpoch: string | undefined
     const subagentGeneration = new Map<string, number>()
-    const sync = createSync()
+    const metadataRecency = new Set<string>()
+    const metadataReads = new Map<object, string>()
+    const sync = createSync(pruneMetadata)
 
     function replaceMessages(sessionID: string, messages: SessionMessageInfo[]) {
       submissions.reconcile(sessionID, messages, store.session.pending[sessionID] ?? [])
@@ -600,6 +702,15 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         })
       }
       setStore("session", "message", sessionID, resident)
+      const residentIDs = new Set(resident.map((message) => message.id))
+      messageMutationSeq.get(sessionID)?.forEach((_, id) => {
+        if (!residentIDs.has(id)) messageMutationSeq.get(sessionID)?.delete(id)
+      })
+      olderMessageIDs.get(sessionID)?.forEach((id) => {
+        if (!residentIDs.has(id)) olderMessageIDs.get(sessionID)?.delete(id)
+      })
+      const checkpoint = resident.some((message) => message.type === "compaction" && message.status === "completed")
+      if (checkpoint && store.session.history[sessionID]) setStore("session", "history", sessionID, { before: undefined, checkpoint: true })
       return resident
     }
 
@@ -626,28 +737,49 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       return messages.filter((message, position) => position > boundary || message.type === "compaction")
     }
 
-    async function syncMessages(sessionID: string) {
+    async function syncMessages(sessionID: string, current: () => boolean) {
+      const started = performance.now()
       const token = {}
       const requestVersion = messageVersion.get(sessionID) ?? 0
       messageSyncLoad.set(sessionID, token)
+      historyOwner.set(sessionID, token)
+      setStore("session", "history", sessionID, { ...store.session.history[sessionID], status: "loading", checkpoint: store.session.history[sessionID]?.checkpoint ?? false, error: undefined, failedRead: undefined })
       try {
-        const response = await client.api.message.list({ sessionID })
-        if (messageSyncLoad.get(sessionID) !== token) return
+        const snapshot = await client.api.session.snapshot({ sessionID, limit: HISTORY_PAGE_SIZE })
+        if (!current() || messageSyncLoad.get(sessionID) !== token) return
+        if (snapshot.session.id !== sessionID || snapshot.watermark.aggregateID !== sessionID ||
+          (sourceEpoch && snapshot.sourceEpoch !== sourceEpoch)) throw new Error("The Session snapshot does not belong to the current connection")
+        const previous = store.session.history[sessionID]
+        if (previous?.sourceEpoch === snapshot.sourceEpoch && previous.watermark !== undefined &&
+          (snapshot.watermark.seq === undefined || snapshot.watermark.seq < previous.watermark))
+          throw new Error("The Session snapshot is older than the resident history")
+        const response = snapshot.messages
         const active = new Set(store.session.input[sessionID] ?? [])
         const canonicalIDs = new Set(response.map((message) => message.id))
         const touched = new Set(
           [...(messageMutations.get(sessionID)?.entries() ?? [])]
-            .filter(([id, version]) => version > requestVersion || !canonicalIDs.has(id))
+            .filter(([id, version]) => !canonicalIDs.has(id) ||
+              version > requestVersion && (messageMutationSeq.get(sessionID)?.get(id) ?? Infinity) > (snapshot.watermark.seq ?? -1))
             .map(([id]) => id),
         )
-        const reconciled = reconcileCanonicalMessages(response, store.session.message[sessionID] ?? [], touched, active)
+        const older = olderMessageIDs.get(sessionID) ?? new Set<string>()
+        const reconciled = reconcileCanonicalMessages(response, store.session.message[sessionID] ?? [], touched, active, older)
         batch(() => {
+          setStore("session", "info", sessionID, reconcile(snapshot.session))
+          registerSession(sessionID)
+          setStore("session", "history", sessionID, {
+            status: "ready", checkpoint: false, error: undefined, failedRead: undefined,
+            before: older.size > 0 ? previous?.before : snapshot.before ?? undefined,
+            sourceEpoch: snapshot.sourceEpoch, watermark: snapshot.watermark.seq,
+          })
+          if (snapshot.watermark.seq !== undefined) streamSequence.set(sessionID, Math.max(streamSequence.get(sessionID) ?? -1, snapshot.watermark.seq))
           response.forEach((item) => {
             const lifecycle = compactionLifecycle(item)
             if (!lifecycle) return
             setCompaction(sessionID, lifecycle)
           })
           replaceMessages(sessionID, reconciled)
+          store.session.pending[sessionID]?.forEach(projectPending)
           const mutations = messageMutations.get(sessionID)
           response.forEach((message) => {
             const version = mutations?.get(message.id)
@@ -655,8 +787,45 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           })
           if (mutations?.size === 0) messageMutations.delete(sessionID)
         })
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+        props.recordTelemetry?.("transcript.load", performance.now() - started)
+      } catch (error) {
+        if (current() && messageSyncLoad.get(sessionID) === token) setStore("session", "history", sessionID, { status: "error", error: errorMessage(error), failedRead: "latest" })
+        throw error
       } finally {
         if (messageSyncLoad.get(sessionID) === token) messageSyncLoad.delete(sessionID)
+      }
+    }
+
+    async function loadOlderMessages(sessionID: string) {
+      const history = store.session.history[sessionID]
+      const before = history?.before
+      const owner = historyOwner.get(sessionID)
+      if (!history || !before || !owner || history.checkpoint || messageSyncLoad.has(sessionID)) return
+      setStore("session", "history", sessionID, { status: "paging", error: undefined, failedRead: undefined })
+      try {
+        const snapshot = await client.api.session.snapshot({ sessionID, limit: HISTORY_PAGE_SIZE, before })
+        if (historyOwner.get(sessionID) !== owner || store.session.history[sessionID]?.before !== before) return
+        if (snapshot.session.id !== sessionID || snapshot.watermark.aggregateID !== sessionID || snapshot.sourceEpoch !== history.sourceEpoch)
+          throw new Error("The older history page does not belong to the resident Session")
+        if (snapshot.before === before) throw new Error("The older history cursor did not advance")
+        const current = store.session.message[sessionID] ?? []
+        const ids = new Set(snapshot.messages.map((message) => message.id))
+        const older = olderMessageIDs.get(sessionID) ?? new Set<string>()
+        snapshot.messages.forEach((message) => older.add(message.id))
+        olderMessageIDs.set(sessionID, older)
+        batch(() => {
+          snapshot.messages.forEach((message) => {
+            const lifecycle = compactionLifecycle(message)
+            if (lifecycle) setCompaction(sessionID, lifecycle)
+          })
+          setStore("session", "history", sessionID, { status: "ready", before: snapshot.before ?? undefined, error: undefined, failedRead: undefined })
+          replaceMessages(sessionID, [...snapshot.messages.map((message) => current.find((item) => item.id === message.id) ?? message), ...current.filter((message) => !ids.has(message.id))])
+          store.session.pending[sessionID]?.forEach(projectPending)
+        })
+      } catch (error) {
+        if (historyOwner.get(sessionID) === owner) setStore("session", "history", sessionID, { status: "error", error: errorMessage(error), failedRead: "older" })
+        throw error
       }
     }
 
@@ -691,6 +860,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
 
     function updateCompaction(sessionID: string, lifecycle: DataSessionCompactionLifecycle) {
       setCompaction(sessionID, lifecycle)
+      if (store.session.message[sessionID] === undefined && !messageSyncLoad.has(sessionID)) return
       replaceMessages(sessionID, store.session.message[sessionID] ?? [])
     }
 
@@ -718,6 +888,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
 
     const message = {
       update(sessionID: string, fn: (messages: SessionMessageInfo[], index: Map<string, number>) => void) {
+        if (store.session.message[sessionID] === undefined && !messageSyncLoad.has(sessionID)) return
         const before = new Map((store.session.message[sessionID] ?? []).map((item) => [item.id, messageRevision(item)]))
         batch(() => {
           setStore(
@@ -737,7 +908,14 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           const mutations = messageMutations.get(sessionID) ?? new Map<string, number>()
           const resident = store.session.message[sessionID] ?? []
           resident.forEach((item) => {
-            if (!sameRevision(before.get(item.id), messageRevision(item))) mutations.set(item.id, version)
+            if (!sameRevision(before.get(item.id), messageRevision(item))) {
+              mutations.set(item.id, version)
+              if (applyingSequence !== undefined) {
+                const sequences = messageMutationSeq.get(sessionID) ?? new Map<string, number>()
+                sequences.set(item.id, applyingSequence)
+                messageMutationSeq.set(sessionID, sequences)
+              }
+            }
           })
           const residentIDs = new Set(resident.map((item) => item.id))
           mutations.forEach((_, id) => {
@@ -818,6 +996,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     function registerSession(sessionID: string) {
       const info = store.session.info[sessionID]
       if (!info) return
+      metadataRecency.delete(sessionID)
+      metadataRecency.add(sessionID)
       const rootID = resolveRoot(sessionID)
       setStore(
         "session",
@@ -837,30 +1017,41 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     }
 
     function removeSession(sessionID: string) {
+      metadataRecency.delete(sessionID)
       messageIndex.delete(sessionID)
       messageSyncLoad.delete(sessionID)
       messageVersion.delete(sessionID)
       messageMutations.delete(sessionID)
+      messageMutationSeq.delete(sessionID)
+      olderMessageIDs.delete(sessionID)
+      historyOwner.delete(sessionID)
+      olderLoads.delete(sessionID)
+      streamSequence.delete(sessionID)
       subagentGeneration.delete(sessionID)
-      sync.invalidate(`session:${sessionID}`)
-      sync.invalidate(`session.pending:${sessionID}`)
-      sync.invalidate(`session.subagent:${sessionID}`)
-      sync.invalidate(`session.message:${sessionID}`)
-      sync.invalidate(`session.diagnostics:${sessionID}`)
-      sync.invalidate(`session.usage:${sessionID}`)
-      sync.invalidate(`session.permission:${sessionID}`)
-      sync.invalidate(`session.guardrail:${sessionID}`)
-      sync.invalidate(`session.form:${sessionID}:`)
+      sync.forget(`session:${sessionID}`)
+      sync.forget(`session.pending:${sessionID}`)
+      sync.forget(`session.subagent:${sessionID}`)
+      sync.forget(`session.message:${sessionID}`)
+      sync.forget(`session.diagnostics:${sessionID}`)
+      sync.forget(`session.usage:${sessionID}`)
+      sync.forget(`session.todo:${sessionID}`)
+      sync.forget(`session.permission:${sessionID}`)
+      sync.forget(`session.guardrail:${sessionID}`)
+      sync.forget(`session.form:${sessionID}:`)
       setStore(
         "session",
         produce((draft) => {
           delete draft.info[sessionID]
           delete draft.active[sessionID]
           delete draft.message[sessionID]
+          delete draft.history[sessionID]
           delete draft.compaction[sessionID]
           delete draft.diagnostics[sessionID]
+          delete draft.prediction[sessionID]
+          delete draft.predictionDismissed[sessionID]
           delete draft.usage[sessionID]
           delete draft.pending[sessionID]
+          delete draft.todo[sessionID]
           delete draft.subagent[sessionID]
           for (const [parentID, page] of Object.entries(draft.subagent)) {
             if (page.data.some((task) => task.sessionID === sessionID)) delete draft.subagent[parentID]
@@ -883,6 +1074,57 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       )
     }
 
+    function pruneMetadata() {
+      const protectedIDs = new Set([
+        ...Object.keys(store.session.message),
+        ...Object.keys(store.session.active).filter((id) => store.session.active[id] === "running"),
+        ...Object.keys(store.session.pending).filter((id) => store.session.pending[id]?.length),
+        ...Object.keys(store.session.input).filter((id) => store.session.input[id]?.length),
+        ...Object.keys(store.session.permission).filter((id) => store.session.permission[id]?.length),
+        ...Object.keys(store.session.form).filter((id) => store.session.form[id]?.length),
+        ...Object.entries(store.session.guardrail).flatMap(([id, requests]) =>
+          requests.length ? [id, ...requests.map((request) => request.sessionID)] : [],
+        ),
+        ...Object.entries(store.session.subagent).flatMap(([id, page]) =>
+          page.summary.active > 0
+            ? [
+                id,
+                ...page.data
+                  .filter((task) => ["starting", "running", "waiting", "cancelling"].includes(task.state))
+                  .map((task) => task.sessionID),
+              ]
+            : [],
+        ),
+        ...Object.values(store.location).flatMap((location) =>
+          Object.values(location.shell ?? {}).flatMap((shell) =>
+            shell.status === "running" && shell.metadata.sessionID ? [shell.metadata.sessionID] : [],
+          ),
+        ),
+        ...submissions
+          .list()
+          .map((entry) => entry.input.sessionID)
+          .filter((id): id is string => id !== undefined),
+        ...sync.pendingSessions(),
+        ...metadataReads.values(),
+        ...(props.selectedSessionID?.() ? [props.selectedSessionID()!] : []),
+      ])
+      const protectedRoots = new Set([...protectedIDs].map(resolveRoot))
+      protectedRoots.forEach((root) => protectedIDs.add(root))
+      Object.entries(store.session.family).forEach(([root, members]) => {
+        if (protectedRoots.has(root)) members.forEach((id) => protectedIDs.add(id))
+      })
+      const ids = new Set([
+        ...Object.values(store.session).flatMap((values) => Object.keys(values)),
+        ...subagentGeneration.keys(),
+      ])
+      ids.forEach((id) => {
+        if (!metadataRecency.has(id)) metadataRecency.add(id)
+      })
+      const inactive = [...ids].filter((id) => id !== "global" && !protectedIDs.has(id))
+      const recent = new Set([...metadataRecency].filter((id) => inactive.includes(id)).slice(-50))
+      batch(() => inactive.filter((id) => !recent.has(id)).forEach(removeSession))
+    }
+
     async function loadSubagentPage(
       parentID: string,
       input: { readonly cursor?: string },
@@ -891,16 +1133,23 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     ) {
       const generation = (subagentGeneration.get(parentID) ?? 0) + 1
       subagentGeneration.set(parentID, generation)
-      const page = await client.api.session.subagent.list({ parentID, limit: 10, ...input })
-      if (subagentGeneration.get(parentID) !== generation) return
-      const position = requested === "top" || page.cursor.previous === undefined ? "top" : "older"
-      setStore("session", "subagent", parentID, {
-        data: page.data.slice(0, 10),
-        summary: page.summary,
-        cursor: page.cursor,
-        offset: position === "top" ? 0 : pageOffset(page),
-        position,
-      })
+      const read = {}
+      metadataReads.set(read, parentID)
+      try {
+        const page = await client.api.session.subagent.list({ parentID, limit: 10, ...input })
+        if (subagentGeneration.get(parentID) !== generation) return
+        const position = requested === "top" || page.cursor.previous === undefined ? "top" : "older"
+        setStore("session", "subagent", parentID, {
+          data: page.data.slice(0, 10),
+          summary: page.summary,
+          cursor: page.cursor,
+          offset: position === "top" ? 0 : pageOffset(page),
+          position,
+        })
+      } finally {
+        metadataReads.delete(read)
+        pruneMetadata()
+      }
     }
 
     async function directSubagents(parentID: string) {
@@ -987,6 +1236,15 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         case "session.diagnostics.updated":
           setStore("session", "diagnostics", event.data.sessionID, event.data.diagnostics)
           break
+        case "session.prediction.updated": {
+          const words = event.data.text.trim().split(/\s+/).length
+          if (!event.data.text.trim() || words < 2 || words > 40 || event.data.text.length > 400 || /[\p{Cc}\p{Bidi_Control}\u2028\u2029]/u.test(event.data.text)) break
+          if (store.session.predictionDismissed[event.data.sessionID] === event.data.sourceMessageID) break
+          const sourceMessageID = result.session.message.list(event.data.sessionID).findLast(message => message.type === "assistant")?.id
+          if (sourceMessageID && sourceMessageID !== event.data.sourceMessageID) break
+          setStore("session", "prediction", event.data.sessionID, { sourceMessageID: event.data.sourceMessageID, text: event.data.text })
+          break
+        }
         case "catalog.updated":
           result.location.model.invalidate(event.location)
           result.location.provider.invalidate(event.location)
@@ -999,6 +1257,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         case "command.updated":
           result.location.command.invalidate(event.location)
           void result.location.command.sync(event.location)
+          break
+        case "config.updated":
+          result.location.config.diagnostics.invalidate(event.location)
+          void result.location.config.diagnostics.sync(event.location)
           break
         case "skill.updated":
           result.location.skill.invalidate(event.location)
@@ -1668,6 +1930,14 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         status(sessionID: string) {
           return store.session.active[sessionID] ?? "idle"
         },
+        prediction: {
+          get(sessionID: string) { return store.session.prediction[sessionID] },
+          dismiss(sessionID: string) {
+            const sourceMessageID = result.session.message.list(sessionID).findLast(message => message.type === "assistant")?.id
+            if (sourceMessageID) setStore("session", "predictionDismissed", sessionID, sourceMessageID)
+            setStore("session", "prediction", sessionID, undefined)
+          },
+        },
         input: {
           list(sessionID: string) {
             return store.session.input[sessionID] ?? []
@@ -1681,10 +1951,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             return store.session.pending[sessionID] ?? []
           },
           sync(sessionID: string) {
-            return sync.run(`session.pending:${sessionID}`, async () => {
+            return sync.run(`session.pending:${sessionID}`, async (current) => {
               const pending = await client.api.session.pending.list({
                 sessionID,
               })
+              if (!current()) return
               setStore("session", "pending", sessionID, reconcile(pending))
               setStore("session", "input", sessionID, reconcile(pending.map((item) => item.id)))
               pending.forEach(projectPending)
@@ -1739,8 +2010,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           },
         },
         sync(sessionID: string) {
-          return sync.run(`session:${sessionID}`, async () => {
-            setStore("session", "info", sessionID, await client.api.session.get({ sessionID }))
+          return sync.run(`session:${sessionID}`, async (current) => {
+            const info = await client.api.session.get({ sessionID })
+            if (!current()) return
+            setStore("session", "info", sessionID, info)
             registerSession(sessionID)
           })
         },
@@ -1752,8 +2025,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             return store.session.diagnostics[sessionID]
           },
           sync(sessionID: string) {
-            return sync.run(`session.diagnostics:${sessionID}`, async () => {
-              setStore("session", "diagnostics", sessionID, await client.api.session.diagnostics({ sessionID }))
+            return sync.run(`session.diagnostics:${sessionID}`, async (current) => {
+              const diagnostics = await client.api.session.diagnostics({ sessionID })
+              if (!current()) return
+              setStore("session", "diagnostics", sessionID, diagnostics)
             })
           },
           invalidate(sessionID: string) {
@@ -1765,8 +2040,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             return store.session.usage[sessionID]
           },
           sync(sessionID: string) {
-            return sync.run(`session.usage:${sessionID}`, async () => {
-              setStore("session", "usage", sessionID, await client.api.session.usage({ sessionID }))
+            return sync.run(`session.usage:${sessionID}`, async (current) => {
+              const usage = await client.api.session.usage({ sessionID })
+              if (!current()) return
+              setStore("session", "usage", sessionID, usage)
             })
           },
           invalidate(sessionID: string) {
@@ -1778,8 +2055,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             return store.session.todo[sessionID] ?? []
           },
           sync(sessionID: string) {
-            return sync.run(`session.todo:${sessionID}`, async () => {
-              setStore("session", "todo", sessionID, reconcile(await client.api.session.todo.list({ sessionID })))
+            return sync.run(`session.todo:${sessionID}`, async (current) => {
+              const todo = await client.api.session.todo.list({ sessionID })
+              if (!current()) return
+              setStore("session", "todo", sessionID, reconcile(todo))
             })
           },
           invalidate(sessionID: string) {
@@ -1787,6 +2066,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           },
         },
         message: {
+          history(sessionID: string) {
+            return store.session.history[sessionID]
+          },
           list(sessionID: string) {
             const messages = store.session.message[sessionID] ?? []
             return [...messages, ...submissions.list(sessionID).flatMap((entry) => {
@@ -1797,11 +2079,16 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           },
           memory(sessionID: string) {
             const memory = process.memoryUsage()
-            return estimateResidentSessionMemory({
-              messages: store.session.message[sessionID] ?? [],
-              residentSessions: Object.keys(store.session.message).length,
-              process: { heapUsed: memory.heapUsed, heapTotal: memory.heapTotal, rss: memory.rss },
-            })
+            return {
+              ...estimateResidentSessionMemory({
+                messages: store.session.message[sessionID] ?? [],
+                residentSessions: Object.keys(store.session.message).length,
+                process: { heapUsed: memory.heapUsed, heapTotal: memory.heapTotal, rss: memory.rss },
+              }),
+              metadataKeys: Object.fromEntries(
+                Object.entries(store.session).map(([key, values]) => [key, Object.keys(values).length]),
+              ),
+            }
           },
           get(sessionID: string, messageID: string) {
             const messages = store.session.message[sessionID]
@@ -1809,26 +2096,45 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             return position === undefined ? submissions.message(sessionID, messageID) : messages?.[position]
           },
           sync(sessionID: string) {
-            return sync.run(`session.message:${sessionID}`, () => syncMessages(sessionID))
+            return sync.run(`session.message:${sessionID}`, (current) => syncMessages(sessionID, current))
+          },
+          loadOlder(sessionID: string) {
+            const current = olderLoads.get(sessionID)
+            if (current) return current
+            const pending = loadOlderMessages(sessionID).finally(() => {
+              if (olderLoads.get(sessionID) === pending) olderLoads.delete(sessionID)
+            })
+            olderLoads.set(sessionID, pending)
+            return pending
           },
           async find(sessionID: string, messageID: string) {
             if (result.session.message.get(sessionID, messageID)) return true
-            sync.invalidate(`session.message:${sessionID}`)
             await result.session.message.sync(sessionID)
+            while (!result.session.message.get(sessionID, messageID) && store.session.history[sessionID]?.before &&
+              !store.session.history[sessionID]?.checkpoint && client.connection.status() === "connected")
+              await result.session.message.loadOlder(sessionID)
             return result.session.message.get(sessionID, messageID) !== undefined
           },
           evict(sessionID: string) {
+            setStore("session", "prediction", sessionID, undefined)
             messageIndex.delete(sessionID)
             messageSyncLoad.delete(sessionID)
             messageVersion.delete(sessionID)
             messageMutations.delete(sessionID)
-            sync.invalidate(`session.message:${sessionID}`)
+            messageMutationSeq.delete(sessionID)
+            olderMessageIDs.delete(sessionID)
+            historyOwner.delete(sessionID)
+            olderLoads.delete(sessionID)
+            streamSequence.delete(sessionID)
+            sync.forget(`session.message:${sessionID}`)
             setStore(
               "session",
               produce((draft) => {
                 delete draft.message[sessionID]
+                delete draft.history[sessionID]
               }),
             )
+            pruneMetadata()
           },
           invalidate(sessionID: string) {
             sync.invalidate(`session.message:${sessionID}`)
@@ -1849,8 +2155,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             return store.session.permission[sessionID]
           },
           sync(sessionID: string) {
-            return sync.run(`session.permission:${sessionID}`, async () => {
-              setStore("session", "permission", sessionID, await client.api.permission.list({ sessionID }))
+            return sync.run(`session.permission:${sessionID}`, async (current) => {
+              const permissions = await client.api.permission.list({ sessionID })
+              if (!current()) return
+              setStore("session", "permission", sessionID, permissions)
             })
           },
           invalidate(sessionID: string) {
@@ -1862,8 +2170,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             return store.session.guardrail[resolveRoot(sessionID)] ?? []
           },
           sync(sessionID: string) {
-            return sync.run(`session.guardrail:${sessionID}`, async () => {
+            return sync.run(`session.guardrail:${sessionID}`, async (current) => {
               const requests = await client.api.guardrail.request.list({ sessionID })
+              if (!current()) return
               const rootID = requests[0]?.rootSessionID ?? resolveRoot(sessionID)
               setStore("session", "guardrail", rootID, reconcile(requests))
             })
@@ -1882,11 +2191,12 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           },
           sync(sessionID: string, ref?: LocationRef) {
             const key = `session.form:${sessionID}:${sessionID === "global" ? locationKey(ref ?? defaultLocation()) : ""}`
-            return sync.run(key, async () => {
+            return sync.run(key, async (current) => {
               if (sessionID === "global") {
                 const response = await client.api.form.request.list({
                   location: locationQuery(ref ?? defaultLocation()),
                 })
+                if (!current()) return
                 const location = {
                   directory: response.location.directory,
                   workspaceID: response.location.workspaceID,
@@ -1900,7 +2210,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
                 ])
                 return
               }
-              setStore("session", "form", sessionID, await client.api.form.list({ sessionID }))
+              const forms = await client.api.form.list({ sessionID })
+              if (!current()) return
+              setStore("session", "form", sessionID, forms)
             })
           },
           invalidate(sessionID: string, ref?: LocationRef) {
@@ -1916,8 +2228,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             return store.project.permission[projectID]
           },
           sync(projectID: string) {
-            return sync.run(`project.permission:${projectID}`, async () => {
-              setStore("project", "permission", projectID, await client.api.permission.saved.list({ projectID }))
+            return sync.run(`project.permission:${projectID}`, async (current) => {
+              const permissions = await client.api.permission.saved.list({ projectID })
+              if (!current()) return
+              setStore("project", "permission", projectID, permissions)
             })
           },
           invalidate(projectID: string) {
@@ -1936,10 +2250,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         },
         sync(ref?: LocationRef) {
           const id = locationKey(ref ?? defaultLocation())
-          return sync.run(`location.shell:${id}`, async () => {
+          return sync.run(`location.shell:${id}`, async (current) => {
             const response = await client.api.shell.list({
               location: locationQuery(ref ?? defaultLocation()),
             })
+            if (!current()) return
             const key = locationKey(response.location)
             setStore("location", key, {
               ...store.location[key],
@@ -1960,10 +2275,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         },
         async sync(ref?: LocationRef) {
           const current = ref ?? defaultLocation()
-          await sync.run(`location:${locationKey(current)}`, async () => {
+          await sync.run(`location:${locationKey(current)}`, async (isCurrent) => {
             const location = await client.api.location.get({
               location: locationQuery(current),
             })
+            if (!isCurrent()) return
             const key = locationKey(location)
             if (!store.location[key]) setStore("location", key, {})
             setStore("location", key, "info", location)
@@ -1981,6 +2297,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             result.location.integration.sync(location),
             result.location.mcp.server.sync(location),
             result.location.mcp.resource.sync(location),
+            result.location.config.diagnostics.sync(location),
             result.location.model.sync(location),
             result.location.provider.sync(location),
             result.location.reference.sync(location),
@@ -1997,6 +2314,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           result.location.integration.invalidate(location)
           result.location.mcp.server.invalidate(location)
           result.location.mcp.resource.invalidate(location)
+          result.location.config.diagnostics.invalidate(location)
           result.location.model.invalidate(location)
           result.location.provider.invalidate(location)
           result.location.reference.invalidate(location)
@@ -2010,10 +2328,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           },
           sync(ref?: LocationRef) {
             const id = locationKey(ref ?? defaultLocation())
-            return sync.run(`location.agent:${id}`, async () => {
+            return sync.run(`location.agent:${id}`, async (current) => {
               const response = await client.api.agent.list({
                 location: locationQuery(ref ?? defaultLocation()),
               })
+              if (!current()) return
               const key = locationKey(response.location)
               setStore("location", key, {
                 ...store.location[key],
@@ -2031,10 +2350,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           },
           sync(ref?: LocationRef) {
             const id = locationKey(ref ?? defaultLocation())
-            return sync.run(`location.command:${id}`, async () => {
+            return sync.run(`location.command:${id}`, async (current) => {
               const response = await client.api.command.list({
                 location: locationQuery(ref ?? defaultLocation()),
               })
+              if (!current()) return
               const key = locationKey(response.location)
               setStore("location", key, {
                 ...store.location[key],
@@ -2052,10 +2372,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           },
           sync(ref?: LocationRef) {
             const id = locationKey(ref ?? defaultLocation())
-            return sync.run(`location.integration:${id}`, async () => {
+            return sync.run(`location.integration:${id}`, async (current) => {
               const response = await client.api.integration.list({
                 location: locationQuery(ref ?? defaultLocation()),
               })
+              if (!current()) return
               const key = locationKey(response.location)
               setStore("location", key, {
                 ...store.location[key],
@@ -2074,10 +2395,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             },
             sync(ref?: LocationRef) {
               const id = locationKey(ref ?? defaultLocation())
-              return sync.run(`location.mcp.server:${id}`, async () => {
+              return sync.run(`location.mcp.server:${id}`, async (current) => {
                 const response = await client.api.mcp.list({
                   location: locationQuery(ref ?? defaultLocation()),
                 })
+                if (!current()) return
                 const key = locationKey(response.location)
                 setStore("location", key, {
                   ...store.location[key],
@@ -2095,10 +2417,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             },
             sync(ref?: LocationRef) {
               const id = locationKey(ref ?? defaultLocation())
-              return sync.run(`location.mcp.resource:${id}`, async () => {
+              return sync.run(`location.mcp.resource:${id}`, async (current) => {
                 const response = await client.api.mcp.resource.catalog({
                   location: locationQuery(ref ?? defaultLocation()),
                 })
+                if (!current()) return
                 const key = locationKey(response.location)
                 setStore("location", key, {
                   ...store.location[key],
@@ -2114,20 +2437,50 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             },
           },
         },
+        config: {
+          diagnostics: {
+            list(location?: LocationRef) {
+              return store.location[locationKey(location ?? defaultLocation())]?.config?.diagnostics
+            },
+            sync(ref?: LocationRef) {
+              const id = locationKey(ref ?? defaultLocation())
+              return sync.run(`location.config.diagnostics:${id}`, async (current) => {
+                const response = await client.api.config.diagnostics({
+                  location: locationQuery(ref ?? defaultLocation()),
+                })
+                if (!current()) return
+                const key = locationKey(response.location)
+                setStore("location", key, {
+                  ...store.location[key],
+                  config: { ...store.location[key]?.config, diagnostics: response.data },
+                })
+              })
+            },
+            invalidate(ref?: LocationRef) {
+              sync.invalidate(`location.config.diagnostics:${locationKey(ref ?? defaultLocation())}`)
+            },
+          },
+        },
         model: {
           list(location?: LocationRef) {
             return store.location[locationKey(location ?? defaultLocation())]?.model
           },
+          default(location?: LocationRef) {
+            return store.location[locationKey(location ?? defaultLocation())]?.modelDefault
+          },
           sync(ref?: LocationRef) {
             const id = locationKey(ref ?? defaultLocation())
-            return sync.run(`location.model:${id}`, async () => {
-              const response = await client.api.model.list({
-                location: locationQuery(ref ?? defaultLocation()),
-              })
+            return sync.run(`location.model:${id}`, async (current) => {
+              const requestedLocation = locationQuery(ref ?? defaultLocation())
+              const configured = await client.api.model.default({ location: requestedLocation })
+              if (!current()) return
+              const response = await client.api.model.list({ location: requestedLocation })
+              if (!current()) return
               const key = locationKey(response.location)
               setStore("location", key, {
                 ...store.location[key],
                 model: response.data,
+                modelDefault: configured.data?.selection,
               })
             })
           },
@@ -2141,10 +2494,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           },
           sync(ref?: LocationRef) {
             const id = locationKey(ref ?? defaultLocation())
-            return sync.run(`location.provider:${id}`, async () => {
+            return sync.run(`location.provider:${id}`, async (current) => {
               const response = await client.api.provider.list({
                 location: locationQuery(ref ?? defaultLocation()),
               })
+              if (!current()) return
               const key = locationKey(response.location)
               setStore("location", key, {
                 ...store.location[key],
@@ -2162,10 +2516,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           },
           sync(ref?: LocationRef) {
             const id = locationKey(ref ?? defaultLocation())
-            return sync.run(`location.reference:${id}`, async () => {
+            return sync.run(`location.reference:${id}`, async (current) => {
               const response = await client.api.reference.list({
                 location: locationQuery(ref ?? defaultLocation()),
               })
+              if (!current()) return
               const key = locationKey(response.location)
               setStore("location", key, {
                 ...store.location[key],
@@ -2183,10 +2538,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           },
           sync(ref?: LocationRef) {
             const id = locationKey(ref ?? defaultLocation())
-            return sync.run(`location.skill:${id}`, async () => {
+            return sync.run(`location.skill:${id}`, async (current) => {
               const response = await client.api.skill.list({
                 location: locationQuery(ref ?? defaultLocation()),
               })
+              if (!current()) return
               const key = locationKey(response.location)
               setStore("location", key, {
                 ...store.location[key],
@@ -2203,17 +2559,43 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     result satisfies Plugin.Context["data"]
 
     createEffect(() => {
-      if (client.connection.status() === "connected") return
-      activeSnapshot = undefined
-      sync.invalidate()
-      subagentGeneration.forEach((generation, parentID) => subagentGeneration.set(parentID, generation + 1))
-      messageSyncLoad.clear()
+      props.selectedSessionID?.()
+      untrack(pruneMetadata)
     })
+
+    createEffect(
+      (previous) => {
+        const status = client.connection.status()
+        if (status === "connected" || previous !== "connected") return status
+        setStore(
+          "session",
+          "prediction",
+          produce((draft) => {
+            Object.keys(draft).forEach((id) => {
+              delete draft[id]
+            })
+          }),
+        )
+        activeSnapshot = undefined
+        sync.invalidate()
+        subagentGeneration.forEach((generation, parentID) => subagentGeneration.set(parentID, generation + 1))
+        messageSyncLoad.clear()
+        historyOwner.clear()
+        olderLoads.clear()
+        return status
+      },
+      client.connection.status(),
+    )
 
     onCleanup(
       client.event.listen(({ details }) => {
+        if (["session.input.admitted", "session.execution.started", "session.step.started", "session.moved", "session.deleted", "session.archived", "session.agent.selected", "session.model.selected"].includes(details.type) && "sessionID" in details.data)
+          result.session.prediction.dismiss(details.data.sessionID)
+        if (details.type === "session.text.delta" || details.type === "session.reasoning.delta" || details.type === "session.tool.input.delta")
+          props.recordTelemetry?.("stream.delay", Date.now() - details.created, Date.now())
         submissions.observe(details)
         if (details.type === "server.connected") {
+          sourceEpoch = details.sourceEpoch
           const mutations = new Map<string, DataSessionStatus>()
           activeSnapshot = mutations
           // Durable task state is broader than execution activity: waiting and cancelling children
@@ -2282,13 +2664,34 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
                 sync.complete(`session:${session.id}`)
                 registerSession(session.id)
               }
+              pruneMetadata()
             })
             .catch((error) => console.error("Failed to preload sessions", error))
           return
         }
+        applyingSequence = "durable" in details ? details.durable.seq : undefined
         handleEvent(details)
+        applyingSequence = undefined
+        pruneMetadata()
       }),
     )
+
+    onCleanup(client.event.filter((event) => {
+      if (sourceEpoch && event.sourceEpoch && event.sourceEpoch !== sourceEpoch) return false
+      if (!("durable" in event)) return true
+      const sessionID = event.durable.aggregateID
+      const history = store.session.history[sessionID]
+      if (!history) return true
+      if (history.watermark !== undefined && event.durable.seq <= history.watermark && event.type !== "session.task.updated")
+        return false
+      const previous = streamSequence.get(sessionID) ?? history.watermark
+      streamSequence.set(sessionID, Math.max(previous ?? -1, event.durable.seq))
+      if (previous !== undefined && event.durable.seq > previous + 1 && client.connection.status() === "connected") {
+        result.session.message.invalidate(sessionID)
+        void result.session.message.sync(sessionID).catch(() => undefined)
+      }
+      return true
+    }))
 
     return result
   },

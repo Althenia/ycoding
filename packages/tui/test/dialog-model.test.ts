@@ -13,6 +13,18 @@ test("completes an explicit selection of the already-current model and variant",
   ).toEqual({ providerID: "openai", modelID: "gpt-5.6", variant: "high" })
 })
 
+test("retains an explicit profile when completing model and variant selection", () => {
+  expect(
+    dialogModel.completeModelSelection({
+      providerID: "openai",
+      modelID: "gpt-5.6",
+      variants: ["low", "high"],
+      currentVariant: "high",
+      profile: "Work",
+    }),
+  ).toEqual({ providerID: "openai", modelID: "gpt-5.6", variant: "high", profile: "Work" })
+})
+
 test("withholds completion until a required variant is explicitly selected", () => {
   const input = {
     providerID: "anthropic",

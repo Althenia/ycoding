@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import path from "node:path"
-import { createModelPreferenceRepository, decodeModelPreference } from "../src/model-preference"
+import { createModelPreferenceRepository, decodeModelPreference, modelPreferenceKey } from "../src/model-preference"
+import { recentModels } from "../src/context/local"
 import { tmpdir } from "./fixture/fixture"
 
 test("repairs known model preferences and preserves unrelated fields", () => {
@@ -31,6 +32,37 @@ test("preserves named none and default variants as ordinary ids", () => {
       },
     }).variant,
   ).toEqual({ "local/qwopus": "none", "local/ornith": "default", "local/tiel": "fast" })
+})
+
+test("retains explicit provider profiles in recent and favorite model identities", () => {
+  const profile = "Work/account"
+  const value = decodeModelPreference({
+    recent: [{ providerID: "openai", modelID: "gpt-5", profile }, { providerID: "openai", modelID: "gpt-5", profile: "" }],
+    favorite: [{ providerID: "openai", modelID: "gpt-5", profile }],
+  })
+  expect(value.recent).toEqual([{ providerID: "openai", modelID: "gpt-5", profile }])
+  expect(value.favorite).toEqual([{ providerID: "openai", modelID: "gpt-5", profile }])
+  expect(modelPreferenceKey({ providerID: "openai", modelID: "gpt-5" }))
+    .not.toBe(modelPreferenceKey({ providerID: "openai", modelID: "gpt-5", profile }))
+})
+
+test("recent model identities keep separate profile choices for the same model", () => {
+  expect(recentModels(
+    { providerID: "openai", modelID: "gpt-5", profile: "Work" },
+    [{ providerID: "openai", modelID: "gpt-5", profile: "Personal" }, { providerID: "openai", modelID: "gpt-5" }],
+  )).toEqual([
+    { providerID: "openai", modelID: "gpt-5", profile: "Work" },
+    { providerID: "openai", modelID: "gpt-5", profile: "Personal" },
+    { providerID: "openai", modelID: "gpt-5" },
+  ])
+})
+
+test("persists named profiles in recent and favorite model identities", async () => {
+  await using tmp = await tmpdir()
+  const repository = createModelPreferenceRepository(path.join(tmp.path, "model.json"))
+  const work = { providerID: "openai", modelID: "gpt-5", profile: "Work" }
+  await repository.patch({ recent: [work], favorite: [work] })
+  expect(await repository.load()).toEqual({ recent: [work], favorite: [work], variant: {} })
 })
 
 test("atomically serializes patches and variant updates", async () => {

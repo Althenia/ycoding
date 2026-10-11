@@ -1,4 +1,4 @@
-import { YCoding, type YCodingEvent } from "@ycoding-ai/client"
+import { YCoding, type YCodingEvent, type SessionInfo, type SessionProjection } from "@ycoding-ai/client"
 
 export const worktree = "/tmp/ycoding"
 export const directory = `${worktree}/packages/tui`
@@ -9,6 +9,30 @@ export function json(data: unknown, init?: ResponseInit) {
   return new Response(JSON.stringify(data), {
     ...init,
     headers,
+  })
+}
+
+export function sessionSnapshot(
+  sessionID: string,
+  messages: readonly unknown[],
+  options: Partial<Pick<SessionProjection, "before" | "sourceEpoch" | "watermark">> & { session?: Partial<SessionInfo> } = {},
+) {
+  return json({
+    sourceEpoch: "test_epoch",
+    watermark: { type: "log.synced", aggregateID: sessionID },
+    ...options,
+    session: {
+      id: sessionID,
+      projectID: "proj_test",
+      title: "Fixture Session",
+      agent: "build",
+      location: { directory },
+      cost: 0,
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      time: { created: 1, updated: 1 },
+      ...options.session,
+    } satisfies SessionInfo,
+    messages,
   })
 }
 
@@ -106,6 +130,8 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
       return json({ location: { directory, project: { id: "proj_test", directory: worktree } }, data: [] })
     if (url.pathname === "/api/project/current") return json({ id: "proj_test", directory: worktree })
     if (url.pathname === "/api/project/proj_test/directories") return json([{ directory: worktree }])
+    if (url.pathname === "/api/model/default")
+      return json({ location: { directory, project: { id: "proj_test", directory: worktree } }, data: null })
     if (url.pathname === "/api/shell")
       return json({ location: { directory, project: { id: "proj_test", directory: worktree } }, data: [] })
     if (url.pathname === "/api/mcp")
@@ -115,10 +141,17 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
         location: { directory, project: { id: "proj_test", directory: worktree } },
         data: { resources: [], templates: [] },
       })
+    if (url.pathname === "/api/config/diagnostics")
+      return json({ location: { directory, project: { id: "proj_test", directory: worktree } }, data: [] })
     if (url.pathname === "/api/session") return json({ data: [], cursor: {} })
     if (url.pathname === "/api/session/active") return json({ data: {} })
+    if (/^\/api\/session\/[^/]+\/snapshot$/.test(url.pathname))
+      return sessionSnapshot(url.pathname.slice("/api/session/".length, -"/snapshot".length), [])
+    if (/^\/api\/session\/[^/]+\/(pending|skills)$/.test(url.pathname)) return json({ data: [] })
     if (url.pathname === "/api/remote") return json({ data: { state: "off" } })
     if (url.pathname === "/api/keep-awake") return json({ data: { state: "off" } })
+    if (url.pathname === "/api/server/telemetry/consent")
+      return json({ consent: { enabled: false, noticeVersion: 1, decidedAt: 0 }, noticeVersion: 1 })
     if (url.pathname === "/api/permission/request")
       return json({ location: { directory, project: { id: "proj_test", directory: worktree } }, data: [] })
     if (url.pathname === "/api/form/request")

@@ -14,7 +14,7 @@ import { LocationProvider, useLocation } from "../../src/context/location"
 import { RouteProvider } from "../../src/context/route"
 import { ThemeProvider } from "../../src/context/theme"
 import { ToastProvider } from "../../src/ui/toast"
-import { createApi, createEventStream, createFetch, json } from "../fixture/tui-client"
+import { createApi, createEventStream, createFetch, json, sessionSnapshot } from "../fixture/tui-client"
 import { TestTuiContexts } from "../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE, NARROW_VIEWPORT } from "../viewport"
@@ -267,12 +267,12 @@ function route(url: URL) {
     return json({ data: children.find((child) => url.pathname === `/api/session/${child.id}`) })
   if (children.some((child) => [`/api/session/${child.id}/pending`, `/api/session/${child.id}/permission`, `/api/session/${child.id}/form`, `/api/session/${child.id}/todo`, `/api/session/${child.id}/skills`, `/api/session/${child.id}/guardrail/request`].includes(url.pathname))) return json({ data: [] })
   if (children.some((child) => url.pathname === `/api/session/${child.id}/guardrail`)) return json({ data: { rootSessionID: sessionID, profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [] } })
-  if (url.pathname === `/api/session/${sessionID}/message`)
-    return json({ data: [
+  if (url.pathname === `/api/session/${sessionID}/snapshot`)
+    return sessionSnapshot(sessionID, [
       { id: "msg_assistant", type: "assistant", agent: "ycoding", model: { providerID: "anthropic", id: "claude-opus-5", variant: "max" }, content: [{ type: "text", text: "Dispatched two background subagents. They run independently and report back here." }], time: { created: 2, completed: 3 } },
       { id: "msg_user", type: "user", text: "Dispatch the background subagents.", time: { created: 1 } },
-    ], cursor: {} })
-  if (children.some((child) => url.pathname === `/api/session/${child.id}/message`)) return json({ data: [], cursor: {} })
+    ], { session })
+  if (children.some((child) => url.pathname === `/api/session/${child.id}/snapshot`)) return sessionSnapshot(url.pathname.slice("/api/session/".length, -"/snapshot".length), [], { session: children.find((child) => url.pathname === `/api/session/${child.id}/snapshot`) })
   if ([`/api/session/${sessionID}/pending`, `/api/session/${sessionID}/permission`, `/api/session/${sessionID}/form`, `/api/session/${sessionID}/todo`, `/api/session/${sessionID}/skills`, `/api/session/${sessionID}/guardrail/request`].includes(url.pathname)) return json({ data: [] })
   if (url.pathname === `/api/session/${sessionID}/subagent`)
     return json({ data: tasks, summary: { total: 4, active: 2, running: 1, waiting: 1 }, cursor: {} })

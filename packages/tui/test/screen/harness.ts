@@ -1,4 +1,6 @@
 import { mock } from "bun:test"
+import { createComponent } from "solid-js"
+import type { useData } from "../../src/context/data"
 import { ScrollBoxRenderable, type Renderable } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { Effect, FileSystem } from "effect"
@@ -9,6 +11,8 @@ import type { TuiPluginStatus } from "../../src/plugin/host-api"
 import type { ClipboardService } from "../../src/context/clipboard"
 import type { KeepAwakeStatus } from "../../src/keep-awake"
 import type { RemoteStatus } from "../../src/remote-connector"
+import type { PackageResolver } from "../../src/plugin/context"
+import type { Plugin } from "@ycoding-ai/plugin/tui"
 
 /**
  * Boots the REAL application against a deterministic fixture server and returns
@@ -24,7 +28,7 @@ export async function renderScreen(input: {
   width: number
   height: number
   route?: FetchHandler
-  args?: { sessionID?: string }
+  args?: { sessionID?: string; model?: string }
   pluginStatus?: ReadonlyArray<TuiPluginStatus>
   clipboard?: ClipboardService
   /** The real renderer enables the kitty keyboard protocol; modifier sequences need it. */
@@ -35,6 +39,9 @@ export async function renderScreen(input: {
   remote?: { get: () => Promise<RemoteStatus>; set: (enabled: boolean) => Promise<RemoteStatus> }
   keepAwake?: { get: () => Promise<KeepAwakeStatus>; set: (enabled: boolean) => Promise<KeepAwakeStatus> }
   state?: string
+  data?: (value: ReturnType<typeof useData>) => void
+  packages?: PackageResolver
+  builtins?: readonly Plugin.Definition[]
 }) {
   const setup = await createTestRenderer({
     width: input.width,
@@ -42,24 +49,65 @@ export async function renderScreen(input: {
     useThread: false,
     kittyKeyboard: input.kittyKeyboard ?? false,
   })
-  const core = await import("@opentui/core")
-  mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
   // A module mock persists for the whole Bun process, so installing it only when a caller asks for
   // plugin status leaks that status into every file loaded afterwards and makes optional rail
   // sections appear where later tests assert their absence. Always install a freshly seeded runtime.
   const runtime = await import("../../src/plugin/runtime")
+  const originalRuntime = { ...runtime }
   const pluginRuntime = runtime.createPluginRuntime()
   pluginRuntime.update({ status: input.pluginStatus ?? [] })
-  mock.module("../../src/plugin/runtime", () => ({ ...runtime, createPluginRuntime: () => pluginRuntime }))
+  mock.module("../../src/plugin/runtime", () => ({ ...originalRuntime, createPluginRuntime: () => pluginRuntime }))
+  let restoreClipboard: (() => void) | undefined
   if (input.clipboard) {
+    const clipboard = await import("../../src/context/clipboard")
+    const original = { ...clipboard }
     mock.module("../../src/context/clipboard", () => ({
       ClipboardProvider: (props: { children: unknown }) => props.children,
       useClipboard: () => input.clipboard,
     }))
+    restoreClipboard = () => {
+      mock.module("../../src/context/clipboard", () => original)
+    }
   }
 
   const events = createEventStream()
+  let restoreData: (() => void) | undefined
+  if (input.data) {
+    const data = await import("../../src/context/data")
+    const original = { ...data }
+    function Probe() {
+      input.data?.(data.useData())
+      return null
+    }
+    mock.module("../../src/context/data", () => ({
+      ...data,
+      DataProvider: (props: Parameters<typeof data.DataProvider>[0]) =>
+        createComponent(original.DataProvider, {
+          get recordTelemetry() {
+            return props.recordTelemetry
+          },
+          get selectedSessionID() {
+            return props.selectedSessionID
+          },
+          get children() {
+            return [createComponent(Probe, {}), props.children]
+          },
+        }),
+    }))
+    restoreData = () => {
+      mock.module("../../src/context/data", () => original)
+    }
+  }
   const calls = createFetch(input.route, events)
+  let restoreBuiltins: (() => void) | undefined
+  if (input.builtins) {
+    const builtinModule = await import("../../src/plugin/builtins")
+    const original = { ...builtinModule }
+    mock.module("../../src/plugin/builtins", () => ({ builtins: input.builtins }))
+    restoreBuiltins = () => {
+      mock.module("../../src/plugin/builtins", () => original)
+    }
+  }
   const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request), idleTimeout: 30 })
   const { run } = await import("../../src/app")
 
@@ -67,12 +115,16 @@ export async function renderScreen(input: {
     run({
       server: { endpoint: { url: server.url.toString() } },
       config: { get: async () => input.config ?? {}, update: async () => ({}) },
-      packages: { resolve: async () => undefined },
+      packages: input.packages ?? { resolve: async () => undefined },
       args: input.args ?? {},
+      terminalHandoff: async () => ({ renderer: setup.renderer, mode: null, complete: () => {} }),
       log: () => {},
       remote: input.remote,
       keepAwake: input.keepAwake,
-    }).pipe(Effect.provide(input.state ? Global.layerWith({ state: input.state }) : AppNodeBuilder.build(Global.node)), Effect.provide(FileSystem.layerNoop({}))),
+    }).pipe(
+      Effect.provide(input.state ? Global.layerWith({ state: input.state }) : AppNodeBuilder.build(Global.node)),
+      Effect.provide(FileSystem.layerNoop({})),
+    ),
   )
 
   const deadline = Date.now() + 25_000
@@ -121,10 +173,16 @@ export async function renderScreen(input: {
         .find((span) => span.text.includes(text))
         ?.fg.toInts(),
     async dispose() {
-      if (!setup.renderer.isDestroyed) setup.renderer.destroy()
-      await task.catch(() => {})
-      await server.stop()
-      mock.restore()
+      try {
+        if (!setup.renderer.isDestroyed) setup.renderer.destroy()
+        await task.catch(() => {})
+        await server.stop()
+      } finally {
+        restoreData?.()
+        restoreBuiltins?.()
+        restoreClipboard?.()
+        mock.module("../../src/plugin/runtime", () => originalRuntime)
+      }
     },
   }
 }

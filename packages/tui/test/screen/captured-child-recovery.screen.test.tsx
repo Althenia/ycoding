@@ -7,7 +7,7 @@ import type {
   SessionOrchestrationTask,
   YCodingEvent,
 } from "@ycoding-ai/client"
-import { json } from "../fixture/tui-client"
+import { json, sessionSnapshot } from "../fixture/tui-client"
 import { renderScreen } from "./harness"
 
 const parentID = "ses_capture_recovery"
@@ -62,7 +62,7 @@ function session(id: string): SessionInfo {
   }
 }
 
-function fixture(input?: { secondPrompt?: boolean; noRootEdit?: boolean; live?: "root" | "child" }) {
+function fixture(input?: { secondPrompt?: boolean; noRootEdit?: boolean; live?: "root" | "child"; older?: boolean }) {
   const failures = new Set<string>()
   const gates = new Map<string, Promise<void>>()
   const requests: string[] = []
@@ -118,7 +118,7 @@ function fixture(input?: { secondPrompt?: boolean; noRootEdit?: boolean; live?: 
     gates,
     requests,
     reads(id: string) {
-      return requests.filter((request) => request === `GET /api/session/${id}/message`).length
+      return requests.filter((request) => request === `GET /api/session/${id}/snapshot`).length
     },
     async route(this: void, url: URL, request: Request) {
       requests.push(`${request.method} ${url.pathname}`)
@@ -127,13 +127,16 @@ function fixture(input?: { secondPrompt?: boolean; noRootEdit?: boolean; live?: 
         return json({ data: [session(parentID), ...childIDs.map(session)], cursor: {} })
       if ([parentID, ...childIDs].some((id) => url.pathname === `/api/session/${id}`))
         return json({ data: session(url.pathname.split("/").at(-1)!) })
-      if (url.pathname === `/api/session/${parentID}/message`) return json({ data: root, cursor: {} })
+      if (url.pathname === `/api/session/${parentID}/snapshot`) return sessionSnapshot(parentID, root, { session: session(parentID) })
       for (const id of childIDs) {
-        if (url.pathname !== `/api/session/${id}/message`) continue
+        if (url.pathname !== `/api/session/${id}/snapshot`) continue
         await gates.get(id)
         return failures.has(id)
           ? json({ message: "Transcript unavailable" }, { status: 500 })
-          : json({ data: transcripts.get(id), cursor: {} })
+          : sessionSnapshot(id, transcripts.get(id) ?? [], {
+              session: session(id),
+              before: input?.older ? "opaque_older" : undefined,
+            })
       }
       if (url.pathname === `/api/session/${parentID}/subagent`)
         return json({
@@ -160,6 +163,7 @@ function fixture(input?: { secondPrompt?: boolean; noRootEdit?: boolean; live?: 
               capabilities: { tools: true, input: ["text"], output: ["text"] },
               time: { released: 0 },
               cost: [],
+              variants: [],
               status: "active",
               enabled: true,
               limit: { context: 200000, output: 32000 },
@@ -393,6 +397,23 @@ test("reopens a Session whose captured transcript is still resident without cras
     screen.input.pressEnter()
     await text(screen, "Captured changes")
     expect(screen.frame()).not.toContain("YCoding crashed")
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("a partial child history keeps the incomplete label and omits the earlier-changes notice", async () => {
+  const state = fixture({ older: true })
+  const screen = await mount(state)
+  try {
+    await text(screen, "incomplete")
+    expect(screen.frame()).not.toContain("Earlier changes are not loaded")
+    expect(screen.frame()).not.toContain("Load earlier child changes")
+    expect(screen.frame()).not.toContain("Child membership unavailable")
+    screen.input.pressKey("p", { ctrl: true })
+    await text(screen, "Commands")
+    await text(screen, "Fork session")
+    expect(screen.frame()).not.toContain("Load earlier child changes")
   } finally {
     await screen.dispose()
   }
