@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>YCoding Meeting</title>
+    <link rel="stylesheet" href="/view/style.css" />
+    <script type="module" src="/view/app.js"></script>
+  </head>
+  <body>
+    <a class="skip" href="#transcript">Skip to transcript</a>
+    <div class="passage" id="passage" data-phase="start">
+      <header class="header">
+        <div class="brand">
+          <img src="/view/mark.svg" width="32" height="32" alt="YCoding" data-audit-ignore />
+          <div>
+            <p class="eyebrow">YCoding Meeting · Passage</p>
+            <h1 id="meeting-title">YCoding Meeting</h1>
+            <p id="meeting-status" class="status">Connecting</p>
+          </div>
+        </div>
+        <ol class="stages" aria-label="Meeting stages">
+          <li id="stage-start" aria-current="step">01 Start</li>
+          <li id="stage-live">02 Live</li>
+          <li id="stage-review">03 Review</li>
+        </ol>
+      </header>
+      <div id="connection" class="connection" role="status" aria-live="polite">Connecting to the local runtime…</div>
+      <section id="ownership" class="ownership" hidden aria-label="Recording lifetime">
+        <strong>REC · Keep this tab open</strong>
+        <p>Closing or reloading this page stops recording. Leave it open beside Meet.</p>
+        <button id="leave-preview" type="button">Leave-page warning preview</button>
+      </section>
+      <main id="workspace" class="workspace">
+        <section id="capture-panel" class="capture-runtime" aria-label="Capture and runtime">
+          <div class="capture-gate">
+            <p class="eyebrow">Capture setup</p>
+            <h2 id="capture-title">Choose what to capture</h2>
+            <p id="capture-description">
+              Choose the Google Meet tab in Chrome’s share picker and tick “Share tab audio”. Sharing a screen or a
+              window may not include tab audio.
+            </p>
+            <form id="capture-form">
+              <label class="check"
+                ><input id="consent" type="checkbox" /><span
+                  >I have participant consent for this recording.</span
+                ></label
+              >
+              <label class="check"
+                ><input id="policy" type="checkbox" /><span>Organizational policy permits this recording.</span></label
+              >
+              <label class="check"
+                ><input id="microphone" type="checkbox" /><span
+                  >Include my microphone <small>Optional · headphones recommended</small></span
+                ></label
+              >
+              <p id="start-reason" class="hint">
+                Acknowledge both checks for every Start. This tab must stay open while recording.
+              </p>
+              <button id="start" type="submit" class="primary" disabled aria-describedby="start-reason connection">
+                Start · choose Meet tab
+              </button>
+            </form>
+            <div class="actions">
+              <button id="stop" type="button" hidden disabled aria-describedby="connection">Stop and finalize</button
+              ><button id="tab-only" type="button" hidden>Use tab audio only · fresh Start</button
+              ><button id="settings-help" type="button">Microphone site settings help</button>
+            </div>
+            <div class="feedback" role="status" aria-live="polite">
+              <p id="capture-feedback">Nothing is recording.</p>
+              <p id="control-feedback"></p>
+            </div>
+          </div>
+          <section class="runtime" aria-label="Runtime reports">
+            <div class="section-head">
+              <h3>Runtime</h3>
+              <span id="health-status" class="status">Unreported</span>
+            </div>
+            <p id="source-status" class="hint">Sources unreported</p>
+            <dl class="metrics">
+              <div>
+                <dt>Buffered audio</dt>
+                <dd id="buffered">Unreported</dd>
+              </div>
+              <div>
+                <dt>Backlog</dt>
+                <dd id="backlog">Unreported</dd>
+              </div>
+              <div>
+                <dt>Processed audio</dt>
+                <dd id="processed">Unreported</dd>
+              </div>
+            </dl>
+            <p class="hint">Transcription lag · <span id="lag">Unreported</span></p>
+            <details id="runtime-details">
+              <summary>Model details</summary>
+              <div class="details-body">
+                <p id="model" class="mono">Model unreported</p>
+                <p id="device" class="hint">Device unreported</p>
+                <p id="bridge" class="mono"></p>
+              </div>
+            </details>
+          </section>
+        </section>
+        <section id="recovery" class="notice" hidden aria-labelledby="recovery-title">
+          <h2 id="recovery-title">Runtime needs attention</h2>
+          <p id="recovery-text"></p>
+          <p id="error-detail" class="hint"></p>
+          <button id="retry-audio" type="button" hidden>Retry failed audio</button>
+        </section>
+        <section id="transcript" class="transcript" aria-labelledby="transcript-title" tabindex="-1">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Live evidence · source-labelled</p>
+              <h2 id="transcript-title">Transcript</h2>
+            </div>
+            <div class="actions">
+              <button id="follow" type="button" aria-pressed="true">Follow newest · on</button
+              ><button id="original" type="button" aria-pressed="false">Show original</button>
+            </div>
+          </div>
+          <p class="hint">Source is an audio channel, not speaker identification. Temporary text can change.</p>
+          <p id="transcript-empty" class="empty hint">
+            Audio is not being captured. Give fresh consent and Start on this page; processed evidence will appear here.
+          </p>
+          <p id="transcript-window" class="hint" hidden>
+            Showing the runtime's most recent transcript window. Earlier evidence remains in YCoding.
+          </p>
+          <div id="segments"></div>
+        </section>
+        <section id="insights" class="insights" aria-label="Advisory notebook">
+          <section class="analysis" aria-labelledby="summary-title">
+            <p class="eyebrow">Advisory · transcript so far</p>
+            <h2 id="summary-title">Working summary</h2>
+            <p id="summary-status" class="hint">Analysis unreported</p>
+            <p id="summary-text" class="prose">No summary yet.</p>
+            <details id="findings">
+              <summary id="findings-title">Findings · unreported</summary>
+              <div id="finding-list" class="details-body"></div>
+            </details>
+          </section>
+          <section id="chat-panel" class="ask-panel" aria-labelledby="chat-title">
+            <h2 id="chat-title">Ask AI</h2>
+            <p class="hint">Advisory only · transcript so far · no tools or actions · latest 50 questions</p>
+            <div id="chat-history" class="chat-history"><p class="hint">No questions yet.</p></div>
+            <form id="chat-form">
+              <label for="question">Your question</label
+              ><textarea
+                id="question"
+                maxlength="2000"
+                rows="4"
+                placeholder="สรุปข้อเสนอ rollout ตอนนี้ให้หน่อย"
+                aria-describedby="chat-feedback"
+              ></textarea>
+              <div class="actions">
+                <button id="ask" type="submit" class="primary" disabled aria-describedby="chat-feedback">Ask AI</button
+                ><button id="retry-question" type="button" hidden>Retry answer</button>
+              </div>
+              <p id="chat-feedback" class="feedback" role="status" aria-live="polite">
+                Waiting for the runtime. One question at a time.
+              </p>
+            </form>
+          </section>
+        </section>
+      </main>
+      <footer class="footer">
+        Audio capture stays on this page; transcription and durable evidence stay in YCoding. Unknown values remain
+        Unreported.
+      </footer>
+    </div>
+    <dialog id="stop-dialog" aria-labelledby="stop-title">
+      <h2 id="stop-title">Stop and finalize?</h2>
+      <p>
+        Release the shared tab and microphone, then process remaining buffered audio. Recording again requires a ready
+        meeting and fresh consent.
+      </p>
+      <form method="dialog" class="actions">
+        <button value="cancel" autofocus>Keep recording</button
+        ><button id="confirm-stop" value="stop" class="primary">Stop and finalize</button>
+      </form>
+    </dialog>
+    <dialog id="leave-dialog" aria-labelledby="leave-title">
+      <h2 id="leave-title">Keep this tab open</h2>
+      <p>
+        Closing or reloading stops recording. While recording, Chrome asks for confirmation when you leave. This preview
+        does not navigate or stop capture.
+      </p>
+      <form method="dialog" class="actions"><button autofocus>Keep this tab open</button></form>
+    </dialog>
+    <dialog id="settings-dialog" aria-labelledby="settings-title">
+      <h2 id="settings-title">Microphone site settings</h2>
+      <p>
+        Open Chrome’s site controls beside the address, then Site settings → Microphone → Allow. Return here and Start
+        with fresh consent, or choose tab audio only.
+      </p>
+      <p id="permission-origin" class="mono"></p>
+      <p class="hint">
+        Permission belongs to this origin, including the port. A restarted local runtime on a new port may need a new
+        grant. Echo cancellation helps; use headphones. Your microphone is never played to speakers.
+      </p>
+      <form method="dialog" class="actions"><button autofocus>Back to source choice</button></form>
+    </dialog>
+  </body>
+</html>
