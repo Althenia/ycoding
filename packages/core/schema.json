@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "34121609-0e89-4ff9-924e-f9943b6ff5de",
+  "id": "6861a3d6-4613-46b1-974e-d4781e5887ee",
   "prevIds": [
-    "b62baca3-c955-43bc-9168-7da04223ea3f"
+    "34121609-0e89-4ff9-924e-f9943b6ff5de"
   ],
   "ddl": [
     {
@@ -6776,6 +6776,24 @@
     {
       "columns": [
         {
+          "value": "session_id",
+          "isExpression": false
+        },
+        {
+          "value": "time_ended",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": "\"session_compaction_job\".\"status\" = 'ended'",
+      "origin": "manual",
+      "name": "session_compaction_job_session_ended_idx",
+      "entityType": "indexes",
+      "table": "session_compaction_job"
+    },
+    {
+      "columns": [
+        {
           "value": "manifest_digest",
           "isExpression": false
         }
@@ -6992,6 +7010,20 @@
     {
       "columns": [
         {
+          "value": "time_created",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_provider_request_time_created_idx",
+      "entityType": "indexes",
+      "table": "session_provider_request"
+    },
+    {
+      "columns": [
+        {
           "value": "blob_digest",
           "isExpression": false
         }
@@ -7024,14 +7056,40 @@
     {
       "columns": [
         {
-          "value": "project_id",
+          "value": "time_updated",
+          "isExpression": false
+        },
+        {
+          "value": "id",
           "isExpression": false
         }
       ],
       "isUnique": false,
       "where": null,
       "origin": "manual",
-      "name": "session_project_idx",
+      "name": "session_time_updated_id_idx",
+      "entityType": "indexes",
+      "table": "session"
+    },
+    {
+      "columns": [
+        {
+          "value": "project_id",
+          "isExpression": false
+        },
+        {
+          "value": "time_updated",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_project_time_updated_id_idx",
       "entityType": "indexes",
       "table": "session"
     },
@@ -7040,12 +7098,20 @@
         {
           "value": "workspace_id",
           "isExpression": false
+        },
+        {
+          "value": "time_updated",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
         }
       ],
       "isUnique": false,
       "where": null,
       "origin": "manual",
-      "name": "session_workspace_idx",
+      "name": "session_workspace_time_updated_id_idx",
       "entityType": "indexes",
       "table": "session"
     },
@@ -7054,12 +7120,42 @@
         {
           "value": "parent_id",
           "isExpression": false
+        },
+        {
+          "value": "time_updated",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
         }
       ],
       "isUnique": false,
       "where": null,
       "origin": "manual",
-      "name": "session_parent_idx",
+      "name": "session_parent_time_updated_id_idx",
+      "entityType": "indexes",
+      "table": "session"
+    },
+    {
+      "columns": [
+        {
+          "value": "directory",
+          "isExpression": false
+        },
+        {
+          "value": "time_updated",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_directory_time_updated_id_idx",
       "entityType": "indexes",
       "table": "session"
     },

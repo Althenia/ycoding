@@ -942,6 +942,9 @@ export default {
         `CREATE INDEX \`session_compaction_job_recovery_idx\` ON \`session_compaction_job\` (\`status\`,\`lease_expires_at\`,\`session_id\`);`,
       )
       yield* tx.run(
+        `CREATE INDEX \`session_compaction_job_session_ended_idx\` ON \`session_compaction_job\` (\`session_id\`,\`time_ended\`) WHERE "session_compaction_job"."status" = 'ended';`,
+      )
+      yield* tx.run(
         `CREATE INDEX \`session_compaction_job_manifest_idx\` ON \`session_compaction_job\` (\`manifest_digest\`);`,
       )
       yield* tx.run(
@@ -976,14 +979,27 @@ export default {
         `CREATE INDEX \`session_provider_request_session_source_idx\` ON \`session_provider_request\` (\`session_id\`,\`source\`);`,
       )
       yield* tx.run(
+        `CREATE INDEX \`session_provider_request_time_created_idx\` ON \`session_provider_request\` (\`time_created\`);`,
+      )
+      yield* tx.run(
         `CREATE INDEX \`session_provider_state_link_blob_idx\` ON \`session_provider_state_link\` (\`blob_digest\`);`,
       )
       yield* tx.run(
         `CREATE INDEX \`session_provider_state_link_revision_idx\` ON \`session_provider_state_link\` (\`session_id\`,\`context_revision\`);`,
       )
-      yield* tx.run(`CREATE INDEX \`session_project_idx\` ON \`session\` (\`project_id\`);`)
-      yield* tx.run(`CREATE INDEX \`session_workspace_idx\` ON \`session\` (\`workspace_id\`);`)
-      yield* tx.run(`CREATE INDEX \`session_parent_idx\` ON \`session\` (\`parent_id\`);`)
+      yield* tx.run(`CREATE INDEX \`session_time_updated_id_idx\` ON \`session\` (\`time_updated\`,\`id\`);`)
+      yield* tx.run(
+        `CREATE INDEX \`session_project_time_updated_id_idx\` ON \`session\` (\`project_id\`,\`time_updated\`,\`id\`);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`session_workspace_time_updated_id_idx\` ON \`session\` (\`workspace_id\`,\`time_updated\`,\`id\`);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`session_parent_time_updated_id_idx\` ON \`session\` (\`parent_id\`,\`time_updated\`,\`id\`);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`session_directory_time_updated_id_idx\` ON \`session\` (\`directory\`,\`time_updated\`,\`id\`);`,
+      )
       yield* tx.run(
         `CREATE INDEX \`session_time_suspended_idx\` ON \`session\` (\`time_suspended\`) WHERE "session"."time_suspended" is not null;`,
       )

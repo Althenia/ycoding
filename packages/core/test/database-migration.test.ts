@@ -59,6 +59,7 @@ const currentMigrations = [
   { id: "20261004154315_web-latency" },
   { id: "20261008065350_provider-profiles" },
   { id: "20261010015127_telemetry-consent" },
+  { id: "20261011135037_session-usage-indexes" },
 ]
 const selectiveCompactionTables = [
   "compaction_manifest_blob",

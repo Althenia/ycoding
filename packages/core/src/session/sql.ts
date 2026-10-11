@@ -81,9 +81,11 @@ export const SessionTable = sqliteTable(
     time_suspended: integer(),
   },
   (table) => [
-    index("session_project_idx").on(table.project_id),
-    index("session_workspace_idx").on(table.workspace_id),
-    index("session_parent_idx").on(table.parent_id),
+    index("session_time_updated_id_idx").on(table.time_updated, table.id),
+    index("session_project_time_updated_id_idx").on(table.project_id, table.time_updated, table.id),
+    index("session_workspace_time_updated_id_idx").on(table.workspace_id, table.time_updated, table.id),
+    index("session_parent_time_updated_id_idx").on(table.parent_id, table.time_updated, table.id),
+    index("session_directory_time_updated_id_idx").on(table.directory, table.time_updated, table.id),
     index("session_time_suspended_idx")
       .on(table.time_suspended)
       .where(sql`${table.time_suspended} is not null`),
@@ -121,6 +123,7 @@ export const SessionProviderRequestTable = sqliteTable(
   (table) => [
     uniqueIndex("session_provider_request_session_request_idx").on(table.session_id, table.request),
     index("session_provider_request_session_source_idx").on(table.session_id, table.source),
+    index("session_provider_request_time_created_idx").on(table.time_created),
   ],
 )
 
@@ -415,6 +418,9 @@ export const SessionCompactionJobTable = sqliteTable(
       .on(table.legacy_input_id)
       .where(sql`${table.legacy_input_id} IS NOT NULL`),
     index("session_compaction_job_recovery_idx").on(table.status, table.lease_expires_at, table.session_id),
+    index("session_compaction_job_session_ended_idx")
+      .on(table.session_id, table.time_ended)
+      .where(sql`${table.status} = 'ended'`),
     index("session_compaction_job_manifest_idx").on(table.manifest_digest),
     check("session_compaction_job_id_check", sql`length(${table.id}) > 4 AND substr(${table.id}, 1, 4) = 'cmp_'`),
     check("session_compaction_job_legacy_input_check", optionalNonempty(table.legacy_input_id)),
