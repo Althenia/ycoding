@@ -250,7 +250,7 @@ bun run build:tui
 bun run smoke:runtime
 ```
 
-The benchmark uses local fake providers and a local stdio MCP server. Its fixture explicitly disables predictions to isolate the pinned nonprediction request counts, costs, and cache-prefix assertions. Default-on prediction delivery is checked separately by the Session runner flow test. It performs:
+The benchmark uses local fake providers and a local stdio MCP server. Prediction runs only on explicit request, so the fixture's pinned request counts, costs, and cache-prefix assertions contain no prediction traffic. It performs:
 
 1. two ordinary requests with a provider-reported cache write followed by a cache read;
 2. one Session containing two real `read` tool continuations, producing three logical and three physical provider requests;

@@ -402,7 +402,6 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   await writeFile(
     path.join(project, "ycoding.json"),
     JSON.stringify({
-      prediction: { enabled: false },
       efficiency: {
         title: "local",
         goal_synthesis: "local",

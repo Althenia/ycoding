@@ -890,6 +890,11 @@ async function run(input: OperationInput) {
     case "interrupt":
       await input.local.interrupt(sessionID, location)
       return null
+    case "prediction":
+      return input.local.prediction(sessionID, location, {
+        memory: validated.memory,
+        ...(validated.hint === undefined ? {} : { hint: validated.hint }),
+      })
     case "compact":
       return { data: await input.local.compact(sessionID, location, validated.id) }
     case "permission.reply":
@@ -985,6 +990,7 @@ type Validated =
   | { readonly kind: "unsubscribe" }
   | { readonly kind: "prompt"; readonly input: LocalPrompt }
   | { readonly kind: "interrupt" }
+  | { readonly kind: "prediction"; readonly memory: readonly ("repository" | "knowledge")[]; readonly hint?: string }
   | { readonly kind: "permission.reply"; readonly requestID: string; readonly reply: Reply; readonly message?: string }
   | { readonly kind: "guardrail.reply"; readonly requestID: string; readonly reply: Reply }
   | { readonly kind: "form.reply"; readonly formID: string; readonly answer: FormAnswer }
@@ -1153,6 +1159,8 @@ function validate(request: RemoteRequest): Validated {
         limit: optionalInteger(fields.limit, "limit", 1, maxShellOutputPage) ?? maxShellOutputPage,
       }
     }
+    case "session.prediction":
+      return { kind: "prediction", ...predictionInput(fields) }
     case "session.prompt":
       return {
         kind: "prompt",
@@ -1707,6 +1715,7 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.unsubscribe": [],
   "session.prompt": ["id", "text", "files", "agents", "delivery", "resume", "skills"],
   "session.interrupt": [],
+  "session.prediction": ["memory", "hint"],
   "session.permission.reply": ["requestID", "reply", "message"],
   "session.guardrail.reply": ["requestID", "reply"],
   "session.form.reply": ["formID", "answer"],
@@ -1745,6 +1754,7 @@ const mutations: ReadonlySet<string> = new Set([
   "session.skill",
   "session.prompt",
   "session.interrupt",
+  "session.prediction",
   "session.permission.reply",
   "session.guardrail.reply",
   "session.form.reply",
@@ -1926,6 +1936,20 @@ function messageID(value: unknown) {
 function literal<const Values extends readonly string[]>(value: unknown, values: Values, field: string): Values[number] {
   if (typeof value === "string" && (values as readonly string[]).includes(value)) return value as Values[number]
   throw new OperationError("invalid_message", `Invalid ${field}`)
+}
+
+function isPredictionScope(value: unknown): value is "repository" | "knowledge" {
+  return value === "repository" || value === "knowledge"
+}
+
+function predictionInput(fields: Readonly<Record<string, unknown>>) {
+  const memory = fields.memory
+  if (!Array.isArray(memory) || memory.length > 2 || new Set(memory).size !== memory.length || !memory.every(isPredictionScope))
+    throw new OperationError("invalid_message", "Invalid prediction memory")
+  return {
+    memory: memory.filter(isPredictionScope),
+    ...(fields.hint === undefined ? {} : { hint: requireString(fields.hint, "hint", 2_000, { allowEmpty: true }) }),
+  }
 }
 
 function requireString(

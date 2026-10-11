@@ -1937,6 +1937,17 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             if (sourceMessageID) setStore("session", "predictionDismissed", sessionID, sourceMessageID)
             setStore("session", "prediction", sessionID, undefined)
           },
+          request(sessionID: string, input: { memory: ReadonlyArray<"repository" | "knowledge">; hint?: string }) {
+            setStore("session", produce((draft) => {
+              delete draft.predictionDismissed[sessionID]
+              delete draft.prediction[sessionID]
+            }))
+            return client.api.session.prediction({
+              sessionID,
+              memory: input.memory,
+              ...(input.hint === undefined ? {} : { hint: input.hint }),
+            })
+          },
         },
         input: {
           list(sessionID: string) {

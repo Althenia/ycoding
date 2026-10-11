@@ -4,10 +4,10 @@ import os from "node:os"
 import path from "node:path"
 import { cleanupRuntimeSmoke } from "./runtime-smoke"
 
-test("runtime cache benchmark explicitly isolates prediction traffic without relaxing accounting or prefix checks", async () => {
+test("runtime cache benchmark leaves prediction on-demand without relaxing accounting or prefix checks", async () => {
   const source = await Bun.file(path.join(import.meta.dir, "runtime-smoke.ts")).text()
   const config = source.split('path.join(project, "ycoding.json"),')[1]?.split("const dir =")[0]
-  expect(config).toContain("prediction: { enabled: false }")
+  expect(config).not.toContain("prediction")
   expect(source).toContain("toolSummary.helpers !== 0")
   expect(source).toContain("requests.length - toolRequestsStart !== 3")
   expect(source).toContain("toolSummary.physical !== 3")

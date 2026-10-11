@@ -43,6 +43,7 @@ import { useToast } from "../../ui/toast"
 import { createFadeIn } from "../../util/signal"
 import { DialogSkill } from "../dialog-skill"
 import { DialogBtwExport } from "../dialog-btw-export"
+import { DialogSuggest } from "../dialog-suggest"
 import { DialogSessionGoal } from "../dialog-session-goal"
 import { useConfig } from "../../config"
 import { usePromptMove } from "./move"
@@ -782,6 +783,29 @@ export function Prompt(props: PromptProps) {
               }}
             />
           ))
+        },
+      },
+      {
+        title: "Suggest next message",
+        name: "session.suggest",
+        category: "Session",
+        palette: props.sessionID !== undefined,
+        slash: { name: "suggest", arguments: true as const },
+        run: async (text: string | undefined) => {
+          const sessionID = props.sessionID
+          if (!sessionID) return
+          clearPrompt()
+          const hint = text?.trim()
+          const memory = await DialogSuggest.show(dialog)
+          if (!memory) return
+          toast.show({ message: "Generating suggestion…", variant: "info" })
+          const result = await data.session.prediction
+            .request(sessionID, hint ? { memory, hint } : { memory })
+            .catch((error: unknown) => {
+              toast.error(error)
+            })
+          if (result?.status !== "unavailable") return
+          toast.show({ message: "No suggestion available for the latest reply", variant: "info" })
         },
       },
       {

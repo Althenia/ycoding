@@ -69,6 +69,7 @@ export const remoteOperations = [
   "session.prompt",
   "session.attachment.upload",
   "session.interrupt",
+  "session.prediction",
   "session.permission.list",
   "session.permission.reply",
   "session.guardrail.status",
@@ -132,6 +133,7 @@ export const remoteSessionOperations = [
   "session.prompt",
   "session.attachment.upload",
   "session.interrupt",
+  "session.prediction",
   "session.permission.list",
   "session.permission.reply",
   "session.guardrail.status",
@@ -197,6 +199,7 @@ export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation">
   "session.prompt": "mutation",
   "session.attachment.upload": "mutation",
   "session.interrupt": "mutation",
+  "session.prediction": "mutation",
   "session.permission.list": "read",
   "session.permission.reply": "mutation",
   "session.guardrail.status": "read",
@@ -807,6 +810,9 @@ function validOperationInput(operation: RemoteOperation, input: unknown): boolea
       Object.keys(input).every((key) => key === "query" || key === "limit" || (operation === "workspace.file.find" && key === "workspace"))
   if (operation === "session.switchModel") return isRecord(input) && validModel(input.model) && Object.keys(input).length === 1
   if (operation === "session.switchAgent") return isRecord(input) && validName(input.agent) && Object.keys(input).length === 1
+  if (operation === "session.prediction") return isRecord(input) && predictionMemory(input.memory) &&
+    (input.hint === undefined || (typeof input.hint === "string" && input.hint.length <= 2_000)) &&
+    Object.keys(input).every((key) => key === "memory" || key === "hint")
   if (operation === "session.skill") return isRecord(input) && validName(input.skill) &&
     (input.id === undefined || (typeof input.id === "string" && /^msg_[A-Za-z0-9_-]+$/.test(input.id) && input.id.length <= 128)) &&
     (input.resume === undefined || typeof input.resume === "boolean") &&
@@ -850,6 +856,11 @@ export function isRemoteLatencySample(value: unknown): value is RemoteLatencySam
   return typeof value.queueMs === "number" && typeof value.totalMs === "number" &&
     (value.settlementMs === undefined ? value.queueMs === value.totalMs :
       typeof value.settlementMs === "number" && value.queueMs + value.settlementMs === value.totalMs)
+}
+
+function predictionMemory(value: unknown) {
+  return Array.isArray(value) && value.length <= 2 && new Set(value).size === value.length &&
+    value.every((item) => item === "repository" || item === "knowledge")
 }
 
 function validWorkspace(value: unknown): boolean {

@@ -35,7 +35,7 @@ The same directory structure is supported globally under the YCoding configurati
     └── company-dark.json
 ```
 
-The hidden primary `prediction` agent is an internal next-message helper with no tools. Its system prompt and model can be configured through `agents.prediction`; it resolves the explicit agent model before `efficiency.helper_models.prediction` and the Session/default model. Prediction is enabled by default; set `prediction.enabled` to false to disable it. Workspace-memory enrichment defaults to false; explicit `prediction.memory: true` requires the calling selected agent's effective `memory_read` allow. Snippets are sent only to the helper, never injected into Session prompts. See [prediction configuration](./configuration.md#next-message-prediction).
+The hidden primary `prediction` agent is an internal next-message helper with no tools. Its system prompt and model can be configured through `agents.prediction`; it resolves the explicit agent model before `efficiency.helper_models.prediction` and the Session/default model. Prediction runs only when requested with `/suggest [hint]`, whose dialog selects project and global memory scopes; each selected scope requires the calling selected agent's effective `memory_read` to be `allow` or `ask`. Snippets are sent only to the helper, never injected into Session prompts. See [prediction configuration](./configuration.md#next-message-prediction).
 
 Supported project resource domains are:
 

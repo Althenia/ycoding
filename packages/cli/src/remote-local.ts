@@ -157,6 +157,11 @@ export type LocalServer = {
   readonly command: (sessionID: string, location: LocalLocation, input: { readonly id?: string; readonly command: string; readonly arguments?: string; readonly files?: LocalPrompt["files"]; readonly agents?: LocalPrompt["agents"]; readonly delivery?: LocalPrompt["delivery"] }) => Promise<unknown>
   readonly skill: (sessionID: string, location: LocalLocation, input: { readonly id?: string; readonly skill: string; readonly resume?: boolean }) => Promise<void>
   readonly interrupt: (sessionID: string, location: LocalLocation) => Promise<void>
+  readonly prediction: (
+    sessionID: string,
+    location: LocalLocation,
+    input: { readonly memory: readonly ("repository" | "knowledge")[]; readonly hint?: string },
+  ) => Promise<{ readonly status: "suggested"; readonly text: string } | { readonly status: "unavailable" }>
   readonly compact: (sessionID: string, location: LocalLocation, id: string) => Promise<unknown>
   readonly permissionReply: (
     sessionID: string,
@@ -364,6 +369,12 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
       call(async () => {
         await client.session.interrupt({ sessionID }, request(location, timeoutMs))
       }),
+    prediction: (sessionID, location, input) =>
+      call(() => client.session.prediction({
+        sessionID,
+        memory: input.memory,
+        ...(input.hint === undefined ? {} : { hint: input.hint }),
+      }, request(location, timeoutMs))),
     compact: (sessionID, location, id) => call(async () => {
       const result = await client.session.compact({ sessionID, id }, request(location, RemoteLimits.compactionTimeoutMs))
       if (result.status === "failed") throw new LocalFailure("server", `Compaction failed: ${result.failure ?? "unknown failure"}`)

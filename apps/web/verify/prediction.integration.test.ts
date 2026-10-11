@@ -198,3 +198,34 @@ async function wait(page: { evaluate<T>(script: string): Promise<T> }, expressio
   for (let index = 0; index < 100; index++) { if (await page.evaluate<boolean>(expression)) return; await Bun.sleep(50) }
   throw new Error(`Did not settle: ${expression}`)
 }
+
+test("/suggest opens the memory dialog, sends only checked scopes with the hint, and Escape sends nothing", async () => {
+  for (const width of [390, 1440]) {
+    const page = await browser!.openPage()
+    const input = ".mini-composer__mount textarea"
+    try {
+      await page.setViewport(width, width === 390 ? 844 : 900)
+      await page.injectOnNewDocument(`localStorage.removeItem('ycoding.remote.composer-collapsed')`)
+      await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+      await wait(page, `document.querySelector(${JSON.stringify(input)}) !== null`)
+      const submit = async (text: string) => {
+        await page.evaluate(`(() => { const field=document.querySelector(${JSON.stringify(input)}); field.focus(); field.value=${JSON.stringify(text)}; field.dispatchEvent(new Event('input',{bubbles:true})); })()`)
+        await page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Send prompt"]').click()`)
+        await wait(page, `document.querySelector('dialog[aria-label="Suggest next message"]')?.open === true`)
+      }
+      await submit("/suggest focus on tests")
+      const dialog = await page.evaluate<{ labels: string[]; checked: boolean[]; focusInside: boolean; overflow: boolean }>(`(() => { const dialog=document.querySelector('dialog[aria-label="Suggest next message"]'); const boxes=[...dialog.querySelectorAll('input[type=checkbox]')]; return { labels: boxes.map(box => box.closest('label').textContent.trim()), checked: boxes.map(box => box.checked), focusInside: dialog.contains(document.activeElement), overflow: document.documentElement.scrollWidth > innerWidth } })()`)
+      expect(dialog).toEqual({ labels: ["Project memory (this repository)", "Global memory (shared knowledge)"], checked: [false, false], focusInside: true, overflow: false })
+      expect(await page.evaluate<string>(`document.querySelector(${JSON.stringify(input)}).value`)).toBe("")
+      await page.evaluate(`document.querySelector('dialog[aria-label="Suggest next message"] input[type=checkbox]').click()`)
+      await page.evaluate(`[...document.querySelectorAll('dialog[aria-label="Suggest next message"] button')].find(button => button.textContent.trim() === 'Suggest').click()`)
+      await wait(page, `!document.querySelector('dialog[aria-label="Suggest next message"]')?.open && window.composerRequests().length === 1`)
+      expect(await page.evaluate<unknown>(`window.composerRequests()`)).toEqual([{ operation: "session.prediction", input: { memory: ["repository"], hint: "focus on tests" } }])
+      await wait(page, `document.activeElement === document.querySelector(${JSON.stringify(input)})`)
+      await submit("/suggest")
+      await page.pressEscape()
+      await wait(page, `!document.querySelector('dialog[aria-label="Suggest next message"]')?.open`)
+      expect(await page.evaluate<number>(`window.composerRequests().length`)).toBe(1)
+    } finally { await page.close() }
+  }
+}, 60000)

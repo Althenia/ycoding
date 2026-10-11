@@ -2,6 +2,7 @@ import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, 
 import { Portal } from "solid-js/web"
 import { createDebouncer, createThrottler } from "@tanstack/solid-pacer"
 import { Icon } from "../../ui/icon"
+import { Modal } from "../../ui/modal"
 import { catalogKey, type CatalogTarget, type CatalogView, type FileOption } from "../catalog"
 import { useRemote } from "../context"
 import { defaultComposerModel, readPreferredModel, readRecentModels, rememberRecentModel, writePreferredModel } from "../preferences"
@@ -93,16 +94,16 @@ export function MiniComposer(props: {
   const current = () => props.target && "sessionID" in props.target && remote.state().selectedSessionInfo?.id === props.target.sessionID ? remote.state().selectedSessionInfo : undefined
   const sessionTarget = () => props.target !== undefined && "sessionID" in props.target
   const collapsed = () => dockCollapsed() && sessionTarget()
-  const [dismissedPredictions, setDismissedPredictions] = createSignal<readonly { readonly scope: string; readonly source: string }[]>([])
   const predictionView = () => props.target && "sessionID" in props.target && remote.state().view?.id === props.target.sessionID ? remote.state().view : undefined
   const predictionSource = () => predictionView()?.messages.findLast(message => message.kind === "assistant")?.id
-  const dismissedSource = () => dismissedPredictions().find(item => item.scope === modelKey())?.source
+  const dismissedSource = () => remote.state().dismissedPredictions.find((item) => item.scope === modelKey())?.source
   const prediction = createMemo(() => !props.disabled && !props.running && !collapsed() && remote.state().transport.kind === "open" ? nextMessagePrediction(predictionView(), props.text, dismissedSource()) : undefined)
   const dismissPrediction = () => {
     const scope = modelKey()
     const source = predictionSource()
-    if (scope === undefined || source === undefined) return
-    setDismissedPredictions(items => [...items.filter(item => item.scope !== scope), { scope, source }].slice(-32))
+    const sessionID = props.target && "sessionID" in props.target ? props.target.sessionID : undefined
+    if (scope === undefined || source === undefined || sessionID === undefined) return
+    remote.store.dismissPrediction(sessionID, scope, source)
   }
   const usePrediction = () => {
     const text = acceptNextMessagePrediction(predictionView(), props.text, dismissedSource())
@@ -512,16 +513,44 @@ export function MiniComposer(props: {
   </>
 }
 
+function SuggestDialog(props: {
+  readonly returnFocus: HTMLElement
+  readonly onClose: () => void
+  readonly onConfirm: (memory: readonly ("repository" | "knowledge")[]) => void
+}) {
+  const [repository, setRepository] = createSignal(false)
+  const [knowledge, setKnowledge] = createSignal(false)
+  let close: (() => void) | undefined
+  return <Modal class="overlay--confirm" label="Suggest next message" returnFocus={props.returnFocus} onClose={props.onClose} requestClose={(handoff) => { close = handoff }}>
+    <label class="check"><input type="checkbox" checked={repository()} autofocus onChange={(event) => setRepository(event.currentTarget.checked)} /><span class="check__body"><span class="check__title">Project memory (this repository)</span></span></label>
+    <label class="check"><input type="checkbox" checked={knowledge()} onChange={(event) => setKnowledge(event.currentTarget.checked)} /><span class="check__body"><span class="check__title">Global memory (shared knowledge)</span></span></label>
+    <div class="device-cleanup-actions">
+      <button type="button" class="button button--secondary" onClick={() => close?.()}>Cancel</button>
+      <button type="button" class="button button--primary" onClick={() => { props.onConfirm([...(repository() ? ["repository" as const] : []), ...(knowledge() ? ["knowledge" as const] : [])]); close?.() }}>Suggest</button>
+    </div>
+  </Modal>
+}
+
 export function Composer(props: { readonly sessionID?: string; readonly running: boolean; readonly canSend: boolean }): JSX.Element {
   const remote = useRemote()
   const [mobileMount, setMobileMount] = createSignal<HTMLDivElement>()
+  const [suggestion, setSuggestion] = createSignal<{ readonly hint?: string; readonly returnFocus: HTMLElement }>()
+  let composerMount: HTMLDivElement | undefined
   const text = () => props.sessionID ? remote.state().drafts[props.sessionID] ?? "" : ""
-  return <div class="mini-composer__mount">
+  return <div class="mini-composer__mount" ref={composerMount}>
     <div ref={setMobileMount} class="composer__mobile-identity" />
     <MiniComposer mobileMount={mobileMount()} target={props.sessionID ? { sessionID: props.sessionID } : undefined} text={text()} onText={(value) => { if (props.sessionID) remote.store.setDraft(props.sessionID, value) }} disabled={!props.canSend || !props.sessionID} running={props.running} showStatus onInterrupt={() => void remote.store.interrupt()} onSubmit={async (value) => {
       const sessionID = props.sessionID
       const draft = text()
       if (!sessionID) return false
+      if (value.kind === "suggest") {
+        const active = document.activeElement
+        const returnFocus = active instanceof HTMLElement && active !== document.body ? active : composerMount?.querySelector("textarea") ?? composerMount
+        if (!returnFocus) return false
+        setSuggestion({ ...(value.input.hint ? { hint: value.input.hint } : {}), returnFocus })
+        if (remote.state().drafts[sessionID] === draft) remote.store.setDraft(sessionID, "")
+        return true
+      }
       const result = value.kind === "command" ? await remote.store.runCommand(value.input)
         : value.kind === "prompt" ? await remote.store.sendPrompt(value.input)
           : value.kind === "compact" ? await remote.store.compactSession()
@@ -532,5 +561,6 @@ export function Composer(props: { readonly sessionID?: string; readonly running:
       if (result !== false && remote.state().drafts[sessionID] === draft) remote.store.setDraft(sessionID, "")
       return result
     }} />
+    <Show when={suggestion()} keyed>{(request) => <SuggestDialog returnFocus={request.returnFocus} onClose={() => setSuggestion(undefined)} onConfirm={(memory) => { void remote.store.requestPrediction({ memory, ...(request.hint ? { hint: request.hint } : {}) }) }} />}</Show>
   </div>
 }

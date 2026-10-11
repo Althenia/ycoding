@@ -23,6 +23,7 @@ import {
   parseNoticePage,
   parseRelayToClientMessage,
   remoteError,
+  remoteOperationAccess,
   remoteOperations,
   remoteSessionOperations,
   requireSession,
@@ -365,6 +366,51 @@ describe("remote envelope: request", () => {
       .toMatchObject({ ok: false, error: { code: "invalid_message" } })
   })
 
+  test("validates session.prediction memory and hint and classifies the operation as a mutation", () => {
+    const frame = (input?: unknown) =>
+      JSON.stringify({
+        type: "request",
+        id: "pred_1",
+        operation: "session.prediction",
+        sessionID: "ses_1",
+        ...(input === undefined ? {} : { input }),
+      })
+    for (const input of [
+      { memory: ["repository"] },
+      { memory: ["knowledge"] },
+      { memory: ["repository", "knowledge"] },
+      { memory: ["knowledge", "repository"] },
+      { memory: [] },
+      { memory: ["repository"], hint: "" },
+      { memory: ["knowledge"], hint: "x".repeat(2_000) },
+    ]) {
+      expect(parseClientMessage(frame(input))).toEqual({
+        ok: true,
+        value: { type: "request", id: "pred_1", operation: "session.prediction", sessionID: "ses_1", input },
+      })
+    }
+    for (const input of [
+      {},
+      { memory: ["repository", "repository"] },
+      { memory: ["repository", "knowledge", "repository"] },
+      { memory: ["repository", "knowledge", "other"] },
+      { memory: ["other"] },
+      { memory: "repository" },
+      { memory: [null] },
+      { memory: ["repository"], hint: "x".repeat(2_001) },
+      { memory: ["repository"], hint: 1 },
+      { memory: ["repository"], directory: "/work" },
+      { hint: "only" },
+    ]) expect(parseClientMessage(frame(input))).toMatchObject({ ok: false, error: { code: "invalid_message" } })
+    expect(parseClientMessage(frame())).toMatchObject({ ok: false, error: { code: "invalid_message" } })
+    expect(parseClientMessage(JSON.stringify({ type: "request", id: "pred_1", operation: "session.prediction", input: { memory: ["repository"] } }))).toMatchObject({
+      ok: false,
+      error: { code: "session_required" },
+    })
+    expect(remoteOperationAccess["session.prediction"]).toBe("mutation")
+    expect(requireSession("session.prediction")).toBe(true)
+  })
+
   test("admits only bounded parent-scoped subagent page inputs", () => {
     expect(parseClientMessage('{"type":"request","id":"a","operation":"session.subagent.list","sessionID":"ses_parent"}')).toMatchObject({ ok: true })
     expect(parseClientMessage('{"type":"request","id":"a","operation":"session.subagent.list","sessionID":"ses_parent","input":{"cursor":"page_2"}}')).toMatchObject({ ok: true })
@@ -607,6 +653,7 @@ describe("remote operations", () => {
       "session.prompt",
       "session.attachment.upload",
       "session.interrupt",
+      "session.prediction",
       "session.permission.list",
       "session.permission.reply",
       "session.guardrail.status",

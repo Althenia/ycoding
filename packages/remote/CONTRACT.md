@@ -630,6 +630,7 @@ grouping and Session-list filters are derived from backend metadata.
 | `session.switchModel` | yes | `session.switchModel` | `POST /api/session/:sessionID/model` | `model` |
 | `session.switchAgent` | yes | `session.switchAgent` | `POST /api/session/:sessionID/agent` | `agent` |
 | `session.interrupt` | yes | `session.interrupt` | `POST /api/session/:sessionID/interrupt` | — |
+| `session.prediction` | yes | `session.prediction` | `POST /api/session/:sessionID/prediction` at the verified Session Location | `memory` (unique `repository` or `knowledge`, at most 2), `hint?` (string, at most 2000 characters) |
 | `session.permission.list` | yes | `session.permission.list` | `GET /api/session/:sessionID/permission` | — |
 | `session.permission.reply` | yes | `session.permission.reply` | `POST /api/session/:sessionID/permission/:requestID/reply` | `requestID`, `reply`, `message?` |
 | `session.guardrail.status` | yes | `session.guardrail.status` | `GET /api/session/:sessionID/guardrail` | — |
@@ -645,6 +646,8 @@ grouping and Session-list filters are derived from backend metadata.
 | `session.create` | no | `session.create`, `project.current` | `POST /api/session`, `GET /api/project/current` | `id`, `workspace`, `agent?`, `model?` |
 
 `session.compaction.list` returns `{ data, truncated, completedBefore, completedCount, totalSavedTokens }`. `data` contains the latest 100 job-backed compaction messages in chronological order, each with `jobID`, `trigger`, `status`, `created` (milliseconds), and completed `metrics` or failure `code` where applicable. `truncated` marks omitted older jobs; `completedBefore` counts completed jobs omitted from `data`. `completedCount` and `totalSavedTokens` cover all completed jobs, including omitted ones; savings is the sum of `inputTokens - retainedTokens`. The connector verifies the Session against its recorded Location, excludes message content and error text, and accepts no caller-selected path, cursor, or Location.
+
+`session.prediction` asks the verified Session for one next-message suggestion. `memory` is required and contains only the unique values `repository` and `knowledge`, at most one of each. `hint` is an optional string of at most 2000 characters. The connector resolves the Session Location from the backend record and returns the local result unchanged: `{ status: "suggested", text }` or `{ status: "unavailable" }`. It accepts no caller placement. An unconfirmed request is `outcome_unknown` and is not replayed.
 
 `session.compact` requests manual compaction using its stable job ID and waits up to five minutes for settlement. An ended job returns `{ data: SessionCompaction.Result }`; a failed job reports a request failure rather than success. It accepts no arguments, files, caller placement, or managed-subagent direct input. It never becomes an ordinary provider prompt. A transport failure leaves the outcome unknown; an explicit retry retains the same job ID.
 

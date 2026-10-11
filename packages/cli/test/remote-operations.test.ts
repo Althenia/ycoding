@@ -1509,6 +1509,67 @@ describe("operation mapping", () => {
     expect(calls.at(-1)).toEqual({ method: "autonomySet", args: ["ses_1", { directory: "/work" }, { goal: null }] })
   })
 
+  test("forwards session.prediction at the verified Location and rejects invalid memory", async () => {
+    const moved = sessionInfo("ses_1", { updated: 1, directory: "/work/moved" })
+    const suggested = { status: "suggested", text: "Run the focused tests" }
+    const { local, registry, subscriptions, calls } = await harness({
+      sessions: [moved],
+      results: {
+        getSession: async () => moved,
+        listPage: async () => ({ data: [moved] }),
+        prediction: async () => suggested,
+      },
+    })
+    const forwarded = await executeRemoteOperation({
+      request: request("session.prediction", {
+        memory: ["knowledge", "repository"],
+        hint: "relay",
+      }),
+      sessions: registry,
+      subscriptions,
+      local,
+    })
+    expect(valueOf(forwarded)).toEqual(suggested)
+    expect(calls.at(-1)).toEqual({
+      method: "prediction",
+      args: ["ses_1", { directory: "/work/moved" }, { memory: ["knowledge", "repository"], hint: "relay" }],
+    })
+
+    const unavailable = await harness({
+      sessions: [moved],
+      results: { getSession: async () => moved, prediction: async () => ({ status: "unavailable" }) },
+    })
+    expect(valueOf(await executeRemoteOperation({
+      request: request("session.prediction", { memory: ["repository"] }),
+      sessions: unavailable.registry,
+      subscriptions: unavailable.subscriptions,
+      local: unavailable.local,
+    }))).toEqual({ status: "unavailable" })
+    expect(unavailable.calls.at(-1)).toEqual({
+      method: "prediction",
+      args: ["ses_1", { directory: "/work/moved" }, { memory: ["repository"] }],
+    })
+
+    calls.length = 0
+    for (const input of [
+      { memory: ["repository", "repository"] },
+      { memory: ["nope"] },
+      { memory: ["repository", "knowledge", "repository"] },
+      { memory: "repository" },
+      { hint: "only" },
+      { memory: ["repository"], hint: "x".repeat(2_001) },
+      { memory: ["repository"], directory: "/tmp" },
+    ]) {
+      expect(errorOf(await executeRemoteOperation({
+        request: request("session.prediction", input),
+        sessions: registry,
+        subscriptions,
+        local,
+      })).code).toBe("invalid_message")
+    }
+    expect(calls.filter((call) => call.method === "prediction")).toEqual([])
+  })
+
   test("returns each read body verbatim and validates subscriptions without owning relay state", async () => {
     const snapshot = { sourceEpoch: "epoch_1", session: sessionInfo("ses_1", { updated: 1 }), messages: [], watermark: { seq: 4 } }
     const { local, registry, subscriptions, calls } = await harness({

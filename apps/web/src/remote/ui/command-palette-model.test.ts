@@ -10,6 +10,7 @@ const base: PaletteContext = {
   session: { id: "ses_a", running: false, managedChild: false, yolo: 0, goalActive: false },
   commands: [
     { name: "review", description: "Review the working tree" },
+    { name: "suggest", description: "Configured suggest" },
     { name: "compact" },
     { name: "goal" },
     { name: "cd" },
@@ -59,6 +60,7 @@ describe("palette availability", () => {
   test("a connected idle Session offers compaction, goal, every other YOLO level, configured commands, and skills", () => {
     expect(ids(base)).toEqual(expect.arrayContaining([
       "session.compact",
+      "session.suggest",
       "session.goal",
       "session.yolo.1",
       "session.yolo.2",
@@ -82,6 +84,7 @@ describe("palette availability", () => {
   test("commands the composer already owns are not repeated as configured commands", () => {
     expect(ids(base)).not.toContain("command.compact")
     expect(ids(base)).not.toContain("command.goal")
+    expect(ids(base)).not.toContain("command.suggest")
   })
 
   test("slash actions unavailable in the web composer are omitted from Commands", () => {
@@ -165,6 +168,7 @@ describe("palette availability", () => {
   test("actions that need text prefill the composer and run nothing", () => {
     const actions = paletteActions(base)
     expect(actions.find((action) => action.id === "session.goal")?.intent).toEqual({ type: "draft", text: "/goal " })
+    expect(actions.find((action) => action.id === "session.suggest")).toMatchObject({ title: "Suggest next message", description: "Suggest your next message", intent: { type: "draft", text: "/suggest " } })
     expect(actions.find((action) => action.id === "command.review")?.intent).toEqual({ type: "draft", text: "/review " })
   })
 })
@@ -201,6 +205,7 @@ describe("palette search", () => {
     expect(titles("/compact")[0]).toBe("Compact session")
     expect(titles("/summarize")).toEqual(["Compact session"])
     expect(titles("/goal")[0]).toBe("Set goal…")
+    expect(titles("/suggest")[0]).toBe("Suggest next message")
     expect(titles("/yolo")).toEqual(expect.arrayContaining(["YOLO level 1", "YOLO level 3"]))
     expect(titles("/review")[0]).toBe("/review")
   })

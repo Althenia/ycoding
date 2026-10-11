@@ -37,6 +37,16 @@ test("manual compact is an available Session action, not a provider prompt or co
   expect(submission("/compact", [], { ...catalog, commands: [{ name: "compact" }] }, "steer")).toEqual({ kind: "compact" })
 })
 
+test("suggest is a Session slash action and keeps an optional hint", () => {
+  const listed = optionsForTrigger("/", "suggest", catalog, [])
+  expect(listed[0]).toEqual({ label: "/suggest", description: "Suggest your next message", kind: "command", value: "suggest" })
+  expect(optionsForTrigger("/", "suggest", catalog, [], false)).toEqual([])
+  expect(submission("/suggest", [], catalog, "steer")).toEqual({ kind: "suggest", input: {} })
+  expect(submission("/suggest   ", [], catalog, "queue")).toEqual({ kind: "suggest", input: {} })
+  expect(submission("/suggest focus the tests", [], catalog, "steer")).toEqual({ kind: "suggest", input: { hint: "focus the tests" } })
+  expect(submission("/suggest  keep the hint spacing ", [], { ...catalog, commands: [{ name: "suggest", description: "Configured suggest" }] }, "queue")).toEqual({ kind: "suggest", input: { hint: "keep the hint spacing" } })
+})
+
 test("dollar activation, at mentions, and hash alias produce the TUI prompt parts and skill requests", () => {
   const skill = optionsForTrigger("$", "aud", catalog, [])[0]!
   const dollar = applyMention("$aud", 0, 4, skill, [])

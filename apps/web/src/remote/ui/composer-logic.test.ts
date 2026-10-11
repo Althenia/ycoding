@@ -187,7 +187,7 @@ describe("composer input semantics", () => {
   test("returns the full ranked catalog for bare skill and command triggers", () => {
     const large = { ...catalog, skills: Array.from({ length: 63 }, (_, index) => ({ id: `skill-${index}`, name: `Skill ${index}`, slash: true })), commands: Array.from({ length: 24 }, (_, index) => ({ name: `command-${index}` })) }
     expect(optionsForTrigger("$", "", large, [])).toHaveLength(63)
-    expect(optionsForTrigger("/", "", large, [])).toHaveLength(90)
+    expect(optionsForTrigger("/", "", large, [])).toHaveLength(91)
   })
   test("detects a trigger adjacent to the caret without matching prose or later text", () => {
     expect(triggerAt("/pla", 4)).toEqual({ trigger: "/", start: 0, query: "pla" })
@@ -198,7 +198,7 @@ describe("composer input semantics", () => {
 
   test("sources slash commands and skills, references/agents/resources/files, and name-filtered #", () => {
     expect(optionsForTrigger("/", "pla", catalog, []).map((item) => item.label)).toEqual(["/plan"])
-    expect(optionsForTrigger("/", "res", catalog, []).map((item) => item.label)).toEqual(["/research"])
+    expect(optionsForTrigger("/", "res", catalog, []).map((item) => item.label)).toEqual(["/research", "/suggest"])
     expect(optionsForTrigger("@", "", catalog, [{ path: "src/main.ts", uri: "file:///main", kind: "file" }]).map((item) => item.label)).toEqual(["@docs", "@guide", "@reviewer", "@src/main.ts"])
     expect(optionsForTrigger("$", "audit", catalog, []).map((item) => item.label)).toEqual(["$audit"])
     expect(optionsForTrigger("#", "review", catalog, []).map((item) => item.label)).toEqual(["Reviewer"])
@@ -223,6 +223,10 @@ describe("composer input semantics", () => {
     expect(submission("/plan now", [], catalog, "queue", "gsd", { providerID: "openai", id: "gpt", variant: "high" })).toEqual({ kind: "command", input: { command: "plan", arguments: "now", delivery: "queue", agent: "gsd", model: { providerID: "openai", id: "gpt", variant: "high" } } })
     expect(submission("hello @reviewer $audit", parts, catalog, "steer", "gsd", undefined)).toEqual({ kind: "prompt", input: { text: "hello @reviewer $audit", delivery: "steer", agents: [{ name: "reviewer", mention: { start: 6, end: 15, text: "@reviewer" } }], skills: ["audit"], agent: "gsd" } })
     expect(submission("/research context", [], catalog, "steer")).toEqual({ kind: "skill", input: { skill: "research" } })
+    expect(optionsForTrigger("/", "sug", catalog, []).find((item) => item.value === "suggest")?.description).toBe("Suggest your next message")
+    expect(optionsForTrigger("/", "sug", catalog, [], false).some((item) => item.value === "suggest")).toBe(false)
+    expect(submission("/suggest", [], catalog, "steer")).toEqual({ kind: "suggest", input: {} })
+    expect(submission("/suggest  next step", [], catalog, "queue")).toEqual({ kind: "suggest", input: { hint: "next step" } })
     expect(submission("/unknown", [], catalog, "steer")).toEqual({ kind: "prompt", input: { text: "/unknown", delivery: "steer" } })
   })
   test("marks an explicitly reselected profile for a same-reference rebind without changing request shape", () => {

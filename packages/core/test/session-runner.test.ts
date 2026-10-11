@@ -81,8 +81,6 @@ import { Config } from "@ycoding-ai/core/config"
 import { ConfigCompaction } from "@ycoding-ai/core/config/compaction"
 import { ConfigEfficiency } from "@ycoding-ai/core/config/efficiency"
 import { ConfigImageAnalyzer } from "@ycoding-ai/core/config/image-analyzer"
-import { ConfigPrediction } from "@ycoding-ai/core/config/prediction"
-import { AgentPlugin } from "@ycoding-ai/core/plugin/agent"
 import { Tool } from "@ycoding-ai/core/tool/tool"
 import {
   InstructionStateTable,
@@ -617,7 +615,6 @@ const projects = Layer.mock(Project.Service, {
 })
 let efficiencyConfig: ConfigEfficiency.Info | undefined
 let imageAnalyzerConfig: ConfigImageAnalyzer.Info | undefined
-let predictionConfig: ConfigPrediction.Info | undefined = new ConfigPrediction.Info({ enabled: false })
 let catalogModel: CatalogModel.Info | undefined
 let compactionWakeHook = Effect.void
 let compactionSummary = false
@@ -638,7 +635,6 @@ const config = Layer.succeed(
             }),
             ...(efficiencyConfig === undefined ? {} : { efficiency: efficiencyConfig }),
             ...(imageAnalyzerConfig === undefined ? {} : { image_analyzer: imageAnalyzerConfig }),
-            ...(predictionConfig === undefined ? {} : { prediction: predictionConfig }),
           }),
         }),
       ]),
@@ -952,7 +948,6 @@ const setup = Effect.gen(function* () {
   currentAccountIdentityDigest = "a".repeat(64)
   efficiencyConfig = undefined
   imageAnalyzerConfig = undefined
-  predictionConfig = new ConfigPrediction.Info({ enabled: false })
   catalogModel = undefined
   compactionWakeHook = Effect.void
   compactionSummary = false
@@ -1598,37 +1593,6 @@ describe("SessionRunnerLLM", () => {
         expect((yield* session.context(sessionID)).filter((message) => message.type === "skill")).toHaveLength(1)
       }),
     )
-
-  it.live("default-on prediction follows real prompt admission, runner and execution settlement without reading memory", () =>
-    Effect.gen(function* () {
-      const session = yield* setup
-      predictionConfig = undefined
-      const agents = yield* Agent.Service
-      yield* AgentPlugin.Plugin.effect(host({ agent: agentHost(agents) }))
-      const database = yield* Database.Service
-      const events = yield* EventRuntime.Service
-      const execution = yield* realExecution
-      const predicted = yield* Deferred.make<SessionEvent.PredictionUpdated>()
-      const stop = yield* events.listen(event => Schema.is(SessionEvent.PredictionUpdated)(event)
-        ? Deferred.succeed(predicted, event).pipe(Effect.asVoid) : Effect.void)
-      yield* Effect.addFinalizer(() => stop)
-      responses = [reply.text("The implementation is ready.", "reply"), reply.text("Run the focused regression tests", "prediction")]
-      yield* session.prompt({ sessionID, text: "Implement the requested change", resume: false })
-      yield* execution.resume(sessionID)
-      const event = yield* Deferred.await(predicted).pipe(Effect.timeout("1 second"))
-      expect(event.data).toMatchObject({ sessionID, text: "Run the focused regression tests" })
-      const messages = yield* session.context(sessionID)
-      expect(messages.filter(message => message.type === "user").map(message => message.text)).toEqual(["Implement the requested change"])
-      expect(messages.filter(message => message.type === "assistant").map(message => message.id)).toEqual([event.data.sourceMessageID])
-      expect(requests).toHaveLength(2)
-      expect(requests[1]?.tools).toEqual([])
-      expect(requests[1]?.messages[0]?.content.find(part => part.type === "text")?.text).toBe(JSON.stringify({ user: "Implement the requested change", assistant: "The implementation is ready.", memory: [] }))
-      const ledger = yield* database.db.select().from(SessionProviderRequestTable).where(eq(SessionProviderRequestTable.session_id, sessionID)).orderBy(asc(SessionProviderRequestTable.request)).all().pipe(Effect.orDie)
-      expect(ledger.map(row => row.source)).toEqual(["step", "prediction"])
-      expect(ledger.every(row => row.attempts === 1)).toBe(true)
-      expect((yield* execution.active).size).toBe(0)
-    }),
-  )
 
   it.effect("accepts verified work through the real runner, tool settlement and execution coordinator", () =>
     Effect.gen(function* () {

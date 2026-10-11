@@ -5,7 +5,6 @@ import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy"
 import { Context, Effect, Fiber, FiberSet, Layer, Stream } from "effect"
 import { Agent } from "../agent"
 import { Config } from "../config"
-import { ConfigPrediction } from "../config/prediction"
 import { Database } from "../database/database"
 import { makeLocationNode } from "../effect/app-node"
 import { llmClient } from "../effect/app-node-platform"
@@ -41,7 +40,13 @@ export const accept = (output: string, previous: string) => {
 }
 
 export interface Interface {
-  readonly generateForReply: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+  readonly request: (
+    sessionID: SessionSchema.ID,
+    input: {
+      readonly memory: ReadonlyArray<"repository" | "knowledge">
+      readonly hint?: string
+    },
+  ) => Effect.Effect<{ readonly status: "suggested"; readonly text: string } | { readonly status: "unavailable" }>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionPrediction") {}
@@ -59,9 +64,10 @@ export const layer = (options?: SessionModelHeaders.Options) => Layer.effect(Ser
   const permission = yield* Permission.Service
   const location = yield* Location.Service
   const autonomy = yield* SessionAutonomy.Service
-  const fork = yield* FiberSet.makeRuntime<never, void, never>()
-  const active = new Map<SessionSchema.ID, { cancelled: boolean; fiber?: Fiber.Fiber<void> }>()
-  const attempted = new Map<SessionSchema.ID, SessionMessage.ID>()
+  const unavailable = { status: "unavailable" as const }
+  type Outcome = typeof unavailable | { readonly status: "suggested"; readonly text: string }
+  const fork = yield* FiberSet.makeRuntime<never, Outcome, never>()
+  const active = new Map<SessionSchema.ID, { cancelled: boolean; fiber?: Fiber.Fiber<Outcome> }>()
   const eligible = Effect.fn("SessionPrediction.eligible")(function* (sessionID: SessionSchema.ID) {
     const session = yield* store.get(sessionID)
     if (
@@ -84,49 +90,48 @@ export const layer = (options?: SessionModelHeaders.Options) => Layer.effect(Ser
     if (!text.trim() || !user.text.trim()) return
     return { session, user, assistant, text }
   })
-  const generate = Effect.fn("SessionPrediction.generate")(function* (sessionID: SessionSchema.ID, owner: { cancelled: boolean }) {
-    const entries = yield* config.entries()
-    const settings = ConfigPrediction.resolve(
-      entries.flatMap(entry => entry.type === "document" && entry.info.prediction ? [entry.info.prediction] : []),
-    )
-    if (!settings.enabled || owner.cancelled) return
+  const generate = Effect.fn("SessionPrediction.generate")(function* (
+    sessionID: SessionSchema.ID,
+    input: { readonly memory: ReadonlyArray<"repository" | "knowledge">; readonly hint?: string },
+    owner: { cancelled: boolean },
+  ) {
+    if (owner.cancelled) return unavailable
     const context = yield* eligible(sessionID)
-    if (!context || owner.cancelled || attempted.get(sessionID) === context.assistant.id) return
-    attempted.set(sessionID, context.assistant.id)
+    if (!context || owner.cancelled) return unavailable
     const agent = yield* agents.get(Agent.ID.make("prediction"))
-    if (!agent) return
+    if (!agent) return unavailable
     const resolved = yield* helpers.resolveModel(context.session, "prediction", agent)
-    if (!resolved || owner.cancelled) return
+    if (!resolved || owner.cancelled) return unavailable
     const recent = { user: context.user.text.slice(-2000), assistant: context.text.slice(-4000) }
-    const snippets = settings.memory
-      ? yield* Effect.forEach(["repository", "knowledge"] as const, scope => Effect.gen(function* () {
-          const status = yield* memory.status(scope)
-          if (!status.enabled || (scope === "repository" && !status.repository)) return []
-          const access = yield* permission.evaluateEffective({
-            sessionID, agent: context.session.agent ?? context.assistant.agent,
-            action: "memory_read", resource: status.root,
-          })
-          if (access !== "allow") return []
-          const result = yield* memory.search(
-            { scope, query: `${recent.user.slice(0, 512)} ${recent.assistant.slice(0, 511)}`, limit: 3 }, status.root,
-          )
-          return result.hits.slice(0, 3).map(hit => ({
-            scope, id: hit.id,
-            ...(hit.title === undefined ? {} : { title: hit.title.slice(0, 200) }),
-            snippet: hit.snippet.slice(0, 600),
-          }))
-        }).pipe(Effect.catchCause(() => Effect.succeed([]))))
-      : []
-    if (owner.cancelled) return
+    const hint = input.hint?.trim().slice(0, 2000)
+    const snippets = yield* Effect.forEach(input.memory, (scope) => Effect.gen(function* () {
+      const status = yield* memory.status(scope)
+      if (!status.enabled || (scope === "repository" && !status.repository)) return []
+      const access = yield* permission.evaluateEffective({
+        sessionID, agent: context.session.agent ?? context.assistant.agent,
+        action: "memory_read", resource: status.root,
+      })
+      if (access !== "allow" && access !== "ask") return []
+      const result = yield* memory.search(
+        { scope, query: `${recent.user.slice(0, 512)} ${recent.assistant.slice(0, 511)}`, limit: 3 }, status.root,
+      )
+      return result.hits.slice(0, 3).map(hit => ({
+        scope, id: hit.id,
+        ...(hit.title === undefined ? {} : { title: hit.title.slice(0, 200) }),
+        snippet: hit.snippet.slice(0, 600),
+      }))
+    }).pipe(Effect.catchCause(() => Effect.succeed([]))))
+    if (owner.cancelled) return unavailable
     const baseRequest = LLM.request({
       model: resolved.model,
       http: { headers: SessionModelHeaders.make(context.session, {
         ...options, providerID: resolved.ref.providerID, accountIdentityDigest: resolved.accountIdentityDigest,
       }) },
       system: agent.system,
-      messages: [Message.user(JSON.stringify({ ...recent, memory: snippets.flat() }))],
+      messages: [Message.user(JSON.stringify({ ...recent, memory: snippets.flat(), ...(hint ? { hint } : {}) }))],
       tools: [],
     })
+    const entries = yield* config.entries()
     const efficiency = SessionRunnerCache.efficiencySettings(Config.latest(entries, "efficiency"))
     const cache = SessionRunnerCache.providerOptions({
       projectID: context.session.projectID,
@@ -198,9 +203,9 @@ export const layer = (options?: SessionModelHeaders.Options) => Layer.effect(Ser
       }),
       Effect.as(true), Effect.catchCause(() => Effect.succeed(false)), Effect.ensuring(settle),
     )
-    if (!streamed || failed || !finished || owner.cancelled) return
+    if (!streamed || failed || !finished || owner.cancelled) return unavailable
     const text = accept(chunks.join(""), context.user.text)
-    if (!text) return
+    if (!text) return unavailable
     const current = yield* eligible(sessionID)
     if (
       !current || current.assistant.id !== context.assistant.id ||
@@ -209,26 +214,32 @@ export const layer = (options?: SessionModelHeaders.Options) => Layer.effect(Ser
       current.session.model?.id !== context.session.model?.id ||
       current.session.model?.profile !== context.session.model?.profile ||
       current.session.model?.variant !== context.session.model?.variant || owner.cancelled
-    ) return
+    ) return unavailable
     yield* events.publish(
       SessionEvent.PredictionUpdated,
       { sessionID, sourceMessageID: context.assistant.id, text },
       { location: context.session.location },
     )
+    return { status: "suggested" as const, text }
   })
-  const generateForReply = (sessionID: SessionSchema.ID) => Effect.gen(function* () {
+  const request: Interface["request"] = (sessionID, input) => Effect.gen(function* () {
     const prior = active.get(sessionID)
-    if (prior) return
-    const owner: { cancelled: boolean; fiber?: Fiber.Fiber<void> } = { cancelled: false }
+    if (prior) {
+      prior.cancelled = true
+      if (prior.fiber) yield* Fiber.interrupt(prior.fiber)
+    }
+    const owner: { cancelled: boolean; fiber?: Fiber.Fiber<Outcome> } = { cancelled: false }
     active.set(sessionID, owner)
     const fiber = fork(Effect.yieldNow.pipe(
-      Effect.andThen(generate(sessionID, owner)),
+      Effect.andThen(generate(sessionID, input, owner)),
       Effect.interruptible,
-      Effect.catchCause(() => Effect.void),
+      Effect.catchCause(() => Effect.succeed(unavailable)),
       Effect.ensuring(Effect.sync(() => { if (active.get(sessionID) === owner) active.delete(sessionID) })),
     ))
     owner.fiber = fiber
-    yield* Fiber.await(fiber)
+    const exit = yield* Fiber.await(fiber)
+    if (exit._tag === "Success") return exit.value
+    return unavailable
   })
   const stop = yield* events.listen(event => Effect.sync(() => {
     if (typeof event.data !== "object" || event.data === null || !("sessionID" in event.data) || typeof event.data.sessionID !== "string") return
@@ -237,14 +248,12 @@ export const layer = (options?: SessionModelHeaders.Options) => Layer.effect(Ser
       const owner = active.get(sessionID)
       if (owner) {
         owner.cancelled = true
-        if (owner.fiber) fork(Fiber.interrupt(owner.fiber))
+        if (owner.fiber) fork(Fiber.interrupt(owner.fiber).pipe(Effect.as(unavailable)))
       }
     }
-    if (event.type === "session.deleted") attempted.delete(sessionID)
-    if (event.type === "session.execution.succeeded") fork(generateForReply(sessionID))
   }))
   yield* Effect.addFinalizer(() => stop)
-  return Service.of({ generateForReply })
+  return Service.of({ request })
 }))
 
 export const node = makeLocationNode({

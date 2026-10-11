@@ -44,6 +44,7 @@ export type TelemetryRequestSample = {
     | "session.prompt"
     | "session.attachment.upload"
     | "session.interrupt"
+    | "session.prediction"
     | "session.permission.list"
     | "session.permission.reply"
     | "session.guardrail.status"
@@ -280,6 +281,8 @@ export type SessionEventFileChangeInfo = { path: string; patch: string; addition
 export type InstructionEntryKey = string
 
 export type SessionGenerateResponse = { data: { text: string } }
+
+export type SessionPredictionResponse = { data: { status: "suggested"; text: string } | { status: "unavailable" } }
 
 export type SessionEventArtifactProvenance = {
   scopeID: string
@@ -4093,6 +4096,7 @@ export type ServerTelemetryAppendInput = {
             | "session.prompt"
             | "session.attachment.upload"
             | "session.interrupt"
+            | "session.prediction"
             | "session.permission.list"
             | "session.permission.reply"
             | "session.guardrail.status"
@@ -5360,6 +5364,20 @@ export type SessionGenerateInput = {
 }
 
 export type SessionGenerateOutput = SessionGenerateResponse["data"]
+
+export type SessionPredictionInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly memory: {
+    readonly memory: ReadonlyArray<"repository" | "knowledge">
+    readonly hint?: string | undefined
+  }["memory"]
+  readonly hint?: {
+    readonly memory: ReadonlyArray<"repository" | "knowledge">
+    readonly hint?: string | undefined
+  }["hint"]
+}
+
+export type SessionPredictionOutput = SessionPredictionResponse["data"]
 
 export type SessionLogInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]

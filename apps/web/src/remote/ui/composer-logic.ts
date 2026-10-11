@@ -171,7 +171,7 @@ export function optionsForTrigger(trigger: Trigger, query: string, catalog: Cata
   const resources: ComposerOption[] = [...catalog.references, ...catalog.resources]
     .map((resource) => ({ label: `@${resource.name}`, description: resource.description, kind: "file", value: resource.name, uri: resource.uri }))
   const candidates: ComposerOption[] = trigger === "/"
-    ? [...(sessionActions ? [{ label: "/compact", description: "Compact this Session's context", kind: "command" as const, value: "compact" }, { label: "/goal", description: "Set an autonomous goal", kind: "command" as const, value: "goal" }, { label: "/yolo", description: "Set the autonomy level", kind: "command" as const, value: "yolo" }] : []), ...catalog.commands.filter((command) => !unsupportedSlashActions.has(command.name) && command.name !== "compact" && (!sessionActions || command.name !== "goal" && command.name !== "yolo")).map((command) => ({ label: `/${command.name}`, description: command.description, kind: "command" as const, value: command.name })), ...(sessionActions ? skills.filter((skill) => catalog.skills.find((entry) => entry.id === skill.value)?.slash).map((skill) => ({ ...skill, label: `/${skill.value}` })) : [])]
+    ? [...(sessionActions ? [{ label: "/compact", description: "Compact this Session's context", kind: "command" as const, value: "compact" }, { label: "/goal", description: "Set an autonomous goal", kind: "command" as const, value: "goal" }, { label: "/yolo", description: "Set the autonomy level", kind: "command" as const, value: "yolo" }, { label: "/suggest", description: "Suggest your next message", kind: "command" as const, value: "suggest" }] : []), ...catalog.commands.filter((command) => !unsupportedSlashActions.has(command.name) && command.name !== "compact" && (!sessionActions || command.name !== "goal" && command.name !== "yolo" && command.name !== "suggest")).map((command) => ({ label: `/${command.name}`, description: command.description, kind: "command" as const, value: command.name })), ...(sessionActions ? skills.filter((skill) => catalog.skills.find((entry) => entry.id === skill.value)?.slash).map((skill) => ({ ...skill, label: `/${skill.value}` })) : [])]
     : trigger === "@" ? [...catalog.references.map((resource) => resources.find((item) => item.uri === resource.uri)!), ...agents, ...catalog.resources.map((resource) => resources.find((item) => item.uri === resource.uri)!), ...files.map((file) => ({ label: `@${file.path}`, kind: "file" as const, value: file.path, uri: file.uri }))]
       : trigger === "$" ? skills : [...skills.map((skill) => ({ ...skill, label: catalog.skills.find((item) => item.id === skill.value)?.name ?? skill.label })), ...agents.map((agent) => ({ ...agent, label: catalog.agents.find((item) => item.id === agent.value)?.name ?? agent.label }))]
   return candidates.map((option) => ({ option, score: Math.max(fuzzy(option.value, query), fuzzy(option.description ?? "", query) - 20) }))
@@ -223,6 +223,10 @@ export function submission(text: string, parts: readonly MentionPart[], catalog:
     const parsed: 0 | 1 | 2 | 3 | undefined = level === "0" ? 0 : level === "1" ? 1 : level === "2" ? 2 : level === "3" ? 3 : undefined
     if (level && parsed === undefined) return { kind: "invalid" as const, message: "Use /yolo with a level from 0 to 3." }
     return { kind: "yolo" as const, input: parsed === undefined ? {} : { level: parsed } }
+  }
+  if (command?.[1] === "suggest") {
+    const hint = command[2]?.trim()
+    return { kind: "suggest" as const, input: hint ? { hint } : {} }
   }
   if (command && unsupportedSlashActions.has(command[1]!)) return { kind: "invalid" as const, message: "This slash action is unavailable in the web composer." }
   const files: FileAttachmentInput[] = parts.filter((part): part is Extract<MentionPart, { kind: "file" }> => part.kind === "file")

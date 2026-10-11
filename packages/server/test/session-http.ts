@@ -22,9 +22,10 @@ export function sessionHttp(
     orchestration?: Partial<SessionOrchestration.Interface>
     guardrail?: Partial<SessionGuardrail.Interface>
     onLocation?: () => void
+    location?: Pick<Context.Context<never>, "mapUnsafe">
   } = {},
 ) {
-  const location = Context.makeUnsafe<LocationServices>(new Map())
+  const location = Context.makeUnsafe<LocationServices>(options.location?.mapUnsafe ?? new Map())
   const services = Layer.mergeAll(
     Layer.mock(Session.Service, {
       autonomy: { get: () => Effect.die("unused"), set: () => Effect.die("unused") },

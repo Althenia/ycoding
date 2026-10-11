@@ -165,7 +165,7 @@ function emptyTeam(rootID: string, status: TeamView["status"]): TeamView {
 
 export type PendingMutation = {
   readonly id: string
-  readonly kind: "prompt" | "command" | "compact" | "skill" | "model" | "agent" | "interrupt" | "permission" | "guardrail" | "form" | "autonomy" | "goal"
+  readonly kind: "prompt" | "command" | "compact" | "skill" | "model" | "agent" | "interrupt" | "permission" | "guardrail" | "form" | "autonomy" | "goal" | "prediction"
   readonly label: string
   readonly state: "sending" | "unknown" | "failed"
   readonly phase?: "preparing" | "admitting"
@@ -213,6 +213,8 @@ export type RemoteStoreState = {
   readonly selectedSessionInfo?: SessionInfoView
   readonly confirmedModelSwitches?: Readonly<Record<string, { readonly revision: number; readonly model: ModelRefView }>>
   readonly drafts: Readonly<Record<string, string>>
+  /** Latest dismissed prediction source per composer scope. A request clears one Session so its next event can show. */
+  readonly dismissedPredictions: readonly { readonly sessionID: string; readonly scope: string; readonly source: string }[]
   /** Bumps whenever the device connection is replaced or ended; read resources are keyed by device and generation. */
   readonly generation: number
   readonly sessionCreation?: SessionCreation
@@ -330,6 +332,8 @@ export type RemoteStore = {
   readonly loadMoreNotifications: () => Promise<void>
   readonly reloadNotifications: () => Promise<void>
   readonly interrupt: () => Promise<void>
+  readonly dismissPrediction: (sessionID: string, scope: string, source: string) => void
+  readonly requestPrediction: (input: { readonly memory: readonly ("repository" | "knowledge")[]; readonly hint?: string }) => Promise<boolean>
   readonly replyPermission: (id: string, reply: "once" | "always" | "reject") => Promise<void>
   readonly replyGuardrail: (id: string, reply: "once" | "always" | "reject") => Promise<void>
   readonly replyForm: (formID: string, answer: Readonly<Record<string, string | number | boolean | readonly string[]>>) => Promise<void>
@@ -412,6 +416,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     sessionHasNext: false,
     sessionHasPrevious: false,
     drafts: {},
+    dismissedPredictions: [],
     confirmedModelSwitches: {},
     generation: 0,
     mutations: [],
@@ -3298,6 +3303,34 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         { sessionID },
       )
     },
+    dismissPrediction: (sessionID, scope, source) => {
+      if (!sessionID || !scope || !source) return
+      const current = container.state.dismissedPredictions
+      if (current.some((item) => item.sessionID === sessionID && item.scope === scope && item.source === source)) return
+      setState({ dismissedPredictions: [...current.filter((item) => item.scope !== scope), { sessionID, scope, source }].slice(-32) })
+    },
+    requestPrediction: async (input) => {
+      const sessionID = container.state.activeSessionID
+      if (sessionID === undefined) return false
+      const token = selectionToken
+      const hint = input.hint?.trim().slice(0, 2000)
+      setState({ dismissedPredictions: container.state.dismissedPredictions.filter((item) => item.sessionID !== sessionID) })
+      const outcome = await request({
+        id: `prediction_${now()}_${createMessageID()}`,
+        kind: "prediction",
+        label: "Suggest next message",
+        state: "sending",
+        sessionID,
+        operation: "session.prediction",
+        input: { memory: [...input.memory], ...(hint ? { hint } : {}) },
+      }, { sessionID })
+      if (token !== selectionToken || container.state.activeSessionID !== sessionID) return false
+      if (outcome.status === "ok" && predictionUnavailable(outcome.value)) {
+        setState({ notice: "No suggestion available for the latest reply" })
+        return false
+      }
+      return outcome.status === "ok"
+    },
     replyPermission: async (id, reply) => {
       const sessionID = container.state.activeSessionID
       if (sessionID === undefined) return
@@ -3764,4 +3797,8 @@ function mutationText(mutation: PendingMutation) {
   if (mutation.kind !== "command") return typeof mutation.input.text === "string" ? mutation.input.text : undefined
   if (typeof mutation.input.command !== "string") return undefined
   return `/${mutation.input.command}${typeof mutation.input.arguments === "string" && mutation.input.arguments ? ` ${mutation.input.arguments}` : ""}`
+}
+
+function predictionUnavailable(value: unknown) {
+  return typeof value === "object" && value !== null && "status" in value && value.status === "unavailable"
 }

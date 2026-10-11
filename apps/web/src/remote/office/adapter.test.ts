@@ -29,6 +29,7 @@ function remoteState(patch: Partial<RemoteStoreState> = {}): RemoteStoreState {
     sessionHasNext: false,
     sessionHasPrevious: false,
     drafts: {},
+    dismissedPredictions: [],
     catalogs: {},
     generation: 0,
     transport: { kind: "open" },

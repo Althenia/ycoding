@@ -1075,6 +1075,31 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         ),
     )
     .add(
+      HttpApiEndpoint.post("session.prediction", "/api/session/:sessionID/prediction", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({
+          memory: Schema.Array(Schema.Literals(["repository", "knowledge"])),
+          hint: Schema.String.check(Schema.isMaxLength(2000)).pipe(Schema.optional),
+        }),
+        success: Schema.Struct({
+          data: Schema.Union([
+            Schema.Struct({ status: Schema.Literal("suggested"), text: Schema.String }),
+            Schema.Struct({ status: Schema.Literal("unavailable") }),
+          ]),
+        }).annotate({ identifier: "SessionPredictionResponse" }),
+        error: SessionNotFoundError,
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.prediction",
+            summary: "Suggest the next user message",
+            description:
+              "Generate one next-message suggestion for an idle root Session's latest completed reply, optionally guided by a hint and selected memory scopes. A new request cancels an earlier one for the Session. Publishes session.prediction.updated with the accepted suggestion.",
+          }),
+        ),
+    )
+    .add(
       HttpApiEndpoint.get("session.log", "/api/experimental/session/:sessionID/log", {
         params: { sessionID: Session.ID },
         query: {

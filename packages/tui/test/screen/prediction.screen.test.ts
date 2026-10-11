@@ -16,6 +16,12 @@ const completePrompt = "Please review the changes we just made, run the focused 
 
 async function fixture(width = 120, height = 36, accept = "right") {
   const posts: string[] = []
+  const predictions: { path: string; body: unknown }[] = []
+  const pendingPredictions: Array<() => void> = []
+  let predictionResult: unknown = { data: { status: "suggested", text: "Suggested from the response" } }
+  const releasePrediction = () => {
+    for (const resolve of pendingPredictions.splice(0)) resolve()
+  }
   const sessions = [sessionID, otherID].map(id => ({
     id, title: id === sessionID ? "Prediction" : "Other prediction", projectID: location.project.id,
     location: { directory }, agent: "build", model, cost: 0, tokens, time: { created: 1, updated: 2 },
@@ -28,8 +34,13 @@ async function fixture(width = 120, height = 36, accept = "right") {
     width, height, kittyKeyboard: true, args: { sessionID }, settle: "Message YCoding…",
     data: value => { data = value },
     config: { animations: false, session: { sidebar: "hide" }, keybinds: { "prompt.prediction.accept": accept } },
-    route: (url, request) => {
+    route: async (url, request) => {
       if (url.pathname.endsWith("/wait")) return new Response(null, { status: 204 })
+      if (request.method === "POST" && url.pathname.endsWith("/prediction")) {
+        predictions.push({ path: url.pathname, body: await request.json() })
+        await new Promise<void>((resolve) => pendingPredictions.push(resolve))
+        return json(predictionResult)
+      }
       if (request.method === "POST") { posts.push(url.pathname); return json({}) }
       if (url.pathname === "/api/location") return json(location)
       if (url.pathname === "/api/command") return json({ location, data: [{ name: "predict-audit", description: "Prediction audit fixture", template: "Review the prediction" }] })
@@ -105,7 +116,20 @@ async function fixture(width = 120, height = 36, accept = "right") {
   screen.renderer.clearSelection()
   const editor = screen.renderer.currentFocusedEditor
   if (!(editor instanceof TextareaRenderable)) throw new Error("Prediction composer is not focused")
-  return { screen, data, editor, posts, wait, emit, escape, predict, durable, startReply, finishReply }
+  return {
+    screen, data, editor, posts, predictions, releasePrediction, wait, emit, escape, predict, durable, startReply, finishReply,
+    setPredictionResult: (value: unknown) => { predictionResult = value },
+  }
+}
+
+async function openSuggest(view: Awaited<ReturnType<typeof fixture>>, text: string) {
+  await view.screen.input.typeText(text)
+  view.screen.input.pressEnter()
+  const opened = () => view.screen.frame().includes("[ ] Project memory (this repository)")
+  await view.wait(() => opened() || view.editor.plainText === "/suggest ")
+  if (opened()) return
+  view.screen.input.pressEnter()
+  await view.wait(opened)
 }
 
 test.each([[80, 24], [120, 36]])("Tab accepts the complete visible next prompt without sending at %ix%i", async (width, height) => {
@@ -460,6 +484,96 @@ test.each(["agent", "model", "profile"])("%s selection dismisses the source befo
     expect(view.screen.frame()).not.toContain("Late selected source")
     expect(view.data.session.prediction.get(sessionID)).toBeUndefined()
     expect(view.editor.plainText).toBe("")
+    expect(view.posts).toEqual([])
+  } finally { await view.screen.dispose() }
+}, 30000)
+
+test("/suggest with a hint toggles project memory and requests that scope", async () => {
+  const view = await fixture()
+  try {
+    await openSuggest(view, "/suggest focus on tests")
+    expect(view.editor.plainText).toBe("")
+    expect(view.screen.frame()).toContain("[ ] Project memory (this repository)")
+    expect(view.screen.frame()).toContain("[ ] Global memory (shared knowledge)")
+    expect(view.screen.frame()).not.toContain("[x]")
+    view.screen.input.pressKey(" ")
+    await view.wait(() => view.screen.frame().includes("[x] Project memory (this repository)"))
+    expect(view.screen.frame()).toContain("[ ] Global memory (shared knowledge)")
+    view.screen.input.pressEnter()
+    await view.wait(() => view.predictions.length === 1)
+    expect(view.predictions).toEqual([{ path: `/api/session/${sessionID}/prediction`, body: { memory: ["repository"], hint: "focus on tests" } }])
+    expect(view.screen.frame()).toContain("Generating suggestion…")
+    expect(view.screen.frame()).not.toContain("Suggested from the response")
+    view.releasePrediction()
+    await view.wait(() => !view.screen.frame().includes("Suggest next message"))
+    expect(view.screen.frame()).not.toContain("Suggested from the response")
+  } finally {
+    view.releasePrediction()
+    await view.screen.dispose()
+  }
+}, 30000)
+
+test("bare /suggest confirms with no memory scopes and no hint", async () => {
+  const view = await fixture()
+  try {
+    await openSuggest(view, "/suggest")
+    expect(view.screen.frame()).toContain("[ ] Project memory (this repository)")
+    expect(view.screen.frame()).toContain("[ ] Global memory (shared knowledge)")
+    view.screen.input.pressEnter()
+    await view.wait(() => view.predictions.length === 1)
+    expect(view.predictions).toEqual([{ path: `/api/session/${sessionID}/prediction`, body: { memory: [] } }])
+    view.releasePrediction()
+  } finally {
+    view.releasePrediction()
+    await view.screen.dispose()
+  }
+}, 30000)
+
+test("a requested prediction shows the ghost for a source that was already dismissed", async () => {
+  const view = await fixture()
+  try {
+    await view.predict()
+    await view.wait(() => view.screen.frame().includes(suggestion))
+    await view.escape()
+    expect(view.screen.frame()).not.toContain(suggestion)
+    await openSuggest(view, "/suggest")
+    view.screen.input.pressEnter()
+    await view.wait(() => view.predictions.length === 1)
+    await view.predict("msg_reply", "Inspect the published suggestion")
+    expect(view.screen.frame()).not.toContain("Suggested from the response")
+    view.releasePrediction()
+    await view.wait(() => view.screen.frame().includes("Inspect the published suggestion"))
+    expect(view.screen.frame()).not.toContain("Suggested from the response")
+    expect(view.editor.plainText).toBe("")
+  } finally {
+    view.releasePrediction()
+    await view.screen.dispose()
+  }
+}, 30000)
+
+test("an unavailable suggestion tells the user none is available", async () => {
+  const view = await fixture()
+  try {
+    view.setPredictionResult({ data: { status: "unavailable" } })
+    await openSuggest(view, "/suggest")
+    view.screen.input.pressEnter()
+    await view.wait(() => view.predictions.length === 1)
+    expect(view.screen.frame()).toContain("Generating suggestion…")
+    view.releasePrediction()
+    await view.wait(() => view.screen.frame().includes("No suggestion available for the latest reply"))
+  } finally {
+    view.releasePrediction()
+    await view.screen.dispose()
+  }
+}, 30000)
+
+test("escape cancels suggest without requesting a prediction", async () => {
+  const view = await fixture()
+  try {
+    await openSuggest(view, "/suggest focus on tests")
+    await view.escape()
+    await view.wait(() => !view.screen.frame().includes("Suggest next message"))
+    expect(view.predictions).toEqual([])
     expect(view.posts).toEqual([])
   } finally { await view.screen.dispose() }
 }, 30000)

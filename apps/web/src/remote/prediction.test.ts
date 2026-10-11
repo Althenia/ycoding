@@ -76,3 +76,104 @@ test("a replacement connection drops the old prediction and ignores late old-tra
     expect(store.state().view?.prediction?.text).toBe("Review the fresh connection")
   } finally { store.dispose() }
 })
+
+test("session.prediction sends memory and hint, clears only that Session's dismissed source, and ignores response text", async () => {
+  const requests: { operation: string; sessionID?: string; input?: Readonly<Record<string, unknown>> }[] = []
+  const store = predictionStore(requests, async (operation) => operation === "session.prediction"
+    ? { status: "ok", value: { status: "suggested", text: "Do not render this response" } }
+    : undefined)
+  try {
+    expect(await store.requestPrediction({ memory: ["repository"] })).toBe(false)
+    expect(requests.some((request) => request.operation === "session.prediction")).toBe(false)
+    store.connect("dev_1")
+    await store.selectSession("ses_prediction")
+    store.container.setState((state) => ({ ...state, view: applySessionEvent(base, event, 2), drafts: { ses_prediction: "" } }))
+    store.dismissPrediction("ses_prediction", "scope-a", "msg_reply")
+    store.dismissPrediction("ses_other", "scope-b", "msg_keep")
+    const notice = store.state().notice
+    expect(await store.requestPrediction({ memory: ["repository", "knowledge"], hint: "focus the tests" })).toBe(true)
+    expect(requests.filter((request) => request.operation === "session.prediction")).toEqual([{
+      operation: "session.prediction",
+      sessionID: "ses_prediction",
+      input: { memory: ["repository", "knowledge"], hint: "focus the tests" },
+    }])
+    expect(store.state().dismissedPredictions).toEqual([{ sessionID: "ses_other", scope: "scope-b", source: "msg_keep" }])
+    expect(store.state().view?.prediction?.text).toBe("Run the focused tests")
+    expect(store.state().drafts.ses_prediction).toBe("")
+    expect(store.state().notice).toBe(notice)
+    expect(store.state().mutationToasts ?? []).toEqual([])
+    await store.requestPrediction({ memory: [], hint: "   " })
+    await store.requestPrediction({ memory: ["repository"], hint: "h".repeat(2001) })
+    const sent = requests.filter((request) => request.operation === "session.prediction")
+    expect(sent[1]?.input).toEqual({ memory: [] })
+    expect(sent[2]?.input).toEqual({ memory: ["repository"], hint: "h".repeat(2000) })
+  } finally { store.dispose() }
+})
+
+test("an unavailable suggestion is a notice, and failed or unknown outcomes stay mutation toasts", async () => {
+  const answers: ({ status: "ok"; value: { status: "unavailable" } } | { status: "failed" | "unknown"; error: { code: "internal_error" | "outcome_unknown"; message: string } })[] = []
+  const store = predictionStore([], async (operation) => {
+    if (operation !== "session.prediction") return undefined
+    const answer = answers.shift()
+    if (!answer) throw new Error("missing prediction answer")
+    return answer
+  })
+  try {
+    store.connect("dev_1")
+    await store.selectSession("ses_prediction")
+    store.dismissPrediction("ses_prediction", "scope-a", "msg_reply")
+    answers.push({ status: "ok", value: { status: "unavailable" } })
+    expect(await store.requestPrediction({ memory: ["knowledge"] })).toBe(false)
+    expect(store.state().dismissedPredictions).toEqual([])
+    expect(store.state().notice).toBe("No suggestion available for the latest reply")
+    expect(store.state().mutationToasts ?? []).toEqual([])
+    answers.push({ status: "failed", error: { code: "internal_error", message: "prediction failed" } })
+    expect(await store.requestPrediction({ memory: [] })).toBe(false)
+    expect(store.state().mutationToasts).toMatchObject([{ label: "Suggest next message", state: "failed", detail: "prediction failed", sessionID: "ses_prediction" }])
+    answers.push({ status: "unknown", error: { code: "outcome_unknown", message: "prediction unsettled" } })
+    expect(await store.requestPrediction({ memory: [] })).toBe(false)
+    expect(store.state().mutationToasts?.some((toast) => toast.state === "unknown" && toast.detail === "Outcome unknown: prediction unsettled. Retry only if you want to send it again.")).toBe(true)
+    expect(store.state().view?.prediction).toBeUndefined()
+  } finally { store.dispose() }
+})
+
+test("a suggestion settled after the Session changes does not publish that outcome notice", async () => {
+  let release: (outcome: { status: "ok"; value: { status: "unavailable" } }) => void = () => {}
+  const store = predictionStore([], (operation) => operation === "session.prediction"
+    ? new Promise((resolve) => { release = resolve })
+    : undefined)
+  try {
+    store.connect("dev_1")
+    await store.selectSession("ses_prediction")
+    const pending = store.requestPrediction({ memory: ["knowledge"] })
+    await store.selectSession("ses_other")
+    release({ status: "ok", value: { status: "unavailable" } })
+    await pending
+    expect(store.state().activeSessionID).toBe("ses_other")
+    expect(store.state().notice).not.toBe("No suggestion available for the latest reply")
+  } finally { store.dispose() }
+})
+
+function predictionStore(
+  requests: { operation: string; sessionID?: string; input?: Readonly<Record<string, unknown>> }[],
+  prediction: (operation: string) => Promise<{ status: "ok"; value: unknown } | { status: "failed" | "unknown"; error: { code: "internal_error" | "outcome_unknown"; message: string } } | undefined> | { status: "ok"; value: unknown } | { status: "failed" | "unknown"; error: { code: "internal_error" | "outcome_unknown"; message: string } } | undefined,
+) {
+  return createRemoteStore({
+    http: createRemoteHttp(),
+    batchMs: 0,
+    createTransport: (_deviceID, callbacks) => ({
+      connect: () => callbacks.onStatus?.({ kind: "open" }),
+      close: () => {},
+      setPriority: () => {},
+      status: () => ({ kind: "open" as const }),
+      request: async (operation, request) => {
+        requests.push({ operation, sessionID: request?.sessionID, input: request?.input })
+        const answered = await prediction(operation)
+        if (answered) return answered
+        if (operation === "session.snapshot") return { status: "ok" as const, value: { sourceEpoch: "epoch_prediction", session: { id: request?.sessionID, title: "Prediction", time: { created: 1, updated: 1 } }, messages: [], watermark: { type: "log.synced", aggregateID: request?.sessionID ?? "ses_prediction", seq: 0 } } }
+        if (operation === "session.autonomy.get") return { status: "ok" as const, value: { data: { mode: "normal", yolo: 0 } } }
+        return { status: "ok" as const, value: { data: [] } }
+      },
+    }),
+  })
+}

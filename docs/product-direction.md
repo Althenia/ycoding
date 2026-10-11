@@ -32,7 +32,7 @@ Sessions and subagents can select named profiles independently for the same prov
 
 The terminal application is the primary product and release surface.
 
-Next-message prediction is enabled by default and uses bounded recent conversation text. Workspace-memory enrichment is off by default and requires explicit configuration and permission-checked reads. TUI and web acceptance fills the composer without sending.
+Next-message prediction runs on request with `/suggest [hint]` in the TUI and web composer and uses bounded recent conversation text, the optional hint, and only the project or global memory scopes chosen in its dialog. TUI and web acceptance fills the composer without sending.
 
 Changes that affect sessions, prompts, tools, permissions, subagents, skills, project artifacts, cache diagnostics, or transcript history must be proven through the CLI/TUI path.
 

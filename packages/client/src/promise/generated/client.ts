@@ -117,6 +117,8 @@ import type {
   SessionInstructionsEntryRemoveOutput,
   SessionGenerateInput,
   SessionGenerateOutput,
+  SessionPredictionInput,
+  SessionPredictionOutput,
   SessionLogInput,
   SessionLogOutput,
   SessionInterruptInput,
@@ -1295,6 +1297,18 @@ export function make(options: ClientOptions) {
             body: { prompt: input["prompt"] },
             successStatus: 200,
             declaredStatuses: [404, 503, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      prediction: (input: SessionPredictionInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionPredictionOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/prediction`,
+            body: { memory: input["memory"], hint: input["hint"] },
+            successStatus: 200,
+            declaredStatuses: [404, 400, 401],
             empty: false,
           },
           requestOptions,
