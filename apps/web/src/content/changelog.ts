@@ -22,6 +22,17 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.10.1",
+    date: "2026-10-11",
+    title: "On-demand suggestions and read receipts",
+    tags: ["Changed", "Fixed"],
+    changes: [
+      { tag: "Changed", text: "Ask for a suggested next message with /suggest in the TUI or web composer, optionally followed by text to steer it, for example /suggest focus on the failing tests. A dialog lets you include Project memory (this repository) and Global memory (shared knowledge); both start unselected, and a selected scope is read when the agent may read memory with or without asking. Suggestions appear only on request, never automatically after a reply, and you are told when no suggestion can be made for the latest reply. Running /suggest shows a fresh suggestion even after you dismissed one. The prediction.enabled and prediction.memory settings are removed; existing configurations that still set them keep working, and Status lists the ignored keys." },
+      { tag: "Changed", text: "The TUI receipt beneath your prompt animates a dot trail while sending, shows ✓ once the prompt is accepted (✓ Queued for queued input), and shows ✓✓ once the model has read it, both while the Session runs and after it finishes. The web keeps its static receipt labels." },
+      { tag: "Fixed", text: "After compaction, the TUI transcript restarts at the compaction divider, whether you watched the compaction finish or reopened the Session. Returning from a subagent no longer leaves an old divider below newer messages, and the divider numbers each compression and totals the saved tokens across the Session's full history." },
+    ],
+  },
+  {
     version: "0.10.0",
     date: "2026-10-11",
     title: "Concurrent profiles, Meeting, prediction, and a Focus workspace",
