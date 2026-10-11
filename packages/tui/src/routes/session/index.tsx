@@ -27,7 +27,7 @@ import {
 import { SplitBorder } from "../../ui/border"
 import { DialogSelect } from "../../ui/dialog-select"
 import { useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
-import { Spinner, SPINNER_FRAMES } from "../../component/spinner"
+import { DOT_TRAIL_FRAMES, Spinner, SPINNER_FRAMES } from "../../component/spinner"
 import { ThemeContext, useTheme } from "../../context/theme"
 import { BoxRenderable, InputRenderable, ScrollBoxRenderable, addDefaultParsers, TextAttributes, RGBA } from "@opentui/core"
 import { Prompt, type PromptRef } from "../../component/prompt"
@@ -3042,17 +3042,11 @@ function UserMessage(props: { message: SessionMessageUser; findActive?: boolean 
     const current = send()
     const pending = data.session.pending.list(ctx.sessionID).find((item) => item.id === props.message.id)
     const pendingUser = pending?.type === "user" ? pending : undefined
-    const admitted = Boolean(pendingUser) || data.session.input.has(ctx.sessionID, props.message.id)
-    const processing =
-      data.session.status(ctx.sessionID) === "running" &&
-      data.session.message.list(ctx.sessionID).findLast((message) => message.type === "user")?.id === props.message.id
-    if (current?.state === "attention") return { glyph: current.phase, read: false, retry: true, label: undefined }
-    if (current && !current.admitted && !current.consumed) return { glyph: "◷", read: false, retry: false, label: "Sending" }
-    if (admitted && pendingUser?.delivery === "queue") return { glyph: "◷", read: false, retry: false, label: "Queued" }
-    if (admitted) return { glyph: "◷", read: false, retry: false, label: "Processing" }
-    if (processing) return { glyph: "◷", read: false, retry: false, label: "Processing" }
-    if (current?.consumed || props.message.time.consumed !== undefined) return { glyph: "✓✓", read: true, retry: false, label: undefined }
-    return { glyph: "✓", read: false, retry: false, label: undefined }
+    if (current?.state === "attention") return { glyph: current.phase, read: false, retry: true, sending: false, label: undefined }
+    if (current && !current.admitted && !current.consumed) return { glyph: "", read: false, retry: false, sending: true, label: undefined }
+    if (current?.consumed || props.message.time.consumed !== undefined) return { glyph: "✓✓", read: true, retry: false, sending: false, label: undefined }
+    if (pendingUser?.delivery === "queue") return { glyph: "✓", read: false, retry: false, sending: false, label: "Queued" }
+    return { glyph: "✓", read: false, retry: false, sending: false, label: undefined }
   })
 
   return (
@@ -3129,20 +3123,27 @@ function UserMessage(props: { message: SessionMessageUser; findActive?: boolean 
             </box>
           </Show>
         </box>
-        <text
-          id={`session.user-message.receipt.${props.message.id}`}
-          wrapMode="none"
-          fg={receipt().retry ? theme.text.feedback.error.default : receipt().read ? theme.text.feedback.info.default : theme.text.subdued}
-          onMouseUp={() => {
-            if (renderer.getSelection()?.getSelectedText()) return
-            data.session.submissions.retry(ctx.sessionID, props.message.id)
-          }}
+        <Show
+          when={receipt().sending}
+          fallback={
+            <text
+              id={`session.user-message.receipt.${props.message.id}`}
+              wrapMode="none"
+              fg={receipt().retry ? theme.text.feedback.error.default : receipt().read ? theme.text.feedback.info.default : theme.text.subdued}
+              onMouseUp={() => {
+                if (renderer.getSelection()?.getSelectedText()) return
+                data.session.submissions.retry(ctx.sessionID, props.message.id)
+              }}
+            >
+              <Show when={receipt().retry} fallback={receipt().label ? `${receipt().glyph} ${receipt().label}` : receipt().glyph}>
+                {receipt().glyph.replace(" · Retry send", "")}
+                <span style={{ fg: theme.text.action.primary.default }}> · Retry send</span>
+              </Show>
+            </text>
+          }
         >
-          <Show when={receipt().retry} fallback={receipt().label ? `${receipt().glyph} ${receipt().label}` : receipt().glyph}>
-            {receipt().glyph.replace(" · Retry send", "")}
-            <span style={{ fg: theme.text.action.primary.default }}> · Retry send</span>
-          </Show>
-        </text>
+          <Spinner color={theme.text.subdued} frames={DOT_TRAIL_FRAMES} interval={160} />
+        </Show>
       </box>
     </Show>
   )

@@ -94,7 +94,7 @@ function route(messages: SessionMessageInfo[], admitted: SessionPendingInfo[] = 
 async function mount(messages: SessionMessageInfo[], admitted: SessionPendingInfo[], settle: string) {
   const screen = await renderScreen({
     width: 120,
-    height: 36,
+    height: 52,
     args: { sessionID },
     route: route(messages, admitted),
     settle,
@@ -125,12 +125,13 @@ async function text(screen: Awaited<ReturnType<typeof renderScreen>>, value: str
   })
 }
 
-async function settledReceipt(screen: Awaited<ReturnType<typeof renderScreen>>) {
+async function absent(screen: Awaited<ReturnType<typeof renderScreen>>, value: string) {
   const deadline = Date.now() + 4000
-  while (receipt(screen.lines(), "Latest prompt").includes("Processing") && Date.now() < deadline) {
+  while (screen.frame().includes(value) && Date.now() < deadline) {
     await screen.renderOnce()
     await Bun.sleep(20)
   }
+  if (screen.frame().includes(value)) throw new Error(`still showing ${value}:\n${screen.frame()}`)
 }
 
 function receipt(lines: string[], prompt: string) {
@@ -163,38 +164,61 @@ const settled = [
   user("msg_older", "Older prompt", 1, 2),
   assistant("msg_reply", "Older reply"),
   user("msg_latest", "Latest prompt", 3, 4),
+  user("msg_promoted", "Promoted prompt", 5),
 ]
 
-test("the latest user prompt shows a static Processing receipt only while the Session is running", async () => {
-  const screen = await mount(settled, [], "Latest prompt")
+function expectRead(value: string) {
+  expect(value).toContain("✓✓")
+  expect(value).not.toContain("Processing")
+  expect(value).not.toContain("Queued")
+  expect(value).not.toContain("Sending")
+  expect(value).not.toContain("◷")
+}
+
+function expectSent(value: string) {
+  expect(value).toContain("✓")
+  expect(value).not.toContain("✓✓")
+  expect(value).not.toContain("Processing")
+  expect(value).not.toContain("Queued")
+  expect(value).not.toContain("Sending")
+  expect(value).not.toContain("◷")
+}
+
+test("a consumed prompt stays read and a promoted prompt shows one check while running", async () => {
+  const screen = await mount(settled, [pending("msg_latest", "Latest prompt", "queue", 3)], "Promoted prompt")
   try {
     const lines = () => screen.lines()
-    expect(receipt(lines(), "Latest prompt")).toContain("✓✓")
-    expect(receipt(lines(), "Latest prompt")).not.toContain("Processing")
-    expect(receipt(lines(), "Older prompt")).toContain("✓✓")
+    const bubble = (prompt: string) => lines().find((line) => line.includes(prompt)) ?? ""
+    expectRead(receipt(lines(), "Latest prompt"))
+    expectRead(receipt(lines(), "Older prompt"))
+    expectSent(receipt(lines(), "Promoted prompt"))
     screen.events.emit(execution("session.execution.started"))
-    await text(screen, "Processing")
-    expect(receipt(lines(), "Latest prompt")).toContain("◷ Processing")
-    expect(receipt(lines(), "Latest prompt")).not.toContain("✓")
-    expect(receipt(lines(), "Older prompt")).toContain("✓✓")
-    expect(receipt(lines(), "Older prompt")).not.toContain("Processing")
-    expect(lines().find((line) => line.includes("Latest prompt"))).not.toContain("Processing")
+    await text(screen, "cooking")
+    expectRead(receipt(lines(), "Latest prompt"))
+    expectRead(receipt(lines(), "Older prompt"))
+    expectSent(receipt(lines(), "Promoted prompt"))
+    expect(bubble("Latest prompt")).not.toContain("✓")
+    expect(bubble("Promoted prompt")).not.toContain("✓")
+    expect(bubble("Latest prompt")).not.toContain("Processing")
+    expect(bubble("Promoted prompt")).not.toContain("Processing")
+    expect(bubble("Latest prompt")).not.toContain("◷")
+    expect(bubble("Promoted prompt")).not.toContain("◷")
     screen.events.emit(execution("session.execution.interrupted"))
-    await settledReceipt(screen)
-    expect(receipt(lines(), "Latest prompt")).toContain("✓✓")
-    expect(receipt(lines(), "Latest prompt")).not.toContain("Processing")
+    await absent(screen, "cooking")
+    expectRead(receipt(lines(), "Latest prompt"))
+    expectSent(receipt(lines(), "Promoted prompt"))
     screen.events.emit(execution("session.execution.started"))
-    await text(screen, "Processing")
+    await text(screen, "cooking")
     screen.events.emit(execution("session.execution.failed"))
-    await settledReceipt(screen)
-    expect(receipt(lines(), "Latest prompt")).toContain("✓✓")
-    expect(receipt(lines(), "Latest prompt")).not.toContain("Processing")
+    await absent(screen, "cooking")
+    expectRead(receipt(lines(), "Latest prompt"))
+    expectSent(receipt(lines(), "Promoted prompt"))
   } finally {
     await screen.dispose()
   }
 }, 30_000)
 
-test("admitted steer and queued prompts name Processing and Queued on the static receipt", async () => {
+test("admitted steer shows one check and a pending queue shows a queued check", async () => {
   const screen = await mount(
     [user("msg_sent", "Promoted prompt", 1)],
     [pending("msg_steer", "Steer prompt", "steer", 2), pending("msg_queue", "Queue prompt", "queue", 3)],
@@ -202,21 +226,25 @@ test("admitted steer and queued prompts name Processing and Queued on the static
   )
   try {
     const lines = () => screen.lines()
-    expect(receipt(lines(), "Steer prompt")).toContain("◷ Processing")
-    expect(receipt(lines(), "Steer prompt")).not.toContain("steer")
-    expect(receipt(lines(), "Queue prompt")).toContain("◷ Queued")
+    const bubble = (prompt: string) => lines().find((line) => line.includes(prompt)) ?? ""
+    expectSent(receipt(lines(), "Steer prompt"))
+    expect(receipt(lines(), "Queue prompt")).toContain("✓ Queued")
+    expect(receipt(lines(), "Queue prompt")).not.toContain("✓✓")
     expect(receipt(lines(), "Queue prompt")).not.toContain("Processing")
-    expect(receipt(lines(), "Promoted prompt")).toContain("✓")
-    expect(receipt(lines(), "Promoted prompt")).not.toContain("Processing")
+    expect(receipt(lines(), "Queue prompt")).not.toContain("◷")
+    expectSent(receipt(lines(), "Promoted prompt"))
     screen.events.emit(execution("session.execution.started"))
-    await screen.renderOnce()
-    expect(receipt(lines(), "Steer prompt")).toContain("◷ Processing")
-    expect(receipt(lines(), "Queue prompt")).toContain("◷ Queued")
-    expect(receipt(lines(), "Promoted prompt")).not.toContain("Processing")
-    const queue = lines().find((line) => line.includes("Queue prompt")) ?? ""
-    const steer = lines().find((line) => line.includes("Steer prompt")) ?? ""
-    expect(queue).not.toContain("Queued")
-    expect(steer).not.toContain("Processing")
+    await text(screen, "cooking")
+    expectSent(receipt(lines(), "Steer prompt"))
+    expect(receipt(lines(), "Queue prompt")).toContain("✓ Queued")
+    expect(receipt(lines(), "Queue prompt")).not.toContain("Processing")
+    expect(receipt(lines(), "Queue prompt")).not.toContain("◷")
+    expectSent(receipt(lines(), "Promoted prompt"))
+    expect(bubble("Queue prompt")).not.toContain("Queued")
+    expect(bubble("Queue prompt")).not.toContain("✓")
+    expect(bubble("Steer prompt")).not.toContain("✓")
+    expect(bubble("Steer prompt")).not.toContain("Processing")
+    expect(bubble("Steer prompt")).not.toContain("◷")
   } finally {
     await screen.dispose()
   }

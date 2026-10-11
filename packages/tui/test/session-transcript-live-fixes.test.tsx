@@ -1842,13 +1842,18 @@ test("renders only truthful icon receipts at the lower-right of outbound user bu
       return row
     }
 
-    const pendingRow = receipt(pending, "◷")
+    expect(lines.slice(pending.bottom + 1).join("\n")).not.toContain("◷")
+    const pendingRow = receipt(pending, "✓")
     const sentRow = receipt(sent, "✓")
     const readRow = receipt(read, "✓✓")
     const color = (row: number, glyph: string) =>
       screen.spans().lines[row]?.spans.find((span) => span.text.includes(glyph))?.fg.toInts()
     expect(pending.body.some((line) => line.includes("file") && line.includes("receipt.txt"))).toBe(true)
-    expect(color(pendingRow, "◷")).toEqual(color(sentRow, "✓"))
+    expect(lines[pendingRow]).toContain("Queued")
+    expect(lines[pendingRow]).not.toContain("◷")
+    expect(lines[sentRow]).not.toContain("◷")
+    expect(lines[readRow]).not.toContain("◷")
+    expect(color(pendingRow, "✓")).toEqual(color(sentRow, "✓"))
     expect(color(readRow, "✓✓")).not.toEqual(color(sentRow, "✓"))
 
     for (const bubble of [pending, sent, read])

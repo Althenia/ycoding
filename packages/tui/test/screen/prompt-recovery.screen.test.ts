@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { json, type FetchHandler, sessionSnapshot } from "../fixture/tui-client"
 import { renderScreen } from "./harness"
 import { TextareaRenderable, type Renderable } from "@opentui/core"
-import { SPINNER_FRAMES } from "../../src/component/spinner"
+import { DOT_TRAIL_FRAMES, SPINNER_FRAMES } from "../../src/component/spinner"
 import { mkdtemp, rm } from "node:fs/promises"
 import path from "node:path"
 import { tmpdir } from "node:os"
@@ -266,6 +266,17 @@ function composer(node: Renderable): TextareaRenderable | undefined {
   return node.getChildren().map(composer).find(Boolean)
 }
 
+function bubbleReceipt(lines: string[], prompt: string) {
+  const body = lines.findIndex((line) => line.includes(prompt))
+  if (body < 0) return { bubble: "", receipt: "" }
+  const bottomOffset = lines.slice(body + 1).findIndex((line) => line.includes("╰") && line.includes("╯"))
+  if (bottomOffset < 0) return { bubble: lines[body] ?? "", receipt: "" }
+  return {
+    bubble: lines[body] ?? "",
+    receipt: lines.slice(body + bottomOffset + 2, body + bottomOffset + 4).join("\n"),
+  }
+}
+
 test("unavailable explicit Session variant retains the draft and starts no model or prompt request", async () => {
   resetFixture()
   const switches: unknown[] = []
@@ -344,6 +355,88 @@ test("dispatch releases the composer for a second send while the first acknowled
     firstRequestGate = undefined
     firstRequestStarted = undefined
     await screen.dispose()
+  }
+}, 30_000)
+
+test("an unadmitted local send shows a dot-trail receipt beneath the bubble", async () => {
+  const hold = () => {
+    let release!: () => void
+    firstRequestGate = new Promise<void>((resolve) => (release = resolve))
+    const started = new Promise<void>((resolve) => (firstRequestStarted = resolve))
+    return { release, started }
+  }
+
+  resetFixture()
+  failFirstPrompt = false
+  const animatedHold = hold()
+  const animated = await renderScreen({
+    width: 100,
+    height: 69,
+    args: { sessionID },
+    route,
+    settle: "Message YCoding…",
+    config: { animations: true },
+  })
+  try {
+    await focusComposer(animated)
+    await animated.input.typeText("unadmitted send")
+    animated.input.pressEnter()
+    await animatedHold.started
+    const seen = new Set<string>()
+    const deadline = Date.now() + 2_000
+    let bubble = ""
+    let receipt = ""
+    while (seen.size < 2 && Date.now() < deadline) {
+      const current = bubbleReceipt(animated.lines(), "unadmitted send")
+      bubble = current.bubble
+      receipt = current.receipt
+      const frame = DOT_TRAIL_FRAMES.find((item) => receipt.includes(item))
+      if (frame) seen.add(frame)
+      await Bun.sleep(20)
+    }
+    expect(bubble).toContain("unadmitted send")
+    expect(bubble).not.toContain("Sending")
+    for (const frame of DOT_TRAIL_FRAMES) expect(bubble).not.toContain(frame)
+    expect(receipt).not.toContain("Sending")
+    expect(receipt).not.toContain("◷")
+    expect(seen.size).toBeGreaterThanOrEqual(2)
+  } finally {
+    animatedHold.release()
+    firstRequestGate = undefined
+    firstRequestStarted = undefined
+    await animated.dispose()
+  }
+
+  resetFixture()
+  failFirstPrompt = false
+  const stillHold = hold()
+  const still = await renderScreen({
+    width: 100,
+    height: 69,
+    args: { sessionID },
+    route,
+    settle: "Message YCoding…",
+    config: { animations: false },
+  })
+  try {
+    await focusComposer(still)
+    await still.input.typeText("static unadmitted send")
+    still.input.pressEnter()
+    await stillHold.started
+    await still.renderOnce()
+    const current = bubbleReceipt(still.lines(), "static unadmitted send")
+    expect(current.bubble).toContain("static unadmitted send")
+    expect(current.bubble).not.toContain("⋯")
+    expect(current.bubble).not.toContain("Sending")
+    expect(current.receipt).toContain("⋯")
+    expect(current.receipt).not.toContain("Sending")
+    expect(current.receipt).not.toContain("◷")
+    for (const frame of DOT_TRAIL_FRAMES) expect(current.receipt).not.toContain(frame)
+  } finally {
+    stillHold.release()
+    firstRequestGate = undefined
+    firstRequestStarted = undefined
+    await still.dispose()
   }
 }, 30_000)
 

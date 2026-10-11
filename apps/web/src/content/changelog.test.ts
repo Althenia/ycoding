@@ -17,7 +17,7 @@ describe("release entries", () => {
     })
     expect(RELEASES[0]?.changes).toContainEqual({
       tag: "Changed",
-      text: "Prompts show a static receipt beneath the bubble in the web and TUI: Sending until the prompt is admitted, Processing while the Session is running, Queued for queued input, and Sent or Read when the Session is idle.",
+      text: "Prompts show a receipt beneath the bubble. The web shows a static receipt: Sending until the prompt is admitted, Processing while the Session is running, Queued for queued input, and Sent or Read when the Session is idle. The TUI animates a dot trail while sending, shows ✓ once the prompt is admitted (✓ Queued for queued input), and ✓✓ once the model has read it, both while running and after the Session settles.",
     })
     expect(RELEASES[0]?.changes.map((change) => change.text).join("\n")).not.toContain("Load earlier child changes")
     expect(RELEASES[0]?.changes.map((change) => change.text).join("\n")).not.toContain("scope tool")
