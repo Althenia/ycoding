@@ -7,6 +7,9 @@ import type {
   ServerTelemetryAppendOutput,
   ServerTelemetryListInput,
   ServerTelemetryListOutput,
+  ServerTelemetryConsentGetOutput,
+  ServerTelemetryConsentSetInput,
+  ServerTelemetryConsentSetOutput,
   LocationGetInput,
   LocationGetOutput,
   AgentListInput,
@@ -136,6 +139,8 @@ import type {
   ModelDefaultOutput,
   GenerateTextInput,
   GenerateTextOutput,
+  ProviderIntegrationsInput,
+  ProviderIntegrationsOutput,
   ProviderListInput,
   ProviderListOutput,
   ProviderRefreshInput,
@@ -366,6 +371,8 @@ import type {
   KeepAwakeGetOutput,
   KeepAwakeSetInput,
   KeepAwakeSetOutput,
+  ConfigDiagnosticsInput,
+  ConfigDiagnosticsOutput,
 } from "./types"
 import { ClientError } from "./client-error"
 
@@ -538,7 +545,7 @@ export function make(options: ClientOptions) {
               path: `/api/server/web-latency`,
               body: { samples: input["samples"] },
               successStatus: 200,
-              declaredStatuses: [400, 401],
+              declaredStatuses: [400, 403, 401],
               empty: false,
             },
             requestOptions,
@@ -555,6 +562,31 @@ export function make(options: ClientOptions) {
             },
             requestOptions,
           ),
+        consent: {
+          get: (requestOptions?: RequestOptions) =>
+            request<ServerTelemetryConsentGetOutput>(
+              {
+                method: "GET",
+                path: `/api/server/telemetry/consent`,
+                successStatus: 200,
+                declaredStatuses: [401, 400],
+                empty: false,
+              },
+              requestOptions,
+            ),
+          set: (input: ServerTelemetryConsentSetInput, requestOptions?: RequestOptions) =>
+            request<ServerTelemetryConsentSetOutput>(
+              {
+                method: "PUT",
+                path: `/api/server/telemetry/consent`,
+                body: { enabled: input["enabled"], noticeVersion: input["noticeVersion"] },
+                successStatus: 200,
+                declaredStatuses: [401, 400],
+                empty: false,
+              },
+              requestOptions,
+            ),
+        },
       },
     },
     location: {
@@ -1406,6 +1438,18 @@ export function make(options: ClientOptions) {
         ).then((value) => value.data),
     },
     provider: {
+      integrations: (input?: ProviderIntegrationsInput, requestOptions?: RequestOptions) =>
+        request<ProviderIntegrationsOutput>(
+          {
+            method: "GET",
+            path: `/api/provider/integrations`,
+            query: { location: input?.["location"] },
+            successStatus: 200,
+            declaredStatuses: [503, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
       list: (input?: ProviderListInput, requestOptions?: RequestOptions) =>
         request<ProviderListOutput>(
           {
@@ -2980,6 +3024,20 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ).then((value) => value.data),
+    },
+    config: {
+      diagnostics: (input?: ConfigDiagnosticsInput, requestOptions?: RequestOptions) =>
+        request<ConfigDiagnosticsOutput>(
+          {
+            method: "GET",
+            path: `/api/config/diagnostics`,
+            query: { location: input?.["location"] },
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
     },
   }
 }

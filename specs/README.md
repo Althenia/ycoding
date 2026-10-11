@@ -29,9 +29,11 @@ Generated clients follow the assembled public `HttpApi`. GitHub issues own activ
 | [Session](./session.md)                       | Explain prompt admission, execution, instructions, compaction, and recovery boundaries. |
 | [Session guardrails](./session-guardrails.md) | Explain root-family policy, reviews, counters, boundaries, and security invariants.     |
 | [Provider usage](./provider-usage.md)         | Explain normalized quota sources, caching, source stability, APIs, and TUI semantics.   |
-| [Native decisions](./decisions.md)           | Explain OpenAI/TypeSafe native inputs, opt-in automatic flows, safety, errors, and usage. |
+| [Concurrent provider profiles](./provider-profiles.md) | Define explicit per-Session account selection, private binding, refresh, replay isolation, and consumer behavior. |
+| [Decisions](./decisions.md)                  | Specify explicit agent judgments, abstention, safety, corrective errors, and usage. |
 | [Integration authorization](./integration-auth.md) | Explain automatic OAuth settlement and optional manual-code submission.              |
 | [Tools](./tools.md)                           | Explain tool construction, registration, execution, and settlement laws.                |
+| [Plugin MCP domain](./plugin-mcp.md)         | Define trusted Location-scoped MCP operations for runtime plugins and their approval boundary. |
 | [Session-owned PTY](./pty.md)                 | Explain owned terminal lifecycle, control fencing, bounded replay, and TUI recovery.    |
 | [Selected-tab browser](./browser.md)          | Explain explicit Chrome sharing, pairing, semantic actions, fencing, and safety bounds. |
 | [Machine-local Web latency](./web-latency.md) | Explain sanitized remote ingestion, local SQLite retention, bounded readout, and timing limits. |

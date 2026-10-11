@@ -7,6 +7,15 @@ import { LocationQuery, locationQueryOpenApi } from "./location.js"
 
 export const ProviderGroup = HttpApiGroup.make("server.provider")
   .add(
+    HttpApiEndpoint.get("provider.integrations", "/api/provider/integrations", {
+      query: LocationQuery,
+      success: Location.response(Schema.Array(Provider.IntegrationRef)),
+      error: ServiceUnavailableError,
+    })
+      .annotateMerge(locationQueryOpenApi)
+      .annotateMerge(OpenApi.annotations({ identifier: "provider.integrations", summary: "List provider integration mappings", description: "Discover allowed provider authentication integrations, including providers without credentials, without exposing configuration or credentials." })),
+  )
+  .add(
     HttpApiEndpoint.get("provider.list", "/api/provider", {
       query: LocationQuery,
       success: Location.response(Schema.Array(Provider.Info)),

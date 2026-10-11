@@ -38,6 +38,7 @@ test("ensures a missing service with native promises", async () => {
   try {
     expect(endpoint.url).toBe(info.url)
     expect(starts).toEqual(["missing"])
+    expect((await Bun.file(registration + ".starts").text()).trim().split("\n")).toHaveLength(2)
   } finally {
     process.kill(info.pid, "SIGTERM")
     await waitForExit(info.pid)

@@ -36,6 +36,8 @@ Within one custom source layer, rules sort by descending numeric priority, then 
 
 `hard_review` is a custom rule decision and is normalized to a review request with `hardReview: true`. A matching hard-review rule overrides ordinary `allow` and `ask` rules across source layers, including a higher-priority ordinary rule in the same layer; an effective deny remains a deny. `guardrails.enabled: false` disables ordinary policy but retains standard catastrophic denies, standard hard reviews, and enabled custom hard-review rules.
 
+JSON/JSONC configuration recovery treats `guardrails` as one security unit. Any invalid value, including an unknown property, is replaced with `{ "enabled": true }`; omitted caps resolve to 8 concurrent shells, 8 concurrent subagents, and 16 pending reviews. This replacement takes precedence over an earlier document's disabled guardrails or custom caps through the existing last-defined configuration rule. `GET /api/config/diagnostics` reports the source path, `jsonPath: "$.guardrails"`, the rejection reason and message, and `failClosed: true`. Invalid permission rules likewise fail closed in their global or agent ruleset: preserve valid rule order, append a deny for the readable nonempty action on every resource, or append an all-action/all-resource deny if the action or ruleset is unreadable. This recovery does not change ordinary precedence between configuration scopes.
+
 ## Guarded boundaries
 
 The current runtime evaluates guardrails immediately before supported side effects:
@@ -48,11 +50,25 @@ The current runtime evaluates guardrails immediately before supported side effec
 
 A permission approval cannot bypass a guardrail decision. A guardrail approval cannot widen the agent's effective permission policy.
 
+Recursive deletion denies filesystem root (`standard.catastrophic.rm-root`), the configured home or any exact `/Users/<name>` or `/home/<name>` directory (`standard.catastrophic.rm-user-home`), and system directories under `/System`, `/Library`, `/usr`, `/etc`, `/bin`, `/sbin`, `/opt`, `/Applications`, or `/var` (`standard.catastrophic.rm-system`). Formatting disks, raw block-device writes, and fork bombs remain catastrophic denies.
+
+Standard rules have two review tiers. Hard reviews cover destructive actions: deleting the project root or an ancestor (`standard.review.project-deletion`), deleting a direct child of the configured home (`standard.review.home-child`), destructive Git (`standard.review.git-destructive`: `git reset --hard`, `git clean` with `f` in its first flag group, `git checkout -- .`, `git restore` with `--worktree`, and `git branch` with `D` in its first flag group), force push (`standard.review.force-push`), and destructive database statements (`standard.review.database-destructive`). Ordinary review is the outside-repository sandbox (`standard.review.outside-repo`); nothing inside the repository triggers it. Package publication, production deployment, security-policy changes, and MCP execution have no standard guardrail rule; tool permissions still govern them. Multiple deletion targets inside the repository do not independently trigger a review.
+
+Temporary roots are excluded before every standard deletion classification: `/tmp`, `/private/tmp`, `/var/tmp`, `/private/var/tmp`, `/var/folders`, and the Location process's `TMPDIR` when present, including their descendants. The exclusion takes precedence even when a temporary target contains the project or is a home child. A mixed command evaluates only its non-temporary deletion targets. Custom policy and permission decisions retain their authority.
+
 ### Broad-deletion recognition boundary
 
-The standard matcher recognizes direct POSIX `rm` invocations by executable basename, including `/bin/rm`, supported `sudo | command | env | nohup` wrappers, combined or separate short recursive flags, `--recursive`, quoted operands, simple `; | && ||` or newline-separated commands, and a preceding direct `cd`. It expands exact `~`, `$HOME`, `${HOME}`, `$PWD`, and `${PWD}` path forms against the Location's home, workdir, and project directory. A recursive command with multiple explicit operands is conservatively treated as broad deletion because the matcher does not own a registry that proves each operand's project identity.
+The standard matcher recognizes direct POSIX `rm` invocations by executable basename, including `/bin/rm`, supported `sudo | command | env | nohup` wrappers, combined or separate short recursive flags, `--recursive`, quoted operands, simple `; | && ||` or newline-separated commands, and a preceding direct `cd`. It expands exact `~`, `$HOME`, `${HOME}`, `$PWD`, `${PWD}`, `$TMPDIR`, and `${TMPDIR}` path forms against the Location's home, workdir, project directory, and process temporary directory. Targets resolve lexically before temporary exclusions and deletion classification. Supported compound commands retain every reachable working directory; `cd ... &&` establishes relocation only on success. Multiple ordinary operands are allowed by the standard deletion rules.
 
 This is a bounded recognizer, not a complete shell parser or executable sandbox. It does not promise detection of arbitrary aliases, substitutions, generated commands, `sh -c` payloads, `eval`, `find -exec`, `xargs`, or other obfuscation and indirection. Shell sandbox availability and enforcement remain a separate boundary.
+
+### Outside-repository recognition boundary
+
+The repository is the Location's version-control worktree root, or the Location directory when it has no version control, and everything below it. This repository's managed worktrees (Git-listed linked worktrees under the YCoding data `worktrees` root, the same set `LocationMutation` trusts for `external_directory`) and the temporary roots above count as inside.
+
+`file_mutation` (edit, write, and patch commits) targeting a path outside the repository requires ordinary review. A shell command requires ordinary review when its working directory, a `cd` target (a bare `cd` means home), or any operand, redirection target, or `--option=value` path resolves outside the repository. Shell resolution reuses the deletion recognizer's working-directory tracking and `~`, `$HOME`, `$PWD`, `$TMPDIR` expansion. Device paths under `/dev` and the executable position of each command are not targets. Deterministically recognized read-only shell commands are exempt even when they name outside paths, and read-only tools are not guarded; reading outside the repository remains governed by the `external_directory` permission. Like deletion recognition, this is a bounded recognizer: it does not detect paths produced by substitution, `sh -c` payloads, `eval`, `xargs`, `find -exec`, scripts, or programs that write outside the repository without naming the path.
+
+Outside-repository ordinary reviews always use the normal review and effective YOLO path without helper-model classification. Deterministic denies, hard reviews, custom rules, disabled ordinary guardrails, and `skipReview` retain their gates. Optional historical `risk` fields remain valid in stored requests and events for replay, but current guardrail evaluation does not produce them or use them to allow an action.
 
 ## Human review
 
@@ -62,9 +78,9 @@ A review request blocks the guarded operation until the user replies:
 - `always` permits the attempt and records a transient reusable approval;
 - `reject` fails the blocked operation.
 
-A request with `hardReview: true` advertises only `once` and `reject`. It cannot use a transient `always` approval, and a direct `always` reply fails the waiting operation rather than approving it. Hard reviews are never auto-approved by YOLO 0-3, active goals, agent automation, permission auto-answering, or any reusable approval. Ordinary reviews retain YOLO 3 auto-approval.
+A request with `hardReview: true` advertises only `once` and `reject`. It cannot use a transient `always` approval, and a direct `always` reply fails the waiting operation rather than approving it. Hard reviews are never auto-approved by YOLO 0-3, active goals, agent automation, permission auto-answering, or any reusable approval. Ordinary reviews auto-approve at effective YOLO 1-3.
 
-An `always` approval is keyed by root Session family, action, ordered matched rule IDs, ordered resources, and request metadata. It is held only by the Location service in process memory, is cleared at service shutdown, is not durable or global, and is shared by descendants of the same root. Core always performs a fresh evaluation before consulting the key: a deny, changed match, or non-review result cannot reuse an approval. `once` is not reusable. `yolo 1-2`, `goal`, and TUI permission auto-approval never answer guardrail reviews; only `yolo 3` auto-approves guardrail reviews.
+An `always` approval is keyed by root Session family, action, ordered matched rule IDs, ordered resources, and request metadata. It is held only by the Location service in process memory, is cleared at service shutdown, is not durable or global, and is shared by descendants of the same root. Core always performs a fresh evaluation before consulting the key: a deny, changed match, or non-review result cannot reuse an approval. `once` is not reusable. Ordinary review auto-approval requires effective `yolo 1-3`; active `goal` or permission auto-approval alone cannot grant it.
 
 Parent Session views may answer reviews created by descendants in the same root family. An unrelated Session receives a not-found response.
 The first valid reply atomically claims the pending request. A concurrent or later reply receives a not-found response and cannot change the winning decision or create a reusable approval.
@@ -97,7 +113,7 @@ POST /api/session/:sessionID/guardrail/request/:requestID/reply
 
 Guardrail asked, replied, and decided events are ephemeral. Durable Session history remains the authority for Session ownership; guardrail review state is process-local and rehydrated from the canonical request API after reconnect or restart.
 
-The Reply body remains the public union `once | always | reject`. `Guardrail.RuleDecision` additionally accepts `hard_review`, and pending requests may carry additive `hardReview: true`. No new guardrail route is introduced.
+The Reply body is the public union `once | always | reject`. `Guardrail.RuleDecision` additionally accepts `hard_review`, and pending requests may carry optional `hardReview: true` and `Guardrail.Risk`. No additional guardrail route is required.
 
 ## Notification contract
 
@@ -107,7 +123,8 @@ After a 500 ms pending-review checkpoint, an unresolved guardrail review emits *
 
 - Catastrophic direct shell forms are denied before process creation.
 - Catastrophic standard denies cannot be overridden by custom policy or any approval reply.
-- Broad recursive deletion of the current project, an ancestor of that project, or multiple targets requires a human-only hard review; recognized root and home deletion remains denied.
+- Recursive deletion of the current project or an ancestor requires human-only hard review after temporary exclusions; filesystem root, user-home, and system-directory deletion remains denied.
+- Semantic risk classification is consulted only for outside-repository ordinary reviews and can only keep that review or allow it; deterministic denies, hard reviews, and inside-repository work never consult the classifier.
 - Hard reviews cannot be bypassed by disabled ordinary guardrails, custom allow rules, reusable approvals, agent or goal automation, or YOLO 3.
 - Raw custom file content and command history are not rendered in the sidebar.
 - Invalid enabled policy never silently disables the standard profile.

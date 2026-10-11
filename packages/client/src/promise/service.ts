@@ -5,6 +5,7 @@ import { spawn, type ChildProcess } from "node:child_process"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { DiscoverOptions, Endpoint, Info, EnsureOptions, StopOptions } from "../service.js"
+import { pollDelay, startupTimeout } from "../service-poll.js"
 import type { ServiceHealth, ServiceStopResponse } from "./generated/types.js"
 
 export * from "../service.js"
@@ -35,7 +36,7 @@ async function discoverLocal(options: DiscoverOptions) {
 
 /** Ensure a healthy, compatible local service is running. */
 export async function ensure(options: EnsureOptions = {}): Promise<Endpoint> {
-  const deadline = Date.now() + 120_000
+  const started = Date.now()
   const contenders = new Set<Contender>()
   let announced = false
   let lastSpawn = 0
@@ -74,7 +75,8 @@ export async function ensure(options: EnsureOptions = {}): Promise<Endpoint> {
 
   try {
     while (true) {
-      if (Date.now() >= deadline) throw new Error("Timed out waiting for the background service to start")
+      if (Date.now() - started >= startupTimeout)
+        throw new Error("Timed out waiting for the background service to start")
       const registration = await registered(options.file, true)
 
       if (registration.service !== undefined) {
@@ -113,7 +115,7 @@ export async function ensure(options: EnsureOptions = {}): Promise<Endpoint> {
           lastSpawn = Date.now()
         }
       }
-      await delay(1_000)
+      await delay(pollDelay(Date.now() - started))
     }
   } finally {
     contenders.forEach(cleanupContender)

@@ -124,6 +124,19 @@ test("machine keep-awake controls are global and accept only the explicit enable
   expect(parseClientMessage(JSON.stringify({ ...read, input: {} })).ok).toBe(false)
 })
 
+test("machine telemetry consent controls are global and strictly versioned", () => {
+  const read = { type: "request", id: "req_consent", operation: "machine.telemetry.consent.get" }
+  const write = { ...read, operation: "machine.telemetry.consent.set", input: { enabled: true, noticeVersion: 1 } }
+  for (const frame of [read, write, { ...write, input: { enabled: false, noticeVersion: 1 } }]) {
+    expect(parseClientMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
+    expect(parseRelayToAgentMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
+    expect(parseClientMessage(JSON.stringify({ ...frame, sessionID: "ses_1" })).ok).toBe(false)
+  }
+  for (const input of [undefined, {}, { enabled: true }, { enabled: true, noticeVersion: 2 }, { enabled: true, noticeVersion: 1, extra: true }])
+    expect(parseClientMessage(JSON.stringify({ ...write, input })).ok).toBe(false)
+  expect(parseClientMessage(JSON.stringify({ ...read, input: {} })).ok).toBe(false)
+})
+
 test("machine latency ingest and reads accept only bounded anonymous samples for the connected device", () => {
   const sample = { kind: "request", at: "2026-10-04T12:00:00.000Z", operation: "session.list", outcome: "ok", queueMs: 5, settlementMs: 20, totalMs: 25 }
   const task = { kind: "long-task", at: sample.at, durationMs: 70 }
@@ -145,6 +158,16 @@ test("machine latency ingest and reads accept only bounded anonymous samples for
     expect(parseClientMessage(JSON.stringify({ ...list, input })).ok).toBe(input !== undefined && Object.keys(input).length === 0)
 })
 
+test("machine latency accepts exact web client samples and rejects other client surfaces", () => {
+  const sample = { kind: "client", at: "2026-10-04T12:00:00.000Z", surface: "web", metric: "stream.delay", durationMs: 12 }
+  const append = { type: "request", id: "req_client_latency", operation: "machine.latency.append", input: { samples: [sample] } }
+  expect(parseClientMessage(JSON.stringify(append))).toMatchObject({ ok: true })
+  for (const bad of [{ ...sample, surface: "tui" }, { ...sample, metric: "private" }, { ...sample, extra: true }, { ...sample, durationMs: -1 }])
+    expect(parseClientMessage(JSON.stringify({ ...append, input: { samples: [bad] } })).ok).toBe(false)
+  const requestSample = { kind: "request", at: sample.at, operation: "machine.telemetry.consent.get", outcome: "ok", queueMs: 0, totalMs: 0 }
+  expect(parseClientMessage(JSON.stringify({ ...append, input: { samples: [requestSample] } })).ok).toBe(false)
+})
+
 test("captured changes is a read-only Session-scoped paged operation without caller placement", () => {
   const frame = { type: "request", id: "req_changes", operation: "session.capturedChanges.list", sessionID: "ses_root" }
   expect(parseClientMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
@@ -159,6 +182,8 @@ test("Team operations stay root-scoped with bounded child, shell, side-chat, and
     ...(input === undefined ? {} : { input }) })
   for (const [operation, input] of [
     ["session.subagent.cancel", { childID: "ses_child" }],
+    ["session.pin", undefined],
+    ["session.unpin", undefined],
     ["session.subagent.answer", { childID: "ses_child", questionID: "qst_1", text: "staging" }],
     ["session.team.shell.list", undefined],
     ["session.team.shell.kill", { shellID: "sh_1" }],
@@ -172,6 +197,8 @@ test("Team operations stay root-scoped with bounded child, shell, side-chat, and
   }
   for (const [operation, input] of [
     ["session.subagent.cancel", { childID: "../foreign" }],
+    ["session.pin", {}],
+    ["session.unpin", { childID: "ses_child" }],
     ["session.subagent.answer", { childID: "ses_child", questionID: "qst_1", text: "" }],
     ["session.subagent.answer", { childID: "ses_child", questionID: "bad", text: "answer" }],
     ["session.team.shell.list", { directory: "/private" }],
@@ -316,10 +343,12 @@ describe("remote envelope: request", () => {
       ["session.catalog", undefined, "ses_1"],
       ["session.file.find", { query: "src", limit: 1 }, "ses_1"],
       ["session.switchModel", { model: { providerID: "openai", id: "gpt", variant: "high" } }, "ses_1"],
+      ["session.switchModel", { model: { providerID: "openai", id: "gpt", profile: "work" } }, "ses_1"],
       ["session.switchAgent", { agent: "build" }, "ses_1"],
       ["session.command", { command: "test", files: [{ uri: "file:///work/a.ts" }] }, "ses_1"],
       ["session.skill", { skill: "test", resume: false }, "ses_1"],
       ["session.create", { id: "ses_new", workspace: "wsp_1", agent: "build", model: { providerID: "openai", id: "gpt" } }],
+      ["session.create", { id: "ses_new", workspace: "wsp_1", model: { providerID: "openai", id: "gpt", profile: "work" } }],
       ["session.prompt", { text: "test", files: [{ uri: "file:///work/a.ts" }], agents: [{ name: "build" }], resume: false }, "ses_1"],
     ] as const) {
       const request = { type: "request", id: "a", operation, ...(sessionID === undefined ? {} : { sessionID }), ...(input === undefined ? {} : { input }) }
@@ -332,6 +361,8 @@ describe("remote envelope: request", () => {
       ["workspace.file.find", { workspace: "wsp_1", query: "x", limit: 51 }],
       ["session.create", { id: "ses_new", workspace: "wsp_1", model: { providerID: "a", id: "b", secret: "x" } }],
     ] as const) expect(parseClientMessage(JSON.stringify({ type: "request", id: "a", operation, input }))).toMatchObject({ ok: false, error: { code: "invalid_message" } })
+    expect(parseClientMessage(JSON.stringify({ type: "request", id: "a", operation: "session.switchModel", sessionID: "ses_1", input: { model: { providerID: "a", id: "b", profile: "" } } })))
+      .toMatchObject({ ok: false, error: { code: "invalid_message" } })
   })
 
   test("admits only bounded parent-scoped subagent page inputs", () => {
@@ -540,6 +571,12 @@ describe("remote envelope: event, advertisement, heartbeat", () => {
 describe("remote operations", () => {
   test("exposes exactly the session operations the relay proxies", () => {
     expect(remoteOperations).toEqual([
+      "provider.auth.list",
+      "provider.auth.key",
+      "provider.auth.begin",
+      "provider.auth.status",
+      "provider.auth.complete",
+      "provider.auth.cancel",
       "workspace.list",
       "session.list",
       "session.active",
@@ -554,6 +591,8 @@ describe("remote operations", () => {
       "session.message.stream",
       "session.todo.list",
       "session.subagent.list",
+      "session.pin",
+      "session.unpin",
       "session.subagent.cancel",
       "session.subagent.answer",
       "session.team.economics",
@@ -595,7 +634,9 @@ describe("remote operations", () => {
       "usage.summary",
       "usage.report",
       "machine.keepAwake.get",
-      "machine.keepAwake.set",
+    "machine.keepAwake.set",
+    "machine.telemetry.consent.get",
+    "machine.telemetry.consent.set",
       "machine.latency.append",
       "machine.latency.list",
     ])

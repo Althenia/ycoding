@@ -1,95 +1,86 @@
-# Native decisions
+# Decisions
 
 ## Scope and defaults
 
-The Location-scoped decision service evaluates native OpenAI Decisions or TypeSafe Jev requests and hidden decision-agent judgments. The `decision` tool exposes this service directly; opt-in runtime policies consume a normalized choice for guardrails, initial routing, and goal continuation. Native policies use probability; agent policies use separately configured model-estimated confidence. Decisions are judgments, not human authorization, completion evidence, or a change to the user's objective.
+The Location-scoped decision service evaluates judgments only when an agent calls the `decision` tool. Main, child, and side-chat Sessions share its registry and built-in guidance; effective permission denies and inherited ceilings remain enforced. The calling agent decides when a bounded judgment is useful. Session startup uses normal default agent/model resolution; guardrails use deterministic rules and ordinary review/YOLO handling; goals use explicit state and goal tools; question forms retain deterministic auto-answering.
 
-Configuration and authentication follow [Native decisions](../docs/configuration.md#native-decisions). OpenAI's supported native model is `gpt-6-luna`. TypeSafe native calls require their model; automatic policies default to `jev-1.13.0`. Configured keys take precedence over selected active API-key credentials for the corresponding integration, then provider environment keys. OAuth/subscription identities do not imply a native API key. Credentials stay outside agent input and output.
-
-## Native tool inputs
-
-The disjoint input union is `{ provider, request }`, with output `{ provider, response }`. OpenAI/TypeSafe requests use their native bodies, not a translated common question format. Their responses preserve validated native answers, probabilities, confidence where reported, OpenAI refusals, and reported usage. Provider `agent` uses the separate model-estimate contract described below.
-
-OpenAI predicate input:
-
-```json
-{
-  "provider": "openai",
-  "request": {
-    "model": "gpt-6-luna",
-    "input": "The proposed operation reads a repository file without modifying it.",
-    "questions": [{ "type": "predicate", "name": "read_only", "instructions": "Is the operation read-only?" }]
-  }
-}
-```
-
-TypeSafe `noul` input:
-
-```json
-{
-  "provider": "typesafe",
-  "request": {
-    "model": "jev-1.13.0",
-    "state": "The proposed operation reads a repository file without modifying it.",
-    "questions": { "read_only": { "type": "noul", "instructions": "Is the operation read-only?" } }
-  }
-}
-```
-
-OpenAI accepts an ordered array of `predicate`, `choice`, or `score` questions with `input`; TypeSafe accepts named `noul`, `choice`, or `score` questions with `state`. Responses must match their request's questions and options. The automatic choice adapter uses the probability of the selected option; it does not substitute the separate confidence field. A refusal or unusable choice remains uncertain.
-
-## Automatic policy boundaries
-
-Native policies require `min_probability`; agent policies require `min_confidence`. Both accept finite values in `[0, 1]` and compare inclusively. Wrong or mixed metric fields are rejected. Agent confidence is self-reported and uncalibrated, not a native probability. The confidence threshold supplies no independent calibration or correctness guarantee.
-
-Routing configuration admits 1–254 uniquely named candidates and reserves `keep-current` for the baseline. Each offered candidate selects an agent, model, or both; entries selecting neither are filtered out.
-
-- **Guardrails:** classify only deterministic allow, sending action, resources, and supplied metadata. Selected allow at or above the provider-specific threshold preserves allow. Other choices, refusal, and decision errors require ordinary review. Deterministic deny/hard-review, disabled ordinary guardrails, `skipReview`, and existing YOLO review rules retain their gates; classification cannot grant human approval.
-- **Routing:** evaluate only the first root Session model step when both agent and model are unset, no prior context/Step exists, and a nonempty pending user input is eligible. Offer finite configured routes with known selectable permission-allowed agents and available supported models/variants, plus the baseline `keep-current`. An eligible choice at the inclusive threshold selects its configured fields. Refusal, uncertainty, and baseline preserve defaults. Provider failure fails the operation. Transactional eligibility rechecks preserve concurrent explicit user selection.
-- **Goal:** evaluate one continue/stop choice at an active goal's idle continuation boundary, excluding active child and shell work. Evidence contains objective, iteration, and bounded latest assistant text. A stop at the inclusive threshold durably records `stopped`, not `completed`. Otherwise the synthetic steer preserves the exact objective. Autonomy compare-and-set settlement rejects stale results. Decision failure halts continuation without admitting fallback input. Activation/resume and unconfigured continuation keep the existing goal helper.
-
-## Safety, transport, and usage
-
-The tool requires `decision` permission on resource `openai`, `typesafe`, or `agent`. Automatic policy configuration authorizes its specified evidence disclosure; it does not loosen tool permissions or Session safety rules. Provider bodies and judgment evidence must be appropriate for the selected external service/model route. An OpenAI/TypeSafe configured base URL chooses the recipient of evidence and API-key authentication. Agent requests use the selected normal model route and its authentication, privacy, quota, and billing contracts.
-
-Core bounds serialized decision input to 1 MiB. The request timeout defaults to 10 seconds and cannot exceed 60 seconds. Native invocation performs one physical HTTP attempt; the agent performs one model call. Neither uses automatic retry or fabricated fallback answers. Timeout, interruption, or abort cannot establish that the provider cancelled processing or billing. Invalid input, unavailable authentication, oversized input, timeout, and provider failure produce sanitized decision errors rather than raw credentials or provider payloads.
-
-Provider requests use ledger source `decision`, separate from normal model Steps. Preserve provider-reported token, reasoning, and cache telemetry when available; missing cache reporting remains unknown. Native requests expose no invented prompt-cache controls and remain unpriced. Agent helper requests use known normal-model catalog pricing when available; unpriced usage has no priced ledger amount. Cached token counts and a zero aggregate cannot establish free billing. Subscription-route catalog costs are estimates, not subscription invoices. Local Session history and tool results remain durable; there is no free-use or zero-retention guarantee.
+The helper returns typed judgments and self-reported, uncalibrated confidence, not calibrated probabilities. A judgment is never permission, approval, the user's answer, completion evidence, or authority to change the objective or explicit owner choices. Configuration and authentication follow [Decisions](../docs/configuration.md#decisions). The top-level `decisions` key is unsupported and produces a removed-key diagnostic; decision helper model settings remain supported.
 
 ## Decision-agent inputs
 
-Provider `agent` accepts JSON `state` and 1–32 ordered questions. Each question has a unique nonempty `name` of at most 64 characters and nonempty `instructions` of at most 8,192 characters. `predicate` asks for a Boolean; `choice` supplies 1–255 unique string or Boolean `value` options with optional descriptions; `score` supplies 2–10 levels with labels and optional descriptions. String and Boolean choices retain distinct types. The request does not select credentials or a model directly.
+The tool accepts `{ "provider": "agent", "request": { "state": ..., "questions": [...] } }`. State is JSON. Questions are ordered, uniquely named, and bounded to 1–32 per call. Every question has a nonempty `name` of at most 64 characters and nonempty `instructions` of at most 8,192 characters:
+
+- `predicate` asks for a Boolean;
+- `choice` supplies 1–255 unique string or Boolean `value` options with optional nonempty descriptions;
+- `score` supplies 2–10 levels with nonempty labels and optional nonempty descriptions; results use zero-based integer indexes.
+
+String and Boolean choices retain distinct types. Inputs select neither credentials nor the helper model. Send self-contained authorized evidence and observable criteria. Use neutral wording, distinct options including a keep-current/other alternative, and distinguish adjacent score levels. Batch independent questions; separate dependent judgments. Use tests, grep, typechecks, and inventory for facts those checks can settle. Skip trivial choices, routine per-step classification, and repeated unchanged judgments.
 
 ```json
 {
   "provider": "agent",
   "request": {
-    "state": { "operation": "Read a repository file without modifying it" },
-    "questions": [{ "type": "predicate", "name": "read_only", "instructions": "Is the operation read-only?" }]
+    "state": { "alternatives": "Two approaches have comparable cost; requirements are incomplete" },
+    "questions": [
+      {
+        "type": "choice",
+        "name": "route",
+        "instructions": "Choose the better-supported approach",
+        "choices": [
+          { "value": "keep-current", "description": "Retain the current approach" },
+          { "value": "change", "description": "Use the alternative" }
+        ]
+      },
+      { "type": "predicate", "name": "ready", "instructions": "Does the evidence support starting now?" }
+    ]
   }
 }
 ```
 
-The hidden primary `decision` agent has all tools denied and uses a static TOON-only judgment prompt. Its ID is reserved for internal evaluation; fresh Session creation and explicit agent switching reject it with HTTP 400 `InvalidRequestError` on field `agent`, and commands reject it before template evaluation. Existing-ID Session adoption retains the original Session unchanged. Model resolution prefers `agents.decision.model`, then `efficiency.helper_models.decision`, then the owner Session/default model. A helper value of `session` retains owner-model resolution. Supported subscription routes work through normal credentials without requiring a separate native API key. The helper makes one streaming model call with no tools and `generation.maxTokens: 2048`; the selected route maps that limit to its provider's wire format. Text output is bounded to 1 MiB of UTF-8 and must finish normally; tool calls and partial or failed settlement are rejected.
+The hidden primary `decision` agent has every tool denied and a static TOON-only prompt. Its reserved ID cannot be selected for fresh foreground Session creation, explicit switching, or commands. Session creation and switching reject it with HTTP 400 `InvalidRequestError` on `agent`; command rejection precedes template evaluation. Existing-ID adoption preserves the original Session.
 
-The model must return exactly one TOON root `decisions`, version `1`, with one answer per requested name and uniform columns `name,type,answer,choice,score,confidence`. This illustrative predicate result is an estimate, not evidence that the operation was executed or verified:
+Model resolution prefers `agents.decision.model`, then `efficiency.helper_models.decision`, then the owner Session/default model. A helper value of `session` retains owner-model resolution. Supported subscription routes use normal model credentials. The helper makes one streaming request with no tools and `generation.maxTokens: 2048`; the route maps that limit to its wire format. UTF-8 output is bounded to 1 MiB and must settle normally. Tool calls, partial settlement, and provider failures are rejected.
+
+## Results and abstention
+
+The helper returns exactly one TOON document with root `decisions`, version `1`, and one answer for each requested name. Uniform columns are `name,type,answer,choice,score,confidence`. Validated answers retain request order. Only the matching answer field is populated; other fields are `null`. Confidence is finite in `[0, 1]`. Choices must match supplied values with their original type; scores must index supplied levels. Unknown fields, duplicate/missing names, wrong types, out-of-range scores, malformed TOON, and JSON substitution fail validation. No JSON fallback or fabricated default answer exists.
+
+Every question type can abstain with the same existing refusal representation: `type: refusal`, `answer: null`, `choice: null`, `score: null`, and `confidence: 0`. The prompt explicitly requires abstention for insufficient evidence and forbids forcing a value or substituting a low-confidence pick. Refusal is distinct from any real option, including keep-current. Calling agents treat it as uncertainty and gather missing evidence, decide from evidence, or ask the user.
 
 ```toon
 decisions:
   version: 1
-  answers[1]{name,type,answer,choice,score,confidence}:
-    read_only,predicate,true,null,null,0.95
+  answers[2]{name,type,answer,choice,score,confidence}:
+    route,refusal,null,null,null,0
+    ready,refusal,null,null,null,0
 ```
 
-Unused answer fields must be `null`. Choices must match a supplied value with its original type; scores must be integer zero-based level indexes; confidence must be finite in `[0, 1]`. Refusal requires all answer fields `null` and confidence `0`. Unknown fields, duplicate/missing names, wrong types, out-of-range scores, malformed TOON, and JSON substitution fail validation. There is no JSON fallback, automatic retry, or fabricated default judgment. Validated answers are returned in request order.
+The tool returns the complete `{ provider, response }` envelope as TOON. Structured responses include the selected model reference, `semantics: "model-estimate"`, version, ordered answers, and canonical token usage when reported. For refusal results, a separate model-visible text part states that refusal is uncertainty and directs the caller to missing evidence or the user; it does not alter the structured result. For example, an abstaining choice appears in the envelope as:
 
-Structured responses include the selected model reference, `semantics: "model-estimate"`, version and answers, and canonical token usage when reported. The tool exposes the complete `{ provider, response }` agent result as TOON while native output remains JSON; the `decisions` example above is the model's required judgment document, not the tool-result envelope. Agent policies use the selected answer's confidence only; they preserve existing deny, human-only review, permission, explicit-selection, stale-autonomy, and active-work fences. Uncertainty follows ordinary review, routing baseline, or unchanged-objective continuation; provider failure preserves existing failure boundaries rather than inventing input.
+```json
+{
+  "provider": "agent",
+  "response": {
+    "model": { "providerID": "fixture", "id": "judge" },
+    "semantics": "model-estimate",
+    "version": 1,
+    "answers": [{ "name": "route", "type": "refusal", "answer": null, "choice": null, "score": null, "confidence": 0 }]
+  }
+}
+```
 
-## Provider references
+The helper weighs plausible alternatives and estimates how well evidence supports its answer. Self-reporting supplies no calibration guarantee. Set the action threshold by the cost of being wrong. Refusal, errors, low or close confidence, and disagreement with evidence mean uncertainty. Reuse settled judgments until evidence changes; preserve owner choices and guardrails.
 
-These references describe the external APIs; the supported local schemas and validation remain authoritative for YCoding:
+## Corrective errors
 
-- [OpenAI Decisions guide](https://developers.openai.com/api/docs/guides/decisions)
-- [OpenAI create method](https://developers.openai.com/api/reference/resources/decisions/methods/create)
-- [TypeSafe API](https://docs.typesafe.ai/api)
-- [TypeSafe models](https://docs.typesafe.ai/models)
+Invalid calls produce model-visible tool errors with JSON field paths, expected shapes or allowed values, and a minimal valid request. Values and unrecognized key names are redacted, never echoed as evidence. Empty `questions` reports: `questions: expected at least one question; received []. Add one bounded question, or skip the decision tool if no judgment is needed.` An invalid question type identifies `questions[0].type` and the allowed `predicate`, `choice`, and `score` types.
+
+`unavailable` identifies helper model settings and the authenticated route to check. `invalid-output` identifies invalid TOON or schema-mismatched answers and directs the caller to evidence or uncertainty handling. `input-too-large` asks for reduced bounded evidence. Provider/transport failure reports unsettled evaluation rather than a successful judgment. Errors never expose credentials, raw helper output, or provider payloads. Refusal is a valid result, not malformed output.
+
+## Safety, transport, and usage
+
+Permission action `decision` uses resource `agent`. Explicit denials block the call and inherited ceilings also remove it from model-visible tools. Judgment evidence must be authorized for the selected helper model's authentication, privacy, quota, and billing route. Credentials stay outside tool arguments and results.
+
+Serialized input is bounded to 1 MiB. Calls have no YCoding wall-clock deadline but remain explicitly cancellable; providers, transport, or networks can impose timeouts. Each call uses one model request without automatic retry or fabricated answers. Interruption does not establish upstream cancellation or billing cancellation.
+
+Provider-request ledger source is `decision`, separate from normal model Steps. Records keep agent `decision` and the caller's input ID when supplied. Preserve reported token, reasoning, and cache usage; missing cache reporting remains unknown. Known normal-model catalog prices can price requests; unpriced usage has no priced ledger amount. Cached tokens or zero aggregates do not establish free billing, and subscription catalog costs are estimates, not invoices. Local history and tool results remain durable; no zero-retention guarantee applies. Historical synthetic judgments and optional guardrail risk fields remain replayable; TUI transcript rows keep historical advisory messages hidden by their `decisionInputID` metadata.

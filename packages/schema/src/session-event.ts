@@ -27,6 +27,9 @@ import { ProviderRequest } from "./provider-request.js"
 import { SessionOrchestration } from "./session-orchestration.js"
 import { Permission } from "./permission.js"
 import { SessionCompaction } from "./session-compaction.js"
+import { Credential } from "./credential.js"
+import { Integration } from "./integration.js"
+import { Provider } from "./provider.js"
 
 export { FileAttachment }
 
@@ -96,6 +99,25 @@ export const ModelSelected = Event.durable({
 })
 export type ModelSelected = typeof ModelSelected.Type
 
+export interface ProfileBinding extends Schema.Schema.Type<typeof ProfileBinding> {}
+export const ProfileBinding = Schema.Struct({
+  providerID: Provider.ID,
+  integrationID: Integration.ID,
+  profile: Model.ProfileName,
+  credentialID: Credential.ID,
+  accountGeneration: NonNegativeInt,
+}).annotate({ identifier: "Session.ProfileBinding" })
+
+export const ProfileBound = Event.durable({
+  type: "session.profile.bound",
+  ...options,
+  schema: {
+    ...Base,
+    binding: ProfileBinding.pipe(optional),
+  },
+})
+export type ProfileBound = typeof ProfileBound.Type
+
 export const DaybreakSet = Event.durable({
   type: "session.daybreak.set",
   ...options,
@@ -144,7 +166,7 @@ export const UsageRecorded = Event.durable({
   ...options,
   schema: {
     ...Base,
-    source: Schema.Literals(["title", "compaction", "goal", "decision"]),
+    source: Schema.Literals(["title", "compaction", "goal", "decision", "prediction"]),
     cost: Money.USD,
     tokens: TokenUsage.Info,
   },
@@ -167,6 +189,12 @@ export const UsageUpdated = Event.ephemeral({
   },
 })
 export type UsageUpdated = typeof UsageUpdated.Type
+
+export const PredictionUpdated = Event.ephemeral({
+  type: "session.prediction.updated",
+  schema: { ...Base, sourceMessageID: SessionMessage.ID, text: Schema.String },
+})
+export type PredictionUpdated = typeof PredictionUpdated.Type
 
 export const DiagnosticsUpdated = Event.ephemeral({
   type: "session.diagnostics.updated",
@@ -813,6 +841,7 @@ export const Definitions = Event.inventory(
   Moved,
   Renamed,
   UsageUpdated,
+  PredictionUpdated,
   DiagnosticsUpdated,
   Deleted,
   Archived,
@@ -879,6 +908,7 @@ export const DurableDefinitions = Event.inventory(
   ...Compaction.LegacyDurableDefinitions,
   UsageRecorded,
   ProviderRequestRecorded,
+  ProfileBound,
 )
 
 // Durable replay accepts legacy and current payloads for the same event type.
@@ -889,7 +919,7 @@ export const Durable = Schema.Union(DurableDefinitions, { mode: "oneOf" }).annot
 export type DurableEvent = typeof Durable.Type
 
 const Public = Schema.Union(Definitions, { mode: "oneOf" })
-export const All = Schema.Union([Public, UsageRecorded, ProviderRequestRecorded], { mode: "oneOf" })
+export const All = Schema.Union([Public, UsageRecorded, ProviderRequestRecorded, ProfileBound], { mode: "oneOf" })
 export type Event = typeof All.Type
 export type Type = Event["type"]
 

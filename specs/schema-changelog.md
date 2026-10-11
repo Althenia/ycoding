@@ -2,6 +2,17 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+## 2026-10-10: Add Consent-Gated Local Telemetry
+
+- Add `Telemetry.NoticeVersion`, `CurrentNoticeVersion`, `Consent`, `ConsentState`, `ConsentInput`, `ClientSample`, and HTTP 403 `TelemetryDisabled`. Machine-global consent defaults to undecided/off and persists in the single-row `telemetry_consent` table.
+- Add authenticated `telemetry.consent.get` and `telemetry.consent.set` at `/api/server/telemetry/consent`. Existing `telemetry.append` at `/api/server/web-latency` requires enabled consent; sample retention is 30 days and 10,000 rows.
+- Add optional non-negative integer `firstOutputMs`, `totalMs`, and `retryWaitMs` to `ProviderRequest.Timing`, gated at recording time. Existing token, cost, and generation timing fields retain their independent recording contract.
+- Add optional `ProviderRequest.ReportRow.speed` with field-specific nearest-rank p50/p95 latency, aggregate output tokens per second, and first-output sample count.
+
+Compatibility:
+
+- Optional durable fields preserve decoding of stored events and retain `session.provider.request.recorded.1`; no event rewrite or version bump is required. The generated database migration adds only the consent table. Promise and Effect clients are regenerated from the assembled `HttpApi`; OpenAPI is derived from Protocol.
+
 ## 2026-09-30: Add Server-Owned Keep Awake
 
 - Add `KeepAwake.Status` with `state` (`off`, `on`, `unsupported`, or `error`) and an optional message of at most 200 characters.

@@ -4,6 +4,8 @@ Provider usage is a read-only Location-scoped service that normalizes quota, cre
 
 ## Ownership
 
+The local provider-request ledger's closed request-source set is `step`, `title`, `goal`, `compaction`, `decision`, and `prediction`. The default-enabled hidden prediction helper records its physical request identity and normalized usage/cost through the existing ledger under `prediction`. These are ordinary accounted helper calls, separate from provider quota snapshots. Prediction uses conversation text by default; optional memory search itself makes no provider request. Partial usage before interruption remains accounted, unavailable prices follow the report's unpriced rules, and prediction output is excluded from durable transcript history. Quota snapshot sources below are a separate contract, not request-source labels.
+
 - Schema owns normalized snapshot, window, source, stability, and status shapes.
 - Core owns catalog-based provider discovery, credential selection, provider adapters, caching, observation precedence, redaction, and source isolation.
 - Protocol and Server expose normalized list/get operations through Location middleware.
@@ -66,9 +68,11 @@ Live response observations replace overlapping older OAuth windows. The OAuth us
 
 ### Codex and Spark
 
-When configured, YCoding invokes a Codex app-server process directly with an argv array, performs the documented `initialize`, `initialized`, and `account/rateLimits/read` sequence, then terminates the process. This path has precedence when it succeeds.
+When configured, YCoding invokes a Codex app-server process directly with an argv array, performs the documented `initialize`, `initialized`, and `account/rateLimits/read` sequence, then terminates the process. Its snapshot is a separate **Codex app-server** source with unknown account attribution, not a stored credential profile's quota.
 
-Without a usable app-server snapshot, a ChatGPT OAuth credential may use the provider-owned backend usage endpoint as a best-effort fallback. Account routing uses the credential's account ID when present.
+A stored ChatGPT OAuth credential uses the provider-owned backend usage endpoint independently for that profile. Account routing uses the credential's account ID when present. Profile quota caches distinguish credential identity, account generation, and token generation; provider-local organization hints and response observations cannot cross account identities. A response observation without account provenance remains unbound rather than being assigned to a named profile.
+
+ChatGPT usage resolves its credential through the same expiry-refresh boundary as model requests. Concurrent refreshes share work within the process; a newer, fresh stored OAuth generation for the same credential and account is adopted when another process has rotated the token. Rejected refreshes cannot delete or overwrite newer credentials, and replacement accounts are never adopted. ChatGPT usage failures retain the `provider_internal_api` and `best_effort` labels and do not fall through to organization API usage. A failed refresh preserves a cached quota as stale.
 
 Primary, secondary, credit, reset-credit, and every additional named limit ID are preserved. Known Spark IDs render as Spark; unknown future IDs receive a sanitized display label instead of being discarded.
 
@@ -86,7 +90,7 @@ Other seats keep the legacy entitlement path, whose lanes report a percentage of
 
 Successful API snapshots are cached by provider and credential identity. Concurrent refreshes for the same cache key are single-flight. A refresh failure returns a stale copy when one exists.
 
-Observed response data is stored separately by provider and applies only to the provider's active profile. A newer observation takes precedence over that profile's older API snapshot. A forced API refresh does not erase a newer observation.
+Observed response data is stored separately by provider and applies only to the provider's default profile. A newer observation takes precedence over that profile's older API snapshot. A forced API refresh does not erase a newer observation.
 
 No cache key contains a credential secret.
 
@@ -120,7 +124,9 @@ The list uses `Catalog.provider.available()` to enumerate each available configu
 
 ## Durable provider-request usage
 
-Durable provider-request usage is separate from provider quota and credit snapshots. Core derives one aggregate per Session and provider/model/variant from `session.provider.request.recorded` events, including logical requests, physical attempts, helper calls, continuation/fallback counts, raw token categories, and cost. Each raw provider-request record may carry `cacheReadReported`: `true` means the provider explicitly reported cache-read usage, including an explicit zero; `false` means it did not report cache-read usage; absence is historical unknown. Cache-adaptation folds measure only explicit `true` records and preserve missing or historical telemetry as unmeasured. An optional `timing` object contains provider-reported prompt evaluation, generation, and model-load durations in nanoseconds. Runpod Ollama supplies these fields when present; missing timings remain absent. The Session usage summary and diagnostics include only the most recent request's `latestTiming`, never a fabricated sum across requests. Timings are excluded from model input and grouped usage reports.
+Durable provider-request usage is separate from provider quota and credit snapshots. Core derives one aggregate per Session and provider/model/variant from `session.provider.request.recorded` events, including logical requests, physical attempts, helper calls, continuation/fallback counts, raw token categories, and cost. Each raw provider-request record may carry `cacheReadReported`: `true` means the provider explicitly reported cache-read usage, including an explicit zero; `false` means it did not report cache-read usage; absence is historical unknown. Cache-adaptation folds measure only explicit `true` records and preserve missing or historical telemetry as unmeasured. An optional `timing` object contains always-on provider-reported `promptEvalDurationNs`, `generationDurationNs`, and `loadDurationNs`, plus `generatedTokens` and a reliable `observedGenerationDurationNs` when available. Runpod Ollama supplies provider durations when present; missing timings remain absent. The Session usage summary and diagnostics include only the most recent request's `latestTiming`, never a fabricated sum across requests. Timing fields are excluded from model input.
+
+With enabled machine-wide telemetry consent at record time, `ProviderRequest.Timing` additionally contains non-negative integer milliseconds: optional `firstOutputMs`, `totalMs`, and `retryWaitMs`. The logical request begins when the existing provider-request tracker admits it and includes its physical retries. `firstOutputMs` measures to the first non-empty provider text, reasoning, or tool-input delta, or complete tool call when no incremental tool input is supplied. `totalMs` measures to terminal provider settlement, excluding later local-tool work; a failed request without terminal output measures through completion of its existing recording path. `retryWaitMs` sums elapsed retry backoff waits in that logical request, and is zero when no backoff occurred. A request with no observable output omits `firstOutputMs`. Native structured decision calls have no text/reasoning/tool deltas and therefore omit first-output latency. Title, decision, and compaction requests use the same tracker without introducing additional recording paths. Disabled or undecided consent omits all three latency fields while preserving always-on tokens, cost, and generation timing. These values remain in local SQLite and do not configure or enable the separate OTLP exporter.
 
 ```text
 GET /api/usage
@@ -138,6 +144,8 @@ Both report operations group their scope by model, hour, day, month, Session, pr
 Raw request projections and aggregates are retained for current, recently updated, and locally active Sessions. A startup and hourly cleanup removes only those derived projections when a Session has been inactive for more than 30 days. Durable events and transcript rows are never pruned by usage cleanup. Global summary and report totals cover the retained projections available at query time; they do not claim complete historical or billing coverage after cleanup.
 
 Summary totals and per-model spend rows expose optional `cacheReadReported`, true only when every contributing request explicitly reported cache-read telemetry. False or absent does not establish a reported zero; displays keep it unreported while retaining the raw aggregate counters.
+
+Each grouped row in both global and Session reports optionally exposes `speed: { firstOutputP50Ms?, firstOutputP95Ms?, totalP50Ms?, totalP95Ms?, outputTokensPerSecond?, samples }`. Percentiles use the nearest rank (`ceil(p * count)`, one-based) over the sorted population containing that individual field; missing latency does not enter the population. `samples` counts records containing `firstOutputMs`, including a reported zero. `outputTokensPerSecond` is the sum of `generatedTokens` divided by the summed generation duration in seconds over valid generation samples, using the same per-record rule as Session generation-speed diagnostics. Tokens and duration must be positive safe integers with a positive finite rate. A provider `generationDurationNs` takes precedence; without that field, `observedGenerationDurationNs` must be at least one second. Historical buffered sub-second observed windows are excluded. No valid population means no rate. This throughput uses always-on fields and remains available independently of consent. A row with neither latency nor a defined throughput omits `speed`; a throughput-only or total-only row has `samples: 0`. Missing values remain absent rather than becoming zero. Report totals keep their aggregate usage shape without row-level speed.
 
 ## TUI presentation
 

@@ -22,6 +22,9 @@ export const ID = Schema.String.pipe(
 )
 export type ID = typeof ID.Type
 
+export interface IntegrationRef extends Schema.Schema.Type<typeof IntegrationRef> {}
+export const IntegrationRef = Schema.Struct({ providerID: ID, integrationID: Integration.ID }).annotate({ identifier: "Provider.IntegrationRef" })
+
 export const Package = Schema.String
 export type Package = typeof Package.Type
 

@@ -41,9 +41,26 @@ const Endpoint1_2 = (raw: RawClient["server.server"]) => (input?: Endpoint1_2Inp
     Effect.mapError(mapClientError),
   )
 
+const Endpoint1_3 = (raw: RawClient["server.server"]) => () =>
+  raw["telemetry.consent.get"]({}).pipe(Effect.mapError(mapClientError))
+
+type Endpoint1_4Request = Parameters<RawClient["server.server"]["telemetry.consent.set"]>[0]
+type Endpoint1_4Input = {
+  readonly enabled: Endpoint1_4Request["payload"]["enabled"]
+  readonly noticeVersion: Endpoint1_4Request["payload"]["noticeVersion"]
+}
+const Endpoint1_4 = (raw: RawClient["server.server"]) => (input: Endpoint1_4Input) =>
+  raw["telemetry.consent.set"]({ payload: { enabled: input["enabled"], noticeVersion: input["noticeVersion"] } }).pipe(
+    Effect.mapError(mapClientError),
+  )
+
 const adaptGroup1 = (raw: RawClient["server.server"]) => ({
   get: Endpoint1_0(raw),
-  telemetry: { append: Endpoint1_1(raw), list: Endpoint1_2(raw) },
+  telemetry: {
+    append: Endpoint1_1(raw),
+    list: Endpoint1_2(raw),
+    consent: { get: Endpoint1_3(raw), set: Endpoint1_4(raw) },
+  },
 })
 
 type Endpoint2_0Request = Parameters<RawClient["server.location"]["location.get"]>[0]
@@ -843,30 +860,36 @@ const Endpoint9_0 = (raw: RawClient["server.generate"]) => (input: Endpoint9_0In
 
 const adaptGroup9 = (raw: RawClient["server.generate"]) => ({ text: Endpoint9_0(raw) })
 
-type Endpoint10_0Request = Parameters<RawClient["server.provider"]["provider.list"]>[0]
+type Endpoint10_0Request = Parameters<RawClient["server.provider"]["provider.integrations"]>[0]
 type Endpoint10_0Input = { readonly location?: Endpoint10_0Request["query"]["location"] }
 const Endpoint10_0 = (raw: RawClient["server.provider"]) => (input?: Endpoint10_0Input) =>
-  raw["provider.list"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError))
+  raw["provider.integrations"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError))
 
-type Endpoint10_1Request = Parameters<RawClient["server.provider"]["provider.refresh"]>[0]
+type Endpoint10_1Request = Parameters<RawClient["server.provider"]["provider.list"]>[0]
 type Endpoint10_1Input = { readonly location?: Endpoint10_1Request["query"]["location"] }
 const Endpoint10_1 = (raw: RawClient["server.provider"]) => (input?: Endpoint10_1Input) =>
+  raw["provider.list"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint10_2Request = Parameters<RawClient["server.provider"]["provider.refresh"]>[0]
+type Endpoint10_2Input = { readonly location?: Endpoint10_2Request["query"]["location"] }
+const Endpoint10_2 = (raw: RawClient["server.provider"]) => (input?: Endpoint10_2Input) =>
   raw["provider.refresh"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError))
 
-type Endpoint10_2Request = Parameters<RawClient["server.provider"]["provider.get"]>[0]
-type Endpoint10_2Input = {
-  readonly providerID: Endpoint10_2Request["params"]["providerID"]
-  readonly location?: Endpoint10_2Request["query"]["location"]
+type Endpoint10_3Request = Parameters<RawClient["server.provider"]["provider.get"]>[0]
+type Endpoint10_3Input = {
+  readonly providerID: Endpoint10_3Request["params"]["providerID"]
+  readonly location?: Endpoint10_3Request["query"]["location"]
 }
-const Endpoint10_2 = (raw: RawClient["server.provider"]) => (input: Endpoint10_2Input) =>
+const Endpoint10_3 = (raw: RawClient["server.provider"]) => (input: Endpoint10_3Input) =>
   raw["provider.get"]({ params: { providerID: input["providerID"] }, query: { location: input["location"] } }).pipe(
     Effect.mapError(mapClientError),
   )
 
 const adaptGroup10 = (raw: RawClient["server.provider"]) => ({
-  list: Endpoint10_0(raw),
-  refresh: Endpoint10_1(raw),
-  get: Endpoint10_2(raw),
+  integrations: Endpoint10_0(raw),
+  list: Endpoint10_1(raw),
+  refresh: Endpoint10_2(raw),
+  get: Endpoint10_3(raw),
 })
 
 type Endpoint11_0Request = Parameters<RawClient["server.providerUsage"]["providerUsage.list"]>[0]
@@ -2423,6 +2446,13 @@ const Endpoint34_1 = (raw: RawClient["server.keepAwake"]) => (input: Endpoint34_
 
 const adaptGroup34 = (raw: RawClient["server.keepAwake"]) => ({ get: Endpoint34_0(raw), set: Endpoint34_1(raw) })
 
+type Endpoint35_0Request = Parameters<RawClient["server.config"]["config.diagnostics"]>[0]
+type Endpoint35_0Input = { readonly location?: Endpoint35_0Request["query"]["location"] }
+const Endpoint35_0 = (raw: RawClient["server.config"]) => (input?: Endpoint35_0Input) =>
+  raw["config.diagnostics"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError))
+
+const adaptGroup35 = (raw: RawClient["server.config"]) => ({ diagnostics: Endpoint35_0(raw) })
+
 const adaptClient = (raw: RawClient) => ({
   health: adaptGroup0(raw["server.health"]),
   server: adaptGroup1(raw["server.server"]),
@@ -2459,6 +2489,7 @@ const adaptClient = (raw: RawClient) => ({
   usage: adaptGroup32(raw["server.usage"]),
   remote: adaptGroup33(raw["server.remote"]),
   keepAwake: adaptGroup34(raw["server.keepAwake"]),
+  config: adaptGroup35(raw["server.config"]),
 })
 
 export const make = (options?: { readonly baseUrl?: URL | string }) =>

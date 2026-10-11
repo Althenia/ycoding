@@ -1,11 +1,12 @@
 import { ServiceStatus } from "@ycoding-ai/protocol/groups/health"
-import { Effect, FileSystem, Option, Schedule, Schema } from "effect"
+import { Clock, Effect, FileSystem, Option, Schedule, Schema } from "effect"
 import { spawn, type ChildProcess } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { readFileSync, rmSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { DiscoverOptions, Endpoint, EnsureOptions, StopOptions } from "../service.js"
+import { pollDelay, startupTimeout } from "../service-poll.js"
 
 export * from "../service.js"
 /** Contents of the local service registration file. */
@@ -55,6 +56,7 @@ const discoverLocal = Effect.fnUntraced(function* (options: DiscoverOptions) {
 // becomes discoverable. A contender is never killed merely for slow startup.
 /** Ensure a healthy, compatible local service is running. */
 export const ensure = Effect.fn("service.ensure")(function* (options: EnsureOptions = {}) {
+  const started = yield* Clock.currentTimeMillis
   const contenders = new Set<Contender>()
   let announced = false
   let lastSpawn = 0
@@ -135,7 +137,13 @@ export const ensure = Effect.fn("service.ensure")(function* (options: EnsureOpti
   }).pipe(
     Effect.repeat({
       until: Option.isSome,
-      schedule: Schedule.max([Schedule.spaced("1 second"), Schedule.recurs(120)]),
+      schedule: Schedule.spaced("100 millis").pipe(
+        Schedule.modifyDelay(() => Clock.currentTimeMillis.pipe(Effect.map((now) => pollDelay(now - started)))),
+      ),
+    }),
+    Effect.timeoutOrElse({
+      duration: startupTimeout,
+      orElse: () => Effect.fail(new Error("Timed out waiting for the background service to start")),
     }),
     Effect.ensuring(Effect.sync(() => contenders.forEach(cleanupContender))),
   )

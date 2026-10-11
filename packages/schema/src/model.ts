@@ -11,27 +11,43 @@ export type ID = typeof ID.Type
 export const VariantID = Schema.String.pipe(Schema.brand("Model.VariantID"))
 export type VariantID = typeof VariantID.Type
 
+export const ProfileName = Schema.String.check(Schema.isNonEmpty()).annotate({ identifier: "Model.ProfileName" })
+export type ProfileName = typeof ProfileName.Type
+
 export const Ref = Schema.Struct({
   id: ID,
   providerID: Provider.ID,
   variant: VariantID.pipe(optional),
+  profile: ProfileName.pipe(optional),
 })
   .annotate({ identifier: "Model.Ref" })
   .pipe(
     statics((schema) => ({
       parse: (input: string) => {
-        const providerEnd = input.indexOf("/")
+        const profileEnd = input.indexOf("#")
+        const firstSlash = input.indexOf("/")
+        const hasProfile = profileEnd >= 0 && profileEnd < firstSlash
+        const providerStart = hasProfile ? profileEnd + 1 : 0
+        const providerEnd = input.indexOf("/", providerStart)
         if (providerEnd <= 0) throw new Error(`Invalid model reference: ${input}`)
-        const providerID = input.slice(0, providerEnd)
+        const providerID = input.slice(providerStart, providerEnd)
         const variantStart = input.indexOf("#", providerEnd + 1)
         const id = input.slice(providerEnd + 1, variantStart === -1 ? undefined : variantStart)
         const variant = variantStart === -1 ? undefined : input.slice(variantStart + 1)
-        if (!id || providerID.includes("#") || (variant !== undefined && (!variant || variant.includes("#"))))
+        const profile = hasProfile ? input.slice(0, profileEnd) : undefined
+        if (
+          !id ||
+          !providerID ||
+          (hasProfile && !profile) ||
+          providerID.includes("#") ||
+          (variant !== undefined && (!variant || variant.includes("#")))
+        )
           throw new Error(`Invalid model reference: ${input}`)
         return schema.make({
           providerID: Provider.ID.make(providerID),
           id: ID.make(id),
           ...(variant ? { variant: VariantID.make(variant) } : {}),
+          ...(profile ? { profile: ProfileName.make(profile) } : {}),
         })
       },
     })),
@@ -73,6 +89,14 @@ export const Daybreak = Schema.Literals(["daybreak_blue", "daybreak_red"]).annot
 })
 export type Daybreak = typeof Daybreak.Type
 
+export interface Profile extends Schema.Schema.Type<typeof Profile> {}
+export const Profile = Schema.Struct({
+  name: ProfileName,
+  active: Schema.Boolean,
+  variants: Schema.Array(VariantID).pipe(optional),
+  daybreak: Schema.Array(Daybreak).pipe(optional),
+}).annotate({ identifier: "Model.Profile" })
+
 export const API = Schema.Literals(["chat", "responses"]).annotate({
   identifier: "Model.API",
 })
@@ -89,6 +113,7 @@ export const Info = Schema.Struct({
   ...Provider.Overlays,
   capabilities: Capabilities,
   variants: Schema.Array(Variant),
+  profiles: Schema.Array(Profile).pipe(optional),
   time: Schema.Struct({
     released: Schema.Finite,
   }),
@@ -124,3 +149,9 @@ export const Info = Schema.Struct({
         }) satisfies Info,
     })),
   )
+
+export interface Default extends Schema.Schema.Type<typeof Default> {}
+export const Default = Schema.Struct({
+  ...Info.fields,
+  selection: Ref,
+}).annotate({ identifier: "Model.Default" })

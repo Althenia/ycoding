@@ -20,9 +20,9 @@ test("validates Session subagent launch and control payloads", () => {
       description: "Review implementation",
       prompt: "Review the changed files",
       background: true,
-      model: { providerID: "openai", id: "gpt-5.6", variant: "high" },
+      model: { providerID: "openai", id: "gpt-5.6", variant: "high", profile: "Work" },
     }),
-  ).toMatchObject({ agent: "reviewer", model: { variant: "high" } })
+  ).toMatchObject({ agent: "reviewer", model: { variant: "high", profile: "Work" } })
   expect(
     Schema.decodeUnknownSync(SessionSubagentMessage)({
       messageID,

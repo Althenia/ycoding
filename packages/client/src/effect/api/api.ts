@@ -36,11 +36,28 @@ export type Endpoint1_2Input = {
 export type Endpoint1_2Output = EffectValue<ReturnType<RawClient["server.server"]["telemetry.list"]>>
 export type ServerTelemetryListOperation<E = never> = (input?: Endpoint1_2Input) => Effect.Effect<Endpoint1_2Output, E>
 
+export type Endpoint1_3Output = EffectValue<ReturnType<RawClient["server.server"]["telemetry.consent.get"]>>
+export type ServerTelemetryConsentGetOperation<E = never> = () => Effect.Effect<Endpoint1_3Output, E>
+
+type Endpoint1_4Request = Parameters<RawClient["server.server"]["telemetry.consent.set"]>[0]
+export type Endpoint1_4Input = {
+  readonly enabled: Endpoint1_4Request["payload"]["enabled"]
+  readonly noticeVersion: Endpoint1_4Request["payload"]["noticeVersion"]
+}
+export type Endpoint1_4Output = EffectValue<ReturnType<RawClient["server.server"]["telemetry.consent.set"]>>
+export type ServerTelemetryConsentSetOperation<E = never> = (
+  input: Endpoint1_4Input,
+) => Effect.Effect<Endpoint1_4Output, E>
+
 export interface ServerApi<E = never> {
   readonly get: ServerGetOperation<E>
   readonly telemetry: {
     readonly append: ServerTelemetryAppendOperation<E>
     readonly list: ServerTelemetryListOperation<E>
+    readonly consent: {
+      readonly get: ServerTelemetryConsentGetOperation<E>
+      readonly set: ServerTelemetryConsentSetOperation<E>
+    }
   }
 }
 
@@ -661,25 +678,33 @@ export interface GenerateApi<E = never> {
   readonly text: GenerateTextOperation<E>
 }
 
-type Endpoint10_0Request = Parameters<RawClient["server.provider"]["provider.list"]>[0]
+type Endpoint10_0Request = Parameters<RawClient["server.provider"]["provider.integrations"]>[0]
 export type Endpoint10_0Input = { readonly location?: Endpoint10_0Request["query"]["location"] }
-export type Endpoint10_0Output = EffectValue<ReturnType<RawClient["server.provider"]["provider.list"]>>
-export type ProviderListOperation<E = never> = (input?: Endpoint10_0Input) => Effect.Effect<Endpoint10_0Output, E>
+export type Endpoint10_0Output = EffectValue<ReturnType<RawClient["server.provider"]["provider.integrations"]>>
+export type ProviderIntegrationsOperation<E = never> = (
+  input?: Endpoint10_0Input,
+) => Effect.Effect<Endpoint10_0Output, E>
 
-type Endpoint10_1Request = Parameters<RawClient["server.provider"]["provider.refresh"]>[0]
+type Endpoint10_1Request = Parameters<RawClient["server.provider"]["provider.list"]>[0]
 export type Endpoint10_1Input = { readonly location?: Endpoint10_1Request["query"]["location"] }
-export type Endpoint10_1Output = EffectValue<ReturnType<RawClient["server.provider"]["provider.refresh"]>>
-export type ProviderRefreshOperation<E = never> = (input?: Endpoint10_1Input) => Effect.Effect<Endpoint10_1Output, E>
+export type Endpoint10_1Output = EffectValue<ReturnType<RawClient["server.provider"]["provider.list"]>>
+export type ProviderListOperation<E = never> = (input?: Endpoint10_1Input) => Effect.Effect<Endpoint10_1Output, E>
 
-type Endpoint10_2Request = Parameters<RawClient["server.provider"]["provider.get"]>[0]
-export type Endpoint10_2Input = {
-  readonly providerID: Endpoint10_2Request["params"]["providerID"]
-  readonly location?: Endpoint10_2Request["query"]["location"]
+type Endpoint10_2Request = Parameters<RawClient["server.provider"]["provider.refresh"]>[0]
+export type Endpoint10_2Input = { readonly location?: Endpoint10_2Request["query"]["location"] }
+export type Endpoint10_2Output = EffectValue<ReturnType<RawClient["server.provider"]["provider.refresh"]>>
+export type ProviderRefreshOperation<E = never> = (input?: Endpoint10_2Input) => Effect.Effect<Endpoint10_2Output, E>
+
+type Endpoint10_3Request = Parameters<RawClient["server.provider"]["provider.get"]>[0]
+export type Endpoint10_3Input = {
+  readonly providerID: Endpoint10_3Request["params"]["providerID"]
+  readonly location?: Endpoint10_3Request["query"]["location"]
 }
-export type Endpoint10_2Output = EffectValue<ReturnType<RawClient["server.provider"]["provider.get"]>>
-export type ProviderGetOperation<E = never> = (input: Endpoint10_2Input) => Effect.Effect<Endpoint10_2Output, E>
+export type Endpoint10_3Output = EffectValue<ReturnType<RawClient["server.provider"]["provider.get"]>>
+export type ProviderGetOperation<E = never> = (input: Endpoint10_3Input) => Effect.Effect<Endpoint10_3Output, E>
 
 export interface ProviderApi<E = never> {
+  readonly integrations: ProviderIntegrationsOperation<E>
   readonly list: ProviderListOperation<E>
   readonly refresh: ProviderRefreshOperation<E>
   readonly get: ProviderGetOperation<E>
@@ -1932,6 +1957,15 @@ export interface KeepAwakeApi<E = never> {
   readonly set: KeepAwakeSetOperation<E>
 }
 
+type Endpoint35_0Request = Parameters<RawClient["server.config"]["config.diagnostics"]>[0]
+export type Endpoint35_0Input = { readonly location?: Endpoint35_0Request["query"]["location"] }
+export type Endpoint35_0Output = EffectValue<ReturnType<RawClient["server.config"]["config.diagnostics"]>>
+export type ConfigDiagnosticsOperation<E = never> = (input?: Endpoint35_0Input) => Effect.Effect<Endpoint35_0Output, E>
+
+export interface ConfigApi<E = never> {
+  readonly diagnostics: ConfigDiagnosticsOperation<E>
+}
+
 export interface AppApi<E = never> {
   readonly health: HealthApi<E>
   readonly server: ServerApi<E>
@@ -1968,4 +2002,5 @@ export interface AppApi<E = never> {
   readonly usage: UsageApi<E>
   readonly remote: RemoteApi<E>
   readonly keepAwake: KeepAwakeApi<E>
+  readonly config: ConfigApi<E>
 }
