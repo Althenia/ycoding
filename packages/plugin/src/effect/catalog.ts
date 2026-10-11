@@ -32,8 +32,8 @@ export interface CatalogDraft {
     update(providerID: string, modelID: string, update: (model: ModelInfo) => void): void
     remove(providerID: string, modelID: string): void
     readonly default: {
-      get(): { providerID: string; modelID: string } | undefined
-      set(providerID: string, modelID: string): void
+      get(): { providerID: string; modelID: string; variant?: string; profile?: string } | undefined
+      set(providerID: string, modelID: string, selection?: { readonly variant?: string; readonly profile?: string }): void
     }
   }
 }

@@ -34,9 +34,13 @@ test("the maskable icon fills its canvas and keeps the mark inside the maskable 
   const background = [0x24, 0x28, 0x2f]
   const offsets = Array.from({ length: image.width * image.height }, (_, index) => index)
   const transparent = offsets.filter((index) => pixels[index * 4 + 3] < 255).length
-  const mark = offsets.filter((index) => background.some((value, offset) => Math.abs(pixels[index * 4 + offset] - value) > 8))
-  const markOutsideSafeZone = mark.filter((index) =>
-    Math.hypot((index % image.width) + 0.5 - center, Math.floor(index / image.width) + 0.5 - center) > safeRadius).length
+  const mark = offsets.filter((index) =>
+    background.some((value, offset) => Math.abs(pixels[index * 4 + offset] - value) > 8),
+  )
+  const markOutsideSafeZone = mark.filter(
+    (index) =>
+      Math.hypot((index % image.width) + 0.5 - center, Math.floor(index / image.width) + 0.5 - center) > safeRadius,
+  ).length
   const columns = mark.map((index) => index % image.width)
   const rows = mark.map((index) => Math.floor(index / image.width))
   expect({ transparent, markOutsideSafeZone }).toEqual({ transparent: 0, markOutsideSafeZone: 0 })
@@ -50,10 +54,16 @@ test("the app icon keeps a small, even margin around the Y mark", async () => {
   const context = canvas.getContext("2d")
   context.drawImage(image, 0, 0)
   const pixels = context.getImageData(0, 0, image.width, image.height).data
-  const markColors = [[0x67, 0xd7, 0xa4], [0xf2, 0xf3, 0xf5], [0xf0, 0xbe, 0x62]]
+  const markColors = [
+    [0x67, 0xd7, 0xa4],
+    [0xf2, 0xf3, 0xf5],
+    [0xf0, 0xbe, 0x62],
+  ]
   const mark = Array.from({ length: image.width * image.height }, (_, index) => index).filter((index) => {
     const offset = index * 4
-    return markColors.some((color) => Math.hypot(...color.map((value, channel) => pixels[offset + channel] - value)) < 60)
+    return markColors.some(
+      (color) => Math.hypot(...color.map((value, channel) => pixels[offset + channel] - value)) < 60,
+    )
   })
   const columns = mark.map((index) => index % image.width)
   const rows = mark.map((index) => Math.floor(index / image.width))

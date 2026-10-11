@@ -704,7 +704,7 @@ const toolLifecycleLayer = (endpoint: string) => {
         Config.node,
         Layer.succeed(
           Config.Service,
-          Config.Service.of({ reload: () => Effect.void, entries: () => Effect.succeed([]) }),
+          Config.Service.of({ diagnostics: () => Effect.succeed([]), reload: () => Effect.void, entries: () => Effect.succeed([]) }),
         ),
       ],
     ],
