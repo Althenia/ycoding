@@ -169,7 +169,7 @@ OpenAI server-side compaction is provider request semantics, not a prompt-cache 
 
 ## Request diagnostics
 
-Step generation speed prefers a provider-reported generation duration. Without one, it uses the observed streamed-output window only when that window lasts at least one second; shorter bursts do not yield a trustworthy rate, including when read from retained request records. This rate is separate from prompt-cache efficiency and provider quota.
+Step generation speed prefers a provider-reported generation duration, paired with all output tokens including reasoning. Without one, it measures visible output (text and tool-call arguments) over the observed streamed window, excluding separately counted reasoning whose summary streams after it was generated, and only when that window lasts at least one second; an output total that may include hidden reasoning without a separate count, such as Anthropic thinking, has no observed rate; shorter bursts do not yield a trustworthy rate, including when read from retained request records. This rate is separate from prompt-cache efficiency and provider quota.
 
 The Provider Usage command contains two separate sections:
 
@@ -250,7 +250,7 @@ bun run build:tui
 bun run smoke:runtime
 ```
 
-The benchmark uses local fake providers and a local stdio MCP server. It performs:
+The benchmark uses local fake providers and a local stdio MCP server. Its fixture explicitly disables predictions to isolate the pinned nonprediction request counts, costs, and cache-prefix assertions. Default-on prediction delivery is checked separately by the Session runner flow test. It performs:
 
 1. two ordinary requests with a provider-reported cache write followed by a cache read;
 2. one Session containing two real `read` tool continuations, producing three logical and three physical provider requests;
@@ -268,6 +268,8 @@ OpenAI fallback: logical 2, physical 3, fallback 1, input 1200, cache read 900, 
 ```
 
 The smoke command fails if the namespace changes after the MCP catalog reload, if continued input resends represented history, if the fallback omits canonical history, or if request/token/cost accounting changes.
+
+When the OpenAI scenario lacks the expected fallback diagnostics, the smoke command reports a durable Session execution error when present before reporting missing request accounting.
 
 For provider-backed measurements, compare runs only when provider, model, variant, system, permissions, tools, prompt sequence, and timing window are identical. Record raw read/write/input categories separately; do not infer a cache miss from telemetry the provider did not report.
 

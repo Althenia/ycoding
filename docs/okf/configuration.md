@@ -16,6 +16,8 @@ sources:
   resource: repo:///docs/repository-resources.md
 - id: migration
   resource: repo:///docs/ycoding-migration.md
+- id: config-core
+  resource: repo:///packages/core/src/config.ts
 ---
 
 ## Configuration Surfaces
@@ -28,9 +30,13 @@ Global directories resolve through XDG bases with a ycoding namespace for config
 
 Runtime documents assemble from lowest to highest priority across global files, YCODING_CONFIG, upward project discovery, well-known integration configuration, and YCODING_CONFIG_CONTENT; within one directory, ycoding.jsonc loads after ycoding.json.[^config-doc]
 
-Both JSON and JSONC support comments, trailing commas, unknown ignored properties, schema metadata, and env and file substitution; a missing file reference invalidates that document.[^config-doc]
+Both JSON and JSONC support comments, trailing commas, unknown properties dropped individually with diagnostics, schema metadata, and env and file substitution; a missing file reference invalidates that document.[^config-doc]
 
-A document containing any removed key is ignored as a whole, including legacy logLevel, server, agent, provider, tools, and related keys; the legacy MCP shape with server names directly under mcp is also rejected in favor of mcp.servers.[^config-doc]
+Only unparsable JSON/JSONC documents are skipped as a whole. Parsed documents drop removed or unknown keys and the smallest schema-invalid unit while preserving unrelated settings. Invalid named MCP server, provider, command, or reference values drop only that entry; invalid agent fields drop individually when the agent remains structurally valid. MCP servers use mcp.servers.[^config-doc][^config-core]
+
+Invalid permission rules preserve valid rule order and append denies for the readable nonempty action on every resource, or for every action when the action or ruleset is unreadable. Any invalid guardrails value becomes { "enabled": true } with default limits; normal configuration-scope precedence is unchanged. GET /api/config/diagnostics reports the document path, reason, message, parsed-item jsonPath, and failClosed: true for security recovery.[^config-doc][^config-core]
+
+Decision judgments use explicit agent calls to decision with provider: "agent" and the hidden helper model selected through agents.decision.model, efficiency.helper_models.decision, or the Session/default model. The decisions configuration key is dropped individually as a removed key.[^config-doc]
 
 ## Repository Resources and Identity
 
@@ -46,5 +52,6 @@ Canonical YCoding identity uses YCoding product prose, ycoding executable, @ycod
 - [Provider Integration and Cache](./provider-integration.md)
 
 [^config-doc]: repo:///docs/configuration.md
+[^config-core]: repo:///packages/core/src/config.ts
 [^repo-resources]: repo:///docs/repository-resources.md
 [^migration]: repo:///docs/ycoding-migration.md

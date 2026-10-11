@@ -1,6 +1,8 @@
 # Repository memories and shared knowledge
 
-Memory stores linked, human-readable Markdown concepts. It separates repository memories, shared by all worktrees of one local Git repository, from shared knowledge. It is an explicit knowledge store, not Session history, a prompt cache, or a project artifact. Concept content is never injected into prompts, and transcripts are never extracted into memory.
+Memory stores linked, human-readable Markdown concepts. It separates repository memories, shared by all worktrees of one local Git repository, from shared knowledge. It is an explicit knowledge store, not Session history, a prompt cache, or a project artifact. Concept content is never injected into Session prompts, and transcripts are never extracted into memory.
+
+When both `prediction.enabled` and `prediction.memory` are on, bounded search snippets are sent only to the next-message prediction helper request, to its configured helper provider. The calling Session's selected agent must have effective `memory_read` permission evaluated as `allow` for each collection root; `ask` and `deny` skip that collection without raising a permission prompt. Repository scope supplies project memory when the Location is in Git; knowledge scope supplies shared/global knowledge. The helper searches each available allowed scope once, takes at most three hits each, and sends only bounded titles/IDs and snippets of at most 600 characters. Disabled memory or search failures degrade to prediction without those snippets. These snippets never enter the Session's transcript, durable instructions, or subsequent model-visible history. The helper provider's ordinary privacy, quota, and pricing policies apply.
 
 ## Agent guidance
 

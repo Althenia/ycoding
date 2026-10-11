@@ -35,6 +35,8 @@ The same directory structure is supported globally under the YCoding configurati
     └── company-dark.json
 ```
 
+The hidden primary `prediction` agent is an internal next-message helper with no tools. Its system prompt and model can be configured through `agents.prediction`; it resolves the explicit agent model before `efficiency.helper_models.prediction` and the Session/default model. Prediction is enabled by default; set `prediction.enabled` to false to disable it. Workspace-memory enrichment defaults to false; explicit `prediction.memory: true` requires the calling selected agent's effective `memory_read` allow. Snippets are sent only to the helper, never injected into Session prompts. See [prediction configuration](./configuration.md#next-message-prediction).
+
 Supported project resource domains are:
 
 - runtime configuration;
@@ -52,6 +54,10 @@ There is no generic `.ycoding/tool` loader. Custom tools must be provided by a p
 ## Built-in workspace memory
 
 The built-in `memory` tool stores explicit folder-scoped knowledge outside repository resource discovery. Configure it through the runtime `memory` object; it does not scan `.ycoding` for concepts or automatically load knowledge as instructions. Its actions are `status`, `list`, `search`, `read`, `write`, and offline `graph` export. See [Workspace knowledge memory](./memory.md) for storage, format, permissions, and update semantics.
+
+## Built-in Git worktrees
+
+The built-in `worktree` tool accepts `{ action: "list" }` or `{ action: "create", name }`. Names must match `^[a-z0-9][a-z0-9-]{0,62}$`. Listing returns each repository worktree's path, branch when known, and whether it contains the current Location. Creation uses the project-copy service and creates `<data>/worktrees/<repo-key>/<name>` on branch `<name>`; it does not switch the current Session Location. `repo-key` is `repo_` plus SHA-256 of the canonical Git common directory. Permission action `worktree` defaults to ask, and creation also uses the Session `file_mutation` guardrail. The tool has no remove action; deletion remains a human action in Manage workspaces.
 
 ## Built-in task completion signal
 
@@ -100,7 +106,7 @@ The detailed sections below are authoritative. This index makes scope, recursion
 | Commands             | `<global config>/command/**/*.md`, `<global config>/commands/**/*.md`; `.ycoding/command/**/*.md`, `.ycoding/commands/**/*.md`                                | Recursive. Name is the path below `command` or `commands` without `.md`.                                                                     | Markdown body is required `template`. Frontmatter: `description`, `agent`, `model`, `subtask`.                                                                                                       | Configured or Markdown command with the same name wins over an MCP prompt. Every frontmatter field is unset when omitted.                                                                |
 | Skills               | `<global config>/skill` and `skills`; ancestor `.ycoding/skill` and `skills`; compatible `.claude/skills`, `.agents/skills`; configured local/HTTP(S) sources | Direct root `*.md` or recursive `**/SKILL.md`. Root-file ID is filename; `SKILL.md` ID is its directory.                                     | Markdown is the skill content. Frontmatter: `name`, `description`, `slash`, `metadata`; recognized metadata includes `ycoding/slash`, `ycoding/autoinvoke`, and conflict lists.                      | `name` defaults to the ID. Other fields are unset when omitted. Compatibility roots contribute skills only and are re-read on demand.                                                    |
 | Plugins              | `<global config>/plugin/*.{ts,js}`, `<global config>/plugins/*.{ts,js}`; equivalent `.ycoding` paths                                                          | Direct children only; nested files are not auto-discovered. Plugin identity is supplied by its exported plugin definition.                   | TypeScript or JavaScript module; options come from JSON `{ package, options }`.                                                                                                                      | JSON directives run after auto-discovered files and can remove exact, `*`, or `<prefix>.*` IDs. There is no Markdown body or frontmatter format.                                         |
-| Themes               | `<global config>/themes/*.json`; `.ycoding/themes/*.json`                                                                                                     | Direct children only. ID is filename without `.json`.                                                                                        | Theme JSON shape is owned by the `ThemeFile` schema in `packages/tui/src/theme/schema.ts`.                                                                                                                              | Global, broad ancestor, then nearer project files load in order; later equal IDs replace earlier files.                                                                                  |
+| Themes               | `<global config>/themes/*.json`; `.ycoding/themes/*.json`                                                                                                     | Direct children only. ID is filename without `.json`.                                                                                        | Theme JSON shape is owned by the `ThemeFile` schema in `packages/tui/src/theme/schema.ts`.                                                                                                           | Global, broad ancestor, then nearer project files load in order; later equal IDs replace earlier files.                                                                                  |
 | Ambient instructions | `<global config>/AGENTS.md`; project-root-to-current-directory `AGENTS.md` files                                                                              | Direct `AGENTS.md` file at each discovered level; no recursive filename glob. There is no derived instruction ID exposed as a resource name. | Whole file is instruction content, truncated per `instruction_max_bytes`.                                                                                                                            | Broader context precedes narrower context. Top-level JSON `instructions` is Schema-accepted but is not a current discovery source.                                                       |
 | Guardrails           | `<global config>/guardrails/*.md`; each discovered repository `Config.Directory` `/guardrails/*.md`                                                           | Direct children only; one file is one rule and its `id` comes from frontmatter.                                                              | Body is operator-facing explanation. Frontmatter is `id`, `enabled`, `decision` (`allow` \| `ask` \| `deny`), `actions`, `resources`, `reason`, `priority`.                                          | `enabled` defaults to `true`; `priority` defaults to `0`. Nearest repository layer, then broader repository, then global. See the dedicated guardrail document for reply/reuse behavior. |
 
@@ -326,6 +332,10 @@ Skill availability is filtered through the selected agent's `skill` permission r
 
 ## Plugins
 
+The [meeting runtime](./meeting-intelligence.md) has separate runtime and TUI entrypoints. Native `/meeting` commands register through the TUI keymap and `/meeting start` prints the authenticated live page address for page-owned capture; the read-only `meeting_history` tool uses the runtime tool transform.
+
+Trusted Effect/Promise plugins have `context.mcp.servers()`, `tools()`, `readResource({server, uri})`, and `callTool({server, name, args?})`. These reuse the current Location's MCP services and errors, not a separate registry, authentication flow or annotation-based authorization.
+
 Plugins extend runtime domains and can register tools, hooks, agents, commands, skills, integrations, references, provider transforms, and Session behavior.
 
 ### Auto-discovered files
@@ -410,6 +420,8 @@ A remove selector can be an exact ID, `*`, or a prefix ending in `.*`.
 
 Explicit JSON plugin operations are applied after auto-discovered files, so configuration can disable an auto-discovered or built-in plugin.
 
+Terminal-side plugins use global `cli.json`, separately from runtime plugin discovery. TUI startup first applies built-in enable/disable selectors in configuration order, then exposes the Home and Session shell before loading optional plugins. Disabled built-in UI is not mounted during startup. Optional directives retain their configuration order, including enable and remove operations on optional plugins; loading and failure states are available in Status.
+
 ## Hooks
 
 Hooks are a plugin API, not a standalone repository file format.
@@ -428,7 +440,9 @@ Do not create `.ycoding/hooks.json`, `.ycoding/hooks/`, or a top-level `hooks` c
 
 ## Tools
 
-The built-in `decision` tool accepts `{ provider, request }`. `openai` and `typesafe` use their native bodies and native JSON results; `agent` accepts JSON `state` and ordered named questions and exposes validated model-estimate results as TOON. Permission action `decision` uses resource `openai`, `typesafe`, or `agent`; an explicit denial blocks the call. Credentials stay outside agent arguments and results. Send only evidence authorized for disclosure to the selected provider or helper model route. OpenAI uses `input` and an ordered question array; TypeSafe uses `state` and named questions. Their predicate and `noul` bodies are distinct, not interchangeable. The hidden primary `decision` agent has no tools, is reserved for internal evaluation rather than foreground Session or command selection, and uses `agents.decision.model`, then `efficiency.helper_models.decision`, then the owner Session/default model. Its confidence is self-reported and uncalibrated, not a native probability. See [native examples](../specs/decisions.md#native-tool-inputs), [agent input and TOON](../specs/decisions.md#decision-agent-inputs), and [configuration](./configuration.md#native-decisions).
+The built-in `decision` tool accepts `{ provider: "agent", request }`. Requests contain JSON `state` and ordered named questions and expose validated model-estimate results as TOON. Permission action `decision` uses resource `agent`; an explicit denial blocks the call. Credentials stay outside agent arguments and results. Send only evidence authorized for disclosure to the helper model route. The hidden primary `decision` agent has no tools, is reserved for internal evaluation rather than foreground Session or command selection, and uses `agents.decision.model`, then `efficiency.helper_models.decision`, then the owner Session/default model. Its confidence is self-reported and uncalibrated. See [agent input and TOON](../specs/decisions.md#decision-agent-inputs) and [configuration](./configuration.md#decisions).
+
+Only explicit agent calls invoke decision judgments. Main, child, and side-chat Sessions share the tool and its `core/decision-use` guidance; effective permission denies and inherited ceilings remain enforced. Predicates, choices, and scores can abstain with `type: refusal`, null answer values, and confidence `0`. Refusal means insufficient evidence or inability to judge, not a selected option or approval; gather missing evidence or ask the user.
 
 YCoding does not auto-load `.ycoding/tool/*.ts` or `.ycoding/tools/*.ts`.
 

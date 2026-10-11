@@ -4,14 +4,14 @@ This document is the canonical configuration reference for the current YCoding r
 
 ## Configure by task
 
-| Task                                      | Read                                                                                                                                     |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| Choose which configuration wins           | [Discovery and precedence](#runtime-configuration-discovery-and-precedence), [JSON/JSONC](#json-and-jsonc-behavior).                     |
+| Task                                      | Read                                                                                                                                                                       |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Choose which configuration wins           | [Discovery and precedence](#runtime-configuration-discovery-and-precedence), [JSON/JSONC](#json-and-jsonc-behavior).                                                       |
 | Connect an account and choose a model     | [Providers and models](#providers-and-models), [profiles](#provider-profiles), [Claude Code accounts](#claude-code-account-profiles), [model selectors](#model-selectors). |
-| Control agent authority                   | [Permissions](#permissions), [agents](#agents), [guardrails](#guardrail-configuration-and-custom-files).                                 |
-| Extend repository behavior                | [Commands](#commands), [skills and instructions](#skills-and-ambient-instructions), [plugins](#plugins-and-hooks), [MCP](#mcp).          |
-| Manage context and knowledge              | [Compaction](#compaction-and-experimental-settings), [workspace memory](#workspace-memory), [provider efficiency](#provider-efficiency). |
-| Adjust presentation and service operation | [CLI/TUI](#cli-tui-configuration), [managed service](#managed-service-configuration).                                                    |
+| Control agent authority                   | [Permissions](#permissions), [agents](#agents), [guardrails](#guardrail-configuration-and-custom-files).                                                                   |
+| Extend repository behavior                | [Commands](#commands), [skills and instructions](#skills-and-ambient-instructions), [plugins](#plugins-and-hooks), [MCP](#mcp).                                            |
+| Manage context and knowledge              | [Compaction](#compaction-and-experimental-settings), [workspace memory](#workspace-memory), [provider efficiency](#provider-efficiency).                                   |
+| Adjust presentation and service operation | [CLI/TUI](#cli-tui-configuration), [managed service](#managed-service-configuration).                                                                                      |
 
 Runtime settings belong in `ycoding.json` or `ycoding.jsonc`; terminal preferences belong in `cli.json`. These surfaces do not substitute for each other.
 
@@ -56,7 +56,7 @@ For source development on macOS, run `bun run build:computer-use` explicitly bef
 
 On POSIX systems, YCoding restricts its log directory to mode `0700` and the active YCoding log file to `0600`, whether that file is new or pre-existing. Startup repairs more-permissive modes without deleting or rewriting existing log content.
 
-The server-hosted remote connector writes warning-level diagnostics to the active YCoding log file in `$XDG_DATA_HOME/ycoding/log` with `component=remote-connector`. A relay-close entry records the close code and whether the connector reconnects; failure entries omit error details, so credentials, bearer tokens, and frame payloads never reach the log.
+The server-hosted remote connector writes warning-level diagnostics to the active YCoding log file in `$XDG_DATA_HOME/ycoding/log` with `component=remote-connector`. A relay-close entry records the close code and whether the connector reconnects. A state transition records `from`, `state`, and, when known, `retryable`. A startup or recovery failure records a fixed `cause` category (`authorization_rejected`, `setup_failed`, or `startup_failed`); a rejected credential exchange also records its `operation` (`enroll`, `challenge`, `token`, or `refresh`) and HTTP `status`. Failure entries omit raw error bodies, so credentials, bearer tokens, and frame payloads never reach the log. A remote request that takes 1 s or longer on the machine writes `slow remote request <operation> took <N>ms on this device`, naming only the operation and duration. Session-scoped reads verify the Session with one `session.get` at its recorded Location, scanning the full Session inventory only for an ID the connector has not yet seen; captured-change summaries are reused while every member Session's durable event position is unchanged.
 
 When `$XDG_CONFIG_HOME` is `~/.config`, the global JSONC source is `~/.config/ycoding/ycoding.jsonc`. Compaction helper selection reads the merged runtime configuration from this normal discovery chain; it does not use a separate helper-only configuration file.
 
@@ -90,10 +90,12 @@ Both JSON and JSONC support:
 
 - `//` comments;
 - trailing commas;
-- unknown properties, which are ignored by Schema decoding;
+- unknown properties, which are dropped individually with diagnostics;
 - `$schema` metadata;
 - environment substitution with `{env:NAME}`;
 - file substitution with `{file:path}`.
+
+Only an unparsable JSON/JSONC document is skipped as a whole. For a parsed document, the runtime drops removed or unknown keys and the smallest schema-invalid unit, preserving unrelated settings. Invalid named MCP server, provider, command, or reference values drop only that entry; invalid agent fields are dropped individually when the agent remains structurally valid. Invalid permission rules fail closed: a readable nonempty action is denied on every resource, and an unreadable action or non-array ruleset denies every action in that global or agent ruleset. Valid rules retain their order, followed by the recovered denies, so later rules in the same ruleset cannot override recovery; normal precedence between configuration scopes is unchanged. Any invalid `guardrails` value becomes `{ "enabled": true }`, using default limits. The runtime logs `ignored config file with invalid JSON` for unparsable documents and one `recovered config item` warning per dropped or fail-closed item. The Location-scoped `GET /api/config/diagnostics` endpoint returns the document `path`, `reason`, and short `message`, plus `jsonPath` for parsed items and `failClosed: true` for security recovery. The TUI shows error toasts and lists diagnostics under Configuration in Status, with wrapping JSON-path/message details and a `fails closed` marker.
 
 `{file:path}` is resolved relative to the containing configuration file. Absolute paths and `~/` are supported. The referenced file is trimmed and inserted as a JSON string fragment. A `{file:...}` token inside a `//` comment is not resolved.
 
@@ -116,7 +118,7 @@ Example:
 }
 ```
 
-Missing environment variables become an empty string. A missing file reference invalidates that configuration document.
+Missing environment variables become an empty string. A missing `{file:...}` reference fails configuration loading for that Location and is shown as a configuration error.
 
 The configuration JSON Schema is generated from the runtime-owned `Config.Info` Schema during the public web build. Its public endpoint is [`https://ycoding.althenia.app/ycoding.schema.json`](https://ycoding.althenia.app/ycoding.schema.json). Publish the built web assets before using the endpoint.
 
@@ -134,7 +136,7 @@ Use the generated YCoding schema endpoint rather than a different product's sche
 
 After the public site and a native release are published, `curl -fsSL https://ycoding.althenia.app/install.sh | sh` installs a checksum-verified release executable in `~/.local/bin`. Installation does not require a separate Bun runtime. The installer applies the same archive checks as `ycoding update`. It checks the shell configuration and adds the binary directory to PATH only when needed; unsupported shells receive manual PATH guidance.
 
-`ycoding` opens the interactive terminal interface. `ycoding --model <provider/model> "prompt"` executes a direct non-interactive run instead. `ycoding run --help` lists the explicit run command's options. These paths share the existing durable Session execution and permission handling.
+`ycoding` opens the interactive terminal interface. `ycoding --model <[profile#]provider/model[#variant]> "prompt"` executes a direct non-interactive run instead. `ycoding run --help` lists the explicit run command's options. These paths share the existing durable Session execution and permission handling.
 
 The installed executable includes `ycoding service start`, `restart`, `status`, `stop`, `get`, `set`, and `unset` for the managed background server. `ycoding service --help` lists these controls. `status` reports the running endpoint or `stopped` without starting a server. `restart` interrupts executing Sessions; let their work finish before restarting to apply an update.
 
@@ -148,6 +150,12 @@ After `ycoding update` installs a release, it applies the release to the running
 
 The background update check resolves the newest release from the same GitHub Releases source and only announces its availability with the explicit `ycoding update` command. It never downloads release assets, installs an update, replaces executables, or restarts the application. An omitted `autoupdate`, `true`, and `"notify"` all enable notice-only checks for patch, minor, and major releases; `false` disables the check. Installation requires the user to run `ycoding update`.
 
+### Meeting capture
+
+Meeting requires the native Bun-built `ycoding` executable. The Node CLI excludes Meeting; `meeting` and `serve --meeting` exit nonzero with an error directing you to the native executable, without starting a meeting server or arming capture.
+
+`ycoding meeting [directory] [--no-open]` starts a private server with the bundled meeting runtime for the directory (default: the current directory), arms a meeting, and opens or prints its local live page; it reuses a meeting runtime that already serves the directory. `ycoding serve --meeting` starts a server with the same runtime plugin. The live page owns browser-tab audio capture using its per-bridge view key, with fresh participant consent and an optional microphone; no capture extension or pairing is required. Keep it open while recording. Speech prerequisites and recording consent are described in [meeting intelligence](./meeting-intelligence.md#ycoding-meeting).
+
 ### Remote access
 
 `ycoding remote` gives the authenticated owner of an enrolled machine access to every Session in that machine's backend through a relay deployment. The local process keeps execution authority; see [Runtime behavior](./runtime.md#remote-relay-agent) for backend-derived Location, authorization, reconnection, and frame-bounding rules.
@@ -158,13 +166,13 @@ The standalone terminal artifact and the full CLI expose the same remote subcomm
 
 In the browser, **New session** selects from existing repositories recorded by that backend. Open a missing repository locally, then use **Refresh repositories**. New Sessions use the selected directory's configured `default_agent` and `model` when no Session-specific selection exists; configure providers and credentials on the machine. The browser does not accept an arbitrary directory or create repositories.
 
-| Command                                                                                 | Purpose                                                                                              |
-| --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `ycoding remote enroll <enrollmentID> [--name <name>] [--relay <origin>] [--replace]`   | Enroll this machine with a relay. The one-use enrollment code is read from the terminal, never argv. |
-| `ycoding remote connect [--relay <origin>] [--server <url> \| --standalone]`            | Turn on the resolved server's remote connection and return once it is on; `--standalone` stays in the foreground until Ctrl-C. |
-| `ycoding remote disconnect [--server <url> \| --standalone]`                            | Turn off the resolved server's remote connection.                                                    |
-| `ycoding remote status [--server <url> \| --standalone]`                               | Show enrollment, credential validity, local server address, backend Session count, and the remote connection state. An unenrolled machine reports only that it is not enrolled, without starting or contacting a local server. |
-| `ycoding remote sessions [--server <url> \| --standalone]`                             | List every Session in the backend through its authoritative Location.                                |
+| Command                                                                               | Purpose                                                                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ycoding remote enroll <enrollmentID> [--name <name>] [--relay <origin>] [--replace]` | Enroll this machine with a relay. The one-use enrollment code is read from the terminal, never argv.                                                                                                                           |
+| `ycoding remote connect [--relay <origin>] [--server <url> \| --standalone]`          | Turn on the resolved server's remote connection and return once it is on; `--standalone` stays in the foreground until Ctrl-C.                                                                                                 |
+| `ycoding remote disconnect [--server <url> \| --standalone]`                          | Turn off the resolved server's remote connection.                                                                                                                                                                              |
+| `ycoding remote status [--server <url> \| --standalone]`                              | Show enrollment, credential validity, local server address, backend Session count, and the remote connection state. An unenrolled machine reports only that it is not enrolled, without starting or contacting a local server. |
+| `ycoding remote sessions [--server <url> \| --standalone]`                            | List every Session in the backend through its authoritative Location.                                                                                                                                                          |
 
 `ycoding remote enroll` requires a relay origin, and `--replace` is required before an existing device identity can be overwritten. `ycoding remote connect` requires an enrolled device and refuses to bridge a local server over a LAN or public-network endpoint.
 
@@ -189,7 +197,7 @@ Provisioning is an operator action in `infra/cloudflare`. `wrangler.jsonc` selec
 
 ## Rejected configuration keys
 
-A document containing any rejected key is ignored as a whole. Rejected keys are:
+A rejected key is dropped with a diagnostic; the rest of its document still loads. Rejected keys are:
 
 ```text
 logLevel
@@ -209,7 +217,10 @@ permission
 tools
 attachment
 layout
+decisions
 ```
+
+Removed or unknown keys are dropped individually without discarding unrelated settings. Each dropped item is logged and exposed through `GET /api/config/diagnostics` with its document path, JSON path, reason, and message; security recovery also carries `failClosed: true`. The TUI reports ignored documents, dropped items, and fail-closed recovery with distinct error toasts and Configuration entries in Status.
 
 The MCP shape where server names appear directly under `mcp` is also rejected. Use `mcp.servers`.
 
@@ -223,7 +234,7 @@ The MCP shape where server names appear directly under `mcp` is also rejected. U
 | `shell_memory_limit_mb` | non-negative integer                  | Default shell command process-tree memory limit in MiB; zero disables the default.          |
 | `model`                 | model selector                        | Default model.                                                                              |
 | `default_agent`         | string                                | Default selectable primary agent.                                                           |
-| `autoupdate`            | boolean or `notify`                   | Notice-only update checks; `false` disables checks. Installation is always manual.           |
+| `autoupdate`            | boolean or `notify`                   | Notice-only update checks; `false` disables checks. Installation is always manual.          |
 | `share`                 | `manual`, `auto`, or `disabled`       | Session sharing policy accepted by Schema.                                                  |
 | `enterprise.url`        | string                                | Enterprise sharing endpoint accepted by Schema.                                             |
 | `username`              | string                                | Display and telemetry identity.                                                             |
@@ -245,11 +256,14 @@ The MCP shape where server names appear directly under `mcp` is also rejected. U
 | `plugins`               | array                                 | Ordered plugin additions, options, and removals.                                            |
 | `providers`             | record                                | Provider and model overrides.                                                               |
 | `memory`                | object                                | On-demand workspace knowledge enablement, base path, and concept/bundle limits.             |
+| `prediction`            | object                                | Default-enabled next-message prediction with optional permission-checked memory enrichment. |
 | `efficiency`            | object                                | Helper-model, prompt-cache, and provider-continuation policy.                               |
 | `image_analyzer`        | object                                | Image analysis fallback for text-only models.                                               |
 | `experimental`          | object                                | Subagent depth and resource policies.                                                       |
 
 ### Shell memory limits
+
+`shell_sandbox` delegates isolation to an enforceable runtime backend. No shell sandbox backend is bundled: `optional` runs without sandboxing and reports a warning, while `required` rejects execution when no backend is available. A managed worktree is not sandbox-allowed by default.
 
 The model-facing shell `timeout` input is not a configuration field. It accepts whole milliseconds up to 3,600,000 (one hour); omission or `0` selects the finite 600,000 ms default. Values above one hour are rejected. A foreground command that remains active after 300,000 ms is moved to the background without being terminated; its selected timeout still applies.
 
@@ -263,107 +277,107 @@ On macOS and Linux, YCoding samples aggregate resident memory for the detached s
 
 The field reference below expands the overview. `unset` means the field is optional in Schema and has no default specified here.
 
-| Field path                                        | Exact type or closed values                                                    | Default         | Operational remark                                                                                |
-| ------------------------------------------------- | ------------------------------------------------------------------------------ | --------------- | ------------------------------------------------------------------------------------------------- |
-| `$schema`                                         | string                                                                         | unset           | Editor metadata only.                                                                             |
-| `shell`                                           | string                                                                         | unset           | Shell executable or command selector.                                                             |
-| `shell_sandbox`                                   | `disabled` \| `optional` \| `required`                                         | unset           | Shell isolation policy.                                                                           |
-| `shell_memory_limit_mb`                           | non-negative integer `<= 1048576`                                              | unset           | Default sampled resident-memory limit in MiB; zero means unlimited.                               |
-| `model`                                           | model selector                                                                 | unset           | Session/agent model fallback.                                                                     |
-| `default_agent`, `username`                       | string                                                                         | unset           | Primary agent ID and display identity.                                                            |
-| `autoupdate`                                      | boolean \| `notify`                                                            | unset           | Notice-only checks; `false` disables them.                                                          |
-| `share`                                           | `manual` \| `auto` \| `disabled`                                               | unset           | Sharing policy.                                                                                   |
-| `enterprise.url`                                  | string                                                                         | unset           | Enterprise endpoint.                                                                              |
-| `permissions`                                     | ordered `[{ action: string, resource: string, effect: allow \| deny \| ask }]` | unset           | Global permission rules.                                                                          |
-| `agents`                                          | record of `Config.Agent`                                                       | unset           | Inline agent definitions and overrides.                                                           |
-| `snapshots`                                       | boolean                                                                        | unset           | Snapshot switch.                                                                                  |
-| `watcher`                                         | `Config.Watcher`                                                               | unset           | Watcher filters.                                                                                  |
-| `formatter`                                       | boolean \| record of `Config.Formatter.Entry`                                  | unset           | Formatter enablement and overrides.                                                               |
-| `lsp`                                             | boolean \| record of `Config.LSP.Entry`                                        | unset           | Language-server enablement and overrides.                                                         |
-| `attachments`, `tool_output`, `mcp`, `compaction` | their named `Config.*` object                                                  | unset           | Runtime tooling and context controls.                                                             |
-| `guardrails`                                      | `Config.Guardrail`                                                             | unset           | Root-Session-family guardrail configuration; custom-source and reply rules are documented below.  |
-| `skills`, `instructions`                          | string[]                                                                       | unset           | Extra skill sources; `instructions` has no current ambient-discovery consumer.                    |
-| `instruction_max_bytes`                           | positive integer `<= 1048576`                                                  | `51200`         | Per-ambient-instruction UTF-8 byte cap.                                                           |
-| `commands`                                        | record of `Config.Command`                                                     | unset           | Inline slash commands.                                                                            |
-| `references`                                      | record of `Config.Reference.Entry`                                             | unset           | Named local or Git context sources.                                                               |
-| `plugins`                                         | (`string` \| `{ package: string, options?: Record<string, unknown> }`)[]       | unset           | Ordered runtime plugin directives.                                                                |
-| `providers`                                       | record of `Config.Provider`                                                    | unset           | Provider/model overrides.                                                                         |
-| `provider_usage`                                  | `Config.ProviderUsage`                                                         | unset           | Read-only provider-usage client bridge.                                                           |
-| `efficiency`                                      | `Config.Efficiency`                                                            | runtime-derived | Helper-model, cache, and continuation policy.                                                     |
-| `image_analyzer`                                  | `Config.ImageAnalyzer`                                                         | unset           | Vision fallback for text-only models: provider/model, prompt, and thresholds.                     |
-| `experimental`                                    | `Config.Experimental`                                                          | unset           | Experimental runtime policy.                                                                      |
+| Field path                                        | Exact type or closed values                                                    | Default         | Operational remark                                                                               |
+| ------------------------------------------------- | ------------------------------------------------------------------------------ | --------------- | ------------------------------------------------------------------------------------------------ |
+| `$schema`                                         | string                                                                         | unset           | Editor metadata only.                                                                            |
+| `shell`                                           | string                                                                         | unset           | Shell executable or command selector.                                                            |
+| `shell_sandbox`                                   | `disabled` \| `optional` \| `required`                                         | unset           | Shell isolation policy.                                                                          |
+| `shell_memory_limit_mb`                           | non-negative integer `<= 1048576`                                              | unset           | Default sampled resident-memory limit in MiB; zero means unlimited.                              |
+| `model`                                           | model selector                                                                 | unset           | Session/agent model fallback.                                                                    |
+| `default_agent`, `username`                       | string                                                                         | unset           | Primary agent ID and display identity.                                                           |
+| `autoupdate`                                      | boolean \| `notify`                                                            | unset           | Notice-only checks; `false` disables them.                                                       |
+| `share`                                           | `manual` \| `auto` \| `disabled`                                               | unset           | Sharing policy.                                                                                  |
+| `enterprise.url`                                  | string                                                                         | unset           | Enterprise endpoint.                                                                             |
+| `permissions`                                     | ordered `[{ action: string, resource: string, effect: allow \| deny \| ask }]` | unset           | Global permission rules.                                                                         |
+| `agents`                                          | record of `Config.Agent`                                                       | unset           | Inline agent definitions and overrides.                                                          |
+| `snapshots`                                       | boolean                                                                        | unset           | Snapshot switch.                                                                                 |
+| `watcher`                                         | `Config.Watcher`                                                               | unset           | Watcher filters.                                                                                 |
+| `formatter`                                       | boolean \| record of `Config.Formatter.Entry`                                  | unset           | Formatter enablement and overrides.                                                              |
+| `lsp`                                             | boolean \| record of `Config.LSP.Entry`                                        | unset           | Language-server enablement and overrides.                                                        |
+| `attachments`, `tool_output`, `mcp`, `compaction` | their named `Config.*` object                                                  | unset           | Runtime tooling and context controls.                                                            |
+| `guardrails`                                      | `Config.Guardrail`                                                             | unset           | Root-Session-family guardrail configuration; custom-source and reply rules are documented below. |
+| `skills`, `instructions`                          | string[]                                                                       | unset           | Extra skill sources; `instructions` has no current ambient-discovery consumer.                   |
+| `instruction_max_bytes`                           | positive integer `<= 1048576`                                                  | `51200`         | Per-ambient-instruction UTF-8 byte cap.                                                          |
+| `commands`                                        | record of `Config.Command`                                                     | unset           | Inline slash commands.                                                                           |
+| `references`                                      | record of `Config.Reference.Entry`                                             | unset           | Named local or Git context sources.                                                              |
+| `plugins`                                         | (`string` \| `{ package: string, options?: Record<string, unknown> }`)[]       | unset           | Ordered runtime plugin directives.                                                               |
+| `providers`                                       | record of `Config.Provider`                                                    | unset           | Provider/model overrides.                                                                        |
+| `provider_usage`                                  | `Config.ProviderUsage`                                                         | unset           | Read-only provider-usage client bridge.                                                          |
+| `efficiency`                                      | `Config.Efficiency`                                                            | runtime-derived | Helper-model, cache, and continuation policy.                                                    |
+| `image_analyzer`                                  | `Config.ImageAnalyzer`                                                         | unset           | Vision fallback for text-only models: provider/model, prompt, and thresholds.                    |
+| `experimental`                                    | `Config.Experimental`                                                          | unset           | Experimental runtime policy.                                                                     |
 
-| Nested field path                                                                       | Exact type or closed values                                                                                     | Default                         | Operational remark                                                                                                                                                                |
-| --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agents.<id>.model`                                                                     | model selector                                                                                                  | unset                           | Agent model override.                                                                                                                                                             |
-| `agents.<id>.request.headers`, `.request.body`                                          | string record, JSON record                                                                                      | unset                           | Provider request overlays.                                                                                                                                                        |
-| `agents.<id>.system`, `.description`                                                    | string                                                                                                          | unset                           | System instruction and display description.                                                                                                                                       |
-| `agents.<id>.mode`                                                                      | `subagent` \| `primary` \| `all`                                                                                | unset                           | Agent availability.                                                                                                                                                               |
-| `agents.<id>.hidden`, `.disabled`                                                       | boolean                                                                                                         | unset                           | Visibility and disable switches.                                                                                                                                                  |
-| `agents.<id>.color`                                                                     | `#RRGGBB` \| `primary` \| `secondary` \| `accent` \| `success` \| `warning` \| `error` \| `info`                | unset                           | TUI color.                                                                                                                                                                        |
-| `agents.<id>.steps`                                                                     | positive integer                                                                                                | unset                           | Agent step allowance.                                                                                                                                                             |
-| `agents.<id>.permissions`                                                               | `Permission.Rule[]`                                                                                             | unset                           | Agent permission additions.                                                                                                                                                       |
-| `commands.<name>.template`                                                              | string                                                                                                          | required                        | Command prompt template.                                                                                                                                                          |
-| `commands.<name>.description`, `.agent`                                                 | string                                                                                                          | unset                           | Picker description and agent ID.                                                                                                                                                  |
-| `commands.<name>.model`                                                                 | model selector                                                                                                  | unset                           | Command model override.                                                                                                                                                           |
-| `commands.<name>.subtask`                                                               | boolean                                                                                                         | unset                           | Subtask request.                                                                                                                                                                  |
-| `references.<name>`                                                                     | string \| `{ repository: string, branch?, description?, hidden? }` \| `{ path: string, description?, hidden? }` | required per entry              | Reference source.                                                                                                                                                                 |
-| `mcp.timeout.startup`, `.catalog`, `.execution`                                         | positive integer milliseconds                                                                                   | runtime-derived                 | Global timeout overrides.                                                                                                                                                         |
-| `mcp.servers.<name>`                                                                    | local \| remote server object                                                                                   | required per entry              | Discriminated by `.type`.                                                                                                                                                         |
-| local `.command`                                                                        | string[]                                                                                                        | required                        | Stdio command and arguments.                                                                                                                                                      |
-| local `.cwd`, `.environment`, `.disabled`, `.timeout`                                   | string, string record, boolean, timeout object                                                                  | unset                           | Local-server options; relative `cwd` resolves from workspace.                                                                                                                     |
-| remote `.url`                                                                           | string                                                                                                          | required                        | Remote MCP endpoint.                                                                                                                                                              |
-| remote `.headers`, `.disabled`, `.timeout`                                              | string record, boolean, timeout object                                                                          | unset                           | Remote-server options.                                                                                                                                                            |
-| local/remote `.codemode`                                                                | boolean                                                                                                         | `true`                          | Code Mode catalog exposure.                                                                                                                                                       |
-| remote `.oauth`                                                                         | `false` \| OAuth object                                                                                         | unset                           | OAuth configuration.                                                                                                                                                              |
-| `.oauth.client_id`, `.client_secret`, `.scope`, `.redirect_uri`                         | string                                                                                                          | unset                           | OAuth client fields.                                                                                                                                                              |
-| `.oauth.callback_port`                                                                  | integer `1..65535`                                                                                              | unset                           | Local OAuth callback port.                                                                                                                                                        |
-| `providers.<id>.name`, `.package`                                                       | string                                                                                                          | unset                           | Provider identity/implementation override.                                                                                                                                        |
-| `providers.<id>.env`                                                                    | string[]                                                                                                        | unset                           | Credential variable names; never place credential values in config.                                                                                                               |
-| `providers.<id>.settings`, `.headers`, `.body`                                          | JSON record, string record, JSON record                                                                         | unset                           | Provider request overlays.                                                                                                                                                        |
-| `providers.<id>.catalog.source`                                                        | `openai-models`                                                                                                 | unset                           | Optional model catalog discovery for a configured provider.                                                                                                                     |
-| `providers.<id>.models.<id>.modelID`, `.family`, `.name`, `.package`                    | model ID, model family, string, string                                                                          | unset                           | Model identity.                                                                                                                                                                   |
-| model `.settings`, `.headers`, `.body`                                                  | JSON record, string record, JSON record                                                                         | unset                           | Model request overlays.                                                                                                                                                           |
-| model `.capabilities.tools`                                                             | boolean                                                                                                         | unset                           | Tool-call declaration.                                                                                                                                                            |
-| model `.capabilities.input`, `.output`                                                  | string[]                                                                                                        | unset                           | Input/output modality names.                                                                                                                                                      |
-| model `.variants[]`                                                                     | `{ id: variant ID, settings?, headers?, body? }`                                                                | unset                           | Named request variants.                                                                                                                                                           |
-| model `.cost`                                                                           | cost object \| cost object[]                                                                                    | unset                           | USD-per-million input/output cost; optional cache and context-tier data.                                                                                                          |
-| model `.disabled`                                                                       | boolean                                                                                                         | unset                           | Model disable switch.                                                                                                                                                             |
-| model `.limit.context`, `.input`, `.output`                                             | integer                                                                                                         | unset                           | Declared model limits.                                                                                                                                                            |
-| model `.api`                                                                            | `chat` \| `responses`                                                                                           | unset                           | OpenAI-compatible request surface; `responses` overrides the source default and the catalog value.                                                                                |
-| `formatter.<name>`                                                                      | `{ disabled?, command?: string[], environment?: Record<string, string>, extensions?: string[] }`                | unset                           | Formatter override.                                                                                                                                                               |
-| `lsp.<name>`                                                                            | `{ disabled: true }` \| `{ command: string[], extensions?, disabled?, env?, initialization? }`                  | unset                           | LSP override.                                                                                                                                                                     |
-| `attachments.image.auto_resize`                                                         | boolean                                                                                                         | unset                           | Image resizing.                                                                                                                                                                   |
-| `attachments.image.max_width`, `.max_height`, `.max_base64_bytes`                       | positive integer                                                                                                | unset                           | Image limits.                                                                                                                                                                     |
-| `tool_output.max_lines`, `.max_bytes`                                                   | positive integer                                                                                                | unset                           | Output truncation thresholds.                                                                                                                                                     |
-| `watcher.ignore`                                                                        | string[]                                                                                                        | unset                           | Watcher ignore patterns.                                                                                                                                                          |
-| `compaction.keep_recent_messages`                                                       | non-negative integer                                                                                            | `20`                            | Number of newest complete messages protected from selective exclusion. Model-switch boundary advice requires an explicit value.                                                   |
-| `compaction.reserved_output_tokens`                                                     | non-negative integer                                                                                            | `0`                             | Output-token reservation used by compaction helper requests.                                                                                                                      |
-| `compaction.context_safety_margin_tokens`                                               | non-negative integer                                                                                            | `4096`                          | Tokens reserved from the model input budget before context-pressure and model-switch fit calculations.                                                                            |
-| `compaction.timeout_seconds`                                                            | non-negative integer                                                                                            | `60`                            | Total provider-assisted checkpoint-generation budget across all helper calls; expiry stops helper traffic and uses the local canonical checkpoint, while `0` disables the budget. |
-| `compaction.max_output_tokens`                                                          | non-negative integer                                                                                            | `0`                             | Compaction helper output cap; `0` uses the model cap.                                                                                                                             |
-| `compaction.max_manifest_bytes`                                                         | non-negative integer                                                                                            | `65536`                         | UTF-8 cap for one strict ContextManifest candidate.                                                                                                                               |
-| `compaction.max_internal_passes`                                                        | non-negative integer                                                                                            | `8`                             | Maximum physical manifest-generation calls, including repair attempts.                                                                                                            |
-| `compaction.advisory`                                                                   | `false` \| `{ consider_percent, strongly_advised_percent }`                                                     | `{ 70, 90 }`                    | Disables automatic soft-pressure admission or sets ordered integer thresholds from 1 through 99. Mandatory pressure at the hard cap is independent of this switch.                |
-| `guardrails.enabled`                                                                    | boolean                                                                                                         | unset                           | Guardrail switch.                                                                                                                                                                 |
-| `guardrails.max_concurrent_shells`, `.max_concurrent_subagents`, `.max_pending_reviews` | positive integer                                                                                                | unset                           | Root-Session-family caps for running shells, running subagents, and pending reviews.                                                                                              |
-| `provider_usage.codex_app_server.command`                                               | non-empty string                                                                                                | required when object is present | Direct executable, not a shell command.                                                                                                                                           |
-| `provider_usage.codex_app_server.args`                                                  | string[]                                                                                                        | unset                           | Executable arguments.                                                                                                                                                             |
-| `provider_usage.codex_app_server.cwd`                                                   | string                                                                                                          | unset                           | Client working directory.                                                                                                                                                         |
-| `provider_usage.codex_app_server.timeout_ms`                                            | positive integer `<= 30000`                                                                                     | unset                           | App-server timeout.                                                                                                                                                               |
-| `efficiency.title`                                                                      | `local` \| `model` \| `off`                                                                                     | `local`                         | Title policy.                                                                                                                                                                     |
-| `efficiency.helper_models.title`, `.goal`, `.decision`, `.compaction.main`, `.compaction.subagent` | model selector \| `session` | `session` | Independent model selection for title, goal, decision, and ContextManifest helpers. |
-| `efficiency.prompt_cache.anthropic_ttl`                                                 | `adaptive` \| `5m` \| `1h`                                                                                      | `adaptive`                      | Cache lifetime policy.                                                                                                                                                            |
-| `efficiency.prompt_cache.openai_mode`                                                   | `auto` \| `implicit` \| `explicit`                                                                              | `auto`                          | OpenAI cache lowering.                                                                                                                                                            |
-| `efficiency.prompt_cache.openai_extended_retention`                                     | boolean                                                                                                         | `false`                         | Pre-GPT-5.6 OpenAI and Meta Muse Spark `24h` retention request.                                                                                                                                              |
-| `efficiency.openai_responses_continuation`                                              | `auto` \| `on` \| `off`                                                                                         | `auto`                          | Response continuation policy.                                                                                                                                                     |
-| `efficiency.openai_responses_state`                                                     | `stored` \| `stateless`                                                                                         | `stored`                        | Direct OpenAI Responses storage mode. Stored mode permits compatible response-ID continuation; stateless mode replays opaque provider state.                                      |
-| `experimental.subagent_depth`                                                           | non-negative integer                                                                                            | `1`                             | Maximum nesting depth.                                                                                                                                                            |
-| `experimental.policies`                                                                 | `Config.Policy.Info[]`                                                                                          | unset                           | Ordered configured-resource policies.                                                                                                                                             |
+| Nested field path                                                                                                 | Exact type or closed values                                                                                     | Default                         | Operational remark                                                                                                                                                                |
+| ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agents.<id>.model`                                                                                               | model selector                                                                                                  | unset                           | Agent model override.                                                                                                                                                             |
+| `agents.<id>.request.headers`, `.request.body`                                                                    | string record, JSON record                                                                                      | unset                           | Provider request overlays.                                                                                                                                                        |
+| `agents.<id>.system`, `.description`                                                                              | string                                                                                                          | unset                           | System instruction and display description.                                                                                                                                       |
+| `agents.<id>.mode`                                                                                                | `subagent` \| `primary` \| `all`                                                                                | unset                           | Agent availability.                                                                                                                                                               |
+| `agents.<id>.hidden`, `.disabled`                                                                                 | boolean                                                                                                         | unset                           | Visibility and disable switches.                                                                                                                                                  |
+| `agents.<id>.color`                                                                                               | `#RRGGBB` \| `primary` \| `secondary` \| `accent` \| `success` \| `warning` \| `error` \| `info`                | unset                           | TUI color.                                                                                                                                                                        |
+| `agents.<id>.steps`                                                                                               | positive integer                                                                                                | unset                           | Agent step allowance.                                                                                                                                                             |
+| `agents.<id>.permissions`                                                                                         | `Permission.Rule[]`                                                                                             | unset                           | Agent permission additions.                                                                                                                                                       |
+| `commands.<name>.template`                                                                                        | string                                                                                                          | required                        | Command prompt template.                                                                                                                                                          |
+| `commands.<name>.description`, `.agent`                                                                           | string                                                                                                          | unset                           | Picker description and agent ID.                                                                                                                                                  |
+| `commands.<name>.model`                                                                                           | model selector                                                                                                  | unset                           | Command model override.                                                                                                                                                           |
+| `commands.<name>.subtask`                                                                                         | boolean                                                                                                         | unset                           | Subtask request.                                                                                                                                                                  |
+| `references.<name>`                                                                                               | string \| `{ repository: string, branch?, description?, hidden? }` \| `{ path: string, description?, hidden? }` | required per entry              | Reference source.                                                                                                                                                                 |
+| `mcp.timeout.startup`, `.catalog`, `.execution`                                                                   | positive integer milliseconds                                                                                   | runtime-derived                 | Global timeout overrides.                                                                                                                                                         |
+| `mcp.servers.<name>`                                                                                              | local \| remote server object                                                                                   | required per entry              | Discriminated by `.type`.                                                                                                                                                         |
+| local `.command`                                                                                                  | string[]                                                                                                        | required                        | Stdio command and arguments.                                                                                                                                                      |
+| local `.cwd`, `.environment`, `.disabled`, `.timeout`                                                             | string, string record, boolean, timeout object                                                                  | unset                           | Local-server options; relative `cwd` resolves from workspace.                                                                                                                     |
+| remote `.url`                                                                                                     | string                                                                                                          | required                        | Remote MCP endpoint.                                                                                                                                                              |
+| remote `.headers`, `.disabled`, `.timeout`                                                                        | string record, boolean, timeout object                                                                          | unset                           | Remote-server options.                                                                                                                                                            |
+| local/remote `.codemode`                                                                                          | boolean                                                                                                         | `true`                          | Code Mode catalog exposure.                                                                                                                                                       |
+| remote `.oauth`                                                                                                   | `false` \| OAuth object                                                                                         | unset                           | OAuth configuration.                                                                                                                                                              |
+| `.oauth.client_id`, `.client_secret`, `.scope`, `.redirect_uri`                                                   | string                                                                                                          | unset                           | OAuth client fields.                                                                                                                                                              |
+| `.oauth.callback_port`                                                                                            | integer `1..65535`                                                                                              | unset                           | Local OAuth callback port.                                                                                                                                                        |
+| `providers.<id>.name`, `.package`                                                                                 | string                                                                                                          | unset                           | Provider identity/implementation override.                                                                                                                                        |
+| `providers.<id>.env`                                                                                              | string[]                                                                                                        | unset                           | Credential variable names; never place credential values in config.                                                                                                               |
+| `providers.<id>.settings`, `.headers`, `.body`                                                                    | JSON record, string record, JSON record                                                                         | unset                           | Provider request overlays.                                                                                                                                                        |
+| `providers.<id>.catalog.source`                                                                                   | `openai-models`                                                                                                 | unset                           | Optional model catalog discovery for a configured provider.                                                                                                                       |
+| `providers.<id>.models.<id>.modelID`, `.family`, `.name`, `.package`                                              | model ID, model family, string, string                                                                          | unset                           | Model identity.                                                                                                                                                                   |
+| model `.settings`, `.headers`, `.body`                                                                            | JSON record, string record, JSON record                                                                         | unset                           | Model request overlays.                                                                                                                                                           |
+| model `.capabilities.tools`                                                                                       | boolean                                                                                                         | unset                           | Tool-call declaration.                                                                                                                                                            |
+| model `.capabilities.input`, `.output`                                                                            | string[]                                                                                                        | unset                           | Input/output modality names.                                                                                                                                                      |
+| model `.variants[]`                                                                                               | `{ id: variant ID, settings?, headers?, body? }`                                                                | unset                           | Named request variants.                                                                                                                                                           |
+| model `.cost`                                                                                                     | cost object \| cost object[]                                                                                    | unset                           | USD-per-million input/output cost; optional cache and context-tier data.                                                                                                          |
+| model `.disabled`                                                                                                 | boolean                                                                                                         | unset                           | Model disable switch.                                                                                                                                                             |
+| model `.limit.context`, `.input`, `.output`                                                                       | integer                                                                                                         | unset                           | Declared model limits.                                                                                                                                                            |
+| model `.api`                                                                                                      | `chat` \| `responses`                                                                                           | unset                           | OpenAI-compatible request surface; `responses` overrides the source default and the catalog value.                                                                                |
+| `formatter.<name>`                                                                                                | `{ disabled?, command?: string[], environment?: Record<string, string>, extensions?: string[] }`                | unset                           | Formatter override.                                                                                                                                                               |
+| `lsp.<name>`                                                                                                      | `{ disabled: true }` \| `{ command: string[], extensions?, disabled?, env?, initialization? }`                  | unset                           | LSP override.                                                                                                                                                                     |
+| `attachments.image.auto_resize`                                                                                   | boolean                                                                                                         | unset                           | Image resizing.                                                                                                                                                                   |
+| `attachments.image.max_width`, `.max_height`, `.max_base64_bytes`                                                 | positive integer                                                                                                | unset                           | Image limits.                                                                                                                                                                     |
+| `tool_output.max_lines`, `.max_bytes`                                                                             | positive integer                                                                                                | unset                           | Output truncation thresholds.                                                                                                                                                     |
+| `watcher.ignore`                                                                                                  | string[]                                                                                                        | unset                           | Watcher ignore patterns.                                                                                                                                                          |
+| `compaction.keep_recent_messages`                                                                                 | non-negative integer                                                                                            | `20`                            | Number of newest complete messages protected from selective exclusion. Model-switch boundary advice requires an explicit value.                                                   |
+| `compaction.reserved_output_tokens`                                                                               | non-negative integer                                                                                            | `0`                             | Output-token reservation used by compaction helper requests.                                                                                                                      |
+| `compaction.context_safety_margin_tokens`                                                                         | non-negative integer                                                                                            | `4096`                          | Tokens reserved from the model input budget before context-pressure and model-switch fit calculations.                                                                            |
+| `compaction.timeout_seconds`                                                                                      | non-negative integer                                                                                            | `60`                            | Total provider-assisted checkpoint-generation budget across all helper calls; expiry stops helper traffic and uses the local canonical checkpoint, while `0` disables the budget. |
+| `compaction.max_output_tokens`                                                                                    | non-negative integer                                                                                            | `0`                             | Compaction helper output cap; `0` uses the model cap.                                                                                                                             |
+| `compaction.max_manifest_bytes`                                                                                   | non-negative integer                                                                                            | `65536`                         | UTF-8 cap for one strict ContextManifest candidate.                                                                                                                               |
+| `compaction.max_internal_passes`                                                                                  | non-negative integer                                                                                            | `8`                             | Maximum physical manifest-generation calls, including repair attempts.                                                                                                            |
+| `compaction.advisory`                                                                                             | `false` \| `{ consider_percent, strongly_advised_percent }`                                                     | `{ 70, 90 }`                    | Disables automatic soft-pressure admission or sets ordered integer thresholds from 1 through 99. Mandatory pressure at the hard cap is independent of this switch.                |
+| `guardrails.enabled`                                                                                              | boolean                                                                                                         | unset                           | Guardrail switch.                                                                                                                                                                 |
+| `guardrails.max_concurrent_shells`, `.max_concurrent_subagents`, `.max_pending_reviews`                           | positive integer                                                                                                | unset                           | Root-Session-family caps for running shells, running subagents, and pending reviews.                                                                                              |
+| `provider_usage.codex_app_server.command`                                                                         | non-empty string                                                                                                | required when object is present | Direct executable, not a shell command.                                                                                                                                           |
+| `provider_usage.codex_app_server.args`                                                                            | string[]                                                                                                        | unset                           | Executable arguments.                                                                                                                                                             |
+| `provider_usage.codex_app_server.cwd`                                                                             | string                                                                                                          | unset                           | Client working directory.                                                                                                                                                         |
+| `provider_usage.codex_app_server.timeout_ms`                                                                      | positive integer `<= 30000`                                                                                     | unset                           | App-server timeout.                                                                                                                                                               |
+| `efficiency.title`                                                                                                | `local` \| `model` \| `off`                                                                                     | `local`                         | Title policy.                                                                                                                                                                     |
+| `efficiency.helper_models.title`, `.goal`, `.decision`, `.prediction`, `.compaction.main`, `.compaction.subagent` | model selector \| `session`                                                                                     | `session`                       | Independent model selection for title, goal, decision, next-message prediction, and ContextManifest helpers.                                                                      |
+| `efficiency.prompt_cache.anthropic_ttl`                                                                           | `adaptive` \| `5m` \| `1h`                                                                                      | `adaptive`                      | Cache lifetime policy.                                                                                                                                                            |
+| `efficiency.prompt_cache.openai_mode`                                                                             | `auto` \| `implicit` \| `explicit`                                                                              | `auto`                          | OpenAI cache lowering.                                                                                                                                                            |
+| `efficiency.prompt_cache.openai_extended_retention`                                                               | boolean                                                                                                         | `false`                         | Pre-GPT-5.6 OpenAI and Meta Muse Spark `24h` retention request.                                                                                                                   |
+| `efficiency.openai_responses_continuation`                                                                        | `auto` \| `on` \| `off`                                                                                         | `auto`                          | Response continuation policy.                                                                                                                                                     |
+| `efficiency.openai_responses_state`                                                                               | `stored` \| `stateless`                                                                                         | `stored`                        | Direct OpenAI Responses storage mode. Stored mode permits compatible response-ID continuation; stateless mode replays opaque provider state.                                      |
+| `experimental.subagent_depth`                                                                                     | non-negative integer                                                                                            | `1`                             | Maximum nesting depth.                                                                                                                                                            |
+| `experimental.policies`                                                                                           | `Config.Policy.Info[]`                                                                                          | unset                           | Ordered configured-resource policies.                                                                                                                                             |
 
 ### Provider-usage reporting
 
-`provider_usage` configures only the optional Codex app-server fields above. Provider usage refreshes use credentials already stored for the matching YCoding integration; they do not discover credentials from another application's files, keychain, or browser cookies. GitHub Copilot reuses the OAuth credential configured for `github-copilot`.
+`provider_usage` configures only the optional Codex app-server fields above. Its output appears separately as **Codex app-server** with unknown account attribution; it does not replace or inherit a stored profile's quota. Provider usage refreshes use credentials already stored for the matching YCoding integration; they do not discover credentials from another application's files, keychain, or browser cookies. GitHub Copilot reuses the OAuth credential configured for `github-copilot`.
 
 After unsuccessful Copilot model discovery, YCoding removes previously discovered Copilot model entries so stale models cannot remain selectable.
 
@@ -428,13 +442,14 @@ The optional `efficiency` block controls provider-request amplification and prom
 | ---------------------------------------- | ------------------------------ | ---------- | ---------------------------------------------------------------------------------------------------------------- |
 | `title`                                  | `local`, `model`, `off`        | `local`    | Generate Session titles locally, with a model, or not at all.                                                    |
 | `helper_models.title`                    | model selector, `session`      | `session`  | Model for model-generated Session titles.                                                                        |
+| `helper_models.prediction`               | model selector, `session`      | `session`  | Model for next-message prediction; an explicit `agents.prediction.model` takes precedence.                       |
 | `helper_models.goal`                     | model selector, `session`      | `session`  | Model for model-based goal synthesis.                                                                            |
-| `helper_models.decision`                 | model selector, `session`      | `session`  | Model for hidden decision-agent judgments; an explicit `agents.decision.model` takes precedence.                  |
+| `helper_models.decision`                 | model selector, `session`      | `session`  | Model for hidden decision-agent judgments; an explicit `agents.decision.model` takes precedence.                 |
 | `helper_models.compaction.main`          | model selector, `session`      | `session`  | Model for ContextManifest generation in main chats.                                                              |
 | `helper_models.compaction.subagent`      | model selector, `session`      | `session`  | Model for ContextManifest generation in child Sessions.                                                          |
 | `prompt_cache.anthropic_ttl`             | `adaptive`, `5m`, `1h`         | `adaptive` | Choose Anthropic-compatible cache lifetime behavior.                                                             |
 | `prompt_cache.openai_mode`               | `auto`, `implicit`, `explicit` | `auto`     | Select OpenAI prompt-cache behavior according to model and route capabilities.                                   |
-| `prompt_cache.openai_extended_retention` | boolean                        | `false`    | Request `24h` cache retention for supported pre-GPT-5.6 OpenAI and Meta Muse Spark models.                                       |
+| `prompt_cache.openai_extended_retention` | boolean                        | `false`    | Request `24h` cache retention for supported pre-GPT-5.6 OpenAI and Meta Muse Spark models.                       |
 | `openai_responses_continuation`          | `auto`, `on`, `off`            | `auto`     | Reuse compatible durable direct OpenAI Responses state when state mode is `stored` and effective storage allows. |
 | `openai_responses_state`                 | `stored`, `stateless`          | `stored`   | Select provider-stored response-ID continuation or stateless opaque replay for direct OpenAI Responses.          |
 
@@ -450,7 +465,7 @@ Configuration:
 
 ```jsonc
 {
-  // Preferred selector string (provider/model#variant)
+  // Preferred selector string ([profile#]provider/model[#variant])
   "image_analyzer": {
     "enabled": true,
     "model": "anthropic/claude-sonnet-4",
@@ -516,7 +531,7 @@ The native OpenAI and ChatGPT/Codex routes do not consume `chunkTimeout`, `heade
 
 Daybreak is OpenAI's Trusted Access for Cyber program with two access levels, `daybreak_blue` and `daybreak_red`, selected per Session as `session.daybreak`; an absent value is off and requests keep standard safeguards. ChatGPT connections discover Daybreak availability from the authenticated Codex model catalog at startup and when the active connection changes. Catalog requests use the supported Codex catalog client version `0.157.1`, independently of the YCoding release version, and retain `User-Agent: ycoding/<version>`. Each ordinary model entry advertising `daybreak_blue` or `daybreak_red` in `available_access_programs.cyber` carries an advertised `daybreak` list containing exactly those programs. Discovery runs in the background with a three-second timeout; missing, unknown, invalid, or unavailable metadata never blocks ordinary model use. Changing the connection clears the previous account's discovery, and late responses cannot restore it.
 
-Use `/daybreak blue`, `/daybreak red`, or `/daybreak off`, or the Daybreak command in the landing or Session command palette. Without an argument, `/daybreak` cycles off → blue → red → off, offering only programs the active model advertises. The model picker lists ordinary models, not separate Daybreak entries. A landing selection updates the header immediately without creating a Session; it is saved durably as `session.daybreak.set` after Session creation and before the first prompt or explicit goal starts. A Session toggle saves the selection immediately. If saving fails, the prompt or goal does not start. The header shows `Daybreak Blue` or `Daybreak Red` beside the current model name; an unsupported model or another provider shows the saved selection as `(inactive)`. Switching back to a supported model restores the selected mode; `/daybreak off` clears it and removes the indicator.
+Use `/daybreak blue`, `/daybreak red`, or `/daybreak off`, or the Daybreak command in the landing or Session command palette. Without an argument, `/daybreak` cycles off → blue → red → off, offering only programs the selected model profile advertises. An explicit named profile uses its own advertised programs, including an empty list; it does not inherit model-wide programs. The provider default uses the model-wide advertisement. The model picker lists ordinary models, not separate Daybreak entries. A landing selection updates the header immediately without creating a Session; it is saved durably as `session.daybreak.set` after Session creation and before the first prompt or explicit goal starts. A Session toggle saves the selection immediately. If saving fails, the prompt or goal does not start. The header shows `Daybreak Blue` or `Daybreak Red` beside the current model name; an unsupported model, profile, or provider shows the saved selection as `(inactive)`. Switching back to a supported model or profile restores the selected mode; `/daybreak off` clears it and removes the indicator.
 
 Requests carry `access_programs: { cyber: <program> }` only when the provider is `openai`, the credential is ChatGPT OAuth, the resolved route is a Codex HTTP or WebSocket backend route, and the active model advertises the selected program. Unsupported models, API-key credentials, custom providers, GPT through OpenRouter, Anthropic, and DeepSeek omit the field while retaining the stored Session selection. Discovery is not entitlement: missing metadata does not establish an authorization denial, and neither plan names nor a ChatGPT UI toggle grant inference access. OpenAI still enforces authorization. Daybreak does not change YCoding permissions, guardrails, or autonomy.
 
@@ -527,6 +542,26 @@ When `openai_extended_retention` is true, supported pre-GPT-5.6 direct OpenAI re
 `openai_responses_continuation` never changes `openai_responses_state`. The default `stored` state sends `store: true` on direct OpenAI Responses requests; choose `stateless` to send `store: false` and disable response-ID continuation. Enabling extended cache retention or stored Responses state may change provider data-retention behavior; make that choice explicitly.
 
 The default `local` title mode makes no provider request. Set `title` to `model` for model-generated titles; `title: "off"` leaves the initial generated Session title unchanged. Explicit `/goal <text>` calculation always uses a model, while resuming a retained goal does not recalculate it.
+
+### Next-message prediction
+
+| Key                                        | Type                        | Default   | Contract                                                                                                                                                                                                                                 |
+| ------------------------------------------ | --------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `prediction.enabled`                       | boolean                     | `true`    | Background next-message suggestions after root Session replies settle idle without pending input or an active goal. Set false to disable.                                                                                                  |
+| `prediction.memory`                        | boolean                     | `false`   | Explicitly enable bounded repository (project) and knowledge (shared/global) search snippets only when the calling selected agent's effective `memory_read` is `allow`. `ask` and `deny` skip reading without a prompt; consulted only when prediction is enabled. |
+| `efficiency.helper_models.prediction`      | model selector or `session` | `session` | Resolve like the title helper: explicit `agents.prediction.model` wins, otherwise use this selection or the Session/default model.                                                                                                       |
+| TUI `keybinds["prompt.prediction.accept"]` | key binding                 | `right`   | Tab or this configurable shortcut fills only while the prompt is empty and a matching ghost suggestion is shown; never sends. Tab and the configured shortcut retain normal behavior otherwise.                                             |
+
+The hidden primary `prediction` agent has its own prediction system prompt and no tools. Override its prompt with `agents.prediction.system` if needed. By default the helper receives only the latest user and assistant text, bounded to 2,000 and 4,000 characters. Explicit memory enrichment adds at most three search hits per available memory scope with snippets of at most 600 characters when permission allows; memory failures degrade to conversation-only prediction. Accepted output is a single line of 2–40 words and at most 400 characters. Prediction requests use ordinary provider pricing, usage, and privacy policies, including accounting for partial usage before cancellation. Input admission or agent, model, or profile selection cancels in-flight prediction. The TUI and web dismiss on typing, Escape, or new Session activity and reject late suggestions for the dismissed assistant source. TUI acceptance uses Tab or its configurable shortcut, defaulting to Right; web acceptance uses Tab, Right, or **Use suggestion**. Tab retains normal behavior when no suggestion is shown. Neither acceptance path sends or replaces a nonempty draft. No prediction command-palette toggle is provided.
+
+```json
+{
+  "prediction": { "enabled": true, "memory": false },
+  "efficiency": { "helper_models": { "prediction": "session" } }
+}
+```
+
+### Goal helper selection
 
 Configure the goal pre-prompt with `agents.goal.system`. This helper synthesizes objectives and generates context-aware synthetic steers for activation, resume, and continuation. Select its model with `agents.goal.model` or `efficiency.helper_models.goal`; leave both unset to use the current Session model. For example:
 
@@ -545,7 +580,7 @@ Configure the goal pre-prompt with `agents.goal.system`. This helper synthesizes
 
 An unavailable configured model, failed provider request, or empty calculation leaves the prior goal unchanged. The runtime does not fall back to raw input or another model on that failure. The user replaces objectives explicitly; ordinary chat and agent goal-tool calls cannot rewrite them.
 
-For titles, goals, and decision judgments, an explicit model on the matching hidden agent takes precedence over `efficiency.helper_models.<role>`; a missing value or `session` uses the current Session model. Local selective-compaction manifests resolve `helper_models.compaction.main` for main chats and `.subagent` for child Sessions before creating the helper child. An explicit configured compaction model takes precedence over the agent-pinned model; a missing value or `session` retains the existing `agent model`, then owner-Session-model precedence. A subagent owner's `session` value means that subagent's own model. Local jobs reuse a deterministic taskless child Session with the hidden primary `compaction` agent, the selected model, and provider/cache identity isolated from the owner. On a ChatGPT/Codex Responses route, remote compaction uses the owner Session's model regardless of the helper selection; if remote compaction fails, the same job uses the configured local helper. Direct OpenAI and eligible Copilot Responses can compact inline on their Session model without calling a helper. This changes no configuration shape.
+For titles, goals, and decision judgments, an explicit model on the matching hidden agent takes precedence over `efficiency.helper_models.<role>`; a missing value or `session` uses the current Session model. Local selective-compaction manifests resolve `helper_models.compaction.main` for main chats and `.subagent` for child Sessions before creating the helper child. An explicit configured compaction model takes precedence over the agent-pinned model; a missing value or `session` retains the existing `agent model`, then owner-Session-model precedence. A subagent owner's `session` value means that subagent's own model. An explicitly selected helper model without a profile uses that provider's default profile, even when the helper owner selected another profile; inheriting the whole Session model retains its profile. Local jobs reuse a deterministic taskless child Session with the hidden primary `compaction` agent, the selected model, and provider/cache identity isolated from the owner. On a ChatGPT/Codex Responses route, remote compaction uses the owner Session's model regardless of the helper selection; if remote compaction fails, the same job uses the configured local helper. Direct OpenAI and eligible Copilot Responses can compact inline on their Session model without calling a helper. This changes no configuration shape.
 
 ## Permissions
 
@@ -562,9 +597,9 @@ Permissions are evaluated in order. Each rule has:
 `effect` is `allow`, `deny`, or `ask`.
 
 The TUI has no separate auto-approve permission toggle. Automatic handling is controlled by durable Session autonomy:
-YOLO 1 handles questions/forms, YOLO 2 also handles `ask` permissions, and YOLO 3 also handles guardrail reviews.
+YOLO 0 is manual; YOLO 1 auto-approves `ask` permissions and ordinary guardrail reviews, YOLO 2 also answers questions/forms, and YOLO 3 currently behaves like YOLO 2.
 An active goal also handles questions/forms and `ask` permissions at YOLO 0, but does not auto-approve guardrail reviews
-below effective YOLO 3. Explicit denies and inherited permission ceilings remain enforced. Manual permission decisions,
+below effective YOLO 1. Stored numeric levels retain their values without migration or mapping. Explicit denies and inherited permission ceilings remain enforced. Manual permission decisions,
 including approval for the current Session, remain available.
 
 For noninteractive runs, `ycoding run --yolo <0-3>` sets the durable Session level before admitting the prompt. Omitting the flag preserves an adopted Session's autonomy; `--yolo 0` explicitly selects manual handling. A failed autonomy update prevents prompt admission.
@@ -572,6 +607,8 @@ For noninteractive runs, `ycoding run --yolo <0-3>` sets the durable Session lev
 The noninteractive client does not approve requests locally: any remaining permission, question, form or guardrail blocker is rejected or cancelled and the run exits unsuccessfully. Hard guardrail reviews always require a human decision and cannot be approved by this CLI path.
 
 Home-directory expansion applies to path resources for `external_directory`, `read`, and `edit`. It does not rewrite shell command text.
+
+The `worktree` permission controls listing and creating managed Git worktrees; its built-in default is `ask`. Creation also passes through the Session `file_mutation` guardrail. Managed worktrees are stored at `<data>/worktrees/<repo-key>/<name>`, where `repo-key` is `repo_` plus the SHA-256 of the canonical Git common directory, and branch names match directory names. Only a linked worktree listed for the same Git repository is treated as internal for `external_directory`; all other outside paths remain external.
 
 `glob` and `grep` search roots must resolve inside the active Location, including through symlinks. `grep` also accepts an absolute file path directly inside YCoding's managed tool-output directory. A direct file search checks `read` permission before scanning; a directory search checks `read` for each matched file before returning any results. A denied match rejects the search result. `webfetch` checks its `webfetch` URL permission before every HTTP redirect destination, refusing an unapproved destination and limiting chains to ten redirects.
 
@@ -691,6 +728,8 @@ Relative local paths resolve from the containing configuration file.
 
 ## Plugins and hooks
 
+The native-only [meeting runtime](./meeting-intelligence.md#configuration) configures speech, processing, analysis, knowledge bindings and retention through runtime plugin `options`. Its TUI entrypoint belongs in global `cli.json` `plugins`; there is no top-level `meeting` configuration key. In the native Bun-built executable, `ycoding meeting [directory] [--no-open]` loads the bundled runtime plugin without a `plugins` entry; it uses the meeting data directory's saved `settings.json`, or the documented defaults. `ycoding serve --meeting` starts a server with that plugin. Plugin loading never downloads weights or starts recording.
+
 Plugins are applied in order.
 
 ```jsonc
@@ -718,6 +757,8 @@ Hooks are registered by plugins. There is no top-level `hooks` configuration key
 ## MCP
 
 MCP configuration is nested under `mcp.servers`.
+
+MCP server definitions are read when a Location's services boot. Changes to `mcp.servers` take effect after the server restarts or the Location is evicted and initialized again.
 
 ```jsonc
 {
@@ -750,7 +791,7 @@ MCP configuration is nested under `mcp.servers`.
 Local server fields:
 
 - `command`: required string array;
-- `cwd`: optional, relative to the workspace;
+- `cwd`: optional, relative to the workspace; the resolved working directory (the Location directory when unset) must exist and be a directory, otherwise the server fails with `Working directory does not exist: <path>` or `Working directory is not a directory: <path>` without starting a process;
 - `environment`;
 - `disabled`;
 - `codemode`;
@@ -779,6 +820,8 @@ Override a phase globally under `mcp.timeout` or per server under that server's 
 
 The TUI displays configured MCP servers in `/mcps`, the status dialog, the sidebar, and the Home/Session footer. Footer counts use `connected/configured` form so failed or pending servers remain visible.
 
+Initial MCP failures and authentication requirements are shown in MCP and Status rather than corner toasts, including the first transition from `pending` to either state. Once a server has settled, a later transition into `failed` or `needs_auth` produces a toast; repeated reads of the same state do not repeat the alert. Selecting an MCP entry in Status opens the MCP dialog for details and connection actions.
+
 An MCP server that declares both the Resources capability and the `io.modelcontextprotocol/skills` extension can publish MCP skills. YCoding lists only validated entry metadata—server label, `SKILL.md` URI, frontmatter, and declared manifest—during catalog discovery; it does not retrieve `SKILL.md` or supporting-file bytes while connecting or listing. The extension is unavailable when either declaration is absent. Loading a selected skill retrieves its declared entry and content only after approval; see [repository resources](./repository-resources.md#mcp-resources-and-prompts) for the content and activation rules.
 
 Status meanings:
@@ -791,6 +834,8 @@ Status meanings:
 | `needs_auth`                | The remote server requires its registered OAuth flow.                                                      |
 | `needs_client_registration` | OAuth requires an explicit client registration.                                                            |
 | `failed`                    | Startup, initialization, or initial tool discovery failed. Open the MCP dialog to inspect the exact error. |
+
+Each failed or authorization-blocked connection logs an `mcp connect failed` warning with the server name, the Location `directory`, the resolved `cwd` for local servers, and the status.
 
 YCoding reads the `ycoding` configuration namespace only. Copy required MCP definitions explicitly into the current configuration format.
 
@@ -819,17 +864,72 @@ behavior. The dialog highlights the selected catalog source and API type with a 
 
 A provider may hold several named profiles: multiple accounts or multiple API keys for the same
 provider. A profile is the stored credential's user-facing name. Connecting asks for that name
-(`/connect`, the command palette's `Connect integration`, or the model selector's connect action),
+(`/connect`, the TUI command palette's `Connect integration`, its model selector's connect action, or the web palette's `Connect provider`),
 and re-using a name updates that profile instead of replacing the provider's credentials.
 
-Exactly one profile per provider is active. The active profile is the one a model request resolves,
-the one provider usage reports, and the one named in the Session header and in the model selector; a
-provider with a single profile keeps the plain `provider/model` label. Switching the active profile
-does not remove the others, and removing the active profile promotes the remaining one.
+In the web, **Connect provider** uses the selected machine and current Session or landing repository.
+API keys and manual authorization codes pass through the authenticated relay and are stored only by
+the machine's credential owner. A successful connection creates or replaces the named profile and
+makes it that provider's global default; it does not reselect an existing Session's explicit profile.
+The dialog offers registered key, remote-capable OAuth, and command methods. Loopback-only or
+undeclared OAuth methods state that sign-in must happen on the backend machine. A registered command
+runs on that machine and may still require local browser interaction. Failed or unknown outcomes
+require checking authentication status or refreshing profiles before an explicit retry; writes are
+never automatically replayed. Model/profile selection uses **Select provider and model** and retains
+the composer's existing pending-selection and draft behavior.
 
-The Session header names the active profile as its own segment immediately after the agent, keeping
-the plain `provider/model` label beside it. A provider with a single stored profile shows no profile
-segment. Context keeps the Provider and Model identity rows and never carries the profile.
+One profile per provider is its default profile; a model reference without a profile uses it. A Session
+can select an eligible named profile alongside its model independently of that default, so two Sessions
+or subagents can use different accounts for the same provider and model simultaneously. Selecting a
+Session profile does not change the default. In the TUI provider dialog, the default profile is marked
+**Default profile** and every other stored profile offers **Make `<name>` the default**.
+**Use provider default** clears explicit selection. Provider usage reports supported stored profiles;
+provider-wide local spend is not per-profile billing.
+
+Model availability, effort variants, and Daybreak access follow the selected profile. A model offered
+only by another named profile stays selectable with that profile; it is not usable through an
+ineligible provider default. Authenticated custom-provider discovery maintains each stored profile's
+own inventory and request settings.
+
+Provider and model configuration overlays apply to every eligible profile, including the default
+profile. Configured packages, endpoints, headers, request bodies, and effort variants remain
+authoritative after account-specific discovery; selecting a profile does not discard them or
+borrow another account's discovered settings.
+
+The public model reference carries the user-chosen `profile` name. Structured configuration selectors
+accept it too. String shorthand uses `[profile#]provider/model[#variant]`; omitting the profile uses
+the provider's default profile:
+
+```text
+Work#openai/gpt-6-luna#high
+openai/gpt-6-luna#high
+```
+
+Use structured selectors for profile names containing `/` or `#`.
+
+```jsonc
+{
+  "model": {
+    "providerID": "openai",
+    "model": "gpt-6-luna",
+    "variant": "high",
+    "profile": "Work",
+  },
+}
+```
+
+Profile names resolve only within that provider's integration. A missing, renamed, removed, or replaced
+explicit profile blocks provider work instead of selecting another account. Re-selecting the same
+named profile explicitly restores its binding after replacement. Ordinary token refresh does not
+change the selected account. Reusing a Session or admitted-input ID retains its original binding.
+
+Model controls and the Session header distinguish explicit profiles from the provider default. Pending
+changes apply before prompt admission; failure preserves the draft. An unavailable saved selection
+stays visible with a recovery action. Helpers and subagents keep their existing model precedence. An
+explicitly chosen helper model with no profile uses the chosen provider's default profile; only
+inheriting the whole owning Session model retains its profile. Explicit profile names select accounts
+only within their provider. See the
+[profile isolation contract](../specs/provider-profiles.md).
 
 ### Claude Code account profiles
 
@@ -839,63 +939,29 @@ The Claude CLI opens the browser; the TUI shows the authorization URL and polls 
 
 The isolated Claude CLI profile owns its OAuth credentials. On macOS, Claude Code stores credentials in a Keychain service scoped to that profile; on other platforms, the profile uses its own `.credentials.json`. YCoding does not expose the profile's internal source identifier or Keychain service name. Existing named Claude profiles remain listed, but a profile without its corresponding isolated CLI credentials requires a fresh sign-in; YCoding cannot infer separate account identities from shared CLI credentials. A missing selected profile, or expired credentials that refresh cannot restore, requires reconnect before its model request proceeds. API-key authentication remains separate and is not converted into a Claude Code account profile.
 
-## Native decisions
+## Decisions
 
-The `decisions` runtime object configures native OpenAI Decisions and TypeSafe Jev judgments and hidden decision-agent judgments. `timeout_ms` defaults to `10000` and accepts positive integers up to `60000`. `providers.openai` and `providers.typesafe` accept `api_key` and an HTTP(S) `base_url`. OpenAI uses `gpt-6-luna`; `providers.typesafe.model` selects the automatic-flow model, defaulting to `jev-1.13.0`. Native TypeSafe tool requests supply their own model. Agent configuration is described [below](#decision-agent).
+Judgments run only when an agent calls the `decision` tool with `provider: "agent"` and `request: { state, questions }`. Main, child, and side-chat Sessions share the tool and its built-in guidance within effective permissions and inherited ceilings. The calling agent decides when a bounded judgment is useful. The top-level `decisions` configuration key is unsupported and surfaces a removed-key diagnostic; helper model settings remain supported.
 
-Authentication precedence is the configured `api_key`, the selected active API-key credential for the `openai` or `typesafe` integration, then `OPENAI_API_KEY` or `TYPESAFE_API_KEY`. Codex OAuth and subscription credentials are not native decision API keys. Keys belong in configuration or credential storage, never tool inputs or results.
+The hidden decision agent uses the selected model's regular authentication, privacy, quota, and billing route. Credentials are managed through the selected model integration and never passed as decision-tool inputs or results. Shared agent guidance directs bounded classification, option choice, grading, ranking, unverifiable predicates, and recommendations before `question`, using only authorized evidence.
 
-OpenAI Decisions uses API Platform billing, separate from a ChatGPT subscription; a subscription alone supplies neither a decision API key nor included API usage. See [OpenAI billing](https://help.openai.com/en/articles/9039756-managing-billing-for-chatgpt-and-the-api-platform). Shared agent guidance encourages appropriate use only with configured API access and authorized evidence; it does not enable billing or automatic policies.
-
-All three automatic policies are disabled when omitted. Native policies require `provider` (`openai` or `typesafe`) and an explicit `min_probability` in `[0, 1]`; thresholds are inclusive and apply to the chosen option's probability, not the separate confidence field. Agent policies instead require `provider: "agent"` and `min_confidence` in `[0, 1]`. Wrong or mixed metric fields are rejected. This native example deliberately sets thresholds without a calibration guarantee. Its route changes only the agent, using the available default model.
-
-```jsonc
-{
-  "decisions": {
-    "timeout_ms": 10000,
-    "providers": {
-      "openai": { "api_key": "{env:OPENAI_API_KEY}" },
-      "typesafe": { "api_key": "{env:TYPESAFE_API_KEY}", "model": "jev-1.13.0" }
-    },
-    "guardrails": { "provider": "openai", "min_probability": 0.95 },
-    "routing": {
-      "provider": "typesafe",
-      "min_probability": 0.9,
-      "candidates": [
-        { "id": "delivery", "description": "Complete a bounded repository implementation", "agent": "GSD" }
-      ]
-    },
-    "goal": { "provider": "openai", "min_probability": 0.95 }
-  }
-}
-```
-
-Routing accepts 1–254 candidates with unique nonempty IDs and descriptions; `keep-current` is reserved for the runtime's baseline choice. Candidates select an agent, a normal model selector, or both; entries selecting neither are not offered. Only known selectable agents allowed by the current agent's effective `agent` permission and available supported models/variants are offered. See [runtime policies](./runtime.md#automatic-decision-policies) and the [native decision contract](../specs/decisions.md) for disclosure, failure, safety, and usage boundaries.
+Requests supply JSON state and 1–32 uniquely named `predicate`, `choice`, or `score` questions. Choices use `{ value, description }`; scores use `{ label, description }` levels with distinguishable adjacent criteria. Batch independent questions and separate dependent ones. Verify factual claims with tests, grep, typechecks, or inventory rather than judging them. Reuse unchanged judgments and preserve explicit owner choices. See [explicit runtime judgments](./runtime.md#explicit-decision-judgments) and the [decision contract](../specs/decisions.md).
 
 ### Decision agent
 
-The hidden primary `decision` agent evaluates JSON state and bounded questions without tools and returns strict TOON. Its ID is reserved for the decision tool and automatic policies, not foreground Session or command selection. Select its model with `agents.decision.model`, then `efficiency.helper_models.decision`; missing helper configuration or `"session"` uses the owner Session model, or the normal default resolver when no model is selected. The selected model's existing authentication route is used, including supported subscription routes; no separate native-decision API key is required. Its provider's ordinary privacy, quotas, and pricing apply. This does not establish free usage or a zero-retention guarantee, and local Session history and tool results remain durable.
+The hidden primary `decision` agent evaluates JSON state and bounded questions without tools and returns strict TOON. Its ID is reserved for the decision tool, not foreground Session or command selection. Select its model with `agents.decision.model`, then `efficiency.helper_models.decision`; missing helper configuration or `"session"` uses the owner Session model, or the normal default resolver when no model is selected. The selected model's existing authentication route is used, including supported subscription routes. Its provider's ordinary privacy, quotas, and pricing apply. This does not establish free usage or a zero-retention guarantee, and local Session history and tool results remain durable.
 
-This example enables all three agent policies and retains the owner Session model. Its deliberate confidence thresholds are not calibration promises:
+Retain the owner Session model for the helper:
 
 ```jsonc
 {
-  "decisions": {
-    "guardrails": { "provider": "agent", "min_confidence": 0.95 },
-    "routing": {
-      "provider": "agent",
-      "min_confidence": 0.9,
-      "candidates": [
-        { "id": "delivery", "description": "Complete a bounded repository implementation", "agent": "GSD" }
-      ]
-    },
-    "goal": { "provider": "agent", "min_confidence": 0.95 }
-  },
-  "efficiency": { "helper_models": { "decision": "session" } }
+  "efficiency": { "helper_models": { "decision": "session" } },
 }
 ```
 
-Agent confidence is self-reported and uncalibrated, not a native probability. At the inclusive `min_confidence` threshold it can preserve a deterministic allow, select an eligible initial route, or stop goal continuation; existing permission, hard-review, selection, autonomy-revision, and active-work gates remain enforced. Refusal or uncertainty requests ordinary review, preserves routing defaults, or continues toward the unchanged goal, respectively. See the [agent input and TOON contract](../specs/decisions.md#decision-agent-inputs).
+Confidence is self-reported and uncalibrated. Every question type can abstain for insufficient evidence: the helper returns `type: refusal`, null `answer`, `choice`, and `score`, and confidence `0`. Refusal is distinct from a real option or low-confidence pick. The tool preserves that structured result and adds a model-visible explanation to gather missing evidence or ask the user. Set the action threshold by the cost of being wrong; treat refusal, errors, low or close confidence, and disagreement with evidence as uncertainty. Judgments never grant permission, supply the user's answer, or prove completion.
+
+Schema-invalid calls return tool errors identifying the field path, expected shape/allowed values, and a minimal valid request without echoing evidence or secrets. Empty questions explicitly request one bounded question or skipping the tool. Helper-unavailable errors identify model settings and authentication to check; invalid TOON errors identify uncertainty rather than fabricated answers. No unchanged judgment is retried automatically. See the [agent input and TOON contract](../specs/decisions.md#decision-agent-inputs).
 
 ### Cursor
 
@@ -904,7 +970,7 @@ The `cursor` provider runs models from a Cursor subscription through YCoding's n
 Connect it with `ycoding auth login` (or `/connect`) and choose **Cursor**:
 
 - **Cursor account (browser login)** opens Cursor's PKCE sign-in page and stores the returned access and refresh tokens; YCoding refreshes the access token within five minutes of its expiry.
-- **Cursor API key (crsr_…)** stores a key from cursor.com settings; the package exchanges it for an access token and refreshes that token itself.
+- **Cursor API key (crsr\_…)** stores a key from cursor.com settings; the package exchanges it for an access token and refreshes that token itself.
 - `CURSOR_API_KEY` in the environment is used as a connection without storing it.
 
 Credentials stay in YCoding's integration store; YCoding never writes them to Protocol, events, or logs. Model discovery, the model cache (`cursor-models.json`), Cursor project metadata (`projects/<slug>/`), and 24-hour conversation snapshots (`cursor-conversations/`) live under `$XDG_CACHE_HOME/ycoding/cursor`.
@@ -974,11 +1040,11 @@ configure `settings.apiKey`. Example for the Ollama worker:
         "worker": {
           "name": "Ollama worker",
           "capabilities": { "tools": true, "input": ["text"], "output": ["text"] },
-          "limit": { "context": 32768, "output": 4096 }
-        }
-      }
-    }
-  }
+          "limit": { "context": 32768, "output": 4096 },
+        },
+      },
+    },
+  },
 }
 ```
 
@@ -994,11 +1060,11 @@ For the vLLM worker, use the same package and endpoint-root format:
         "worker": {
           "modelID": "<SERVED_MODEL_NAME>",
           "name": "vLLM worker",
-          "capabilities": { "tools": true, "input": ["text"], "output": ["text"] }
-        }
-      }
-    }
-  }
+          "capabilities": { "tools": true, "input": ["text"], "output": ["text"] },
+        },
+      },
+    },
+  },
 }
 ```
 
@@ -1122,6 +1188,8 @@ Soft thresholds are runtime-owned. A Session starts background compaction once w
 | `guardrails.max_concurrent_subagents` | positive integer | `8`     | Running-subagent cap per root Session family.                                                             |
 | `guardrails.max_pending_reviews`      | positive integer | `16`    | Pending-review cap per root Session family.                                                               |
 
+Standard recursive-deletion rules exclude `/tmp`, `/private/tmp`, `/var/tmp`, `/private/var/tmp`, `/var/folders`, and the process `TMPDIR`, including descendants. Filesystem root, configured or other exact user homes, and system-directory deletion are denied. Project-root, ancestor, and direct home-child deletion, destructive Git, force push, and destructive database statements require hard human review. Edits, writes, patches, and shell commands that reach outside the repository require ordinary review through the normal review/YOLO path, without helper classification; this repository's managed worktrees and temporary roots count as inside, and recognized read-only shell commands are exempt. Publication, production deployment, security-policy changes, and MCP execution have no standard guardrail rule.
+
 Custom rule files are direct `guardrails/*.md` children of the global config directory and each discovered repository `Config.Directory`; nested directories are not scanned. Source layers evaluate nearest repository first, then broader repositories, then the global directory. Within a layer, rules sort by descending numeric `priority`, then deterministic lexical file path and rule ID. See [`guardrails-and-provider-usage.md`](./guardrails-and-provider-usage.md#custom-guardrails) for the complete file contract and the unoverrideable catastrophic-deny, reply, and transient-approval rules.
 
 ## CLI/TUI configuration
@@ -1182,32 +1250,32 @@ Defaults applied by the TUI:
 
 All other `cli.json` fields are optional and remain `unset` until configured. The schema-recognized field paths are:
 
-| Field path                                                         | Exact type or closed values                       | Default               | Operational remark                                                                                  |
-| ------------------------------------------------------------------ | ------------------------------------------------- | --------------------- | --------------------------------------------------------------------------------------------------- |
-| `theme.name`                                                       | string                                            | unset                 | Discovered theme ID.                                                                                |
-| `theme.mode`                                                       | `system` \| `dark` \| `light`                     | unset                 | `system` follows the terminal.                                                                      |
-| `keybinds.<command>`                                               | key-sequence override                             | unset                 | The supported command names and default bindings are owned by `packages/tui/src/config/keybind.ts`. |
-| `plugins[]`                                                        | string \| `{ package: string, options?: record }` | unset                 | TUI-side plugin directives, separate from Core runtime plugins.                                     |
-| `leader.timeout`                                                   | positive integer milliseconds                     | `2000`                | Wait time after the leader key.                                                                     |
-| `scroll.speed`                                                     | number `>= 0.001`                                 | unset                 | Distance per scroll-input tick.                                                                     |
-| `scroll.acceleration`                                              | boolean                                           | unset                 | Repeated-input acceleration.                                                                        |
-| `attention.enabled`, `.notifications`, `.sound`                    | boolean                                           | `true`                | Master alerts, system notifications, and attention sound.                                           |
-| `attention.volume`                                                 | number `0..1`                                     | `0.4`                 | Attention-sound volume.                                                                             |
-| `attention.sound_pack`                                             | string                                            | `ycoding.default`     | Active sound-pack ID.                                                                               |
-| `attention.sounds.<event>`                                         | string                                            | unset                 | Event is `default`, `question`, `permission`, `error`, `done`, or `subagent_done`.                  |
-| `diffs.wrap`                                                       | `word` \| `none`                                  | unset                 | Diff line wrapping.                                                                                 |
-| `diffs.tree`, `.single`                                            | boolean                                           | unset                 | File-tree visibility and single-patch view.                                                         |
-| `diffs.view`                                                       | `auto` \| `split` \| `unified`                    | unset                 | `auto` selects from terminal width.                                                                 |
-| `terminal.title`                                                   | boolean                                           | unset                 | Terminal title updates.                                                                             |
-| `terminal.copy_on_select`                                          | boolean                                           | `true` except Windows | Copy a dialog's mouse selection when it is released; main screens require an explicit copy action.   |
-| `prompt.editor`                                                    | boolean                                           | unset                 | Adds active editor file or selection to prompt context.                                             |
-| `prompt.paste`                                                     | `compact` \| `full`                               | unset                 | Large-paste presentation.                                                                           |
-| `session.sidebar`                                                  | `auto` \| `hide`                                  | unset                 | `auto` shows the sidebar when width permits.                                                        |
-| `session.scrollbar`                                                | boolean                                           | unset                 | Transcript scrollbar.                                                                               |
-| `session.thinking`                                                 | `show` \| `hide`                                  | unset                 | Default reasoning visibility.                                                                       |
-| `session.grouping`                                                 | `auto` \| `none`                                  | unset                 | Related transcript-item grouping.                                                                   |
-| `hints.onboarding`, `debug.devtools`, `debug.timing`, `animations` | boolean                                           | unset                 | Guidance, diagnostics, and animation switches.                                                      |
-| `mouse`                                                            | boolean                                           | `true`                | Terminal mouse capture.                                                                             |
+| Field path                                                         | Exact type or closed values                       | Default               | Operational remark                                                                                                                                                                                                                                                                                                     |
+| ------------------------------------------------------------------ | ------------------------------------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `theme.name`                                                       | string                                            | unset                 | Discovered theme ID: a built-in such as `ycoding`, `one-dark`, `one-dark-pro`, or `high-contrast`, or a custom theme file. A standalone theme that omits `text.separator`, `text.hint`, or `text.label` reads them as its own `text.subdued`; an unreadable custom theme file is skipped without affecting the others. |
+| `theme.mode`                                                       | `system` \| `dark` \| `light`                     | unset                 | `system` follows the terminal.                                                                                                                                                                                                                                                                                         |
+| `keybinds.<command>`                                               | key-sequence override                             | unset                 | The supported command names and default bindings are owned by `packages/tui/src/config/keybind.ts`.                                                                                                                                                                                                                    |
+| `plugins[]`                                                        | string \| `{ package: string, options?: record }` | unset                 | TUI-side plugin directives, separate from Core runtime plugins.                                                                                                                                                                                                                                                        |
+| `leader.timeout`                                                   | positive integer milliseconds                     | `2000`                | Wait time after the leader key.                                                                                                                                                                                                                                                                                        |
+| `scroll.speed`                                                     | number `>= 0.001`                                 | unset                 | Distance per scroll-input tick.                                                                                                                                                                                                                                                                                        |
+| `scroll.acceleration`                                              | boolean                                           | unset                 | Repeated-input acceleration.                                                                                                                                                                                                                                                                                           |
+| `attention.enabled`, `.notifications`, `.sound`                    | boolean                                           | `true`                | Master alerts, system notifications, and attention sound.                                                                                                                                                                                                                                                              |
+| `attention.volume`                                                 | number `0..1`                                     | `0.4`                 | Attention-sound volume.                                                                                                                                                                                                                                                                                                |
+| `attention.sound_pack`                                             | string                                            | `ycoding.default`     | Active sound-pack ID.                                                                                                                                                                                                                                                                                                  |
+| `attention.sounds.<event>`                                         | string                                            | unset                 | Event is `default`, `question`, `permission`, `error`, `done`, or `subagent_done`.                                                                                                                                                                                                                                     |
+| `diffs.wrap`                                                       | `word` \| `none`                                  | unset                 | Diff line wrapping.                                                                                                                                                                                                                                                                                                    |
+| `diffs.tree`, `.single`                                            | boolean                                           | unset                 | File-tree visibility and single-patch view.                                                                                                                                                                                                                                                                            |
+| `diffs.view`                                                       | `auto` \| `split` \| `unified`                    | unset                 | `auto` selects from terminal width.                                                                                                                                                                                                                                                                                    |
+| `terminal.title`                                                   | boolean                                           | unset                 | Terminal title updates.                                                                                                                                                                                                                                                                                                |
+| `terminal.copy_on_select`                                          | boolean                                           | `true` except Windows | Copy a dialog's mouse selection when it is released; main screens require an explicit copy action.                                                                                                                                                                                                                     |
+| `prompt.editor`                                                    | boolean                                           | unset                 | Adds active editor file or selection to prompt context.                                                                                                                                                                                                                                                                |
+| `prompt.paste`                                                     | `compact` \| `full`                               | unset                 | Large-paste presentation.                                                                                                                                                                                                                                                                                              |
+| `session.sidebar`                                                  | `auto` \| `hide`                                  | unset                 | `auto` shows the sidebar when width permits.                                                                                                                                                                                                                                                                           |
+| `session.scrollbar`                                                | boolean                                           | unset                 | Transcript scrollbar.                                                                                                                                                                                                                                                                                                  |
+| `session.thinking`                                                 | `show` \| `hide`                                  | unset                 | Default reasoning visibility.                                                                                                                                                                                                                                                                                          |
+| `session.grouping`                                                 | `auto` \| `none`                                  | unset                 | Related transcript-item grouping.                                                                                                                                                                                                                                                                                      |
+| `hints.onboarding`, `debug.devtools`, `debug.timing`, `animations` | boolean                                           | unset                 | Guidance, diagnostics, and animation switches.                                                                                                                                                                                                                                                                         |
+| `mouse`                                                            | boolean                                           | `true`                | Terminal mouse capture.                                                                                                                                                                                                                                                                                                |
 
 Attention sound names are `default`, `question`, `permission`, `error`, `done`, and `subagent_done`. System notifications for attention events are requested while the terminal is blurred or before it has reported its focus, and are suppressed while it is known to be focused; delivery also depends on the terminal's notification support and the operating system's notification settings for that terminal.
 
@@ -1215,7 +1283,13 @@ Attention sound names are `default`, `question`, `permission`, `error`, `done`, 
 
 `keybinds` is a record of command names to key sequences. The complete current key map lives in `packages/tui/src/config/keybind.ts`; that file is authoritative when bindings are added or renamed.
 
+`session_find` opens Find in loaded history in the current Session. Its default is `ctrl+shift+g`; set `keybinds.session_find` in `cli.json` to override it. The command palette also provides **Find in loaded history**.
+
+`keybinds.session_task_pin_toggle` defaults to `p` and pins or unpins the selected child task while the TUI Subagents composer list is focused.
+
 The TUI `plugins` array has the same string or `{ package, options }` shape, but it configures terminal-side plugins rather than Core runtime plugins.
+
+Built-in TUI selectors settle before optional plugin loading; see [terminal plugin ordering](./repository-resources.md#ordered-enablement-and-removal). Optional plugins do not delay the Home or Session shell. Status lists their loading and failure states.
 
 Assistant and compaction transcript text always renders as Markdown. There is no syntax-source display setting.
 
@@ -1252,7 +1326,11 @@ This prevents branch builds of YCoding from colliding with another product proce
 
 When a configured port is occupied, edit the channel-specific service file and choose another integer from `1` to `65535`. `ycoding --standalone` is a temporary alternative that starts a private server instead of the managed service.
 
+One managed service owns a file-backed database at a time, across installation channels and ports. The `latest`, `beta`, and `prod` channels share `ycoding.db`, so only one of their managed services runs at once. Before unsupported-database recovery and application startup, the service acquires an OS process lock at `<database>.service.lock`; a contender whose database is already owned exits without replacing the active service. The lock is released when the owning process exits. In-memory databases are not locked.
+
 The matching registration file is stored in the YCoding state directory. It contains the service instance ID, version, URL, PID, and private password. Do not hand-edit a live registration file.
+
+Managed-service startup checks readiness more frequently during its initial wait, then uses a slower polling cadence. Polling delays are capped by the remaining startup wait and do not shorten the backoff between server spawn attempts. Both Effect and Promise clients return only a healthy, compatible service in the `ready` state.
 
 ## Chrome extension connection
 
@@ -1322,9 +1400,10 @@ CLI/TUI `cli.json` updates are serialized, written atomically through a temporar
 
 ## Troubleshooting
 
-- A config file containing a rejected key is ignored in full; inspect warning logs for the exact keys.
-- Invalid JSON/JSONC or a failed file substitution causes that document to be skipped.
+- Unparsable JSON/JSONC skips the affected document and logs `ignored config file with invalid JSON`. For parsed documents, removed or unknown keys and schema-invalid units are dropped individually, with one `recovered config item` warning each. Invalid permission rules become action-wide or scope-wide denies; invalid `guardrails` values keep guardrails enabled with default limits. Inspect `GET /api/config/diagnostics` or the TUI Status dialog for the document path, JSON path, reason, message, and `fails closed` marker. The TUI also shows an error toast when a diagnostic is loaded.
+- A missing `{file:...}` reference fails configuration loading for that Location and surfaces as a configuration error; it does not skip only that document.
 - `instructions` is accepted but currently inactive; use `AGENTS.md` or skills.
 - `tui.json`, `kv.json`, `config.json`, and project `.ycoding/tui.json` are not read.
 - A managed-service port conflict is not fixed by deleting session data. Change the channel service config port or use `ycoding --standalone`.
 - Run with `--log-level all` and `YCODING_PRINT_LOGS=1` when investigating configuration discovery.
+- Each `location services booted` log line records the Location `directory`, total `durationMs`, and a `stages` map of per-service construction milliseconds; use it to identify a slow Location boot stage.

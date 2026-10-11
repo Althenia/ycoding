@@ -18,9 +18,9 @@ sources:
   resource: repo:///specs/session-guardrails.md
 - id: arch-doc
   resource: repo:///docs/architecture.md
+- id: guardrail-core
+  resource: repo:///packages/core/src/session/guardrail.ts
 ---
-
-
 
 ## Independence from Permissions
 
@@ -40,7 +40,11 @@ Recognized catastrophic shell commands are denied before process creation, while
 
 ## Review Behavior
 
-Guardrail reviews remain reviews in normal, yolo 1-2, and goal modes; only yolo 3 auto-approves guardrail reviews and TUI permission auto-approve never auto-approves guardrails.[^runtime-doc]
+Ordinary guardrail reviews auto-approve at effective yolo 1-3; yolo 0, including an active goal, keeps ordinary reviews enforced. Hard reviews require a fresh human decision at every level and cannot reuse an always approval.[^runtime-doc]
+
+Outside-repository ordinary reviews use deterministic rules and the normal review/effective YOLO path without helper-model classification. Deterministic denies, hard reviews, custom rules, disabled ordinary guardrails, and skipReview retain their gates. Historical risk fields remain valid for replay, but current evaluation neither produces them nor uses them to allow an action.[^spec-v2][^guardrail-core]
+
+Configuration recovery treats guardrails as one security unit: any invalid value, including an unknown property, becomes { "enabled": true } with default limits of 8 shells, 8 subagents, and 16 pending reviews. Invalid permission rules preserve valid order and append action-wide or all-action denies; diagnostics identify the rejected JSON path and failClosed: true without changing ordinary configuration-scope precedence.[^spec-v2]
 
 Replies are once, always, or reject; always is transient process-memory reuse for the exact root Session family, action, ordered rule IDs, ordered resources, and request metadata only after a fresh evaluation still asks.[^runtime-doc]
 
@@ -63,3 +67,4 @@ After a 500 ms pending-review checkpoint, the TUI emits a root-owned Guardrail a
 [^runtime-doc]: repo:///docs/runtime.md
 [^spec-v2]: repo:///specs/session-guardrails.md
 [^guardrail-ops]: repo:///docs/guardrails-and-provider-usage.md
+[^guardrail-core]: repo:///packages/core/src/session/guardrail.ts

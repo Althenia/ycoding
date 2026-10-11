@@ -27,7 +27,7 @@ The product goal is a dependable, highly customizable coding-agent runtime with 
 
 Sessions preserve user intent and execution state across ordinary process lifecycle boundaries; process-local coordinators may optimize execution but cannot own user-visible state.[^product-dir]
 
-Autonomy supports normal, yolo 0-3, and goal modes with permission ceilings and Session guardrails; only effective yolo 3 auto-approves guardrail reviews and completion claims require verification evidence.[^product-dir]
+Autonomy supports normal, yolo 0-3, and goal modes with permission ceilings and Session guardrails; effective yolo 1-3 auto-approves ordinary guardrail reviews, hard reviews require a fresh human decision, and completion claims require verification evidence.[^product-dir]
 
 Subagents are durable background child sessions with explicit agent selection, bounded nesting, permission ceilings, and parent-child ownership.[^product-dir]
 

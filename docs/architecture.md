@@ -114,6 +114,8 @@ Core chooses policy and context. AI translates that decision into provider wire 
 
 Owns Effect and Promise plugin contracts, hooks, tools, session extensions, integration transforms, and TUI extension APIs. Plugins extend declared surfaces and do not bypass durable services through undocumented side channels.
 
+Effect and Promise plugins can inspect/call the existing Location-scoped MCP registry through `context.mcp`; this is a trusted runtime plugin interface, not an agent permission grant. `extensions/meeting` consumes it and tool-free Session generation. Its capture bridge and separate SQLite store outlive TUI components. The bridge serves `/view`; that authenticated live page owns audio capture and sends strict messages to `/view/capture` under the per-bridge view key. Native control has separate authority, and capture heartbeats preserve the runtime's disconnect watchdog. `packages/cli` depends on `@ycoding-ai/meeting` only to compose the bundled runtime plugin into `ycoding meeting`: `serve --meeting` passes it to `packages/server` as a host plugin, which registers it through the existing `SdkPlugins` registry before the server accepts requests. Core and Server do not import the extension. See [meeting intelligence](./meeting-intelligence.md).
+
 ### `packages/cli`
 
 Owns:
@@ -122,16 +124,18 @@ Owns:
 - command parsing and non-interactive execution;
 - local managed-service discovery and restart;
 - TUI startup dependency construction;
-- native and Node build output;
+- native and Node build output; native executables are minified, code-split ESM bundles with embedded Bun bytecode, and one executable provides both the TUI and the local service;
 - installer and updater integration;
 - artifact and runtime smoke tests.
+
+The release workflow verifies source suites alongside native builds, with independent macOS arm64 legs for isolated-browser integration and source/packaged Chrome extension integration. Packaging and packaged isolated-browser acceptance run in parallel after all native builds succeed. Cloudflare deployment requires every source leg, packaging, and packaged acceptance to succeed; TUI publication requires successful deployment. Manual runs prepare artifacts without deployment or publication.
 
 ### `packages/tui`
 
 Owns:
 
 - the YCoding wordmark, terminal title, startup and exit presentation;
-- transcript rendering and complete resident transcript loading;
+- transcript rendering and windowed resident transcript loading;
 - prompt, autocomplete, commands, keymaps, dialogs, themes, and notifications;
 - session, subagent, shell, permission, form, skill, and project-artifact interaction;
 - cache and context diagnostics;
@@ -177,7 +181,7 @@ Prompt admission and provider execution are separate. A prompt is admitted durab
 
 ## Location scope
 
-Models, providers, provider usage, tools, permissions, Session guardrails, instructions, filesystem access, plugins, and related services are resolved through a Location. Session execution resolves the Session's Location when a drain starts.
+Models, providers, provider usage, tools, permissions, Session guardrails, instructions, filesystem access, plugins, and related services are resolved through a Location. Session execution resolves the Session's Location when a drain starts. Location-service cache keys normalize absolute-directory path segments and trailing separators before acquisition and invalidation, so equivalent directory references share one service graph; explicit workspace identities remain separate keys.
 
 `SessionGuardrail` is Location-scoped but evaluates by Session ID. It resolves the root Session through `SessionStore`, shares counters across that family, and mediates mutation immediately before side effects. `ProviderUsage` is Location-scoped and resolves credentials through the existing credential service; it returns normalized, cached snapshots without becoming part of model execution.
 
@@ -191,16 +195,16 @@ The TUI applies events to a Solid store and reconciles canonical Client reads. A
 
 ## State scopes
 
-| Scope | Examples | Owner |
-| --- | --- | --- |
-| Process-global | execution coordinator, application service nodes | Core process runtime |
-| Process-global durable | background shell process ownership and lost completion notices | Core shell ledger in the local database |
-| Location | models, providers, provider usage, tools, plugins, permissions, guardrail policy, filesystem, instructions | Core Location services |
-| Session durable | messages, pending prompts, autonomy, orchestration, compaction | Core database and event history |
-| Project durable | project artifacts and project configuration | Core project-artifact store |
-| Global durable | global project artifacts and shared artifact state | Core project-artifact store |
-| Process-local Session-family safety | pending guardrail reviews and running shell/subagent/review reservations | Core `SessionGuardrail` service |
-| UI resident | complete projected messages for each resident Session, guardrail/provider snapshots, dialogs, scroll state | TUI only |
+| Scope                               | Examples                                                                                                   | Owner                                   |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| Process-global                      | execution coordinator, application service nodes                                                           | Core process runtime                    |
+| Process-global durable              | background shell process ownership and lost completion notices                                             | Core shell ledger in the local database |
+| Location                            | models, providers, provider usage, tools, plugins, permissions, guardrail policy, filesystem, instructions | Core Location services                  |
+| Session durable                     | messages, pending prompts, autonomy, orchestration, compaction                                             | Core database and event history         |
+| Project durable                     | project artifacts and project configuration                                                                | Core project-artifact store             |
+| Global durable                      | global project artifacts and shared artifact state                                                         | Core project-artifact store             |
+| Process-local Session-family safety | pending guardrail reviews and running shell/subagent/review reservations                                   | Core `SessionGuardrail` service         |
+| UI resident                         | complete projected messages for each resident Session, guardrail/provider snapshots, dialogs, scroll state | TUI only                                |
 
 ## Generated and tool-owned content
 
@@ -217,7 +221,7 @@ The TUI applies events to a Solid store and reconciles canonical Client reads. A
 - Session execution ownership is process-local.
 - Public HTTP contracts come from Protocol and Schema, not handler-local types.
 - Durable state remains replayable; caches and projections remain rebuildable.
-- TUI Session eviction releases complete resident transcript payloads; canonical reload rebuilds them.
+- TUI Session eviction releases resident transcript windows; a newest-window snapshot read rebuilds them.
 - Project artifacts use their validated lifecycle instead of writing directly into source directories.
 - Agent permissions and Session guardrails are separate mediation layers; neither approval widens the other layer.
 - Provider usage failures remain isolated from Session startup and model execution.
