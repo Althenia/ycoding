@@ -9,6 +9,7 @@ class FakeSocket {
   readyState = 0
   closeCode?: number
   closeReason?: string
+  stallClose = false
   private readonly listeners = new Map<string, Set<Listener>>()
 
   addEventListener(type: string, listener: Listener) {
@@ -29,6 +30,7 @@ class FakeSocket {
     if (this.readyState === 3) return
     this.closeCode = code
     this.closeReason = reason
+    if (this.stallClose) { this.readyState = 2; return }
     this.readyState = 3
     this.emit("close", { code, reason })
   }
@@ -56,6 +58,54 @@ async function waitFor(check: () => boolean, timeout = 1_000) {
 }
 
 describe("CloudflareRemoteTransport", () => {
+  test("retires a silent socket without waiting for its close handshake and fences late frames", async () => {
+    const sockets: FakeSocket[] = []
+    const messages: unknown[] = []
+    const closes: { code?: number; reason?: string }[] = []
+    const transport = new CloudflareRemoteTransport({
+      url: "wss://relay.invalid/ws/v4/agent", heartbeatIntervalMs: 10,
+      reconnectInitialDelayMs: 5,
+      createSocket: () => { const socket = new FakeSocket(); socket.stallClose = true; sockets.push(socket); return socket },
+      onClose: (info) => closes.push(info),
+    })
+    transport.onMessage((message) => messages.push(message))
+    try {
+      const connected = transport.connect()
+      sockets[0].open()
+      await connected
+      await waitFor(() => sockets.length === 2)
+      expect(closes).toEqual([{ code: 1011, reason: "Remote heartbeat timed out" }])
+      sockets[0].receive({ type: "request", id: "late" })
+      sockets[1].open()
+      await transport.send("fresh")
+      expect(messages).toEqual([])
+      expect(sockets[1].sent).toEqual(["fresh"])
+    } finally { await transport.disconnect() }
+  })
+
+  test("retires a stalled reconnect upgrade at its deadline even if closing never settles", async () => {
+    const sockets: FakeSocket[] = []
+    const transport = new CloudflareRemoteTransport({
+      url: "wss://relay.invalid/ws/v4/agent", heartbeatIntervalMs: 60_000,
+      connectTimeoutMs: 10, reconnectInitialDelayMs: 5,
+      createSocket: () => { const socket = new FakeSocket(); sockets.push(socket); return socket },
+    })
+    try {
+      const connected = transport.connect()
+      sockets[0].open()
+      await connected
+      sockets[0].close(1006)
+      await waitFor(() => sockets.length === 2)
+      sockets[1].stallClose = true
+      await waitFor(() => sockets.length === 3)
+      sockets[1].open()
+      sockets[2].open()
+      await transport.send("fresh")
+      expect(sockets[1].sent).toEqual([])
+      expect(sockets[2].sent).toEqual(["fresh"])
+    } finally { await transport.disconnect() }
+  })
+
   test("bounds a stalled initial upgrade and closes it for supervisor recovery", async () => {
     const socket = new FakeSocket()
     const transport = new CloudflareRemoteTransport({

@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
+import { spawnSync } from "node:child_process"
+import { mkdtemp, rm, stat } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { attentionSoundAssets } from "../src/node/target"
+import { NODE_BINARY } from "../src/binary"
 
 const macTest = process.platform === "darwin" && process.arch === "arm64" ? test : test.skip
 
@@ -26,6 +28,19 @@ macTest("builds and smokes a macOS Node CLI with its complete signed computer ap
         attentionSoundAssets.map((key) => Bun.file(path.join(import.meta.dir, "../dist-node/assets", key)).exists()),
       ),
     ).toEqual(attentionSoundAssets.map(() => true))
+    for (const args of [["meeting", directory, "--no-open"], ["serve", "--meeting"]]) {
+      const result = spawnSync(path.join(directory, "cli-node-darwin-arm64/bin", NODE_BINARY), args, {
+        cwd: directory,
+        env: { ...process.env, XDG_DATA_HOME: path.join(directory, "data"), YCODING_DISABLE_MODELS_FETCH: "1" },
+        encoding: "utf8",
+        timeout: 10_000,
+      })
+      expect(result.error).toBeUndefined()
+      expect(result.status, result.stdout + result.stderr).toBe(1)
+      expect(result.stdout).toContain("Meeting requires the native ycoding executable; it is not supported by the Node CLI.")
+      expect(result.stdout).not.toContain("Live page:")
+    }
+    await expect(stat(path.join(directory, "data/ycoding/meeting"))).rejects.toMatchObject({ code: "ENOENT" })
   } finally {
     await rm(directory, { recursive: true, force: true })
   }

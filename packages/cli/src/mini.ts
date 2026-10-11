@@ -212,7 +212,7 @@ function parseModel(value?: string) {
   try {
     return parseSessionTargetModel(value)
   } catch {
-    throw new MiniInputError("--model must use the format provider/model[#variant]")
+    throw new MiniInputError("--model must use the format [profile#]provider/model[#variant]")
   }
 }
 

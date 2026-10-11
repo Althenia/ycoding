@@ -1,6 +1,6 @@
 import { acquireRemoteLock } from "./lock"
 import { DeviceAuthorizationError } from "../../../remote-credentials"
-import { RemoteSetupError } from "../../../remote-error"
+import { RemoteSetupError, type RemoteDiagnostic } from "../../../remote-error"
 
 export type RemoteConnectorStatus = {
   state: "off" | "connecting" | "on" | "other-process" | "error"
@@ -18,8 +18,8 @@ export type RemoteConnectorBridge = {
 export function createRemoteConnector(input: {
   directory: string
   notice: string
-  makeBridge: (hooks: { onDiagnostic: (message: string) => void; onTerminal: (message: string, retryable?: boolean) => void }) => RemoteConnectorBridge
-  onDiagnostic?: (message: string) => void
+  makeBridge: (hooks: { onDiagnostic: RemoteDiagnostic; onTerminal: (message: string, retryable?: boolean) => void }) => RemoteConnectorBridge
+  onDiagnostic?: RemoteDiagnostic
 }) {
   const listeners = new Set<(status: RemoteConnectorStatus) => void>()
   let current: RemoteConnectorStatus = { state: "off" }
@@ -44,6 +44,9 @@ export function createRemoteConnector(input: {
   }
 
   function setStatus(next: RemoteConnectorStatus) {
+    if (current.state !== next.state) input.onDiagnostic?.("remote connector state", {
+      from: current.state, state: next.state, ...(next.retryable === undefined ? {} : { retryable: next.retryable }),
+    })
     current = next
     listeners.forEach((listener) => listener(next))
   }
@@ -67,7 +70,7 @@ export function createRemoteConnector(input: {
         return
       }
       bridge = input.makeBridge({
-        onDiagnostic: (message) => input.onDiagnostic?.(message),
+        onDiagnostic: (message, fields) => input.onDiagnostic?.(message, fields),
         onTerminal: (message, retryable = false) => {
           if (cycle !== generation) return
           setStatus({ state: "error", message, retryable })
@@ -85,6 +88,10 @@ export function createRemoteConnector(input: {
       if (cycle !== generation || current.state === "error") return
       if (!next.subscribe) setStatus({ state: "on", notice: input.notice })
     })().catch(async (error: unknown) => {
+      if (cycle === generation) input.onDiagnostic?.("remote connector failed", {
+        cause: error instanceof DeviceAuthorizationError ? "authorization_rejected" : error instanceof RemoteSetupError ? "setup_failed" : "startup_failed",
+        ...(error instanceof DeviceAuthorizationError ? { status: error.status, ...(error.operation === undefined ? {} : { operation: error.operation }) } : {}),
+      })
       try {
         await cleanup()
       } catch {

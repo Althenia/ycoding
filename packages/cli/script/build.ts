@@ -88,6 +88,7 @@ for (const item of targets) {
     minify: true,
     sourcemap: "inline",
     splitting: true,
+    bytecode: true,
     compile: {
       autoloadBunfig: false,
       autoloadDotenv: false,

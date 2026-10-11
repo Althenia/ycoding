@@ -14,6 +14,7 @@ import { UI } from "./ui"
 type Model = {
   providerID: string
   modelID: string
+  profile?: string
 }
 
 type File = {
@@ -31,6 +32,7 @@ type Input = {
   agent?: string
   model?: Model
   variant?: string
+  profile?: string
   thinking: boolean
   format: "default" | "json"
   /** True when the client is attached to a shared server rather than an exclusive in-process one. */
@@ -492,7 +494,7 @@ export async function runNonInteractivePrompt(input: Input) {
       await input.client.session.switchAgent({ sessionID: input.sessionID, agent: input.agent })
     }
     const selected = input.model
-      ? { providerID: input.model.providerID, id: input.model.modelID, variant: input.variant }
+      ? { providerID: input.model.providerID, id: input.model.modelID, variant: input.variant, profile: input.profile }
       : input.variant
         ? await input.client.session
             .get({ sessionID: input.sessionID })

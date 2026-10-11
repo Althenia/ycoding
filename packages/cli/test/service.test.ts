@@ -339,6 +339,48 @@ test("concurrent service processes elect one server without resuming suspended S
   }
 }, 120_000)
 
+test("installation channels cannot own a shared service database concurrently", async () => {
+  const service = await startManagedService("ycoding-service-shared-database-")
+  await waitForReady(service.info)
+  const port = await availablePort()
+  const filename = ServiceConfig.filename("prod")
+  const registration = path.join(service.root, "state", "ycoding", filename)
+  const startupError = path.join(service.root, "contender.startup-error")
+  await Bun.write(path.join(service.root, "config", "ycoding", filename), JSON.stringify({ port }))
+  const contender = Bun.spawn([
+    process.execPath,
+    "--preload", path.join(import.meta.dir, "fixture/service-channel.ts"),
+    path.join(import.meta.dir, "../src/index.ts"), "serve", "--service",
+  ], {
+    env: {
+      ...serviceEnv(service.root),
+      YCODING_TEST_SERVICE_CHANNEL: "prod",
+      YCODING_SERVICE_STARTUP_ERROR_FILE: startupError,
+    },
+    stderr: "pipe",
+    stdout: "pipe",
+  })
+  try {
+    for (let attempt = 0; attempt < 400 && contender.exitCode === null; attempt++) {
+      if (await Bun.file(registration).exists()) {
+        await waitForReady(await waitForInfo(registration))
+        break
+      }
+      await Bun.sleep(25)
+    }
+    expect(contender.exitCode).toBe(1)
+    expect(await Bun.file(startupError).text()).toContain("Process lock is already held")
+    expect(await Bun.file(registration).exists()).toBe(false)
+    expect(await healthStatus(service.info)).toBe(200)
+    expect(service.owner.exitCode).toBe(null)
+    await expectPortAvailable(port)
+  } finally {
+    contender.kill("SIGTERM")
+    await contender.exited
+    await stopManagedService(service)
+  }
+}, 30_000)
+
 test("managed service startup settles an unterminated execution as a failed run without resuming it", async () => {
   const sessionID = Session.ID.make("ses_service_killed")
   const startedType = EventRuntime.versionedType(

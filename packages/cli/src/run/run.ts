@@ -140,6 +140,7 @@ async function execute(input: RunCommandInput, prepared: Prepared, endpoint: End
     agent: target.agent,
     model,
     variant,
+    profile: target.model?.profile,
     thinking: input.thinking ?? false,
     format: input.format,
     attached: true,
@@ -174,6 +175,7 @@ export function parseRunModel(value?: string) {
   return {
     model: { providerID: ref.providerID, modelID: ref.id },
     variant: ref.variant,
+    profile: ref.profile,
   }
 }
 

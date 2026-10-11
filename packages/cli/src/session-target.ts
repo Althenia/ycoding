@@ -82,7 +82,7 @@ export async function resolveSessionTarget(input: {
 export function parseSessionTargetModel(value?: string): ModelRef | undefined {
   if (!value) return
   const model = Model.Ref.parse(value)
-  return { providerID: model.providerID, id: model.id, variant: model.variant }
+  return { providerID: model.providerID, id: model.id, variant: model.variant, profile: model.profile }
 }
 
 async function selectSession(input: {

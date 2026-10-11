@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { SessionCompletionsOutput, SessionInfo } from "@ycoding-ai/client/promise"
+import type { SessionCompletionsOutput, SessionInfo, SessionPredictionUpdated } from "@ycoding-ai/client/promise"
 import { RemoteCloseCode, RemoteLimits, parseAgentMessage, parseChunkedValue } from "@ycoding-ai/remote"
 import { RemoteAgent, type BridgeCredentials, type ConnectionInput, type RelayConnection } from "../src/remote-bridge"
 import type { AllowlistSession } from "../src/remote-config"
@@ -8,6 +8,13 @@ import { LocalFailure, type LocalEventStream, type LocalServer } from "../src/re
 
 const entry: AllowlistSession = { sessionID: "ses_1", directory: "/work", workspaceID: undefined, title: "One" }
 const second: AllowlistSession = { sessionID: "ses_2", directory: "/work", workspaceID: undefined, title: "Two" }
+const prediction: SessionPredictionUpdated = {
+  id: "evt_prediction_synthetic",
+  created: 1_000,
+  sourceEpoch: "source_synthetic",
+  type: "session.prediction.updated",
+  data: { sessionID: "ses_1", sourceMessageID: "msg_assistant_synthetic", text: "Show the focused tests" },
+}
 
 function sessionInfo(id: string, table: { updated?: number; directory?: string; title?: string } = {}): SessionInfo {
   return {
@@ -892,6 +899,53 @@ describe("remote bridge", () => {
     await bridge.close()
   })
 
+  test("forwards subscribed prediction text and source message IDs unchanged in arrival order", async () => {
+    const test = harness({ sessions: [entry, second] })
+    try {
+      await test.bridge.connect()
+      const connection = test.records[0]
+      connection.deliver({ type: "subscriptions", clientID: "client-1", sessionIDs: [entry.sessionID] })
+      const next: SessionPredictionUpdated = {
+        ...prediction,
+        id: "evt_prediction_next_synthetic",
+        created: 1_001,
+        data: { sessionID: entry.sessionID, sourceMessageID: "msg_assistant_next_synthetic", text: "Show the next command" },
+      }
+      test.streams[0].stream.onEvent(prediction)
+      test.streams[0].stream.onEvent(next)
+      await waitFor(() => sentEvents(connection).length >= 2 ? true : undefined)
+      expect(sentEvents(connection)).toEqual([
+        { sessionID: entry.sessionID, event: prediction },
+        { sessionID: entry.sessionID, event: next },
+      ])
+    } finally {
+      await test.bridge.close()
+    }
+  })
+
+  test("suppresses prediction events for never-subscribed and unsubscribed Sessions", async () => {
+    const test = harness({ sessions: [entry, second] })
+    try {
+      await test.bridge.connect()
+      const connection = test.records[0]
+      const stream = test.streams[0].stream
+      stream.onEvent(prediction)
+      connection.deliver({ type: "subscriptions", clientID: "client-1", sessionIDs: [entry.sessionID] })
+      connection.deliver({ type: "subscriptions", clientID: "client-1", sessionIDs: [second.sessionID] })
+      stream.onEvent(prediction)
+      const subscribed: SessionPredictionUpdated = {
+        ...prediction,
+        id: "evt_prediction_subscribed_synthetic",
+        data: { sessionID: second.sessionID, sourceMessageID: "msg_assistant_subscribed_synthetic", text: "Explain the test results" },
+      }
+      stream.onEvent(subscribed)
+      await waitFor(() => sentEvents(connection).length > 0 ? true : undefined)
+      expect(sentEvents(connection)).toEqual([{ sessionID: second.sessionID, event: subscribed }])
+    } finally {
+      await test.bridge.close()
+    }
+  })
+
   test("clears derived subscription interest on relay reconnect until fresh snapshots arrive", async () => {
     const { bridge, records, streams } = harness({})
     await bridge.connect()
@@ -1388,4 +1442,22 @@ describe("remote bridge multiplexed delivery", () => {
       expect(sentEvents(test.connection).map((item) => Reflect.get(Reflect.get(item.event as object, "data") as object, "index"))).toEqual([100])
     } finally { await test.bridge.close() }
   })
+})
+
+test("records agent-side execution time for a slow request and stays silent for a fast one", async () => {
+  let elapsed = 1_500
+  let advance = (_ms: number) => {}
+  const test = harness({ results: { autonomyGet: () => { advance(elapsed); return { mode: "normal" } } } })
+  advance = test.advance
+  try {
+    await test.bridge.connect()
+    test.records[0].deliver(requestFrame("session.autonomy.get", "ses_1"))
+    await waitFor(() => sentFrames(test.records[0]).filter((frame) => frame.type === "response").length >= 1 ? true : undefined)
+    elapsed = 10
+    test.records[0].deliver(requestFrame("session.autonomy.get", "ses_1"))
+    await waitFor(() => sentFrames(test.records[0]).filter((frame) => frame.type === "response").length >= 2 ? true : undefined)
+    expect(test.diagnostics.filter((message) => message.startsWith("slow remote request"))).toEqual([
+      "slow remote request session.autonomy.get took 1500ms on this device",
+    ])
+  } finally { await test.bridge.close() }
 })

@@ -35,3 +35,12 @@ test("carries the device bearer header on the Node runtime", async () => {
   expect(result.runtime).toStartWith("v")
   expect(exitCode, stderr).toBe(0)
 }, 60_000)
+
+test("a stalled Node upgrade retires without an unhandled websocket error", async () => {
+  const child = Bun.spawn(["node", "--experimental-transform-types", path.join(import.meta.dir, "remote-node-stalled-upgrade.ts")], {
+    cwd: path.resolve(import.meta.dir, ".."), stdin: "ignore", stdout: "pipe", stderr: "pipe",
+  })
+  const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
+  expect(exit, stderr).toBe(0)
+  expect(stdout.trim()).toBe("Remote connection timed out")
+}, 10_000)

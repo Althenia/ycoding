@@ -7,7 +7,7 @@ const marker = "REMOTE_DIAGNOSTIC_RESULT:"
 
 if (process.env.YCODING_REMOTE_DIAGNOSTIC_MODE) await runChild()
 else test("the server-owned connector writes a bridge diagnostic to the server log", async () => {
-  for (const mode of ["service", "stdio"] as const) {
+  for (const mode of ["service", "stdio", "rejected"] as const) {
     const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-remote-diagnostic-"))
     const env: Record<string, string | undefined> = { ...process.env,
       HOME: root,
@@ -35,9 +35,16 @@ else test("the server-owned connector writes a bridge diagnostic to the server l
       const line = stdout.split("\n").find((value) => value.startsWith(marker))
       expect(line).toBeDefined()
       const entry = line?.slice(marker.length) ?? ""
-      expect(entry).toContain("remote event authorization queue filled")
+      expect(entry).toContain(mode === "rejected" ? "authorization_rejected" : "remote event authorization queue filled")
       expect(entry).toContain("remote-connector")
       expect(entry).toContain("level=WARN")
+      expect(stdout).toContain("from=off state=connecting")
+      expect(stdout).toContain(`state=${mode === "rejected" ? "error" : "on"}`)
+      if (mode === "rejected") {
+        expect(stdout).toContain("status=401")
+        expect(stdout).toContain("operation=refresh")
+      }
+      expect(stdout).not.toContain("synthetic-secret")
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -51,6 +58,7 @@ async function runChild() {
   const { ServiceConfig } = await import("../src/services/service-config")
   const { Effect, Fiber } = await import("effect")
   const { availablePort } = await import("./remote-harness")
+  const { DeviceAuthorizationError } = await import("../src/remote-credentials")
   await mkdir(Global.Path.state, { recursive: true })
   await mkdir(Global.Path.config, { recursive: true })
   await writeFile(path.join(Global.Path.config, ServiceConfig.filename()), JSON.stringify({ password: "test-password" }), { mode: 0o600 })
@@ -65,6 +73,11 @@ async function runChild() {
     RemoteAgent: class {
       constructor(private readonly options: { onDiagnostic?: (message: string) => void }) {}
       async connect() {
+        if (process.env.YCODING_REMOTE_DIAGNOSTIC_MODE === "rejected") {
+          const error = new DeviceAuthorizationError(401, "refresh")
+          error.cause = new Error("synthetic-secret")
+          throw error
+        }
         this.options.onDiagnostic?.("the remote event authorization queue filled; closing for client reconciliation")
       }
       async close() {}
@@ -72,7 +85,8 @@ async function runChild() {
   }))
   const { ServerProcess } = await import("../src/server-process")
   const port = await availablePort()
-  const mode = process.env.YCODING_REMOTE_DIAGNOSTIC_MODE
+  const mode = process.env.YCODING_REMOTE_DIAGNOSTIC_MODE === "rejected" ? "stdio" : process.env.YCODING_REMOTE_DIAGNOSTIC_MODE
+  const expected = process.env.YCODING_REMOTE_DIAGNOSTIC_MODE === "rejected" ? "error" : "on"
   if (mode !== "service" && mode !== "stdio") throw new Error("Invalid diagnostic fixture mode")
   const fiber = Effect.runFork(ServerProcess.run({ mode, hostname: "127.0.0.1", port }).pipe(
     Effect.provide(Observability.layer({ client: "cli" })),
@@ -80,22 +94,24 @@ async function runChild() {
   try {
     const ready = Date.now() + 10_000
     let status = ""
-    while (Date.now() < ready && !status.includes('"state":"on"')) {
+    while (Date.now() < ready && !status.includes(`"state":"${expected}"`)) {
       status = await fetch(`http://127.0.0.1:${port}/api/remote`, {
         headers: { authorization: `Basic ${Buffer.from("ycoding:test-password").toString("base64")}` },
       }).then((response) => response.text()).catch(() => "")
-      if (!status.includes('"state":"on"')) await Bun.sleep(25)
+      if (!status.includes(`"state":"${expected}"`)) await Bun.sleep(25)
     }
-    if (!status.includes('"state":"on"')) throw new Error(`isolated ${mode} remote connector did not start: ${status.slice(0, 300)}`)
+    if (!status.includes(`"state":"${expected}"`)) throw new Error(`isolated ${mode} remote connector did not settle: ${status.slice(0, 300)}`)
     const deadline = Date.now() + 10_000
     let line = ""
-    while (Date.now() < deadline && !line.includes("remote event authorization queue filled")) {
+    const wanted = expected === "error" ? "authorization_rejected" : "remote event authorization queue filled"
+    while (Date.now() < deadline && !line.includes(wanted)) {
       line = (await Bun.file(Logging.file()).text().catch(() => "")).split("\n")
-        .find((value) => value.includes("remote event authorization queue filled")) ?? ""
+        .find((value) => value.includes(wanted)) ?? ""
       if (!line) await Bun.sleep(25)
     }
     if (!line) throw new Error("remote diagnostic did not reach the server log")
     process.stdout.write(`${marker}${line}\n`)
+    process.stdout.write((await Bun.file(Logging.file()).text()).split("\n").filter((value) => value.includes("remote connector state")).join("\n") + "\n")
   } finally {
     await Effect.runPromise(Fiber.interrupt(fiber))
     mock.restore()

@@ -12,6 +12,7 @@ import { assertPrivateEndpoint, type LocalLocation, type LocalServer } from "../
 import { LocalFailure as LocalFailureClass } from "../src/remote-local"
 import {
   createSessionRegistry,
+  createOperationCache,
   createAttachmentUploads,
   createSubscriptions,
   executeRemoteOperation,
@@ -33,6 +34,70 @@ test("reads admitted pending prompts at their verified Session Location", async 
   expect(errorOf(await executeRemoteOperation({ request: { ...request("session.pending.list"), sessionID: "ses_other" },
     local: fixture.local, sessions: fixture.registry, subscriptions: fixture.subscriptions })).code).toBe("session_not_allowed")
   expect(fixture.calls.filter((call) => call.method === "pendingList")).toHaveLength(1)
+})
+
+test("provider authentication projects safe methods and binds attempts to their initiating Location and integration", async () => {
+  const integrations = [{ id: "test", name: "Test", connections: [{ type: "credential", id: "cred_private", label: "Work", active: true }], methods: [
+    { type: "key" }, { type: "oauth", id: "device", label: "Device", remote: true }, { type: "oauth", id: "browser", label: "Local browser" }, { type: "command", id: "cli", label: "CLI", command: ["private-command"] },
+  ] }]
+  const fixture = await harness({ results: { integrationList: integrations, providerIntegrations: [{ providerID: "test", integrationID: "test" }],
+    integrationOAuthBegin: { attemptID: "con_auth", mode: "auto", url: "https://example.com/auth", instructions: "Enter device code: ABCD", time: { created: 1, expires: Date.now() + 10000 } },
+    integrationOAuthStatus: { status: "failed", message: "private-token", time: { created: 1, expires: 2 } },
+    integrationCommandBegin: { attemptID: "con_cli", time: { created: 1, expires: Date.now() + 10000 } },
+    integrationCommandStatus: { status: "pending", message: "private-token", time: { created: 1, expires: 2 } },
+  } })
+  const cache = createOperationCache()
+  const run = (operation: RemoteRequest["operation"], fields: Record<string, unknown>) => executeRemoteOperation({ request: request(operation, { target: { sessionID: "ses_1" }, ...fields }), local: fixture.local, sessions: fixture.registry, subscriptions: fixture.subscriptions, cache })
+  const listed = JSON.stringify(valueOf(await run("provider.auth.list", {})))
+  expect(listed).toContain('"available":false')
+  expect(listed).toContain('"name":"Work"')
+  expect(listed).not.toMatch(/cred_private|private-command/)
+  expect(valueOf(await run("provider.auth.begin", { integrationID: "test", methodID: "device", label: "New", inputs: {} }))).toMatchObject({ data: { attemptID: "con_auth", type: "oauth" } })
+  expect(valueOf(await run("provider.auth.status", { integrationID: "test", attemptID: "con_auth" }))).toMatchObject({ data: { status: "failed", message: "Authentication failed. Try connecting again." } })
+  expect(errorOf(await run("provider.auth.complete", { integrationID: "other", attemptID: "con_auth", code: "secret-code" })).code).toBe("invalid_message")
+  expect(errorOf(await run("provider.auth.begin", { integrationID: "test", methodID: "browser", label: "New", inputs: {} })).code).toBe("invalid_message")
+  expect(fixture.calls.filter((call) => call.method === "integrationOAuthBegin")).toEqual([{ method: "integrationOAuthBegin", args: [{ directory: "/work" }, "test", "device", {}, "New"] }])
+  expect(valueOf(await run("provider.auth.begin", { integrationID: "test", methodID: "cli", label: "CLI", inputs: {} }))).toMatchObject({ data: { type: "command" } })
+  expect(JSON.stringify(valueOf(await run("provider.auth.status", { integrationID: "test", attemptID: "con_cli" })))).not.toContain("private-token")
+  expect(errorOf(await run("provider.auth.key", { target: { sessionID: "ses_missing" }, integrationID: "test", label: "New", key: "secret-key" })).code).toBe("session_not_allowed")
+  expect(fixture.calls.some((call) => call.method === "integrationKey")).toBe(false)
+})
+
+test("provider authentication reserves its bounded attempt slot before asynchronous authorization starts", async () => {
+  const began = Promise.withResolvers<void>()
+  const secondBegan = Promise.withResolvers<"started">()
+  const release = Promise.withResolvers<{ attemptID: string; mode: "auto"; url: string; instructions: string; time: { created: number; expires: number } }>()
+  let calls = 0
+  const fixture = await harness({ results: { integrationList: [{ id: "test", name: "Test", connections: [], methods: [{ type: "oauth", id: "device", label: "Device", remote: true }] }], providerIntegrations: [{ providerID: "test", integrationID: "test" }],
+    integrationOAuthBegin: () => { calls += 1; began.resolve(); if (calls === 2) secondBegan.resolve("started"); return release.promise },
+  } })
+  const cache = createOperationCache()
+  for (let index = 0; index < 31; index++) cache.providerAuth.set(`con_prior${index}`, { integrationID: "test", target: JSON.stringify({ sessionID: "ses_1" }), location: { directory: "/work" }, type: "oauth", expires: Date.now() + 10000 })
+  const run = () => executeRemoteOperation({ request: request("provider.auth.begin", { target: { sessionID: "ses_1" }, integrationID: "test", methodID: "device", label: "Work", inputs: {} }), local: fixture.local, sessions: fixture.registry, subscriptions: fixture.subscriptions, cache })
+  const first = run()
+  await began.promise
+  const second = run()
+  const outcome = await Promise.race([second.then((frames) => frames[0].ok ? "accepted" : "rejected"), secondBegan.promise])
+  release.resolve({ attemptID: "con_new", mode: "auto", url: "https://example.com/auth", instructions: "Sign in", time: { created: 1, expires: Date.now() + 10000 } })
+  await Promise.all([first, second])
+  expect(outcome).toBe("rejected")
+  expect(calls).toBe(1)
+  expect(cache.providerAuth.size).toBe(32)
+})
+
+test("an unconfirmed provider authentication start retains only its bounded reservation until expiry", async () => {
+  let now = 1000
+  const cache = createOperationCache(() => now)
+  const fixture = await harness({ results: { integrationList: [{ id: "test", name: "Test", connections: [], methods: [{ type: "oauth", id: "device", label: "Device", remote: true }] }], providerIntegrations: [{ providerID: "test", integrationID: "test" }], integrationOAuthBegin: new LocalFailureClass("transport", "synthetic-private-diagnostic") } })
+  const run = (operation: RemoteRequest["operation"], fields: Record<string, unknown>) => executeRemoteOperation({ request: request(operation, { target: { sessionID: "ses_1" }, ...fields }), local: fixture.local, sessions: fixture.registry, subscriptions: fixture.subscriptions, cache })
+  const frames = await run("provider.auth.begin", { integrationID: "test", methodID: "device", label: "Work", inputs: {} })
+  expect(errorOf(frames).code).toBe("outcome_unknown")
+  expect(JSON.stringify(frames)).not.toContain("synthetic-private-diagnostic")
+  expect(cache.providerAuth.size).toBe(1)
+  expect(fixture.calls.filter((call) => call.method === "integrationOAuthBegin")).toHaveLength(1)
+  now += 600001
+  await run("provider.auth.list", {})
+  expect(cache.providerAuth.size).toBe(0)
 })
 
 test("prompt skills are admitted as metadata without activating queued instructions in the connector", async () => {
@@ -82,6 +147,32 @@ test("machine keep-awake forwards global backend controls without a caller Locat
   expect(fixture.calls).toHaveLength(2)
 })
 
+test("machine telemetry consent forwards global reads and writes only the current notice version", async () => {
+  const consent = { enabled: true, noticeVersion: 1, decidedAt: 10 }
+  const fixture = await harness({ sessions: [], results: { telemetryConsentGet: { noticeVersion: 1, consent }, telemetryConsentSet: consent } })
+  const run = (operation: RemoteRequest["operation"], input?: Record<string, unknown>, sessionID?: string) => executeRemoteOperation({
+    request: { ...request(operation, input), ...(sessionID === undefined ? {} : { sessionID }) }, local: fixture.local,
+    sessions: fixture.registry, subscriptions: fixture.subscriptions,
+  })
+  expect(valueOf(await run("machine.telemetry.consent.get"))).toEqual({ data: { noticeVersion: 1, consent } })
+  expect(valueOf(await run("machine.telemetry.consent.set", { enabled: true, noticeVersion: 1 }))).toEqual({ data: consent })
+  expect(fixture.calls).toEqual([
+    { method: "telemetryConsentGet", args: [] },
+    { method: "telemetryConsentSet", args: [{ enabled: true, noticeVersion: 1 }] },
+  ])
+  expect(errorOf(await run("machine.telemetry.consent.set", { enabled: true, noticeVersion: 2 })).code).toBe("invalid_message")
+  expect(errorOf(await run("machine.telemetry.consent.get", undefined, "ses_1")).code).toBe("invalid_message")
+  expect(fixture.calls).toHaveLength(2)
+})
+
+test("disabled local telemetry append maps to a distinct non-replayable remote failure", async () => {
+  const fixture = await harness({ sessions: [], results: { latencyAppend: new LocalFailureClass("telemetry_disabled", "disabled") } })
+  const result = await executeRemoteOperation({ request: request("machine.latency.append", { samples: [{ kind: "long-task", at: "2026-10-04T12:00:00.000Z", durationMs: 60 }] }),
+    local: fixture.local, sessions: fixture.registry, subscriptions: fixture.subscriptions })
+  expect(errorOf(result).code).toBe("telemetry_disabled")
+  expect(fixture.calls.filter((call) => call.method === "latencyAppend")).toHaveLength(1)
+})
+
 test("machine latency writes and reads only validated anonymous samples at the authenticated local backend", async () => {
   const sample = { kind: "request", at: "2026-10-04T12:00:00.000Z", operation: "session.list", outcome: "ok", queueMs: 4, settlementMs: 9, totalMs: 13 }
   const task = { kind: "long-task", at: sample.at, durationMs: 70 }
@@ -106,7 +197,7 @@ test("machine latency writes and reads only validated anonymous samples at the a
 test("local telemetry operation names cover the relay's current forwarded operations without self-upload", () => {
   const decode = Schema.decodeUnknownSync(Telemetry.Operation)
   for (const operation of remoteOperations) {
-    if (operation === "machine.latency.append" || operation === "machine.latency.list") continue
+    if (operation === "machine.latency.append" || operation === "machine.latency.list" || operation === "machine.telemetry.consent.get" || operation === "machine.telemetry.consent.set") continue
     expect(decode(operation)).toBe(operation)
   }
   expect(() => decode("machine.latency.append")).toThrow()
@@ -685,7 +776,7 @@ describe("workspace inventory and Session creation", () => {
     } })
     const workspaces = arrayOf(recordOf(valueOf(await executeRemoteOperation({ request: request("workspace.list"), local: test.local,
       sessions: test.registry, subscriptions: test.subscriptions }))).data)
-    const model = { providerID: "test", id: "model", variant: "high" }
+    const model = { providerID: "test", id: "model", variant: "high", profile: "work" }
     const outcome = await executeRemoteOperation({ request: request("session.create", { id: "ses_chosen", workspace: recordOf(workspaces[0]).id,
       agent: "build", model }), local: test.local, sessions: test.registry, subscriptions: test.subscriptions })
     expect(valueOf(outcome)).toMatchObject({ data: { id: "ses_chosen" } })
@@ -964,8 +1055,11 @@ describe("operation mapping", () => {
       projectCurrent: { id: "prj_1", directory },
       agentList: [{ id: "build", name: "Builder", mode: "primary", hidden: false, description: "Build", model: { providerID: "test", id: "model" }, permissions: [], request: {} }],
       providerList: [{ id: "test", name: "Test", package: "test" }, { id: "off", name: "Off", disabled: true, package: "off" }],
-      modelList: [{ providerID: "test", id: "model", name: "Model", enabled: true, variants: [{ id: "high" }] }, { providerID: "off", id: "hidden", name: "Hidden", enabled: true, variants: [] }],
-      modelDefault: { providerID: "test", id: "model" },
+      modelList: [{ providerID: "test", id: "model", name: "Model", enabled: false, variants: [{ id: "high" }, { id: "low" }], profiles: [
+        { name: "work", active: true, variants: ["high"], credentialID: "private", daybreak: ["daybreak_blue"] },
+        { name: "personal", active: false, variants: ["low"], credentialID: "other-private" },
+      ] }, { providerID: "off", id: "hidden", name: "Hidden", enabled: true, variants: [] }],
+      modelDefault: { selection: { providerID: "test", id: "model", variant: "high", profile: "work" } },
       commandList: [{ name: "test", template: "example", description: "Test" }],
       skillList: [{ id: "skill", name: "Skill", description: "Help", slash: true, content: "secret" }],
       referenceList: [{ name: "Readme", path: join(directory, "README.md"), source: { type: "file" } }],
@@ -975,8 +1069,10 @@ describe("operation mapping", () => {
     const { local, registry, subscriptions, calls } = await harness({ sessions: [session], results })
     const catalog = valueOf(await executeRemoteOperation({ request: request("session.catalog"), local, sessions: registry, subscriptions }))
     expect(catalog).toEqual({ agents: [{ id: "build", name: "Builder", mode: "primary", hidden: false, description: "Build", model: { providerID: "test", id: "model" } }],
-      models: [{ providerID: "test", providerName: "Test", id: "model", name: "Model", variants: ["high"] }],
-      defaultModel: { providerID: "test", id: "model" }, commands: [{ name: "test", description: "Test" }],
+      models: [{ providerID: "test", providerName: "Test", id: "model", name: "Model", variants: ["high", "low"], enabled: false, profiles: [
+        { name: "work", active: true, variants: ["high"] }, { name: "personal", active: false, variants: ["low"] },
+      ] }],
+      defaultModel: { providerID: "test", id: "model", variant: "high", profile: "work" }, commands: [{ name: "test", description: "Test" }],
       skills: [{ id: "skill", name: "Skill", description: "Help", slash: true }],
       references: [{ name: "Readme", uri: pathToFileURL(join(directory, "README.md")).href }], resources: [{ name: "Docs", uri: "mcp://docs" }] })
     const workspace = recordOf(arrayOf(recordOf(valueOf(await executeRemoteOperation({ request: request("workspace.list"), local, sessions: registry, subscriptions }))).data)[0]).id
@@ -1021,11 +1117,13 @@ describe("operation mapping", () => {
     } })
     const invoke = (operation: RemoteRequest["operation"], payload: Record<string, unknown>) => executeRemoteOperation({ request: request(operation, payload), local, sessions: registry, subscriptions })
     expect(valueOf(await invoke("session.switchModel", { model: { providerID: "test", id: "model" } }))).toBeNull()
+    expect(valueOf(await invoke("session.switchModel", { model: { providerID: "test", id: "model", profile: "work" } }))).toBeNull()
     expect(valueOf(await invoke("session.switchAgent", { agent: "build" }))).toBeNull()
     expect(valueOf(await invoke("session.command", { command: "test", arguments: "--x" }))).toEqual({ data: { id: "msg_command" } })
     expect(valueOf(await invoke("session.skill", { skill: "skill" }))).toBeNull()
     expect(calls.filter((call) => ["switchModel", "switchAgent", "command", "skill"].includes(call.method))).toEqual([
       { method: "switchModel", args: ["ses_1", { directory: "/work" }, { providerID: "test", id: "model" }] },
+      { method: "switchModel", args: ["ses_1", { directory: "/work" }, { providerID: "test", id: "model", profile: "work" }] },
       { method: "switchAgent", args: ["ses_1", { directory: "/work" }, "build"] },
       { method: "command", args: ["ses_1", { directory: "/work" }, { command: "test", arguments: "--x" }] },
       { method: "skill", args: ["ses_1", { directory: "/work" }, { skill: "skill" }] },
@@ -1108,7 +1206,7 @@ describe("operation mapping", () => {
     expect(calls.some((call) => call.method === "subagentPage")).toBe(false)
   })
   test("Team cancel and answer authorize a direct managed child before local mutation", async () => {
-    const sessions = [sessionInfo("ses_root", { updated: 1 }), sessionInfo("ses_child", { updated: 2, parentID: "ses_root", agent: "general" }),
+    const sessions = [sessionInfo("ses_root", { updated: 1 }), sessionInfo("ses_child", { updated: 2, directory: "/child", parentID: "ses_root", agent: "general" }),
       sessionInfo("ses_foreign", { updated: 3, parentID: "ses_other", agent: "general" }), sessionInfo("ses_btw", { updated: 4, parentID: "ses_root", agent: "btw" })]
     const test = await harness({ sessions, results: {
       subagentCancel: async () => ({ sessionID: "ses_child", state: "cancelling" }),
@@ -1127,6 +1225,24 @@ describe("operation mapping", () => {
     for (const childID of ["ses_foreign", "ses_btw", "ses_missing"])
       expect(errorOf(await run("session.subagent.cancel", { childID })).code).toBe("forbidden")
     expect(test.calls.some((call) => call.method === "subagentCancel")).toBe(false)
+  })
+
+  test("remote pin operations require a verified direct managed child and use its Location", async () => {
+    const sessions = [sessionInfo("ses_root", { updated: 1 }), sessionInfo("ses_child", { updated: 2, directory: "/child", parentID: "ses_root", agent: "general" }),
+      sessionInfo("ses_foreign", { updated: 3, parentID: "ses_other", agent: "general" }), sessionInfo("ses_btw", { updated: 4, parentID: "ses_root", agent: "btw" })]
+    const test = await harness({ sessions })
+    const run = (sessionID: string, operation: "session.pin" | "session.unpin") => executeRemoteOperation({
+      request: { ...request(operation), sessionID }, sessions: test.registry, subscriptions: test.subscriptions, local: test.local,
+    })
+    expect(valueOf(await run("ses_child", "session.pin"))).toBeNull()
+    expect(valueOf(await run("ses_child", "session.unpin"))).toBeNull()
+    expect(test.calls.filter((call) => call.method === "pin" || call.method === "unpin")).toEqual([
+      { method: "pin", args: ["ses_child", { directory: "/child" }] },
+      { method: "unpin", args: ["ses_child", { directory: "/child" }] },
+    ])
+    for (const [sessionID, code] of [["ses_root", "forbidden"], ["ses_foreign", "session_not_allowed"], ["ses_btw", "forbidden"], ["ses_missing", "session_not_allowed"]] as const)
+      expect(errorOf(await run(sessionID, "session.pin")).code).toBe(code)
+    expect(test.calls.filter((call) => call.method === "pin" || call.method === "unpin")).toHaveLength(2)
   })
 
   test("Team shells expose only root-family owners and kill no foreign or ownerless shell", async () => {
@@ -1424,11 +1540,7 @@ describe("operation mapping", () => {
     expect(valueOf(await executeRemoteOperation({ request: request("session.subscribe"), sessions: registry, subscriptions, local }))).toBeNull()
     expect(valueOf(await executeRemoteOperation({ request: request("session.subscribe"), sessions: registry, subscriptions, local }))).toBeNull()
     expect(valueOf(await executeRemoteOperation({ request: request("session.unsubscribe"), sessions: registry, subscriptions, local }))).toBeNull()
-    expect(calls.filter((call) => call.method !== "getSession").slice(before).map((call) => call.method)).toEqual([
-      "listPage",
-      "listPage",
-      "listPage",
-    ])
+    expect(calls.filter((call) => call.method !== "getSession").slice(before)).toEqual([])
     expect(subscriptions.count("ses_1")).toBe(0)
     expect(subscriptions.has("ses_1")).toBe(false)
     expect(valueOf(await executeRemoteOperation({ request: request("session.unsubscribe"), sessions: registry, subscriptions, local }))).toBeNull()
@@ -1807,6 +1919,7 @@ describe("strict validation and error mapping", () => {
       [request("workspace.list", { directory: "/etc" }), "invalid_message"],
       [request("session.create", { id: "invalid", workspace: "wsp_1" }), "invalid_message"],
       [request("session.create", { id: "ses_new", workspace: "wsp_1", directory: "/etc" }), "invalid_message"],
+      [request("session.switchModel", { model: { providerID: "test", id: "model", profile: "" } }), "invalid_message"],
       [request("session.get", { directory: "/etc" }), "invalid_message"],
       [request("session.active", { limit: 1 }), "invalid_message"],
       // A frame outside the shared contract; the relay parser rejects it before this layer.

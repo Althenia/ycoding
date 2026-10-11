@@ -113,6 +113,17 @@ describe("mini command", () => {
       id: "openai/gpt-5",
       variant: "high",
     })
+    expect(parseRunModel("Work#openrouter/openai/gpt-5#high")).toEqual({
+      model: { providerID: "openrouter", modelID: "openai/gpt-5" },
+      variant: "high",
+      profile: "Work",
+    })
+    expect(parseSessionTargetModel("Work#openrouter/openai/gpt-5#high")).toEqual({
+      providerID: "openrouter",
+      id: "openai/gpt-5",
+      variant: "high",
+      profile: "Work",
+    })
   })
 
   test("is registered in the preview CLI", async () => {

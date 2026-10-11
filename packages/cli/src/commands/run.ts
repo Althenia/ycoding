@@ -36,7 +36,7 @@ export const RunCommand = Spec.make("run", {
     ),
     model: Flag.string("model").pipe(
       Flag.withAlias("m"),
-      Flag.withDescription("Model to use in the format provider/model#variant"),
+      Flag.withDescription("Model to use in the format [profile#]provider/model[#variant]"),
       Flag.optional,
     ),
     agent: Flag.string("agent").pipe(Flag.withDescription("Agent to use"), Flag.optional),
@@ -58,7 +58,7 @@ export const RunCommand = Spec.make("run", {
       ["3", 3],
     ]).pipe(
       Flag.withDescription(
-        "Set durable Session YOLO level; omitted preserves it (0: off, 1: questions/forms, 2: +permissions, 3: +ordinary guardrails; explicit denies and hard guardrails still apply)",
+        "Set durable Session YOLO level; omitted preserves it (0: off, 1: permissions and ordinary guardrails, 2: +questions/forms, 3: +scope dispatch; explicit denies and hard guardrails still apply)",
       ),
       Flag.optional,
     ),

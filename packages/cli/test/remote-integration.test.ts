@@ -4,7 +4,7 @@ import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import { Telemetry } from "@ycoding-ai/schema/telemetry"
 import { Schema } from "effect"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { RemoteAgent, type ConnectionInput, type RelayConnection } from "../src/remote-bridge"
 import { createLocalServer } from "../src/remote-local"
@@ -34,6 +34,10 @@ test("forwards anonymous Web latency through the connector into the local Server
   const sample = { kind: "request", at: "2026-10-04T12:00:00.000Z", operation: "session.list", outcome: "ok", queueMs: 2, settlementMs: 9, totalMs: 11 } as const
   try {
     await bridge.connect()
+    relay.deliver(request("latency_refused", "machine.latency.append", undefined, { samples: [sample] }))
+    expect(errorOf(await answer(relay, "latency_refused")).code).toBe("telemetry_disabled")
+    relay.deliver(request("consent_set", "machine.telemetry.consent.set", undefined, { enabled: true, noticeVersion: 1 }))
+    expect(valueOf(await answer(relay, "consent_set"))).toMatchObject({ data: { enabled: true, noticeVersion: 1 } })
     relay.deliver(request("latency_append", "machine.latency.append", undefined, { samples: [sample] }))
     expect(valueOf(await answer(relay, "latency_append"))).toEqual({ accepted: 1 })
     relay.deliver(request("latency_read", "machine.latency.list", undefined, { limit: 60 }))
@@ -864,15 +868,14 @@ Require a fresh human decision in this isolated test.
     await createSession(server, unrelatedID, directory)
     await bridge.connect()
 
-    // The harmless echo matches the standard destructive-Git review, but cannot reset a repository.
-    const ordinaryCommand = "echo git reset --hard HEAD~1"
+    const ordinaryCommand = `cd ${JSON.stringify(homedir())} && echo guarded ordinary review`
     const ordinaryShell = startShell(ordinaryCommand)
     const ordinary = await pendingReview()
     expect(ordinary).toMatchObject({
       rootSessionID: rootID,
       sessionID: childID,
       resources: [ordinaryCommand],
-      ruleIDs: ["standard.review.git-destructive"],
+      ruleIDs: ["standard.review.outside-repo"],
     })
     expect(ordinary.hardReview).not.toBe(true)
     expect(await reviews(childID)).toEqual([ordinary])

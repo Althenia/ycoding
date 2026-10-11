@@ -4,6 +4,19 @@ import os from "node:os"
 import path from "node:path"
 import { cleanupRuntimeSmoke } from "./runtime-smoke"
 
+test("runtime cache benchmark explicitly isolates prediction traffic without relaxing accounting or prefix checks", async () => {
+  const source = await Bun.file(path.join(import.meta.dir, "runtime-smoke.ts")).text()
+  const config = source.split('path.join(project, "ycoding.json"),')[1]?.split("const dir =")[0]
+  expect(config).toContain("prediction: { enabled: false }")
+  expect(source).toContain("toolSummary.helpers !== 0")
+  expect(source).toContain("requests.length - toolRequestsStart !== 3")
+  expect(source).toContain("toolSummary.physical !== 3")
+  expect(source).toContain("beforeDiagnostics.requests?.latestNamespace !== stableNamespace")
+  expect(source).toContain("afterDiagnostics.requests?.latestNamespace !== stableNamespace")
+  expect(source).toContain('assertClose(toolSummary.cost, 0.001875, "Tool benchmark estimated cost")')
+  expect(source).toContain('assertClose(openAISummary.cost, 0.001455, "OpenAI benchmark estimated cost")')
+})
+
 test("runtime smoke waits for stdio server shutdown before removing its workspace", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-runtime-cleanup-"))
   const marker = `${root}.closed`

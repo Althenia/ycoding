@@ -127,7 +127,7 @@ describe("shared remote connector", () => {
       await connector.start()
       terminal?.("Relay rejected the device")
       await connector.settled()
-      expect(diagnostics).toEqual(["connected"])
+      expect(diagnostics).toEqual(["remote connector state", "connected", "remote connector state", "remote connector state"])
       expect(connector.status()).toMatchObject({ state: "error", message: "Relay rejected the device" })
       const next = createRemoteConnector({ directory, notice: "Owner access", makeBridge: () => ({ connect: async () => {}, close: async () => {} }) })
       await next.start()

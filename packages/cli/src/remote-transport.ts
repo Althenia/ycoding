@@ -57,6 +57,7 @@ export class CloudflareRemoteTransport implements RemoteTransport {
   private stopped = true
   private resolveInitial?: () => void
   private rejectInitial?: (error: Error) => void
+  private retireSocket?: (code: number, reason: string) => void
 
   constructor(private readonly options: Options) {
     requireWebSocketURL(options.url)
@@ -106,6 +107,7 @@ export class CloudflareRemoteTransport implements RemoteTransport {
     this.rejectInitial = undefined
     const socket = this.socket
     this.socket = undefined
+    this.retireSocket = undefined
     if (socket && socket.readyState !== CLOSED && socket.readyState !== CLOSING) socket.close(code, reason)
   }
 
@@ -147,6 +149,7 @@ export class CloudflareRemoteTransport implements RemoteTransport {
       socket.removeEventListener("error", errored)
       if (this.socket !== socket) return
       this.socket = undefined
+      this.retireSocket = undefined
       this.clearOpeningTimer()
       this.clearHeartbeat()
       if (this.rejectInitial) {
@@ -158,7 +161,12 @@ export class CloudflareRemoteTransport implements RemoteTransport {
       this.options.onClose?.({ code: event.code, reason: event.reason })
       this.scheduleReconnect()
     }
-    const errored = () => socket.close(1011, "Remote transport error")
+    const retire = (code: number, reason: string) => {
+      closed({ code, reason })
+      socket.close(code, reason)
+    }
+    this.retireSocket = retire
+    const errored = () => retire(1011, "Remote transport error")
     socket.addEventListener("open", opened)
     socket.addEventListener("message", message)
     socket.addEventListener("close", closed)
@@ -172,7 +180,7 @@ export class CloudflareRemoteTransport implements RemoteTransport {
         this.resolveInitial = undefined
         this.rejectInitial = undefined
       }
-      socket.close(1011, "Remote connection timed out")
+      retire(1011, "Remote connection timed out")
     }, this.options.connectTimeoutMs ?? 30_000)
   }
 
@@ -199,7 +207,7 @@ export class CloudflareRemoteTransport implements RemoteTransport {
     this.heartbeatTimer = setInterval(() => {
       if (this.socket !== socket || socket.readyState !== OPEN) return
       if (this.awaitingPong) {
-        socket.close(1011, "Remote heartbeat timed out")
+        this.retireSocket?.(1011, "Remote heartbeat timed out")
         return
       }
       this.awaitingPong = true
@@ -310,6 +318,8 @@ class NodeRemoteSocket implements RemoteSocket {
   }
 
   close(code?: number, reason?: string) {
+    // ws emits an error when an opening socket is intentionally closed after its transport listeners are retired.
+    if (this.socket.readyState === CONNECTING) this.socket.on("error", () => undefined)
     this.socket.close(code, reason)
   }
 }

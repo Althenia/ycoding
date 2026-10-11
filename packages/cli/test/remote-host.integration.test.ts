@@ -13,6 +13,7 @@ import { password, startServer } from "./remote-harness"
 
 class RelaySocket implements RemoteSocket {
   readyState = 0
+  stallClose = false
   readonly sent: string[] = []
   readonly listeners = new Map<string, Set<(event: { code?: number }) => void>>()
 
@@ -30,6 +31,7 @@ class RelaySocket implements RemoteSocket {
 
   close(code = 1000) {
     if (this.readyState === 3) return
+    if (this.stallClose) { this.readyState = 2; return }
     this.readyState = 3
     this.listeners.get("close")?.forEach((listener) => listener({ code }))
   }
@@ -48,7 +50,7 @@ async function waitFor(check: () => boolean | Promise<boolean>) {
   }
 }
 
-async function fixture(credentials?: (signal?: AbortSignal) => Promise<BridgeCredentials>) {
+async function fixture(credentials?: (signal?: AbortSignal) => Promise<BridgeCredentials>, heartbeatIntervalMs = 60_000) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-remote-recovery-"))
   const server = await startServer(directory)
   const sockets: RelaySocket[] = []
@@ -78,7 +80,7 @@ async function fixture(credentials?: (signal?: AbortSignal) => Promise<BridgeCre
               return socket
             },
             reconnectInitialDelayMs: 5, reconnectMaxDelayMs: 10, connectTimeoutMs: 100,
-            heartbeatIntervalMs: 60_000,
+            heartbeatIntervalMs,
             onOpen: input.onOpen, onClose: ({ code, reason }) => input.onClose(code, reason),
           }),
           refreshIntervalMs: 60_000, onTerminal: hooks.onTerminal, onDiagnostic: hooks.onDiagnostic,
@@ -96,6 +98,26 @@ async function fixture(credentials?: (signal?: AbortSignal) => Promise<BridgeCre
     close: async () => { await host.shutdown(); await server.close(); await rm(directory, { recursive: true, force: true }) },
   }
 }
+
+test("the host recovers a silent relay socket without a close callback or a second authentication owner", async () => {
+  const remote = await fixture(undefined, 40)
+  try {
+    await remote.host.set(true)
+    await waitFor(() => remote.sockets.length === 1)
+    remote.sockets[0].stallClose = true
+    remote.sockets[0].open()
+    await waitFor(async () => (await remote.host.status()).state === "on")
+    await waitFor(() => remote.sockets.length === 2)
+    expect(await remote.host.status()).toEqual({ state: "connecting" })
+    remote.sockets[1].open()
+    await waitFor(async () => (await remote.host.status()).state === "on")
+    remote.sockets[0].open()
+    expect(await remote.host.status()).toEqual({ state: "on" })
+    expect(remote.bridges).toHaveLength(1)
+    expect(remote.authentications()).toBe(1)
+    expect(remote.retrying()).toBe(false)
+  } finally { await remote.close() }
+})
 
 test("a live socket outage reconnects the same opted-in backend without a second host retry owner", async () => {
   const remote = await fixture()

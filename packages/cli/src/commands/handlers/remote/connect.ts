@@ -12,7 +12,7 @@ import type { Endpoint } from "@ycoding-ai/client/effect/service"
 import { Service } from "@ycoding-ai/client/effect/service"
 import { YCoding } from "@ycoding-ai/client/promise"
 import { ServerConnection } from "../../../services/server-connection"
-import { RemoteSetupError } from "../../../remote-error"
+import { RemoteSetupError, type RemoteDiagnostic } from "../../../remote-error"
 
 export function privateLocalServer(endpoint: Endpoint) {
   RemoteLocal.assertPrivateEndpoint(endpoint)
@@ -21,7 +21,7 @@ export function privateLocalServer(endpoint: Endpoint) {
 
 export const makeRemoteConnector = Effect.fn("cli.remote.connector")(function* (input: {
   endpoint: Endpoint
-  onDiagnostic?: (message: string) => void
+  onDiagnostic?: RemoteDiagnostic
 }) {
   const identity = yield* requireIdentity()
   const relayURL = yield* Effect.try({

@@ -3,9 +3,12 @@ export * as ServerProcess from "./server-process"
 import { NodeServices } from "@effect/platform-node"
 import { Service, type DiscoverOptions, type Info } from "@ycoding-ai/client/effect/service"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
+import { Database } from "@ycoding-ai/core/database/database"
 import { Global } from "@ycoding-ai/core/global"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import type { SdkPlugins } from "@ycoding-ai/core/plugin/sdk"
 import { AppProcess } from "@ycoding-ai/core/process"
+import { ProcessLock } from "@ycoding-ai/core/util/process-lock"
 import { randomBytes, randomUUID } from "node:crypto"
 import path from "node:path"
 import { Effect, FiberSet, FileSystem, Option, Redacted, Schedule, Schema } from "effect"
@@ -20,6 +23,7 @@ export type Options = {
   readonly mode: Mode
   readonly hostname?: string
   readonly port?: number
+  readonly plugins?: ReadonlyArray<Parameters<SdkPlugins.Interface["register"]>[0]>
 }
 
 // The process effect lives until server shutdown; tracing it would parent every request to one process-lifetime trace.
@@ -57,13 +61,6 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
         (yield* Service.incumbent({ ...serviceOptions, url: serviceURL(hostname, port) })) !== undefined
       )
         return
-      if (options.mode === "service" && !process.env.YCODING_DB) {
-        const backup = yield* Effect.tryPromise(() => DatabaseRecovery.backupUnsupported())
-        if (backup)
-          yield* Effect.logWarning("backed up unsupported pre-current database", {
-            backup,
-          })
-      }
       const { start } = yield* Effect.promise(() => import("@ycoding-ai/server/process"))
       const environmentPassword = yield* Env.password
       // Keep the lease credential out of the environment inherited by tools.
@@ -124,6 +121,12 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
               instanceID,
               onListen: (address, shutdown) =>
                 Effect.gen(function* () {
+                  const database = Database.filename({ path: process.env.YCODING_DB })
+                  if (database !== ":memory:") yield* ProcessLock.acquire(database + ".service.lock")
+                  if (!process.env.YCODING_DB) {
+                    const backup = yield* Effect.tryPromise(() => DatabaseRecovery.backupUnsupported())
+                    if (backup) yield* Effect.logWarning("backed up unsupported pre-current database", { backup })
+                  }
                   if (!config.password) yield* ServiceConfig.password(password)
                   return yield* register(address, password, instanceID, serviceOptions.file, shutdown)
                 }),
@@ -137,18 +140,24 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
               const url = new URL(HttpServer.formatAddress(address))
               if (url.hostname === "0.0.0.0") url.hostname = "127.0.0.1"
               if (url.hostname === "[::]") url.hostname = "[::1]"
-              return Effect.runPromise(makeRemoteConnector({
-                endpoint: { url: url.toString(), auth: { type: "basic", username: "ycoding", password } },
-                onDiagnostic: (message) => {
-                  logRemoteDiagnostic(Effect.logWarning("remote connector diagnostic", {
-                    component: "remote-connector",
-                    detail: message,
-                  }))
-                },
-              }).pipe(Effect.provide(services)))
+              return Effect.runPromise(
+                makeRemoteConnector({
+                  endpoint: { url: url.toString(), auth: { type: "basic", username: "ycoding", password } },
+                  onDiagnostic: (message, fields) => {
+                    logRemoteDiagnostic(
+                      Effect.logWarning("remote connector diagnostic", {
+                        ...fields,
+                        component: "remote-connector",
+                        detail: message,
+                      }),
+                    )
+                  },
+                }).pipe(Effect.provide(services)),
+              )
             },
           })
         },
+        options.plugins,
       ).pipe(
         Effect.catch((error) => {
           if (serviceOptions === undefined || port === undefined || !addressInUse(error)) return Effect.fail(error)

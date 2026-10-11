@@ -7,6 +7,7 @@ import {
   type FormInfo,
   type AgentInfo,
   type ModelInfo,
+  type ModelDefault,
   type ProviderInfo,
   type CommandInfo,
   type SkillInfo,
@@ -23,11 +24,17 @@ import {
   type SessionCompletionsOutput,
   type SessionMessageInfo,
   type YCodingClient,
+  type IntegrationInfo,
+  type ProviderIntegrationRef,
+  type IntegrationAttemptStatus,
+  type IntegrationCommandAttempt,
+  type IntegrationCommandAttemptStatus,
 } from "@ycoding-ai/client/promise"
 import { createHash } from "node:crypto"
+import { stat } from "node:fs/promises"
 import { Service, type Endpoint } from "@ycoding-ai/client/effect/service"
 import { Telemetry } from "@ycoding-ai/schema/telemetry"
-import { RemoteLimits, type RemoteLatencySample, type RemoteUsageReportInput } from "@ycoding-ai/remote"
+import { RemoteLimits, type RemoteLatencySample, type RemoteTelemetryConsent, type RemoteTelemetryConsentState, type RemoteUsageReportInput } from "@ycoding-ai/remote"
 
 // The bridge's only view of the local YCoding server: the same Protocol routes
 // the TUI uses, addressed with a Location derived from the backend inventory.
@@ -49,7 +56,7 @@ export type LocalAutonomy =
   | { readonly yolo: number | boolean; readonly maxNoProgress?: number | null }
   | { readonly goal: string | null; readonly maxNoProgress?: number | null }
 
-export type LocalFailureKind = "not_found" | "invalid" | "conflict" | "transport" | "too_large" | "server"
+export type LocalFailureKind = "not_found" | "location_unavailable" | "invalid" | "conflict" | "transport" | "too_large" | "telemetry_disabled" | "server"
 
 export class LocalFailure extends Error {
   override readonly name = "LocalFailure"
@@ -71,8 +78,20 @@ export type LocalEventStream = {
 }
 
 export type LocalServer = {
+  readonly integrationList: (location: LocalLocation) => Promise<readonly IntegrationInfo[]>
+  readonly providerIntegrations: (location: LocalLocation) => Promise<readonly ProviderIntegrationRef[]>
+  readonly integrationKey: (location: LocalLocation, integrationID: string, key: string, label: string) => Promise<void>
+  readonly integrationOAuthBegin: (location: LocalLocation, integrationID: string, methodID: string, inputs: Readonly<Record<string, string>>, label: string) => Promise<Awaited<ReturnType<YCodingClient["integration"]["oauth"]["connect"]>>["data"]>
+  readonly integrationOAuthStatus: (location: LocalLocation, integrationID: string, attemptID: string) => Promise<IntegrationAttemptStatus>
+  readonly integrationOAuthComplete: (location: LocalLocation, integrationID: string, attemptID: string, code: string) => Promise<void>
+  readonly integrationOAuthCancel: (location: LocalLocation, integrationID: string, attemptID: string) => Promise<void>
+  readonly integrationCommandBegin: (location: LocalLocation, integrationID: string, methodID: string, label: string) => Promise<IntegrationCommandAttempt>
+  readonly integrationCommandStatus: (location: LocalLocation, integrationID: string, attemptID: string) => Promise<IntegrationCommandAttemptStatus>
+  readonly integrationCommandCancel: (location: LocalLocation, integrationID: string, attemptID: string) => Promise<void>
   readonly latencyAppend: (samples: readonly RemoteLatencySample[]) => Promise<{ readonly accepted: number }>
   readonly latencyList: (input: { readonly limit?: number; readonly before?: string }) => Promise<Telemetry.Page>
+  readonly telemetryConsentGet: () => Promise<RemoteTelemetryConsentState>
+  readonly telemetryConsentSet: (input: { readonly enabled: boolean; readonly noticeVersion: 1 }) => Promise<RemoteTelemetryConsent>
   readonly keepAwakeGet: () => Promise<KeepAwakeStatus>
   readonly keepAwakeSet: (enabled: boolean) => Promise<KeepAwakeStatus>
   readonly listPage: (input: { limit: number; cursor?: string }) => Promise<{
@@ -82,7 +101,7 @@ export type LocalServer = {
   readonly projectList: () => Promise<readonly Project[]>
   readonly projectDirectories: (projectID: string) => Promise<readonly ProjectDirectory[]>
   readonly projectCurrent: (location: LocalLocation) => Promise<{ readonly id: string; readonly directory: string }>
-  readonly createSession: (id: string, location: LocalLocation, agent?: string, model?: { readonly providerID: string; readonly id: string; readonly variant?: string }) => Promise<SessionInfo>
+  readonly createSession: (id: string, location: LocalLocation, agent?: string, model?: { readonly providerID: string; readonly id: string; readonly variant?: string; readonly profile?: string }) => Promise<SessionInfo>
   readonly getSession: (sessionID: string, location: LocalLocation) => Promise<SessionInfo>
   /** Process-wide running status; the caller filters it to the current inventory. */
   readonly activeSessions: () => Promise<unknown>
@@ -93,7 +112,7 @@ export type LocalServer = {
   readonly usageReport: (input: RemoteUsageReportInput) => Promise<UsageReportOutput>
   readonly agentList: (location: LocalLocation) => Promise<readonly AgentInfo[]>
   readonly modelList: (location: LocalLocation) => Promise<readonly ModelInfo[]>
-  readonly modelDefault: (location: LocalLocation) => Promise<ModelInfo | null>
+  readonly modelDefault: (location: LocalLocation) => Promise<ModelDefault | null>
   readonly providerList: (location: LocalLocation) => Promise<readonly ProviderInfo[]>
   readonly commandList: (location: LocalLocation) => Promise<readonly CommandInfo[]>
   readonly skillList: (location: LocalLocation) => Promise<readonly SkillInfo[]>
@@ -106,6 +125,8 @@ export type LocalServer = {
   readonly messageRead: (sessionID: string, location: LocalLocation, messageID: string, signal?: AbortSignal) => Promise<SessionMessageInfo>
   readonly todoList: (sessionID: string, location: LocalLocation) => Promise<unknown>
   readonly subagentPage: (parentID: string, location: LocalLocation, cursor?: string) => Promise<unknown>
+  readonly pin: (sessionID: string, location: LocalLocation) => Promise<unknown>
+  readonly unpin: (sessionID: string, location: LocalLocation) => Promise<unknown>
   readonly subagentCancel: (parentID: string, childID: string, location: LocalLocation) => Promise<unknown>
   readonly subagentAnswer: (parentID: string, childID: string, questionID: string, text: string, location: LocalLocation) => Promise<unknown>
   readonly diagnostics: (sessionID: string, location: LocalLocation) => Promise<unknown>
@@ -131,7 +152,7 @@ export type LocalServer = {
     input: { readonly cursor?: number; readonly limit: number },
   ) => Promise<unknown>
   readonly prompt: (sessionID: string, location: LocalLocation, input: LocalPrompt) => Promise<unknown>
-  readonly switchModel: (sessionID: string, location: LocalLocation, model: { readonly providerID: string; readonly id: string; readonly variant?: string }) => Promise<void>
+  readonly switchModel: (sessionID: string, location: LocalLocation, model: { readonly providerID: string; readonly id: string; readonly variant?: string; readonly profile?: string }) => Promise<void>
   readonly switchAgent: (sessionID: string, location: LocalLocation, agent: string) => Promise<void>
   readonly command: (sessionID: string, location: LocalLocation, input: { readonly id?: string; readonly command: string; readonly arguments?: string; readonly files?: LocalPrompt["files"]; readonly agents?: LocalPrompt["agents"]; readonly delivery?: LocalPrompt["delivery"] }) => Promise<unknown>
   readonly skill: (sessionID: string, location: LocalLocation, input: { readonly id?: string; readonly skill: string; readonly resume?: boolean }) => Promise<void>
@@ -186,6 +207,8 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
   return {
     latencyAppend: (samples) => call(() => client.server.telemetry.append({ samples }, { signal: AbortSignal.timeout(timeoutMs) })),
     latencyList: (input) => call(() => client.server.telemetry.list(input, { signal: AbortSignal.timeout(timeoutMs) })),
+    telemetryConsentGet: () => call(() => client.server.telemetry.consent.get({ signal: AbortSignal.timeout(timeoutMs) })),
+    telemetryConsentSet: (input) => call(() => client.server.telemetry.consent.set(input, { signal: AbortSignal.timeout(timeoutMs) })),
     listPage: (input) =>
       call(async () => {
         const page = await client.session.list(
@@ -198,7 +221,10 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
     projectDirectories: (projectID) =>
       call(() => client.project.directories({ projectID }, { signal: AbortSignal.timeout(timeoutMs) })),
     projectCurrent: (location) =>
-      call(() => client.project.current({}, request(location, timeoutMs))),
+      call(async () => {
+        await requireDirectory(location)
+        return client.project.current({}, request(location, timeoutMs))
+      }),
     createSession: (id, location, agent, model) =>
       call(() =>
         client.session.create(
@@ -208,6 +234,7 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
       ),
     getSession: (sessionID, location) =>
       call(async () => {
+        await requireDirectory(location)
         const info = await client.session.get({ sessionID }, request(location, timeoutMs))
         if (info.location.directory !== location.directory || info.location.workspaceID !== location.workspaceID)
           throw new LocalFailure("not_found", "Session is not available at the recorded location")
@@ -243,6 +270,8 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
       call(() => client.session.todo.list({ sessionID }, request(location, timeoutMs))),
     subagentPage: (parentID, location, cursor) =>
       call(() => client.session.subagent.list({ parentID, ...(cursor === undefined ? {} : { cursor }) }, request(location, timeoutMs))),
+    pin: (sessionID, location) => call(() => client.session.pin({ sessionID }, request(location, timeoutMs))),
+    unpin: (sessionID, location) => call(() => client.session.unpin({ sessionID }, request(location, timeoutMs))),
     subagentCancel: (parentID, childID, location) =>
       call(() => client.session.subagent.cancel({ parentID, childID }, request(location, timeoutMs))),
     subagentAnswer: (parentID, childID, questionID, text, location) =>
@@ -364,6 +393,16 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
       call(async () => {
         await client.form.cancel({ sessionID, formID }, request(location, timeoutMs))
       }),
+    integrationList: (location) => call(async () => (await client.integration.list({}, request(location, timeoutMs))).data),
+    providerIntegrations: (location) => call(async () => (await client.provider.integrations({}, request(location, timeoutMs))).data),
+    integrationKey: (location, integrationID, key, label) => call(async () => { await client.integration.connect.key({ integrationID, key, label }, request(location, timeoutMs)) }),
+    integrationOAuthBegin: (location, integrationID, methodID, inputs, label) => call(async () => (await client.integration.oauth.connect({ integrationID, methodID, inputs: { ...inputs }, label }, request(location, timeoutMs))).data),
+    integrationOAuthStatus: (location, integrationID, attemptID) => call(async () => (await client.integration.oauth.status({ integrationID, attemptID }, request(location, timeoutMs))).data),
+    integrationOAuthComplete: (location, integrationID, attemptID, code) => call(async () => { await client.integration.oauth.complete({ integrationID, attemptID, code }, request(location, timeoutMs)) }),
+    integrationOAuthCancel: (location, integrationID, attemptID) => call(async () => { await client.integration.oauth.cancel({ integrationID, attemptID }, request(location, timeoutMs)) }),
+    integrationCommandBegin: (location, integrationID, methodID, label) => call(async () => (await client.integration.command.connect({ integrationID, methodID, label }, request(location, timeoutMs))).data),
+    integrationCommandStatus: (location, integrationID, attemptID) => call(async () => (await client.integration.command.status({ integrationID, attemptID }, request(location, timeoutMs))).data),
+    integrationCommandCancel: (location, integrationID, attemptID) => call(async () => { await client.integration.command.cancel({ integrationID, attemptID }, request(location, timeoutMs)) }),
     keepAwakeGet: () => call(() => client.keepAwake.get({ signal: AbortSignal.timeout(timeoutMs) })),
     keepAwakeSet: (enabled) => call(() => client.keepAwake.set({ enabled }, { signal: AbortSignal.timeout(timeoutMs) })),
     autonomySet: (sessionID, location, payload) => {
@@ -407,8 +446,19 @@ function request(location: LocalLocation, timeoutMs: number, signal?: AbortSigna
   }
 }
 
+async function requireDirectory(location: LocalLocation) {
+  const info = await stat(location.directory).catch((cause: unknown) => {
+    const code = typeof cause === "object" && cause !== null ? Reflect.get(cause, "code") : undefined
+    if (code === "ENOENT" || code === "ENOTDIR") return undefined
+    throw cause
+  })
+  if (!info?.isDirectory()) throw new LocalFailure("location_unavailable", "The recorded directory is unavailable on this device")
+}
+
 function classify(cause: unknown, timeoutMs: number): LocalFailure {
   if (cause instanceof LocalFailure) return cause
+  if (typeof cause === "object" && cause !== null && Reflect.get(cause, "_tag") === "TelemetryDisabled")
+    return new LocalFailure("telemetry_disabled", "Machine telemetry consent is disabled", { cause })
   if (cause instanceof ClientError) {
     const message =
       cause.reason === "Transport" || cause.reason === "UnexpectedStatus"

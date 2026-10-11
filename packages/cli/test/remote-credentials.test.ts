@@ -400,6 +400,7 @@ describe("device credentials", () => {
         (error: unknown) => error,
       )
       expect(failure).toBeInstanceOf(DeviceAuthorizationError)
+      expect(failure).toMatchObject({ status: 403, operation: "refresh" })
       expect(await provide(root)(read())).toMatchObject({ refreshToken: "refresh_old", refreshExpiresAt: 9_000 })
     })
   })

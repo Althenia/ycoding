@@ -148,7 +148,7 @@ export type FetchLike = typeof globalThis.fetch
 export class DeviceAuthorizationError extends Error {
   override readonly name = "DeviceAuthorizationError"
 
-  constructor(readonly status: number) {
+  constructor(readonly status: number, readonly operation?: "enroll" | "challenge" | "token" | "refresh") {
     super("The relay no longer authorizes this device; enroll it again with `ycoding remote enroll`")
   }
 }
@@ -165,7 +165,7 @@ export async function enroll(input: {
   if (!enrollmentCodePattern.test(input.code)) throw new Error("That enrollment code is not in the expected format")
   const name = input.name.trim()
   if (name.length === 0) throw new Error("A device name is required")
-  const response = await post(input.relayURL, "/api/devices/enroll", input.fetcher, {
+  const response = await post(input.relayURL, "enroll", input.fetcher, {
     enrollmentID: input.enrollmentID,
     code: input.code,
     name,
@@ -194,7 +194,7 @@ export const credentials = Effect.fn("cli.remote-credentials.credentials")(funct
 const challenge = Effect.fnUntraced(function* (identity: Identity, fetcher: FetchLike | undefined, signal: AbortSignal) {
   const minted = yield* Effect.tryPromise({
     try: () =>
-      post(identity.relayURL, "/api/devices/challenge", fetcher, { deviceID: identity.deviceID }, signal),
+      post(identity.relayURL, "challenge", fetcher, { deviceID: identity.deviceID }, signal),
     catch: (cause) => authenticationError(cause, "Could not start device authentication with the relay"),
   })
   const challengeID = requireStringField(minted, "challengeID")
@@ -205,7 +205,7 @@ const challenge = Effect.fnUntraced(function* (identity: Identity, fetcher: Fetc
   })
   const tokens = yield* Effect.tryPromise({
     try: () =>
-      post(identity.relayURL, "/api/devices/token", fetcher, { deviceID: identity.deviceID, challengeID, signature }, signal),
+      post(identity.relayURL, "token", fetcher, { deviceID: identity.deviceID, challengeID, signature }, signal),
     catch: (cause) => authenticationError(cause, "The relay rejected this device"),
   })
   return requireTokens(tokens)
@@ -214,7 +214,7 @@ const challenge = Effect.fnUntraced(function* (identity: Identity, fetcher: Fetc
 const refresh = Effect.fnUntraced(function* (identity: Identity, fetcher: FetchLike | undefined, signal: AbortSignal) {
   const tokens = yield* Effect.tryPromise({
     try: () =>
-      post(identity.relayURL, "/api/devices/refresh", fetcher, {
+      post(identity.relayURL, "refresh", fetcher, {
         deviceID: identity.deviceID,
         refreshToken: identity.refreshToken,
       }, signal),
@@ -228,8 +228,8 @@ function authenticationError(cause: unknown, message: string) {
   return new Error(message, { cause })
 }
 
-async function post(relayURL: string, route: string, fetcher: FetchLike | undefined, body: unknown, signal?: AbortSignal) {
-  const url = new URL(route, withTrailingSlash(relayURL))
+async function post(relayURL: string, operation: NonNullable<DeviceAuthorizationError["operation"]>, fetcher: FetchLike | undefined, body: unknown, signal?: AbortSignal) {
+  const url = new URL(`/api/devices/${operation}`, withTrailingSlash(relayURL))
   if (url.search !== "") throw new Error("Device credentials are never sent as URL parameters")
   const response = await (fetcher ?? globalThis.fetch)(url, {
     method: "POST",
@@ -240,7 +240,7 @@ async function post(relayURL: string, route: string, fetcher: FetchLike | undefi
     body: JSON.stringify(body),
   })
   if (response.status === 401 || response.status === 403 || response.status === 410)
-    throw new DeviceAuthorizationError(response.status)
+    throw new DeviceAuthorizationError(response.status, operation)
   // Never read or log the response body: it may contain credentials.
   if (!response.ok) throw new Error(`Relay rejected the request with status ${response.status}`)
   return (await response.json()) as unknown
