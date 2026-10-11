@@ -24,15 +24,24 @@ import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
-import { Deferred, Effect, Exit, Fiber, Layer, Scope } from "effect"
+import { ConfigAgentPlugin } from "@ycoding-ai/core/config/plugin/agent"
+import { Deferred, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } from "effect"
 import { location } from "./fixture/location"
+import { agentHost, host } from "./plugin/host"
 import { testEffect } from "./lib/effect"
+
+const home = "/home/user"
+const configDir = "/global"
+const dataDir = "/ycoding/data"
+const cacheDir = "/ycoding/cache"
+const stateDir = "/ycoding/state"
+const buildAgent = Agent.ID.make("build")
 
 const parentID = Session.ID.descending("ses_guardrail_service_parent")
 const childID = Session.ID.descending("ses_guardrail_service_child")
 
-function session(id: Session.ID, parentID?: Session.ID) {
-  return { id, ...(parentID ? { parentID } : {}) } as Session.Info
+function session(id: Session.ID, parentID?: Session.ID, agent?: Agent.ID) {
+  return { id, ...(parentID ? { parentID } : {}), ...(agent ? { agent } : {}) } as Session.Info
 }
 
 function markdown(input: {
@@ -57,6 +66,7 @@ function harness(input?: {
   readonly documents?: ReadonlyMap<string, string>
   readonly autoGuardrail?: boolean
   readonly managedWorktrees?: ReadonlyArray<string>
+  readonly rules?: Permission.Ruleset
   readonly replyGate?: {
     readonly entered: PromiseWithResolvers<void>
     readonly release: PromiseWithResolvers<void>
@@ -66,6 +76,8 @@ function harness(input?: {
   const scans: Array<{ readonly pattern: string; readonly cwd: string | undefined }> = []
   const choices: Decision.Input[] = []
   let replyGated = false
+  const agent = input?.rules === undefined ? undefined : buildAgent
+  const permissionRules = input?.rules
   const filesystem = Layer.effect(
     FSUtil.Service,
     Effect.gen(function* () {
@@ -81,6 +93,65 @@ function harness(input?: {
       })
     }),
   ).pipe(Layer.provide(FSUtil.layer), Layer.provide(NodeFileSystem.layer))
+  const events = Layer.mock(EventRuntime.Service, {
+    publish: (definition, data) => {
+      const gated = definition.type === Guardrail.Event.Replied.type && input?.replyGate && !replyGated
+      if (gated) replyGated = true
+      return (
+        gated
+          ? Effect.promise(async () => {
+              input.replyGate!.entered.resolve()
+              await input.replyGate!.release.promise
+            })
+          : Effect.void
+      ).pipe(
+        Effect.as({
+          id: EventRuntime.ID.create(),
+          type: definition.type,
+          data,
+        } as EventRuntime.Payload<typeof definition>),
+      )
+    },
+    subscribe: () => Stream.empty,
+  })
+  const sessions = Layer.mock(SessionStore.Service, {
+    get: (sessionID) =>
+      Effect.succeed(
+        new Map<Session.ID, Session.Info>([
+          [parentID, session(parentID, undefined, agent)],
+          [childID, session(childID, parentID, agent)],
+        ]).get(sessionID),
+      ),
+  })
+  const autonomy = Layer.mock(SessionAutonomy.Service, {
+    canAutoGuardrail: () => Effect.succeed(input?.autoGuardrail ?? false),
+  } as unknown as SessionAutonomy.Interface)
+  const locationLayer = Layer.succeed(
+    Location.Service,
+    Location.Service.of(
+      location(
+        { directory: AbsolutePath.make("/workspace/project") },
+        { projectDirectory: AbsolutePath.make("/workspace/project") },
+      ),
+    ),
+  )
+  const global = Global.layerWith({ home, data: dataDir, config: configDir, cache: cacheDir, state: stateDir })
+  const permission = AppNodeBuilder.build(LayerNode.group([Agent.node, Permission.node]), [
+    [EventRuntime.node, events],
+    [Location.node, locationLayer],
+    [SessionStore.node, sessions],
+    [SessionAutonomy.node, autonomy],
+    [PermissionSaved.node, Layer.mock(PermissionSaved.Service, { list: () => Effect.succeed([]) })],
+  ])
+  const seed = permissionRules === undefined ? Layer.empty : Layer.effectDiscard(Effect.gen(function* () {
+    const configured = yield* Agent.Service
+    yield* configured.transform((draft) => {
+      draft.update(buildAgent, (item) => {
+        item.permissions = []
+      })
+    })
+    yield* ConfigAgentPlugin.Plugin.effect(host({ agent: agentHost(configured) }))
+  }))
   const dependencies = Layer.mergeAll(
     Layer.mock(Decision.Service, {
       evaluate: (request) => {
@@ -88,60 +159,32 @@ function harness(input?: {
         return Effect.die("Guardrails must not request helper judgments")
       },
     }),
-    Layer.mock(Config.Service, { entries: () => Effect.succeed([...(input?.entries ?? [])]) }),
+    Layer.mock(Config.Service, {
+      entries: () => Effect.succeed([
+        ...(input?.entries ?? []),
+        ...(permissionRules === undefined ? [] : [new Config.Document({
+          type: "document",
+          info: Schema.decodeUnknownSync(Config.Info)({ permissions: permissionRules }),
+        })]),
+      ]),
+    }),
     Layer.mock(LocationMutation.Service, {
       managedWorktree: (target) =>
         Effect.succeed((input?.managedWorktrees ?? []).some((root) => target === root || target.startsWith(`${root}/`))),
     }),
     filesystem,
-    Global.layerWith({ home: "/home/user", data: "/data", config: "/global" }),
-    Layer.succeed(
-      Location.Service,
-      Location.Service.of(
-        location(
-          { directory: AbsolutePath.make("/workspace/project") },
-          { projectDirectory: AbsolutePath.make("/workspace/project") },
-        ),
-      ),
-    ),
-    Layer.mock(EventRuntime.Service, {
-      publish: (definition, data) => {
-        const gated = definition.type === Guardrail.Event.Replied.type && input?.replyGate && !replyGated
-        if (gated) replyGated = true
-        return (
-          gated
-            ? Effect.promise(async () => {
-                input.replyGate!.entered.resolve()
-                await input.replyGate!.release.promise
-              })
-            : Effect.void
-        ).pipe(
-          Effect.as({
-            id: EventRuntime.ID.create(),
-            type: definition.type,
-            data,
-          } as EventRuntime.Payload<typeof definition>),
-        )
-      },
-    }),
-    Layer.mock(SessionStore.Service, {
-      get: (sessionID) =>
-        Effect.succeed(
-          new Map<Session.ID, Session.Info>([
-            [parentID, session(parentID)],
-            [childID, session(childID, parentID)],
-          ]).get(sessionID),
-        ),
-    }),
-    Layer.mock(SessionAutonomy.Service, {
-      canAutoGuardrail: () => Effect.succeed(input?.autoGuardrail ?? false),
-    } as unknown as SessionAutonomy.Interface),
+    global,
+    locationLayer,
+    events,
+    sessions,
+    autonomy,
+    permission,
   )
   return {
     documents,
     scans,
     choices,
-    it: testEffect(SessionGuardrail.layer.pipe(Layer.provide(dependencies))),
+    it: testEffect(Layer.mergeAll(SessionGuardrail.layer, seed).pipe(Layer.provide(dependencies))),
   }
 }
 
@@ -172,6 +215,88 @@ managed.it.effect("treats this repository's managed worktrees as inside and thei
   expect(yield* service.evaluate({ sessionID: parentID, action: "file_mutation", resources: ["/data/worktrees/repo_abc/other/a.ts"] }))
     .toMatchObject({ decision: "ask", hardReview: false, ruleIDs: ["standard.review.outside-repo"] })
   expect(managed.choices).toHaveLength(0)
+}))
+
+exact.it.effect("allows file mutations inside the global config directory", () => Effect.gen(function* () {
+  const service = yield* SessionGuardrail.Service
+  for (const resources of [[configDir], [`${configDir}/settings.json`], [`${configDir}/nested/settings.json`]])
+    expect(yield* service.evaluate({ sessionID: parentID, action: "file_mutation", resources })).toMatchObject({
+      decision: "allow", hardReview: false, ruleIDs: [],
+    })
+}))
+
+exact.it.effect("allows file mutations inside the global data, cache, and state directories", () => Effect.gen(function* () {
+  const service = yield* SessionGuardrail.Service
+  for (const resources of [
+    [`${dataDir}/db`],
+    [`${dataDir}/repos/example`],
+    [`${cacheDir}/bin/tool`],
+    [`${stateDir}/session`],
+  ]) expect(yield* service.evaluate({ sessionID: parentID, action: "file_mutation", resources })).toMatchObject({
+    decision: "allow", hardReview: false, ruleIDs: [],
+  })
+}))
+
+const allowedDirectory = harness({
+  rules: [{ action: "external_directory", resource: "~/Downloads/**", effect: "allow" }],
+})
+
+allowedDirectory.it.effect("allows outside paths covered by an external_directory allow rule", () => Effect.gen(function* () {
+  const service = yield* SessionGuardrail.Service
+  for (const input of [
+    { action: "file_mutation", resources: [`${home}/Downloads/a/b.txt`] },
+    { action: "shell", resources: ["cd ~/Downloads && echo ok"] },
+    { action: "shell", resources: ["touch ~/Downloads/a/b.txt"] },
+  ]) expect(yield* service.evaluate({ sessionID: parentID, ...input })).toMatchObject({
+    decision: "allow", hardReview: false, ruleIDs: [],
+  })
+}))
+
+const askedDirectory = harness({
+  rules: [{ action: "external_directory", resource: "~/Downloads/**", effect: "ask" }],
+})
+const unruledDirectory = harness({ rules: [] })
+
+askedDirectory.it.effect("still reviews outside paths when external_directory asks or has no rule", () => Effect.gen(function* () {
+  const asked = yield* SessionGuardrail.Service
+  expect(yield* asked.evaluate({
+    sessionID: parentID, action: "file_mutation", resources: [`${home}/Downloads/a/b.txt`],
+  })).toMatchObject({ decision: "ask", hardReview: false, ruleIDs: ["standard.review.outside-repo"] })
+}))
+
+unruledDirectory.it.effect("still reviews outside paths when external_directory has no matching rule", () => Effect.gen(function* () {
+  const service = yield* SessionGuardrail.Service
+  expect(yield* service.evaluate({
+    sessionID: parentID, action: "file_mutation", resources: [`${home}/Downloads/a/b.txt`],
+  })).toMatchObject({ decision: "ask", hardReview: false, ruleIDs: ["standard.review.outside-repo"] })
+}))
+
+const deniedDirectory = harness({
+  rules: [{ action: "external_directory", resource: "~/Downloads/**", effect: "deny" }],
+})
+
+deniedDirectory.it.effect("still reviews outside paths denied by external_directory", () => Effect.gen(function* () {
+  const service = yield* SessionGuardrail.Service
+  expect(yield* service.evaluate({
+    sessionID: parentID, action: "file_mutation", resources: [`${home}/Downloads/a/b.txt`],
+  })).toMatchObject({ decision: "ask", hardReview: false, ruleIDs: ["standard.review.outside-repo"] })
+}))
+
+allowedDirectory.it.effect("keeps hard review for recursive deletion of an allowed home child", () => Effect.gen(function* () {
+  const service = yield* SessionGuardrail.Service
+  expect(yield* service.evaluate({
+    sessionID: parentID, action: "shell", resources: ["rm -rf ~/Downloads"],
+  })).toMatchObject({ decision: "ask", hardReview: true, ruleIDs: ["standard.review.home-child"] })
+}))
+
+allowedDirectory.it.effect("still reviews a shell command that mixes exempt and non-exempt outside paths", () => Effect.gen(function* () {
+  const service = yield* SessionGuardrail.Service
+  expect(yield* service.evaluate({
+    sessionID: parentID, action: "shell", resources: ["touch ~/Downloads/a/b.txt /outside/file"],
+  })).toMatchObject({ decision: "ask", hardReview: false, ruleIDs: ["standard.review.outside-repo"] })
+  expect(yield* service.evaluate({
+    sessionID: parentID, action: "shell", resources: [`touch ${configDir}/settings.json /outside/file`],
+  })).toMatchObject({ decision: "ask", hardReview: false, ruleIDs: ["standard.review.outside-repo"] })
 }))
 
 exact.it.effect("destructive rules stay human-only and never consult classification", () => Effect.gen(function* () {

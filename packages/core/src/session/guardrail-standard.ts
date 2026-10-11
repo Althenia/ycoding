@@ -126,9 +126,18 @@ function deletionMatch(command: string, paths?: Paths): Match | undefined {
 const temporaryRoots = ["/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp", "/var/folders"]
 const systemRoots = ["/System", "/Library", "/usr", "/etc", "/bin", "/sbin", "/opt", "/Applications", "/var"]
 
+export interface OutsideTarget {
+  readonly path: string
+  readonly directory: boolean
+}
+
 export function outsidePaths(action: string, resource: string, paths: Paths): ReadonlyArray<string> {
+  return outsideTargets(action, resource, paths).map((target) => target.path)
+}
+
+export function outsideTargets(action: string, resource: string, paths: Paths): ReadonlyArray<OutsideTarget> {
   const targets = action === "file_mutation"
-    ? [resolveTarget(resource, paths.workdir, paths)]
+    ? [{ path: resolveTarget(resource, paths.workdir, paths), directory: false }]
     : action === "shell" && !readOnlyShell(resource)
       ? shellWorkdirs(resource, paths).flatMap(({ segment, workdir }) => {
           const invocation = executable(segment.tokens)
@@ -139,16 +148,33 @@ export function outsidePaths(action: string, resource: string, paths: Paths): Re
             const value = token.replace(/^(?:\d*[<>]+|[^=]+=)/, "")
             return !value || value.startsWith("-") || /^[<>]|^&\d+$/.test(value) ? [] : [value]
           })
-          return [workdir, ...(invocation?.name === "cd" && invocation.args.length === 0 ? [paths.home] : []),
-            ...operands.map((target) => resolveTarget(target, workdir, paths))]
+          const separator = invocation?.name === "cd" ? invocation.args.indexOf("--") : -1
+          const cdOperand = invocation?.name === "cd"
+            ? separator >= 0 ? invocation.args[separator + 1] : invocation.args.find((token) => !token.startsWith("-"))
+            : undefined
+          const cdPath = cdOperand === undefined ? undefined : resolveTarget(cdOperand, workdir, paths)
+          return [
+            { path: workdir, directory: true },
+            ...(invocation?.name === "cd" && invocation.args.length === 0 ? [{ path: paths.home, directory: true }] : []),
+            ...operands.map((target) => {
+              const resolved = resolveTarget(target, workdir, paths)
+              return { path: resolved, directory: cdPath !== undefined && resolved === cdPath }
+            }),
+          ]
         })
       : []
-  return Array.from(new Set(targets)).filter((target) => {
-    const relative = path.relative(paths.project, target)
-    if (relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))) return false
-    if (target === "/dev" || target.startsWith("/dev/")) return false
-    return !isTemporary(target, paths.workdir, paths) && !paths.trustedPaths?.includes(target)
-  })
+  const merged = targets.reduce((result, target) => {
+    result.set(target.path, result.get(target.path) === true || target.directory)
+    return result
+  }, new Map<string, boolean>())
+  return [...merged].flatMap(([target, directory]) => isOutside(target, paths) ? [{ path: target, directory }] : [])
+}
+
+function isOutside(target: string, paths: Paths) {
+  const relative = path.relative(paths.project, target)
+  if (relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))) return false
+  if (target === "/dev" || target.startsWith("/dev/")) return false
+  return !isTemporary(target, paths.workdir, paths) && !paths.trustedPaths?.includes(target)
 }
 
 function isTemporary(target: string, workdir: string, paths?: Paths) {

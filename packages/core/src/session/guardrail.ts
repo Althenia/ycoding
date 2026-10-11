@@ -13,6 +13,7 @@ import { FSUtil } from "../fs-util"
 import { Global } from "../global"
 import { Location } from "../location"
 import { LocationMutation } from "../location-mutation"
+import { Permission } from "../permission"
 import { Hash } from "../util/hash"
 import { SessionAutonomy } from "./autonomy"
 import { SessionErrors } from "./error"
@@ -158,6 +159,9 @@ export const layer = Layer.effect(
     const autonomy = yield* SessionAutonomy.Service
     const location = yield* Location.Service
     const locationMutation = yield* LocationMutation.Service
+    const permission = yield* Permission.Service
+    const globalRoots = [global.config, global.data, global.cache, global.state, global.tmp, global.bin, global.log, global.repos]
+      .map((root) => path.resolve(root))
     const entries = yield* config.entries()
     const settings = Config.latest(entries, "guardrails")
     const counters = SessionGuardrailCounter.make({
@@ -300,10 +304,26 @@ export const layer = Layer.effect(
         }),
       }
       if (!result.standard || result.ruleIDs[0] !== "standard.review.outside-repo" || input.skipReview === true) return result
-      const candidates = Array.from(new Set(input.resources.flatMap((resource) =>
-        SessionGuardrailStandard.outsidePaths(input.action, resource, paths))))
+      const directories = input.resources.flatMap((resource) =>
+        SessionGuardrailStandard.outsideTargets(input.action, resource, paths)).reduce((result, target) => {
+        result.set(target.path, result.get(target.path) === true || target.directory)
+        return result
+      }, new Map<string, boolean>())
+      const candidates = [...directories.keys()]
       const trustedPaths = yield* Effect.filter(candidates, (target) =>
-        locationMutation.managedWorktree(target).pipe(Effect.catch(() => Effect.succeed(false))))
+        locationMutation.managedWorktree(target).pipe(
+          Effect.catch(() => Effect.succeed(false)),
+          Effect.flatMap((managed) => {
+            if (managed || globalRoots.some((root) => target === root || target.startsWith(`${root}${path.sep}`)))
+              return Effect.succeed(true)
+            const boundary = directories.get(target) === true ? target : path.dirname(target)
+            return permission.evaluateEffective({
+              sessionID: input.sessionID,
+              action: "external_directory",
+              resource: path.join(boundary, "*").replaceAll("\\", "/"),
+            }).pipe(Effect.map((effect) => effect === "allow"))
+          }),
+        ))
       const resources = SessionGuardrailStandard.semanticResources(input.action, input.resources, paths).filter((resource) =>
         SessionGuardrailStandard.outsidePaths(input.action, resource, { ...paths, trustedPaths }).length > 0)
       const allowed = { rootSessionID, decision: "allow" as const, ruleIDs: [], standard: false, hardReview: false }
@@ -570,6 +590,7 @@ export const node = makeLocationNode({
     FSUtil.node,
     Global.node,
     LocationMutation.node,
+    Permission.node,
     EventRuntime.node,
     SessionStore.node,
     SessionAutonomy.node,
