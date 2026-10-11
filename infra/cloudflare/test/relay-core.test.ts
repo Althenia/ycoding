@@ -178,6 +178,10 @@ function deferred() {
   return { promise, resolve }
 }
 
+async function flushMicrotasks() {
+  for (let index = 0; index < 50; index++) await Promise.resolve()
+}
+
 async function attachBoth(h: ReturnType<typeof harness>) {
   await h.relay.attach(agent("agent-1"))
   await h.relay.attach(client("client-1"))
@@ -549,6 +553,19 @@ describe("relay core: request admission", () => {
     h.setClientAuthority({ ok: false, reason: "Browser session is not authorized" })
     await h.relay.handleClientMessage("client-1", request("latency_2", "machine.latency.list"))
     expect(h.requestsTo("agent-1")).toHaveLength(1)
+  })
+
+  test("forwards machine telemetry consent operations without retaining a consent decision", async () => {
+    const h = harness()
+    await attachBoth(h)
+    h.reset()
+    await h.relay.handleClientMessage("client-1", request("consent_get", "machine.telemetry.consent.get"))
+    await h.relay.handleClientMessage("client-1", request("consent_set", "machine.telemetry.consent.set", undefined, { enabled: true, noticeVersion: 1 }))
+    expect(h.requestsTo("agent-1")).toMatchObject([
+      { operation: "machine.telemetry.consent.get" },
+      { operation: "machine.telemetry.consent.set", input: { enabled: true, noticeVersion: 1 } },
+    ])
+    expect(h.database.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%telemetry%'").all()).toEqual([])
   })
 
   test("reports malformed frames with the client id and closes frames without one", async () => {
@@ -1189,6 +1206,122 @@ describe("relay core: per-connection frame order and authority windows", () => {
     gate.resolve()
     await paused
     expect(h.messagesTo("agent-1").map((message) => message.id)).toEqual(["r1", "r2"])
+  })
+
+  test("admits an independent request while another request's authority read is stalled", async () => {
+    const h = harness()
+    await attachBoth(h)
+    const gate = deferred()
+    let gated = false
+    h.setClientAuthorityRead(async () => {
+      if (!gated) {
+        gated = true
+        await gate.promise
+      }
+      return { ok: true }
+    })
+
+    const stalled = h.relay.handleClientMessage("client-1", request("1", "session.list"))
+    const independent = h.relay.handleClientMessage("client-1", request("2", "session.list"))
+    await flushMicrotasks()
+    expect(h.requestsTo("agent-1")).toHaveLength(1)
+
+    gate.resolve()
+    await Promise.all([stalled, independent])
+    expect(h.requestsTo("agent-1")).toHaveLength(2)
+  })
+
+  test("forwards a cancel only after its own stalled request is admitted", async () => {
+    const h = harness()
+    await attachBoth(h)
+    const gate = deferred()
+    let gated = false
+    h.setClientAuthorityRead(async () => {
+      if (!gated) {
+        gated = true
+        await gate.promise
+      }
+      return { ok: true }
+    })
+
+    const stalled = h.relay.handleClientMessage("client-1", request("1", "session.list"))
+    const cancelled = h.relay.handleClientMessage("client-1", JSON.stringify({ type: "cancel", id: "1" }))
+    await flushMicrotasks()
+    expect(h.messagesTo("agent-1")).toEqual([])
+
+    gate.resolve()
+    await Promise.all([stalled, cancelled])
+    expect(h.messagesTo("agent-1").map((message) => message.type)).toEqual(["request", "cancel"])
+  })
+
+  test("admits a read of one Session without waiting on a sibling read's stalled authorization", async () => {
+    const h = harness()
+    await attachBoth(h)
+    const gate = deferred()
+    let gated = false
+    h.setClientAuthorityRead(async () => {
+      if (!gated) {
+        gated = true
+        await gate.promise
+      }
+      return { ok: true }
+    })
+
+    const stalled = h.relay.handleClientMessage("client-1", request("1", "session.snapshot", "ses_a"))
+    const sibling = h.relay.handleClientMessage("client-1", request("2", "session.messages", "ses_a"))
+    await flushMicrotasks()
+    expect(h.requestsTo("agent-1").map((message) => message.operation)).toEqual(["session.messages"])
+
+    gate.resolve()
+    await Promise.all([stalled, sibling])
+    expect(h.requestsTo("agent-1").map((message) => message.operation)).toEqual(["session.messages", "session.snapshot"])
+  })
+
+  test("forwards two mutations of one Session in arrival order while the first authorization is stalled", async () => {
+    const h = harness()
+    await attachBoth(h)
+    const gate = deferred()
+    let gated = false
+    h.setClientAuthorityRead(async () => {
+      if (!gated) {
+        gated = true
+        await gate.promise
+      }
+      return { ok: true }
+    })
+
+    const first = h.relay.handleClientMessage("client-1", request("1", "session.interrupt", "ses_a"))
+    const second = h.relay.handleClientMessage("client-1", request("2", "session.prompt", "ses_a"))
+    await flushMicrotasks()
+    expect(h.requestsTo("agent-1")).toEqual([])
+
+    gate.resolve()
+    await Promise.all([first, second])
+    expect(h.requestsTo("agent-1").map((message) => message.operation)).toEqual(["session.interrupt", "session.prompt"])
+  })
+
+  test("delivers an agent response while a status frame waits on a client authority read", async () => {
+    const h = harness()
+    await attachBoth(h)
+    await h.relay.handleClientMessage("client-1", request("1", "session.list"))
+    h.reset()
+    const gate = deferred()
+    let gated = false
+    h.setClientAuthorityRead(async () => {
+      if (!gated) {
+        gated = true
+        await gate.promise
+      }
+      return { ok: true }
+    })
+
+    const status = h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: [] }))
+    const answered = h.relay.handleAgentMessage("agent-1", response("r1", { data: [] }))
+    await flushMicrotasks()
+    expect(h.messagesTo("client-1").filter((item) => item.type === "response")).toHaveLength(1)
+
+    gate.resolve()
+    await Promise.all([status, answered])
   })
 
   test("drops a queued frame whose connection detached while it waited", async () => {

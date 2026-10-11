@@ -16,6 +16,7 @@ import {
   RemoteCloseCode,
   RemoteLimits,
   isNoticeRequest,
+  remoteOperationAccess,
   isSessionID,
   noticePageValue,
   noticeSequence,
@@ -153,29 +154,36 @@ export function createRelay(deps: RelayDeps) {
   let agent: AgentState | undefined
 
   /**
-   * Per-connection frame queues. A connection's frames are processed strictly in
-   * arrival order, so a frame that awaits authority can never let a later frame
-   * from the same peer overtake it. Each connection owns its queue and they drain
-   * concurrently; unrelated devices live in different objects entirely.
+   * Ordered frame lanes. Frames in one lane are processed strictly in arrival
+   * order, so a frame that awaits authority can never let a later frame from the
+   * same lane overtake it. Lanes drain concurrently: a connection's agent frames
+   * other than responses share one lane, a browser's mutations share a lane per
+   * Session (or per connection when sessionless), its notice requests share one
+   * lane, and reads take no lane, so independent work never waits on another's
+   * authorization.
    *
-   * The queue entry lives exactly as long as the queued frames: it is released
-   * when the queue drains, and a frame that fails does not poison later frames.
+   * The lane entry lives exactly as long as the queued frames: it is released
+   * when the lane drains, and a frame that fails does not poison later frames.
    */
   const frameQueues = new Map<string, Promise<void>>()
+  const admissions = new Map<string, Promise<void>>()
 
-  const inArrivalOrder = (connectionID: string, process: () => Promise<void>): Promise<void> => {
-    const previous = frameQueues.get(connectionID) ?? Promise.resolve()
+  const inArrivalOrder = (lane: string, process: () => Promise<void>): Promise<void> => {
+    const previous = frameQueues.get(lane) ?? Promise.resolve()
     const current = previous.then(process, process)
     const drained = current.then(
       () => undefined,
       () => undefined,
     )
-    frameQueues.set(connectionID, drained)
+    frameQueues.set(lane, drained)
     void drained.then(() => {
-      if (frameQueues.get(connectionID) === drained) frameQueues.delete(connectionID)
+      if (frameQueues.get(lane) === drained) frameQueues.delete(lane)
     })
     return current
   }
+
+  const mutationLane = (connectionID: string, message: { readonly sessionID?: string }) =>
+    message.sessionID === undefined ? `${connectionID}\0mutation` : `${connectionID}\0session\0${message.sessionID}`
 
   const sendToClients = async (frame: string, noticesOnly = false) => {
     await Promise.all(Array.from(clients.values()).filter((client) => !noticesOnly || client.noticesSubscribed).map(async (client) => {
@@ -575,6 +583,8 @@ export function createRelay(deps: RelayDeps) {
       }
       if (message.type === "pong") return
       if (message.type === "cancel") {
+        await admissions.get(`${connectionID}\0${message.id}`)
+        if (clients.get(connectionID) !== client) return
         const relayID = Array.from(pending).find(([, entry]) => entry.connectionID === connectionID && entry.clientID === message.id)?.[0]
         if (relayID === undefined) return
         pending.delete(relayID)
@@ -589,10 +599,18 @@ export function createRelay(deps: RelayDeps) {
         return
       }
       if (isNoticeRequest(message)) {
-        await admitNoticeRequest(client, message)
+        await inArrivalOrder(`${connectionID}\0notice`, () => admitNoticeRequest(client, message))
         return
       }
-      await admitRequest(client, message)
+      const lane = remoteOperationAccess[message.operation] === "mutation" ? mutationLane(connectionID, message) : undefined
+      const key = `${connectionID}\0${message.id}`
+      const admitted = lane === undefined ? admitRequest(client, message) : inArrivalOrder(lane, () => admitRequest(client, message))
+      const settled = admitted.then(() => undefined, () => undefined)
+      admissions.set(key, settled)
+      void settled.then(() => {
+        if (admissions.get(key) === settled) admissions.delete(key)
+      })
+      await admitted
     },
 
     async handleAgentMessage(connectionID: string, raw: string) {
@@ -627,79 +645,84 @@ export function createRelay(deps: RelayDeps) {
           deps.send(client.connectionID, serializeSessions({ type: "sessions" }))
         return
       }
-      if (message.type === "completions") {
-        const recorded = await recordNotices(() => deps.notices.complete(message.data, message.more))
-        await deliverAlerts(current.ownerID, (recorded ?? []).map((notice) => {
-          const title = message.data.find((item) => item.sessionID === notice.sessionID)?.title
-          const detail = title === undefined ? {} : { title }
-          return { event: { category: "agent-completed", sessionID: notice.sessionID, deviceID: current.deviceID, noticeID: notice.id, ...detail },
-            item: { kind: "notice", notice, ...(title === undefined ? {} : { detail }) } }
-        }))
+      if (message.type === "response") {
+        deliverResponse(current.connectionID, message)
         return
       }
-      if (message.type === "blocked") {
-        const event = { category: "approval-requested" as const, sessionID: message.sessionID, createdAt: deps.now(), need: "blocked" as const }
-        const appended = await recordNotices(() => deps.notices.append([event]))
-        const detail = { ...(message.title === undefined ? {} : { title: message.title }), need: "blocked" as const }
-        if (appended === undefined) {
-          await deliverAlerts(current.ownerID, [{ event: { category: event.category, sessionID: event.sessionID, deviceID: current.deviceID, ...detail } }])
+      return inArrivalOrder(connectionID, async () => {
+        if (message.type === "completions") {
+          const recorded = await recordNotices(() => deps.notices.complete(message.data, message.more))
+          await deliverAlerts(current.ownerID, (recorded ?? []).map((notice) => {
+            const title = message.data.find((item) => item.sessionID === notice.sessionID)?.title
+            const detail = title === undefined ? {} : { title }
+            return { event: { category: "agent-completed", sessionID: notice.sessionID, deviceID: current.deviceID, noticeID: notice.id, ...detail },
+              item: { kind: "notice", notice, ...(title === undefined ? {} : { detail }) } }
+          }))
           return
         }
-        const repeated = appended.length === 0 ? repeatNotices([event]) : []
-        await deliverAlerts(current.ownerID, [...appended, ...repeated].map((notice) => {
-          const alert = { ...detail, ...(repeated.includes(notice) ? { repeat: true as const } : {}) }
-          return { event: { category: notice.category, sessionID: notice.sessionID, deviceID: current.deviceID, noticeID: notice.id, ...alert },
-            item: { kind: "notice", notice, detail: alert } }
-        }))
-        return
-      }
-      if (message.type === "status") {
-        const before = previousStatus
-        await deps.saveStatus(message)
-        latestStatus = raw
-        await sendToClients(raw)
-        previousStatus = message
-        if (before !== undefined) {
-          const oldAttention = new Set(before.attention)
-          const detailOf = (sessionID: string): RemoteAlertDetail => {
-            const detail = message.details?.find((item) => item.sessionID === sessionID)
-            const need = message.failed?.includes(sessionID) ? "failed" : detail?.need
-            return { ...(detail?.title === undefined ? {} : { title: detail.title }), ...(need === undefined ? {} : { need }) }
+        if (message.type === "blocked") {
+          const event = { category: "approval-requested" as const, sessionID: message.sessionID, createdAt: deps.now(), need: "blocked" as const }
+          const appended = await recordNotices(() => deps.notices.append([event]))
+          const detail = { ...(message.title === undefined ? {} : { title: message.title }), need: "blocked" as const }
+          if (appended === undefined) {
+            await deliverAlerts(current.ownerID, [{ event: { category: event.category, sessionID: event.sessionID, deviceID: current.deviceID, ...detail } }])
+            return
           }
-          const events = message.attention.filter((sessionID) => !oldAttention.has(sessionID))
-            .map((sessionID) => ({ category: "approval-requested" as const, sessionID, createdAt: deps.now(), need: detailOf(sessionID).need }))
-          const appended = events.length === 0 ? [] : await recordNotices(() => deps.notices.append(events))
-          const repeated = appended === undefined ? [] : repeatNotices(events.filter((event) => !appended.some((notice) => notice.sessionID === event.sessionID)))
-          const recorded = appended === undefined ? undefined : [...appended, ...repeated]
-          await deliverAlerts(current.ownerID, recorded === undefined
-            ? events.map((event) => ({ event: { category: event.category, sessionID: event.sessionID, deviceID: current.deviceID, ...detailOf(event.sessionID) } }))
-            : recorded.map((notice) => {
-              const detail = { ...detailOf(notice.sessionID), ...(repeated.includes(notice) ? { repeat: true as const } : {}) }
-              return { event: { category: notice.category, sessionID: notice.sessionID, deviceID: current.deviceID, noticeID: notice.id, ...detail },
-                item: { kind: "notice", notice, ...(Object.keys(detail).length === 0 ? {} : { detail }) } }
-            }))
+          const repeated = appended.length === 0 ? repeatNotices([event]) : []
+          await deliverAlerts(current.ownerID, [...appended, ...repeated].map((notice) => {
+            const alert = { ...detail, ...(repeated.includes(notice) ? { repeat: true as const } : {}) }
+            return { event: { category: notice.category, sessionID: notice.sessionID, deviceID: current.deviceID, noticeID: notice.id, ...alert },
+              item: { kind: "notice", notice, detail: alert } }
+          }))
+          return
         }
-        return
-      }
-      if (message.type === "event" || message.type === "events") {
-        for (const client of Array.from(clients.values())) {
-          if (!client.subscriptions.includes(message.sessionID)) continue
-          if (deps.now() >= client.credentialExpiresAt) {
-            removeClient(client.connectionID, RemoteCloseCode.unauthorized, sessionUnauthorizedMessage)
-            continue
+        if (message.type === "status") {
+          const before = previousStatus
+          await deps.saveStatus(message)
+          latestStatus = raw
+          await sendToClients(raw)
+          previousStatus = message
+          if (before !== undefined) {
+            const oldAttention = new Set(before.attention)
+            const detailOf = (sessionID: string): RemoteAlertDetail => {
+              const detail = message.details?.find((item) => item.sessionID === sessionID)
+              const need = message.failed?.includes(sessionID) ? "failed" : detail?.need
+              return { ...(detail?.title === undefined ? {} : { title: detail.title }), ...(need === undefined ? {} : { need }) }
+            }
+            const events = message.attention.filter((sessionID) => !oldAttention.has(sessionID))
+              .map((sessionID) => ({ category: "approval-requested" as const, sessionID, createdAt: deps.now(), need: detailOf(sessionID).need }))
+            const appended = events.length === 0 ? [] : await recordNotices(() => deps.notices.append(events))
+            const repeated = appended === undefined ? [] : repeatNotices(events.filter((event) => !appended.some((notice) => notice.sessionID === event.sessionID)))
+            const recorded = appended === undefined ? undefined : [...appended, ...repeated]
+            await deliverAlerts(current.ownerID, recorded === undefined
+              ? events.map((event) => ({ event: { category: event.category, sessionID: event.sessionID, deviceID: current.deviceID, ...detailOf(event.sessionID) } }))
+              : recorded.map((notice) => {
+                const detail = { ...detailOf(notice.sessionID), ...(repeated.includes(notice) ? { repeat: true as const } : {}) }
+                return { event: { category: notice.category, sessionID: notice.sessionID, deviceID: current.deviceID, noticeID: notice.id, ...detail },
+                  item: { kind: "notice", notice, ...(Object.keys(detail).length === 0 ? {} : { detail }) } }
+              }))
           }
-          // Fail closed: a revoked or expired session never receives an event,
-          // even when the revocation push never reached this object.
-          const authority = await checkClientAuthority(client)
-          if (!authority.ok) {
-            removeClient(client.connectionID, closeCodeFor(authority.reason), closeReasonFor(authority.reason))
-            continue
-          }
-          deps.send(client.connectionID, raw)
+          return
         }
-        return
-      }
-      deliverResponse(current.connectionID, message)
+        if (message.type === "event" || message.type === "events") {
+          for (const client of Array.from(clients.values())) {
+            if (!client.subscriptions.includes(message.sessionID)) continue
+            if (deps.now() >= client.credentialExpiresAt) {
+              removeClient(client.connectionID, RemoteCloseCode.unauthorized, sessionUnauthorizedMessage)
+              continue
+            }
+            // Fail closed: a revoked or expired session never receives an event,
+            // even when the revocation push never reached this object.
+            const authority = await checkClientAuthority(client)
+            if (!authority.ok) {
+              removeClient(client.connectionID, closeCodeFor(authority.reason), closeReasonFor(authority.reason))
+              continue
+            }
+            deps.send(client.connectionID, raw)
+          }
+          return
+        }
+      })
     },
 
     async revokeSession(sessionID: string) {
@@ -726,10 +749,6 @@ export function createRelay(deps: RelayDeps) {
   return {
     ...relay,
     settleDeliveries: async () => { while (deliveries.size > 0) await Promise.all(deliveries) },
-    handleClientMessage: (connectionID: string, raw: string) =>
-      inArrivalOrder(connectionID, () => relay.handleClientMessage(connectionID, raw)),
-    handleAgentMessage: (connectionID: string, raw: string) =>
-      inArrivalOrder(connectionID, () => relay.handleAgentMessage(connectionID, raw)),
   }
 
   async function admitRequest(
