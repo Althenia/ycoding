@@ -35,7 +35,8 @@ test("pages the directory inventory and forgets a directory through the real Ser
       ),
     ),
   )
-  const request = (path: string, init?: RequestInit) => handler.handler(new Request(`http://localhost${path}`, init))
+  const request = (path: string, init?: RequestInit) =>
+    handler.handler(new Request(`http://localhost${path}`, init), Context.empty())
   const page = async (query: string) => {
     const response = await request(`/api/project/inventory?${query}`)
     expect(response.status).toBe(200)

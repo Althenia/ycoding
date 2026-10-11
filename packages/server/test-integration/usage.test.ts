@@ -111,8 +111,11 @@ test("serves retained global usage through the real Server and Core graph when h
   )
 
   try {
-    const summary = await handler.handler(new Request("http://localhost/api/usage"))
-    const report = await handler.handler(new Request("http://localhost/api/usage/report?group=session"))
+    const summary = await handler.handler(new Request("http://localhost/api/usage"), Context.empty())
+    const report = await handler.handler(
+      new Request("http://localhost/api/usage/report?group=session"),
+      Context.empty(),
+    )
     expect([summary.status, report.status]).toEqual([200, 200])
     const summaryBody = Schema.decodeUnknownSync(summaryResponse)(await summary.json())
     expect(summaryBody).toMatchObject({

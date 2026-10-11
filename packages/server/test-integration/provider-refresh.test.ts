@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { NodeHttpServer } from "@effect/platform-node"
-import { Layer } from "effect"
+import { Context, Layer } from "effect"
 import { HttpRouter } from "effect/unstable/http"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -21,7 +21,7 @@ test("provider refresh picks up a project config file created after the location
   )
   const query = `location[directory]=${encodeURIComponent(directory)}`
   const models = async () => {
-    const response = await handler.handler(new Request(`http://localhost/api/model?${query}`))
+    const response = await handler.handler(new Request(`http://localhost/api/model?${query}`), Context.empty())
     expect(response.status).toBe(200)
     const body: { data: Array<{ providerID: string; id: string }> } = await response.json()
     return body.data.map((model) => `${model.providerID}/${model.id}`)
@@ -46,6 +46,7 @@ test("provider refresh picks up a project config file created after the location
 
     const refreshed = await handler.handler(
       new Request(`http://localhost/api/provider/refresh?${query}`, { method: "POST" }),
+      Context.empty(),
     )
     expect(refreshed.status).toBe(204)
 

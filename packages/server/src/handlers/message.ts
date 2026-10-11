@@ -1,8 +1,15 @@
 import { Session } from "@ycoding-ai/core/session"
-import { Effect } from "effect"
+import { SessionMessage } from "@ycoding-ai/core/session/message"
+import { Effect, Schema, Stream } from "effect"
+import { HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { SessionNotFoundError, UnknownError } from "@ycoding-ai/protocol/errors"
 import { Api } from "../api"
+
+const encode = Schema.encodeSync(Schema.toCodecJson(SessionMessage.Info))
+const encoder = new TextEncoder()
+const prefix = '{"data":['
+const suffix = "]}"
 
 export const MessageHandler = HttpApiBuilder.group(Api, "server.message", (handlers) =>
   Effect.gen(function* () {
@@ -34,8 +41,25 @@ export const MessageHandler = HttpApiBuilder.group(Api, "server.message", (handl
               )
             }),
           )
-        return { data: messages }
+        return messageResponse(messages)
       }),
     )
   }),
 )
+
+function messageResponse(messages: ReadonlyArray<SessionMessage.Info>) {
+  const serialized = messages.map((message) => JSON.stringify(encode(message)))
+  return HttpServerResponse.stream(
+    Stream.concat(
+      Stream.make(encoder.encode(prefix)),
+      Stream.fromIterable(serialized, { chunkSize: 1 }).pipe(
+        Stream.map((message, index) => encoder.encode((index === 0 ? "" : ",") + message)),
+      ),
+    ).pipe(Stream.concat(Stream.make(encoder.encode(suffix)))),
+    {
+      contentType: "application/json",
+      contentLength: prefix.length + suffix.length + Math.max(0, serialized.length - 1)
+        + serialized.reduce((size, message) => size + Buffer.byteLength(message), 0),
+    },
+  )
+}

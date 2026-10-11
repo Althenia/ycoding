@@ -4,11 +4,13 @@ import { Api } from "../api"
 import { ServerInfo } from "../server-info"
 import { Database } from "@ycoding-ai/core/database/database"
 import { WebLatency } from "@ycoding-ai/core/web-latency"
+import { TelemetryConsent } from "@ycoding-ai/core/telemetry-consent"
 import { InvalidCursorError, InvalidRequestError } from "@ycoding-ai/protocol/errors"
 
 export const ServerHandler = HttpApiBuilder.group(Api, "server.server", (handlers) =>
   Effect.gen(function* () {
     const database = yield* Database.Service
+    const consent = yield* TelemetryConsent.Service
     yield* WebLatency.prune(database.db)
     yield* Effect.sleep("1 hour").pipe(
       Effect.andThen(WebLatency.prune(database.db)),
@@ -28,7 +30,7 @@ export const ServerHandler = HttpApiBuilder.group(Api, "server.server", (handler
           const valid = ctx.payload.samples.every((sample) => {
             const time = Date.parse(sample.at)
             if (!Number.isFinite(time) || new Date(time).toISOString() !== sample.at) return false
-            if (sample.kind === "long-task") return true
+            if (sample.kind !== "request") return true
             return (
               (sample.reason === undefined || sample.outcome === "unavailable") &&
               (sample.settlementMs === undefined
@@ -52,5 +54,7 @@ export const ServerHandler = HttpApiBuilder.group(Api, "server.server", (handler
           )
         }),
       )
+      .handle("telemetry.consent.get", () => consent.get())
+      .handle("telemetry.consent.set", (ctx) => consent.set(ctx.payload))
   }),
 )

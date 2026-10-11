@@ -2,6 +2,7 @@ export * as ServerProcess from "./process"
 
 import { NodeHttpServer, NodeHttpServerRequest } from "@effect/platform-node"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import { SdkPlugins } from "@ycoding-ai/core/plugin/sdk"
 import { SessionRestart } from "@ycoding-ai/core/session/execution/restart"
 import { ServiceStatus } from "@ycoding-ai/protocol/groups/health"
 import { hasPtyConnectTicketURL } from "@ycoding-ai/protocol/groups/pty"
@@ -37,6 +38,7 @@ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
   options: ServerOptions,
   lifecycle?: Lifecycle<E, R>,
   remoteFactory?: (address: HttpServer.Address, password: string) => Promise<RemoteConnection.Interface>,
+  plugins: ReadonlyArray<Parameters<SdkPlugins.Interface["register"]>[0]> = [],
 ) {
   const password = options.password
   if (!password) return yield* Effect.fail(new Error("Missing server password"))
@@ -98,6 +100,8 @@ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
       ).pipe(Layer.provide(NodeHttpServer.layerHttpServices)),
       applicationScope,
     )
+    const hostPlugins = Context.get(context, SdkPlugins.Service)
+    yield* Effect.forEach(plugins, (plugin) => hostPlugins.register(plugin), { discard: true })
     if (lifecycle) {
       yield* installRestartContinuity(Context.get(context, SessionRestart.Service)).pipe(
         Effect.provideService(Scope.Scope, applicationScope),

@@ -54,6 +54,7 @@ import { randomUUID } from "node:crypto"
 import { processIdentityLayer } from "./process-identity"
 import { ServiceStatus } from "@ycoding-ai/protocol/groups/health"
 import { RemoteConnection } from "./remote-connection"
+import { TelemetryConsent } from "@ycoding-ai/core/telemetry-consent"
 
 const applicationServices = LayerNode.group([
   Database.node,
@@ -79,6 +80,7 @@ const applicationServices = LayerNode.group([
   SessionOrchestration.node,
   SessionOrchestrationNotifier.node,
   KeepAwake.node,
+  TelemetryConsent.node,
 ])
 
 export function createRoutes(

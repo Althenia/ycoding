@@ -104,9 +104,16 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                       location: ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) },
                     },
               )
-              .pipe(Effect.mapError((error) => error._tag === "Session.AgentNotSelectableError"
-                ? new InvalidRequestError({ message: error.message, field: "agent" })
-                : mapSessionNotFound(error))),
+              .pipe(Effect.mapError((error) => {
+                if (error._tag === "Session.AgentNotSelectableError")
+                  return new InvalidRequestError({ message: error.message, field: "agent" })
+                if (error._tag === "Session.NotFoundError") return mapSessionNotFound(error)
+                if (error._tag === "SessionRunnerModel.ProfileUnavailableError") return profileSelectionFailure()
+                return new InvalidRequestError({
+                  message: "Selected model credentials or configuration are unavailable. Reconnect the provider or select an available model.",
+                  field: error._tag === "SessionRunnerModel.VariantUnavailableError" ? "model.variant" : "model",
+                })
+              })),
           }
         }),
       )
@@ -486,6 +493,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
             .switchModel({ sessionID: ctx.params.sessionID, model: ctx.payload.model })
             .pipe(
               Effect.catchTags({
+                "SessionRunnerModel.ProfileUnavailableError": () => profileSelectionFailure(),
                 "SessionRunnerModel.ModelNotSelectedError": () => modelSwitchFailure(ctx.params.sessionID, "model-not-selected", "Select an available model before switching."),
                 "SessionRunnerModel.ModelUnavailableError": () => modelSwitchFailure(ctx.params.sessionID, "model-unavailable", "Target model is unavailable. Refresh the model catalog and select an available model."),
                 "SessionRunnerModel.VariantUnavailableError": () => modelSwitchFailure(ctx.params.sessionID, "variant-unavailable", "Target model variant is unavailable. Select a supported variant."),
@@ -1120,6 +1128,13 @@ export const resolveSkillConflict = (
       "Session.MessageDecodeError": Effect.die,
     }),
   )
+
+function profileSelectionFailure() {
+  return new InvalidRequestError({
+    message: "Selected model profile is unavailable. Reconnect or select the profile again.",
+    field: "model.profile",
+  })
+}
 
 function modelSwitchFailure(sessionID: Session.ID, category: string, message: string) {
   const ref = `err_${crypto.randomUUID().slice(0, 8)}`

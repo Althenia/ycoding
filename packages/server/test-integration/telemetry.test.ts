@@ -48,6 +48,44 @@ test("authenticated machine-global telemetry persists on the selected local Serv
         })
       ).status,
     ).toBe(401)
+    expect((await fetch(`${base}/api/server/telemetry/consent`)).status).toBe(401)
+    expect(await fetch(`${base}/api/server/telemetry/consent`, { headers: auth }).then((r) => r.json())).toEqual({
+      noticeVersion: 1,
+    })
+    const disabled = await fetch(`${base}/api/server/web-latency`, {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ samples: [sample] }),
+    })
+    expect(disabled.status).toBe(403)
+    expect(await disabled.json()).toEqual({ _tag: "TelemetryDisabled" })
+    expect(await fetch(`${base}/api/server/web-latency`, { headers: auth }).then((r) => r.json())).toEqual({
+      data: [],
+      cursor: {},
+    })
+    for (const input of [
+      { enabled: true, noticeVersion: 2 },
+      { enabled: true, noticeVersion: 1, extra: true },
+    ])
+      expect(
+        (
+          await fetch(`${base}/api/server/telemetry/consent`, {
+            method: "PUT",
+            headers: { ...auth, "content-type": "application/json" },
+            body: JSON.stringify(input),
+          })
+        ).status,
+      ).toBe(400)
+    const consent = await fetch(`${base}/api/server/telemetry/consent`, {
+      method: "PUT",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ enabled: true, noticeVersion: 1 }),
+    }).then((r) => r.json())
+    expect(consent).toEqual({ enabled: true, noticeVersion: 1, decidedAt: expect.any(Number) })
+    expect(await fetch(`${base}/api/server/telemetry/consent`, { headers: auth }).then((r) => r.json())).toEqual({
+      noticeVersion: 1,
+      consent,
+    })
     const appended = await fetch(`${base}/api/server/web-latency`, {
       method: "POST",
       headers: { ...auth, "content-type": "application/json", "x-ycoding-directory": "/private/other" },
@@ -76,7 +114,7 @@ test("authenticated machine-global telemetry persists on the selected local Serv
     const listed = await fetch(`${base}/api/server/web-latency`, { headers: auth })
     expect(listed.status).toBe(200)
     expect(await listed.json()).toEqual({ data: [{ receivedAt: expect.any(Number), sample }], cursor: {} })
-    const task = { kind: "long-task", at: sample.at, durationMs: 70 }
+    const task = { kind: "client", at: sample.at, surface: "web", metric: "transcript.load", durationMs: 70 }
     const second = await fetch(`${base}/api/server/web-latency`, {
       method: "POST",
       headers: { ...auth, "content-type": "application/json" },
@@ -106,6 +144,24 @@ test("authenticated machine-global telemetry persists on the selected local Serv
     await start()
     const reopened = await fetch(`${base}/api/server/web-latency`, { headers: auth })
     expect((await reopened.json()).data).toHaveLength(2)
+    expect(await fetch(`${base}/api/server/telemetry/consent`, { headers: auth }).then((r) => r.json())).toEqual({
+      noticeVersion: 1,
+      consent,
+    })
+    await fetch(`${base}/api/server/telemetry/consent`, {
+      method: "PUT",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ enabled: false, noticeVersion: 1 }),
+    })
+    expect(
+      (
+        await fetch(`${base}/api/server/web-latency`, {
+          method: "POST",
+          headers: { ...auth, "content-type": "application/json" },
+          body: JSON.stringify({ samples: [sample] }),
+        })
+      ).status,
+    ).toBe(403)
 
     await Effect.runPromise(Scope.close(scope, Exit.void))
     const stale = new SqliteDatabase(database)
