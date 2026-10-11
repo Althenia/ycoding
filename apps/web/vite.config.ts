@@ -2,6 +2,7 @@ import { defineConfig, type Plugin } from "vite"
 import solidPlugin from "vite-plugin-solid"
 import { markdownAssets } from "./src/seo/llms"
 import { buildSitemap } from "./src/seo/sitemap"
+import { schemeStylesheet } from "./src/theme/schemes"
 
 // The verification fixture is an extra entry only for `YCODING_WEB_VERIFY=1`, so a
 // production build never contains the synthetic transport or its sample data.
@@ -35,8 +36,15 @@ function llmsPlugin(): Plugin {
   }
 }
 
+function schemesPlugin(): Plugin {
+  return {
+    name: "ycoding-schemes",
+    transformIndexHtml: () => [{ tag: "style", attrs: { id: "yc-schemes" }, children: schemeStylesheet(), injectTo: "head" }],
+  }
+}
+
 export default defineConfig({
-  plugins: [solidPlugin(), sitemapPlugin(), llmsPlugin()],
+  plugins: [solidPlugin(), sitemapPlugin(), llmsPlugin(), schemesPlugin()],
   server: { port: 3002 },
   build: {
     target: "esnext",

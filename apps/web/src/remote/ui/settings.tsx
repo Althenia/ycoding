@@ -8,8 +8,10 @@ import { Modal } from "../../ui/modal"
 import { pwaInstall } from "../../pwa/install"
 import { InstallPWAButton } from "../../pwa/install-button"
 import { useTheme } from "../../theme/theme-store"
-import type { ThemePreference } from "../../theme/theme"
+import { normalizeSchemePreference, type ThemePreference } from "../../theme/theme"
+import { SCHEMES, SCHEME_IDS } from "../../theme/schemes"
 import { useRemote } from "../context"
+import { deviceAliasLimit } from "../device-alias"
 import { createRemoteQuery } from "../query"
 import { keepAwakeView } from "../keep-awake"
 import { keepAwakeState } from "../queries"
@@ -37,6 +39,7 @@ import {
   type NotificationChannel,
 } from "../preferences"
 import "./settings.css"
+import "./device-alias.css"
 
 const themeOptions: readonly { readonly id: ThemePreference; readonly label: string }[] = [
   { id: "system", label: "System" },
@@ -44,24 +47,52 @@ const themeOptions: readonly { readonly id: ThemePreference; readonly label: str
   { id: "dark", label: "Dark" },
 ]
 
+const schemeOptions = SCHEME_IDS.map((id) => ({ value: id, label: SCHEMES[id].label }))
+
 export function MachineSettings(): JSX.Element {
   const remote = useRemote()
   const state = () => remote.state()
+  const [draft, setDraft] = createSignal("")
+  const selectedDevice = () => state().devices.find((device) => device.id === state().activeDeviceID)
+  createEffect(() => {
+    const deviceID = state().activeDeviceID
+    setDraft(deviceID === undefined ? "" : remote.deviceAliases()[deviceID] ?? "")
+  })
   const reachable = () => state().activeDeviceID !== undefined && state().transport.kind === "open" && state().connection.kind === "connected"
   const keepAwake = createRemoteQuery(remote.store.queryClient, () => remote.queries.keepAwake(remote.scope(), reachable()))
   const setKeepAwake = createMutation(() => remote.queries.keepAwakeMutation(remote.scope()))
   const awake = () => keepAwakeView({ keepAwake: keepAwakeState(keepAwake()), reachable: reachable() })
   const availability = () => deviceAvailabilityView(accountReadState({ connection: state().connection, owner: state().owner }), state().devices.length, {
-    devices: state().devices, activeDeviceID: state().activeDeviceID, sessionCount: state().sessions.length,
+    devices: state().devices.map((device) => ({ ...device, name: remote.deviceName(device) })), activeDeviceID: state().activeDeviceID, sessionCount: state().sessions.length,
     unreachable: state().connection.kind === "offline",
   })
+  const saveAlias = (value: string) => {
+    const deviceID = state().activeDeviceID
+    if (deviceID === undefined) return
+    remote.setDeviceAlias(deviceID, value)
+    setDraft(remote.deviceAliases()[deviceID] ?? "")
+  }
   return <Section id="machine-settings" category="Machine" title="Machine" hint="Choose an online machine to access its Sessions.">
     <CustomSelect class="remote-device__select" surfaceClass="remote-device__surface" label="Machine"
       sheetTitle="Select Active Machine" sheetSubtitle="Online machines you can connect to"
       value={state().activeDeviceID} placeholder={availability().placeholder} disabled={!availability().selectable}
-      options={state().devices.filter((device) => device.status === "active" && device.online).map((device) => ({ value: device.id, label: device.name, badge: "Online" }))}
+      options={state().devices.filter((device) => device.status === "active" && device.online).map((device) => ({ value: device.id, label: remote.deviceName(device), badge: "Online" }))}
       onChange={(deviceID) => remote.store.connect(deviceID)}
       footer={devicePickerNote(state().devices)} />
+    <Show when={selectedDevice()}>
+      {(device) => <form class="defs__row device-alias" onSubmit={(event) => { event.preventDefault(); saveAlias(draft()) }}>
+        <label class="defs__key" for="device-display-name">Display name</label>
+        <span class="defs__value">
+          <span id="device-display-name-hint" class="field__hint">Only this browser; the machine keeps its hostname {device().name}</span>
+          <input id="device-display-name" class="input" aria-describedby="device-display-name-hint" value={draft()} maxLength={deviceAliasLimit}
+            onInput={(event) => setDraft(event.currentTarget.value)} />
+          <span class="device-alias__actions">
+            <button type="submit" class="button button--secondary">Save</button>
+            <button type="button" class="button button--ghost" onClick={() => saveAlias("")}>Clear</button>
+          </span>
+        </span>
+      </form>}
+    </Show>
     <div class="defs__row" aria-busy={awake().busy}>
       <span class="defs__key" id="machine-awake-label">Keep machine awake</span>
       <span class="defs__value">
@@ -159,6 +190,19 @@ export function LatencySettings(): JSX.Element {
   }
   return <Section id="latency-settings" category="Diagnostics" title="Web latency" hint="Fixed, anonymous timings are sent through the relay to the selected machine's SQLite, never stored by the relay.">
     <div class="defs">
+      <div class="defs__row" aria-busy={remote.state().telemetryConsent.status === "loading"}>
+        <span class="defs__key" id="telemetry-consent-label">Save telemetry on this machine</span>
+        <span class="defs__value">
+          <label class="switch">
+            <input type="checkbox" aria-labelledby="telemetry-consent-label" aria-describedby="telemetry-consent-help telemetry-consent-status"
+              checked={remote.state().telemetryConsent.consent?.enabled ?? remote.state().telemetryConsent.status === "enabled"} disabled={remote.state().transport.kind !== "open" || ["loading", "unsupported", "failed"].includes(remote.state().telemetryConsent.status)}
+              onChange={(event) => { void remote.store.setTelemetryConsent(event.currentTarget.checked) }} />
+            <span>{remote.state().telemetryConsent.consent?.enabled ?? remote.state().telemetryConsent.status === "enabled" ? "On" : remote.state().telemetryConsent.status === "disabled" || remote.state().telemetryConsent.consent?.enabled === false ? "Off" : remote.state().telemetryConsent.status === "undecided" ? "Not decided" : "Unavailable"}</span>
+          </label>
+          <span class="field__hint" id="telemetry-consent-help">Save usage, speed, and latency for each provider, model, and profile on this machine only. Nothing leaves your machine.</span>
+          <span class="field__hint" id="telemetry-consent-status" role="status" aria-live="polite">{remote.state().telemetryConsent.error ?? (remote.state().telemetryConsent.status === "unsupported" ? "Update YCoding on this machine to manage telemetry consent." : remote.state().telemetryConsent.status === "failed" ? "Could not confirm the telemetry setting." : "")}</span>
+        </span>
+      </div>
       <div class="defs__row">
         <span class="defs__key">Measurements</span>
         <span class="defs__value">Queue time is local pacing. Settlement time includes network, relay, machine, response assembly, or time until a timeout or disconnect; it does not isolate model time or screen paint.
@@ -177,7 +221,7 @@ export function LatencySettings(): JSX.Element {
       </div>
       <div class="defs__row">
         <span class="defs__key">Machine save</span>
-        <span class="defs__value" role="status">{({ idle: "Waiting for samples.", saving: "Saving on this machine…", saved: "Latest batch saved on this machine.", waiting: "Waiting for this machine to reconnect.", unsupported: "Update YCoding on this machine to save Web latency.", unknown: "Last save was not confirmed; it will not be replayed.", failed: "Machine save failed; inspect this tab's report." } as const)[remote.state().latencySync]}</span>
+        <span class="defs__value" role="status">{remote.state().telemetryConsent.status !== "enabled" ? "Saving requires this consent." : ({ idle: "Waiting for samples.", saving: "Saving on this machine…", saved: "Latest batch saved on this machine.", waiting: "Waiting for this machine to reconnect.", unsupported: "Update YCoding on this machine to save Web latency.", unknown: "Last save was not confirmed; it will not be replayed.", failed: "Machine save failed; inspect this tab's report." } as const)[remote.state().latencySync]}</span>
       </div>
       <div class="defs__row">
         <span class="defs__key">Saved on machine</span>
@@ -357,7 +401,8 @@ export function DeviceSettings(): JSX.Element {
             {(device) => (
               <div class="device" role="row">
                 <div class="device__body" role="cell">
-                  <span class="device__name">{device.name}</span>
+                  <span class="device__name" title={device.name}>{remote.deviceName(device)}</span>
+                  <Show when={remote.deviceName(device) !== device.name}><span class="device__hostname">{device.name}</span></Show>
                 </div>
                 <span class="device__registration" role="cell">{device.status === "revoked" ? "Revoked" : "Enrolled"}</span>
                 <span class="device__connection" role="cell">
@@ -403,7 +448,7 @@ export function DeviceSettings(): JSX.Element {
       <Show when={removal()} keyed>
         {(selected) => {
           let close: (() => void) | undefined
-          return <Modal label={selected.id === undefined ? "Remove all revoked devices" : "Remove revoked device"}
+          return <Modal class="overlay--confirm" label={selected.id === undefined ? "Remove all revoked devices" : "Remove revoked device"}
             returnFocus={selected.trigger} onClose={() => setRemoval(undefined)} requestClose={(handoff) => { close = handoff }}>
             <p>{selected.id === undefined
               ? "Remove all revoked machines from this account? Enrolled machines stay registered."
@@ -506,9 +551,10 @@ export function DeviceSettings(): JSX.Element {
 }
 
 /**
- * Theme is reachable from Settings at every width, because below 480 the header control
- * is absent and this group is the only path. It is a real three-option control, and the
- * stored preference keeps resolving before the first paint exactly as it shipped.
+ * Theme and color scheme are reachable from Settings at every width, because below 480 the
+ * header control is absent and this group is the only path. Theme is a real three-option
+ * control; the scheme is a select so more schemes add options, not controls. Both stored
+ * choices resolve before the first paint.
  */
 export function AppearanceSettings(): JSX.Element {
   const theme = useTheme()
@@ -517,7 +563,7 @@ export function AppearanceSettings(): JSX.Element {
       id="appearance-settings"
       category="Appearance"
       title="Appearance"
-      hint="Light, dark, or system. The choice is stored in this browser and applied before the first paint."
+      hint="Light, dark, or system, and a color scheme. One Dark Pro paints dark mode only. With System and the default scheme, a system request for more contrast applies High contrast. The choices are stored in this browser and applied before the first paint."
     >
       <div class="list appearance-segments">
         <div class="list__row">
@@ -544,6 +590,25 @@ export function AppearanceSettings(): JSX.Element {
                 </button>
               )}
             </For>
+          </span>
+        </div>
+      </div>
+      <div class="list">
+        <div class="list__row">
+          <span class="list__label">
+            Color scheme
+          </span>
+          <span class="list__control">
+            <CustomSelect
+              class="scheme-select"
+              label="Color scheme"
+              sheetTitle="Select Color Scheme"
+              sheetSubtitle="Applies on top of Light, Dark, or System"
+              value={theme.scheme()}
+              placeholder="Default"
+              options={schemeOptions}
+              onChange={(id) => theme.setScheme(normalizeSchemePreference(id))}
+            />
           </span>
         </div>
       </div>

@@ -95,9 +95,82 @@ test("selected Session speed and context share one stable composer row and acces
       expect(await page.evaluate<boolean>(`document.querySelector('.mini-composer__mount .composer__context-trigger,.mini-composer__mount .composer__mobile-context-ring') !== null`)).toBe(false)
       await page.evaluate(`window.composerSetDiagnostics('unknown')`)
       expect(await page.evaluate<boolean>(`document.querySelector('.mini-composer__mount .composer__speed') !== null`)).toBe(false)
-    } finally { await page.close() }
+    } finally { await page.evaluate(`localStorage.removeItem('ycoding.remote.composer-collapsed')`).catch(() => {}); await page.close() }
   }
 }, 60_000)
+
+test("Session composer dock collapses accessibly, persists, releases transcript height, and expands for decisions and palette drafts", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.setViewport(1440, 900)
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html`)
+    await page.evaluate(`localStorage.removeItem('ycoding.remote.composer-collapsed')`)
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=conversation-workspace-1440`)
+    await wait(page, `document.querySelector('.composer__dock-toggle') !== null`)
+    await page.evaluate(`if (document.querySelector('.composer__dock-toggle').getAttribute('aria-expanded') !== 'true') document.querySelector('.composer__dock-toggle').click()`)
+    const before = await page.evaluate<{ height: number; scroll: number }>(`(() => ({ height:document.querySelector('.workspace__scroll').getBoundingClientRect().height, scroll:document.querySelector('.workspace__scroll').scrollHeight }))()`)
+    expect(await page.evaluate<number>(`document.querySelector('.composer__dock-toggle').tabIndex`)).toBe(0)
+    await page.evaluate(`document.querySelector('.composer__input').focus(); document.querySelector('.composer__dock-toggle').click()`)
+    await wait(page, `document.querySelector('.composer--collapsed') !== null`)
+    // The dock's grid-row transition runs for --yc-dur-base; measure the settled geometry.
+    await wait(page, `document.querySelector('.composer__body').getBoundingClientRect().height === 0`)
+    expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('.composer__dock-toggle')`)).toBe(true)
+    const collapsed = await page.evaluate<{ height: number; scroll: number; toggle: number; status: boolean; hidden: boolean; inert: boolean; handle: number; overflow: boolean }>(`(() => { const dock=document.querySelector('.composer'), body=dock.querySelector('.composer__body'), toggle=dock.querySelector('.composer__dock-toggle'), handle=dock.querySelector('.composer__dock'), slot=dock.querySelector('.composer__dock .session-status__slot'); return { height:document.querySelector('.workspace__scroll').getBoundingClientRect().height, scroll:document.querySelector('.workspace__scroll').scrollHeight, toggle:toggle.getBoundingClientRect().height, status:!!slot, hidden:body.getAttribute('aria-hidden')==='true', inert:body.inert, handle:handle.getBoundingClientRect().height, overflow:document.documentElement.scrollWidth>innerWidth }; })()`)
+    expect(collapsed.toggle).toBeGreaterThanOrEqual(44)
+    expect(collapsed.status).toBe(true)
+    expect(collapsed.hidden).toBe(true)
+    expect(collapsed.inert).toBe(true)
+    expect(collapsed.handle).toBeLessThanOrEqual(52)
+    expect(collapsed.height).toBeGreaterThan(before.height)
+    // Content height does not change on collapse: the scroller grows into the freed dock space, so
+    // its scrollHeight is at least the previous scrollable extent and never below its own height.
+    expect(collapsed.scroll).toBeGreaterThanOrEqual(Math.max(before.scroll, collapsed.height))
+    expect(collapsed.overflow).toBe(false)
+    await page.pressEscape()
+    expect(await page.evaluate<boolean>(`document.querySelector('.composer--collapsed') !== null`)).toBe(true)
+    expect(await page.evaluate<boolean>(`document.querySelector('.composer__body').inert`)).toBe(true)
+    await page.evaluate(`document.querySelector('.composer__dock-toggle').click()`)
+    await wait(page, `document.querySelector('.composer--collapsed') === null`)
+    expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('.composer__input')`)).toBe(true)
+    await page.evaluate(`document.querySelector('.composer__dock-toggle').click()`)
+    await wait(page, `document.querySelector('.composer--collapsed') !== null`)
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=conversation-workspace-1440`)
+    await wait(page, `document.querySelector('.composer--collapsed') !== null`)
+    await page.evaluate(`localStorage.removeItem('ycoding.remote.composer-collapsed')`)
+    for (const width of [320, 390, 768, 1024, 1440]) {
+      await page.setViewport(width, 900)
+      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth<=innerWidth`)).toBe(true)
+    }
+  } finally { await page.evaluate(`localStorage.removeItem('ycoding.remote.composer-collapsed')`).catch(() => {}); await page.close() }
+
+  for (const width of [390, 1440]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width, 900)
+      if (width === 390) await page.setCoarsePointer(true)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html`)
+      await page.evaluate(`localStorage.setItem('ycoding.remote.composer-collapsed', 'true')`)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=permission-guardrail-hard-review-form-requests-${width}`)
+      await wait(page, `document.querySelector('.request--permission') !== null`)
+      expect(await page.evaluate<boolean>(`document.querySelector('.composer--collapsed') === null && document.querySelector('.request--permission') !== null`)).toBe(true)
+      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth<=innerWidth`)).toBe(true)
+    } finally { await page.close() }
+  }
+
+  const palettePage = await browser!.openPage()
+  try {
+    await palettePage.setViewport(1440, 900)
+    await palettePage.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=conversation-workspace-1440`)
+    await wait(palettePage, `document.querySelector('.composer__dock-toggle') !== null`)
+    await palettePage.evaluate(`document.querySelector('.composer__dock-toggle').click()`)
+    await wait(palettePage, `document.querySelector('.composer--collapsed') !== null`)
+    await palettePage.evaluate(`document.querySelector('.app-header__palette').click()`)
+    await wait(palettePage, `document.querySelector('dialog.overlay--command-palette') !== null`)
+    await type(palettePage, "#command-palette-input", "Set goal")
+    await palettePage.pressKey("Enter", "Enter", 13)
+    await wait(palettePage, `document.querySelector('.composer--collapsed') === null && document.activeElement === document.querySelector('.composer__input') && document.querySelector('.composer__input').value.startsWith('/goal ')`)
+  } finally { await palettePage.evaluate(`localStorage.removeItem('ycoding.remote.composer-collapsed')`).catch(() => {}); await palettePage.close() }
+}, 90_000)
 
 test("pending prompts, mutation toasts, and the active goal remain accessible on phone and desktop", async () => {
   for (const [width, height] of [[390, 844], [1440, 900]]) for (const theme of ["light", "dark"]) {
@@ -213,7 +286,7 @@ test("phone selection lives above the card while its footer stays on one line", 
         expect(layout.visible).toBe(true)
         expect(layout.label).toContain("GSD")
         expect(layout.label).toContain("GPT-6 Sol")
-        expect(layout.label).toContain("high")
+        expect(layout.label).toContain("High")
         expect(layout.pillVisible).toBe(false)
         expect(layout.oneLine).toBe(true)
         expect(layout.aligned).toBe(true)
@@ -260,7 +333,7 @@ test("status stays inside a fixed-height composer and pending picks survive unre
       await page.evaluate(`window.composerSetStatus(${JSON.stringify(status)})`)
       expect(await page.evaluate<number>(`document.querySelector('.mini-composer__mount .composer__row').getBoundingClientRect().height`)).toBe(idle)
       expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount button[aria-label="Agent"]')?.textContent`)).toContain("architect")
-      expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount button[aria-label="Model"]')?.textContent`)).toContain("low")
+      expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount button[aria-label="Model"]')?.textContent`)).toContain("Low")
       expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount button[aria-label="Agent"]')?.getAttribute('aria-description')`)).toBe("applies with your next send")
       expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount button[aria-label="Model"]')?.getAttribute('aria-description')`)).toBe("applies with your next send")
       expect(await page.evaluate<boolean>(`document.querySelector('.mini-composer__mount .session-status') !== null`)).toBe(true)
@@ -457,9 +530,9 @@ test("model effort supports keyboard and pointer choices and a separate clear ac
     await wait(page, `document.querySelector('[role="slider"]') !== null`)
     await page.evaluate(`document.querySelector('[role="slider"]')?.focus()`)
     await page.pressKey("Home", "Home", 36)
-    expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("low")
+    expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("Low")
     await page.evaluate(`(() => { const slider = document.querySelector('[role="slider"]'); const rect = slider.getBoundingClientRect(); slider.setPointerCapture=()=>{}; slider.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, clientX: rect.right - 1, clientY: rect.top + 4 })); slider.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: rect.right - 1, clientY: rect.top + 4 })); })()`)
-    expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("high")
+    expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("High")
     await page.evaluate(`document.querySelector('button[aria-label="Clear reasoning effort override"]')?.click()`)
     expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("No effort override")
   } finally { await page.close() }
@@ -471,37 +544,37 @@ test("lightning toggles paired fast models, preserves available effort, and keep
     await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
     await wait(page, `document.querySelector('.mini-composer__mount button[aria-label="Model"]:not([disabled])') !== null`)
     await page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Model"]')?.click()`)
-    await wait(page, `document.querySelector('button[aria-label="Fast model"]') !== null`)
-    const lightningOffset = await page.evaluate<number>(`document.querySelector('button[aria-label="Fast model"]').getBoundingClientRect().left - document.querySelector('.model-control__surface').getBoundingClientRect().left`)
-    expect(await page.evaluate<string>(`document.querySelector('button[aria-label="Fast model"]')?.getAttribute('aria-pressed')`)).toBe("false")
-    const boltStyle = `(() => { const button = document.querySelector('button[aria-label="Fast model"]'); const svg = getComputedStyle(button.querySelector('svg')); const style = getComputedStyle(button); return { fill: svg.fill, color: style.color, border: style.borderTopWidth, background: style.backgroundColor } })()`
+    await wait(page, `document.querySelector('button[aria-label="Model speed"]') !== null`)
+    const lightningOffset = await page.evaluate<number>(`document.querySelector('button[aria-label="Model speed"]').getBoundingClientRect().left - document.querySelector('.model-control__surface').getBoundingClientRect().left`)
+    expect(await page.evaluate<string>(`document.querySelector('button[aria-label="Model speed"]')?.getAttribute('aria-pressed')`)).toBe("false")
+    const boltStyle = `(() => { const button = document.querySelector('button[aria-label="Model speed"]'); const svg = getComputedStyle(button.querySelector('svg')); const style = getComputedStyle(button); return { fill: svg.fill, color: style.color, border: style.borderTopWidth, background: style.backgroundColor } })()`
     const off = await page.evaluate<{ fill: string; color: string; border: string; background: string }>(boltStyle)
     expect(off).toMatchObject({ fill: "none", border: "0px", background: "rgba(0, 0, 0, 0)" })
-    await page.evaluate(`document.querySelector('button[aria-label="Fast model"]')?.click()`)
-    expect(await page.evaluate<string>(`document.querySelector('button[aria-label="Fast model"]')?.getAttribute('aria-pressed')`)).toBe("true")
-    await wait(page, `getComputedStyle(document.querySelector('button[aria-label="Fast model"]')).color !== ${JSON.stringify(off.color)}`)
+    await page.evaluate(`document.querySelector('button[aria-label="Model speed"]').click(); [...document.querySelectorAll('.model-control__choices [role="option"]')].find(option=>option.textContent==='Fast').click()`)
+    expect(await page.evaluate<string>(`document.querySelector('button[aria-label="Model speed"]')?.getAttribute('aria-pressed')`)).toBe("true")
+    await wait(page, `getComputedStyle(document.querySelector('button[aria-label="Model speed"]')).color !== ${JSON.stringify(off.color)}`)
     await Bun.sleep(200)
     const on = await page.evaluate<{ fill: string; color: string; border: string; background: string }>(boltStyle)
     expect(on).toMatchObject({ fill: on.color, border: "0px", background: "rgba(0, 0, 0, 0)" })
     expect(on.color).not.toBe(off.color)
-    expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("high")
+    expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("High")
     expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount button[aria-label="Model"]')?.textContent`)).toContain("GPT-6 Sol")
     await Bun.write(new URL("../../../.cache/tmp/composer-fast-desktop.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
     expect(await page.evaluate<number>(`window.composerRequests().length`)).toBe(0)
     await type(page, ".mini-composer__mount textarea", "Use fast model")
     await page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Send prompt"]')?.click()`)
     expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)?.input`)).toMatchObject({ model: { id: "gpt-6-sol-fast", variant: "high" } })
-    await page.evaluate(`document.querySelector('button[aria-label="Fast model"]')?.click()`)
-    expect(await page.evaluate<string>(`document.querySelector('button[aria-label="Fast model"]')?.getAttribute('aria-pressed')`)).toBe("false")
-    expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("high")
-    await page.evaluate(`document.querySelector('button[aria-label="Fast model"]')?.click()`)
+    await page.evaluate(`document.querySelector('button[aria-label="Model speed"]').click(); [...document.querySelectorAll('.model-control__choices [role="option"]')].find(option=>option.textContent==='Standard').click()`)
+    expect(await page.evaluate<string>(`document.querySelector('button[aria-label="Model speed"]')?.getAttribute('aria-pressed')`)).toBe("false")
+    expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("High")
+    await page.evaluate(`document.querySelector('button[aria-label="Model speed"]').click(); [...document.querySelectorAll('.model-control__choices [role="option"]')].find(option=>option.textContent==='Fast').click()`)
     await page.evaluate(`document.querySelector('.model-control__switch')?.click()`)
     await wait(page, `document.querySelector('.model-control__model') !== null`)
     expect(await page.evaluate<string>(`[...document.querySelectorAll('.model-control__model')].find(item => item.textContent.includes('GPT-6 Sol') && !item.textContent.includes('Fast'))?.getAttribute('aria-selected')`)).toBe("true")
     expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__model')].map(item => item.textContent.trim())`)).toEqual(expect.arrayContaining(["GLM Fast Latestglm-fast-latest", "Quant FP8 Fastquant-fp8-fast"]))
     expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.model-control__model')].some(item => item.textContent.includes('gpt-6-sol-fast') || item.textContent.includes('claude-opus-5-5-fast'))`)).toBe(false)
     await page.evaluate(`[...document.querySelectorAll('.model-control__model')].find(item => item.textContent.includes('Claude Opus 5.5'))?.click()`)
-    expect(await page.evaluate<string>(`document.querySelector('button[aria-label="Fast model"]')?.getAttribute('aria-pressed')`)).toBe("true")
+    expect(await page.evaluate<string>(`document.querySelector('button[aria-label="Model speed"]')?.getAttribute('aria-pressed')`)).toBe("true")
     expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("No effort override")
     await type(page, ".mini-composer__mount textarea", "Use Claude fast")
     await page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Send prompt"]')?.click()`)
@@ -510,9 +583,9 @@ test("lightning toggles paired fast models, preserves available effort, and keep
     await page.evaluate(`document.querySelector('.model-control__switch')?.click()`)
     await page.evaluate(`[...document.querySelectorAll('.model-control__model')].find(item => item.textContent.includes('GPT-6 Lite'))?.click()`)
     await page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Model"]')?.click()`)
-    const unavailable = await page.evaluate<{ shown: boolean; reason: string | null; rect: number; offset: number }>(`(() => { const button=document.querySelector('button[aria-label="Fast model"]'), surface=document.querySelector('.model-control__surface'); return { shown:!!button, reason:button?.getAttribute('aria-description') ?? null, rect:button?.getBoundingClientRect().width ?? 0, offset:button.getBoundingClientRect().left - surface.getBoundingClientRect().left } })()`)
+    const unavailable = await page.evaluate<{ shown: boolean; reason: string | null; rect: number; offset: number }>(`(() => { const button=document.querySelector('button[aria-label="Model speed"]'), surface=document.querySelector('.model-control__surface'); return { shown:!!button, reason:button?.getAttribute('aria-description') ?? null, rect:button?.getBoundingClientRect().width ?? 0, offset:button.getBoundingClientRect().left - surface.getBoundingClientRect().left } })()`)
     expect(unavailable.shown).toBe(true)
-    expect(unavailable.reason).toContain("No paired fast model")
+    expect(unavailable.reason).toContain("No alternate model speed")
     expect(unavailable.rect).toBe(44)
     expect(unavailable.offset).toBe(lightningOffset)
     await Bun.write(new URL("../../../.cache/tmp/composer-fast-unavailable.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
@@ -523,7 +596,7 @@ test("lightning toggles paired fast models, preserves available effort, and keep
     await page.evaluate(`[...document.querySelectorAll('.model-control__model')].find(item => item.textContent.includes('Quant FP8 Fast'))?.click()`)
     await page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Model"]')?.click()`)
     expect(await page.evaluate<string>(`document.querySelector('.model-control__switch span')?.textContent`)).toBe("Quant FP8 Fast")
-    expect(await page.evaluate<string>(`document.querySelector('button[aria-label="Fast model"]')?.getAttribute('aria-disabled')`)).toBe("true")
+    expect(await page.evaluate<string>(`document.querySelector('button[aria-label="Model speed"]')?.getAttribute('aria-disabled')`)).toBe("true")
   } finally { await page.close() }
 }, 30_000)
 
@@ -534,17 +607,17 @@ test("a Session already using a paired fast model displays its base and an activ
     await page.setCoarsePointer(true)
     await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html?model=fast`)
     await wait(page, `document.querySelector('.composer__mobile-trigger:not([disabled])') !== null`)
-    expect(await page.evaluate<string>(`document.querySelector('.composer__mobile-trigger')?.textContent`)).toBe("GSD · GPT-6 Sol · high")
+    expect(await page.evaluate<string>(`document.querySelector('.composer__mobile-trigger')?.textContent`)).toBe("GSD · GPT-6 Sol · High")
     await page.evaluate(`document.querySelector('.composer__mobile-trigger')?.click()`)
     await wait(page, `document.querySelector('.composer__selection-sheet button[aria-label="Model"]') !== null`)
     await page.evaluate(`document.querySelector('.composer__selection-sheet button[aria-label="Model"]')?.click()`)
-    await wait(page, `document.querySelector('button[aria-label="Fast model"]') !== null`)
-    const geometry = await page.evaluate<{ target: boolean; contained: boolean; overflow: boolean; label: string; pressed: string | null }>(`(() => { const button=document.querySelector('button[aria-label="Fast model"]'), surface=document.querySelector('.model-control__surface'), control=button.getBoundingClientRect(), box=surface.getBoundingClientRect(); return { target:control.width>=44 && control.height>=44, contained:control.left>=box.left && control.right<=box.right, overflow:document.documentElement.scrollWidth>innerWidth, label:document.querySelector('.model-control__switch span')?.textContent ?? '', pressed:button.getAttribute('aria-pressed') } })()`)
+    await wait(page, `document.querySelector('button[aria-label="Model speed"]') !== null`)
+    const geometry = await page.evaluate<{ target: boolean; contained: boolean; overflow: boolean; label: string; pressed: string | null }>(`(() => { const button=document.querySelector('button[aria-label="Model speed"]'), surface=document.querySelector('.model-control__surface'), control=button.getBoundingClientRect(), box=surface.getBoundingClientRect(); return { target:control.width>=44 && control.height>=44, contained:control.left>=box.left && control.right<=box.right, overflow:document.documentElement.scrollWidth>innerWidth, label:document.querySelector('.model-control__switch span')?.textContent ?? '', pressed:button.getAttribute('aria-pressed') } })()`)
     expect(geometry).toEqual({ target: true, contained: true, overflow: false, label: "GPT-6 Sol", pressed: "true" })
     await Bun.write(new URL("../../../.cache/tmp/composer-fast-phone.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
-    await page.evaluate(`document.querySelector('button[aria-label="Fast model"]')?.click()`)
-    expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("high")
-    expect(await page.evaluate<string>(`document.querySelector('button[aria-label="Fast model"]')?.getAttribute('aria-pressed')`)).toBe("false")
+    await page.evaluate(`document.querySelector('button[aria-label="Model speed"]').click(); [...document.querySelectorAll('.model-control__choices [role="option"]')].find(option=>option.textContent==='Standard').click()`)
+    expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("High")
+    expect(await page.evaluate<string>(`document.querySelector('button[aria-label="Model speed"]')?.getAttribute('aria-pressed')`)).toBe("false")
   } finally { await page.close() }
 }, 30_000)
 
@@ -588,15 +661,15 @@ test("effort thumb follows drag before snapping, keeps keyboard semantics and su
     expect(dragging.position).toBeLessThan(.6)
     expect(dragging.fill).toBeGreaterThanOrEqual(dragging.position)
     expect(dragging.fill - dragging.position).toBeLessThan(.12)
-    expect(dragging.committed).toBe("low")
+    expect(dragging.committed).toBe("Low")
     await page.evaluate(`(() => { const slider=document.querySelector('[role="slider"]'), r=slider.getBoundingClientRect(); slider.dispatchEvent(new PointerEvent('pointerup', { bubbles:true, pointerId:7, clientX:r.left+r.width*.52, clientY:r.top+15 })); })()`)
-    expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("medium")
+    expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("Medium")
     await Bun.sleep(300)
     const mediumColor = await page.evaluate<string>(`getComputedStyle(document.querySelector('.model-control__switch strong')).color`)
     await page.pressKey("ArrowLeft", "ArrowLeft", 37)
-    expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("low")
+    expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("Low")
     await page.pressKey("End", "End", 35)
-    expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("high")
+    expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("High")
     await Bun.sleep(300)
     const normal = await page.evaluate<{ color: string; transition: string; target: number }>(`(() => { const surface=document.querySelector('.model-control__surface'), fill=surface.querySelector('.model-control__fill'), slider=surface.querySelector('[role="slider"]'); return { color:getComputedStyle(surface.querySelector('.model-control__switch strong')).color, transition:getComputedStyle(fill).transitionDuration, target:slider.getBoundingClientRect().height } })()`)
     expect(normal.target).toBeGreaterThanOrEqual(44)
@@ -680,7 +753,7 @@ test("model search supports Enter, Escape back, and models without effort varian
     await page.pressKey("Enter", "Enter", 13)
     expect(await page.evaluate<boolean>(`document.querySelector('.model-control__surface') === null`)).toBe(true)
     await page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Model"]')?.click()`)
-    expect(await page.evaluate<boolean>(`document.querySelector('[role="slider"]') === null && document.querySelector('button[aria-label="Fast model"]')?.getAttribute('aria-disabled') === 'true'`)).toBe(true)
+    expect(await page.evaluate<boolean>(`document.querySelector('[role="slider"]') === null && document.querySelector('button[aria-label="Model speed"]')?.getAttribute('aria-disabled') === 'true'`)).toBe(true)
     await page.evaluate(`document.querySelector('.model-control__switch')?.click()`)
     expect(await page.evaluate<boolean>(`document.querySelector('input[aria-label="Search models"]') !== null`)).toBe(true)
   } finally { await page.close() }
@@ -786,6 +859,51 @@ test("composer states and effort surface retain layout at four sizes in both the
   }
 }, 90_000)
 
+test("file suggestions show complete paths across the row and wrap without clipping at narrow widths", async () => {
+  for (const width of [320, 390, 768, 1440]) for (const theme of ["light", "dark"]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width, 900)
+      if (width < 768) await page.setCoarsePointer(true)
+      await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+      const input = '.mini-composer__mount textarea[aria-label="Message your agent"]'
+      await wait(page, `document.querySelector(${JSON.stringify(input)}) !== null`)
+      await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
+      await type(page, input, "@agent.ts")
+      await wait(page, `document.querySelectorAll('.mini-composer__mount [role="option"]').length === 3`)
+      await page.evaluate("document.fonts.ready")
+      await page.evaluate(`Promise.all(document.querySelector('.mini-composer__suggestions').getAnimations().map(animation => animation.finished))`)
+      const layout = await page.evaluate<{ overflow: boolean; rows: { text: string; clipped: boolean; unused: number; height: number; lines: number }[] }>(`(() => ({
+        overflow: document.documentElement.scrollWidth > innerWidth,
+        rows: [...document.querySelectorAll('.mini-composer__mount [role="option"]')].map(row => {
+          const label = row.querySelector('span'), box = label.getBoundingClientRect(), rect = row.getBoundingClientRect(), style = getComputedStyle(row), range = document.createRange();
+          range.selectNodeContents(label);
+          return { text: label.textContent, clipped: label.scrollWidth > label.clientWidth || [...range.getClientRects()].some(part => part.left < box.left - 1 || part.right > box.right + 1 || part.top < rect.top || part.bottom > rect.bottom), unused: rect.width - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - box.width, height: rect.height, lines: box.height / parseFloat(getComputedStyle(label).lineHeight) };
+        })
+      }))()`)
+      expect(layout.overflow).toBe(false)
+      expect(layout.rows.map((row) => row.text).toSorted()).toEqual([
+        "@packages/core/src/config/plugin/agent.ts",
+        "@packages/core/src/plugin/agent.ts",
+        "@packages/core/src/project-artifact/adapter/agent.ts",
+      ])
+      for (const row of layout.rows) {
+        expect(row.clipped).toBe(false)
+        expect(Math.abs(row.unused)).toBeLessThanOrEqual(1)
+        expect(row.height).toBeGreaterThanOrEqual(width < 768 ? 44 : 36)
+      }
+      if (width < 768) expect(layout.rows[2]!.lines).toBeGreaterThan(1)
+      await page.pressKey("ArrowDown", "ArrowDown", 40)
+      await page.pressKey("Enter", "Enter", 13)
+      expect(await page.evaluate<string>(`document.querySelector(${JSON.stringify(input)}).value`)).toBe(`${layout.rows[1]!.text} `)
+      await type(page, input, "@agent.ts")
+      await wait(page, `document.querySelectorAll('.mini-composer__mount [role="option"]').length === 3`)
+      await page.evaluate(`document.querySelectorAll('.mini-composer__mount [role="option"]')[2].click()`)
+      expect(await page.evaluate<string>(`document.querySelector(${JSON.stringify(input)}).value`)).toBe("@packages/core/src/project-artifact/adapter/agent.ts ")
+    } finally { await page.close() }
+  }
+}, 120_000)
+
 test("keyboard and mouse autocomplete, pending identity, and creation work across four sizes and themes", async () => {
   for (const [width, height] of [[390, 844], [820, 1180], [1024, 768], [1440, 900]]) {
     for (const theme of ["light", "dark"]) {
@@ -842,10 +960,10 @@ test("keyboard and mouse autocomplete, pending identity, and creation work acros
         await wait(page, `document.querySelector('[role="slider"][aria-label="Reasoning effort"]') !== null`)
         await page.evaluate(`document.querySelector('[role="slider"][aria-label="Reasoning effort"]')?.focus()`)
         await page.pressKey("End", "End", 35)
-        expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("max")
+        expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("Max")
         await page.evaluate(`document.querySelector('.model-control__heading-actions button[aria-label="Close model picker"]')?.click()`)
         if (width! < 480) {
-          expect(await page.evaluate<string>(`document.querySelector('.composer__mobile-trigger')?.textContent`)).toContain("architect · Claude Opus 5.5 · max")
+          expect(await page.evaluate<string>(`document.querySelector('.composer__mobile-trigger')?.textContent`)).toContain("architect · Claude Opus 5.5 · Max")
           expect(await page.evaluate<boolean>(`document.querySelector('.composer__mobile-trigger')?.classList.contains('composer__mobile-trigger--pending')`)).toBe(true)
           expect(await page.evaluate<string>(`document.querySelector('.composer__mobile-trigger')?.getAttribute('aria-description')`)).toBe("applies with your next send")
           await page.evaluate(`document.querySelector('button[aria-label="Close agent and model picker"]')?.click()`)
@@ -987,6 +1105,9 @@ test("setting a goal from the composer never blocks it and shows one stable, ann
       await page.evaluate(send)
       await wait(page, `window.remoteMutationReport().some(item => item.operation === 'session.goal.set')`)
       await wait(page, `document.querySelector('${mount} .session-status__goal-setting') !== null`)
+
+      const indicatorBounds = await page.evaluate<{ insideComposer: boolean; overlaps: string[] }>(`(() => { const chip = document.querySelector('${mount} .session-status__goal-setting'), composer = document.querySelector('${mount} .composer'), chipBox = chip.getBoundingClientRect(), composerBox = composer.getBoundingClientRect(), controls = ['.composer__attach', '.composer__delivery-toggle', '.mini-composer__send', '.session-status__yolo-trigger', '.session-status__goal-trigger']; return { insideComposer: chipBox.left >= composerBox.left && chipBox.right <= composerBox.right && chipBox.top >= composerBox.top && chipBox.bottom <= composerBox.bottom, overlaps: controls.filter(selector => { const box = document.querySelector('${mount} ' + selector).getBoundingClientRect(); return chipBox.left < box.right && chipBox.right > box.left && chipBox.top < box.bottom && chipBox.bottom > box.top }) } })()`)
+      expect(indicatorBounds).toEqual({ insideComposer: true, overlaps: [] })
 
       const pending = await page.evaluate<{ enabled: boolean; draft: string; busy: string | null; name: string | null; chip: string; chipHidden: string | null; dots: number; announced: string; dotAnimation: string; chipAnimation: string }>(`(() => { const chip = document.querySelector('${mount} .session-status__goal-setting'), trigger = document.querySelector('${mount} .session-status__goal-trigger'), field = document.querySelector('${mount} textarea'); return { enabled: !field.disabled, draft: field.value, busy: trigger.getAttribute('aria-busy'), name: trigger.getAttribute('aria-label'), chip: chip.innerText.trim(), chipHidden: chip.getAttribute('aria-hidden'), dots: chip.querySelectorAll('.transcript-dot-trail').length, announced: document.querySelector('${mount} .session-status__announce[role="status"]')?.textContent?.trim() ?? '', dotAnimation: chip.querySelector('.transcript-dot-trail span') ? getComputedStyle(chip.querySelector('.transcript-dot-trail span')).animationName : 'missing', chipAnimation: getComputedStyle(chip).animationName } })()`)
       expect(pending).toMatchObject({ enabled: true, draft: "", busy: "true", name: "Setting goal", chip: width === 390 ? "Setting…" : "Setting goal…", chipHidden: "true", dots: 1, announced: "Setting goal…" })
@@ -1188,6 +1309,161 @@ test("failed catalogs explain disabled selectors and recover through Retry at ph
       expect(await page.evaluate<number>(`window.composerRequests().filter(item => item.operation === 'catalog.refresh').length`)).toBe(1)
     } finally { await page.close() }
   }
+}, 30_000)
+
+type Page = Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>
+const stubViewport = (page: Page, height: number, offsetTop: number) => page.evaluate(`(() => {
+  const stub = Object.assign(new EventTarget(), { height: ${height}, width: 390, offsetTop: ${offsetTop}, offsetLeft: 0, scale: 1, pageTop: ${offsetTop}, pageLeft: 0 })
+  Object.defineProperty(window, 'visualViewport', { configurable: true, value: stub }); window.viewportStub = stub })()`)
+const moveViewport = (page: Page, height: number, offsetTop: number) => page.evaluate(`(() => { Object.assign(window.viewportStub, { height: ${height}, offsetTop: ${offsetTop}, pageTop: ${offsetTop} }); window.viewportStub.dispatchEvent(new Event('resize')) })()`)
+const frame = (page: Page, selector: string) => page.evaluate<{ top: number; bottom: number; left: number; right: number; modal: string | null; role: string | null }>(`(async () => { const node = document.querySelector(${JSON.stringify(selector)}); await Promise.all(node.getAnimations().map((animation) => animation.finished)); const rect = node.getBoundingClientRect(); return { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right, modal: node.getAttribute('aria-modal'), role: node.getAttribute('role') } })()`)
+
+test("phone agent and model sheets fill the screen, contain focus, and Escape closes only the innermost sheet", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.setViewport(390, 844)
+    await page.setCoarsePointer(true)
+    await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+    await wait(page, `document.querySelector('.composer__mobile-trigger') !== null`)
+    await page.evaluate(`document.querySelector('.composer__mobile-trigger').click()`)
+    await wait(page, `document.querySelector('.composer__selection-sheet') !== null`)
+    expect(await frame(page, ".composer__selection-sheet")).toMatchObject({ top: 0, bottom: 844, left: 0, right: 390, modal: "true" })
+    for (let index = 0; index < 8; index++) {
+      await page.pressKey("Tab", "Tab", 9)
+      expect(await page.evaluate<boolean>(`document.querySelector('.composer__selection-sheet').contains(document.activeElement)`)).toBe(true)
+    }
+    await page.evaluate(`document.querySelector('.composer__selection-sheet button[aria-label="Agent"]').click()`)
+    await wait(page, `document.querySelector('.mini-picker__surface--sheet [role="option"]') !== null`)
+    expect(await frame(page, ".mini-picker__surface--sheet")).toMatchObject({ top: 0, bottom: 844, left: 0, right: 390, modal: "true", role: "dialog" })
+    expect(await page.evaluate<string>(`document.activeElement?.getAttribute('role')`)).toBe("listbox")
+    expect(await page.evaluate<boolean>(`(() => { const heading = document.querySelector('.mini-picker__surface--sheet .mini-picker__heading').getBoundingClientRect(); return heading.top === 0 && heading.height >= 44 })()`)).toBe(true)
+    for (let index = 0; index < 8; index++) {
+      await page.pressKey("Tab", "Tab", 9)
+      expect(await page.evaluate<boolean>(`document.querySelector('.mini-picker__surface--sheet').contains(document.activeElement)`)).toBe(true)
+    }
+    await page.pressEscape()
+    await wait(page, `document.querySelector('.mini-picker__surface') === null`)
+    expect(await page.evaluate<boolean>(`document.querySelector('.composer__selection-sheet') !== null`)).toBe(true)
+    expect(await page.evaluate<string>(`document.activeElement?.getAttribute('aria-label')`)).toBe("Agent")
+    await page.evaluate(`document.querySelector('.composer__selection-sheet button[aria-label="Model"]').click()`)
+    await wait(page, `document.querySelector('.model-control__surface') !== null`)
+    expect(await frame(page, ".model-control__surface")).toMatchObject({ top: 0, bottom: 844, left: 0, right: 390, modal: "true", role: "dialog" })
+    expect(await page.evaluate<boolean>(`document.activeElement?.classList.contains('model-control__switch') === true`)).toBe(true)
+    await page.pressEscape()
+    expect(await page.evaluate<boolean>(`document.querySelector('.model-control__surface') === null && document.querySelector('.composer__selection-sheet') !== null`)).toBe(true)
+    expect(await page.evaluate<string>(`document.activeElement?.getAttribute('aria-label')`)).toBe("Model")
+    await page.pressEscape()
+    expect(await page.evaluate<boolean>(`document.querySelector('.composer__selection-sheet') === null`)).toBe(true)
+    expect(await page.evaluate<string>(`document.activeElement?.className`)).toBe("composer__mobile-trigger")
+  } finally { await page.close() }
+}, 30_000)
+
+test("phone sheets follow a shrunken visual viewport so the search field and list stay above the keyboard (stubbed VisualViewport, not a real on-screen keyboard)", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.setViewport(390, 844)
+    await page.setCoarsePointer(true)
+    await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+    await wait(page, `document.querySelector('.composer__mobile-trigger') !== null`)
+    await stubViewport(page, 844, 0)
+    await page.evaluate(`document.querySelector('.composer__mobile-trigger').click()`)
+    await wait(page, `document.querySelector('.composer__selection-sheet') !== null`)
+    await page.evaluate(`document.querySelector('.composer__selection-sheet button[aria-label="Model"]').click()`)
+    await wait(page, `document.querySelector('.model-control__switch') !== null`)
+    await page.evaluate(`document.querySelector('.model-control__switch').click()`)
+    await wait(page, `document.querySelector('.model-control__surface input[type="search"]') !== null`)
+    expect(await page.evaluate<string>(`document.activeElement?.getAttribute('aria-label')`)).toBe("Search models")
+    await moveViewport(page, 380, 120)
+    await wait(page, `Math.round(document.querySelector('.model-control__surface').getBoundingClientRect().height) === 380`)
+    const read = () => page.evaluate<{ top: number; bottom: number; searchTop: number; searchBottom: number; headingTop: number; listBottom: number; listScrolls: boolean; sheetTop: number; sheetBottom: number }>(`(() => { const surface = document.querySelector('.model-control__surface').getBoundingClientRect(), search = document.querySelector('.model-control__surface .mini-picker__search').getBoundingClientRect(), heading = document.querySelector('.model-control__surface .mini-picker__heading').getBoundingClientRect(), list = document.querySelector('.model-control__surface .mini-picker__list'), sheet = document.querySelector('.composer__selection-sheet').getBoundingClientRect(); return { top: surface.top, bottom: surface.bottom, searchTop: search.top, searchBottom: search.bottom, headingTop: heading.top, listBottom: list.getBoundingClientRect().bottom, listScrolls: list.scrollHeight > list.clientHeight, sheetTop: sheet.top, sheetBottom: sheet.bottom } })()`)
+    const keyboard = await read()
+    expect(keyboard).toMatchObject({ top: 120, bottom: 500, headingTop: 120, sheetTop: 120, sheetBottom: 500 })
+    expect(keyboard.searchTop).toBeGreaterThanOrEqual(120)
+    expect(keyboard.searchBottom).toBeLessThanOrEqual(500)
+    expect(keyboard.listBottom).toBeLessThanOrEqual(500)
+    expect(keyboard.listScrolls).toBe(true)
+    await page.evaluate(`document.querySelector('.model-control__surface .mini-picker__list').scrollTop = 200`)
+    await moveViewport(page, 300, 0)
+    await wait(page, `Math.round(document.querySelector('.model-control__surface').getBoundingClientRect().height) === 300`)
+    expect(await read()).toMatchObject({ top: 0, bottom: 300, headingTop: 0 })
+    await moveViewport(page, 844, 0)
+    await wait(page, `Math.round(document.querySelector('.model-control__surface').getBoundingClientRect().height) === 844`)
+  } finally { await page.close() }
+}, 30_000)
+
+test("a phone picker closes with its exit motion, survives a breakpoint change while closing, and reopens cleanly", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.setViewport(390, 844)
+    await page.setCoarsePointer(true)
+    await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+    await wait(page, `document.querySelector('.new-session-composer button[aria-label="Repository"]') !== null`)
+    await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="Repository"]').click()`)
+    await wait(page, `document.querySelector('.mini-picker__surface--sheet') !== null`)
+    expect(await frame(page, ".mini-picker__surface--sheet")).toMatchObject({ top: 0, bottom: 844, left: 0, right: 390 })
+    await page.pressEscape()
+    expect(await page.evaluate<boolean>(`document.querySelector('.mini-picker__surface--closing') !== null && document.querySelector('.mini-picker__surface').inert`)).toBe(true)
+    await page.setViewport(1024, 768)
+    await wait(page, `document.querySelector('.mini-picker__surface') === null && document.querySelector('.mini-picker__scrim') === null`)
+    await page.evaluate(`(() => { const trigger = document.querySelector('.new-session-composer button[aria-label="Repository"]'); trigger.focus(); trigger.click() })()`)
+    await wait(page, `document.querySelector('.mini-picker__surface [role="option"]') !== null`)
+    expect(await page.evaluate<boolean>(`document.querySelector('.mini-picker__surface--sheet') === null && document.querySelector('.mini-picker__surface--closing') === null && document.querySelector('.mini-picker__surface').getAttribute('aria-modal') === null`)).toBe(true)
+    await page.pressEscape()
+    await wait(page, `document.querySelector('.mini-picker__surface') === null`)
+    await page.setReducedMotion(true)
+    await page.setViewport(390, 844)
+    await wait(page, `matchMedia('(max-width: 767px)').matches`)
+    await Bun.sleep(150)
+    await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="Repository"]').click()`)
+    await wait(page, `document.querySelector('.mini-picker__surface--sheet') !== null`)
+    await page.pressEscape()
+    expect(await page.evaluate<boolean>(`document.querySelector('.mini-picker__surface') === null`)).toBe(true)
+    expect(await page.evaluate<string>(`document.activeElement?.getAttribute('aria-label')`)).toBe("Repository")
+  } finally { await page.close() }
+}, 30_000)
+
+test("phone suggestions grow past 40% of a keyboard-sized visual viewport yet stay inside it and above the field", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.setViewport(390, 844)
+    await page.setCoarsePointer(true)
+    await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+    await wait(page, `document.querySelector('.mini-composer__mount textarea') !== null`)
+    const rowBottom = await page.evaluate<number>(`(() => { const mount = document.querySelector('.mini-composer__mount'); mount.style.paddingTop = (800 - mount.querySelector('.composer__row').getBoundingClientRect().bottom) + 'px'; return mount.querySelector('.composer__row').getBoundingClientRect().bottom })()`)
+    const height = 400
+    const offsetTop = Math.max(0, Math.ceil(rowBottom) + 4 - height)
+    await stubViewport(page, height, offsetTop)
+    await type(page, ".mini-composer__mount textarea", "$")
+    await wait(page, `document.querySelectorAll('.mini-composer__mount [role="option"]').length === 66`)
+    const read = async () => {
+      await wait(page, `document.querySelector('.mini-composer__suggestions').getAnimations().every(animation => animation.playState === 'finished' || animation.playState === 'idle')`)
+      return page.evaluate<{ top: number; bottom: number; height: number; fieldTop: number; rowBottom: number }>(`(() => { const panel = document.querySelector('.mini-composer__suggestions').getBoundingClientRect(); return { top: panel.top, bottom: panel.bottom, height: panel.height, fieldTop: document.querySelector('.mini-composer__mount textarea').getBoundingClientRect().top, rowBottom: document.querySelector('.mini-composer__mount .composer__row').getBoundingClientRect().bottom } })()`)
+    }
+    const open = await read()
+    const expected = Math.floor(Math.max(54, Math.min(height * 0.75, open.fieldTop - offsetTop - 8)))
+    expect(open.top).toBeGreaterThanOrEqual(offsetTop - 1)
+    expect(open.bottom).toBeLessThanOrEqual(open.fieldTop + 1)
+    expect(open.rowBottom).toBeLessThanOrEqual(offsetTop + height + 5)
+    expect(Math.abs(open.height - expected)).toBeLessThanOrEqual(1)
+    expect(open.height).toBeGreaterThan(height * 0.4)
+    await moveViewport(page, 250, offsetTop + 150)
+    await wait(page, `document.querySelector('.mini-composer__suggestions').getBoundingClientRect().height < ${open.height - 1}`)
+    const shrunk = await read()
+    expect(shrunk.top).toBeGreaterThanOrEqual(offsetTop + 150 - 1)
+    expect(shrunk.height).toBeLessThanOrEqual(Math.max(54, 250 * 0.75) + 1)
+    await page.evaluate(`document.querySelector('.mini-composer__mount [role="option"]').click()`)
+    await moveViewport(page, height, offsetTop)
+    await type(page, ".mini-composer__mount textarea", "one\ntwo\nthree\nfour\nfive\n$")
+    await wait(page, `document.querySelector('.mini-composer__suggestions') !== null`)
+    const grown = await read()
+    expect(grown.top).toBeGreaterThanOrEqual(offsetTop - 1)
+    expect(grown.bottom).toBeLessThanOrEqual(grown.fieldTop + 1)
+    await page.pressKey("ArrowUp", "ArrowUp", 38)
+    expect(await page.evaluate<boolean>(`(() => { const list = document.querySelector('.mini-composer__mount [role="listbox"][aria-label="Suggestions"]'), option = document.getElementById('composer-option-65'), a = option.getBoundingClientRect(), b = list.getBoundingClientRect(); return a.top >= b.top - 1 && a.bottom <= b.bottom + 1 })()`)).toBe(true)
+    await type(page, ".mini-composer__mount textarea", "$s")
+    await wait(page, `document.querySelectorAll('.mini-composer__mount [role="option"]').length > 0`)
+    expect(await page.evaluate<number>(`document.querySelector('.mini-composer__mount [role="listbox"][aria-label="Suggestions"]').scrollTop`)).toBe(0)
+  } finally { await page.close() }
 }, 30_000)
 
 async function wait(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>, expression: string) {

@@ -293,18 +293,18 @@ describe("transcript rendering", () => {
     } finally { await page.close() }
   })
 
-  test("keeps five icon-only accessible destinations in one phone navigation row", async () => {
+  test("keeps three labeled accessible destinations in one phone navigation row", async () => {
     const page = await browser!.openPage()
     try {
       for (const theme of ["light", "dark"] as const) for (const width of [320, 360, 390, 430]) {
         await page.setViewport(width, 844)
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?theme=${theme}`)
-        for (let i = 0; i < 300 && await page.evaluate<number>(`document.querySelectorAll('.bottom-nav__item').length`) < 4; i++) await Bun.sleep(50)
+        for (let i = 0; i < 300 && await page.evaluate<number>(`document.querySelectorAll('.bottom-nav__item').length`) < 3; i++) await Bun.sleep(50)
         const nav = await page.evaluate<{ readonly tops: readonly number[]; readonly minHeight: number; readonly names: readonly string[]; readonly labelsHidden: boolean; readonly overflow: boolean }>(`(() => { const items = [...document.querySelectorAll('.bottom-nav__item')]; return { tops: items.map(item => item.getBoundingClientRect().top), minHeight: Math.min(...items.map(item => item.getBoundingClientRect().height)), names: items.map(item => item.getAttribute('aria-label')), labelsHidden: items.every(item => { const label = item.querySelector('.bottom-nav__label'); return label instanceof HTMLElement && getComputedStyle(label).display === 'none' }), overflow: document.documentElement.scrollWidth > innerWidth } })()`)
         expect(new Set(nav.tops).size).toBe(1)
         expect(nav.minHeight).toBeGreaterThanOrEqual(44)
-        expect(nav.names.map((name) => name.replace(", waiting for your decision", ""))).toEqual(["Sessions", "Conversation", "Session", "Usage", "Settings"])
-        expect(nav.labelsHidden).toBe(true)
+        expect(nav.names.map((name) => name.replace(", waiting for your decision", ""))).toEqual(["Sessions", "Usage", "Settings"])
+        expect(nav.labelsHidden).toBe(false)
         expect(nav.overflow).toBe(false)
         await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); if (fixture) { fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden' } })()`)
         await Bun.write(new URL(`../../../.cache/tmp/bottom-nav-${theme}-${width}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
@@ -365,15 +365,17 @@ describe("transcript rendering", () => {
 
 
 
-  test("uses most of the real desktop main area and aligns transcript with composer", async () => {
+  test("bounds the desktop Conversation column to 120ch and aligns transcript with composer", async () => {
     const page = await browser!.openPage()
     try {
-      for (const [width, ratio] of [[1440, 0.87], [1920, 0.8]] as const) {
+      for (const width of [1440, 1920]) {
         await page.setViewport(width, 900)
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?theme=light`)
         for (let i = 0; i < 80 && !await page.evaluate(`document.querySelector('.app--conversation.app--selected .transcript-navigation')`); i++) await Bun.sleep(50)
-        const geometry = await page.evaluate<{ readonly ratio: number; readonly left: number; readonly right: number; readonly composerLeft: number; readonly composerRight: number }>(`(() => { const main = document.querySelector('.workspace__main').getBoundingClientRect(); const transcript = document.querySelector('.transcript-navigation').getBoundingClientRect(); const composer = document.querySelector('.composer__row').getBoundingClientRect(); return { ratio: transcript.width / main.width, left: transcript.left, right: transcript.right, composerLeft: composer.left, composerRight: composer.right } })()`)
-        expect(geometry.ratio).toBeGreaterThan(ratio)
+        const geometry = await page.evaluate<{ readonly width: number; readonly measure: number; readonly left: number; readonly right: number; readonly composerLeft: number; readonly composerRight: number }>(`(() => { const app=document.querySelector('.app'), probe=document.createElement('div');probe.style.cssText='position:absolute;visibility:hidden;inline-size:120ch';app.append(probe);const measure=probe.getBoundingClientRect().width;probe.remove();const transcript = document.querySelector('.transcript-navigation').getBoundingClientRect(); const composer = document.querySelector('.composer__row').getBoundingClientRect(); return { width: transcript.width, measure, left: transcript.left, right: transcript.right, composerLeft: composer.left, composerRight: composer.right } })()`)
+        expect(geometry.width).toBeLessThanOrEqual(geometry.measure + 1)
+        expect(geometry.width).toBeGreaterThan(geometry.measure * 0.5)
+        if (width === 1920) expect(Math.abs(geometry.width - geometry.measure)).toBeLessThanOrEqual(1)
         expect(Math.abs(geometry.left - geometry.composerLeft)).toBeLessThanOrEqual(1)
         expect(Math.abs(geometry.right - geometry.composerRight)).toBeLessThanOrEqual(1)
       }
@@ -650,6 +652,33 @@ describe("transcript rendering", () => {
       expect(await page.evaluate<boolean>(`document.querySelector('.transcript-reasoning summary').getAttribute('aria-expanded') === 'false' && document.querySelector('.transcript-reasoning__body') !== null`)).toBe(true)
       for (let i = 0; i < 20 && await page.evaluate<boolean>(`document.querySelector('.transcript-reasoning__body') !== null`); i++) await Bun.sleep(20)
       expect(await page.evaluate<number>(`document.querySelectorAll('.transcript-reasoning__body').length`)).toBe(0)
+    } finally { await page.close() }
+  })
+
+  test("assistant prose fills the column and a pending prompt keeps a static receipt while the session runs", async () => {
+    const page = await browser!.openPage()
+    try {
+      for (const [width, height] of [[390, 844], [1440, 900]] as const) {
+        await page.setViewport(width, height)
+        await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?status=running`)
+        for (let i = 0; i < 40 && !await page.evaluate(`document.querySelector('.transcript-message--assistant .transcript-md p')`); i++) await Bun.sleep(50)
+        const geometry = await page.evaluate<{ readonly paragraph: number; readonly list: number; readonly quote: number; readonly heading: number; readonly column: number; readonly user: number; readonly receipt: string; readonly role: string; readonly animation: string }>(`(() => { const md = document.querySelector('.transcript-message--assistant .transcript-md').getBoundingClientRect(); const receipt = document.querySelector('.transcript-message--user .transcript-message__receipt'); return { paragraph: document.querySelector('.transcript-message--assistant .transcript-md p').getBoundingClientRect().width, list: document.querySelector('.transcript-message--assistant .transcript-md ul').getBoundingClientRect().width, quote: document.querySelector('.transcript-message--assistant .transcript-md blockquote').getBoundingClientRect().width, heading: document.querySelector('.transcript-message--assistant .transcript-md__heading').getBoundingClientRect().width, column: md.width, user: document.querySelector('.transcript-message--user').getBoundingClientRect().width, receipt: receipt?.getAttribute('aria-label') ?? '', role: receipt?.getAttribute('role') ?? '', animation: receipt ? getComputedStyle(receipt).animationName : '' } })()`)
+        expect(Math.abs(geometry.paragraph - geometry.column)).toBeLessThanOrEqual(1)
+        expect(Math.abs(geometry.list - geometry.column)).toBeLessThanOrEqual(1)
+        expect(Math.abs(geometry.quote - geometry.column)).toBeLessThanOrEqual(1)
+        expect(Math.abs(geometry.heading - geometry.column)).toBeLessThanOrEqual(1)
+        expect(geometry.user).toBeLessThan(geometry.column)
+        expect(geometry.receipt).toBe("Queued for processing")
+        expect(geometry.role).toBe("status")
+        expect(geometry.animation).toBe("none")
+      }
+      await page.setReducedMotion(true)
+      await page.evaluate(`document.querySelector('#admit').click()`)
+      expect(await page.evaluate<string>(`document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label') ?? ''`)).toBe("Processing prompt")
+      expect(await page.evaluate<string>(`document.querySelector('.transcript-message__receipt')?.textContent ?? ''`)).toContain("Processing")
+      expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.transcript-message__receipt')).animationName`)).toBe("none")
+      await page.evaluate(`document.querySelector('#consume').click()`)
+      expect(await page.evaluate<string>(`document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label') ?? ''`)).toBe("Processing prompt")
     } finally { await page.close() }
   })
 

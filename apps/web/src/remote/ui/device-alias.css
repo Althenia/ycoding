@@ -1,0 +1,25 @@
+.device-alias {
+  align-items: start;
+}
+
+.device-alias .defs__value {
+  display: grid;
+  gap: var(--yc-space-2);
+}
+
+.device-alias__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--yc-space-2);
+}
+
+.device-alias__actions .button {
+  min-inline-size: var(--yc-hit-min);
+  min-block-size: var(--yc-hit-min);
+}
+
+.device__hostname {
+  color: var(--yc-text-muted);
+  font-family: var(--yc-font-mono);
+  font-size: var(--yc-size-2xs);
+}

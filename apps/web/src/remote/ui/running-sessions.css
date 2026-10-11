@@ -65,9 +65,17 @@
   background: var(--yc-surface-sunken);
 }
 
-.running-sessions__item:focus {
+/* Keyboard location only: a pointer click must not leave a ring on the card it opened. */
+.running-sessions__item:focus-visible {
   outline: 2px solid var(--yc-focus);
   outline-offset: 2px;
+}
+
+/* While a mouse drags the rail, snapping and text selection stay off; base.css owns the
+   pan/panning cursors through the list's data-cursor role. */
+.running-sessions__list[data-cursor="panning"] {
+  scroll-snap-type: none;
+  user-select: none;
 }
 
 .running-sessions__title,

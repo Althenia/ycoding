@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { autocompleteBound, modelSelection, optionsForTrigger, applyMention, reconcileMentions, sameModel, submission, suggestionTrigger, tokenKey, triggerAt, orderedVariants, visibleModels, orderedModelOptions, pairedFastModel, switchFastModel, effortLevel, needsCatalogRead } from "./composer-logic"
-import type { CatalogView, ModelOption } from "../catalog"
+import { autocompleteBound, sheetFrame, modelSelection, modelSelectionKey, optionsForTrigger, applyMention, profileForModel, reconcileMentions, sameModel, submission, suggestionTrigger, tokenKey, triggerAt, orderedVariants, visibleModels, orderedModelOptions, modelSpeeds, switchModelSpeed, effortLabel, effortLevel, needsCatalogRead } from "./composer-logic"
+import { readCatalog, type CatalogView, type ModelOption } from "../catalog"
 
 const models: ModelOption[] = [
   { providerID: "openai", id: "gpt-6-sol", name: "GPT-6 Sol", variants: ["low", "medium", "high"] },
@@ -23,20 +23,99 @@ test("model selection uses only offered effort and explains unsupported incoming
   expect(modelSelection(models, { providerID: "openai", id: "gpt-6-sol" }).model).toEqual({ providerID: "openai", id: "gpt-6-sol" })
   expect(sameModel(incoming, { ...incoming })).toBe(true)
   expect(sameModel(incoming, { ...incoming, variant: "high" })).toBe(false)
+  expect(sameModel({ providerID: "openai", id: "gpt-6-sol", profile: "work" }, { providerID: "openai", id: "gpt-6-sol", profile: "other" })).toBe(false)
+  expect(modelSelection([{ ...models[0]!, profiles: [{ name: "work", active: true }] }], { providerID: "openai", id: "gpt-6-sol", profile: "missing" })).toMatchObject({ blocked: true, model: { profile: "missing" } })
+  expect(modelSelection([{ ...models[0]!, profiles: [{ name: "work", active: true }] }], { providerID: "openai", id: "gpt-6-sol", profile: "work" }).blocked).toBeUndefined()
 })
 
 test("paired fast models hide from the picker and switch model identity without changing an offered effort", () => {
   expect(visibleModels(models).map((item) => item.id)).toEqual(["gpt-6-sol", "claude-opus-5-5", "gpt-6-lite", "glm-fast-latest", "quant-fp8-fast"])
   const normal = { providerID: "openai", id: "gpt-6-sol", variant: "high" }
   const fast = { providerID: "openai", id: "gpt-6-sol-fast", variant: "high" }
-  expect(pairedFastModel(models, normal)).toMatchObject({ base: models[0], fast: models[1], active: false })
-  expect(switchFastModel(models, normal)).toEqual(fast)
-  expect(pairedFastModel(models, fast)).toMatchObject({ base: models[0], fast: models[1], active: true })
-  expect(switchFastModel(models, fast)).toEqual(normal)
-  expect(switchFastModel(models, { ...normal, variant: "medium" })).toEqual({ providerID: "openai", id: "gpt-6-sol-fast" })
-  expect(switchFastModel(models, { providerID: "anthropic", id: "claude-opus-5-5-fast", variant: "medium" })).toEqual({ providerID: "anthropic", id: "claude-opus-5-5" })
-  expect(pairedFastModel(models, { providerID: "zai", id: "glm-fast-latest" })).toBeUndefined()
-  expect(switchFastModel(models, { providerID: "openai", id: "gpt-6-lite" })).toBeUndefined()
+  expect(modelSpeeds(models, normal)).toMatchObject({ base: models[0], active: "standard" })
+  expect(switchModelSpeed(models, normal, "fast")).toEqual(fast)
+  expect(modelSpeeds(models, fast)).toMatchObject({ base: models[0], active: "fast" })
+  expect(switchModelSpeed(models, fast, "standard")).toEqual(normal)
+  expect(switchModelSpeed(models, { ...normal, variant: "medium" }, "fast")).toEqual({ providerID: "openai", id: "gpt-6-sol-fast" })
+  expect(switchModelSpeed(models, { providerID: "anthropic", id: "claude-opus-5-5-fast", variant: "medium" }, "standard")).toEqual({ providerID: "anthropic", id: "claude-opus-5-5" })
+  expect(modelSpeeds(models, { providerID: "zai", id: "glm-fast-latest" })?.options.map((entry) => entry.speed)).toEqual(["standard"])
+  expect(switchModelSpeed(models, { providerID: "openai", id: "gpt-6-lite" }, "fast")).toBeUndefined()
+})
+
+test("speed siblings group only exact offered provider IDs, including fast plus ultrafast without a standard entry", () => {
+  const catalog: ModelOption[] = [
+    ...models,
+    { providerID: "openai", id: "gpt-6-sol-ultrafast", name: "GPT-6 Sol Ultrafast", variants: ["high"] },
+    { providerID: "cursor", id: "gpt-6-sol-ultrafast", name: "Orphan Ultrafast", variants: [] },
+    { providerID: "cursor", id: "pair-fast", name: "Pair Fast", variants: [] },
+    { providerID: "cursor", id: "pair-ultrafast", name: "Pair Ultrafast", variants: [] },
+  ]
+  expect(visibleModels(catalog).map((item) => [item.providerID, item.id])).toEqual([
+    ...visibleModels(models).map((item) => [item.providerID, item.id]),
+    ["cursor", "gpt-6-sol-ultrafast"], ["cursor", "pair-fast"],
+  ])
+  expect(modelSpeeds(catalog, { providerID: "openai", id: "gpt-6-sol-ultrafast" })?.options.map((entry) => entry.label)).toEqual(["Standard", "Fast", "Ultrafast"])
+  expect(modelSpeeds(catalog, { providerID: "cursor", id: "pair-ultrafast" })?.options.map((entry) => entry.label)).toEqual(["Fast", "Ultrafast"])
+  expect(modelSpeeds(catalog, { providerID: "cursor", id: "gpt-6-sol-ultrafast" })?.options.map((entry) => entry.label)).toEqual(["Ultrafast"])
+  expect(switchModelSpeed(catalog, { providerID: "cursor", id: "gpt-6-sol-ultrafast" }, "standard")).toBeUndefined()
+  expect(switchModelSpeed(catalog, { providerID: "openai", id: "gpt-6-sol", variant: "high" }, "ultrafast")).toEqual({ providerID: "openai", id: "gpt-6-sol-ultrafast", variant: "high" })
+  expect(modelSpeeds(catalog.filter((item) => item.id !== "gpt-6-sol-fast"), { providerID: "openai", id: "gpt-6-sol" })?.options.map((entry) => entry.label)).toEqual(["Standard", "Ultrafast"])
+  expect(switchModelSpeed(catalog, { providerID: "openai", id: "gpt-6-sol", variant: "medium" }, "ultrafast")).toEqual({ providerID: "openai", id: "gpt-6-sol-ultrafast" })
+})
+
+test("same-provider changes retain unavailable profile identity and block it while provider changes do not inherit it", () => {
+  const profiled: ModelOption[] = [
+    { providerID: "openai", id: "base", name: "Base", variants: ["low", "high"], profiles: [{ name: "work", active: true }] },
+    { providerID: "openai", id: "base-fast", name: "Base Fast", variants: ["low"], profiles: [{ name: "work", active: false }] },
+    { providerID: "openai", id: "other", name: "Other", variants: [], profiles: [{ name: "private", active: false }] },
+    { providerID: "anthropic", id: "claude", name: "Claude", variants: [], profiles: [{ name: "work", active: true }] },
+  ]
+  const selected = { providerID: "openai", id: "base", variant: "high", profile: "work" }
+  expect(profileForModel(profiled, selected, profiled[2]!)).toBe("work")
+  expect(profileForModel(profiled, selected, profiled[3]!)).toBeUndefined()
+  expect(switchModelSpeed(profiled, selected, "fast")).toEqual({ providerID: "openai", id: "base-fast", profile: "work" })
+  expect(modelSelection(profiled, { providerID: "openai", id: "other", profile: "work" })).toMatchObject({ blocked: true, model: { profile: "work" } })
+  expect(modelSelection(profiled, { providerID: "openai", id: "other", profile: "private" }).blocked).toBeUndefined()
+  const profileFast: ModelOption[] = [
+    { providerID: "openai", id: "base", name: "Base", variants: ["high"], profiles: [{ name: "work", active: true, variants: ["high"] }] },
+    { providerID: "openai", id: "base-fast", name: "Base Fast", variants: ["low"], profiles: [{ name: "personal", active: false, variants: ["low"] }] },
+  ]
+  const fastSelection = switchModelSpeed(profileFast, { providerID: "openai", id: "base", variant: "high", profile: "work" }, "fast")
+  expect(fastSelection).toBeUndefined()
+  expect(modelSpeeds(profileFast, { providerID: "openai", id: "base", profile: "work" })?.options.find((entry) => entry.speed === "fast")?.available).toBe(false)
+})
+
+test("named profiles use only their own variants, and disabled provider defaults require an explicit profile", () => {
+  const catalog = readCatalog({ agents: [], commands: [], skills: [], references: [], resources: [], defaultModel: null,
+    models: [{ providerID: "cursor", id: "claude", name: "Claude", enabled: false, variants: ["high", "low"], profiles: [
+      { name: "work", active: true, variants: ["high"] }, { name: "personal", active: false, variants: ["low"] },
+    ] }] })!
+  expect(modelSelection(catalog.models, { providerID: "cursor", id: "claude" })).toMatchObject({ blocked: true })
+  expect(modelSelection(catalog.models, { providerID: "cursor", id: "claude", profile: "work", variant: "high" }).blocked).toBeUndefined()
+  expect(modelSelection(catalog.models, { providerID: "cursor", id: "claude", profile: "personal", variant: "low" }).blocked).toBeUndefined()
+  expect(modelSelection(catalog.models, { providerID: "cursor", id: "claude", profile: "personal", variant: "high" })).toMatchObject({ blocked: true })
+  expect(modelSelection(catalog.models, { providerID: "cursor", id: "claude", profile: "work", variant: "low" })).toMatchObject({ blocked: true })
+  const unlisted = readCatalog({ agents: [], commands: [], skills: [], references: [], resources: [], models: [
+    { providerID: "openai", id: "gpt", name: "GPT", variants: ["high"], profiles: [{ name: "work", active: true }] },
+  ] })!
+  expect(modelSelection(unlisted.models, { providerID: "openai", id: "gpt", profile: "work" }).blocked).toBeUndefined()
+  expect(modelSelection(unlisted.models, { providerID: "openai", id: "gpt", profile: "work", variant: "high" }).blocked).toBe(true)
+})
+
+test("missing-profile recovery takes precedence over stale effort while valid profiles report unsupported effort", () => {
+  const models: ModelOption[] = [{ providerID: "openai", id: "gpt", name: "GPT", enabled: false, variants: ["high", "low"], profiles: [
+    { name: "work", active: true, variants: ["high"] },
+  ] }]
+  expect(modelSelection(models, { providerID: "openai", id: "gpt", profile: "removed", variant: "high" }).warning).toContain("Profile removed is not offered")
+  expect(modelSelection(models, { providerID: "openai", id: "gpt", profile: "work", variant: "low" }).warning).toContain("Saved effort low is not offered by profile work")
+})
+
+test("pending model selections are fenced by connection device and generation", () => {
+  const target = { sessionID: "ses_same" }
+  expect(modelSelectionKey(target, "dev_a", 2)).toBe(modelSelectionKey(target, "dev_a", 2))
+  expect(modelSelectionKey(target, "dev_a", 2)).not.toBe(modelSelectionKey(target, "dev_b", 2))
+  expect(modelSelectionKey(target, "dev_a", 2)).not.toBe(modelSelectionKey(target, "dev_a", 3))
+  expect(modelSelectionKey(undefined, "dev_a", 2)).toBeUndefined()
 })
 
 test("model rows show available recents once before the selected provider and stable remaining provider groups", () => {
@@ -58,10 +137,36 @@ test("model rows show available recents once before the selected provider and st
   expect(orderedModelOptions(catalog, [], { providerID: "missing", id: "gone" }).map((item) => item.id)).toEqual([
     "claude-a", "gpt-a", "gpt-b", "zai-a",
   ])
+  expect(orderedModelOptions(catalog, [{ providerID: "openai", id: "gpt-a", profile: "work" }, { providerID: "openai", id: "gpt-a", profile: "personal" }], undefined).map((item) => item.id).slice(0, 2)).toEqual(["gpt-a", "gpt-a"])
 })
 
 test("effort levels map known variants exactly and unknown variants to one deterministic fallback", () => {
-  expect(["none", "minimal", "low", "medium", "high", "xhigh", "max", "CUSTOM"].map(effortLevel)).toEqual(["none", "minimal", "low", "medium", "high", "xhigh", "max", "fallback"])
+  expect(["none", "minimal", "low", "medium", "high", "xhigh", "max", "CUSTOM"].map((variant) => effortLevel(variant))).toEqual(["none", "minimal", "low", "medium", "high", "xhigh", "max", "fallback"])
+})
+
+test("effort presentation cleans only recognized levels and the exact selected Cursor model prefix", () => {
+  const grok: ModelOption = { providerID: "cursor", id: "grok-4.7", name: "Grok 4.7", variants: ["Grok 4.7 Low", "medium", "high", "xhigh"] }
+  expect(grok.variants.map((variant) => effortLabel(variant, grok))).toEqual(["Low", "Medium", "High", "Extra High"])
+  expect(effortLabel("Grok 4.7 Extra High", grok)).toBe("Extra High")
+  expect(effortLabel("grok-4.7 High", grok)).toBe("High")
+  expect(effortLabel("Grok 4.7 experimental", grok)).toBe("Grok 4.7 experimental")
+  expect(effortLabel("Other model High", grok)).toBe("Other model High")
+  expect(effortLabel("Grok 4.7 Low", { ...grok, providerID: "xai" })).toBe("Grok 4.7 Low")
+  expect(["constructor", "__proto__", "toString"].map((variant) => effortLabel(variant, grok))).toEqual(["constructor", "__proto__", "toString"])
+  expect(effortLabel("max", models[2])).toBe("Max")
+  expect(orderedVariants(["xhigh", "Grok 4.7 Low", "high", "medium"], grok)).toEqual([...grok.variants])
+  expect(effortLevel("Grok 4.7 Low", grok)).toBe("low")
+  expect(submission("Use original", [], undefined, "steer", undefined, { providerID: "cursor", id: grok.id, variant: grok.variants[0] })).toMatchObject({ input: { model: { variant: "Grok 4.7 Low" } } })
+})
+
+test("verified Cursor fast and context labels stay clean while zero-width source IDs remain intact", () => {
+  const raw = "Grok 4.7 Extra High Fast\u200b\u200b"
+  const model: ModelOption = { providerID: "cursor", id: "grok-4.7-500k-fast", name: "Grok 4.7 Fast 500k", variants: [raw] }
+  expect(effortLabel(raw, model)).toBe("Extra High")
+  expect(effortLevel(raw, model)).toBe("xhigh")
+  expect(effortLabel("Grok 4.7 Low", { ...model, id: "grok-4.7-500k", name: "Grok 4.7 500k" })).toBe("Low")
+  expect(effortLabel("Grok 4.7 Experimental Fast\u200b", model)).toBe("Grok 4.7 Experimental Fast\u200b")
+  expect(submission("Use original", [], undefined, "steer", undefined, { providerID: "cursor", id: model.id, variant: raw })).toMatchObject({ input: { model: { variant: raw } } })
 })
 
 const catalog: CatalogView = {
@@ -120,6 +225,11 @@ describe("composer input semantics", () => {
     expect(submission("/research context", [], catalog, "steer")).toEqual({ kind: "skill", input: { skill: "research" } })
     expect(submission("/unknown", [], catalog, "steer")).toEqual({ kind: "prompt", input: { text: "/unknown", delivery: "steer" } })
   })
+  test("marks an explicitly reselected profile for a same-reference rebind without changing request shape", () => {
+    expect(submission("hello", [], catalog, "steer", undefined, { providerID: "openai", id: "gpt", profile: "work" }, true)).toEqual({
+      kind: "prompt", input: { text: "hello", delivery: "steer", model: { providerID: "openai", id: "gpt", profile: "work" }, forceModelSwitch: true },
+    })
+  })
 
 })
 
@@ -131,6 +241,26 @@ test("suggestions never exceed the space above the composer or the viewport shar
   expect(autocompleteBound(90, 200)).toBe(80)
   expect(autocompleteBound(60, 300)).toBe(54)
   expect(autocompleteBound(30, 300)).toBe(54)
+})
+
+test("phone suggestions use the visual viewport space above the field up to three quarters of it, with no fixed cap", () => {
+  expect(autocompleteBound(700, 844, true)).toBe(633)
+  expect(autocompleteBound(300, 400, true)).toBe(292)
+  expect(autocompleteBound(260, 380, true)).toBe(252)
+  expect(autocompleteBound(260, 380, true)).toBeGreaterThan(autocompleteBound(260, 380))
+  expect(autocompleteBound(1300, 1400, true)).toBe(1050)
+  expect(autocompleteBound(60, 300, true)).toBe(54)
+  expect(autocompleteBound(30, 300, true)).toBe(54)
+  expect(autocompleteBound(700, 844, false)).toBe(autocompleteBound(700, 844))
+})
+
+test("a phone sheet follows the visual viewport top and height in whole pixels and ignores an unreported viewport", () => {
+  expect(sheetFrame({ offsetTop: 0, height: 844 })).toEqual({ top: 0, height: 844 })
+  expect(sheetFrame({ offsetTop: 12.4, height: 420.6 })).toEqual({ top: 12, height: 421 })
+  expect(sheetFrame({ offsetTop: -3, height: 400 })).toEqual({ top: 0, height: 400 })
+  expect(sheetFrame({ offsetTop: 0, height: 0 })).toBeUndefined()
+  expect(sheetFrame({ offsetTop: 0, height: Number.NaN })).toBeUndefined()
+  expect(sheetFrame(undefined)).toBeUndefined()
 })
 
 test("a dismissed suggestion token stays closed until the token changes or another token is chosen", () => {

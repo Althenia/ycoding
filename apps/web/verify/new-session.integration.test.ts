@@ -15,17 +15,19 @@ beforeAll(async () => {
 })
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 
-test("Conversation stays reachable separately from the selected Session and the URL retains its identity", async () => {
+test("New session stays reachable separately from the selected Session and the URL retains its identity", async () => {
   const page = await browser!.openPage()
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat`)
     await wait(page, `document.querySelector('.conversation-breadcrumb strong') !== null`)
     expect(await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb [aria-label="New conversation"]') === null`)).toBe(true)
-    await page.evaluate(`document.querySelector('.remote-nav a[href="/remote"]').click()`)
+    await page.evaluate(`document.querySelector('.workspace-new-session .new-session__trigger').click()`)
     await wait(page, `document.querySelector('.route-panel:not([inert]) .new-session-composer textarea') !== null`)
     expect(await page.evaluate<string>(`new URL(location.href).pathname`)).toBe("/remote")
-    await page.evaluate(`document.querySelector('.remote-nav a[href^="/remote/session?"]').click()`)
-    await wait(page, `document.querySelector('.remote-conversation-view:not([inert]) .conversation-breadcrumb strong') !== null`)
+    expect(await page.evaluate<string | null>(`new URL(location.href).searchParams.get('workspace_id')`)).toBeNull()
+    expect(await page.evaluate<string>(`new URL(location.href).searchParams.get('device_id')`)).toBe("dev_studio")
+    await page.evaluate(`document.querySelector('.workspace-resume[href^="/remote/session?"]').click()`)
+    await wait(page, `document.querySelector('.workspace__topbar:not([inert]) .conversation-breadcrumb strong') !== null`)
     expect(await page.evaluate<string>(`new URL(location.href).pathname`)).toBe("/remote/session")
     expect(await page.evaluate<string>(`new URL(location.href).searchParams.get('session_id')`)).toBe("ses_fixture")
     expect(await page.evaluate<string>(`new URL(location.href).searchParams.get('device_id')`)).toBe("dev_studio")
@@ -50,8 +52,8 @@ test("choosing a Session from Sessions hands focus to its selected workspace hea
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions`)
     await wait(page, `document.querySelector('.sessions-table__select') !== null`)
     await page.evaluate(`[...document.querySelectorAll('.sessions-table__select')].find(item => item.textContent.includes('Archived: release notes')).click()`)
-    await wait(page, `document.querySelector('.remote-conversation-view:not([inert]) .conversation-breadcrumb strong')?.textContent?.includes('Archived: release notes') === true`)
-    expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('.remote-conversation-view:not([inert]) .conversation-breadcrumb')`)).toBe(true)
+    await wait(page, `document.querySelector('.workspace__topbar:not([inert]) .conversation-breadcrumb strong')?.textContent?.includes('Archived: release notes') === true`)
+    expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('.workspace__topbar:not([inert]) .conversation-breadcrumb')`)).toBe(true)
   } finally { await page.close() }
 }, 30_000)
 
@@ -73,8 +75,8 @@ test("a workspace plus button locks its source repository instead of choosing th
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions&inventoryCount=20`)
     await wait(page, `document.querySelector('.workspace-nav button') !== null`)
     await page.evaluate(`[...document.querySelectorAll('.workspace-nav button')].find(item => item.textContent.includes('Other repository')).click()`)
-    await wait(page, `document.querySelector('.sessions-page__toolbar .new-session__trigger:not([disabled])') !== null`)
-    await page.evaluate(`document.querySelector('.sessions-page__toolbar .new-session__trigger').click()`)
+    await wait(page, `document.querySelector('.sessions-page__content .sessions-page__toolbar .new-session__trigger:not([disabled])') !== null`)
+    await page.evaluate(`document.querySelector('.sessions-page__content .sessions-page__toolbar .new-session__trigger').click()`)
     await wait(page, `document.querySelector('.new-session-composer button[aria-label="Repository"]') !== null`)
     expect(await page.evaluate<{ label: string; locked: boolean; workspace: string | null; source: string | null }>(`(() => { const repository = document.querySelector('.new-session-composer button[aria-label="Repository"]'); const params = new URL(location.href).searchParams; return { label: repository.textContent.trim(), locked: repository.disabled, workspace: params.get('workspace_id'), source: params.get('source') } })()`)).toMatchObject({ label: "Other repository", locked: true, workspace: "workspace_other", source: "sessions" })
     await type(page, ".new-session-composer textarea", "Stay in this repository")
@@ -164,8 +166,8 @@ test("new session opens in the main area with repository names, selected model a
   const page = await browser!.openPage()
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions`)
-    await wait(page, `document.querySelector('.sessions-page__toolbar .new-session__trigger:not([disabled])') !== null`)
-    await page.evaluate(`document.querySelector('.remote-nav a[href="/remote"]')?.click()`)
+    await wait(page, `document.querySelector('.sessions-page__content .sessions-page__toolbar .new-session__trigger:not([disabled])') !== null`)
+    await page.evaluate(`document.querySelector('.workspace-new-session .new-session__trigger')?.click()`)
     await wait(page, `document.querySelector('.workspace__main .new-session-composer textarea') !== null`)
     expect(await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="New session"]') === null`)).toBe(true)
     await wait(page, `document.querySelector('.new-session-composer button[aria-label="Repository"]:not([disabled])') !== null`)
@@ -187,8 +189,8 @@ test("unknown creation retries the same admission without a second create", asyn
   const page = await browser!.openPage()
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions&creation=unknown`)
-    await wait(page, `document.querySelector('.sessions-page__toolbar .new-session__trigger:not([disabled])') !== null`)
-    await page.evaluate(`document.querySelector('.sessions-page__toolbar .new-session__trigger')?.click()`)
+    await wait(page, `document.querySelector('.sessions-page__content .sessions-page__toolbar .new-session__trigger:not([disabled])') !== null`)
+    await page.evaluate(`document.querySelector('.sessions-page__content .sessions-page__toolbar .new-session__trigger')?.click()`)
     await wait(page, `document.querySelector('.new-session-composer button[aria-label="Create session"]:not([disabled])') !== null`)
     await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="Create session"]')?.click()`)
     await wait(page, `document.querySelector('.new-session__outcome--unknown') !== null`)
@@ -208,7 +210,7 @@ for (const command of [false, true]) test(`first ${command ? "command" : "prompt
     await page.evaluate(`(() => { const transfer = new DataTransfer(); transfer.items.add(new File([new Uint8Array(30_000)], 'capture.png', { type: 'image/png' })); document.querySelector('.new-session-composer .composer__row').dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer })); })()`)
     await wait(page, `document.querySelector('.new-session-composer .composer__attachment') !== null`)
     await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="Create session"]').click()`)
-    await wait(page, `document.querySelector('.remote-conversation-view:not([inert]) .conversation-breadcrumb strong')?.textContent?.trim() === 'New session'`)
+    await wait(page, `document.querySelector('.workspace__topbar:not([inert]) .conversation-breadcrumb strong')?.textContent?.trim() === 'New session'`)
     expect(await page.evaluate<number>(`window.requestLog.filter(item => item.operation === 'session.subscribe').length`)).toBe(1)
     expect(await page.evaluate<string>(`document.querySelector('.composer-resident:not([inert]) .composer__upload')?.textContent ?? ''`)).toContain("capture.png · 0%")
     await page.evaluate(`window.remoteReleaseAttachments()`)
@@ -228,8 +230,10 @@ test("new-session hero centers in both Conversation placements and remains top-s
       await page.setViewport(width!, height!)
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=${theme}${noSelection ? "&noSelection=1" : ""}`)
       if (!noSelection) {
-        await wait(page, `document.querySelector('.workspace__rail .pane__head--sessions button:not([disabled])') !== null`)
-        await page.evaluate(`document.querySelector('.workspace__rail .pane__head--sessions button')?.click()`)
+        const plus = width! < 768 ? ".overlay--sessions-sheet .pane__head--sessions button" : ".workspace__rail .pane__head--sessions button"
+        if (width! < 768) await page.evaluate(`document.querySelector('[aria-label="Open sessions"]')?.click()`)
+        await wait(page, `document.querySelector(${JSON.stringify(plus)}+':not([disabled])') !== null`)
+        await page.evaluate(`document.querySelector(${JSON.stringify(plus)})?.click()`)
       }
       await wait(page, `document.querySelector('.workspace__scroll .new-session-composer textarea') !== null`)
       if (width === 390 || width === 1440) expect(await page.evaluate<boolean>(`document.querySelector('.new-session-composer__close, .new-session-composer [aria-label="Close new session"]') === null`)).toBe(true)
@@ -315,7 +319,7 @@ test("phone Sessions sheet returns focus to its opener and opens Conversation fr
         await wait(page, `document.querySelector('dialog.overlay--sessions-sheet[open] .session-row') !== null`)
         await page.evaluate(`[...document.querySelectorAll('.overlay--sessions-sheet .session-row')].find((row) => row.textContent.includes('Archived: release notes'))?.click()`)
         await wait(page, `document.querySelector('.conversation-breadcrumb strong')?.textContent?.includes('Archived: release notes') === true`)
-        await wait(page, `document.activeElement === document.querySelector('.remote-conversation-view .conversation-breadcrumb')`)
+        await wait(page, `document.activeElement === document.querySelector('.workspace__topbar:not([inert]) .conversation-breadcrumb')`)
       }
     } finally { await page.close() }
   }

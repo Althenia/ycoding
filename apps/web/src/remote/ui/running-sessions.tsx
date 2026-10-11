@@ -35,6 +35,43 @@ export function RunningSessions(props: {
     track.scrollTo({ left, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" })
   }
   const pacedMeasure = createThrottler(measure, { wait: 50 })
+  // Mouse drag scrolls the rail; a press that travels under the slop stays an ordinary click.
+  const dragSlop = 6
+  let drag: { readonly pointerID: number; readonly startX: number; readonly startLeft: number; moved: boolean } | undefined
+  const onPointerDown = (event: PointerEvent) => {
+    if (!track || event.pointerType !== "mouse" || event.button !== 0) return
+    drag = { pointerID: event.pointerId, startX: event.clientX, startLeft: track.scrollLeft, moved: false }
+    target = undefined
+  }
+  const onPointerMove = (event: PointerEvent) => {
+    if (!track || !drag || event.pointerId !== drag.pointerID) return
+    const delta = event.clientX - drag.startX
+    if (!drag.moved) {
+      if (Math.abs(delta) < dragSlop) return
+      drag.moved = true
+      track.setPointerCapture(event.pointerId)
+      track.dataset.cursor = "panning"
+    }
+    track.scrollLeft = drag.startLeft - delta
+  }
+  let suppressClick = false
+  const endDrag = (event: PointerEvent) => {
+    if (!track || !drag || event.pointerId !== drag.pointerID) return
+    const moved = drag.moved
+    drag = undefined
+    if (!moved) return
+    // The click that follows a drag release must not open the card under the pointer.
+    suppressClick = event.type === "pointerup"
+    track.dataset.cursor = "pan"
+    if (track.hasPointerCapture(event.pointerId)) track.releasePointerCapture(event.pointerId)
+    measure()
+  }
+  const onClickCapture = (event: MouseEvent) => {
+    if (!suppressClick) return
+    suppressClick = false
+    event.stopPropagation()
+    event.preventDefault()
+  }
   createEffect(() => {
     if (props.sessions.length === 0 || !track) { setOverflow(false); return }
     const observer = new ResizeObserver(pacedMeasure.maybeExecute)
@@ -46,7 +83,8 @@ export function RunningSessions(props: {
   return <Show when={props.loading || props.sessions.length > 0}>
     <section class={`running-sessions${props.loading ? " running-sessions--loading" : " running-sessions--ready"}`} aria-labelledby="running-sessions-title" aria-busy={props.loading === true}>
       <h2 id="running-sessions-title">Running and recent</h2>
-      <ul class="running-sessions__list" ref={track} onScroll={pacedMeasure.maybeExecute} onWheel={() => { target = undefined }} onTouchStart={() => { target = undefined }}>
+      <ul class="running-sessions__list" data-cursor="pan" ref={track} onScroll={pacedMeasure.maybeExecute} onWheel={() => { target = undefined }} onTouchStart={() => { target = undefined }}
+        onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={endDrag} onPointerCancel={endDrag} on:click={{ capture: true, handleEvent: onClickCapture }}>
         <Show when={props.loading && props.sessions.length === 0}><For each={[0, 1, 2]}>{(index) => <li><LoadingPlaceholder kind="session" label="Loading running and recent sessions…" announce={index === 0} /></li>}</For></Show>
         <For each={props.sessions}>
           {(session, index) => {

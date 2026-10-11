@@ -170,7 +170,7 @@ describe("remote and public product interactions", () => {
       expect(await signedOut.evaluate<boolean>(`document.body.innerText.includes('Sign in to your workspace')`)).toBe(true)
       await signedOut.evaluate(`[...document.querySelectorAll('.sign-in__provider')].find(button => button.textContent?.trim() === 'Continue with Google')?.click()`)
       for (let attempt = 0; attempt < 40 && !(await signedOut.evaluate<boolean>(`location.pathname === '/api/auth/google/start'`)); attempt += 1) await Bun.sleep(50)
-      expect(await signedOut.evaluate<string>(`location.pathname + location.search`)).toBe("/api/auth/google/start?redirect_after=%2Fremote%2Fsettings")
+      expect(await signedOut.evaluate<string>(`location.pathname + location.search`)).toBe("/api/auth/google/start?redirect_after=%2Fremote%2Fsettings%3Fscenario%3Dsigned-out-390")
     } finally { await signedOut.close() }
 
     const enrollment = await remote("devices-enrollment", 1440)

@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import type { ShellOutputFetch, ShellOutputView } from "./projection"
 import {
+  latestPromptProcessing,
   promptReceipt,
+  telemetryConsentNoticeView,
   REMOTE_CAPABILITY_NAMES,
   accountReadState,
   accountSectionView,
@@ -22,15 +24,30 @@ import {
   connectionLabel,
   summarizeConnection,
   workspaceLabels,
+  workspaceDestination,
   type AccountReadState,
   type RemoteConnectionState,
   type RemoteSessionSummary,
 } from "./view-model"
 
+test("Focus navigation groups Session creation and detail under Sessions", () => {
+  for (const path of ["/remote", "/remote/session", "/remote/sessions"]) expect(workspaceDestination(path)).toBe("/remote/sessions")
+  expect(workspaceDestination("/remote/usage")).toBe("/remote/usage")
+  expect(workspaceDestination("/remote/settings")).toBe("/remote/settings")
+})
+
 test("prompt receipts distinguish sending from failed and unknown delivery", () => {
   expect(promptReceipt("pending", "steer", { state: "sending" }).label).toBe("Sending prompt")
   expect(promptReceipt("pending", "queue", { state: "unknown" }).label).toBe("Outcome unknown")
   expect(promptReceipt("pending", "queue", { state: "failed" }).label).toBe("Send failed")
+})
+
+test("telemetry consent notice appears only for connected undecided machines", () => {
+  expect(telemetryConsentNoticeView({ status: "undecided" }, true)).toBe(true)
+  expect(telemetryConsentNoticeView({ status: "undecided", error: "failure" }, true)).toBe(true)
+  for (const status of ["enabled", "disabled", "unsupported", "failed", "loading"])
+    expect(telemetryConsentNoticeView({ status }, true)).toBe(false)
+  expect(telemetryConsentNoticeView({ status: "undecided" }, false)).toBe(false)
 })
 
 test("prompt receipts preserve queue and read facts over late send outcomes", () => {
@@ -40,6 +57,20 @@ test("prompt receipts preserve queue and read facts over late send outcomes", ()
   for (const state of ["sending", "failed", "unknown"] as const) {
     expect(promptReceipt("consumed", "steer", { state })).toEqual({ label: "Read by YCoding", text: "Read", mark: "✓✓" })
   }
+})
+
+test("the latest user prompt keeps a processing receipt while the session runs", () => {
+  const messages = [{ kind: "user", id: "older" }, { kind: "assistant", id: "reply" }, { kind: "user", id: "latest" }]
+  expect(latestPromptProcessing("running", messages, "latest")).toBe(true)
+  expect(latestPromptProcessing("running", messages, "older")).toBe(false)
+  for (const status of ["idle", "failed", "interrupted", undefined] as const) expect(latestPromptProcessing(status, messages, "latest")).toBe(false)
+  expect(promptReceipt("pending", "steer", { state: "sending" }, true)).toMatchObject({ label: "Sending prompt", text: "Sending" })
+  expect(promptReceipt("pending", "steer", undefined, true).text).toBe("Processing · steer")
+  expect(promptReceipt("pending", "queue", undefined, true)).toMatchObject({ label: "Queued for processing", text: "Queued" })
+  expect(promptReceipt("promoted", "steer", undefined, true)).toEqual({ label: "Processing prompt", text: "Processing", mark: "◷" })
+  expect(promptReceipt("consumed", "steer", undefined, true)).toEqual({ label: "Processing prompt", text: "Processing", mark: "◷" })
+  expect(promptReceipt("promoted", "queue", undefined, false).text).toBe("Sent")
+  expect(promptReceipt("consumed", "steer", undefined, false)).toEqual({ label: "Read by YCoding", text: "Read", mark: "✓✓" })
 })
 
 const connectionStates: readonly RemoteConnectionState[] = [

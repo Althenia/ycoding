@@ -12,6 +12,7 @@ export type LatencySample =
       readonly totalMs: number
     }
   | { readonly kind: "long-task"; readonly at: string; readonly durationMs: number }
+  | { readonly kind: "client"; readonly at: string; readonly surface: "web"; readonly metric: "prompt.admit" | "stream.delay" | "transcript.load"; readonly durationMs: number }
 
 const maxSamples = 60
 
@@ -57,6 +58,8 @@ export function createLatencyDiagnostics(now = () => Date.now()) {
         ...(timing.settlementMs === undefined ? {} : { settlementMs: timing.settlementMs }),
         totalMs: timing.totalMs,
       }),
+    recordClient: (metric: "prompt.admit" | "stream.delay" | "transcript.load", durationMs: number) =>
+      record({ kind: "client", at: new Date(now()).toISOString(), surface: "web", metric, durationMs: Math.max(0, Math.min(600_000, Math.round(durationMs))) }),
     clear: () => {
       if (samples.length === 0) return
       samples.length = 0

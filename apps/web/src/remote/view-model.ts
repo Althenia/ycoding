@@ -14,12 +14,40 @@ import type { FormAnswerView, FormFieldView, FormView, SessionView, ShellOutputF
 
 export type FormDraft = Readonly<Record<string, FormAnswerView[string] | undefined>>
 
-export function promptReceipt(state: "pending" | "promoted" | "consumed" | undefined, delivery: "steer" | "queue" | undefined, mutation?: Pick<PendingMutation, "state">) {
-  if (state === "consumed") return { label: "Read by YCoding", text: "Read", mark: "✓✓" }
+export function nextMessagePrediction(view: SessionView | undefined, draft: string, dismissedSource?: string) {
+  const prediction = view?.prediction
+  if (!view || !prediction || draft !== "" || prediction.sourceMessageID === dismissedSource || view.status !== "idle" || view.autonomy?.goal?.status === "active") return
+  const latest = view.messages.findLast(message => message.kind === "assistant")
+  if (latest?.id !== prediction.sourceMessageID) return
+  return prediction
+}
+
+export function acceptNextMessagePrediction(view: SessionView | undefined, draft: string, dismissedSource?: string) {
+  return nextMessagePrediction(view, draft, dismissedSource)?.text ?? draft
+}
+
+export function workspaceDestination(path: string) {
+  if (path === "/remote/usage") return "/remote/usage"
+  if (path === "/remote/settings") return "/remote/settings"
+  return "/remote/sessions"
+}
+
+export function telemetryConsentNoticeView(consent: { readonly status: string; readonly error?: string }, connected: boolean) {
+  return consent.status === "undecided" && connected
+}
+
+export function latestPromptProcessing(status: SessionView["status"] | undefined, messages: readonly { readonly kind: string; readonly id: string }[], messageID: string) {
+  if (status !== "running") return false
+  return messages.findLast((message) => message.kind === "user")?.id === messageID
+}
+
+export function promptReceipt(state: "pending" | "promoted" | "consumed" | undefined, delivery: "steer" | "queue" | undefined, mutation?: Pick<PendingMutation, "state">, processing = false) {
+  if (state === "consumed" && !processing) return { label: "Read by YCoding", text: "Read", mark: "✓✓" }
   if (mutation?.state === "failed") return { label: "Send failed", text: "Send failed", mark: "!" }
   if (mutation?.state === "unknown") return { label: "Outcome unknown", text: "Outcome unknown", mark: "!" }
   if (mutation?.state === "sending") return { label: "Sending prompt", text: "Sending", mark: "◷" }
   if (state === "pending") return { label: delivery === "queue" ? "Queued for processing" : "Processing prompt", text: delivery === "queue" ? "Queued" : "Processing · steer", mark: "◷" }
+  if (processing) return { label: "Processing prompt", text: "Processing", mark: "◷" }
   return { label: "Sent, not yet read", text: "Sent", mark: "✓" }
 }
 

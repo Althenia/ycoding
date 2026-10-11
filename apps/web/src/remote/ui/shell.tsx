@@ -31,6 +31,8 @@ import {
   sessionProjectLabel,
   summarizeConnection,
   workspaceLabels,
+  workspaceDestination,
+  telemetryConsentNoticeView,
   type DeviceAvailabilityView,
 } from "../view-model"
 import { officeInputFromRemote } from "../office/adapter"
@@ -38,7 +40,10 @@ import { projectOffice } from "../office/model"
 import { OfficeWorkspace } from "../office/OfficeWorkspace"
 import { createOfficeSettings, type OfficeSettingsStore, type WorkspacePresentation } from "../office/storage"
 import { Composer } from "./composer"
+import { CommandPalette, focusComposerField, type PaletteHandlers } from "./command-palette"
 import { NewSessionButton, NewSessionComposer } from "./new-session"
+import { ProviderConnect } from "./provider-connect"
+import type { CatalogTarget } from "../catalog"
 import { UsagePage } from "./usage"
 import {
   AccountSettings,
@@ -86,6 +91,8 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   const [navOpen, setNavOpen] = createSignal(false)
   const [navClosing, setNavClosing] = createSignal(false)
   const [navGeneration, setNavGeneration] = createSignal(1)
+  const [newSessionWorkspaceID, setNewSessionWorkspaceID] = createSignal<string>()
+  const [providerConnect, setProviderConnect] = createSignal<{ readonly target: CatalogTarget; readonly returnFocus: HTMLElement; readonly deviceID: string | undefined; readonly generation: number }>()
   let closeSessionsSheet: (() => void) | undefined
   let navTrigger: HTMLButtonElement | undefined
   const closeNav = () => {
@@ -101,8 +108,9 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
       return !collapsed
     })
   }
-  let rail: HTMLElement | undefined
+  let rail: HTMLDivElement | undefined
   let railExpand: HTMLButtonElement | undefined
+  let railCollapse: HTMLButtonElement | undefined
   let railTop = 0
   const collapseRail = () => {
     railTop = rail?.scrollTop ?? 0
@@ -116,7 +124,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
         rail.scrollTop = railTop
         rail.dispatchEvent(new Event("scroll"))
       }
-      rail?.querySelector<HTMLButtonElement>(".pane .session-panel__collapse")?.focus({ preventScroll: true })
+      railCollapse?.focus({ preventScroll: true })
     })
   }
   const [teamOpen, setTeamOpen] = createSignal(false)
@@ -139,14 +147,13 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   const updatePhoneLayout = createThrottler(() => setPhoneLayout(readPhoneLayout()), { wait: 50 })
   window.addEventListener("resize", updatePhoneLayout.maybeExecute)
   onCleanup(() => window.removeEventListener("resize", updatePhoneLayout.maybeExecute))
-  const tabletQuery = window.matchMedia("(min-width: 768px) and (max-width: 1023px)")
-  const [tabletLayout, setTabletLayout] = createSignal(tabletQuery.matches)
-  const updateTabletLayout = (event: MediaQueryListEvent) => setTabletLayout(event.matches)
-  tabletQuery.addEventListener("change", updateTabletLayout)
-  onCleanup(() => tabletQuery.removeEventListener("change", updateTabletLayout))
 
   const office = createOfficeSettings()
   const state = () => remote.state()
+  const activeDeviceName = () => {
+    const device = state().devices.find((entry) => entry.id === state().activeDeviceID)
+    return device === undefined ? summarizeConnection(state().connection).label : remote.deviceName(device)
+  }
   const view = (): RemoteView => views.find((entry) => entry === props.path()) ?? "/remote"
   let scrollHost: HTMLDivElement | undefined
   let jumpSlot: HTMLDivElement | undefined
@@ -199,9 +206,6 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   const composition = () => remoteSurfaceComposition(view(), selected() && ownsSessionDevice())
   const viewClass = () => view() === "/remote" || view() === "/remote/session" ? "conversation" : view().slice("/remote/".length)
   const entry = () => remoteEntryView(accountReadState({ connection: state().connection, owner: state().owner }))
-  const tabletRailToggle = () => tabletLayout() && composition().showSessionRail
-  const navExpanded = () => tabletRailToggle() ? !railCollapsed() : navOpen() && !navClosing()
-  const navLabel = () => tabletRailToggle() ? railCollapsed() ? "Show sessions sidebar" : "Hide sessions sidebar" : "Open sessions"
   const canCreateSession = () => state().connection.kind === "connected" && state().transport.kind === "open"
   const [listedGeneration, setListedGeneration] = createSignal<number>()
   createEffect(() => {
@@ -209,11 +213,6 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   })
   const [newSessionVisited, setNewSessionVisited] = createSignal(false)
   const openSessionsNavigation = (trigger: HTMLButtonElement) => {
-    if (tabletRailToggle()) {
-      if (railCollapsed()) expandRail()
-      else collapseRail()
-      return
-    }
     navTrigger = trigger
     if (navClosing()) {
       setNavGeneration((generation) => generation + 1)
@@ -226,10 +225,10 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   const showNewSession = () => newSessionOpen() && !firstInventoryLoading()
   createEffect(() => { if (newSessionOpen()) setNewSessionVisited(true) })
   const conversationHidden = () => view() !== "/remote/session" || !ownsSessionRoute() || routeError() !== undefined || (officeShown() && selected())
-  const openNewSession = (source: "sessions" | "sidebar" = "sidebar") => {
+  const openNewSession = (source?: "sessions" | "sidebar") => {
     if (!canCreateSession()) return
     closeNav()
-    navigate({ to: "/remote", search: { ...(state().selectedWorkspaceID === undefined ? {} : { workspace_id: state().selectedWorkspaceID }), source, device_id: state().activeDeviceID } })
+    navigate({ to: "/remote", search: { ...(source === undefined ? {} : { ...(state().selectedWorkspaceID === undefined ? {} : { workspace_id: state().selectedWorkspaceID }), source }), device_id: state().activeDeviceID } })
   }
   let focusAfterSelection: string | undefined
   const openSession = (sessionID: string) => {
@@ -257,7 +256,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
     const sessionID = focusAfterSelection
     queueMicrotask(() => {
       if (focusAfterSelection !== sessionID || state().activeSessionID !== sessionID || newSessionOpen()) return
-      const target = document.querySelector<HTMLElement>(".remote-conversation-view:not([inert]) .conversation-breadcrumb")
+      const target = document.querySelector<HTMLElement>(".workspace__topbar:not([inert]) .conversation-breadcrumb")
       target?.focus({ preventScroll: true })
       if (document.activeElement === target) focusAfterSelection = undefined
     })
@@ -351,9 +350,46 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
     window.removeEventListener("ycoding:open-session", alertEvent)
     navigator.serviceWorker?.removeEventListener("message", workerMessage)
   })
+  const prefillComposer = (text: string) => {
+    const sessionID = composerSessionID()
+    if (sessionID === undefined) return
+    const draft = state().drafts[sessionID] ?? ""
+    remote.store.setDraft(sessionID, draft.startsWith(text) ? draft : `${text}${draft}`)
+    window.dispatchEvent(new Event("ycoding:composer-expand"))
+    if (office.presentation() === "office") office.present("conversation")
+    if (view() !== "/remote/session") navigate({ to: "/remote/session", search: sessionSearch(sessionID, state().activeDeviceID) })
+    focusComposerField()
+  }
+  const paletteHandlers: Omit<PaletteHandlers, "openTeam"> = {
+    go: (target) => {
+      if (target === "new") { openNewSession(); return }
+      if (target === "session") {
+        const sessionID = state().activeSessionID
+        if (sessionID !== undefined) navigate({ to: "/remote/session", search: sessionSearch(sessionID, state().activeDeviceID) })
+        return
+      }
+      navigate({ to: `/remote/${target}` })
+    },
+    openSession,
+    draft: prefillComposer,
+    selectModel: () => {
+      if (office.presentation() === "office") office.present("conversation")
+      const scope = view() === "/remote" ? ".new-session-composer" : ".composer-resident"
+      const trigger = [...document.querySelectorAll<HTMLButtonElement>(`${scope} .model-control__trigger, ${scope} .composer__mobile-trigger`)]
+        .find((button) => !button.disabled && !button.closest("[inert]") && button.getClientRects().length > 0)
+      trigger?.focus({ preventScroll: true })
+      trigger?.click()
+    },
+    connectProvider: (target, returnFocus) => setProviderConnect({ target, returnFocus, deviceID: state().activeDeviceID, generation: state().generation }),
+  }
+  createEffect(() => {
+    const current = providerConnect()
+    if (current && (current.deviceID !== state().activeDeviceID || current.generation !== state().generation)) setProviderConnect(undefined)
+  })
+  const paletteSessionSelected = () => selected() && (view() !== "/remote/session" || (ownsSessionDevice() && ownsSessionRoute()))
   const teamContent = () => <TeamView
     data={() => state().team!} currentSessionID={state().activeSessionID ?? ""} now={Date.now} sheet={phoneLayout()}
-    onClose={closeTeam} onOpen={openFromTeam} onCancel={remote.store.cancelSubagent} onAnswer={remote.store.answerSubagent}
+    onClose={closeTeam} onOpen={openFromTeam} onCancel={remote.store.cancelSubagent} onAnswer={remote.store.answerSubagent} onPin={remote.store.pinSubagent}
     onLoadOlder={remote.store.loadMoreTeam} onViewShell={remote.store.teamShellOutput} onKillShell={remote.store.killTeamShell}
     onOpenSideChat={openFromTeam} onCreateSideChat={remote.store.createSideChat} onLoadOlderSideChats={remote.store.loadMoreSideChats} />
 
@@ -361,12 +397,31 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
     <Show when={entry() === "workspace"} fallback={<SignInScreen />}>
       <div class={`app app--${viewClass()}${view() === "/remote/session" && selected() && ownsSessionDevice() ? " app--selected" : view() === "/remote" ? " app--empty" : ""}${view() === "/remote/session" && managedChild() ? " app--managed-child" : ""}${view() === "/remote/session" && selectedLoading() ? " app--selected-loading" : ""}${railCollapsed() ? " app--rail-collapsed" : ""}${officeShown() ? " app--office" : ""}${showNewSession() ? " app--new-session" : ""}`}>
         <a class="skip-link" href="#remote-main">Skip to content</a>
+        <aside id="session-rail" class="workspace__rail" aria-label="Workspace navigation">
+          <div class="workspace__rail-head">
+            <Link to="/" class="brand" title="YCoding home"><BrandMark compact /></Link>
+            <Show when={railCollapsed()} fallback={<button ref={railCollapse} type="button" class="session-panel__collapse" aria-label="Hide workspace sidebar" aria-expanded="true" aria-controls="session-rail" onClick={collapseRail}><Icon name="panel-left" /></button>}>
+              <button ref={railExpand} type="button" class="session-panel__collapse workspace__rail-expand" aria-label="Show workspace sidebar" aria-expanded="false" aria-controls="session-rail" onClick={expandRail}><Icon name="panel-left" /></button>
+            </Show>
+          </div>
+          <div class="workspace__rail-navigation">
+            <PrimaryNav view={view()} />
+            <div class="workspace-new-session"><NewSessionButton labeled disabled={!canCreateSession()} onClick={() => openNewSession()} /></div>
+            <ResumeSession view={view()} />
+          </div>
+          <div ref={rail} class="workspace__rail-body" inert={railCollapsed()}>
+            <Show when={composition().showSessionRail}>
+              <SessionPanel canCreateSession={canCreateSession()} onNewSession={() => openNewSession("sidebar")} onSelectSession={openSession} />
+            </Show>
+            <Show when={view() === "/remote/sessions"}><WorkspaceNav /></Show>
+          </div>
+          <div class="workspace__rail-footer"><span class="workspace-select__label">Selected machine</span><strong>{activeDeviceName()}</strong><Link to="/remote/settings" class="text-link">Manage connection</Link></div>
+        </aside>
         <RemoteHeader
-          navExpanded={navExpanded()}
-          navLabel={navLabel()}
-          navControls={tabletRailToggle() ? "session-rail" : undefined}
+          navExpanded={navOpen() && !navClosing()}
           onOpenNav={openSessionsNavigation}
           onOpenSession={openSession}
+          palette={{ canCreateSession: canCreateSession(), sessionSelected: paletteSessionSelected(), managedChild: managedChild(), workspaceID: newSessionWorkspaceID(), handlers: paletteHandlers }}
           team={view() === "/remote/session" && selected() && ownsSessionDevice() ? {
             count: state().team === undefined ? undefined : teamActiveCount(state().team!),
             activity: state().team === undefined ? "Activity unreported" : teamActivityLabel(state().team!),
@@ -381,23 +436,20 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
         <ConnectionStrip />
 
         <div class="workspace">
-          <Show when={composition().showSessionRail}>
-            <aside ref={rail} id="session-rail" class="workspace__rail" aria-label="Sessions">
-              <SessionPanel canCreateSession={canCreateSession()} onNewSession={openNewSession} onSelectSession={openSession} onCollapse={collapseRail} />
-              <Show when={railCollapsed()}>
-                <button ref={railExpand} type="button" class="session-panel__collapse workspace__rail-expand" aria-label="Show sessions sidebar" aria-expanded="false" aria-controls="session-rail" onClick={expandRail}><Icon name="panel-left" /></button>
-              </Show>
-            </aside>
-          </Show>
-
           <main id="remote-main" tabindex="-1" class="workspace__main">
-            <Show when={view() === "/remote/session" && selected() && ownsSessionDevice() && !phoneLayout()}>
+            <Show when={view() === "/remote/session" && selected() && ownsSessionDevice()}>
               <div class="workspace__topbar" data-toast-clearance aria-hidden={selectedLoading() ? "true" : undefined} inert={selectedLoading()}>
-                <PresentationSwitch
-                  value={office.presentation()}
-                  attention={(state().view?.requests.length ?? 0) > 0}
-                  onChange={office.present}
-                />
+                <div class="workspace__heading">
+                  <div class="conversation-breadcrumb" tabindex="-1" aria-label="Selected workspace and session">
+                    <Link to="/remote/sessions" class="conversation-back button button--ghost button--icon" ariaLabel="Back to Sessions" title="Back to Sessions"><Icon name="arrow-left" /></Link>
+                    <div class="conversation-breadcrumb__identity"><span class="conversation-breadcrumb__project" title={activeSession()?.directory}>{sessionProjectLabel(activeSession() ?? {})}</span><h1><strong title={activeSession()?.title}>{activeSession()?.title ?? noSessionTitle}</strong></h1></div>
+                  </div>
+                  <Show when={!phoneLayout()}><PresentationSwitch
+                    value={office.presentation()}
+                    attention={(state().view?.requests.length ?? 0) > 0}
+                    onChange={office.present}
+                  /></Show>
+                </div>
               </div>
             </Show>
             <div class="workspace__scroll" ref={scrollHost} onScroll={() => {
@@ -409,17 +461,18 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
                 fallback={<>
                   <RoutePanel active={!conversationHidden()} preserve class="remote-conversation-view">
                     <Show when={!selectedLoading()} fallback={<LoadingPlaceholder kind="screen" label="Loading session…" />}>
-                      <ConversationView title={activeSession()?.title ?? noSessionTitle} active={!conversationHidden()} position={pendingAnchor()?.sessionID === state().activeSessionID ? pendingAnchor()?.position : undefined} onPositioned={() => setPendingAnchor(undefined)} canCreateSession={canCreateSession()} onNewSession={openNewSession} />
+                      <ConversationView active={!conversationHidden()} position={pendingAnchor()?.sessionID === state().activeSessionID ? pendingAnchor()?.position : undefined} onPositioned={() => setPendingAnchor(undefined)} canCreateSession={canCreateSession()} onNewSession={openNewSession} />
                     </Show>
                   </RoutePanel>
                   <RoutePanel active={view() === "/remote" && firstInventoryLoading()}><LoadingPlaceholder kind="screen" label="Loading sessions…" /></RoutePanel>
-                  <RoutePanel active={view() === "/remote" && showNewSession()} preserve={newSessionVisited()} onInteract={() => setNewSessionVisited(true)}><For each={showNewSession() || newSessionVisited() ? [state().activeDeviceID] : []}>{() => <NewSessionComposer workspaceID={originWorkspaceID()} onCreated={openCreatedSession} />}</For></RoutePanel>
+                  <RoutePanel active={view() === "/remote" && showNewSession()} preserve={newSessionVisited()} onInteract={() => setNewSessionVisited(true)}><For each={showNewSession() || newSessionVisited() ? [state().activeDeviceID] : []}>{() => <NewSessionComposer workspaceID={originWorkspaceID()} onCreated={openCreatedSession} onWorkspaceChange={setNewSessionWorkspaceID} />}</For></RoutePanel>
                   <RoutePanel active={view() === "/remote/session" && routeError() !== undefined}><p class="notice-strip" role="alert">{routeError()}</p></RoutePanel>
                   <RoutePanel active={view() === "/remote/session" && officeShown() && selected()}><OfficePresentation office={office} onSelectSession={openSession} /></RoutePanel>
                   <RoutePanel active={view() === "/remote/sessions"}>
                     <SessionsPage
                       canCreateSession={canCreateSession()}
-                      onNewSession={() => openNewSession("sessions")}
+                      onNewSession={() => openNewSession()}
+                      onNewWorkspaceSession={() => openNewSession("sessions")}
                       onSelectSession={openSession}
                     />
                   </RoutePanel>
@@ -467,6 +520,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
 
         </div>
 
+        <Show when={providerConnect()}>{(connection) => <ProviderConnect target={connection().target} returnFocus={connection().returnFocus} onClose={() => setProviderConnect(undefined)} onConnected={() => { void remote.store.loadCatalog(connection().target, { refresh: true }) }} />}</Show>
         <Show when={(phoneLayout() ? teamOpen() : teamVisible()) && view() === "/remote/session" && state().team !== undefined && selected()}>
           <aside ref={teamLayer} class={`${phoneLayout() ? "team-control__phone" : "team-control__panel"}${teamEntering() ? " team-control--entering" : ""}${!teamOpen() ? " team-control--exiting" : ""}`} aria-label="Team controls" aria-hidden={!teamOpen() || teamClosing() ? "true" : undefined} inert={!teamOpen() || teamClosing()}
             onClick={(event) => { if (phoneLayout() && event.target === teamLayer?.querySelector("dialog.team-view__sheet")) closeTeam() }}>
@@ -493,7 +547,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
           }}>
             <SessionPanel
               canCreateSession={canCreateSession()}
-              onNewSession={openNewSession}
+              onNewSession={() => openNewSession("sidebar")}
               onSelectSession={openSession}
               onNavigate={closeNav}
             />
@@ -526,12 +580,12 @@ function RoutePanel(props: { readonly active: boolean; readonly preserve?: boole
       return
     }
     if (!mounted()) return
-    if (host?.contains(document.activeElement)) document.querySelector<HTMLElement>('.remote-nav__link[aria-current="page"], .bottom-nav__item[aria-current="page"]')?.focus()
+    if (host?.contains(document.activeElement)) [...document.querySelectorAll<HTMLElement>('.remote-nav__link[aria-current="page"], .bottom-nav__item[aria-current="page"]')].find((link) => link.getClientRects().length > 0)?.focus({ preventScroll: true })
     setPhase("exiting")
     exitTimer = setTimeout(() => {
       if (!props.preserve) setMounted(false)
       setPhase("idle")
-    }, 220)
+    }, document.documentElement.dataset.motion === "on" ? 140 : 0)
   })
   onCleanup(() => {
     if (exitTimer !== undefined) clearTimeout(exitTimer)
@@ -620,10 +674,15 @@ const noSessionTitle = "No session selected"
 
 function RemoteHeader(props: {
   readonly navExpanded: boolean
-  readonly navLabel: string
-  readonly navControls?: string
   readonly onOpenNav: (trigger: HTMLButtonElement) => void
   readonly onOpenSession: (sessionID: string) => void
+  readonly palette: {
+    readonly canCreateSession: boolean
+    readonly sessionSelected: boolean
+    readonly managedChild: boolean
+    readonly workspaceID?: string
+    readonly handlers: Omit<PaletteHandlers, "openTeam">
+  }
   readonly team?: {
     readonly count: number | undefined
     readonly activity: string
@@ -637,44 +696,22 @@ function RemoteHeader(props: {
   const remote = useRemote()
   const state = () => remote.state()
   const connection = () => summarizeConnection(state().connection)
-  const attention = useNavigationAttention()
   return (
     <header class="app-header" data-toast-clearance>
       <div class="app-header__inner">
         <button
           type="button"
           class="button button--ghost button--icon app-header__menu"
-          aria-label={props.navLabel}
+          aria-label="Open sessions"
           aria-expanded={props.navExpanded}
-          aria-controls={props.navControls}
           onClick={(event) => props.onOpenNav(event.currentTarget)}
         >
           <Icon name="menu" />
         </button>
-        <Link to="/" class="brand" title="YCoding home">
+        <Link to="/" class={`brand${props.view !== "/remote/session" && state().activeSessionID !== undefined ? " brand--with-resume" : ""}`} title="YCoding home">
           <img class="brand__mark" src="/brand/ycoding-mark.svg" alt="YCoding" width={28} height={28} />
         </Link>
-        <nav class="remote-nav" aria-label="Remote workspace">
-          <Link
-            to="/remote/sessions"
-            class={`remote-nav__link${props.view === "/remote/sessions" ? " remote-nav__link--active" : ""}`}
-            ariaCurrent={props.view === "/remote/sessions" ? "page" : undefined}
-            ariaLabel={attention().sessions ? "Sessions, a session is waiting for your decision" : undefined}
-          >
-            Sessions
-            <AttentionMark show={attention().sessions} />
-          </Link>
-          <Link
-            to="/remote"
-            class={`remote-nav__link${props.view === "/remote" ? " remote-nav__link--active" : ""}`}
-            ariaCurrent={props.view === "/remote" ? "page" : undefined}
-          >
-            Conversation
-          </Link>
-          <Link to="/remote/session" search={() => state().activeSessionID === undefined ? {} : sessionSearch(state().activeSessionID!, state().activeDeviceID)} class={`remote-nav__link${props.view === "/remote/session" ? " remote-nav__link--active" : ""}`} ariaCurrent={props.view === "/remote/session" ? "page" : undefined} ariaLabel={attention().conversation ? "Session, waiting for your decision" : undefined}>Session<AttentionMark show={attention().conversation} /></Link>
-          <Link to="/remote/usage" class={`remote-nav__link${props.view === "/remote/usage" ? " remote-nav__link--active" : ""}`} ariaCurrent={props.view === "/remote/usage" ? "page" : undefined}>Usage</Link>
-          <Link to="/remote/settings" class={`remote-nav__link${props.view === "/remote/settings" ? " remote-nav__link--active" : ""}`} ariaCurrent={props.view === "/remote/settings" ? "page" : undefined}>Settings</Link>
-        </nav>
+        <ResumeSession view={props.view} />
         <div class="remote-device">
           <span class="remote-connection">
             <span class={`status-dot status-dot--${connection().tone}`} aria-hidden="true" />
@@ -682,6 +719,15 @@ function RemoteHeader(props: {
           </span>
         </div>
         <div class="app-header__end">
+          <CommandPalette
+            view={props.view}
+            canCreateSession={props.palette.canCreateSession}
+            sessionSelected={props.palette.sessionSelected}
+            managedChild={props.palette.managedChild}
+            workspaceID={props.palette.workspaceID}
+            hasTeam={props.team !== undefined}
+            handlers={{ ...props.palette.handlers, openTeam: () => props.team?.onOpen() }}
+          />
           <Show when={props.team}>{(team) => (
             <button
               ref={team().ref}
@@ -702,14 +748,6 @@ function RemoteHeader(props: {
           <span class="remote-header__theme">
             <ThemeToggle />
           </span>
-          <Link
-            to="/remote/settings"
-            class="button button--ghost button--icon remote-header__settings"
-            ariaLabel="Settings"
-            title="Settings"
-          >
-            <Icon name="settings" />
-          </Link>
         </div>
       </div>
     </header>
@@ -720,7 +758,7 @@ function useNavigationAttention() {
   const remote = useRemote()
   return () => ({
     conversation: (remote.state().view?.requests.length ?? 0) > 0,
-    sessions: hasWaitingSession(remote.state().sessionStatus),
+    sessions: hasWaitingSession(remote.state().sessionStatus) || (remote.state().view?.requests.length ?? 0) > 0,
   })
 }
 
@@ -744,6 +782,19 @@ function Notices(): JSX.Element {
     mutation.state === "unknown" && mutation.sessionID === state().activeSessionID).length
   return (
     <>
+      <Show when={telemetryConsentNoticeView(state().telemetryConsent, state().transport.kind === "open" && state().connection.kind === "connected")}>
+        <section class="telemetry-consent" aria-labelledby="telemetry-consent-title">
+          <div><h2 id="telemetry-consent-title">Help improve YCoding</h2>
+            <p>Save usage, speed, and latency for each provider, model, and profile on this machine only. Nothing leaves your machine. You can change this anytime in Settings → Diagnostics.</p></div>
+          <div class="telemetry-consent__actions">
+            <button type="button" class="button button--primary button--small" onClick={() => void remote.store.setTelemetryConsent(true)}>Agree</button>
+            <button type="button" class="button button--secondary button--small" onClick={() => void remote.store.setTelemetryConsent(false)}>Not now</button>
+          </div>
+        </section>
+      </Show>
+      <Show when={state().telemetryConsent.error}>
+        {(error) => <p class="notice-strip notice-strip--warning" role="alert">{error()}</p>}
+      </Show>
       <Show when={state().notice}>
         {(notice) => (
           <p class="notice-strip" role="status">
@@ -819,7 +870,6 @@ function SessionPanel(props: {
   readonly onNewSession: () => void
   readonly onSelectSession: (sessionID: string) => void
   readonly onNavigate?: () => void
-  readonly onCollapse?: () => void
 }): JSX.Element {
   const remote = useRemote()
   const state = () => remote.state()
@@ -836,7 +886,10 @@ function SessionPanel(props: {
   let detachFeed = () => {}
   onMount(() => { if (feed) detachFeed = attachSessionFeed(feed, remote.store) })
   onCleanup(() => detachFeed())
-  const deviceName = () => state().devices.find((device) => device.id === state().activeDeviceID)?.name
+  const deviceName = () => {
+    const device = state().devices.find((entry) => entry.id === state().activeDeviceID)
+    return device === undefined ? undefined : remote.deviceName(device)
+  }
   const cached = () => cachedSessionsView(state().connection, state().sessions.length)
   const advertised = () => {
     const total = state().sessions.length
@@ -848,8 +901,7 @@ function SessionPanel(props: {
     <div class="pane" ref={feed}>
       <div class="pane__head pane__head--sessions">
         <p class="pane__title">Sessions</p>
-        <NewSessionButton disabled={!props.canCreateSession} onClick={props.onNewSession} />
-        <Show when={props.onCollapse}><button type="button" class="session-panel__collapse" aria-label="Hide sessions sidebar" aria-expanded="true" aria-controls="session-rail" onClick={props.onCollapse}><Icon name="panel-left" /></button></Show>
+        <NewSessionButton workspace={labels().get(state().selectedWorkspaceID ?? "")} disabled={!props.canCreateSession} onClick={props.onNewSession} />
       </div>
       <Show
         when={
@@ -1114,7 +1166,7 @@ function useDeviceAvailability() {
       accountReadState({ connection: remote.state().connection, owner: remote.state().owner }),
       remote.state().devices.length,
       {
-        devices: remote.state().devices,
+        devices: remote.state().devices.map((device) => ({ ...device, name: remote.deviceName(device) })),
         activeDeviceID: remote.state().activeDeviceID,
         sessionCount: remote.state().sessions.length,
         unreachable: remote.state().connection.kind === "offline",
@@ -1136,7 +1188,6 @@ function NoSessionsState(): JSX.Element {
 }
 
 function ConversationView(props: {
-  readonly title: string
   readonly active: boolean
   readonly position?: TranscriptPosition
   readonly onPositioned: () => void
@@ -1150,7 +1201,6 @@ function ConversationView(props: {
   const messages = () => view()?.messages ?? []
   const childQuestions = () => state().team?.status === "ready" && state().team?.rootID === state().activeSessionID
     ? state().team?.tasks.filter((task) => task.parentID === state().activeSessionID && task.state === "waiting" && task.question !== undefined) ?? [] : []
-  const selectedSession = () => state().selectedSessionInfo ?? state().sessions.find((session) => session.id === state().activeSessionID)
   const devices = useDeviceAvailability()
   // Without a reachable machine the device state is the page's one explanation.
   const blocked = () => state().activeDeviceID === undefined || state().connection.kind === "offline"
@@ -1190,20 +1240,6 @@ function ConversationView(props: {
         </Show>
       }
     >
-      <div class="conversation-breadcrumb" tabindex="-1" aria-label="Selected workspace and session">
-        <span title={selectedSession()?.directory}>{sessionProjectLabel(selectedSession() ?? {})}</span>
-        <span aria-hidden="true">/</span>
-        <strong>{props.title}</strong>
-        <Show when={selectedSession()}>
-          {(session) => (
-            <span class="conversation-breadcrumb__status">
-              <For each={sessionChips(session(), view()).slice(0, 1)}>
-                {(chip) => <Chip label={chip.label} tone={chip.tone} />}
-              </For>
-            </span>
-          )}
-        </Show>
-      </div>
       <div class="pane conversation-pane">
         <Show
           when={messages().length > 0}
@@ -1364,6 +1400,7 @@ function SessionsTopAnchor(props: { readonly slot: HTMLElement; readonly scroll:
 function SessionsPage(props: {
   readonly canCreateSession: boolean
   readonly onNewSession: () => void
+  readonly onNewWorkspaceSession: () => void
   readonly onSelectSession: (sessionID: string) => void
 }): JSX.Element {
   const remote = useRemote()
@@ -1379,15 +1416,12 @@ function SessionsPage(props: {
   }
   return (
     <div class="sessions-page" ref={feed}>
-      <h1 class="visually-hidden">Sessions</h1>
+      <div class="page-head"><div><h1 class="page-head__title">Sessions</h1><p class="page-head__support">Pick up where you left off.</p></div><NewSessionButton labeled disabled={!props.canCreateSession} onClick={props.onNewSession} /></div>
       <RunningSessions sessions={remote.state().carouselSessions ?? []} loading={remote.state().carouselStatus === "loading"} onSelectSession={props.onSelectSession} />
       <Show
         when={remote.state().sessionGroups.length > 0 || remote.state().sessionListStatus === "loading"}
         fallback={
           <div class="pane sessions-page__empty">
-            <div class="sessions-page__toolbar">
-              <NewSessionButton disabled={!props.canCreateSession} onClick={props.onNewSession} />
-            </div>
             <Show when={remote.state().activeDeviceID !== undefined} fallback={<DeviceEmptyState />}>
               <NoSessionsState />
             </Show>
@@ -1395,14 +1429,13 @@ function SessionsPage(props: {
         }
       >
         <div class="sessions-page__layout">
-          <WorkspaceNav />
           <section class="pane sessions-page__content" aria-labelledby="sessions-page-title">
             <div class="sessions-page__toolbar">
               <div class="sessions-page__heading">
                 <h2 id="sessions-page-title" class="sessions-page__title">{workspaceTitle()}</h2>
                 <span class="chip sessions-page__count">{advertisedCount(sessions().length)} loaded</span>
               </div>
-              <NewSessionButton disabled={!props.canCreateSession} onClick={props.onNewSession} />
+              <NewSessionButton workspace={remote.state().selectedWorkspaceID === undefined ? undefined : workspaceTitle()} disabled={!props.canCreateSession} onClick={props.onNewWorkspaceSession} />
             </div>
             <div class="sessions-page__workspace-select">
               <WorkspaceSelector />
@@ -1507,7 +1540,7 @@ function WorkspaceNav(): JSX.Element {
   const pacedCue = createThrottler(updateCue, { wait: 50 })
   onMount(() => {
     if (!nav) return
-    scrollport = nav.closest(".workspace__scroll")
+    scrollport = nav.closest(".workspace__rail-body")
     const observer = new ResizeObserver(pacedCue.maybeExecute)
     observer.observe(nav)
     const list = nav.querySelector(".workspace-nav__list")
@@ -1550,7 +1583,7 @@ function WorkspaceNav(): JSX.Element {
 }
 
 function attachSessionFeed(element: HTMLDivElement, store: ReturnType<typeof useRemote>["store"]) {
-  const root = element.closest<HTMLElement>(".workspace__scroll, .workspace__rail") ??
+  const root = element.closest<HTMLElement>(".workspace__scroll, .workspace__rail-body") ??
     (document.scrollingElement instanceof HTMLElement ? document.scrollingElement : undefined)
   if (!root) return () => {}
   let direction = 0
@@ -1638,28 +1671,44 @@ function SettingsPage(props: { readonly office: OfficeSettingsStore; readonly ph
   )
 }
 
-function BottomNav(props: { readonly view: RemoteView }): JSX.Element {
+const primaryDestinations: readonly { readonly view: RemoteView; readonly label: string; readonly icon: IconName }[] = [
+  { view: "/remote/sessions", label: "Sessions", icon: "sessions" },
+  { view: "/remote/usage", label: "Usage", icon: "usage" },
+  { view: "/remote/settings", label: "Settings", icon: "settings" },
+]
+
+function PrimaryNav(props: { readonly view: RemoteView }): JSX.Element {
+  const attention = useNavigationAttention()
+  return <nav class="remote-nav" aria-label="Remote workspace"><For each={primaryDestinations}>{(item) => <Link
+    to={item.view} class={`remote-nav__link${workspaceDestination(props.view) === item.view ? " remote-nav__link--active" : ""}`}
+    ariaCurrent={workspaceDestination(props.view) === item.view ? "page" : undefined}
+    ariaLabel={item.view === "/remote/sessions" && attention().sessions ? "Sessions, waiting for your decision" : item.label} title={item.label}>
+    <Icon name={item.icon} /><span class="remote-nav__label">{item.label}</span><AttentionMark show={item.view === "/remote/sessions" && attention().sessions} />
+  </Link>}</For></nav>
+}
+
+function ResumeSession(props: { readonly view: RemoteView }): JSX.Element {
   const remote = useRemote()
   const attention = useNavigationAttention()
-  const items: readonly { readonly view: RemoteView; readonly label: string; readonly icon: IconName }[] = [
-    { view: "/remote/sessions", label: "Sessions", icon: "sessions" },
-    { view: "/remote", label: "Conversation", icon: "chat" },
-    { view: "/remote/session", label: "Session", icon: "terminal" },
-    { view: "/remote/usage", label: "Usage", icon: "usage" },
-    { view: "/remote/settings", label: "Settings", icon: "settings" },
-  ]
-  const flagged = (view: RemoteView) =>
-    (view === "/remote/session" && attention().conversation) || (view === "/remote/sessions" && attention().sessions)
+  return <Show when={props.view !== "/remote/session" ? remote.state().activeSessionID : undefined}>{(sessionID) => <Link
+    to="/remote/session" search={() => sessionSearch(sessionID(), remote.state().activeDeviceID)} class="workspace-resume button button--ghost"
+    ariaLabel={attention().conversation ? "Resume session, waiting for your decision" : "Resume session"} title={remote.state().selectedSessionInfo?.title ?? "Resume session"}>
+    <Icon name="arrow-left" /><span>Resume session</span><AttentionMark show={attention().conversation} />
+  </Link>}</Show>
+}
+
+function BottomNav(props: { readonly view: RemoteView }): JSX.Element {
+  const attention = useNavigationAttention()
+  const flagged = (view: RemoteView) => view === "/remote/sessions" && attention().sessions
   return (
     <nav class="bottom-nav" aria-label="Workspace">
-      <For each={items}>
+      <For each={primaryDestinations}>
         {(item) => (
           <Link
             to={item.view}
-            search={() => item.view === "/remote/session" && remote.state().activeSessionID !== undefined ? sessionSearch(remote.state().activeSessionID!, remote.state().activeDeviceID) : {}}
-            class={`bottom-nav__item${props.view === item.view ? " bottom-nav__item--active" : ""}`}
+            class={`bottom-nav__item${workspaceDestination(props.view) === item.view ? " bottom-nav__item--active" : ""}`}
             ariaLabel={flagged(item.view) ? `${item.label}, waiting for your decision` : item.label}
-            ariaCurrent={props.view === item.view ? "page" : undefined}
+            ariaCurrent={workspaceDestination(props.view) === item.view ? "page" : undefined}
           >
             <span class="bottom-nav__icon">
               <Icon name={item.icon} size={20} />

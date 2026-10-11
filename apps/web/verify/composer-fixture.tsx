@@ -37,7 +37,7 @@ const catalog: CatalogView = {
   commands: [{ name: "plan", description: "Plan work" }],
   skills: [{ id: "frontend-workflow", name: "Frontend workflow", slash: true }, { id: "gpt-subgent-routing", name: "GPT subagent routing", slash: false }, { id: "audit", name: "Audit", slash: false }, ...Array.from({ length: 63 }, (_, index) => ({ id: `skill-${String(index).padStart(2, "0")}`, name: `Skill ${index}`, slash: false }))],
   references: [{ name: "design-system", uri: "file:///workspace/design-system" }],
-  resources: [{ name: "Runbook", uri: "mcp://docs/runbook" }],
+  resources: [{ name: "Runbook", description: "Operational reference", uri: "mcp://docs/runbook" }],
 }
 const requests: { operation: string; input: unknown }[] = []
 let resolveCompact: ((accepted: boolean) => void) | undefined
@@ -54,8 +54,19 @@ const seed: RemoteStoreState = {
   teamCues: [], notifications: [], noticeSync: { status: "ready", total: 0, loaded: 0, hidden: 0, loadingMore: false, message: undefined }, unhandledEvents: 0,
 }
 base.container.setState(() => seed)
+Object.assign(window, { composerPrediction: (text = "Run the focused tests", sourceMessageID?: string) => base.container.setState(state => ({
+  ...state, view: { ...state.view!, status: "idle", messages: [{ kind: "assistant", id: `msg_${text}`, created: 1, completed: 2, parts: [{ kind: "text", ordinal: 0, text: "The build is fixed." }] }],
+    prediction: { sessionID: "ses_fixture", sourceMessageID: sourceMessageID ?? `msg_${text}`, text } },
+})) })
 const state = () => base.container.state
 const update = (next: RemoteStoreState) => base.container.setState(() => next)
+Object.assign(window, {
+  composerPredictionReply: (sourceMessageID: string) => update({ ...state(), view: { ...state().view!, status: "idle", prediction: undefined, messages: [{ kind: "assistant", id: sourceMessageID, created: 1, completed: 2, parts: [{ kind: "text", ordinal: 0, text: "The build is fixed." }] }] } }),
+  composerPredictionEvent: (text: string, sourceMessageID: string) => update({ ...state(), view: applySessionEvent(state().view!, { type: "session.prediction.updated", data: { sessionID: state().view!.id, sourceMessageID, text } }, 3) }),
+  composerPredictionTransport: (open: boolean) => update({ ...state(), transport: open ? { kind: "open" } : { kind: "closed", code: 1000, reason: "Fixture disconnected", retryable: false } }),
+  composerPredictionConnection: (deviceID = state().activeDeviceID) => update({ ...state(), activeDeviceID: deviceID, generation: state().generation + 1, view: { ...state().view!, prediction: undefined } }),
+  composerPredictionSession: (sessionID: string) => update({ ...state(), activeSessionID: sessionID, selectedSessionInfo: { ...state().selectedSessionInfo!, id: sessionID }, view: { ...createSessionView(sessionID), autonomy: { mode: "normal", yolo: 0 } } }),
+})
 let workspaceGate: Promise<void> | undefined
 let releaseWorkspaces: (() => void) | undefined
 const link: RemoteLink = {
@@ -76,6 +87,7 @@ const store: RemoteStore = {
       return { status: "ok", files: [{ path: "slow.txt", uri: "file:///workspace/ycoding/slow.txt", kind: "file" as const }] }
     }
     if (query === "fail") return { status: "failed", message: "File search is unavailable" }
+    if (query === "agent.ts") return { status: "ok", files: ["packages/core/src/config/plugin/agent.ts", "packages/core/src/plugin/agent.ts", "packages/core/src/project-artifact/adapter/agent.ts"].map((path) => ({ path, uri: `file:///workspace/ycoding/${path}`, kind: "file" as const })) }
     return { status: "ok", files: [{ path: "apps/web/src/remote/ui/composer.tsx", uri: "file:///workspace/ycoding/apps/web/src/remote/ui/composer.tsx", kind: "file" as const }].filter((item) => item.path.includes(query)) }
   },
   setDraft: (sessionID: string, text: string) => update({ ...state(), drafts: { ...state().drafts, [sessionID]: text } }),
@@ -144,10 +156,12 @@ function Fixture() {
   const current = useStore(base.container)
   const [created, setCreated] = createSignal("")
   const [running, setRunning] = createSignal(false)
+  const [predictionEnabled, setPredictionEnabled] = createSignal(true)
+  Object.assign(window, { composerPredictionEnabled: setPredictionEnabled })
   return <RemoteProvider createStore={() => store}>
     <main class="composer-fixture" style={{ "max-width": "900px", margin: "auto", padding: "16px" }}>
       <button type="button" onClick={() => setRunning(!running())}>Toggle running</button>
-      <Composer sessionID={current().activeSessionID} running={running()} canSend />
+      <Composer sessionID={current().activeSessionID} running={running()} canSend={predictionEnabled()} />
       <ToastLayer sessionID="ses_fixture" onOpenSession={() => {}} />
       <div class="transcript" aria-label="Fixture transcript"><For each={current().view?.messages ?? []}>{(message) => <MessageRow message={() => message} />}</For></div>
       <NewSessionComposer onCreated={setCreated} />

@@ -1,4 +1,4 @@
-import { type AgentAttachmentInput, type CatalogTarget, type CatalogView, type FileAttachmentInput, type FileOption, type ModelOption } from "../catalog"
+import { catalogKey, type AgentAttachmentInput, type CatalogTarget, type CatalogView, type FileAttachmentInput, type FileOption, type ModelOption } from "../catalog"
 import type { ModelRefView } from "../projection"
 
 export type Trigger = "/" | "@" | "$" | "#"
@@ -9,41 +9,66 @@ export type MentionPart =
 export type ComposerOption = { readonly label: string; readonly description?: string; readonly kind: "command" | "file" | "agent" | "skill"; readonly value: string; readonly uri?: string }
 const unsupportedSlashActions = new Set(["cd", "editor", "skills", "btw", "btw-send", "daybreak", "move"])
 
-export function orderedVariants(variants: readonly string[]): string[] {
+export function effortLabel(variant: string, model?: ModelOption): string {
+  const labels: Record<string, string> = { none: "None", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra High", "extra high": "Extra High", max: "Max", default: "Default" }
+  const prefix = model?.providerID === "cursor" ? [model.name, model.id,
+    model.name.replace(/(?:\s+(?:Fast|Ultrafast|\d+(?:\.\d+)?[km]))+$/i, ""),
+    model.id.replace(/(?:-(?:fast|ultrafast|\d+(?:\.\d+)?[km]))+$/i, ""),
+  ].find((prefix) => variant.toLowerCase().startsWith(`${prefix.toLowerCase()} `)) : undefined
+  const clean = prefix === undefined ? variant : variant.slice(prefix.length + 1).replace(/\s+(?:Fast|Ultrafast)[\u200b-\u200d\ufeff]*$/i, "")
+  return Object.hasOwn(labels, clean.toLowerCase()) ? labels[clean.toLowerCase()]! : variant
+}
+
+export function orderedVariants(variants: readonly string[], model?: ModelOption): string[] {
   const intensity = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
   return [...variants].sort((a, b) => {
-    const left = intensity.indexOf(a.toLowerCase())
-    const right = intensity.indexOf(b.toLowerCase())
+    const left = intensity.indexOf(effortLevel(a, model))
+    const right = intensity.indexOf(effortLevel(b, model))
     return (left < 0 ? intensity.length : left) - (right < 0 ? intensity.length : right)
   })
 }
 
 export function sameModel(left: ModelRefView | undefined, right: ModelRefView | undefined): boolean {
-  return left !== undefined && right !== undefined && left.providerID === right.providerID && left.id === right.id && left.variant === right.variant
+  return left !== undefined && right !== undefined && left.providerID === right.providerID && left.id === right.id && left.variant === right.variant && left.profile === right.profile
+}
+
+export function variantsForModel(model: ModelOption | undefined, profile: string | undefined) {
+  if (model === undefined) return []
+  if (profile === undefined) return model.variants
+  return model.profiles?.find((item) => item.name === profile)?.variants ?? []
+}
+
+export function modelSelectionKey(target: CatalogTarget | undefined, deviceID: string | undefined, generation: number) {
+  return target === undefined ? undefined : JSON.stringify([catalogKey(target), deviceID ?? null, generation])
 }
 
 export function modelSelection(models: readonly ModelOption[], selected: ModelRefView | undefined): { readonly model?: ModelRefView; readonly warning?: string; readonly blocked?: boolean } {
   if (!selected) return {}
   const option = models.find((item) => item.providerID === selected.providerID && item.id === selected.id)
   if (!option) return { model: selected, blocked: true, warning: `Model ${selected.id} is not offered by this machine. Choose another model before sending.` }
-  if (selected.variant !== undefined && !option.variants.includes(selected.variant)) return { model: selected, blocked: true,
-    warning: `Saved effort ${selected.variant} is not offered for ${option.name}. Clear the reasoning effort override, or select this model again and choose an offered effort before sending.` }
+  const profile = selected.profile === undefined ? undefined : option.profiles?.find((item) => item.name === selected.profile)
+  if (selected.profile !== undefined && profile === undefined) return { model: selected, blocked: true,
+    warning: `Profile ${selected.profile} is not offered for ${option.name}. Choose an available profile or use the provider default before sending.` }
+  if (selected.profile === undefined && option.enabled === false) return { model: selected, blocked: true,
+    warning: `${option.name} requires a named profile. Choose an available profile before sending.` }
+  if (selected.variant !== undefined && !variantsForModel(option, selected.profile).includes(selected.variant)) return { model: selected, blocked: true,
+    warning: `Saved effort ${selected.variant} is not offered${selected.profile === undefined ? ` for ${option.name}` : ` by profile ${selected.profile} for ${option.name}`}. Clear the reasoning effort override, or select this model again and choose an offered effort before sending.` }
   return { model: selected }
 }
 
 export function visibleModels(models: readonly ModelOption[]): ModelOption[] {
-  return models.filter((item) => !item.id.endsWith("-fast") || !models.some((base) => base.providerID === item.providerID && base.id === item.id.slice(0, -5)))
+  return models.filter((item) => modelSpeeds(models, item)?.base.id === item.id)
 }
 
-export function orderedModelOptions(models: readonly ModelOption[], recent: readonly ModelRefView[], selected: ModelRefView | undefined) {
+export function orderedModelOptions(models: readonly ModelOption[], recent: readonly ModelRefView[], selected: ModelRefView | undefined): (ModelOption & { readonly recentSelection?: ModelRefView })[] {
   const available = visibleModels(models)
   const seenRecent = new Set<string>()
   const recentOptions = recent.flatMap((model) => {
     const option = available.find((item) => item.providerID === model.providerID && item.id === model.id)
-    const key = option ? JSON.stringify([option.providerID, option.id]) : ""
+    const key = option ? JSON.stringify([option.providerID, option.id, model.profile]) : ""
     if (!option || seenRecent.has(key)) return []
     seenRecent.add(key)
-    return [option]
+    return [{ ...option, recentSelection: model }]
   })
   const recentKeys = new Set(recentOptions.map((item) => JSON.stringify([item.providerID, item.id])))
   const remaining = available.filter((item) => !recentKeys.has(JSON.stringify([item.providerID, item.id])))
@@ -55,24 +80,36 @@ export function orderedModelOptions(models: readonly ModelOption[], recent: read
   return [...recentOptions, ...providers.flatMap((provider) => remaining.filter((item) => item.providerID === provider))]
 }
 
-export function pairedFastModel(models: readonly ModelOption[], selected: ModelRefView | undefined) {
+export type ModelSpeed = "standard" | "fast" | "ultrafast"
+
+export function modelSpeeds(models: readonly ModelOption[], selected: ModelRefView | undefined) {
   const current = models.find((item) => item.providerID === selected?.providerID && item.id === selected.id)
   if (!current) return undefined
-  const base = current.id.endsWith("-fast") ? models.find((item) => item.providerID === current.providerID && item.id === current.id.slice(0, -5)) : current
-  const fast = base && models.find((item) => item.providerID === base.providerID && item.id === `${base.id}-fast`)
-  return base && fast ? { base, fast, active: current.id === fast.id } : undefined
+  const id = current.id.replace(/-(?:ultrafast|fast)$/, "")
+  const options = (["standard", "fast", "ultrafast"] as const).flatMap((speed) => {
+    const model = models.find((item) => item.providerID === current.providerID && item.id === `${id}${speed === "standard" ? "" : `-${speed}`}`)
+    return model ? [{ speed, label: speed === "standard" ? "Standard" : speed === "fast" ? "Fast" : "Ultrafast", model,
+      available: !modelSelection([model], { providerID: model.providerID, id: model.id, ...(selected?.profile === undefined ? {} : { profile: selected.profile }) }).blocked }] : []
+  })
+  return { base: options[0]!.model, active: options.find((item) => item.model.id === current.id)!.speed, options }
 }
 
-export function switchFastModel(models: readonly ModelOption[], selected: ModelRefView | undefined): ModelRefView | undefined {
-  const pair = pairedFastModel(models, selected)
-  if (!pair) return undefined
-  const target = pair.active ? pair.base : pair.fast
-  const variant = selected?.variant && target.variants.includes(selected.variant) ? selected.variant : undefined
-  return modelSelection([target], { providerID: target.providerID, id: target.id, ...(variant ? { variant } : {}) }).model
+export function switchModelSpeed(models: readonly ModelOption[], selected: ModelRefView | undefined, speed: ModelSpeed): ModelRefView | undefined {
+  const option = modelSpeeds(models, selected)?.options.find((item) => item.speed === speed && item.available)
+  if (!option) return undefined
+  const target = option.model
+  const profile = selected?.providerID === target.providerID ? selected.profile : undefined
+  const variant = selected?.variant && variantsForModel(target, profile).includes(selected.variant) ? selected.variant : undefined
+  return { providerID: target.providerID, id: target.id, ...(variant ? { variant } : {}), ...(profile ? { profile } : {}) }
 }
 
-export function effortLevel(variant: string | undefined) {
-  const level = variant?.toLowerCase()
+export function profileForModel(models: readonly ModelOption[], current: ModelRefView | undefined, target: ModelOption) {
+  return current?.providerID === target.providerID ? current.profile : undefined
+}
+
+export function effortLevel(variant: string | undefined, model?: ModelOption) {
+  const label = variant === undefined ? undefined : effortLabel(variant, model).toLowerCase()
+  const level = label === "extra high" ? "xhigh" : label
   return level === "none" || level === "minimal" || level === "low" || level === "medium" || level === "high" || level === "xhigh" || level === "max" ? level : "fallback"
 }
 
@@ -95,8 +132,14 @@ export function suggestionTrigger(text: string, cursor: number, dismissed: strin
   return match && tokenKey(match) !== dismissed ? match : undefined
 }
 
-export function autocompleteBound(availableAbove: number, viewportHeight: number): number {
-  return Math.floor(Math.max(54, Math.min(360, viewportHeight * 0.4, availableAbove - 8)))
+export function autocompleteBound(availableAbove: number, viewportHeight: number, phone = false): number {
+  const share = phone ? viewportHeight * 0.75 : Math.min(360, viewportHeight * 0.4)
+  return Math.floor(Math.max(54, Math.min(share, availableAbove - 8)))
+}
+
+export function sheetFrame(viewport: { readonly offsetTop: number; readonly height: number } | undefined): { readonly top: number; readonly height: number } | undefined {
+  if (!viewport || !(viewport.height > 0)) return undefined
+  return { top: Math.max(0, Math.round(viewport.offsetTop)), height: Math.round(viewport.height) }
 }
 
 function fuzzy(value: string, query: string): number {
@@ -166,7 +209,7 @@ export function reconcileMentions(before: string, after: string, parts: readonly
   })
 }
 
-export function submission(text: string, parts: readonly MentionPart[], catalog: CatalogView | undefined, delivery: "steer" | "queue", agent?: string, model?: ModelRefView) {
+export function submission(text: string, parts: readonly MentionPart[], catalog: CatalogView | undefined, delivery: "steer" | "queue", agent?: string, model?: ModelRefView, forceModelSwitch = false) {
   const trimmed = text.trim()
   const command = trimmed.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/)
   if (command?.[1] === "compact") return command[2]?.trim()
@@ -186,7 +229,7 @@ export function submission(text: string, parts: readonly MentionPart[], catalog:
     .map((part) => ({ uri: part.uri, name: part.name, description: part.description, mention: part.mention }))
   const agents: AgentAttachmentInput[] = parts.filter((part): part is Extract<MentionPart, { kind: "agent" }> => part.kind === "agent")
     .map((part) => ({ name: part.name, mention: part.mention }))
-  const base = { delivery, ...(files.length ? { files } : {}), ...(agents.length ? { agents } : {}), ...(agent ? { agent } : {}), ...(model ? { model } : {}) }
+  const base = { delivery, ...(files.length ? { files } : {}), ...(agents.length ? { agents } : {}), ...(agent ? { agent } : {}), ...(model ? { model } : {}), ...(forceModelSwitch ? { forceModelSwitch: true } : {}) }
   if (command && catalog?.commands.some((item) => item.name === command[1])) return { kind: "command" as const, input: { command: command[1]!, ...(command[2] ? { arguments: command[2] } : {}), ...base } }
   if (command && catalog?.skills.some((skill) => skill.id === command[1] && skill.slash)) return { kind: "skill" as const, input: { skill: command[1]! } }
   const skills = [...new Set([...parts.filter((part): part is Extract<MentionPart, { kind: "skill" }> => part.kind === "skill").map((part) => part.id), ...(catalog?.skills ?? []).filter((skill) => new RegExp(`(^|\\s)\\$${skill.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=[\\s.,!?;:)\\]'"\x60]|$)`).test(trimmed)).map((skill) => skill.id)])]

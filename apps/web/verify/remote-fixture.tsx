@@ -24,6 +24,7 @@ import type {
 } from "../src/remote/transport"
 import { RemoteLimits, isRemoteLatencySample, noticePageValue, noticeSequence, type RemoteCapturedChangesPage, type RemoteDeviceInfo, type RemoteLatencySample, type RemoteNotice, type RemoteNoticeOperation, type RemoteOperation } from "@ycoding-ai/remote"
 import { remoteScenario } from "./remote-scenarios"
+import { createProviderAuthFixture } from "./provider-auth-fixture"
 import "../src/styles/tokens.css"
 import "../src/styles/base.css"
 import "../src/styles/site.css"
@@ -46,6 +47,7 @@ let devices: readonly RemoteDeviceInfo[] = [
 ]
 
 const accountParams = new URLSearchParams(window.location.search)
+let telemetryConsentEnabled = accountParams.get("telemetryConsent") !== "undecided"
 const requestLatencyMs = Number(accountParams.get("latency") ?? 0)
 const requestLog: { readonly at: number; readonly operation: string; readonly input?: unknown }[] = []
 Object.assign(window, { requestLog })
@@ -144,6 +146,9 @@ const defaultSessions = [
   { id: sessionID, title: "Stream remote output safely", projectID: "prj_remote", location: { directory: "/workspace/ycoding" }, agent: "god", model, time: { created: ago(42), updated: ago(1) }, running: true },
   { id: "ses_archived", title: "Archived: release notes", time: { created: ago(300), updated: ago(280), archived: ago(280) } },
   { id: "ses_child", title: "Child: fix flaky suite", parentID: sessionID, time: { created: ago(30), updated: ago(4) } },
+  ...(accountParams.get("team") === "office-large-family" ? Array.from({ length: 5 }, (_, index) => ({
+    id: `ses_office_child_${index + 2}`, title: `Office child ${index + 2}`, parentID: sessionID, time: { created: ago(25 - index), updated: ago(3) },
+  })) : []),
   ...(accountParams.get("team") === "two" ? [{ id: "ses_second", title: "Child: inspect source", parentID: sessionID, time: { created: ago(20), updated: ago(2) } }] : []),
   ...(accountParams.get("team") === "two" ? [{ id: "ses_btw", title: "Side question", parentID: sessionID, agent: "btw", time: { created: ago(19), updated: ago(2) } }] : []),
 ]
@@ -551,6 +556,8 @@ type Fixture = {
 }
 
 function createFixtureStore(): Fixture {
+  const providerAuth = createProviderAuthFixture()
+  Object.assign(window, { providerAuthFixture: providerAuth })
   let handlers: RemoteTransportHandlers | undefined
   let open = true
   let streamed = false
@@ -655,6 +662,7 @@ function createFixtureStore(): Fixture {
     input?: Readonly<Record<string, unknown>>,
     targetSessionID = sessionID,
   ): RemoteRequestOutcome | Promise<RemoteRequestOutcome> => {
+    if (operation.startsWith("provider.auth.")) return providerAuth.request(operation, input)
     if (inventoryHeld && (operation === "session.list" || operation === "workspace.list" && input?.sessionsOnly === true))
       return new Promise<void>((resolve) => inventoryWaiters.push(resolve)).then(() => outcome(operation, input, targetSessionID))
     if (operation === "notice.subscribe" || operation === "notice.list") {
@@ -682,6 +690,11 @@ function createFixtureStore(): Fixture {
       const limit = typeof input?.limit === "number" ? input.limit : 60
       const next = offset + limit < storedLatency.length ? btoa(String(offset + limit)) : undefined
       return { status: "ok", value: { data: storedLatency.slice(offset, offset + limit), cursor: next === undefined ? {} : { next } } }
+    }
+    if (operation === "machine.telemetry.consent.get") return { status: "ok", value: { data: { noticeVersion: 1, ...(accountParams.get("telemetryConsent") === "undecided" && !telemetryConsentEnabled && operationCounts.get(operation) === 1 ? {} : { consent: { enabled: telemetryConsentEnabled, noticeVersion: 1, decidedAt: 1 } }) } } }
+    if (operation === "machine.telemetry.consent.set") {
+      telemetryConsentEnabled = input?.enabled === true
+      return { status: "ok", value: { data: { enabled: telemetryConsentEnabled, noticeVersion: 1, decidedAt: 1 } } }
     }
     if (operation === "machine.latency.append") {
       const samples = Array.isArray(input?.samples) ? input.samples.filter(isRemoteLatencySample) : []
@@ -799,6 +812,11 @@ function createFixtureStore(): Fixture {
         time: { created: ago(30), updated: ago(teamReported ? 0 : 4) },
       }, ...(accountParams.get("team") === "two" ? [{ sessionID: "ses_second", parentID: sessionID, description: "Inspect source", agent: "researcher", model, background: true,
         state: "running", revision: 1, time: { created: ago(20), updated: ago(2) } }] : [])] : []
+      const officeTasks = accountParams.get("team") === "office-large-family" ? Array.from({ length: 5 }, (_, index) => ({
+        sessionID: `ses_office_child_${index + 2}`, parentID: sessionID, description: `Inspect Office area ${index + 2}`, agent: "researcher", model, background: true,
+        state: "running", revision: 1, time: { created: ago(25 - index), updated: ago(3) },
+      })) : []
+      tasks.push(...officeTasks)
       return { status: "ok", value: { data: tasks, summary: { total: tasks.length }, cursor: {} } }
     }
     if (operation === "session.team.economics") return { status: "ok", value: { data: Array.isArray(input?.sessionIDs) ? input.sessionIDs.map((id) => ({ sessionID: id, cost: 0.25, tokens: { input: 10, output: 5, reasoning: 2, cache: { read: 3, write: 0 } }, cacheHitRatio: 0.75, contextTotal: 800, contextLimit: 2_000, cacheRead: 3, cacheWrite: 0 })) : [] } }
@@ -834,8 +852,8 @@ function createFixtureStore(): Fixture {
     }
     if (operation === "session.family.activity" && accountParams.get("familyActivity") === "unsupported") return { status: "failed", error: { code: "unknown_operation", message: "Update YCoding" } }
     if (operation === "session.family.activity") return { status: "ok", value: { data: [
-      { sessionID, executing: accountParams.get("team") !== "two", ...(accountParams.get("team") === "two" ? {} : { activity: { kind: "tool", room: "developer", text: "Editing store.ts" } }) },
-      ...(Array.isArray(input?.sessionIDs) ? input.sessionIDs.filter((id): id is string => typeof id === "string") : []).map((id) => ({ sessionID: id, executing: true, activity: id === "ses_second"
+      { sessionID, executing: accountParams.get("team") !== "two" && !accountParams.has("gathering"), ...(accountParams.get("team") === "two" || accountParams.has("gathering") ? {} : { activity: { kind: "tool", room: "developer", text: "Editing store.ts" } }) },
+      ...(Array.isArray(input?.sessionIDs) ? input.sessionIDs.filter((id): id is string => typeof id === "string") : []).map((id) => ({ sessionID: id, executing: !accountParams.has("gathering"), activity: id === "ses_second"
         ? { kind: "tool", room: "research", text: "Reading projection.ts" }
         : { kind: "tool", room: "qa", text: "Running bun test" } })),
     ] } }
@@ -939,7 +957,7 @@ function createFixtureStore(): Fixture {
     request: async (operation, request) => {
       if (!open) return { status: "unavailable", reason: "not-connected" }
       if (requestLatencyMs > 0) await new Promise((resolve) => setTimeout(resolve, requestLatencyMs))
-      requestLog.push({ at: Math.round(performance.now()), operation, ...(request?.input === undefined ? {} : { input: request.input }) })
+      requestLog.push({ at: Math.round(performance.now()), operation, ...(request?.input === undefined ? {} : { input: operation.startsWith("provider.auth.") ? Object.fromEntries(Object.entries(request.input).filter(([key]) => key !== "key" && key !== "code" && key !== "inputs")) : request.input }) })
       return outcome(operation, request?.input, request?.sessionID)
     },
   }
@@ -1122,6 +1140,7 @@ function createFixtureStore(): Fixture {
 const fixture = createFixtureStore()
 Object.assign(window, { transcriptDelta: fixture.transcriptDelta, transcriptRefresh: fixture.transcriptRefresh, responseSnapshot: fixture.responseSnapshot, responseStatus: () => fixture.store.state().view?.status })
 Object.assign(window, { remoteReadingTail: fixture.readingTail })
+Object.assign(window, { providerAuthState: () => fixture.store.state() })
 Object.assign(window, { remoteReloadMessages: fixture.store.reloadMessages })
 Object.assign(window, { remoteInventoryReport: () => ({ requests: fixture.inventoryRequests(), rows: fixture.store.state().sessions.length,
   groups: fixture.store.state().sessionGroups.length, next: fixture.store.state().sessionHasNext,

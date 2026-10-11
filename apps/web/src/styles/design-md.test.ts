@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { SCHEMES, SCHEME_IDS, schemeTokens } from "../theme/schemes"
 import { declarationsWhere, parseStylesheet } from "./css-rules"
 
 const GROUP_TO_PROPERTY = {
@@ -58,6 +59,51 @@ function drift(document: string, css: string): string[] {
       .map((name) => `${selector} ${name}: CSS=${actual[name] ?? "missing"}, DESIGN=${expected[name] ?? "missing"}`)
   })
 }
+
+const SCHEME_MODES = ["light", "dark"] as const
+
+function schemeDrift(document: string): string[] {
+  const frontMatter = document.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1]
+  const parsed: unknown = frontMatter === undefined ? undefined : Bun.YAML.parse(frontMatter)
+  const themes = isMapping(parsed) && isMapping(parsed.themes) ? parsed.themes : {}
+  const expected = Object.fromEntries(
+    SCHEME_IDS.flatMap((scheme) =>
+      SCHEME_MODES.flatMap((mode) => {
+        const palette = SCHEMES[scheme].palettes[mode]
+        return palette ? [[`${scheme}-${mode}`, schemeTokens(palette, mode)] as const] : []
+      }),
+    ),
+  )
+  const documented = Object.keys(themes).filter((name) => name !== "dark")
+  return [...new Set([...documented, ...Object.keys(expected)])].sort().flatMap((name) => {
+    const theme = themes[name]
+    const colors = isMapping(theme) && isMapping(theme.colors) ? theme.colors : undefined
+    const actual = Object.fromEntries(Object.entries(colors ?? {}).map(([token, value]) => [`--yc-${token}`, String(value)]))
+    const tokens = expected[name]
+    if (!tokens || !colors) return [`${name}: ${tokens ? "undocumented" : "stale"} scheme`]
+    return [...new Set([...Object.keys(actual), ...Object.keys(tokens)])].sort()
+      .filter((property) => actual[property] !== tokens[property])
+      .map((property) => `${name} ${property}: DESIGN=${actual[property] ?? "missing"}, scheme=${tokens[property] ?? "missing"}`)
+  })
+}
+
+describe("DESIGN.md scheme drift", () => {
+  test("documents every scheme palette's mapped tokens and no other scheme", async () => {
+    expect(schemeDrift(await Bun.file(new URL("../../DESIGN.md", import.meta.url)).text())).toEqual([])
+  })
+
+  test("detects changed, dropped, undocumented, and stale scheme tokens on scratch copies", async () => {
+    const document = await Bun.file(new URL("../../DESIGN.md", import.meta.url)).text()
+    const changed = document.replace('green: "#50a14f"', 'green: "#000000"')
+    expect(schemeDrift(changed).some((issue) => issue.startsWith("onedark-light --yc-green:"))).toBe(true)
+    const start = document.indexOf("\n  onedark-light:\n")
+    const dropped = document.slice(0, start) + document.slice(start).replace(/^ {6}border-strong: .*\n/m, "")
+    expect(schemeDrift(dropped).some((issue) => issue.startsWith("onedark-light --yc-border-strong: DESIGN=missing"))).toBe(true)
+    const stale = document.replace("\n  onedark-light:\n", "\n  solarized-dark:\n")
+    expect(schemeDrift(stale)).toContain("solarized-dark: stale scheme")
+    expect(schemeDrift(stale)).toContain("onedark-light: undocumented scheme")
+  })
+})
 
 describe("DESIGN.md token drift", () => {
   test("matches every base and dark --yc-* declaration in both directions", async () => {

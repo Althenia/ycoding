@@ -28,7 +28,7 @@ describe("Office character art", () => {
         for (let column = 0; column < characterColumnCount; column++) {
           const frame = frameBytes(sheet.pixels, sheet.width, column * characterFrameWidth, (appearance * characterDirections.length + direction) * characterFrameHeight, characterFrameWidth, characterFrameHeight)
           expect(frame.some((_, index) => index % 4 === 3 && frame[index] === 255)).toBe(true)
-          if (column > 5 && column !== 11) continue
+          if (column > 5 && column !== 11 && column < 12) continue
           expect([43, 44, 45, 46].some((row) => [characterFeet.x - 2, characterFeet.x, characterFeet.x + 2].some((x) => frame[(row * characterFrameWidth + x) * 4 + 3] === 255))).toBe(true)
         }
       }
@@ -48,6 +48,14 @@ describe("Office character art", () => {
         expect(at(appearance, direction, 8)).not.toEqual(stand)
         expect(at(appearance, direction, 9)).not.toEqual(at(appearance, direction, 10))
         expect(at(appearance, direction, 11)).not.toEqual(stand)
+        for (const column of [12, 13, 14, 15, 16]) expect(at(appearance, direction, column)).not.toEqual(stand)
+        expect(at(appearance, direction, 12)).not.toEqual(at(appearance, direction, 13))
+        expect(at(appearance, direction, 15)).not.toEqual(at(appearance, direction, 16))
+        for (const column of [12, 13, 14, 15, 16]) {
+          const frame = at(appearance, direction, column)
+          expect(Array.from({ length: characterFrameHeight }, (_, row) => frame[(row * characterFrameWidth) * 4 + 3]).every((alpha) => alpha === 0)).toBe(true)
+          expect(Array.from({ length: characterFrameHeight }, (_, row) => frame[(row * characterFrameWidth + characterFrameWidth - 1) * 4 + 3]).every((alpha) => alpha === 0)).toBe(true)
+        }
         expect(stand[3]).toBe(0)
       }
     }

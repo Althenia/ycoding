@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { SCHEMES, SCHEME_IDS, schemeTokens } from "../theme/schemes"
 
 /**
  * Resolves the stylesheets the browser loads and holds the palette to the WCAG AA
@@ -23,19 +24,32 @@ type Declarations = Record<string, string>
 
 const THEME_SELECTORS = { light: ":root", dark: '[data-theme="dark"]' } as const
 
+const THEME_CASES = SCHEME_IDS.flatMap((scheme) =>
+  (["light", "dark"] as const).flatMap((mode) =>
+    scheme === "default" || SCHEMES[scheme].palettes[mode]
+      ? [{ scheme, mode, name: scheme === "default" ? mode : `${scheme} ${mode}` }]
+      : [],
+  ),
+)
+const THEME_NAMES = THEME_CASES.map((themeCase) => themeCase.name)
+const HIGH_CONTRAST_NAMES = THEME_CASES.filter((themeCase) => themeCase.scheme === "high-contrast").map(
+  (themeCase) => themeCase.name,
+)
+const AAA_NORMAL_TEXT = 7
+
 const PRIMARY_STATES = [
   { name: "default", selector: ".button--primary" },
   { name: "hover", selector: ".button--primary:hover:not(:disabled)" },
 ] as const
 
 describe("primary button contrast", () => {
-  for (const theme of ["light", "dark"] as const) {
+  for (const theme of THEME_NAMES) {
     for (const state of PRIMARY_STATES) {
       test(`${theme} theme ${state.name} state reaches AA normal-text contrast`, async () => {
         const { base, themes } = await stylesheets()
         const rule = declarations(base, state.selector)
-        const background = resolveColor(value(rule, "background"), themes[theme])
-        const foreground = resolveColor(value(rule, "color"), themes[theme])
+        const background = resolveColor(value(rule, "background"), themeOf(themes, theme))
+        const foreground = resolveColor(value(rule, "color"), themeOf(themes, theme))
         expect(contrastRatio(foreground, background)).toBeGreaterThanOrEqual(AA_NORMAL_TEXT)
       })
     }
@@ -63,13 +77,13 @@ describe("primary button contrast", () => {
 })
 
 describe("offline status contrast", () => {
-  for (const theme of ["light", "dark"] as const) {
+  for (const theme of THEME_NAMES) {
     test(`${theme} theme offline status reaches AA on its translucent surface`, async () => {
       const { base, themes } = await stylesheets()
       const rule = declarations(base, ".status-strip--offline")
-      const foreground = resolveColor(value(rule, "color"), themes[theme])
+      const foreground = resolveColor(value(rule, "color"), themeOf(themes, theme))
       for (const surface of ["--yc-bg", "--yc-surface", "--yc-surface-raised"]) {
-        const background = composite(resolveColor(value(rule, "background"), themes[theme]), required(themes[theme], surface))
+        const background = composite(resolveColor(value(rule, "background"), themeOf(themes, theme)), required(themeOf(themes, theme), surface))
         expect(contrastRatio(foreground, background), `${theme} ${surface}`).toBeGreaterThanOrEqual(AA_NORMAL_TEXT)
       }
     })
@@ -79,10 +93,10 @@ describe("offline status contrast", () => {
 describe("foreground accent contrast", () => {
   const SURFACES = ["--yc-bg", "--yc-surface", "--yc-surface-raised"] as const
 
-  for (const theme of ["light", "dark"] as const) {
+  for (const theme of THEME_NAMES) {
     test(`${theme} theme accent text reaches AA on every background it paints on`, async () => {
       const { themes } = await stylesheets()
-      const tokens = themes[theme]
+      const tokens = themeOf(themes, theme)
       const accent = required(tokens, "--yc-green-strong")
       for (const [name, background] of Object.entries(accentBackgrounds(tokens))) {
         expect(contrastRatio(accent, background), `${theme} ${name} ${background}`).toBeGreaterThanOrEqual(
@@ -118,13 +132,13 @@ describe("scrollbar thumb contrast", () => {
     { name: "drag", selector: "::-webkit-scrollbar-thumb:active" },
   ] as const
 
-  for (const theme of ["light", "dark"] as const) {
+  for (const theme of THEME_NAMES) {
     for (const state of STATES) {
       test(`${theme} theme ${state.name} thumb reaches 3:1 on every surface a scroll region paints`, async () => {
         const { base, themes } = await stylesheets()
-        const thumb = resolveColor(value(declarations(base, state.selector), "background-color"), themes[theme])
+        const thumb = resolveColor(value(declarations(base, state.selector), "background-color"), themeOf(themes, theme))
         for (const surface of SURFACES) {
-          expect(contrastRatio(thumb, required(themes[theme], surface)), `${theme} ${surface}`).toBeGreaterThanOrEqual(3)
+          expect(contrastRatio(thumb, required(themeOf(themes, theme), surface)), `${theme} ${surface}`).toBeGreaterThanOrEqual(3)
         }
       })
     }
@@ -138,17 +152,17 @@ describe("scrollbar thumb contrast", () => {
 })
 
 describe("focus indicator token contrast", () => {
-  for (const theme of ["light", "dark"] as const) {
+  for (const theme of THEME_NAMES) {
     test(`${theme} focus color contrasts with page surfaces`, async () => {
       const { themes } = await stylesheets()
-      const tokens = themes[theme]
+      const tokens = themeOf(themes, theme)
       for (const surface of ["--yc-bg", "--yc-surface", "--yc-surface-raised", "--yc-surface-sunken"]) {
         expect(contrastRatio(required(tokens, "--yc-focus"), required(tokens, surface)), `${theme} ${surface}`).toBeGreaterThanOrEqual(3)
       }
     })
     test(`${theme} neutral icon focus contrasts with pending picker fills`, async () => {
       const { themes } = await stylesheets()
-      const tokens = themes[theme]
+      const tokens = themeOf(themes, theme)
       for (const surface of ["--yc-bg", "--yc-surface", "--yc-surface-raised", "--yc-surface-sunken"]) {
         expect(contrastRatio(required(tokens, "--yc-border-strong"), composite(required(tokens, "--yc-green-soft"), required(tokens, surface))), `${theme} ${surface}`).toBeGreaterThanOrEqual(3)
       }
@@ -184,10 +198,10 @@ const DECLARED_PAIRS = [
 ] as const
 
 describe("declared token contrast pairs", () => {
-  for (const theme of ["light", "dark"] as const) {
+  for (const theme of THEME_NAMES) {
     test(`${theme} theme keeps every declared pair at its AA threshold`, async () => {
       const { themes } = await stylesheets()
-      const tokens = themes[theme]
+      const tokens = themeOf(themes, theme)
       for (const pair of DECLARED_PAIRS) {
         expect(
           contrastRatio(required(tokens, pair.token), required(tokens, pair.surface)),
@@ -197,6 +211,67 @@ describe("declared token contrast pairs", () => {
     })
   }
 })
+
+describe("scheme body text contrast", () => {
+  const SURFACES = ["--yc-bg", "--yc-surface", "--yc-surface-raised", "--yc-surface-sunken"] as const
+  const INKS = ["--yc-text", "--yc-text-muted", "--yc-text-subtle", "--yc-green-strong", "--yc-yellow-strong", "--yc-danger"] as const
+
+  for (const theme of THEME_NAMES) {
+    test(`${theme} theme holds every ink to AA on every page surface`, async () => {
+      const { themes } = await stylesheets()
+      const tokens = themeOf(themes, theme)
+      const failures = INKS.flatMap((ink) =>
+        SURFACES.map((surface) => ({ pair: `${ink} on ${surface}`, ratio: contrastRatio(required(tokens, ink), required(tokens, surface)) }))
+          .filter((result) => result.ratio < AA_NORMAL_TEXT),
+      )
+      expect(failures).toEqual([])
+    })
+  }
+})
+
+describe("high-contrast scheme AAA contrast", () => {
+  const SURFACES = ["--yc-bg", "--yc-surface", "--yc-surface-raised", "--yc-surface-sunken"] as const
+  const BODY_INKS = ["--yc-text", "--yc-text-muted", "--yc-text-subtle", "--yc-green-strong", "--yc-yellow-strong", "--yc-danger"] as const
+
+  test("ships a light and a dark high-contrast mode", () => {
+    expect(HIGH_CONTRAST_NAMES).toEqual(["high-contrast light", "high-contrast dark"])
+  })
+
+  for (const theme of HIGH_CONTRAST_NAMES) {
+    test(`${theme} holds body text to 7:1 on every surface and on the soft fills`, async () => {
+      const { themes } = await stylesheets()
+      const tokens = themeOf(themes, theme)
+      const failures = BODY_INKS.flatMap((ink) =>
+        SURFACES.flatMap((surface) => [
+          { pair: `${ink} on ${surface}`, background: required(tokens, surface) },
+          ...(["--yc-green-soft", "--yc-yellow-soft", "--yc-danger-soft"] as const).map((soft) => ({
+            pair: `${ink} on ${soft} over ${surface}`,
+            background: composite(required(tokens, soft), required(tokens, surface)),
+          })),
+        ])
+          .map((result) => ({ pair: result.pair, ratio: contrastRatio(required(tokens, ink), result.background) }))
+          .filter((result) => result.ratio < AAA_NORMAL_TEXT),
+      )
+      expect(failures).toEqual([])
+    })
+
+    test(`${theme} holds the primary button, boundaries, and focus to their floors`, async () => {
+      const { themes } = await stylesheets()
+      const tokens = themeOf(themes, theme)
+      expect(contrastRatio(required(tokens, "--yc-primary-fg"), required(tokens, "--yc-primary-bg"))).toBeGreaterThanOrEqual(AAA_NORMAL_TEXT)
+      for (const surface of SURFACES) {
+        expect(contrastRatio(required(tokens, "--yc-border-strong"), required(tokens, surface)), `border-strong ${surface}`).toBeGreaterThanOrEqual(AA_NORMAL_TEXT)
+        expect(contrastRatio(required(tokens, "--yc-focus"), required(tokens, surface)), `focus ${surface}`).toBeGreaterThanOrEqual(AA_NORMAL_TEXT)
+      }
+    })
+  }
+})
+
+function themeOf(themes: Record<string, Declarations>, name: string): Declarations {
+  const tokens = themes[name]
+  if (tokens === undefined) throw new Error(`undefined theme ${name}`)
+  return tokens
+}
 
 function required(tokens: Declarations, token: string): string {
   const declared = tokens[token]
@@ -226,7 +301,14 @@ async function stylesheets() {
   const base = await stylesheet("base.css")
   const light = declarations(tokens, THEME_SELECTORS.light)
   const overrides = declarations(tokens, THEME_SELECTORS.dark)
-  return { base, overrides, themes: { light, dark: { ...light, ...overrides } } }
+  const modes = { light, dark: { ...light, ...overrides } }
+  const themes: Record<string, Declarations> = Object.fromEntries(
+    THEME_CASES.map(({ scheme, mode, name }) => {
+      const palette = SCHEMES[scheme].palettes[mode]
+      return [name, palette ? { ...modes[mode], ...schemeTokens(palette, mode) } : modes[mode]]
+    }),
+  )
+  return { base, overrides, themes }
 }
 
 async function stylesheet(name: string): Promise<string> {

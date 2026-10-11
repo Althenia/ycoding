@@ -38,7 +38,7 @@ class Visibility extends Signals {
 
 const pings = (socket: Socket) => socket.sent.filter((frame) => frame === '{"type":"ping"}').length
 
-function fixture() {
+function fixture(open = true) {
   const document = new Visibility()
   const window = new Signals()
   const statuses: string[] = []
@@ -68,9 +68,23 @@ function fixture() {
     createSocket: () => { const socket = new Socket(); sockets.push(socket); return socket as unknown as WebSocket },
   })
   transport.connect()
-  sockets[0]!.open()
+  if (open) sockets[0]!.open()
   return { document, window, sockets, transport, advance, tasks, statuses }
 }
+
+test("an unresponsive browser upgrade expires and reconnects without a close event", () => {
+  const f = fixture(false)
+  try {
+    f.advance(30_000)
+    expect(f.transport.status().kind).toBe("reconnecting")
+    expect(f.sockets[0]!.closes).toEqual([{ code: 4000, reason: "Relay connection timed out" }])
+    f.advance(1)
+    f.sockets[1]!.open()
+    expect(f.transport.status().kind).toBe("open")
+    f.sockets[0]!.open()
+    expect(f.transport.status().kind).toBe("open")
+  } finally { f.transport.close() }
+})
 
 test("a silent OPEN socket recovers without awaiting close or replaying sent and queued mutations", async () => {
   const f = fixture()

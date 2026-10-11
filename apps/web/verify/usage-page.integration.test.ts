@@ -17,6 +17,22 @@ beforeAll(async () => {
 })
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 
+test("summary sparklines never overlap the exact spend and token totals", async () => {
+  for (const width of [1280, 1440]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width, 900)
+      await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html`)
+      await wait(page, `document.querySelectorAll('.usage-tile').length === 3`)
+      await page.evaluate(`document.fonts.ready`)
+      expect(await page.evaluate<{ visible: boolean; separated: boolean; contained: boolean }>(`(() => {
+        const chart=document.querySelector('.usage-tile svg'),tile=chart.closest('.usage-tile'),box=chart.getBoundingClientRect(),bounds=tile.getBoundingClientRect();
+        return {visible:box.width>0&&box.height>0,separated:[...tile.querySelectorAll('h3,strong,.usage-tile__meta span')].every(text=>{const rect=text.getBoundingClientRect();return rect.bottom<=box.top||rect.top>=box.bottom||rect.right<=box.left||rect.left>=box.right}),contained:box.left>=bounds.left&&box.right<=bounds.right&&box.top>=bounds.top&&box.bottom<=bounds.bottom};
+      })()`)).toEqual({ visible: true, separated: true, contained: true })
+    } finally { await page.close() }
+  }
+}, 30_000)
+
 test("provider distribution keeps exact large values readable in one accessible legend", async () => {
   for (const width of [320, 390, 1440]) {
     for (const theme of ["light", "dark"]) {
@@ -82,24 +98,24 @@ test("provider allowances, spend, chart and breakdown reflow without overflow ac
         expect(await page.evaluate<string>(`document.querySelector('.usage-donut__total')?.textContent ?? ''`)).toBe("$15.00")
         expect(await page.evaluate<string>(`[...document.querySelectorAll('.usage-provider')].find(card => card.textContent.includes('OpenRouter'))?.innerText ?? ''`)).toContain("$38.42 remaining")
         expect(await page.evaluate<string>(`[...document.querySelectorAll('.usage-provider')].find(card => card.textContent.includes('OpenRouter'))?.innerText ?? ''`)).toContain("$0.00")
-        const result = await page.evaluate<{ overflow: boolean; providerColumns: number; tileColumns: number; visualColumns: number; cardRadius: string; innerRadius: string; headHeight: number; mobileRows: number; requests: number; controls: boolean }>(`(() => {
+        const result = await page.evaluate<{ overflow: boolean; providerColumns: number; tileColumns: number; visualColumns: number; cardRadius: string; innerBorder: string; headHeight: number; mobileRows: number; requests: number; controls: boolean; content: number }>(`(() => {
           const providers = document.querySelector('.usage-providers'); const tiles = document.querySelector('.usage-tiles'); const visuals = document.querySelector('.usage-visuals');
-          return { overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+          return { content: document.querySelector('.usage-page').clientWidth, overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
             providerColumns: getComputedStyle(providers).gridTemplateColumns.split(' ').length,
             tileColumns: getComputedStyle(tiles).gridTemplateColumns.split(' ').length,
             visualColumns: getComputedStyle(visuals).gridTemplateColumns.split(' ').length,
             cardRadius: getComputedStyle(document.querySelector('.usage-provider')).borderTopLeftRadius,
-            innerRadius: getComputedStyle(document.querySelector('.usage-window')).borderTopLeftRadius,
+            innerBorder: getComputedStyle(document.querySelector('.usage-window')).borderTopWidth,
             headHeight: document.querySelector('.usage-head').getBoundingClientRect().height,
             mobileRows: [...document.querySelectorAll('.usage-mobile-row')].filter(row => row.getClientRects().length > 0).length,
             requests: window.usageRequests().length,
             controls: [...document.querySelectorAll('.usage-page button')].filter(button => getComputedStyle(button).display !== 'none' && button.getClientRects().length > 0).every(button => button.getBoundingClientRect().height >= 44) } })()`)
         expect(result.overflow).toBe(false)
-        expect(result.providerColumns).toBe(width! >= 1280 ? 3 : width! >= 768 ? 2 : 1)
-        expect(result.tileColumns).toBe(width! >= 1024 ? 3 : 1)
-        expect(result.visualColumns).toBe(width! >= 1024 ? 2 : 1)
+        expect(result.providerColumns).toBe(result.content >= 1280 ? 3 : result.content >= 768 ? 2 : 1)
+        expect(result.tileColumns).toBe(result.content >= 1024 ? 3 : 1)
+        expect(result.visualColumns).toBe(result.content >= 1024 ? 2 : 1)
         expect(result.cardRadius).toBe("16px")
-        expect(result.innerRadius).toBe("12px")
+        expect(result.innerBorder).toBe("0px")
         if (width! >= 768) expect(result.headHeight).toBeLessThan(100)
         expect(result.mobileRows).toBe(width! < 768 ? 25 : 0)
         if (width! < 768) expect(await page.evaluate<number>(`document.querySelectorAll('.usage-mobile-row .usage-provider-chip').length`)).toBe(25)
@@ -175,6 +191,19 @@ test("a machine with no connected quota providers shows one explicit empty state
     await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?none`)
     await wait(page, `document.querySelector('.usage-page')?.textContent?.includes('No connected provider reports quotas.') === true`)
     expect(await page.evaluate<number>(`document.querySelectorAll('.usage-provider').length`)).toBe(0)
+  } finally { await page.close() }
+})
+
+test("quota refresh returns to idle after a failed provider read", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?unknown-usage`)
+    await wait(page, `document.querySelectorAll('.usage-provider').length === 5`)
+    await page.evaluate(`window.usageAgentBack(true)`)
+    await page.evaluate(`document.querySelector('.usage-refresh')?.click()`)
+    await wait(page, `window.usageRequests().filter(item => item.operation === 'usage.providers').length === 2`)
+    await wait(page, `document.querySelector('.usage-quotas [role="alert"]')?.textContent?.includes('Quota retry failed.') === true`)
+    expect(await page.evaluate<{ busy: string | null; disabled: boolean }>(`(() => { const button = document.querySelector('.usage-refresh'); return { busy: button.getAttribute('aria-busy'), disabled: button.disabled }; })()`)).toEqual({ busy: "false", disabled: false })
   } finally { await page.close() }
 })
 
@@ -315,12 +344,22 @@ test("three same-device reloads and Refresh update values without removing cards
       await wait(page, `document.querySelectorAll('.usage-provider').length === 5 && document.querySelectorAll('.usage-tile').length === 3 && document.querySelectorAll('.usage-donut__arc').length === 2`)
       await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
       await Bun.sleep(900)
+      const refresh = await page.evaluate<{ accessibleName: string | null; title: string | null; text: string; idle: string | null; target: number; width: number; icon: boolean }>(`(() => {
+        const button = document.querySelector('.usage-refresh');
+        const rect = button.getBoundingClientRect();
+        return { accessibleName: button.getAttribute('aria-label'), title: button.getAttribute('title'), text: button.innerText.trim(),
+          idle: button.getAttribute('aria-busy'), target: rect.height, width: rect.width,
+          icon: !!button.querySelector('svg[aria-hidden="true"]') };
+      })()`)
+      expect(refresh).toMatchObject({ accessibleName: "Refresh quotas", title: "Refresh quotas", text: "", idle: "false", icon: true })
+      expect(refresh.target).toBeGreaterThanOrEqual(44)
+      if (width === 390) expect(refresh.width).toBe(refresh.target)
       await page.evaluate(`(() => {
         const selectors = '.usage-provider, .usage-tile, .usage-chart, .usage-distribution, .usage-meter > span, .usage-donut__arc, .usage-distribution__legend li, .usage-chart__bar';
         const root = document.querySelector('.usage-page');
         const nodes = [...root.querySelectorAll(selectors)];
         const probe = { nodes, removed: 0, starts: 0, empty: 0 };
-        root.addEventListener('animationstart', () => { probe.starts++ });
+        root.addEventListener('animationstart', event => { if (!event.target.closest('.usage-refresh')) probe.starts++ });
         const observer = new MutationObserver(records => {
           for (const record of records) for (const node of record.removedNodes) if (node.nodeType === 1 && (node.matches(selectors) || node.querySelector(selectors))) probe.removed++;
           if (!root.querySelector('.usage-provider') || !root.querySelector('.usage-tile') || !root.querySelector('.usage-chart__bar') || !root.querySelector('.usage-donut__arc')) probe.empty++;
@@ -350,9 +389,14 @@ test("three same-device reloads and Refresh update values without removing cards
       }
       await page.evaluate(`document.querySelector('.usage-refresh')?.click()`)
       await wait(page, `window.usageRequests().filter(item => item.operation === 'usage.providers').length === 5`)
+      expect(await page.evaluate<{ busy: string | null; disabled: boolean; animation: string }>(`(() => {
+        const button = document.querySelector('.usage-refresh');
+        return { busy: button.getAttribute('aria-busy'), disabled: button.disabled, animation: getComputedStyle(button.querySelector('svg')).animationName };
+      })()`)).toEqual({ busy: "true", disabled: true, animation: "usage-refresh-spin" })
       expect(await page.evaluate<{ removed: number; starts: number; empty: number; same: boolean }>(`window.usageProbeSnapshot()`)).toMatchObject({ removed: 0, starts: 0, empty: 0, same: true })
       await page.evaluate(`window.usageReleaseReload()`)
       await wait(page, `document.querySelector('.usage-provider:first-child .usage-window__top')?.textContent?.includes('42%') === true`)
+      expect(await page.evaluate<string | null>(`document.querySelector('.usage-refresh')?.getAttribute('aria-busy') ?? null`)).toBe("false")
       expect(await page.evaluate<{ removed: number; starts: number; empty: number; same: boolean }>(`window.usageProbeSnapshot()`)).toMatchObject({ removed: 0, starts: 0, empty: 0, same: true })
       if (width === 390 && theme === "dark") await Bun.write(new URL("../../../.cache/tmp/usage-refresh-settled.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
     } finally { await page.close() }

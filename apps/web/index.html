@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="light" data-theme-preference="system">
+<html lang="en" data-theme="light" data-theme-preference="system" data-scheme="default">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -44,19 +44,28 @@
     <link rel="prefetch" href="../../assets/brand/fonts/GeistMono-Italic.woff2" as="font" type="font/woff2" crossorigin />
     <script>
       // Applies the stored theme before first paint so the shell never flashes the wrong mode.
-      // The storage key is owned by src/theme/theme.ts and guarded by src/theme/theme.test.ts.
+      // The storage keys and scheme list are owned by src/theme/theme.ts and src/theme/schemes.ts,
+      // and guarded by src/theme/theme.test.ts. The scheme palettes arrive as a generated style tag.
       ;(() => {
+        const root = document.documentElement
         try {
           const stored = localStorage.getItem("ycoding.theme")
           const preference = stored === "light" || stored === "dark" || stored === "system" ? stored : "system"
           const dark =
             preference === "dark" ||
             (preference === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches)
-          document.documentElement.dataset.theme = dark ? "dark" : "light"
-          document.documentElement.dataset.themePreference = preference
+          const chosen = localStorage.getItem("ycoding.theme-scheme")
+          const scheme = ["default", "onedark", "onedark-pro", "high-contrast"].includes(chosen) ? chosen : "default"
+          root.dataset.theme = dark ? "dark" : "light"
+          root.dataset.themePreference = preference
+          root.dataset.scheme =
+            scheme === "default" && preference === "system" && window.matchMedia("(prefers-contrast: more)").matches
+              ? "high-contrast"
+              : scheme
         } catch {
-          document.documentElement.dataset.theme = "light"
-          document.documentElement.dataset.themePreference = "system"
+          root.dataset.theme = "light"
+          root.dataset.themePreference = "system"
+          root.dataset.scheme = "default"
         }
       })()
     </script>

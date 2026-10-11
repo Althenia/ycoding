@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import {
   isGoalSteerAdmission,
+  modelLabel,
+  readModelRef,
   readTeamCue,
   noticeSummary,
   formatPartDuration,
@@ -39,6 +41,13 @@ import {
   type ShellOutputView,
   type SessionView,
 } from "./projection"
+
+test("model metadata preserves profile identity through remote projection", () => {
+  const model = readModelRef({ providerID: "openai", id: "gpt", profile: "work" })
+  expect(model).toEqual({ providerID: "openai", id: "gpt", profile: "work" })
+  expect(modelLabel(model)).toBe("openai/gpt · profile work")
+  expect(readModelRef({ providerID: "openai", id: "gpt", profile: "" })).toBeUndefined()
+})
 
 test("projects managed user files without exposing their storage path", () => {
   const digest = "a".repeat(64)

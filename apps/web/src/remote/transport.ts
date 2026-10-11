@@ -108,6 +108,7 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
   let closedByUs = false
   let connectedOnce = false
   let cancelFlush: (() => void) | undefined
+  let cancelOpening: (() => void) | undefined
   let timer: (() => void) | undefined
   let probing = false
   let probeID = 0
@@ -198,6 +199,8 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
 
   const endSocket = (owner: WebSocket, code: number, reason: string) => {
     if (socket !== owner) return
+    cancelOpening?.()
+    cancelOpening = undefined
     releaseTimer()
     removeSocketListeners?.()
     removeSocketListeners = undefined
@@ -245,6 +248,8 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
     socket = next
     const opened = () => {
       if (socket !== next || closedByUs) return
+      cancelOpening?.()
+      cancelOpening = undefined
       const reconnected = connectedOnce
       connectedOnce = true
       attempt = 0
@@ -285,6 +290,11 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
       next.removeEventListener("error", errored)
       next.removeEventListener("close", closed)
     }
+    cancelOpening = schedule(() => {
+      if (socket !== next || closedByUs || next.readyState !== 0) return
+      endSocket(next, 4000, "Relay connection timed out")
+      next.close(4000, "Relay connection timed out")
+    }, 30_000)
   }
 
   const flushOutbound = () => {
@@ -452,6 +462,7 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
           if (timeout > 0)
             entry.cancel = schedule(() => {
               if (!pending.delete(id)) return
+              send({ type: "cancel", id })
               resolve({
                 status: "unknown",
                 error: { code: "outcome_unknown", message: "The request did not settle before the timeout" },
@@ -476,6 +487,8 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
     connect,
     close: (code = 1000, reason = "client closed") => {
       closedByUs = true
+      cancelOpening?.()
+      cancelOpening = undefined
       cancelFlush?.()
       cancelFlush = undefined
       releaseTimer()

@@ -118,6 +118,38 @@ describe("running Sessions across workspaces", () => {
     } finally { await page.close() }
   }, 60_000)
 
+  test("drags the overflowing rail with the mouse, keeps a click on a card from leaving a ring, and keeps keyboard focus visible", async () => {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(1024, 844)
+      await page.navigate(`http://127.0.0.1:${port}/verify/running-sessions-fixture.html?count=7`)
+      for (let attempt = 0; attempt < 40 && await page.evaluate<number>(`document.querySelectorAll('.running-sessions__item').length`) !== 7; attempt += 1) await Bun.sleep(50)
+      const start = await page.evaluate<{ readonly x: number; readonly y: number; readonly cursor: string }>(`(() => { const track = document.querySelector('.running-sessions__list'); const box = track.getBoundingClientRect(); return { x: Math.round(box.left + box.width / 2), y: Math.round(box.top + box.height / 2), cursor: getComputedStyle(track).cursor } })()`)
+      expect(start.cursor).toBe("grab")
+      await page.mouse("mouseMoved", start.x, start.y)
+      await page.mouse("mousePressed", start.x, start.y)
+      await page.mouse("mouseMoved", start.x - 40, start.y, true)
+      expect(await page.evaluate<{ readonly dragging: boolean; readonly cursor: string }>(`(() => { const track = document.querySelector('.running-sessions__list'); return { dragging: track.dataset.cursor === 'panning', cursor: getComputedStyle(track).cursor } })()`)).toEqual({ dragging: true, cursor: "grabbing" })
+      await page.mouse("mouseMoved", start.x - 260, start.y, true)
+      await page.mouse("mouseReleased", start.x - 260, start.y)
+      for (let attempt = 0; attempt < 40 && await page.evaluate<number>(`document.querySelector('.running-sessions__list').scrollLeft`) < 200; attempt += 1) await Bun.sleep(20)
+      expect(await page.evaluate<{ readonly scrolled: number; readonly dragging: boolean; readonly selected: readonly string[] }>(`(() => { const track = document.querySelector('.running-sessions__list'); return { scrolled: Math.round(track.scrollLeft), dragging: track.dataset.cursor === 'panning', selected: window.runningSelected() } })()`)).toMatchObject({ dragging: false, selected: [] })
+      expect(await page.evaluate<number>(`document.querySelector('.running-sessions__list').scrollLeft`)).toBeGreaterThanOrEqual(200)
+
+      // A plain click on whichever card now sits under the pointer opens it and leaves no focus ring.
+      const card = await page.evaluate<{ readonly x: number; readonly y: number; readonly index: number }>(`(() => { const items = [...document.querySelectorAll('.running-sessions__item')]; const track = document.querySelector('.running-sessions__list').getBoundingClientRect(); const index = items.findIndex((item) => item.getBoundingClientRect().left >= track.left - 1); const box = items[index].getBoundingClientRect(); return { x: Math.round(box.left + 20), y: Math.round(box.top + 20), index } })()`)
+      await page.mouse("mouseMoved", card.x, card.y)
+      await page.mouse("mousePressed", card.x, card.y)
+      await page.mouse("mouseReleased", card.x, card.y)
+      for (let attempt = 0; attempt < 40 && (await page.evaluate<string[]>(`window.runningSelected()`)).length === 0; attempt += 1) await Bun.sleep(20)
+      expect(await page.evaluate<{ readonly selected: number; readonly outline: string; readonly focused: boolean }>(`(() => { const item = document.querySelectorAll('.running-sessions__item')[${card.index}]; return { selected: window.runningSelected().length, outline: getComputedStyle(item).outlineStyle, focused: document.activeElement === item } })()`)).toEqual({ selected: 1, outline: "none", focused: true })
+
+      // Tab from the clicked card lands on the next card as keyboard navigation, which must show the ring.
+      await page.pressKey("Tab", "Tab", 9)
+      expect(await page.evaluate<{ readonly next: boolean; readonly outline: string }>(`(() => { const item = document.activeElement; return { next: item === document.querySelectorAll('.running-sessions__item')[${card.index + 1}], outline: getComputedStyle(item).outlineStyle } })()`)).toEqual({ next: true, outline: "solid" })
+    } finally { await page.close() }
+  }, 30_000)
+
   test("keeps overflowing page dots 24 px apart while each stays a 24 px target", async () => {
     const page = await browser!.openPage()
     try {

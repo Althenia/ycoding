@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import { createRemoteHttp } from "../src/remote/http"
 import { createRemoteStore, readSessionInfo } from "../src/remote/store"
+import { officeInputFromRemote } from "../src/remote/office/adapter"
+import { projectOffice } from "../src/remote/office/model"
+import { defaultOfficePreferences } from "../src/remote/office/preferences"
 import { createRemoteTransport } from "../src/remote/transport"
 import { pacedFlowTimeoutMs, startRelayDouble, waitFor, type RelayHandlerOutcome, type RelayHandlerResult } from "./relay-double"
 import { createRemoteStoreClock } from "./remote-store-clock"
@@ -234,6 +237,35 @@ describe("remote team facts", () => {
       expect(reads).toBe(2)
     } finally { await test.stop() }
   })
+
+  test("an unknown family activity outcome retries and later restores reported work", async () => {
+    const clock = createRemoteStoreClock()
+    let reads = 0
+    const test = await setup(() => ({ ok: true, value: { data: [task("ses_child")], summary: { total: 1 }, cursor: {} } }), undefined,
+      (request) => request.operation !== "session.family.activity" ? "default" : ++reads === 1
+        ? "silent"
+        : { ok: true, value: { data: [
+          { sessionID: "ses_a", executing: false },
+          { sessionID: "ses_child", executing: true, activity: { kind: "tool", room: "developer", text: "Editing store.ts" } },
+        ] } }, clock)
+    try {
+      test.store.watchTeam(true)
+      test.store.watchFamilyActivity(true)
+      await test.store.selectSession("ses_a")
+      await waitFor(() => test.store.state().familyActivity?.status !== "loading", 7_000)
+      expect(test.store.state().familyActivity?.status).toBe("error")
+      expect(test.sent.filter((operation) => operation === "session.family.activity")).toHaveLength(1)
+      await clock.advanceBy(2_999)
+      expect(test.sent.filter((operation) => operation === "session.family.activity")).toHaveLength(1)
+      await clock.advanceBy(1)
+      await waitFor(() => test.store.state().familyActivity?.status === "ready")
+      expect(reads).toBe(2)
+      expect(test.store.state().familyActivity?.members).toMatchObject([{ sessionID: "ses_a", executing: false }, {
+        sessionID: "ses_child", executing: true, activity: { text: "Editing store.ts" },
+      }])
+      expect(projectOffice(officeInputFromRemote(test.store.state()), defaultOfficePreferences).actors.find((actor) => actor.sessionID === "ses_child")?.status).not.toBe("unknown")
+    } finally { await test.stop() }
+  }, 12_000)
 
   test("disconnect cancels the Office activity refresh", async () => {
     const clock = createRemoteStoreClock()

@@ -53,7 +53,7 @@ class OfficeGame extends Phaser.Game {
   }
 }
 
-export function mountOffice(host: HTMLElement, initial: OfficeFrameInput, selectSession: (id: string) => void, fail: (message: string) => void, onLocations: (locations: Readonly<Record<string, OfficeRoomID | undefined>>) => void): OfficeHandle {
+export function mountOffice(host: HTMLElement, initial: OfficeFrameInput, selectSession: (id: string) => void, fail: (message: string) => void, onLocations: (locations: Readonly<Record<string, OfficeRoomID | undefined>>) => void, inspectEntity: (id: string) => void, onEntityClaims: (claims: ReadonlyMap<string, readonly string[]>) => void): OfficeHandle {
   const mailbox = createOfficeMailbox(initial)
   const resolution = Math.min(2, Math.max(1, window.devicePixelRatio || 1))
   let failed = false
@@ -68,7 +68,7 @@ export function mountOffice(host: HTMLElement, initial: OfficeFrameInput, select
   const scene = new OfficeScene(mailbox, selectSession, reportFailure, resolution, onLocations, {
     sans: style.getPropertyValue("--yc-font-sans").trim() || "sans-serif",
     mono: style.getPropertyValue("--yc-font-mono").trim() || "monospace",
-  })
+  }, inspectEntity, onEntityClaims)
   game = new OfficeGame({
     type: Phaser.AUTO, parent: host,
     width: Math.max(1, Math.round(host.clientWidth * resolution)), height: Math.max(1, Math.round(host.clientHeight * resolution)),

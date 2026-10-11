@@ -2,8 +2,15 @@
 .app--office .workspace__scroll > .notice-strip { flex:none; }
 .app--office .workspace__scroll > .route-panel:has(> .office-workspace) { flex:1; block-size:auto; min-block-size:0; }
 .office-workspace { display:grid; grid-template-rows:minmax(0,1fr); block-size:100%; min-inline-size:0; min-block-size:0; }
-.office-workspace__stage { display:grid; grid-template-rows:auto minmax(0,1fr) auto; gap:var(--yc-space-3); min-inline-size:0; min-block-size:0; }
+.office-workspace__stage { position:relative; display:grid; grid-template-rows:auto minmax(0,1fr) auto; gap:var(--yc-space-3); min-inline-size:0; min-block-size:0; }
 .office-workspace__canvas { grid-row:2; min-inline-size:0; min-block-size:0; block-size:100%; }
+.office-entity-card header button { min-block-size:var(--yc-hit-min); }
+.office-entity-card { position:absolute; z-index:6; inset-inline-end:var(--yc-space-3); inset-block-end:var(--yc-space-3); inline-size:min(320px,calc(100% - 24px)); max-block-size:60%; overflow:auto; padding:var(--yc-space-3); border:var(--yc-border-width) solid var(--yc-border-strong); border-radius:var(--yc-radius-lg); background:var(--yc-surface-raised); color:var(--yc-text); box-shadow:var(--yc-shadow-md); }
+.office-entity-card header { display:flex; align-items:center; justify-content:space-between; gap:var(--yc-space-2); }
+.office-entity-card h3 { margin:0; font-size:var(--yc-size-sm); }
+.office-entity-card dl { display:grid; grid-template-columns:minmax(64px,auto) minmax(0,1fr); gap:var(--yc-space-1) var(--yc-space-2); margin:var(--yc-space-3) 0 0; font-size:var(--yc-size-xs); }
+.office-entity-card dt { color:var(--yc-text-muted); }
+.office-entity-card dd { min-inline-size:0; margin:0; overflow-wrap:anywhere; }
 .office-stage { position:relative; display:grid; grid-template-rows:auto minmax(0,1fr); min-inline-size:0; min-block-size:0; block-size:100%; overflow:hidden; border:var(--yc-border-width) solid var(--yc-border-strong); border-radius:var(--yc-radius-md); background:var(--yc-surface-sunken); }
 .office-canvas-host { grid-row:2; min-inline-size:0; min-block-size:0; inline-size:100%; block-size:100%; }
 .office-canvas-host:focus-visible { outline:2px solid var(--yc-focus); outline-offset:-2px; }
@@ -29,8 +36,8 @@
 .office-roster__sprite { flex:none; inline-size:32px; block-size:48px; image-rendering:pixelated; }
 .office-roster__content { display:grid; min-inline-size:0; flex:1; gap:2px; }
 .office-roster__name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--yc-size-sm); font-weight:var(--yc-weight-semibold); }
-.office-roster__room,.office-roster__status,.office-roster__note,.office-roster__empty { color:var(--yc-text-muted); font-size:var(--yc-size-xs); }
-.office-roster__room,.office-roster__status { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.office-roster__status,.office-roster__note,.office-roster__empty { color:var(--yc-text-muted); font-size:var(--yc-size-xs); }
+.office-roster__status { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .office-roster__indicator { flex:none; inline-size:8px; block-size:8px; border-radius:var(--yc-radius-pill); background:var(--yc-text-muted); }
 .office-roster__indicator--working,.office-roster__indicator--tool,.office-roster__indicator--thinking,.office-roster__indicator--compacting { background:var(--yc-green-strong); }
 .office-roster__indicator--attention { background:var(--yc-yellow-strong); }

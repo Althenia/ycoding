@@ -2,12 +2,16 @@ import { describe, expect, test } from "bun:test"
 import {
   THEME_STORAGE_KEY,
   nextThemePreference,
+  normalizeSchemePreference,
   normalizeThemePreference,
+  readSchemePreference,
   readThemePreference,
   resolveTheme,
   themePreferenceLabel,
+  writeSchemePreference,
   writeThemePreference,
 } from "./theme"
+import { SCHEME_IDS, SCHEME_STORAGE_KEY } from "./schemes"
 
 function storage(initial: Record<string, string> = {}) {
   const entries = new Map(Object.entries(initial))
@@ -90,6 +94,39 @@ describe("theme preference persistence", () => {
         "dark",
       ),
     ).toBe(false)
+  })
+})
+
+describe("scheme preference persistence", () => {
+  test.each([...SCHEME_IDS])("accepts and round-trips %p", (scheme) => {
+    expect(normalizeSchemePreference(scheme)).toBe(scheme)
+    const target = storage()
+    expect(writeSchemePreference(target, scheme)).toBe(true)
+    expect(readSchemePreference(target)).toBe(scheme)
+  })
+
+  test.each(["solarized", "", undefined, 2])("falls back to the default scheme for %p", (value) => {
+    expect(normalizeSchemePreference(value)).toBe("default")
+  })
+
+  test("falls back to the default scheme for absent, blocked, and invalid storage and reports failed writes", () => {
+    expect(readSchemePreference(undefined)).toBe("default")
+    expect(readSchemePreference(storage({ [SCHEME_STORAGE_KEY]: "midnight" }))).toBe("default")
+    expect(
+      readSchemePreference({
+        getItem: () => {
+          throw new Error("storage disabled")
+        },
+        setItem: () => {},
+      }),
+    ).toBe("default")
+    expect(writeSchemePreference(undefined, "onedark")).toBe(false)
+  })
+
+  test("keeps the scheme in its own key so the mode preference stays untouched", () => {
+    const target = storage({ [THEME_STORAGE_KEY]: "light" })
+    writeSchemePreference(target, "onedark")
+    expect(readThemePreference(target)).toBe("light")
   })
 })
 

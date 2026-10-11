@@ -39,8 +39,8 @@ async function open(theme: "light" | "dark", workspaces: "overflow" | "default")
   await page.setViewport(1440, 900)
   await page.navigate(`${origin}/verify/remote.html?view=sessions&theme=${theme}${workspaces === "overflow" ? "&workspaces=overflow" : ""}`)
   const expected = workspaces === "overflow" ? 22 : 1
-  for (let attempt = 0; attempt < 80 && await page.evaluate<number>(`document.querySelectorAll('.sessions-page .workspace-nav__item').length`) !== expected; attempt += 1) await Bun.sleep(50)
-  expect(await page.evaluate<number>(`document.querySelectorAll('.sessions-page .workspace-nav__item').length`)).toBe(expected)
+  for (let attempt = 0; attempt < 80 && await page.evaluate<number>(`document.querySelectorAll('.workspace__rail .workspace-nav__item').length`) !== expected; attempt += 1) await Bun.sleep(50)
+  expect(await page.evaluate<number>(`document.querySelectorAll('.workspace__rail .workspace-nav__item').length`)).toBe(expected)
   await page.evaluate(`(() => {
     document.querySelector('.fixture__banner')?.remove();
     document.querySelector('.fixture__controls')?.remove();
@@ -53,7 +53,7 @@ async function open(theme: "light" | "dark", workspaces: "overflow" | "default")
 }
 
 const measure = `(() => {
-  const nav = document.querySelector('.sessions-page .workspace-nav');
+  const nav = document.querySelector('.workspace__rail .workspace-nav');
   const style = getComputedStyle(nav);
   return {
     hasMore: nav.hasAttribute('data-more-below'),
@@ -80,23 +80,23 @@ describe("desktop Workspaces scroll cue", () => {
         expect(top.mask).toMatch(/^linear-gradient\(rgb\(0, 0, 0\) calc\(100% - [^)]+\), rgba\(0, 0, 0, 0\)\)$/)
         expect(top.overflow).toBe(false)
 
-        await page.evaluate(`document.querySelector('.sessions-page .workspace-nav').scrollTop = 10000`)
-        for (let attempt = 0; attempt < 30 && await page.evaluate<boolean>(`document.querySelector('.sessions-page .workspace-nav').hasAttribute('data-more-below')`); attempt += 1) await Bun.sleep(20)
+        await page.evaluate(`document.querySelector('.workspace__rail .workspace-nav').scrollTop = 10000`)
+        for (let attempt = 0; attempt < 30 && await page.evaluate<boolean>(`document.querySelector('.workspace__rail .workspace-nav').hasAttribute('data-more-below')`); attempt += 1) await Bun.sleep(20)
         const end = await page.evaluate<{ hasMore: boolean; mask: string; scrollTop: number; scrollHeight: number; clientHeight: number }>(measure)
         expect(end.scrollTop).toBeGreaterThan(0)
         expect(end.scrollHeight - end.clientHeight - end.scrollTop).toBeLessThanOrEqual(1)
         expect(end.hasMore).toBe(false)
         expect(end.mask).toBe("none")
 
-        await page.evaluate(`document.querySelector('.sessions-page .workspace-nav').scrollTop = 0`)
-        for (let attempt = 0; attempt < 30 && !await page.evaluate<boolean>(`document.querySelector('.sessions-page .workspace-nav').hasAttribute('data-more-below')`); attempt += 1) await Bun.sleep(20)
-        expect(await page.evaluate<boolean>(`document.querySelector('.sessions-page .workspace-nav').hasAttribute('data-more-below')`)).toBe(true)
+        await page.evaluate(`document.querySelector('.workspace__rail .workspace-nav').scrollTop = 0`)
+        for (let attempt = 0; attempt < 30 && !await page.evaluate<boolean>(`document.querySelector('.workspace__rail .workspace-nav').hasAttribute('data-more-below')`); attempt += 1) await Bun.sleep(20)
+        expect(await page.evaluate<boolean>(`document.querySelector('.workspace__rail .workspace-nav').hasAttribute('data-more-below')`)).toBe(true)
 
-        await page.evaluate(`document.querySelectorAll('.sessions-page .workspace-nav__item')[12].focus()`)
-        for (let attempt = 0; attempt < 30 && !await page.evaluate<boolean>(`document.querySelector('.sessions-page .workspace-nav').hasAttribute('data-more-below')`); attempt += 1) await Bun.sleep(20)
+        await page.evaluate(`document.querySelectorAll('.workspace__rail .workspace-nav__item')[12].focus()`)
+        for (let attempt = 0; attempt < 30 && !await page.evaluate<boolean>(`document.querySelector('.workspace__rail .workspace-nav').hasAttribute('data-more-below')`); attempt += 1) await Bun.sleep(20)
         const focus = await page.evaluate<{ focused: boolean; bottom: number; edge: number; padding: number; hasMore: boolean }>(`(() => {
-          const nav = document.querySelector('.sessions-page .workspace-nav');
-          const item = document.querySelectorAll('.sessions-page .workspace-nav__item')[12];
+          const nav = document.querySelector('.workspace__rail .workspace-nav');
+          const item = document.querySelectorAll('.workspace__rail .workspace-nav__item')[12];
           return { focused: document.activeElement === item, bottom: item.getBoundingClientRect().bottom,
             edge: nav.getBoundingClientRect().bottom, padding: parseFloat(getComputedStyle(nav).scrollPaddingBlockEnd),
             hasMore: nav.hasAttribute('data-more-below') };
@@ -107,11 +107,11 @@ describe("desktop Workspaces scroll cue", () => {
         expect(focus.bottom).toBeLessThanOrEqual(focus.edge - focus.padding + 1)
 
         await page.setViewport(1440, 1800)
-        for (let attempt = 0; attempt < 30 && await page.evaluate<boolean>(`document.querySelector('.sessions-page .workspace-nav').hasAttribute('data-more-below')`); attempt += 1) await Bun.sleep(20)
-        expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.sessions-page .workspace-nav')).maskImage`)).toBe("none")
+        for (let attempt = 0; attempt < 30 && await page.evaluate<boolean>(`document.querySelector('.workspace__rail .workspace-nav').hasAttribute('data-more-below')`); attempt += 1) await Bun.sleep(20)
+        expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.workspace__rail .workspace-nav')).maskImage`)).toBe("none")
         await page.setViewport(1440, 900)
-        for (let attempt = 0; attempt < 30 && !await page.evaluate<boolean>(`document.querySelector('.sessions-page .workspace-nav').hasAttribute('data-more-below')`); attempt += 1) await Bun.sleep(20)
-        expect(await page.evaluate<boolean>(`document.querySelector('.sessions-page .workspace-nav').hasAttribute('data-more-below')`)).toBe(true)
+        for (let attempt = 0; attempt < 30 && !await page.evaluate<boolean>(`document.querySelector('.workspace__rail .workspace-nav').hasAttribute('data-more-below')`); attempt += 1) await Bun.sleep(20)
+        expect(await page.evaluate<boolean>(`document.querySelector('.workspace__rail .workspace-nav').hasAttribute('data-more-below')`)).toBe(true)
       } finally { await page.close() }
     }, 30_000)
 
@@ -130,7 +130,7 @@ describe("desktop Workspaces scroll cue", () => {
     const page = await open("light", "overflow")
     try {
       const target = await page.evaluate<{ x: number; y: number; title: string; hit: string }>(`(() => {
-        const nav = document.querySelector('.sessions-page .workspace-nav');
+        const nav = document.querySelector('.workspace__rail .workspace-nav');
         const bounds = nav.getBoundingClientRect();
         const x = bounds.left + bounds.width / 2;
         const y = bounds.bottom - 12;
@@ -150,12 +150,12 @@ describe("desktop Workspaces scroll cue", () => {
   test("forced colors removes the mask and reduced motion has no animated cue", async () => {
     const page = await open("light", "overflow")
     try {
-      expect(await page.evaluate<boolean>(`document.querySelector('.sessions-page .workspace-nav').hasAttribute('data-more-below')`)).toBe(true)
+      expect(await page.evaluate<boolean>(`document.querySelector('.workspace__rail .workspace-nav').hasAttribute('data-more-below')`)).toBe(true)
       await page.setForcedColors(true)
-      expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.sessions-page .workspace-nav')).maskImage`)).toBe("none")
+      expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.workspace__rail .workspace-nav')).maskImage`)).toBe("none")
       await page.setForcedColors(false)
       await page.setReducedMotion(true)
-      expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.sessions-page .workspace-nav')).transitionDuration`)).toBe("0s")
+      expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.workspace__rail .workspace-nav')).transitionDuration`)).toBe("0s")
     } finally { await page.close() }
   }, 30_000)
 })

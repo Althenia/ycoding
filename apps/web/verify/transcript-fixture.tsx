@@ -151,6 +151,8 @@ if (imagesMode) {
       return new Response(JSON.stringify({ mime: "image/png", bytes: 4_096, data: plot.toDataURL("image/png").split(",")[1] }), { headers: { "content-type": "application/json" } })
     }
     if (url.endsWith(`/attachments/${"c".repeat(64)}`)) return new Response(null, { status: 404 })
+    if (new URLSearchParams(location.search).has("imageCache") && /\/attachments\/[a-f0-9]{64}$/.test(url))
+      return Response.json({ mime: "image/png", bytes: 4_096, data: plot.toDataURL("image/png").split(",")[1] })
     return originalFetch(input, init)
   }, { preconnect: window.fetch.preconnect })
 }
@@ -186,7 +188,7 @@ const root = document.getElementById("app")
 if (!root) throw new Error("Missing transcript root")
 const store = createRemoteStore({ http: createRemoteHttp({ fetch: Object.assign(async () => new Response(null, { status: 401 }), { preconnect: () => {} }) }), createTransport: () => { throw new Error("Fixture transport must not connect") } })
 const fixtureState = { ...store.state(), activeSessionID: "ses_a", activeDeviceID: "dev_1" }
-const fixtureSnapshot = () => ({ ...fixtureState, history: history(), view: fileChangesMode ? { ...createSessionView("ses_a"), status: fileChangeStatus(), messages: messages(), capturedChanges } : compactionMode ? { ...createSessionView("ses_a"), compactionHistory: compactionHistory() } : fixtureState.view })
+const fixtureSnapshot = () => ({ ...fixtureState, history: history(), view: fileChangesMode ? { ...createSessionView("ses_a"), status: fileChangeStatus(), messages: messages(), capturedChanges } : compactionMode ? { ...createSessionView("ses_a"), compactionHistory: compactionHistory() } : fileChangeStatus() === "running" ? { ...createSessionView("ses_a"), status: fileChangeStatus(), messages: messages() } : fixtureState.view })
 Object.defineProperty(store, "container", { value: new Store(fixtureSnapshot()) })
 createRoot(() => createEffect(() => store.container.setState(() => fixtureSnapshot())))
 Object.defineProperty(store, "loadOlderMessages", { value: async () => {
@@ -220,7 +222,11 @@ if (longMode) Object.assign(window, {
 })
 if (imagesMode) Object.assign(window, {
   imageFetchCount: () => imageFetches,
-  imageUpdate: (kind: "stream" | "live" | "reconcile" | "prepend" | "reconnect" | "corrupt-tool" | "repair-tool") => {
+  imageUpdate: (kind: "stream" | "live" | "reconcile" | "prepend" | "reconnect" | "corrupt-tool" | "repair-tool" | "evict") => {
+    if (kind === "evict") return (async () => {
+      for (let index = 0; index < 33; index++) await store.loadImageSource({ deviceID: "dev_1", sessionID: "ses_a", digest: index.toString(16).padStart(64, "0"), mime: "image/png" })
+      await store.loadImageSource({ deviceID: "dev_1", sessionID: "ses_a", digest: "a".repeat(64), mime: "image/png" })
+    })()
     if (kind === "stream") {
       streamedImageText += "more "
       setMessages((current) => applySessionEvent({ ...createSessionView("ses_a"), messages: current }, { type: "session.text.delta", data: { sessionID: "ses_a", assistantMessageID: "msg_tool_image", ordinal: 1, delta: "more " } }, 10).messages)

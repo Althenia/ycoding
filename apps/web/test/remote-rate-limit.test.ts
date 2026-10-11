@@ -305,7 +305,8 @@ describe("remote request budget integration", () => {
       expect(fixture.closed).toEqual([])
       expect(store.state().connection.kind).toBe("connected")
       expect(store.state().sessions.map((session) => session.id)).toEqual(initial.map((session) => session.id))
-      expect(fixture.requests.every((request) => request.operation === "workspace.list" || request.operation === "session.list" || request.operation === "session.status")).toBe(true)
+      expect(fixture.requests.filter((request) => request.operation === "machine.telemetry.consent.get")).toHaveLength(2)
+      expect(fixture.requests.every((request) => request.operation === "workspace.list" || request.operation === "session.list" || request.operation === "session.status" || request.operation === "machine.telemetry.consent.get")).toBe(true)
     } finally {
       store.dispose()
       await fixture.server.stop(true)

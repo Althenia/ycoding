@@ -116,7 +116,7 @@ export type OfficeSnapshot = {
 
 export type Point = { readonly x: number; readonly y: number }
 
-export type OfficeSpot = { readonly cell: Point; readonly facing: Direction; readonly pose: "sit" | "stand" | "play" }
+export type OfficeSpot = { readonly cell: Point; readonly facing: Direction; readonly pose: "sit" | "stand" | "play"; readonly leisure?: "pantry" | "rest" | "table" }
 
 export type OfficeLayout = {
   readonly columns: number
@@ -126,10 +126,11 @@ export type OfficeLayout = {
   readonly door: Point
   readonly pods: readonly { readonly left: number; readonly right: number; readonly top: number; readonly bottom: number; readonly spots: Readonly<Record<"implement" | "research" | "verify" | "coordinate", OfficeSpot>> }[]
   readonly lounge: readonly OfficeSpot[]
+  readonly gathering: readonly OfficeSpot[]
   readonly roomAt: (cell: Point) => OfficeRoomID | undefined
 }
 
-type ActorPose = "stand" | "walk" | "sit" | "type" | "talk" | "wave" | "play"
+type ActorPose = "stand" | "walk" | "sit" | "type" | "talk" | "wave" | "play" | "read" | "check" | "point"
 export type ActorSpeech = "chat" | "delegate" | "report"
 
 export type ActorFrame = {

@@ -51,6 +51,7 @@ export type IconName =
   | "at"
   | "hash"
   | "slash"
+  | "pin"
 
 const paths: Record<IconName, readonly string[]> = {
   terminal: ["M4 7l4 5-4 5", "M12 17h8"],
@@ -96,6 +97,7 @@ const paths: Record<IconName, readonly string[]> = {
   at: ["M16 12a4 4 0 1 0-1.2 2.8", "M16 8v5.5a2.5 2.5 0 0 0 5 0V12a9 9 0 1 0-3.6 7.2"],
   hash: ["M5 9h14", "M4 15h14", "M10 4L8 20", "M16 4l-2 16"],
   slash: ["M16 4L8 20"],
+  pin: ["M16 3l5 5-4 1-4 4-1 4-5-5 4-1 4-4z", "M9 15l-6 6"],
   usage: ["M4 17a8 8 0 1 1 16 0", "M12 17l4-5", "M12 17h.01"],
   zap: ["M13 3L4 14h7l-1 7 9-11h-7z"],
   reset: ["M4 5v5h5", "M5.2 15a8 8 0 1 0 1.6-8.4L4 10"],

@@ -24,13 +24,6 @@ export function officeHydrating(snapshot: OfficeSnapshot, placedActors: number):
   return placedActors === 0 && !officeInputsSettled(snapshot)
 }
 
-export function officeLocationLabel(room: OfficeRoomID | undefined): string {
-  const labels: Record<OfficeRoomID, string> = {
-    block: "Agent block", lounge: "Relax area", hall: "Open floor",
-  }
-  return room ? labels[room] : "Entrance"
-}
-
 export function shortText(text: string, limit: number): string {
   const normalized = text.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, " ").replace(/\s+/g, " ").trim()
   const points = Array.from(normalized)
@@ -44,7 +37,7 @@ export function projectOffice(input: OfficeInput, preferences: OfficePreferences
   const deviceID = input.deviceID
   const team = input.team
   const rootID = team?.rootID ?? input.activeSessionID
-  const members = team?.status === "ready"
+  const members = team && (team.status === "ready" || ["loading", "error"].includes(team.status) && team.members.length > 0)
     ? [...new Map(team.members.filter((member) => member.parentID === rootID).map((member) => [member.sessionID, member])).values()]
       .sort((a, b) => a.sessionID.localeCompare(b.sessionID))
     : []
@@ -155,7 +148,9 @@ function liveDetail(input: OfficeInput, sessionID: string): SelectedSession | un
 }
 
 function familyMember(input: OfficeInput, sessionID: string) {
-  return input.familyActivity?.status === "ready" ? input.familyActivity.members.find((member) => member.sessionID === sessionID) : undefined
+  const familyActivity = input.familyActivity
+  return familyActivity && (familyActivity.status === "ready" || ["loading", "error"].includes(familyActivity.status) && familyActivity.members.length > 0)
+    ? familyActivity.members.find((member) => member.sessionID === sessionID) : undefined
 }
 
 function sourceFor(input: OfficeInput, member: ReturnType<typeof familyMember>): OfficeActor["source"] {

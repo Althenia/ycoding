@@ -54,6 +54,63 @@ async function advance(page: Awaited<ReturnType<ReturnType<typeof requireBrowser
   await page.evaluate<void>(`(() => {const scene=window.__officeGame.scene.getScene('office');for(let step=0;step<${steps};step++)scene.update(performance.now()+step*50,50)})()`)
 }
 
+test("shared-floor crossings paint walk and yield frames without overlap and settle at 20 and 30 FPS", async () => {
+  const page = await requireBrowser().openPage()
+  try {
+    await page.navigate(url("tool", "&freeCamera=1"))
+    await waitFor(page, "window.__officeGame?.scene.getScene('office').latestFrames.length===1")
+    for (const fps of [20, 30]) for (const corridor of ["central", "widened"]) {
+      const evidence = await page.evaluate<{ readonly minimum: number; readonly aligned: boolean; readonly walking: boolean; readonly yielding: boolean; readonly frameChanges: boolean; readonly arrived: boolean; readonly speech: boolean; readonly reducedDirect: boolean }>(`(async () => {
+        const {OfficeDirector}=await import('/src/remote/office/director.ts');
+        const {officeLayout}=await import('/src/remote/office/map.ts');
+        const {actor,snapshot}=await import('/src/remote/office/layout.test-helper.ts');
+        const game=window.__officeGame,scene=game.scene.getScene('office');game.loop.stop();
+        const cells=${JSON.stringify(corridor === "central" ? [{ x: 25, y: 17 }, { x: 24, y: 17 }] : [{ x: 9, y: 13 }, { x: 9, y: 12 }])};
+        const layout={...officeLayout,lounge:cells.map(cell=>({cell,facing:'up',pose:'play',leisure:'table'}))};
+        scene.director=new OfficeDirector(layout);
+        const workers=Array.from({length:14},(_,index)=>index===0||index===13?actor(index===0?'a':'b',{status:'idle'}):actor('stationary-'+index,{source:'unavailable'}));
+        const input={...scene.mailbox.read(),preferences:{...scene.mailbox.read().preferences,motion:'system'}};
+        scene.mailbox.update({...input,snapshot:snapshot(workers)});scene.update(0,0);
+        scene.mailbox.update({...input,snapshot:snapshot(workers.map(worker=>({...worker,status:'working',activity:'research'})))});
+        let minimum=Infinity,aligned=true,walking=false,yielding=false,speech=false;
+        const painted=new Map();
+        for(let tick=0;tick<${fps * 30};tick++){
+          scene.update(tick*${1_000 / fps},${1_000 / fps});
+          const frames=scene.latestFrames.filter(frame=>frame.actor.source==='projection');
+          const sprites=frames.map(frame=>scene.objects.get(frame.actor.id).sprite);
+          minimum=Math.min(minimum,Math.hypot(sprites[0].x-sprites[1].x,sprites[0].y-sprites[1].y));
+          frames.forEach((frame,index)=>{
+            const sprite=sprites[index];sprite.preUpdate(tick*${1_000 / fps},${1_000 / fps});
+            aligned&&=sprite.x===Math.round(frame.position.x)&&sprite.y===Math.round(frame.position.y);
+            walking||=frame.moving&&sprite.anims.currentAnim?.key.endsWith('-walk');
+            yielding||=!frame.moving&&frame.pose==='stand'&&sprite.anims.currentAnim?.key.endsWith('-stand');
+            speech||=frame.speech!==undefined;
+            const names=painted.get(frame.actor.id)??new Set();names.add(String(sprite.frame.name));painted.set(frame.actor.id,names);
+          });
+        }
+        const frames=scene.latestFrames.filter(frame=>frame.actor.source==='projection');
+        const arrived=frames.every((frame,index)=>!frame.moving&&frame.pose==='read'&&frame.direction===officeLayout.pods[index===0?0:13].spots.research.facing&&Math.floor(frame.position.x/32)===officeLayout.pods[index===0?0:13].spots.research.cell.x&&Math.floor(frame.position.y/32)===officeLayout.pods[index===0?0:13].spots.research.cell.y);
+        scene.director=new OfficeDirector(layout);
+        scene.mailbox.update({...input,snapshot:snapshot(workers)});scene.update(0,0);
+        scene.mailbox.update({...input,snapshot:snapshot(workers.map(worker=>({...worker,status:'working',activity:'research'})))});scene.update(50,50);
+        scene.mailbox.update({...scene.mailbox.read(),preferences:{...input.preferences,motion:'reduced'}});scene.update(100,50);
+        const still=scene.latestFrames.filter(frame=>frame.actor.source==='projection').map(frame=>({...frame.position,frame:String(scene.objects.get(frame.actor.id).sprite.frame.name)}));
+        for(let tick=0;tick<20;tick++)scene.update(150+tick*50,50);
+        const reducedDirect=scene.latestFrames.filter(frame=>frame.actor.source==='projection').every((frame,index)=>!frame.moving&&frame.pose==='read'&&frame.position.x===still[index].x&&frame.position.y===still[index].y&&Math.floor(frame.position.x/32)===officeLayout.pods[index===0?0:13].spots.research.cell.x&&Math.floor(frame.position.y/32)===officeLayout.pods[index===0?0:13].spots.research.cell.y&&String(scene.objects.get(frame.actor.id).sprite.frame.name)===still[index].frame&&!scene.objects.get(frame.actor.id).sprite.anims.isPlaying);
+        return {minimum,aligned,walking,yielding,speech,reducedDirect,frameChanges:[...painted.values()].every(names=>names.size>1),arrived};
+      })()`)
+      expect(evidence.minimum).toBeGreaterThanOrEqual(31)
+      expect(evidence.aligned).toBe(true)
+      expect(evidence.walking).toBe(true)
+      expect(evidence.yielding).toBe(true)
+      expect(evidence.frameChanges).toBe(true)
+      expect(evidence.arrived).toBe(true)
+      expect(evidence.speech).toBe(false)
+      expect(evidence.reducedDirect).toBe(true)
+    }
+  } finally { await page.close() }
+}, 45_000)
+
 test("compact canvas names leave the role in the roster and characters lead their name plates", async () => {
   const page = await requireBrowser().openPage()
   try {
@@ -161,6 +218,7 @@ test("tablet and desktop Office fill the shell below header and status with no p
   for (const [width, height] of [[1440, 900], [1024, 768], [820, 1180]] as const) {
     await page.setViewport(width, height)
     await page.navigate(url("tool", "&shell=1&team=multi&freeCamera=1"))
+    await page.evaluate<void>(`(() => {document.querySelector('.app > div')?.classList.add('status-strip');document.querySelector('.workspace__main').style.gridArea='workspace'})()`)
     await waitFor(page, "window.__officeGame?.scene.getScene('office').latestFrames.length===3")
     const geometry = await page.evaluate<{ readonly scroll: number; readonly viewport: number; readonly panelBottom: number; readonly stageBottom: number; readonly scrollBottom: number; readonly hostBottom: number; readonly canvasHeight: number }>(`(() => {const box=(selector)=>document.querySelector(selector).getBoundingClientRect();return {
       scroll:document.documentElement.scrollHeight,viewport:innerHeight,panelBottom:box('.route-panel').bottom,
@@ -206,12 +264,20 @@ test("delegation and report bubbles occur inside each character's own block with
   for (const kind of ["delegate", "report"] as const) {
     await page.navigate(url("tool", `&team=1&cue=0&cueKind=${kind}&freeCamera=1`))
     await waitFor(page, "window.__officeGame?.scene.getScene('office').latestFrames.length===2")
-    const initial = await page.evaluate<readonly { readonly x: number; readonly y: number }[]>("window.__officeGame.scene.getScene('office').latestFrames.map(frame=>frame.position)")
+    await waitFor(page, "window.__officeGame.scene.getScene('office').latestFrames.every(frame=>!frame.moving)")
+    const initial = await page.evaluate<readonly { readonly x: number; readonly y: number; readonly direction: string }[]>("window.__officeGame.scene.getScene('office').latestFrames.map(frame=>({...frame.position,direction:frame.direction}))")
     await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Toggle observed cue')?.click()")
     await waitFor(page, `window.__officeGame.scene.getScene('office').latestFrames.some(frame=>frame.speech==='${kind}')`)
-    const spoken = await page.evaluate<readonly string[]>("window.__officeGame.scene.getScene('office').latestFrames.map(frame=>frame.speech)")
+    const spoken = await page.evaluate<readonly (string | undefined)[]>("window.__officeGame.scene.getScene('office').latestFrames.map(frame=>frame.speech)")
     expect(spoken).toContain(kind === "delegate" ? "delegate" : "report")
-    expect(await page.evaluate<readonly { readonly x: number; readonly y: number }[]>("window.__officeGame.scene.getScene('office').latestFrames.map(frame=>frame.position)")).toEqual(initial)
+    const current = await page.evaluate<readonly { readonly x: number; readonly y: number; readonly direction: string }[]>("window.__officeGame.scene.getScene('office').latestFrames.map(frame=>({...frame.position,direction:frame.direction}))")
+    expect(current.map(({ x, y }) => ({ x, y }))).toEqual(initial.map(({ x, y }) => ({ x, y })))
+    const from = current[kind === "delegate" ? 0 : 1]!
+    const to = current[kind === "delegate" ? 1 : 0]!
+    expect(from.direction).toBe(from.x === to.x ? from.y < to.y ? "down" : "up" : from.x < to.x ? "right" : "left")
+    expect(to.direction).toBe(to.x === from.x ? to.y < from.y ? "down" : "up" : to.x < from.x ? "right" : "left")
+    expect(await page.evaluate<boolean>(`(() => {const scene=window.__officeGame.scene.getScene('office'),target=scene.latestFrames.find(frame=>frame.actor.sessionID===${JSON.stringify(kind === "delegate" ? "session-b" : "session-a")}),objects=scene.objects.get(target.actor.id);return scene.badge.visible&&scene.badge.text===${JSON.stringify(kind === "delegate" ? "Delegated" : "Reported")}&&scene.badge.y<objects.bubble.y-objects.bubble.displayHeight})()`)).toBe(true)
+    expect(await page.evaluate<boolean>("(() => {const scene=window.__officeGame.scene.getScene('office'),ids=new Set(scene.latestFrames.map(frame=>frame.actor.id));return scene.latestFrames.every(frame=>ids.has(frame.actor.id))})()")).toBe(true)
     await advance(page, 80)
     expect(await page.evaluate<boolean>("window.__officeGame.scene.getScene('office').latestFrames.every(frame=>frame.room==='block'&&!frame.moving)")).toBe(true)
   }
@@ -222,16 +288,16 @@ test("roster preserves identity and selection across live activity updates", asy
   const page = await requireBrowser().openPage()
   await page.navigate(url("tool", "&team=1&cue=0&workspace=1&snapshots=1"))
   await waitFor(page, "document.querySelectorAll('.office-roster__row').length===2&&window.__officeGame?.scene.getScene('office').objects.size===2")
-  const result = await page.evaluate<{ readonly sameRows: boolean; readonly sameSprites: boolean; readonly names: readonly string[]; readonly locations: readonly string[] }>(`(async () => {
+  const result = await page.evaluate<{ readonly sameRows: boolean; readonly sameSprites: boolean; readonly names: readonly string[]; readonly hasLocation: boolean }>(`(async () => {
     const rows=[...document.querySelectorAll('.office-roster__row')],scene=window.__officeGame.scene.getScene('office');
     const sprites=new Map([...scene.objects].map(([id,objects])=>[id,objects.sprite]));
     for(let i=0;i<4;i++){[...document.querySelectorAll('button')].find(button=>button.textContent==='Refresh snapshot').click();await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))}
     return {sameRows:rows.every(row=>document.querySelector('.office-roster__row[data-session-id="'+row.dataset.sessionId+'"]')===row),sameSprites:[...sprites].every(([id,sprite])=>scene.objects.get(id)?.sprite===sprite),
-      names:rows.map(row=>row.querySelector('.office-roster__name').textContent),locations:rows.map(row=>row.querySelector('.office-roster__room').textContent)}})()`)
+      names:rows.map(row=>row.querySelector('.office-roster__name').textContent),hasLocation:rows.some(row=>row.querySelector('.office-roster__room'))}})()`)
   expect(result.sameRows).toBe(true)
   expect(result.sameSprites).toBe(true)
   expect(new Set(result.names).size).toBe(2)
-  expect(result.locations).toEqual(["Agent block", "Agent block"])
+  expect(result.hasLocation).toBe(false)
   await page.evaluate<void>("document.querySelector('.office-roster__row[data-session-id=\"session-b\"]')?.click()")
   await waitFor(page, "document.querySelector('#selected-session')?.textContent==='session-b'&&document.querySelector('.office-roster__row[data-session-id=\"session-b\"]')?.getAttribute('aria-current')==='true'")
   await page.close()
@@ -471,6 +537,64 @@ test("idle agents play table tennis with a moving ball and visibly changing fram
   } finally { await page.close() }
 }, 30_000)
 
+test("idle schedule paints coffee-facing and seated poses from existing frames", async () => {
+  const page = await openIdlePair()
+  try {
+    const evidence = await page.evaluate<{ readonly coffee: boolean; readonly seated: boolean; readonly coffeeFrame: boolean; readonly seatedFrame: boolean; readonly labels: readonly string[] }>(`(() => {
+      const scene=window.__officeGame.scene.getScene('office'),coffee=new Set(),seated=new Set(),labels=new Set();
+      let coffeeFrame=false,seatedFrame=false;
+      for(let tick=0;tick<10000;tick++){
+        scene.update(tick*50,50);
+        for(const frame of scene.latestFrames){
+          const phase=scene.director.leisurePhase(frame.actor.id),cell={x:Math.floor(frame.position.x/32),y:Math.floor(frame.position.y/32)};
+          if(phase?.kind==='pantry'&&frame.direction==='up'){coffee.add(cell.x+','+cell.y+':'+frame.pose);const sprite=scene.objects.get(frame.actor.id).sprite;coffeeFrame=sprite.texture.key==='characters'&&sprite.anims.currentAnim?.key.endsWith('-stand');}
+          if(phase?.kind==='rest'&&frame.pose==='sit'){seated.add(cell.x+','+cell.y);const sprite=scene.objects.get(frame.actor.id).sprite;seatedFrame=sprite.texture.key==='characters'&&!sprite.anims.isPlaying;}
+          if(frame.actor.bubble)labels.add(frame.actor.bubble);
+        }
+      }
+      return {coffee:coffee.size>0,seated:seated.size>0,coffeeFrame,seatedFrame,labels:[...labels]};
+    })()`)
+    expect(evidence.coffee).toBe(true)
+    expect(evidence.seated).toBe(true)
+    expect(evidence.coffeeFrame).toBe(true)
+    expect(evidence.seatedFrame).toBe(true)
+    expect(evidence.labels).toEqual([])
+  } finally { await page.close() }
+}, 45_000)
+
+test("idle gathering renders inward existing poses without a speech plate and disperses on work", async () => {
+  const page = await requireBrowser().openPage()
+  try {
+    await page.navigate(url("idle", "&gathering=1&team=1&teamIdle=1&workspace=1&freeCamera=1"))
+    await waitFor(page, "window.__officeGame?.scene.getScene('office').latestFrames.length===2")
+    const result = await page.evaluate<{ readonly frames: readonly { readonly pose: string; readonly direction: string; readonly moving: boolean; readonly cell: { readonly x: number; readonly y: number } }[]; readonly bubbles: number; readonly animations: readonly string[] }>(`(() => {
+      const scene=window.__officeGame.scene.getScene('office');
+      for(let tick=0;tick<5000;tick++){scene.update(tick*50,50);if(scene.latestFrames.some(frame=>scene.director.gatheringPhase(frame.actor.id)?.stage==='talk'))break;}
+      return {frames:scene.latestFrames.map(frame=>({pose:frame.pose,direction:frame.direction,moving:frame.moving,cell:{x:Math.floor(frame.position.x/32),y:Math.floor(frame.position.y/32)}})),
+        bubbles:[...scene.objects.values()].filter(object=>object.bubble.visible).length,
+        animations:scene.latestFrames.map(frame=>scene.objects.get(frame.actor.id).sprite.anims.currentAnim?.key??'')};
+    })()`)
+    expect(result.frames).toHaveLength(2)
+    expect(result.frames.map((frame) => frame.cell)).toEqual([{ x: 28, y: 21 }, { x: 31, y: 21 }])
+    expect(result.frames.map((frame) => frame.direction)).toEqual(["down", "down"])
+    expect(result.frames.every((frame) => ["talk", "stand"].includes(frame.pose) && !frame.moving)).toBe(true)
+    expect(new Set(result.frames.map((frame) => frame.pose))).toEqual(new Set(["talk", "stand"]))
+    expect(result.animations.every((animation) => animation.endsWith("-talk") || animation.endsWith("-stand"))).toBe(true)
+    expect(result.bubbles).toBe(0)
+    await page.evaluate<void>(`(()=>{const select=document.querySelector('select[aria-label="Office state"]');select.value='tool';select.dispatchEvent(new Event('change',{bubbles:true}))})()`)
+    await waitFor(page, "window.__officeGame.scene.getScene('office').latestFrames.find(frame=>frame.actor.sessionID==='session-a')?.actor.status==='tool'")
+    await advance(page, 1)
+    const after = await page.evaluate<{ readonly stages: readonly string[]; readonly rootMoving: boolean; readonly rootStatus: string }>(`(() => {const scene=window.__officeGame.scene.getScene('office');return {
+      stages:scene.latestFrames.map(frame=>scene.director.gatheringPhase(frame.actor.id)?.stage).filter(Boolean),
+      rootMoving:scene.latestFrames.find(frame=>frame.actor.sessionID==='session-a').moving,
+      rootStatus:scene.latestFrames.find(frame=>frame.actor.sessionID==='session-a').actor.status}})()`)
+    expect(after.rootStatus).toBe("tool")
+    expect(after.rootMoving).toBe(true)
+    expect(after.stages).toEqual([])
+    expect(await page.evaluate<boolean>("(()=>{const frame=window.__officeGame.scene.getScene('office').latestFrames.find(frame=>frame.actor.sessionID==='session-a');return frame.actor.bubble===frame.actor.statusText})()")).toBe(true)
+  } finally { await page.close() }
+}, 45_000)
+
 test("any working or attention state ends play at once and removes the ball", async () => {
   for (const state of ["tool", "attention", "thinking"] as const) {
     const page = await openIdlePair()
@@ -488,17 +612,51 @@ test("any working or attention state ends play at once and removes the ball", as
   }
 }, 45_000)
 
-test("reduced motion shows static stand poses facing the table and no ball", async () => {
+test("reduced motion shows fixed desk poses without leisure travel or ball", async () => {
   const page = await openIdlePair(true)
   try {
     await advance(page, 2)
     const frames = await page.evaluate<FrameSummary>(frameSummary)
-    expect(frames.map((frame) => frame.pose)).toEqual(["stand", "stand"])
-    expect(frames.map((frame) => frame.direction)).toEqual(["right", "left"])
+    expect(frames.map((frame) => frame.pose)).toEqual(["sit", "sit"])
     expect(await page.evaluate<boolean>("window.__officeGame.scene.getScene('office').ball.visible")).toBe(false)
+    const frameIDs = await page.evaluate<readonly string[]>("window.__officeGame.scene.getScene('office').latestFrames.map(frame=>String(window.__officeGame.scene.getScene('office').objects.get(frame.actor.id).sprite.frame.name))")
     const before = await page.evaluate<readonly number[]>("window.__officeGame.scene.getScene('office').latestFrames.map(frame=>frame.position.x)")
     await advance(page, 40)
     expect(await page.evaluate<readonly number[]>("window.__officeGame.scene.getScene('office').latestFrames.map(frame=>frame.position.x)")).toEqual(before)
+    expect(await page.evaluate<readonly string[]>("window.__officeGame.scene.getScene('office').latestFrames.map(frame=>String(window.__officeGame.scene.getScene('office').objects.get(frame.actor.id).sprite.frame.name))")).toEqual(frameIDs)
+    expect(await page.evaluate<boolean>("window.__officeGame.scene.getScene('office').latestFrames.every(frame=>!window.__officeGame.scene.getScene('office').objects.get(frame.actor.id).sprite.anims.isPlaying)")).toBe(true)
+  } finally { await page.close() }
+}, 30_000)
+
+test("reduced motion holds the active type frame while the engine advances", async () => {
+  const page = await requireBrowser().openPage()
+  try {
+    await page.navigate(url("tool", "&freeCamera=1"))
+    await waitFor(page, "window.__officeGame?.scene.getScene('office').latestFrames.length===1")
+    await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Toggle reduced motion')?.click()")
+    const before = await page.evaluate<string>("String(window.__officeGame.scene.getScene('office').objects.values().next().value.sprite.frame.name)")
+    await advance(page, 40)
+    expect(await page.evaluate<string>("String(window.__officeGame.scene.getScene('office').objects.values().next().value.sprite.frame.name)")).toBe(before)
+    expect(await page.evaluate<boolean>("[...window.__officeGame.scene.getScene('office').objects.values()].every(objects=>!objects.sprite.anims.isPlaying)")).toBe(true)
+  } finally { await page.close() }
+}, 30_000)
+
+test("reduced-motion preference switches freeze and resume the current sprite pose", async () => {
+  const page = await requireBrowser().openPage()
+  try {
+    await page.navigate(url("tool", "&freeCamera=1"))
+    await waitFor(page, "window.__officeGame?.scene.getScene('office').latestFrames.length===1")
+    const frameName = "String(window.__officeGame.scene.getScene('office').objects.values().next().value.sprite.frame.name)"
+    await Bun.sleep(600)
+    const animated = await page.evaluate<string>(frameName)
+    await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Toggle reduced motion')?.click()")
+    await waitFor(page, "document.querySelector('#office-motion').textContent==='reduced'&&![...window.__officeGame.scene.getScene('office').objects.values()].some(objects=>objects.sprite.anims.isPlaying)")
+    const fixed = await page.evaluate<string>(frameName)
+    await page.evaluate<void>("(()=>{const scene=window.__officeGame.scene.getScene('office');for(let step=0;step<20;step++)scene.update(performance.now()+step*50,50)})()")
+    expect(await page.evaluate<string>(frameName)).toBe(fixed)
+    await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Toggle reduced motion')?.click()")
+    await waitFor(page, `(document.querySelector('#office-motion').textContent==='system'&&${frameName}!==${JSON.stringify(fixed)})`)
+    expect(animated).not.toBe("")
   } finally { await page.close() }
 }, 30_000)
 
@@ -571,3 +729,23 @@ test("inputs that settle within a beat never flash the loading notice", async ()
     expect(notices.filter((text) => text === "Loading the office…")).toEqual([])
   } finally { await page.close() }
 }, 30_000)
+
+test("work-category gestures animate truthfully and reduced motion fixes each category frame", async () => {
+  const page = await requireBrowser().openPage()
+  try {
+    for (const [theme, activity, pose, bubble] of [["light", "research", "read", "Reading store.ts"], ["dark", "verify", "type", "Running bun test"], ["light", "coordinate", "point", "Dispatching a subagent"]] as const) {
+      await page.navigate(url("tool", `&workspace=1&activity=${activity}&freeCamera=1`))
+      await page.evaluate<void>(`document.documentElement.dataset.theme='${theme}'`)
+      await waitFor(page, `window.__officeGame?.scene.getScene('office').latestFrames[0]?.pose==='${pose}'`)
+      const sprite = "window.__officeGame.scene.getScene('office').objects.values().next().value.sprite"
+      const animatedFrames = await page.evaluate<readonly number[]>(`(async()=>{const sprite=${sprite},frames=new Set([sprite.frame.name]);for(let index=0;index<120&&frames.size<2;index++)await new Promise(requestAnimationFrame).then(()=>frames.add(sprite.frame.name));return [...frames]})()`)
+      expect(animatedFrames.length).toBeGreaterThan(1)
+      expect(await page.evaluate<string>(`window.__officeGame.scene.getScene('office').latestFrames[0].actor.bubble`)).toBe(bubble)
+      await page.evaluate<void>("[...document.querySelectorAll('button')].find(button=>button.textContent==='Toggle reduced motion')?.click()")
+      await waitFor(page, `!${sprite}.anims.isPlaying`)
+      const fixedFrames = await page.evaluate<readonly number[]>(`(async()=>{const sprite=${sprite},frames=new Set([sprite.frame.name]);for(let index=0;index<12;index++)await new Promise(requestAnimationFrame).then(()=>frames.add(sprite.frame.name));return [...frames]})()`)
+      expect(fixedFrames).toHaveLength(1)
+      expect(await page.evaluate<string>("window.__officeGame.scene.getScene('office').latestFrames[0].pose")).toBe(pose)
+    }
+  } finally { await page.close() }
+}, 60_000)

@@ -23,7 +23,7 @@ export const DOC_INDEX: DocPage = {
         {
           kind: "steps",
           items: [
-            { title: "Install", text: "Install a checksum-verified release build, or run from a checkout with Bun 1.4.2." },
+            { title: "Install", text: "Install a checksum-verified release build, or run from a checkout with a current Bun release." },
             { title: "Connect a provider", text: "Start `ycoding`, enter `/connect`, and finish the sign-in or credential flow for a provider you can use." },
             { title: "Start a session", text: "In your project directory, run `ycoding` and send a focused prompt. Use a direct `--model` run only when the task does not need an interactive approval." },
           ],

@@ -15,6 +15,7 @@
 .team-view button:focus-visible, .team-view__confirmation button:focus-visible { outline: 2px solid var(--yc-focus); outline-offset: 2px; }
 .team-view button:disabled { opacity: 0.55; }
 .team-view__close, .team-view__icon { display: inline-grid; place-items: center; inline-size: 36px; block-size: 36px; padding: 0; border: var(--yc-border-width) solid transparent; border-radius: var(--yc-radius-md); background: transparent; color: var(--yc-text-muted); }
+.team-view__pin { inline-size: var(--yc-hit-min); block-size: var(--yc-hit-min); }
 .team-view__close:hover, .team-view__icon:hover:not(:disabled) { background: var(--yc-surface-sunken); color: var(--yc-text); }
 .team-view__icon--danger:hover:not(:disabled) { background: var(--yc-danger-soft); color: var(--yc-danger); }
 .team-view__button, .team-view__answer, .team-view__more, .team-view [data-action="new-side-chat"], .team-view [data-action="older-side-chats"] { display: inline-flex; align-items: center; justify-content: center; gap: var(--yc-space-1); min-block-size: 32px; padding-inline: var(--yc-space-3); border: var(--yc-border-width) solid var(--yc-border-strong); border-radius: var(--yc-radius-md); background: var(--yc-surface-raised); color: var(--yc-text); font: var(--yc-weight-medium) var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-sans); }

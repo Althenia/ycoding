@@ -7,6 +7,38 @@ const inside = (pod: (typeof pods)[number], x: number, y: number) => x >= pod.le
 const inAnyPod = (x: number, y: number) => pods.some((pod) => inside(pod, x, y))
 const cellsOf = (prop: OfficeProp) => Array.from({ length: prop.height }, (_, dy) => Array.from({ length: prop.width }, (_, dx) => ({ x: prop.cell.x + dx, y: prop.cell.y + dy }))).flat()
 
+test("shared routes from distinct claims have a free perpendicular passing cell wherever they meet head-on", () => {
+  const shared = (x: number, y: number) => officeLayout.walkable(x, y) && !inAnyPod(x, y)
+  const passages = new Map<string, Set<number>>()
+  const destinations = [officeLayout.door, ...officeLayout.lounge.map((spot) => spot.cell), ...officeLayout.gathering.map((spot) => spot.cell)]
+  for (const [index, pod] of pods.entries()) for (const spot of Object.values(pod.spots)) for (const destination of destinations) {
+    const allowed = (point: { x: number; y: number }) => pods.every((claim, owner) => owner === index || !inside(claim, point.x, point.y))
+    for (const [start, end] of [[spot.cell, destination], [destination, spot.cell]] as const) {
+      const route = [start, ...findPath(officeLayout, start, end, allowed)!]
+      for (let step = 1; step < route.length - 1; step++) {
+        const before = route[step - 1]!
+        const at = route[step]!
+        const after = route[step + 1]!
+        if (![before, at, after].every((point) => shared(point.x, point.y)) || before.x + after.x !== 2 * at.x || before.y + after.y !== 2 * at.y) continue
+        const key = `${at.x},${at.y}:${after.x - at.x},${after.y - at.y}`
+        const owners = passages.get(key) ?? new Set<number>()
+        owners.add(index)
+        passages.set(key, owners)
+      }
+    }
+  }
+  const narrow = new Set<string>()
+  for (const [key, owners] of passages) {
+    const [cell, direction] = key.split(":")
+    const [x, y] = cell!.split(",").map(Number)
+    const [dx, dy] = direction!.split(",").map(Number)
+    const opposite = passages.get(`${cell}:${-dx!},${-dy!}`)
+    if (!opposite || ![...owners].some((owner) => [...opposite].some((peer) => peer !== owner))) continue
+    if (!shared(x! + dy!, y! + dx!) && !shared(x! - dy!, y! - dx!)) narrow.add(cell!)
+  }
+  expect(narrow).toEqual(new Set())
+})
+
 function reachableWithoutPods() {
   const seen = new Set<string>([`${officeLayout.door.x},${officeLayout.door.y}`])
   const queue = [officeLayout.door]
@@ -153,6 +185,22 @@ test("meeting, lounge, pantry, and foyer are furnished shared rooms outside ever
   expect(foyer.has("receptionDesk")).toBe(true)
   const loungeCells = Array.from({ length: 15 }, (_, dy) => Array.from({ length: 13 }, (_, dx) => ({ x: 10 + dx, y: 18 + dy }))).flat().filter((cell) => officeLayout.walkable(cell.x, cell.y))
   expect(loungeCells.length).toBeGreaterThanOrEqual(110)
+})
+
+test("shared leisure spots reuse seats and pantry standing positions face the existing coffee machine", () => {
+  const seated = officeLayout.lounge.filter((spot) => spot.pose === "sit")
+  expect(seated.length).toBeGreaterThanOrEqual(4)
+  expect(seated.every((spot) => officeLayout.walkable(spot.cell.x, spot.cell.y))).toBe(true)
+  const coffee = props.find((prop) => prop.kind === "coffeeMachine")!
+  const coffeeApproach = officeLayout.lounge.find((spot) => spot.cell.x === coffee.cell.x && spot.cell.y === coffee.cell.y + 1)
+  expect(coffeeApproach).toMatchObject({ facing: "up", pose: "stand" })
+})
+
+test("meeting-edge gathering spots are distinct, walkable, and face inward beside the existing table", () => {
+  expect(officeLayout.gathering).toHaveLength(3)
+  expect(new Set(officeLayout.gathering.map((spot) => `${spot.cell.x},${spot.cell.y}`)).size).toBe(3)
+  expect(officeLayout.gathering.every((spot) => officeLayout.walkable(spot.cell.x, spot.cell.y) && spot.pose === "stand" && spot.facing === "down")).toBe(true)
+  expect(officeLayout.gathering.every((spot) => spot.cell.y === 21 && spot.cell.x >= 28 && spot.cell.x <= 34)).toBe(true)
 })
 
 test("floors zone each neighbourhood and room with authored tile frames", () => {

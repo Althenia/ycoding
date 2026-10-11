@@ -19,6 +19,7 @@ import { Icon } from "./icon"
  */
 export function Modal(props: {
   readonly class?: string
+  readonly surfaceStyle?: JSX.CSSProperties
   readonly label: string
   readonly header?: JSX.Element
   readonly returnFocus: HTMLElement
@@ -77,7 +78,7 @@ export function Modal(props: {
         next.focus()
       }}
     >
-      <div class="overlay__surface">
+      <div class="overlay__surface" style={props.surfaceStyle}>
         <div class="overlay__head">
           {props.header ?? <span class="overlay__title">{props.label}</span>}
           <button

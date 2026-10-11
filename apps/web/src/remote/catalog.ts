@@ -19,6 +19,8 @@ export type ModelOption = {
   readonly id: string
   readonly name: string
   readonly variants: readonly string[]
+  readonly enabled?: boolean
+  readonly profiles?: readonly { readonly name: string; readonly active: boolean; readonly variants?: readonly string[] }[]
 }
 
 type CommandOption = { readonly name: string; readonly description?: string }
@@ -64,8 +66,10 @@ export function catalogKey(target: CatalogTarget): string {
 }
 
 export function modelDisplayLabel(model: ModelRefView, models: readonly ModelOption[] = []): string {
-  const name = models.find((option) => option.providerID === model.providerID && option.id === model.id)?.name
-  return `${model.providerID}/${name ?? model.id.replaceAll("-", " ").replace(/\b\w/g, (letter) => letter.toUpperCase())}`
+  const option = models.find((item) => item.providerID === model.providerID && item.id === model.id)
+  const name = option?.name ?? model.id.replaceAll("-", " ").replace(/\b\w/g, (letter) => letter.toUpperCase())
+  const profile = model.profile === undefined ? "" : ` · profile ${option?.profiles?.some((item) => item.name === model.profile) ? model.profile : `unavailable: ${model.profile}`}`
+  return `${model.providerID}/${name}${profile}`
 }
 
 export function readCatalog(value: unknown): CatalogView | undefined {
@@ -95,7 +99,16 @@ export function readCatalog(value: unknown): CatalogView | undefined {
     models: models.flatMap((item) => {
       const entry = record(item)
       if (!entry || !text(entry.providerID) || !text(entry.id) || !text(entry.name) || !Array.isArray(entry.variants) || !entry.variants.every((variant) => typeof variant === "string")) return []
+      if ("enabled" in entry && typeof entry.enabled !== "boolean") return []
+      const profiles = Array.isArray(entry.profiles) ? entry.profiles.flatMap((profile) => {
+        const item = record(profile)
+        if (!item || !text(item.name) || typeof item.active !== "boolean") return []
+        const variants = Array.isArray(item.variants) ? item.variants.filter((variant): variant is string => typeof variant === "string" && variant.length > 0) : undefined
+        return [{ name: text(item.name)!, active: item.active, ...(variants === undefined ? {} : { variants }) }]
+      }) : undefined
       return [{ providerID: text(entry.providerID)!, id: text(entry.id)!, name: text(entry.name)!, variants: entry.variants,
+        ...(typeof entry.enabled === "boolean" ? { enabled: entry.enabled } : {}),
+        ...(profiles === undefined ? {} : { profiles }),
         ...(text(entry.providerName) === undefined ? {} : { providerName: text(entry.providerName) }) }]
     }),
     commands: commands.flatMap((item) => {

@@ -27,7 +27,7 @@ const domainCards: DocBlock = {
     { title: "Guardrails", text: "Session-family reviews and custom rules.", href: "/docs/configuration/guardrails" },
     { title: "Notifications", text: "Desktop attention alerts and sounds.", href: "/docs/configuration/notifications" },
     { title: "Permissions", text: "Ordered tool rules and inheritance.", href: "/docs/configuration/permissions" },
-    { title: "Tools", text: "Tool surfaces and resource limits.", href: "/docs/configuration/tools" },
+    { title: "Tools", text: "Tool permissions, structured decisions, and resource limits.", href: "/docs/configuration/tools" },
     { title: "Appearance", text: "Theme, keybindings, and terminal behavior.", href: "/docs/configuration/appearance" },
   ],
 }
@@ -190,13 +190,13 @@ export const configurationPages: readonly DocPage[] = [
         blocks: [
           {
             kind: "paragraph",
-            text: "A document containing any rejected top-level key is ignored as a whole, so one stale key disables every setting in that file. The runtime logs the warning `ignored config file with removed keys` with the file path and the exact keys.",
+            text: "A rejected top-level key is dropped on its own; every other setting in that file still loads. The runtime logs one `recovered config item` warning per dropped key, and the TUI Status dialog lists it with the file path and JSON path.",
           },
           {
             kind: "code",
             language: "text",
             label: "Rejected keys",
-            code: "logLevel, server, command, reference, snapshot, plugin, autoshare,\ndisabled_providers, enabled_providers, small_model, mode, agent,\nprovider, permission, tools, attachment, layout",
+            code: "logLevel, server, command, reference, snapshot, plugin, autoshare,\ndisabled_providers, enabled_providers, small_model, mode, agent,\nprovider, permission, tools, attachment, layout, decisions",
           },
           {
             kind: "table",
@@ -223,7 +223,7 @@ export const configurationPages: readonly DocPage[] = [
             head: ["Field", "Type", "Default", "Description"],
             rows: [
               ["`$schema`", "string", "unset", "Editor schema metadata only."],
-              ["`model`", "model selector", "unset", "Default `provider/model#variant` when no Session or agent model is selected."],
+              ["`model`", "model selector", "unset", "Default `[profile#]provider/model[#variant]` when no Session or agent model is selected; an omitted profile uses the provider default."],
               ["`default_agent`", "string", "`god`", "Primary agent for a new Session."],
               ["`username`", "string", "unset", "Display and telemetry identity."],
               ["`shell`", "string", "unset", "Shell for terminal and shell-tool execution."],
@@ -251,7 +251,7 @@ export const configurationPages: readonly DocPage[] = [
               ["`references`", "record", "unset", "Named local directories or Git repositories used as context."],
               ["`plugins`", "array of string | `{ package, options? }`", "unset", "Ordered plugin additions and removals."],
               ["`providers`", "record of provider objects", "unset", "Provider and model metadata and request overlays."],
-              ["`provider_usage.codex_app_server`", "object", "unset", "Optional local Codex app-server quota source."],
+              ["`provider_usage.codex_app_server`", "object", "unset", "Optional local Codex app-server quota source, displayed separately with unknown account attribution rather than as a stored profile."],
               ["`efficiency`", "object", "runtime-derived", "Helper models, title policy, prompt caching, Responses continuation."],
               ["`image_analyzer`", "object", "unset", "Image-to-text fallback for text-only models."],
               ["`experimental.subagent_depth`", "integer ≥ 0", "`1`", "Maximum subagent nesting depth."],
@@ -331,7 +331,7 @@ export const configurationPages: readonly DocPage[] = [
             items: [
               { title: "Save the file", text: "Runtime config files are watched. A change is picked up after a 100 ms debounce without restarting." },
               { title: "Inspect resolved state", text: "Run `ycoding debug agents` for agents, models, and permissions; `ycoding mcp list` for MCP servers; `ycoding plugin list` for active plugins." },
-              { title: "Check for skipped files", text: "Start with `YCODING_PRINT_LOGS=1` and look for `ignored config file with removed keys`. If a value still has no effect and no warning appears, the file failed validation: compare every field against the tables on this page." },
+              { title: "Check for skipped files", text: "Open the Configuration section of the TUI Status dialog, or start with `YCODING_PRINT_LOGS=1` and look for `ignored config file with invalid JSON` and `recovered config item`. A dropped item is listed with its file and JSON path; only a file that is not valid JSON or JSONC is skipped entirely. An invalid permission rule becomes a deny and an invalid `guardrails` value keeps guardrails on, both marked `fails closed`." },
             ],
           },
         ],
@@ -363,7 +363,7 @@ export const configurationPages: readonly DocPage[] = [
               ["`GSD`, `architech`, `yangi`", "primary", "Selectable primary agents."],
               ["`occam`, `omoikane`, `wittgenstein`, `zeus`", "subagent", "Maintained task subagents."],
               ["`btw`", "subagent", "Visible read-only advisor; shell, edit, write, and patch ask."],
-              ["`compaction`, `title`, `goal`, `summary`", "primary, hidden", "Internal helpers with every tool denied."],
+              ["`compaction`, `title`, `goal`, `decision`, `summary`", "primary, hidden", "Internal helpers with every tool denied; `decision` serves structured judgments."],
             ],
           },
         ],
@@ -375,7 +375,7 @@ export const configurationPages: readonly DocPage[] = [
             kind: "table",
             head: ["Field", "Type", "Default", "Description"],
             rows: [
-              ["`model`", "model selector", "Session or `model` fallback", "Agent-specific `provider/model#variant`."],
+              ["`model`", "model selector", "Session or `model` fallback", "Agent-specific `[profile#]provider/model[#variant]`."],
               ["`description`", "string", "unset", "Text shown in pickers and status."],
               ["`mode`", "`primary` | `subagent` | `all`", "built-in mode, or runtime default for a new agent", "`primary` is selectable for the foreground Session; `subagent` only runs as a child; `all` is both."],
               ["`hidden`", "boolean", "unset", "Hide from normal selection."],
@@ -490,7 +490,7 @@ Report concrete defects with file and symbol evidence.`,
         blocks: [
           {
             kind: "paragraph",
-            text: "Run `ycoding debug agents` in the project directory. It prints every resolved agent as JSON, including its mode, model, and final permission list. A missing custom agent means its file or object failed validation.",
+            text: "Run `ycoding debug agents` in the project directory. It prints every resolved agent as JSON, including its mode, model, and final permission list. A missing custom agent means its file is not valid JSON or JSONC or the agent entry was dropped; the Configuration section of the Status dialog names the reason.",
           },
           { kind: "related", slugs: ["configuration/permissions", "configuration/models", "configuration/plugins"] },
         ],
@@ -537,7 +537,7 @@ Report concrete defects with file and symbol evidence.`,
               ["`model`", "selector"],
               ["`agents.<id>.model`", "selector"],
               ["`commands.<name>.model`", "selector"],
-              ["`efficiency.helper_models.title`, `.goal`, `.compaction.main`, `.compaction.subagent`", "selector or `session` (default)"],
+              ["`efficiency.helper_models.title`, `.goal`, `.decision`, `.compaction.main`, `.compaction.subagent`", "selector or `session` (default)"],
               ["`image_analyzer.model`", "selector string"],
             ],
           },
@@ -644,7 +644,7 @@ Report concrete defects with file and symbol evidence.`,
         blocks: [
           {
             kind: "paragraph",
-            text: "Open the model picker in the TUI: a declared model appears under its provider, and a variant appears in the variant cycle. The Session header shows the active `provider/model`. A selector that fails the grammar, such as `gpt-5` without a provider, makes the whole file fail validation.",
+            text: "Open the model picker in the TUI: a declared model appears under its provider, and a variant appears in the variant cycle. The Session header shows the active `provider/model` and, for a named profile, the profile. A selector that fails the grammar, such as `gpt-5` without a provider, makes the whole file fail validation.",
           },
           { kind: "related", slugs: ["configuration/providers", "configuration/agents", "usage/sessions"] },
         ],
@@ -741,7 +741,7 @@ Report concrete defects with file and symbol evidence.`,
           {
             kind: "list",
             items: [
-              "With `catalog.source: \"openai-models\"`, YCoding requests `GET <settings.baseURL>/models` with `Authorization: Bearer <key>` from the active profile, with a 5-second timeout.",
+              "With `catalog.source: \"openai-models\"`, YCoding requests `GET <settings.baseURL>/models` with `Authorization: Bearer <key>` from each stored profile, with a 5-second timeout.",
               "The response must be `{ \"object\": \"list\", \"data\": [{ \"id\": \"...\" }] }`; each record may add `name`, `capabilities`, `limit`, and `variants`, which override catalog metadata.",
               "With a stored profile, the URL must use HTTPS or loopback HTTP (`localhost`, `127.0.0.1`, `[::1]`), contain no embedded credentials, and must not redirect.",
               "A failure logs `OpenAI model discovery failed` and keeps configured models usable.",
@@ -754,14 +754,16 @@ Report concrete defects with file and symbol evidence.`,
         blocks: [
           {
             kind: "paragraph",
-            text: "One provider can hold several named profiles: multiple accounts or API keys. A profile is the user-facing name of a stored credential. `/connect`, the command palette's Connect integration, and the model selector's connect action ask for that name; reusing a name updates that profile.",
+            text: "One provider can hold several named profiles: multiple accounts or API keys. A profile is the user-facing name of a stored credential. The TUI's `/connect`, Connect integration, and model selector's connect action, or the web palette's Connect provider, ask for that name; reusing a name updates that profile. Connecting makes that profile the machine's provider default. The web sends keys and manual authorization codes through the authenticated relay and keeps credential storage on the selected machine.",
           },
           {
             kind: "list",
             items: [
-              "Exactly one profile per provider is active; model requests and usage reporting use it.",
-              "Switching the active profile keeps the others. Removing the active profile promotes the remaining one.",
-              "The Session header shows the active profile after the agent when a provider has more than one profile; a single profile shows the plain `provider/model` label.",
+              "One profile per provider is its default profile, used by any model reference without a profile; set it with Make <name> the default in the provider's connection dialog. Choose an eligible named profile in a Session's model control to use that account independently; other Sessions and subagents can use different profiles for the same provider and model at the same time.",
+              "Available models, effort variants, and Daybreak access follow the selected profile. A model offered only to a named profile remains selectable with that profile, but cannot use an ineligible provider default. Authenticated custom-provider discovery keeps each profile's inventory separate.",
+              "Selecting a Session profile does not change the default profile. Use provider default clears explicit selection. Changing or removing the default profile does not redirect an explicitly selected Session. Usage reports supported stored profiles; local Today spend remains provider-wide.",
+              "The model control and Session header show the selected profile. A missing, renamed, removed, or replaced profile blocks provider work instead of silently selecting another account. Re-select the named profile explicitly after reconnecting or replacing it; failed switches preserve your draft.",
+              'Structured model configuration can include a profile name, for example { "providerID": "openai", "model": "gpt-6-luna", "profile": "Work" }. String shorthand uses [profile#]provider/model[#variant], for example Work#openai/gpt-6-luna#high. An explicitly chosen model without a profile uses its provider’s global default, including for helpers and subagents; selecting the whole Session model retains the profile already in that reference.',
             ],
           },
         ],
@@ -771,7 +773,7 @@ Report concrete defects with file and symbol evidence.`,
         blocks: [
           {
             kind: "paragraph",
-            text: "Open the model picker: the provider appears with its models, and discovered models appear after discovery succeeds. Send one prompt with the new model selected; an authentication error means no active profile or unset `env` variable.",
+            text: "Open the model picker: the provider appears with its models, and discovered models appear after discovery succeeds. Send one prompt with the new model selected; an authentication error means no default profile or unset `env` variable.",
           },
           { kind: "related", slugs: ["configuration/models", "usage/cli", "troubleshooting"] },
         ],
@@ -1100,9 +1102,13 @@ ycoding mcp add docs --global -- bunx @example/docs-mcp`,
         heading: "Continuation and terminal states",
         blocks: [
           {
+            kind: "paragraph",
+            text: "Continuation uses the hidden goal agent's text steer and explicit goal state/tool rules. A running child or shell pauses it, a stale autonomy revision cannot advance it, and a helper failure admits no fallback. Goal completion and stopping require explicit goal actions; decision judgments do not terminate the goal.",
+          },
+          {
             kind: "list",
             items: [
-              "An active goal auto-answers questions, forms, and `ask` permissions at YOLO 0. Guardrail reviews still need effective YOLO 3 or a human.",
+              "An active goal auto-answers questions, forms, and `ask` permissions at YOLO 0. Ordinary guardrail reviews still need effective YOLO 1 or a human.",
               "Each successful settled step sequence advances the iteration and admits the next continuation, steered by the hidden goal agent.",
               "The agent calls `report` only for an unresolved blocker. Each report consumes one no-progress attempt; the default budget is `3`, and progress does not reset consumed attempts.",
               "A running subagent or background shell pauses continuation without consuming an attempt; its completion wakes the goal.",
@@ -1148,15 +1154,15 @@ ycoding mcp add docs --global -- bunx @example/docs-mcp`,
             kind: "table",
             head: ["Level", "Answers automatically"],
             rows: [
-              ["`0`", "Nothing. Every question, form, permission request, and guardrail review waits for you."],
-              ["`1`", "Questions and deterministic forms."],
-              ["`2`", "Level 1 plus `ask` permission decisions."],
-              ["`3`", "Level 2 plus ordinary guardrail reviews."],
+              ["`0`", "Nothing. Every question, form, permission request, and ordinary guardrail review waits for you."],
+              ["`1`", "Automatically approves `ask` permission decisions and ordinary guardrail reviews."],
+              ["`2`", "Level 1 plus questions and deterministic forms."],
+              ["`3`", "Currently behaves like level 2; retains its stored numeric value."],
             ],
           },
           {
             kind: "paragraph",
-            text: "An active goal also answers questions, forms, and `ask` permissions at level 0, but guardrail reviews still require level 3. `deny` permission rules and inherited permission ceilings apply at every level.",
+            text: "An active goal also answers questions, forms, and `ask` permissions at level 0, but does not auto-approve ordinary guardrail reviews. Hard reviews always require a fresh human decision. `deny` permission rules and inherited permission ceilings apply at every level.",
           },
         ],
       },
@@ -1202,7 +1208,7 @@ ycoding mcp add docs --global -- bunx @example/docs-mcp`,
         blocks: [
           {
             kind: "paragraph",
-            text: "`/yolo` shows the toast `YOLO <n> enabled` or `YOLO disabled`. The rail's `AUTONOMY` section shows Guardrails as `auto · YOLO 3` only at effective level 3 and `enforced` otherwise; hard reviews are labeled `human only`.",
+            text: "`/yolo` shows the toast `YOLO <n> enabled` or `YOLO disabled`. The rail's `AUTONOMY` section shows who decides Permissions, Guardrails, and Questions (`ask you`, `auto`, or `auto · goal`).",
           },
           { kind: "related", slugs: ["configuration/guardrails", "configuration/permissions", "configuration/goal"] },
         ],
@@ -1221,6 +1227,10 @@ ycoding mcp add docs --global -- bunx @example/docs-mcp`,
           {
             kind: "paragraph",
             text: "Guardrails review high-impact actions across a root Session and all of its subagents, independently of tool permissions. Shell commands, direct Session shell, edits, writes, patches, subagent launches, mutation-capable MCP tools, and project-artifact changes pass through the same service. A pending review blocks the whole Session family and appears in every Session view it blocks.",
+          },
+          {
+            kind: "paragraph",
+            text: "Outside-repository ordinary reviews always use deterministic guardrail rules and the normal review/YOLO path, without helper classification. Hard reviews remain human-only, and deterministic denials remain denied.",
           },
         ],
       },
@@ -1257,7 +1267,7 @@ ycoding mcp add docs --global -- bunx @example/docs-mcp`,
         blocks: [
           {
             kind: "paragraph",
-            text: "Built-in patterns inspect `shell` command text case-insensitively after collapsing whitespace. Unless noted, a pattern matches anywhere in the command after a space or at its start. The matcher follows `cd <dir> &&` for relative deletion targets but does not expand aliases, functions, command substitution, or `find`/`xargs` deletion.",
+            text: "Built-in patterns inspect `shell` command text after collapsing whitespace and use the case sensitivity of each rule; `standard.review.git-destructive` is case-sensitive. Unless noted, a pattern matches anywhere in the command after a space or at its start. Outside-repository review also covers edit, write, and patch targets, plus shell workdirs, `cd` targets, operands, and redirections that resolve outside the repository. Managed worktrees and temporary roots count as inside; recognized read-only shell commands and read tools are exempt. The matcher follows `cd <dir> &&` for relative deletion targets but does not expand aliases, functions, command substitution, or `find`/`xargs` deletion.",
           },
           {
             kind: "table",
@@ -1267,15 +1277,12 @@ ycoding mcp add docs --global -- bunx @example/docs-mcp`,
               ["Catastrophic deny", "`standard.catastrophic.format-disk`", "`mkfs`, `mkfs.<type>` such as `mkfs.ext4`, `diskutil eraseDisk`, or `format <letter>:`.", "Nobody."],
               ["Catastrophic deny", "`standard.catastrophic.block-device-write`", "`dd` with an `of=/dev/disk…`, `of=/dev/sd…`, `of=/dev/nvme…`, or `of=/dev/vd…` operand.", "Nobody."],
               ["Catastrophic deny", "`standard.catastrophic.fork-bomb`", "`:(){ :|:& };:`, with optional spaces.", "Nobody."],
-              ["Ordinary review", "`standard.review.git-destructive`", "`git reset --hard`; `git clean` whose first flag group contains `f` (`-f`, `-fd`, `-xdf`); `git checkout -- .`; `git restore … --worktree`.", "Human, YOLO 3, earlier Allow for this session, or a custom `allow` rule."],
-              ["Ordinary review", "`standard.review.force-push`", "`git push` followed later by the word `--force`, `--force-with-lease`, or `-f`.", "Same as above."],
-              ["Ordinary review", "`standard.review.publish`", "`npm`, `pnpm`, `yarn`, or `bun` followed by `publish` or `release`; `docker push`.", "Same as above."],
-              ["Ordinary review", "`standard.review.production`", "`kubectl` with `production` or `prod` later in the command; `terraform apply`; `helm install` or `helm upgrade` with `production` or `prod` later.", "Same as above."],
-              ["Ordinary review", "`standard.review.database-destructive`", "`drop database`, `drop schema`, `drop table`, `truncate table`, or `delete from <table>` that ends the command (optional `;`, no `WHERE`).", "Same as above."],
-              ["Ordinary review", "`standard.review.security-mutation`", "`security add-generic-password`, `security delete-generic-password`, `chmod` with `777` or `a+w`, `ufw disable`, `ufw reset`, `iptables -F`.", "Same as above."],
-              ["Ordinary review", "`standard.review.mcp-execute`", "Every `mcp_execute` action; the resource is `<server>/<tool>`.", "Same as above."],
-              ["Ordinary review", "`standard.review.broad-deletion`", "A recursive `rm` with more than one target when no target is the project, an ancestor, a direct child of home, root, or home.", "Same as above."],
-              ["Hard review", "`standard.review.broad-deletion`", "A recursive `rm` with any target that resolves to the current project directory, one of its ancestors, or a direct child of the home directory such as `~/Documents`.", "A fresh human `Allow once` or `Deny` only."],
+              ["Hard review", "`standard.review.project-deletion`", "Recursive `rm` targeting the current project directory or one of its ancestors.", "A fresh human `Allow once` or `Deny` only."],
+              ["Hard review", "`standard.review.home-child`", "Recursive `rm` targeting a direct child of the home directory, such as `~/Documents`.", "A fresh human `Allow once` or `Deny` only."],
+              ["Hard review", "`standard.review.git-destructive`", "`git reset --hard`; `git clean` with an `f` flag (`-f`, `-fd`, `-xdf`); `git checkout -- .`; `git restore … --worktree`; `git branch -D`. This pattern is case-sensitive.", "A fresh human `Allow once` or `Deny` only."],
+              ["Hard review", "`standard.review.force-push`", "`git push` followed later by the word `--force`, `--force-with-lease`, or `-f`.", "A fresh human `Allow once` or `Deny` only."],
+              ["Hard review", "`standard.review.database-destructive`", "`drop database`, `drop schema`, `drop table`, `truncate table`, or `delete from <table>` that ends the command (optional `;`, no `WHERE`).", "A fresh human `Allow once` or `Deny` only."],
+              ["Ordinary review", "`standard.review.outside-repo`", "A file mutation or shell operation resolving outside the repository, except managed worktrees, temporary roots, recognized read-only shell commands, and read tools.", "Human, YOLO 1–3, earlier Allow for this session, or a custom `allow` rule."],
             ],
           },
         ],
@@ -1287,12 +1294,12 @@ ycoding mcp add docs --global -- bunx @example/docs-mcp`,
             kind: "callout",
             tone: "warning",
             title: "Hard reviews need a fresh human decision",
-            text: "A hard review offers only `Allow once` and `Deny`. YOLO 3, an active goal, agent automation, `Allow for this session`, earlier reusable approvals, custom `allow` rules, and `guardrails.enabled: false` cannot settle it. An `always` reply sent to a hard review is recorded as `reject`, and the action is denied.",
+            text: "Built-in hard reviews offer only a fresh human `Allow once` or `Deny`. YOLO 3, an active goal, agent automation, `Allow for this session`, earlier reusable approvals, custom `allow` rules, and `guardrails.enabled: false` cannot settle them. An `always` reply sent to a hard review is recorded as `reject`, and the action is denied.",
           },
           {
             kind: "list",
             items: [
-              "Built-in: `standard.review.broad-deletion` when a recursive `rm` targets the current project directory, one of its ancestors, or a direct child of the home directory. The same rule ID with multiple other targets is an ordinary review.",
+              "Built-in: `standard.review.project-deletion` and `standard.review.home-child` for the matching recursive deletions, plus `standard.review.git-destructive`, `standard.review.force-push`, and `standard.review.database-destructive` for the destructive operations listed above.",
               "Custom: any rule file with `decision: hard_review`. A matching `hard_review` rule in any source layer applies even when a nearer layer matched `allow` or `ask`.",
               "A custom `deny` and every catastrophic deny still win over a hard review.",
             ],
@@ -1581,8 +1588,8 @@ Confirm the account, cluster, namespace, and change plan.`,
             kind: "table",
             head: ["Situation", "Behavior"],
             rows: [
-              ["YOLO 0 or 1, no active goal", "`ask` waits for your reply."],
-              ["YOLO 2 or higher", "`ask` is answered automatically."],
+              ["YOLO 0, no active goal", "`ask` waits for your reply."],
+              ["YOLO 1 or higher", "`ask` is answered automatically."],
               ["Active goal", "`ask` and questions are answered automatically at any level."],
               ["`deny`", "Denied at every level."],
             ],
@@ -1629,11 +1636,81 @@ Confirm the account, cluster, namespace, and change plan.`,
               ["`shell`", "`ycoding.tool.shell`", "Run commands with a finite timeout and optional memory limit."],
               ["`webfetch`, `websearch`", "`ycoding.tool.webfetch`, `.websearch`", "Fetch a URL; local web search backed by Exa or Parallel."],
               ["`browser`", "`ycoding.tool.browser`", "Paired Chrome tabs, Session-owned tabs, or an isolated browser."],
+              ["`decision`", "`ycoding.tool.decision`", "Evaluate bounded classification, fixed-option choices, or rubric scores using an authorized provider."],
               ["`computer`", "`ycoding.tool.computer`", "macOS iTerm sessions, Finder paths, and one identified app window."],
               ["`memory`", "`ycoding.tool.memory`", "Explicit workspace knowledge."],
               ["`subagent`, `subagent_control`, `todowrite`, `question`, `goal`, `skill`", "`ycoding.tool.subagent`, `.subagent-control`, `.todowrite`, `.question`, `.goal`, `.skill`", "Orchestration and Session control."],
             ],
           },
+        ],
+      },
+      {
+        heading: "Structured decisions",
+        blocks: [
+          {
+            kind: "paragraph",
+            text: "Judgments run only when an agent calls `decision`. Main, child, and side-chat Sessions share the tool within effective permissions and permission ceilings. Calls accept `provider: \"agent\"`; permission rules use action `decision` and resource `agent`. Requests contain JSON `state` and 1–32 uniquely named `predicate`, `choice`, or `score` questions; choices use `{ value, description }`, and score levels use `{ label, description }`. Output is validated TOON with self-reported, uncalibrated confidence. Send only authorized evidence. Preserve explicit owner choices; judgments never grant permission or approval, supply your answer, or prove completion. Credentials are managed through the selected model integration and never passed as tool inputs.",
+          },
+          {
+            kind: "code",
+            language: "jsonc",
+            label: "Decision helper model",
+            code: `{
+  "efficiency": {
+    "helper_models": {
+      "decision": "openai/gpt-6-luna-fast#medium",
+    },
+  },
+}`,
+          },
+          {
+            kind: "paragraph",
+            text: "The hidden built-in `decision` agent is reserved for internal judgments, has every tool denied, and is not a selectable foreground agent. An explicit `agents.decision.model` takes precedence over `efficiency.helper_models.decision`. With no agent override, an omitted helper selection or `\"session\"` uses the Session model. Choose a model and effort offered by your connected provider; the selector above is an example. The selected model's normal authentication route applies, including supported subscription routes, with its ordinary privacy, quota, and pricing. This is not a free-usage or zero-retention guarantee.",
+          },
+        ],
+      },
+      {
+        heading: "Asking for a bounded judgment",
+        blocks: [
+          {
+            kind: "paragraph",
+            text: "The agent decides when judgment is useful: choosing a subagent model/variant from verified candidates, choosing concrete options, classifying risk, grading against a rubric, checking predicates tests cannot settle, or recommending an option before question. Use tests, grep, typechecks, and inventory for verifiable facts. Supply self-contained evidence, observable criteria, neutral wording, distinct options with a keep-current/other fallback, and distinct adjacent score levels. Batch independent questions and separate dependent ones. Skip trivial choices, routine per-step classification, and repeated unchanged judgments.",
+          },
+          {
+            kind: "code",
+            language: "jsonc",
+            label: "Explicit decision request",
+            code: `{
+  "provider": "agent",
+  "request": {
+    "state": { "alternatives": "Two approaches have comparable cost; requirements are incomplete" },
+    "questions": [
+      {
+        "type": "choice", "name": "route", "instructions": "Choose the better-supported approach",
+        "choices": [
+          { "value": "keep-current", "description": "Retain the current approach" },
+          { "value": "change", "description": "Use the alternative" }
+        ]
+      },
+      { "type": "predicate", "name": "ready", "instructions": "Does the evidence support starting now?" }
+    ]
+  },
+}`,
+          },
+          {
+            kind: "list",
+            items: [
+              "Every predicate, choice, or score can abstain for insufficient evidence: type `refusal`, null `answer`, `choice`, and `score`, and confidence `0`. A refusal is distinct from a real choice, including keep-current, or a low-confidence pick. The tool retains it in structured output and adds a model-visible explanation to gather missing evidence or ask the user.",
+              "Set the action threshold by the cost of being wrong. Refusal, errors, low or close confidence, and disagreement with evidence are uncertainty. Reuse settled judgments until evidence changes; never bypass permission ceilings or guardrails.",
+              "Invalid calls return a corrective JSON field path, expected shape/allowed values, and a minimal valid example without echoing secrets or evidence. Empty questions asks for one bounded question or skipping the tool. Unavailable-helper errors identify model settings and authentication to check; invalid TOON errors direct evidence or uncertainty handling. Calls remain cancellable and have no local wall-clock deadline or automatic retry; interruption does not establish provider billing cancellation.",
+              "Session startup uses normal defaults; ordinary outside-repository reviews use the normal review/YOLO path; goal continuation uses the goal helper and explicit goal actions. Under YOLO 2–3 or an active goal, single-select question auto-answering chooses the first option without helper suggestions; other form defaults and validation remain unchanged. The top-level `decisions` config key is unsupported and produces a removed-key diagnostic, while helper model settings remain supported.",
+            ],
+          },
+        ],
+      },
+      {
+        heading: "Tool configuration",
+        blocks: [
           {
             kind: "code",
             language: "jsonc",
@@ -1819,8 +1896,8 @@ Confirm the account, cluster, namespace, and change plan.`,
           {
             kind: "list",
             items: [
-              "Built-in themes include `ycoding`, `tokyonight`, `catppuccin`, `dracula`, `gruvbox`, `nord`, `one-dark`, `rosepine`, and `solarized`. Press `<leader>t` to list every available theme.",
-              "Custom themes are JSON files directly under `themes/` in the global config directory or an ancestor `.ycoding/themes/`; the file name without `.json` is the theme ID. Later files with the same ID replace earlier ones, nearer project directories last.",
+              "Built-in themes include `ycoding`, `tokyonight`, `catppuccin`, `dracula`, `gruvbox`, `nord`, `one-dark`, `one-dark-pro`, `high-contrast`, `rosepine`, and `solarized`. `one-dark` and `one-dark-pro` use the official One Dark and One Dark Pro palettes; `high-contrast` keeps every text color at 7:1 or better in both modes. Press `<leader>t` to list every available theme.",
+              "Custom themes are JSON files directly under `themes/` in the global config directory or an ancestor `.ycoding/themes/`; the file name without `.json` is the theme ID. Later files with the same ID replace earlier ones, nearer project directories last. An unreadable theme file is skipped and the other themes stay available; a standalone theme that omits `text.separator`, `text.hint`, or `text.label` uses its `text.subdued` color for them.",
               "The default leader key is `ctrl+x`. Examples of bindings: `session_new` `<leader>n`, `session_list` `<leader>l`, `sidebar_toggle` `<leader>b`, `theme_list` `<leader>t`, `session_compact` `<leader>c`, `session_autonomy_normal` `<leader>y`.",
               "A binding string may list alternatives separated by commas, for example `\"ctrl+c,ctrl+d,<leader>q\"`.",
               "With a selection, `Ctrl+C` (or `Cmd+C` on macOS) copies instead of exiting, and `Esc` clears the selection.",
@@ -1833,7 +1910,7 @@ Confirm the account, cluster, namespace, and change plan.`,
         blocks: [
           {
             kind: "paragraph",
-            text: "Press `<leader>t` to confirm the active theme is selected in the theme list, and press a rebound key to confirm its command runs. If a change is ignored and other settings also reverted to defaults, the file failed validation; check each value against the table above.",
+            text: "Press `<leader>t` to confirm the active theme is selected in the theme list, and press a rebound key to confirm its command runs. If a change is ignored, open the Configuration section of the Status dialog: it lists each dropped value with its JSON path, and an unparsable file, the only case that reverts every setting in it, by path.",
           },
           { kind: "related", slugs: ["configuration/notifications", "usage/tui", "configuration"] },
         ],

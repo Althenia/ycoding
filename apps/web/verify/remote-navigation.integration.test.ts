@@ -90,7 +90,7 @@ describe("remote navigation", () => {
     }
   }, 180_000)
 
-  test("offers Sessions, Conversation, Session, Usage and Settings without Activity and shows the connection strip only when it has something to say", async () => {
+  test("offers Sessions, Usage and Settings without Activity and shows the connection strip only when it has something to say", async () => {
     const page = await requireBrowser().openPage()
     const links = `(() => ({
       header: [...document.querySelectorAll('.remote-nav a')].map((link) => link.getAttribute('href')),
@@ -100,7 +100,7 @@ describe("remote navigation", () => {
       strip: document.querySelector('.status-strip') !== null,
       overflow: document.documentElement.scrollWidth > innerWidth,
     }))()`
-    const destinations = ["/remote/sessions", "/remote", "/remote/session?session_id=ses_fixture&device_id=dev_studio", "/remote/usage", "/remote/settings"]
+    const destinations = ["/remote/sessions", "/remote/usage", "/remote/settings"]
     try {
       for (const theme of themes) {
         for (const [width, height] of [[390, 844], [1440, 900]] as const) {
@@ -133,6 +133,10 @@ describe("remote navigation", () => {
           await page.setViewport(width, height)
           await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?theme=${theme}`)
           await until(page, `document.getElementById("pending-requests") !== null && document.querySelector(".presentation-switch") ${width < 768 ? "===" : "!=="} null`)
+          if (width < 768) {
+            await page.evaluate(`document.querySelector('.app-header__menu').click()`)
+            await until(page, `document.querySelector('.overlay--sessions-sheet[open] .session-row--active') !== null`)
+          }
           const report = await page.evaluate<{
             readonly tab: string | null
             readonly tabDot: boolean
@@ -147,9 +151,9 @@ describe("remote navigation", () => {
             return {
               tab: document.querySelector(".presentation-switch .filters__option--attention")?.getAttribute("aria-label") ?? null,
               tabDot: visible(document.querySelector(".presentation-switch .filters__option--attention .attention-dot")),
-              bar: (() => { const bar = document.querySelector('.workspace__topbar'); const team = document.querySelector('.app-header [aria-label="Open Team"]'); return Boolean(team) && bar?.querySelector('[aria-label="Open Team"]') == null && (innerWidth < 768 ? bar === null : bar?.parentElement === document.querySelector('.workspace__main') && bar.querySelector('.presentation-switch') !== null) })(),
-              navDot: visible(document.querySelector('.remote-nav a[href^="/remote/session?"] .attention-dot')),
-              bottomDot: visible(document.querySelector('.bottom-nav a[href^="/remote/session?"] .attention-dot')),
+              bar: (() => { const bar = document.querySelector('.workspace__topbar'); const team = document.querySelector('.app-header [aria-label="Open Team"]'); return Boolean(team) && bar?.querySelector('[aria-label="Open Team"]') == null && (innerWidth < 768 ? bar?.parentElement === document.querySelector('.workspace__main') && bar.querySelector('.presentation-switch') === null && bar.querySelector('.conversation-breadcrumb') !== null : bar?.parentElement === document.querySelector('.workspace__main') && bar.querySelector('.presentation-switch') !== null) })(),
+              navDot: visible(document.querySelector('.remote-nav a[href="/remote/sessions"] .attention-dot')),
+              bottomDot: visible(document.querySelector('.bottom-nav a[href="/remote/sessions"] .attention-dot')),
               rowDot: document.querySelector(".session-row--active .session-row__attention") !== null,
               rows: [...document.querySelectorAll(".session-row__name")].map((name) => name.textContent.trim()),
               overflow: document.documentElement.scrollWidth > innerWidth,
@@ -162,6 +166,7 @@ describe("remote navigation", () => {
           expect(report.rowDot).toBe(true)
           expect(report.rows).not.toContain("Child: fix flaky suite")
           expect(report.overflow).toBe(false)
+          if (width < 768) await page.pressEscape()
           await capture(page, `conversation-${width}-${theme}`)
         }
       }
@@ -186,8 +191,8 @@ describe("remote navigation", () => {
       return {
         chips: [...row.querySelectorAll('.sessions-table__status .chip')].map((chip) => chip.textContent.trim()),
         rowDot: row.querySelector('.attention-dot') !== null,
-        navDot: visible(document.querySelector('.remote-nav a[href="/remote/sessions"] .attention-dot')),
-        navLabel: document.querySelector('.remote-nav a[href="/remote/sessions"]')?.getAttribute('aria-label') ?? null,
+        navDot: visible(document.querySelector('.remote-nav a[href="/remote/sessions"] .attention-dot')) || visible(document.querySelector('.bottom-nav a[href="/remote/sessions"] .attention-dot')),
+        navLabel: [...document.querySelectorAll('.remote-nav a[href="/remote/sessions"], .bottom-nav a[href="/remote/sessions"]')].find(visible)?.getAttribute('aria-label') ?? null,
         overflow: document.documentElement.scrollWidth > innerWidth,
       }
     })()`
@@ -203,7 +208,7 @@ describe("remote navigation", () => {
           expect(failed.chips).toEqual(["Failed"])
           expect(failed.rowDot).toBe(false)
           expect(failed.navDot).toBe(false)
-          expect(failed.navLabel).toBeNull()
+          expect(failed.navLabel).not.toMatch(/waiting/)
           expect(failed.overflow).toBe(false)
           await capture(page, `failed-session-${width}-${theme}`)
           await page.evaluate(`window.remoteStatus([], ["ses_fixture"])`)
@@ -211,8 +216,8 @@ describe("remote navigation", () => {
           const waiting = await page.evaluate<{ chips: readonly string[]; rowDot: boolean; navDot: boolean; navLabel: string | null }>(report)
           expect(waiting.chips).toEqual(["Waiting for you"])
           expect(waiting.rowDot).toBe(true)
-          expect(waiting.navDot).toBe(width >= 768)
-          expect(waiting.navLabel).toBe("Sessions, a session is waiting for your decision")
+          expect(waiting.navDot).toBe(true)
+          expect(waiting.navLabel).toMatch(/^Sessions, .*waiting for your decision$/)
         }
       }
     } finally {
@@ -226,7 +231,7 @@ describe("remote navigation", () => {
       for (const [width, height] of [[1440, 900], [390, 844]] as const) {
         await page.setViewport(width, height)
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?theme=dark`)
-        await until(page, `document.querySelector(".session-row--active .live-dot") !== null || document.querySelector(".live-dot") !== null`)
+        await until(page, width < 768 ? `typeof window.remoteStatus === "function" && document.querySelector(".composer") !== null` : `document.querySelector(".session-row--active .live-dot") !== null || document.querySelector(".live-dot") !== null`)
         expect(await page.evaluate<boolean>(`document.querySelector(".yc-notification-center__badge") === null`)).toBe(true)
         await page.evaluate(`window.remoteStatus([], ["ses_archived"])`)
         await until(page, `document.querySelector(".yc-notification-center__badge") !== null`)
@@ -362,7 +367,7 @@ describe("remote navigation", () => {
         expect(transition.exiting).toBe(true)
         expect(transition.entering).toBe(true)
         expect(transition.hidden).toBe(false)
-        expect(transition.duration.split(",").every((duration) => duration.trim() === (reduced ? "0s" : "0.22s"))).toBe(true)
+        expect(transition.duration.split(",").every((duration) => duration.trim() === (reduced ? "0s" : "0.14s"))).toBe(true)
         expect(transition.oldVisibility).toBe(reduced ? "hidden" : "visible")
         if (reduced) expect(transition.frames.every((opacity) => opacity === 1)).toBe(true)
         else expect(new Set(transition.frames).size).toBeGreaterThan(1)
@@ -410,10 +415,10 @@ describe("remote navigation", () => {
         await page.evaluate(`([...document.querySelectorAll('.new-session__trigger')].find(button => button.getBoundingClientRect().width > 0))?.click()`)
         await until(page, `document.querySelector('.new-session-composer') !== null`)
         expect(await page.evaluate<boolean>(`(() => { const old=document.querySelector('.remote-conversation-view'); const composer=document.querySelector('.composer-resident'); return old?.inert===true && old?.getAttribute('aria-hidden')==='true' && getComputedStyle(composer).display==='none' && window.draftProbe===document.querySelector('.mini-composer__mount textarea') && window.draftProbe.value==='Keep this draft' })()`)).toBe(true)
-        await page.evaluate(`document.querySelector('${width >= 768 ? ".remote-nav__link" : ".bottom-nav__item"}[href="/remote/sessions"]')?.click()`)
+        await page.evaluate(`document.querySelector('${width >= 768 ? ".remote-nav" : ".bottom-nav"} a[href="/remote/sessions"]')?.click()`)
         await until(page, `location.pathname === '/remote/sessions'`)
         expect(await page.evaluate<boolean>(`(() => { const old=[...document.querySelectorAll('.route-panel--exiting')].find(panel=>panel.querySelector('.new-session-composer')); return old?.inert===true && old?.getAttribute('aria-hidden')==='true' && window.draftProbe===document.querySelector('.mini-composer__mount textarea') && window.draftProbe.value==='Keep this draft' })()`)).toBe(true)
-        await page.evaluate(`document.querySelector('${width >= 768 ? ".remote-nav__link" : ".bottom-nav__item"}[href^="/remote/session?"]')?.click()`)
+        await page.evaluate(`document.querySelector('.workspace-resume[href^="/remote/session?"]')?.click()`)
         await until(page, `location.pathname === '/remote/session' && document.querySelector('.remote-conversation-view:not([inert])') !== null && document.querySelector('.mini-composer__mount textarea')?.value === 'Keep this draft'`)
       }
     } finally { await page.close() }

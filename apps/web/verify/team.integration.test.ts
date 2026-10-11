@@ -159,6 +159,21 @@ test("Team tabs keep keyed rows, counts, and navigation across phone, tablet, an
   }
 }, 30_000)
 
+test("Team pins children with a named control and moves them into the Pinned group", async () => {
+  if (!browser) throw new Error("Browser not started")
+  const page = await browser.openPage()
+  try {
+    await page.setViewport(390, 844)
+    await page.navigate(`http://127.0.0.1:${port}/verify/team-fixture.html?mode=team`)
+    await page.evaluate(`document.querySelector('.team-view__task[data-session-id="ses_child"] [data-action="pin"]').click()`)
+    expect(await page.evaluate<boolean>(`document.querySelector('.team-view__section h3')?.textContent === 'Pinned' && document.querySelector('.team-view__task[data-session-id="ses_child"] [aria-label="Unpin Review test coverage"]')?.getBoundingClientRect().height >= 44`)).toBe(true)
+    expect(await page.evaluate<string[]>(`window.teamEvents()`)).toEqual(["pin:ses_child"])
+    await page.evaluate(`document.querySelector('.team-view__task[data-session-id="ses_child"] [data-action="unpin"]').click()`)
+    expect(await page.evaluate<boolean>(`document.querySelector('.team-view__task[data-session-id="ses_child"] [data-action="pin"]') !== null && document.querySelector('.team-view__section h3')?.textContent !== 'Pinned'`)).toBe(true)
+    expect(await page.evaluate<string[]>(`window.teamEvents()`)).toEqual(["pin:ses_child", "unpin:ses_child"])
+  } finally { await page.close() }
+}, 30_000)
+
 test("Team cards keep identity, order, focus and geometry while usage loads and progress arrives", async () => {
   if (!browser) throw new Error("Browser not started")
   for (const [width, height] of [[390, 844], [1440, 900]] as const) {

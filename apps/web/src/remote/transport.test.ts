@@ -11,7 +11,7 @@ class Socket extends EventTarget {
   open() { this.readyState = 1; this.dispatchEvent(new Event("open")) }
   message(frame: unknown) { this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(frame) })) }
   priorities() { return this.frames().filter((frame) => frame.type === "priority") }
-  frames() { return this.sent.map((frame) => JSON.parse(frame) as { type: string; id?: string; mode?: string }) }
+  frames() { return this.sent.map((frame) => JSON.parse(frame) as { type: string; id?: string; mode?: string; operation?: string }) }
 }
 
 class Visibility extends EventTarget {
@@ -143,14 +143,31 @@ test("records sent timeout once and a rejected preflight with no wire time", asy
   const f = fixture({ handlers: { onRequestTiming: (sample) => timings.push(sample) } })
   try {
     const outcome = f.transport.request("session.snapshot", { timeoutMs: 35 })
+    const id = f.sockets[0]!.frames()[0]!.id
     f.advance(35)
     expect((await outcome).status).toBe("unknown")
+    expect(f.sockets[0]!.frames()).toEqual([{ type: "request", id, operation: "session.snapshot" }, { type: "cancel", id }])
     expect(timings).toEqual([{ operation: "session.snapshot", outcome: "unknown", queueMs: 0, settlementMs: 35, totalMs: 35 }])
     f.sockets[0]!.message({ type: "response", id: f.sockets[0]!.frames()[0]!.id, ok: true, value: "late" })
     expect(timings).toHaveLength(1)
     f.transport.close()
     expect((await f.transport.request("session.list")).status).toBe("unavailable")
     expect(timings.at(-1)).toEqual({ operation: "session.list", outcome: "unavailable", reason: "not-connected", queueMs: 0, totalMs: 0 })
+  } finally { f.transport.close() }
+})
+
+test("a timed-out mutation cancels relay work without replaying or reporting a definite failure", async () => {
+  const f = fixture()
+  try {
+    const outcome = f.transport.request("session.interrupt", { sessionID: "ses_a", timeoutMs: 15 })
+    const id = f.sockets[0]!.frames()[0]!.id
+    f.advance(15)
+    expect(await outcome).toMatchObject({ status: "unknown", error: { code: "outcome_unknown" } })
+    expect(f.sockets[0]!.frames().slice(1)).toEqual([{ type: "cancel", id }])
+    f.sockets[0]!.dispatchEvent(Object.assign(new Event("close"), { code: 1006, reason: "" }))
+    f.advance(2)
+    f.sockets[1]!.open()
+    expect(f.sockets[1]!.sent).toEqual([])
   } finally { f.transport.close() }
 })
 

@@ -231,12 +231,12 @@ export const gettingStartedPages: readonly DocPage[] = [
         blocks: [
           {
             kind: "paragraph",
-            text: "For development, install Bun 1.4.2, change to the YCoding repository checkout, install the locked dependencies, and start the development command. This is a source run, not a native release installation.",
+            text: "For development, install a current Bun release, change to the YCoding repository checkout, install the locked dependencies, and start the development command. This is a source run, not a native release installation.",
           },
           { kind: "code", language: "sh", label: "From the repository root", code: "bun install --frozen-lockfile\nbun run dev" },
           {
             kind: "paragraph",
-            text: "Expected result: the YCoding terminal interface starts from the checkout. If the command reports a Bun version or dependency error, use Bun 1.4.2 and run both commands from the repository root; rerun `bun install --frozen-lockfile` after changing Bun versions.",
+            text: "Expected result: the YCoding terminal interface starts from the checkout. If the command reports a Bun or dependency error, use a current Bun release and run both commands from the repository root; rerun `bun install --frozen-lockfile` after changing Bun versions.",
           },
           { kind: "related", slugs: ["getting-started", "quickstart"] },
         ],
@@ -296,7 +296,7 @@ export const gettingStartedPages: readonly DocPage[] = [
             kind: "table",
             head: ["Option", "Purpose"],
             rows: [
-              ["`--model <provider/model#variant>`", "Choose a model, optionally with a model variant."],
+              ["`--model <[profile#]provider/model[#variant]>`", "Choose a model, optionally with a named profile and a model variant."],
               ["`--continue` or `-c`", "Continue the last Session."],
               ["`--session <id>` or `-s <id>`", "Continue a specific Session."],
               ["`--file <path>` or `-f <path>`", "Attach a file to the prompt; repeat for more files."],

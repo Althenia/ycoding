@@ -21,7 +21,7 @@ import {
   type ShellOutputView,
   type ToolContentBlock,
 } from "../projection"
-import { capturedChangesVisible, promptReceipt, shellOutputPaging } from "../view-model"
+import { capturedChangesVisible, latestPromptProcessing, promptReceipt, shellOutputPaging } from "../view-model"
 import { parentAnswer, questionAnswerState, questionHistory } from "../question-history"
 import { FormRequest } from "./form-request"
 import { Markdown } from "./markdown"
@@ -366,7 +366,7 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
   const attachments = () => { const message = props.message(); return message.kind === "user" ? message.attachments ?? [] : [] }
   const sendMutation = () => remote.state().mutations.find((mutation) => (mutation.kind === "prompt" || mutation.kind === "command") && mutation.id === props.message().id && mutation.sessionID === remote.state().activeSessionID)
   const promptMutation = () => sendMutation()?.state !== "sending" ? sendMutation() : undefined
-  const receipt = () => promptReceipt(userState(props.message()), userDelivery(props.message()), sendMutation())
+  const receipt = () => promptReceipt(userState(props.message()), userDelivery(props.message()), sendMutation(), latestPromptProcessing(selectedView()?.status, selectedView()?.messages ?? [], props.message().id))
   const attachmentKeys = () => attachments().map(attachmentKey)
   const oversized = () => { const message = props.message(); return message.kind === "oversized" ? message : undefined }
   const fallbackText = () => {

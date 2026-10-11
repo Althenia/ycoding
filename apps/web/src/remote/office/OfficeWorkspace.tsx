@@ -1,9 +1,9 @@
-import { For, Show, createMemo, createSignal, type JSX } from "solid-js"
+import { For, Show, createMemo, createSignal, onCleanup, type JSX } from "solid-js"
 import { OfficeCanvas } from "./OfficeCanvas"
 import { LoadingPlaceholder } from "../ui/loading"
-import { officeLocationLabel } from "./model"
-import { appearanceFor, characterFrame } from "./sprites"
+import { appearanceFor, characterColumnCount, characterFrame } from "./sprites"
 import type { OfficeActor, OfficePreferences, OfficeRoomID, OfficeSnapshot } from "./types"
+import { entityCatalog, entityState, entityUsers, type OfficeEntity } from "./entities"
 
 const characterSheetURL = new URL("./assets/characters.png?no-inline", import.meta.url).href
 
@@ -19,6 +19,17 @@ export function OfficeWorkspace(props: {
 }): JSX.Element {
   const [locations, setLocations] = createSignal<Readonly<Record<string, OfficeRoomID | undefined>>>({})
   const [focusRequest, setFocusRequest] = createSignal<{ readonly actorID: string; readonly revision: number }>()
+  const [inspected, setInspected] = createSignal<OfficeEntity>()
+  const [entityClaims, setEntityClaims] = createSignal<ReadonlyMap<string, readonly string[]>>(new Map())
+  let inspectFocus: HTMLElement | undefined
+  const inspect = (id: string) => {
+    if (!inspected()) inspectFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
+    setInspected(entityCatalog.find((entity) => entity.id === id))
+  }
+  const closeInspect = () => { setInspected(undefined); inspectFocus?.focus(); inspectFocus = undefined }
+  const keydown = (event: KeyboardEvent) => { if (event.key === "Escape") closeInspect() }
+  document.addEventListener("keydown", keydown)
+  onCleanup(() => document.removeEventListener("keydown", keydown))
   const focusActor = (actor: OfficeActor) => {
     props.onSelectSession(actor.sessionID)
     setFocusRequest({ actorID: actor.id, revision: (focusRequest()?.revision ?? 0) + 1 })
@@ -41,15 +52,29 @@ export function OfficeWorkspace(props: {
                 onSelectSession={props.onSelectSession}
                 onNormalView={props.onNormalView}
                 onLocations={setLocations}
+                onInspectEntity={inspect}
+                onEntityClaims={setEntityClaims}
                 focusRequest={focusRequest()}
               />
             )}
           </For>
         </div>
         <OfficeRoster snapshot={props.snapshot} locations={locations()} onFocusActor={focusActor} onLoadMoreTeam={props.onLoadMoreTeam} />
+        <Show when={inspected()}>{(entity) => <OfficeEntityCard entity={entity()} snapshot={props.snapshot} claims={entityClaims()} onClose={closeInspect} />}</Show>
       </section>
     </div>
   )
+}
+
+function OfficeEntityCard(props: { readonly entity: OfficeEntity; readonly snapshot: OfficeSnapshot; readonly claims: ReadonlyMap<string, readonly string[]>; readonly onClose: () => void }): JSX.Element {
+  const users = () => entityUsers(props.entity, props.snapshot.actors, props.claims)
+  const state = () => entityState(props.entity, props.claims.get(props.entity.id) ?? [])
+  return <section class="office-entity-card" role="region" aria-label={`${props.entity.name} inspection`} aria-live="polite">
+    <header><h3>{props.entity.name}</h3><button type="button" class="button button--secondary button--small" aria-label="Close object inspection" onClick={props.onClose}>Close</button></header>
+    <dl><dt>Kind</dt><dd>{props.entity.kind}</dd><dt>Room</dt><dd>{props.entity.room}</dd>
+      <dt>State</dt><dd>{state().status}</dd><dt>Using</dt><dd>{users().join(", ") || "No one"}</dd>
+      <dt>Description</dt><dd>{props.entity.description}</dd></dl>
+  </section>
 }
 
 function OfficeRoster(props: {
@@ -73,7 +98,7 @@ function OfficeRoster(props: {
           <For each={actorIDs()}>
             {(id) => {
               const actor = createMemo(() => actors().find((item) => item.id === id)!)
-              return <OfficeRosterRow actor={actor()} room={Object.hasOwn(props.locations, id) ? props.locations[id] : actor().status === "idle" ? "lounge" : "block"} onFocusActor={props.onFocusActor} />
+              return <OfficeRosterRow actor={actor()} onFocusActor={props.onFocusActor} />
             }}
           </For>
         </ul>
@@ -93,7 +118,6 @@ function OfficeRoster(props: {
 
 function OfficeRosterRow(props: {
   readonly actor: OfficeActor
-  readonly room?: OfficeRoomID
   readonly onFocusActor: (actor: OfficeActor) => void
 }): JSX.Element {
   const frame = () => characterFrame(appearanceFor(props.actor.sessionID), "down", 0)
@@ -106,10 +130,9 @@ function OfficeRosterRow(props: {
         aria-current={props.actor.selected ? "true" : undefined}
         onClick={() => props.onFocusActor(props.actor)}
       >
-        <span class="office-roster__sprite" aria-hidden="true" style={{ "background-image": `url(${characterSheetURL})`, "background-position": `${-(frame() % 12) * 32}px ${-Math.floor(frame() / 12) * 48}px` }} />
+        <span class="office-roster__sprite" aria-hidden="true" style={{ "background-image": `url(${characterSheetURL})`, "background-position": `${-(frame() % characterColumnCount) * 32}px ${-Math.floor(frame() / characterColumnCount) * 48}px` }} />
         <span class="office-roster__content">
           <span class="office-roster__name">{props.actor.name} <span aria-hidden="true">·</span> {props.actor.role}</span>
-          <span class="office-roster__room">{officeLocationLabel(props.room)}</span>
           <Show when={props.actor.unknownOutcome || props.actor.statusText}><span class="office-roster__status">{props.actor.unknownOutcome ? "Outcome unknown" : props.actor.statusText}</span></Show>
         </span>
         <span class={`office-roster__indicator office-roster__indicator--${props.actor.status}`} aria-hidden="true" />

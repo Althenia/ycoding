@@ -7,6 +7,7 @@ import { shortText } from "./model"
 import { hasReducedMotion } from "./preferences"
 import { characterAppearances, characterColumns, characterDirections, characterFrame } from "./sprites"
 import type { ActorFrame, OfficeCue, OfficeSnapshot } from "./types"
+import { activityForActor, claimedEntities, entityCatalog, seededRoomVariant } from "./entities"
 
 const importedAssets = import.meta.glob<string>("./assets/*.png", { eager: true, query: "?url&no-inline", import: "default" })
 const textureURLs = Object.fromEntries(Object.entries(importedAssets).map(([filename, url]) => [filename.slice(filename.lastIndexOf("/") + 1, -4), url]))
@@ -25,6 +26,7 @@ type ActorObjects = {
 export class OfficeScene extends Phaser.Scene {
   private readonly director = new OfficeDirector(officeLayout)
   private readonly objects = new Map<string, ActorObjects>()
+  private readonly entityImages = new Map<string, Phaser.GameObjects.Image>()
   private readonly seenCues = new Set<string>()
   private badgeQueue: OfficeCue[] = []
   private badge?: Phaser.GameObjects.Text
@@ -44,10 +46,17 @@ export class OfficeScene extends Phaser.Scene {
   private fitting = false
   private latestFrames: readonly ActorFrame[] = []
   private lastLocations = ""
+  private inspectEntity?: (id: string) => void
+  private entityClaims = new Map<string, readonly string[]>()
+  private readonly entityStatuses = new Map<string, string>()
+  private readonly entityTints = new Map<string, number>()
+  private entitySignature = ""
+  private coffeeSteam?: Phaser.GameObjects.Ellipse
 
-  constructor(private readonly mailbox: OfficeMailbox, private readonly selectSession: (id: string) => void, private readonly fail: (message: string) => void, private readonly resolution: number, private readonly onLocations: (locations: Readonly<Record<string, ActorFrame["room"]>>) => void, private readonly fonts: { readonly sans: string; readonly mono: string }) {
+  constructor(private readonly mailbox: OfficeMailbox, private readonly selectSession: (id: string) => void, private readonly fail: (message: string) => void, private readonly resolution: number, private readonly onLocations: (locations: Readonly<Record<string, ActorFrame["room"]>>) => void, private readonly fonts: { readonly sans: string; readonly mono: string }, inspectEntity: (id: string) => void, private readonly onEntityClaims: (claims: ReadonlyMap<string, readonly string[]>) => void) {
     super({ key: "office" })
     this.desiredZoom = resolution
+    this.inspectEntity = inspectEntity
   }
 
   preload(): void {
@@ -83,11 +92,28 @@ export class OfficeScene extends Phaser.Scene {
       this.add.image(door.x * tileSize, door.y * tileSize, "walls", door.y === rows - 1 ? 3 : 2)
         .setOrigin(0).setDepth((door.y + 1) * tileSize - 1)
     }
-    for (const prop of props) {
+    for (const [index, prop] of props.entries()) {
       const image = this.add.image(prop.cell.x * tileSize, prop.layer === "floor" ? prop.cell.y * tileSize : (prop.cell.y + prop.height) * tileSize, prop.kind)
       if (prop.layer === "floor") image.setOrigin(0).setDisplaySize(prop.width * tileSize, prop.height * tileSize).setDepth(-1900)
       if (prop.layer === "object") image.setOrigin(0, 1).setScale(prop.width * tileSize / image.width).setDepth((prop.cell.y + prop.height) * tileSize - 1)
+      const entity = entityCatalog[index]!
+      const tint = /^(plant|rug|beanBag|sofa)/.test(entity.kind)
+        ? [0xffffff, 0xf4f0dc, 0xe5f3e8, 0xe7edf5][seededRoomVariant(`${entity.room}:${entity.prop.pod ?? "shared"}`, entity.prop.cell.x * 97 + entity.prop.cell.y, 4)]!
+        : 0xffffff
+      image.setTint(tint)
+      this.entityTints.set(entity.id, tint)
+      image.setInteractive(new Phaser.Geom.Rectangle(0, prop.layer === "floor" ? 0 : -prop.height * tileSize, prop.width * tileSize, prop.height * tileSize), Phaser.Geom.Rectangle.Contains)
+        .on("pointerover", () => this.inspectEntity?.(entity.id))
+        .on("pointerup", (pointer: Phaser.Input.Pointer) => { if (pointer.getDistance() < 6) this.inspectEntity?.(entity.id) })
+        .setName(entity.id)
+      this.entityImages.set(entity.id, image)
     }
+    const coffeeMachine = props.find((prop) => prop.kind === "coffeeMachine")!
+    this.coffeeSteam = this.add.ellipse((coffeeMachine.cell.x + 0.5) * tileSize, coffeeMachine.cell.y * tileSize - 5, 3, 8, 0xffffff, 0.65)
+      .setDepth(coffeeMachine.cell.y * tileSize).setVisible(false)
+    const hour = new Date().getHours()
+    this.add.rectangle(0, 0, worldWidth, worldHeight, hour < 6 || hour >= 19 ? 0x23416a : 0xf4d495, 0.045)
+      .setOrigin(0).setDepth(1_500).setBlendMode(Phaser.BlendModes.MULTIPLY).setName("office-time-tint")
     this.ball = this.add.ellipse(0, 0, 6, 6, 0xf7f5ec).setStrokeStyle(1, 0x3d4e5b).setDepth(896).setVisible(false)
     this.badge = this.add.text(0, 0, "", { fontFamily: this.fonts.mono, fontSize: "13px", color: "#1e2934", backgroundColor: "#f4bd3d", padding: { x: 6, y: 3 }, resolution: this.resolution })
       .setOrigin(0.5, 1).setDepth(10007).setVisible(false)
@@ -95,6 +121,7 @@ export class OfficeScene extends Phaser.Scene {
       for (const [pose, columns, speed] of [
         ["stand", characterColumns.stand, 1], ["walk", characterColumns.walk, 8],
         ["talk", characterColumns.talk, 3], ["type", characterColumns.type, 4], ["play", characterColumns.talk, 2],
+        ["read", characterColumns.read, 1.5], ["check", characterColumns.check, 1], ["point", characterColumns.point, 1.5],
       ] as const) {
         this.anims.create({ key: `${appearance}-${direction}-${pose}`,
           frames: this.anims.generateFrameNumbers("characters", { start: characterFrame(appearance, direction, columns[0]), end: characterFrame(appearance, direction, columns[columns.length - 1]!) }),
@@ -211,7 +238,7 @@ export class OfficeScene extends Phaser.Scene {
     for (const cue of snapshot.cues) this.seenCues.add(cue.id)
     this.badgeQueue = []
     this.badge?.setVisible(false)
-    this.director.settle()
+    this.director.settle(true)
   }
 
   private boundCamera(): void {
@@ -238,20 +265,37 @@ export class OfficeScene extends Phaser.Scene {
     }
     const input = this.mailbox.read()
     const reduced = hasReducedMotion(input.preferences, input.systemReduced)
-    if (this.applied !== this.mailbox.revision()) {
+    const needsApply = this.applied !== this.mailbox.revision()
+    if (needsApply) {
       this.director.sync(input.snapshot)
       if (input.snapshot.connection !== "ready" || this.lastConnection !== "ready") {
         this.badgeQueue = []
         for (const cue of input.snapshot.cues) this.seenCues.add(cue.id)
-        this.director.settle()
+        this.director.settle(true)
         this.badge?.setVisible(false)
       }
-      this.discoverCues(input.snapshot, reduced)
+      this.discoverCues(input.snapshot, reduced, time)
       this.lastConnection = input.snapshot.connection
       this.applied = this.mailbox.revision()
     }
     if (reduced && this.badgeQueue.length && time >= this.badgeUntil) this.showCueBadge(this.badgeQueue.shift()!, time)
     this.latestFrames = this.director.tick(delta, reduced)
+    const signature = this.latestFrames.map((frame) => {
+      const leisure = this.director.leisurePhase(frame.actor.id)
+      return `${frame.actor.id}:${frame.actor.status}:${frame.actor.activity}:${frame.actor.statusText}:${frame.room}:${leisure?.kind === "travel" ? leisure.arrival : leisure?.kind ?? ""}`
+    }).join("|")
+    if (needsApply || signature !== this.entitySignature) {
+      this.entitySignature = signature
+      this.entityClaims = claimedEntities(this.latestFrames.map((frame) => {
+        const leisure = this.director.leisurePhase(frame.actor.id)
+        return { id: frame.actor.id, status: frame.actor.status,
+          activity: leisure?.kind === "pantry" || leisure?.kind === "travel" && leisure.arrival === "pantry" ? "coffee" : activityForActor(frame.actor),
+          statusText: frame.actor.statusText, room: frame.room, position: frame.position }
+      }))
+      this.onEntityClaims(this.entityClaims)
+    }
+    this.entityStatuses.clear()
+    for (const frame of this.latestFrames) this.entityStatuses.set(frame.actor.id, frame.actor.status)
     const locations = Object.fromEntries(this.latestFrames.map((frame) => [frame.actor.id, frame.room]))
     const locationKey = JSON.stringify(locations)
     if (locationKey !== this.lastLocations) {
@@ -266,7 +310,8 @@ export class OfficeScene extends Phaser.Scene {
       objects.bubble.destroy(); objects.bubblePlate.destroy(); objects.marker.destroy()
       this.objects.delete(id)
     }
-    for (const frame of this.latestFrames) this.paintActor(frame, input.snapshot, scale)
+    for (const frame of this.latestFrames) this.paintActor(frame, input.snapshot, scale, reduced)
+    this.paintEntityActivity(reduced || input.preferences.quality === "battery")
     const ball = rallyBall(this.latestFrames, time)
     if (ball) this.ball?.setPosition(ball.x, ball.y)
     this.ball?.setVisible(ball !== undefined)
@@ -274,7 +319,11 @@ export class OfficeScene extends Phaser.Scene {
     this.placeLabels(scale)
     const target = this.latestFrames.find((frame) => frame.actor.id === this.badgeActorID)
     this.badge?.setVisible(time < this.badgeUntil && !!target)
-    if (target) this.badge?.setPosition(target.position.x, target.position.y - 80).setScale(scale)
+    if (target) {
+      const objects = this.objects.get(target.actor.id)
+      this.badge?.setPosition(target.position.x, target.position.y - (objects?.sprite.displayHeight ?? 72)
+        - (objects?.bubble.visible ? objects.bubble.displayHeight : 0) - 16 * scale).setScale(scale)
+    }
     const selected = this.latestFrames.find((frame) => frame.actor.selected)
     if (this.selectedID === undefined && selected && !this.fitting) this.cameras.main.centerOn(selected.position.x, selected.position.y)
     if (selected?.actor.id !== this.selectedID) this.followSuspended = false
@@ -282,7 +331,21 @@ export class OfficeScene extends Phaser.Scene {
     this.selectedID = selected?.actor.id
   }
 
-  private discoverCues(snapshot: OfficeSnapshot, reduced: boolean): void {
+  private paintEntityActivity(lowMotion: boolean): void {
+    for (const entity of entityCatalog) {
+      const image = this.entityImages.get(entity.id)
+      if (!image) continue
+      const active = this.entityStatuses.get(this.entityClaims.get(entity.id)?.[0] ?? "")
+      image.setTint(active === "tool" || active === "working" || active === "thinking" ? 0xc8ffe2 : this.entityTints.get(entity.id) ?? 0xffffff)
+      if (entity.kind === "coffeeMachine") {
+        const brewing = active === "idle" && !lowMotion
+        image.setAlpha(1)
+        this.coffeeSteam?.setVisible(brewing).setAlpha(brewing ? 0.3 + Math.sin(this.time.now / 450) * 0.2 : 0)
+      } else image.setAlpha(1)
+    }
+  }
+
+  private discoverCues(snapshot: OfficeSnapshot, reduced: boolean, time: number): void {
     if (snapshot.scope !== this.cueScope || snapshot.team.rootActorID !== this.cueRootID) {
       this.cueScope = snapshot.scope
       this.cueRootID = snapshot.team.rootActorID
@@ -298,7 +361,7 @@ export class OfficeScene extends Phaser.Scene {
       if (this.seenCues.has(cue.id)) continue
       this.seenCues.add(cue.id)
       if (reduced) this.badgeQueue.push(cue)
-      if (!reduced) this.director.playCue(cue)
+      if (!reduced && this.director.playCue(cue)) this.showCueBadge(cue, time)
     }
   }
 
@@ -369,7 +432,7 @@ export class OfficeScene extends Phaser.Scene {
     }
   }
 
-  private paintActor(frame: ActorFrame, snapshot: OfficeSnapshot, scale: number): void {
+  private paintActor(frame: ActorFrame, snapshot: OfficeSnapshot, scale: number, reduced: boolean): void {
     let objects = this.objects.get(frame.actor.id)
     if (!objects) {
       const sprite = this.add.sprite(0, 0, "characters", characterFrame(frame.appearance, frame.direction, 0))
@@ -395,11 +458,14 @@ export class OfficeScene extends Phaser.Scene {
     objects.sprite.setPosition(x, y).setDepth(y).setAlpha(alpha)
     if (frame.leaving) objects.sprite.disableInteractive()
     if (!frame.leaving && !objects.sprite.input) objects.sprite.setInteractive({ cursor: "var(--yc-cursor-action)" })
-    if (frame.pose === "sit" || frame.pose === "wave") {
+    if (reduced) {
+      objects.sprite.anims.stop()
+      objects.sprite.setTexture("characters", staticFrameForState(frame))
+    } else if (frame.pose === "sit" || frame.pose === "wave" || frame.pose === "check") {
       objects.sprite.anims.stop()
       objects.sprite.setTexture("characters", characterFrame(frame.appearance, frame.direction, characterColumns[frame.pose][0]))
     }
-    if (frame.pose !== "sit" && frame.pose !== "wave") objects.sprite.play(`${frame.appearance}-${frame.direction}-${frame.pose}`, true)
+    if (!reduced && frame.pose !== "sit" && frame.pose !== "wave" && frame.pose !== "check") objects.sprite.play(`${frame.appearance}-${frame.direction}-${frame.pose}`, true)
     objects.shadow.setPosition(x, y + 2).setDepth(y - 1).setAlpha(alpha * 0.55)
     objects.ring.setPosition(x, y + 2).setDepth(y - 0.5).setVisible(frame.actor.selected && !frame.leaving).setAlpha(alpha)
     const preferences = this.mailbox.read().preferences
@@ -422,4 +488,9 @@ export class OfficeScene extends Phaser.Scene {
       .setVisible(!frame.leaving && inView && (frame.actor.status === "attention" || frame.actor.status === "failed" || frame.actor.unknownOutcome))
     if (snapshot.team.rootActorID === frame.actor.id) objects.ring.setStrokeStyle(2, 0x6de3b3)
   }
+}
+
+function staticFrameForState(frame: ActorFrame): number {
+  const pose = frame.pose === "play" ? "talk" : frame.pose
+  return characterFrame(frame.appearance, frame.direction, characterColumns[pose][0])
 }

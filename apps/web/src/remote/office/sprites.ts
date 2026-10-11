@@ -3,7 +3,7 @@ export const characterFrameHeight = 48
 export const characterFeet = { x: 16, y: 46 } as const
 export const characterAppearances = 12
 export const characterDirections = ["down", "left", "right", "up"] as const
-export const characterColumnCount = 12
+export const characterColumnCount = 17
 export const characterColumns = {
   stand: [0, 1],
   walk: [2, 3, 4, 5],
@@ -11,6 +11,9 @@ export const characterColumns = {
   sit: [8],
   type: [9, 10],
   wave: [11],
+  read: [12, 13],
+  check: [14],
+  point: [15, 16],
 } as const
 
 export function characterFrame(appearance: number, direction: (typeof characterDirections)[number], column: number): number {

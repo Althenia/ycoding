@@ -71,7 +71,7 @@ describe("documentation index", () => {
     const install = DOC_INDEX.sections.flatMap((section) =>
       section.blocks.flatMap((block) => (block.kind === "steps" ? block.items : [])),
     ).find((step) => step.title === "Install")
-    expect(install?.text).toBe("Install a checksum-verified release build, or run from a checkout with Bun 1.4.2.")
+    expect(install?.text).toBe("Install a checksum-verified release build, or run from a checkout with a current Bun release.")
   })
 
   test("describes every group and links the configuration domains", () => {
@@ -88,11 +88,12 @@ describe("documentation index", () => {
 })
 
 describe("remote workspace documentation", () => {
-  test("documents all five destinations, distinguishes landing from transcript, and keeps Session links device-scoped", () => {
+  test("documents Focus navigation, distinguishes creation from detail, and keeps Session links device-scoped", () => {
     const remote = findDocPage("usage/remote")
     const text = JSON.stringify(remote?.sections)
-    expect(text).toContain("Sessions (/remote/sessions), Conversation (/remote), Session (/remote/session), Usage (/remote/usage), and Settings (/remote/settings)")
-    expect(text).toContain("Conversation is always the logo and new-session landing")
+    expect(text).toContain("Sessions (/remote/sessions), Usage (/remote/usage), and Settings (/remote/settings)")
+    expect(text).toContain("New session at /remote")
+    expect(text).toContain("Resume session")
     expect(text).toContain("/remote/session?session_id=<id>&device_id=<id>")
     expect(text).toContain("with optional &notice_id=<id>")
     expect(text).toContain("unknown, revoked, or offline device is reported unavailable, with no fallback to another machine")
@@ -107,6 +108,94 @@ describe("remote workspace documentation", () => {
     ).find((row) => row[0] === "Session")
     expect(conversation?.[1]).toContain("first 4,000 characters")
     expect(conversation?.[1]).toContain("device truncation")
+  })
+})
+
+describe("structured decision documentation", () => {
+  test("documents helper model precedence and estimated confidence", () => {
+    const tools = findDocPage("configuration/tools")
+    const text = JSON.stringify(tools?.sections)
+    expect(text).toContain("ycoding.tool.decision")
+    expect(text).toContain("agents.decision.model")
+    expect(text).toContain("efficiency.helper_models.decision")
+    expect(text).not.toContain("min_confidence")
+    expect(text).toContain("uncalibrated")
+    expect(text).toContain("subscription")
+    const example = tools?.sections.flatMap((section) => section.blocks)
+      .find((block) => block.kind === "code" && block.label === "Decision helper model")
+    expect(example?.kind).toBe("code")
+    if (example?.kind !== "code") throw new Error("Decision helper model example is missing")
+    expect(Bun.JSONC.parse(example.code)).toEqual({
+      efficiency: { helper_models: { decision: "openai/gpt-6-luna-fast#medium" } },
+    })
+    expect(JSON.stringify(findDocPage("configuration/models")?.sections)).toContain(".decision")
+    expect(JSON.stringify(findDocPage("configuration/agents")?.sections)).toContain("`decision`")
+  })
+
+  test("documents explicit judgments, valid requests and abstention without automation", () => {
+    const tools = findDocPage("configuration/tools")
+    const text = JSON.stringify(tools?.sections)
+    expect(text).toContain("only when an agent calls")
+    expect(text).toContain("permission ceilings")
+    expect(text).toContain("owner choices")
+    expect(text).toContain("insufficient evidence")
+    expect(text).toContain("refusal")
+    expect(text).toContain("authorized")
+    expect(text).toContain("keep-current")
+    const example = tools?.sections.flatMap((section) => section.blocks)
+      .find((block) => block.kind === "code" && block.label === "Explicit decision request")
+    expect(example?.kind).toBe("code")
+    if (example?.kind !== "code") throw new Error("Explicit decision request example is missing")
+    expect(Bun.JSONC.parse(example.code)).toMatchObject({ provider: "agent", request: {
+      state: expect.any(Object), questions: [
+        { type: "choice", name: "route", choices: [{ value: "keep-current", description: expect.any(String) }, { value: "change", description: expect.any(String) }] },
+        { type: "predicate", name: "ready", instructions: expect.any(String) },
+      ],
+    } })
+    expect(JSON.stringify(findDocPage("configuration/goal")?.sections)).toContain("explicit goal")
+    expect(JSON.stringify(findDocPage("configuration/guardrails")?.sections)).toContain("without helper classification")
+    const rejected = findDocPage("configuration")?.sections.flatMap((section) => section.blocks)
+      .find((block) => block.kind === "code" && block.label === "Rejected keys")
+    expect(rejected?.kind === "code" ? rejected.code : "").toContain("decisions")
+  })
+
+  test("documents the current built-in guardrail tiers and outside-repository review", () => {
+    const guardrails = JSON.stringify(findDocPage("configuration/guardrails")?.sections)
+    for (const rule of [
+      "standard.review.project-deletion",
+      "standard.review.home-child",
+      "standard.review.git-destructive",
+      "standard.review.force-push",
+      "standard.review.database-destructive",
+      "standard.review.outside-repo",
+    ]) expect(guardrails).toContain(rule)
+    expect(guardrails).not.toContain("standard.review.broad-deletion")
+    expect(guardrails).not.toContain("standard.review.publish")
+    expect(guardrails).toContain("without helper classification")
+    expect(guardrails).toContain("case-sensitive")
+    expect(guardrails).toContain("YOLO 1–3")
+    expect(guardrails).toContain("A fresh human `Allow once` or `Deny` only")
+  })
+})
+
+describe("remote recovery documentation", () => {
+  test("documents saved enablement, bounded recovery, safe disable, and manual repair", () => {
+    const recovery = findDocPage("usage/remote")?.sections.find((section) => section.heading === "Connection recovery")
+    const text = JSON.stringify(recovery?.blocks ?? [])
+    expect(text).toContain("connecting")
+    expect(text).toContain("1, 2, 4, 8, 16")
+    expect(text).toContain("30 seconds")
+    expect(text).toContain("authentication")
+    expect(text).toContain("pending enable")
+    expect(text).toContain("late")
+    expect(text).toContain("off and then on")
+    expect(text).toContain("ycoding remote status")
+    expect(text).toContain("ycoding update")
+    const help = JSON.stringify(findDocPage("troubleshooting")?.sections)
+    expect(help).toContain("automatically")
+    expect(help).toContain("connecting")
+    expect(help).toContain("rejected credentials")
+    expect(help).toContain("off and then on")
   })
 })
 

@@ -105,7 +105,7 @@ test("the conversation column and composer keep shared edges beside a visible sc
       const size = await scrollbarSize(page)
       expect((await scrollerBox(page, ".app--conversation .workspace__scroll")).thickness).toBe(size)
       const edges = await page.evaluate<{ column: readonly [number, number]; composer: readonly [number, number]; band: number; window: number }>(`(() => {
-        const column = document.querySelector('.conversation-breadcrumb').getBoundingClientRect()
+        const column = document.querySelector('.workspace__heading').getBoundingClientRect()
         const composer = document.querySelector('.composer .composer__row').getBoundingClientRect()
         return { column: [column.left, column.right], composer: [composer.left, composer.right], band: document.querySelector('.workspace__topbar').getBoundingClientRect().right, window: innerWidth }
       })()`)

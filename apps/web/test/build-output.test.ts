@@ -127,7 +127,9 @@ describe("built web output", () => {
     // Mobile is the default composition: a single column until the tablet query.
     expect(css).toContain("grid-template-columns:minmax(0,1fr)")
     expect(css).toContain(".workspace__rail{display:none")
-    expect(css).toContain(".app--conversation.app--selected.workspace{grid-template-columns:minmax(220px,256px)minmax(0,1fr)")
+    // Tablet and desktop add the Focus rail column; the collapsed rail keeps one hit-sized column.
+    expect(css).toContain(".app{grid-template-columns:var(--yc-rail-w)minmax(0,1fr)")
+    expect(css).toContain(".app--rail-collapsed{--rail-collapsed:calc(var(--yc-hit-min)+2*var(--yc-space-2))")
     expect(css).not.toContain(".workspace__activity")
   })
 
