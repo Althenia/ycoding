@@ -19,16 +19,20 @@ describe("YCoding workspace", () => {
         ["packages/remote", "@ycoding-ai/remote"],
         ["apps/web", "@ycoding-ai/web"],
         ["apps/unapproved", "unapproved-app"],
+        ["extensions/meeting", "@ycoding-ai/meeting"],
+        ["extensions/unapproved", "unapproved-extension"],
       ] as const) {
         await mkdir(path.join(fixture, directory), { recursive: true })
         await Bun.write(path.join(fixture, directory, "package.json"), JSON.stringify({ name }))
       }
       expect(await discoverPackageNames(fixture)).toEqual([
+        "@ycoding-ai/meeting",
         "@ycoding-ai/remote",
         "@ycoding-ai/web",
         "unapproved-app",
+        "unapproved-extension",
       ])
-      expect(await checkWorkspace(fixture)).toEqual(["unapproved-app"])
+      expect(await checkWorkspace(fixture)).toEqual(["unapproved-app", "unapproved-extension"])
     } finally {
       await rm(fixture, { recursive: true, force: true })
     }

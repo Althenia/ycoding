@@ -80,7 +80,8 @@ test("release workflow packages and checksums every CLI archive", () => {
   expect(workflow).toContain(
     '(cd release && sha256sum "ycoding-$version-"*.tar.gz "ycoding-$version-"*.zip LICENSE NOTICE > "ycoding-$version-checksums.txt")',
   )
-  expect(workflow).toContain("needs: [build, isolated-browser-acceptance]")
+  const packageJob = workflow.split("\n  package:")[1]?.split("\n  release-tui:")[0] ?? ""
+  expect(packageJob).toContain("    needs: build\n")
 })
 
 test("macOS release builds sign the app with the pinned release certificate and never fall back to ad hoc", () => {
@@ -259,7 +260,7 @@ test("the first unified release has nonempty shared notes", async () => {
 
 test("same v tag deploys web after the shared checks without GitHub write access", () => {
   const deploy = workflow.split("\n  deploy-web:")[1]
-  expect(deploy).toContain("needs: [verify-source, package]")
+  expect(deploy).toContain("needs: [verify-source, package, isolated-browser-acceptance]")
   expect(deploy).toContain("github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')")
   expect(deploy).toContain("bun run build:web")
   expect(deploy).toContain("bun run deploy:cloudflare")
@@ -274,7 +275,7 @@ test("GitHub Release publication waits for successful web deployment", () => {
   const tui = workflow.split("\n  release-tui:")[1]?.split("\n  deploy-web:")[0]
   expect(tui).toContain("needs: deploy-web")
   expect(tui).toContain("github.event_name == 'push'")
-  expect(workflow.split("\n  deploy-web:")[1]).toContain("needs: [verify-source, package]")
+  expect(workflow.split("\n  deploy-web:")[1]).toContain("needs: [verify-source, package, isolated-browser-acceptance]")
 })
 
 test("Cloudflare deployment requires a scoped Actions token before Wrangler runs", () => {
@@ -379,8 +380,10 @@ test("source verification legs start in parallel with the native builds", () => 
     "cli",
     "tui",
     "browser",
+    "extension",
   ])
   expect(verify).toContain(["          - suite: browser", "            runner: macos-26"].join("\n"))
+  expect(verify).toContain(["          - suite: extension", "            runner: macos-26"].join("\n"))
   for (const [step, condition] of [
     ["Check workspace and types", "matrix.suite == 'types'"],
     ["Verify web application and relay", "matrix.suite == 'web'"],
@@ -393,10 +396,10 @@ test("source verification legs start in parallel with the native builds", () => 
     ["Verify transcript and approval suites", "matrix.suite == 'tui'"],
     ["Verify goal continuation", "matrix.suite == 'tui'"],
     ["Verify installer and web assets", "matrix.suite == 'web'"],
-    ["Verify approved browser host", "matrix.suite == 'browser'"],
+    ["Verify approved browser host", "matrix.suite == 'browser' || matrix.suite == 'extension'"],
     ["Verify isolated-browser integration suites", "matrix.suite == 'browser'"],
-    ["Provision Chrome for Testing", "matrix.suite == 'browser'"],
-    ["Verify Chrome extension integration suite", "matrix.suite == 'browser'"],
+    ["Provision Chrome for Testing", "matrix.suite == 'extension'"],
+    ["Verify Chrome extension integration suite", "matrix.suite == 'extension'"],
   ])
     expect(verify).toContain(`      - name: ${step}\n        if: ${condition}\n`)
   expect(verify).toContain("uses: ./.github/actions/verify-browser-host")
@@ -409,6 +412,37 @@ test("source verification legs start in parallel with the native builds", () => 
   expect(verify.indexOf("- name: Provision Chrome for Testing")).toBeLessThan(
     verify.indexOf("- name: Verify Chrome extension integration suite"),
   )
+})
+
+test("packaging overlaps packaged-browser acceptance without bypassing either deployment gate", () => {
+  const jobs = workflow.split("\njobs:\n")[1]!.split(/(?:^|\n)  ([\w-]+):\n/).slice(1)
+  const dependencies = [
+    ["verify-source", undefined],
+    ["build", undefined],
+    ["isolated-browser-acceptance", "build"],
+    ["package", "build"],
+    ["deploy-web", "[verify-source, package, isolated-browser-acceptance]"],
+    ["release-tui", "deploy-web"],
+  ] as const
+  expect(jobs.filter((_, index) => index % 2 === 0).sort()).toEqual(dependencies.map(([name]) => name).sort())
+  for (const [name, needs] of dependencies) {
+    const job = jobs[jobs.indexOf(name) + 1] ?? ""
+    expect(/^    needs: (.+)$/m.exec(job)?.[1]).toBe(needs)
+    expect(/^    if: (.+)$/m.exec(job)?.[1]).toBe(
+      name === "deploy-web" || name === "release-tui"
+        ? "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}"
+        : "${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}",
+    )
+  }
+  expect(workflow).not.toContain("continue-on-error:")
+  expect(workflow).toContain("permissions:\n  contents: read\n")
+  const verify = workflow.split("\n  verify-source:")[1]?.split("\n  build:")[0] ?? ""
+  expect(verify).not.toContain("secrets.")
+  expect(verify).not.toContain("token:")
+  expect(verify).not.toContain("permissions:")
+  expect(verify).toContain("persist-credentials: false")
+  expect(verify).toContain("git merge-base --is-ancestor \"$GITHUB_SHA\" origin/main")
+  expect(verify).toContain("      - name: Verify tag is reachable from main\n        if: github.event_name == 'push'\n")
 })
 
 test("the packaged isolated-browser smoke waits for the native builds on the approved host", () => {
@@ -431,6 +465,14 @@ test("obsolete Pages publishing is replaced by the web asset publisher", async (
 })
 
 const setupBun = await Bun.file(path.join(import.meta.dir, "../.github/actions/setup-bun/action.yml")).text()
+
+test("setup installs the latest Bun on baseline and native runners without a version pin", () => {
+  expect(setupBun).toContain("https://github.com/oven-sh/bun/releases/latest/download/bun-${OS}-x64-baseline.zip")
+  expect(setupBun).toContain("bun-download-url: ${{ steps.bun-url.outputs.url }}")
+  expect(setupBun).toMatch(/\n {8}bun-version: latest\n/)
+  expect(setupBun).not.toContain("bun-version-file")
+  expect(setupBun).not.toContain("packageManager")
+})
 
 test("setup installs Bun dependencies cold, without an Actions dependency cache or cache-warming workflow", async () => {
   expect(setupBun).not.toContain("actions/cache")

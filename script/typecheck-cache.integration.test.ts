@@ -80,7 +80,7 @@ async function fixture() {
       JSON.stringify({
         name: "ycoding-cache-fixture",
         private: true,
-        packageManager: "bun@1.4.2",
+        packageManager: (await Bun.file(path.join(root, "package.json")).json()).packageManager,
         workspaces: ["packages/*", "apps/*"],
       }),
     )

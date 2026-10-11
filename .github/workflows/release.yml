@@ -41,6 +41,8 @@ jobs:
             runner: ubuntu-24.04
           - suite: browser
             runner: macos-26
+          - suite: extension
+            runner: macos-26
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     steps:
@@ -143,7 +145,7 @@ jobs:
         run: cd /tmp && bun test "$GITHUB_WORKSPACE/script/install.test.ts" "$GITHUB_WORKSPACE/script/build-web-assets.test.ts" "$GITHUB_WORKSPACE/script/release.test.ts" "$GITHUB_WORKSPACE/script/chrome-for-testing.test.ts"
 
       - name: Verify approved browser host
-        if: matrix.suite == 'browser'
+        if: matrix.suite == 'browser' || matrix.suite == 'extension'
         uses: ./.github/actions/verify-browser-host
 
       - name: Verify isolated-browser integration suites
@@ -151,14 +153,14 @@ jobs:
         run: bun run test:integration:browser
 
       - name: Provision Chrome for Testing
-        if: matrix.suite == 'browser'
+        if: matrix.suite == 'extension'
         run: |
           set -euo pipefail
           executable="$(bun script/chrome-for-testing.ts "$RUNNER_TEMP/chrome-for-testing")"
           echo "YCODING_TEST_ISOLATED_BROWSER_CHROME=$executable" >> "$GITHUB_ENV"
 
       - name: Verify Chrome extension integration suite
-        if: matrix.suite == 'browser'
+        if: matrix.suite == 'extension'
         run: bun run test:integration:extension
 
   build:
@@ -339,7 +341,7 @@ jobs:
 
   package:
     name: package TUI release assets
-    needs: [build, isolated-browser-acceptance]
+    needs: build
     if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -479,7 +481,7 @@ jobs:
 
   deploy-web:
     name: deploy web (cloudflare)
-    needs: [verify-source, package]
+    needs: [verify-source, package, isolated-browser-acceptance]
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15

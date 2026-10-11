@@ -9,6 +9,14 @@
     "typecheck-inputs": {
       "dependsOn": ["^typecheck-inputs"]
     },
+    "@ycoding-ai/core#typecheck": {
+      "dependsOn": ["^typecheck-inputs"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/extensions/meeting/src/**"]
+    },
+    "@ycoding-ai/core#typecheck-inputs": {
+      "dependsOn": ["^typecheck-inputs"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/extensions/meeting/src/**"]
+    },
     "@ycoding-ai/cli#typecheck": {
       "dependsOn": ["^typecheck-inputs"],
       "inputs": [
