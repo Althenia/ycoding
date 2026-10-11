@@ -14,6 +14,31 @@ import { testEffect } from "./lib/effect"
 const it = testEffect(Database.layer({ path: ":memory:" }))
 const sessionID = Session.ID.make("ses_autonomy")
 
+for (const yolo of [0, 1, 2, 3] as const) {
+  it.effect(`YOLO ${yolo} grants the new ladder without changing stored levels`, () => Effect.gen(function* () {
+    const service = yield* setup
+    const state = yield* service.setYolo({ sessionID, yolo })
+    expect(state.yolo).toBe(yolo)
+    expect(SessionAutonomy.canAutoAnswer(state)).toBe(yolo >= 2)
+    expect(SessionAutonomy.canAutoPermission(state)).toBe(yolo >= 1)
+    expect(SessionAutonomy.canAutoGuardrail(state)).toBe(yolo >= 1)
+    expect(yield* service.canAutoAnswer(sessionID)).toBe(yolo >= 2)
+    expect(yield* service.canAutoPermission(sessionID)).toBe(yolo >= 1)
+    expect(yield* service.canAutoGuardrail(sessionID)).toBe(yolo >= 1)
+  }))
+}
+
+it.effect("active goal retains answers and permissions but not ordinary guardrail approval at YOLO 0", () => Effect.gen(function* () {
+  const service = yield* setup
+  const state = yield* service.setGoal({ sessionID, text: "Finish safely" })
+  expect(SessionAutonomy.canAutoAnswer(state)).toBe(true)
+  expect(SessionAutonomy.canAutoPermission(state)).toBe(true)
+  expect(SessionAutonomy.canAutoGuardrail(state)).toBe(false)
+  expect(yield* service.canAutoAnswer(sessionID)).toBe(true)
+  expect(yield* service.canAutoPermission(sessionID)).toBe(true)
+  expect(yield* service.canAutoGuardrail(sessionID)).toBe(false)
+}))
+
 const setup = Effect.gen(function* () {
   const { db } = yield* Database.Service
   yield* db
@@ -257,24 +282,19 @@ it.effect("applies a guarded goal calculation only at the expected autonomy revi
   }),
 )
 
-it.effect("compare-and-set stop preserves the objective and rejects changed or terminal autonomy", () =>
+it.effect("explicit stop preserves the objective and advances the autonomy fence", () =>
   Effect.gen(function* () {
     const service = yield* setup
     yield* service.setYolo({ sessionID, yolo: 2 })
     yield* service.setGoal({ sessionID, text: "Verified objective", rawText: "User request" })
     yield* service.report({ sessionID })
     const before = yield* service.snapshot(sessionID)
-    const stopped = yield* service.stopGoalIfCurrent({ sessionID, expectedSequence: before.sequence })
-    expect(stopped).toEqual({ applied: true, state: {
+    const stopped = yield* service.stop(sessionID)
+    expect(stopped).toEqual({
       ...before.state, goal: { ...before.state.goal!, status: "stopped" },
-    } })
+    })
     const after = yield* service.snapshot(sessionID)
     expect(after.sequence).toBe(before.sequence + 1)
-    expect((yield* service.stopGoalIfCurrent({ sessionID, expectedSequence: after.sequence })).applied).toBe(false)
-    expect(yield* service.snapshot(sessionID)).toEqual(after)
-    yield* service.setGoal({ sessionID, text: "New objective" })
-    expect((yield* service.stopGoalIfCurrent({ sessionID, expectedSequence: before.sequence })).applied).toBe(false)
-    expect((yield* service.get(sessionID)).goal).toMatchObject({ text: "New objective", status: "active" })
   }),
 )
 

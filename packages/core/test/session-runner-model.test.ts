@@ -202,6 +202,48 @@ describe("SessionRunnerModel", () => {
       }),
   );
 
+  for (const packageName of [Provider.aisdk("@ai-sdk/openai"), "@ycoding-ai/ai/providers/openai/responses"]) {
+    it.effect(`sends Ultrafast catalog selection through encoded HTTP transport using ${packageName}`, () =>
+      Effect.gen(function* () {
+        const catalog = model(packageName, {
+          providerID: "openai",
+          id: "gpt-6.1-sol-ultrafast",
+          modelID: "gpt-6.1-sol",
+          settings: { apiKey: "fixture-key", baseURL: "https://openai.example/v1" },
+          body: { service_tier: "ultrafast", custom_extension: { enabled: true } },
+          variants: [{
+            id: CatalogModel.VariantID.make("high"),
+            settings: {},
+            body: { custom_extension: { variant: "high" } },
+          }],
+        });
+        const session = Session.Info.make({
+          ...sessionInfo("ses_model_ultrafast"),
+          model: {
+            id: catalog.id,
+            providerID: catalog.providerID,
+            variant: CatalogModel.VariantID.make("high"),
+          },
+        });
+        const resolved = yield* SessionRunnerModel.resolve(session, catalog);
+        const body = yield* captureRequestBody(resolved);
+
+        expect(body).toMatchObject({
+          model: "gpt-6.1-sol",
+          service_tier: "ultrafast",
+          custom_extension: { enabled: true, variant: "high" },
+        });
+        expect(catalog.id).toBe(CatalogModel.ID.make("gpt-6.1-sol-ultrafast"));
+        expect(session.model).toEqual({
+          id: CatalogModel.ID.make("gpt-6.1-sol-ultrafast"),
+          providerID: Provider.ID.openai,
+          variant: CatalogModel.VariantID.make("high"),
+        });
+        expect(catalog.body).toEqual({ service_tier: "ultrafast", custom_extension: { enabled: true } });
+      }),
+    );
+  }
+
   it.effect("keeps catalog apiKey credentials out of provider JSON", () =>
     Effect.gen(function* () {
       const resolved = yield* SessionRunnerModel.fromCatalogModel(

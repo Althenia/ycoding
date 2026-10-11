@@ -2,6 +2,7 @@ export * as MCPClient from "./client"
 
 import path from "node:path"
 import { execFile } from "node:child_process"
+import { stat } from "node:fs/promises"
 import { pathToFileURL } from "node:url"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
@@ -249,10 +250,25 @@ export const connect = Effect.fnUntraced(function* (
   const transport: Transport = yield* Effect.gen(function* () {
     if (config.type === "local") {
       const [command, ...args] = config.command
+      const cwd = config.cwd ? path.resolve(directory, config.cwd) : directory
+      const workingDirectory = yield* Effect.tryPromise({
+        try: () => stat(cwd),
+        catch: (error) => {
+          if (
+            error instanceof Error &&
+            "code" in error &&
+            (error.code === "ENOENT" || error.code === "ENOTDIR")
+          )
+            return new ConnectError({ server, message: `Working directory does not exist: ${cwd}` })
+          return error instanceof Error ? error : new Error(String(error))
+        },
+      })
+      if (!workingDirectory.isDirectory())
+        return yield* new ConnectError({ server, message: `Working directory is not a directory: ${cwd}` })
       return new StdioClientTransport({
         command,
         args,
-        cwd: config.cwd ? path.resolve(directory, config.cwd) : directory,
+        cwd,
         stderr: "pipe",
         env: {
           ...(process.env as Record<string, string>),

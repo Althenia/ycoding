@@ -5,6 +5,7 @@ import { McpEvent } from "@ycoding-ai/schema/mcp-event"
 import { McpSkill } from "@ycoding-ai/schema/mcp-skill"
 import { Command } from "@ycoding-ai/schema/command"
 import { createHash } from "node:crypto"
+import path from "node:path"
 import { Cause, Context, Deferred, Effect, Exit, FiberSet, Layer, Schema, Scope, Stream } from "effect"
 import { makeLocationNode } from "../effect/app-node"
 import { Config } from "../config"
@@ -585,7 +586,14 @@ export const layer = Layer.effect(
           error instanceof MCPClient.NeedsAuthError
             ? { status: "needs_auth" }
             : { status: "failed", error: error instanceof Error ? error.message : String(error) }
-        yield* Effect.logWarning("mcp connect failed", { server: name, status: entry.status })
+        yield* Effect.logWarning("mcp connect failed", {
+          server: name,
+          directory: location.directory,
+          ...(entry.config.type === "local"
+            ? { cwd: entry.config.cwd ? path.resolve(location.directory, entry.config.cwd) : location.directory }
+            : {}),
+          status: entry.status,
+        })
         yield* events.publish(McpEvent.StatusChanged, { server: name }).pipe(Effect.ignore)
       }).pipe(Effect.ensuring(Deferred.succeed(entry.startup, undefined)))
 

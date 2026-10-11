@@ -4,7 +4,7 @@ import { describe, expect } from "bun:test"
 import { Config } from "@ycoding-ai/schema/config"
 import { Plugin } from "@ycoding-ai/schema/plugin"
 import { Money } from "@ycoding-ai/schema/money"
-import { DateTime, Deferred, Effect, Equal, Fiber, Hash, RcMap, Schema, Stream } from "effect"
+import { DateTime, Deferred, Effect, Equal, Fiber, Hash, Logger, RcMap, Schema, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { Plugin as EffectPlugin } from "@ycoding-ai/plugin/effect"
 import { Agent } from "@ycoding-ai/core/agent"
@@ -43,6 +43,55 @@ const itWithSdk = testEffect(
 )
 
 describe("LocationServiceMap", () => {
+  it.live("exposes explicit decisions for main, child and side-chat agents but not partition dispatch", () =>
+    Effect.acquireRelease(Effect.promise(() => tmpdir()), (dir) => Effect.promise(() => dir[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((dir) => Effect.gen(function* () {
+        const locations = yield* LocationServiceMap.Service
+        const context = yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))
+        const supervisor = yield* PluginSupervisor.Service.pipe(Effect.provide(context))
+        yield* supervisor.flush
+        const agents = yield* Agent.Service.pipe(Effect.provide(context))
+        const registry = yield* ToolRegistry.Service.pipe(Effect.provide(context))
+        yield* waitForTool(registry, "decision")
+        for (const id of ["god", "zeus", "btw"]) {
+          const agent = yield* agents.get(Agent.ID.make(id))
+          expect(agent).toBeDefined()
+          const definitions = yield* toolDefinitions(registry, agent!.permissions)
+          expect(definitions.map((tool) => tool.name)).toContain("decision")
+          expect(definitions.map((tool) => tool.name)).not.toContain("scope")
+        }
+        expect((yield* toolDefinitions(registry, [{ action: "decision", resource: "*", effect: "deny" }])).map((tool) => tool.name)).not.toContain("decision")
+      })),
+    ),
+  )
+  it.live("logs bounded per-service construction timings with the completed Location boot", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) => {
+        const messages: unknown[] = []
+        return Effect.gen(function* () {
+          const locations = yield* LocationServiceMap.Service
+          yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))
+          const boot = messages.flatMap((message) =>
+            Array.isArray(message) && message[0] === "location services booted" ? [message[1]] : [],
+          )[0]
+          expect(boot).toMatchObject({
+            directory: dir.path,
+            durationMs: expect.any(Number),
+            stages: {
+              "@ycoding/Location": expect.any(Number),
+              "@ycoding/Config": expect.any(Number),
+              "@ycoding/MCP": expect.any(Number),
+              "@ycoding/FileSystem/Search": expect.any(Number),
+            },
+          })
+        }).pipe(Effect.provide(Logger.layer([Logger.make((options) => { messages.push(options.message) })], { mergeWithExisting: false })))
+      }),
+    ),
+  )
+
   itWithSdk.live("preserves embedded SDK plugins after Location eviction", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
@@ -75,7 +124,7 @@ describe("LocationServiceMap", () => {
     ),
   )
 
-  itWithSdk.live("waits for default agent activation to complete", () =>
+  itWithSdk.effect("releases initial readiness after activation without a reload debounce", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
       (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
@@ -98,11 +147,18 @@ describe("LocationServiceMap", () => {
 
           const flushFiber = yield* PluginSupervisor.Service.use((supervisor) => supervisor.flush).pipe(
             Effect.provide(context),
-            Effect.forkChild,
+            Effect.timeout("50 millis"),
+            Effect.exit,
+            Effect.forkChild({ startImmediately: true }),
           )
           expect(flushFiber.pollUnsafe()).toBeUndefined()
+          const activated = yield* EventRuntime.Service.use((events) =>
+            events.subscribe(Plugin.Event.Updated).pipe(Stream.runHead),
+          ).pipe(Effect.provide(context), Effect.forkChild({ startImmediately: true }))
           yield* Deferred.succeed(release, undefined)
-          yield* Fiber.join(flushFiber)
+          yield* Fiber.join(activated)
+          yield* TestClock.adjust("50 millis")
+          expect((yield* Fiber.join(flushFiber))._tag).toBe("Success")
           yield* PluginSupervisor.Service.use((supervisor) => supervisor.flush).pipe(
             Effect.provide(context),
             Effect.timeout("1 second"),
@@ -115,8 +171,39 @@ describe("LocationServiceMap", () => {
 
           expect(god).toMatchObject({ id: Agent.ID.make("god"), mode: "primary" })
           expect(god?.permissions.length).toBeGreaterThan(0)
+          const tools = yield* ToolRegistry.Service.use((registry) => toolDefinitions(registry)).pipe(Effect.provide(context))
+          expect(tools.map((tool) => tool.name)).toContain("read")
         }),
       ),
+    ),
+  )
+
+  itWithSdk.effect("debounces and coalesces plugin updates after initial readiness", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) => Effect.gen(function* () {
+        const locations = yield* LocationServiceMap.Service
+        const context = yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))
+        yield* PluginSupervisor.Service.use((supervisor) => supervisor.flush).pipe(Effect.provide(context))
+        const activated = yield* EventRuntime.Service.use((events) =>
+          events.subscribe(Plugin.Event.Updated).pipe(Stream.runHead),
+        ).pipe(Effect.provide(context), Effect.forkChild({ startImmediately: true }))
+        const sdk = yield* SdkPlugins.Service
+        const activations: string[] = []
+        for (const id of ["debounced-first", "debounced-second"]) {
+          yield* sdk.register(EffectPlugin.define({
+            id,
+            effect: () => Effect.sync(() => { activations.push(id) }),
+          }))
+        }
+        yield* TestClock.adjust("99 millis")
+        expect(activations).toEqual([])
+        yield* TestClock.adjust("1 millis")
+        yield* Fiber.join(activated)
+        expect(activations).toEqual(["debounced-first", "debounced-second"])
+      })),
     ),
   )
 
@@ -541,6 +628,32 @@ describe("LocationServiceMap", () => {
     ),
   )
 
+  it.live("coalesces normalized directory aliases into one location graph and invalidates through either alias", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            yield* Effect.promise(() => fs.mkdir(path.join(dir.path, "nested")))
+            const locations = yield* LocationServiceMap.Service
+            const directory = AbsolutePath.make(dir.path)
+            const refs = [directory, AbsolutePath.make(`${directory}/./`), AbsolutePath.make(`${directory}/nested/..`)]
+              .map((directory) => Location.Ref.make({ directory }))
+            const contexts = yield* Effect.all(refs.map((ref) => locations.contextEffect(ref)), { concurrency: "unbounded" })
+            expect(contexts[1]).toBe(contexts[0])
+            expect(contexts[2]).toBe(contexts[0])
+            expect(yield* Location.Service.pipe(Effect.provide(contexts[0]))).toMatchObject({ directory })
+            expect(Array.from(yield* RcMap.keys(locations.rcMap))).toHaveLength(1)
+            yield* locations.invalidate(refs[2])
+            expect(Array.from(yield* RcMap.keys(locations.rcMap))).toHaveLength(0)
+          }),
+        ),
+      ),
+    ),
+  )
+
   it.live("isolates catalog state by location", () =>
     Effect.acquireRelease(
       Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
@@ -559,6 +672,7 @@ describe("LocationServiceMap", () => {
               const expected = [
                 "browser",
                 "computer",
+                "decision",
                 "edit",
                 "glob",
                 "goal",
@@ -577,6 +691,7 @@ describe("LocationServiceMap", () => {
                 "todowrite",
                 "webfetch",
                 "websearch",
+                "worktree",
                 "write",
               ]
               yield* Effect.forEach(expected, (name) => waitForTool(registry, name))

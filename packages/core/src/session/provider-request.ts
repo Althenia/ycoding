@@ -6,13 +6,16 @@ import { Money } from "@ycoding-ai/schema/money"
 import { Model } from "@ycoding-ai/schema/model"
 import type { TokenUsage } from "@ycoding-ai/schema/token-usage"
 import type { TransportAttempt } from "@ycoding-ai/ai/route"
+import type { LLMEvent } from "@ycoding-ai/ai"
 import { and, asc, desc, eq, gt, gte, lt } from "drizzle-orm"
-import { Cause, Context, Data, DateTime, Effect, Layer, Option, Schema, Semaphore } from "effect"
+import { Cause, Clock, Context, Data, DateTime, Effect, Layer, Option, Schema, Semaphore } from "effect"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
 import { EventRuntime } from "../event"
 import { SessionEvent } from "./event"
 import { ProviderRequestObserver } from "./provider-request-observer"
+import { TelemetryConsent } from "../telemetry-consent"
+import { SessionCacheDiagnostics } from "./cache-diagnostics"
 import {
   SessionCompactionJobTable,
   SessionContextStateTable,
@@ -24,6 +27,8 @@ export interface BeginInput {
   readonly sessionID: ProviderRequest.Record["sessionID"]
   readonly expectedContextRevision?: number
   readonly inputID?: ProviderRequest.Record["inputID"]
+  readonly assistantMessageID?: ProviderRequest.Record["assistantMessageID"]
+  readonly connectionIdentityDigest?: string
   readonly source: ProviderRequest.Source
   readonly agent: ProviderRequest.Record["agent"]
   readonly model: ProviderRequest.Record["model"]
@@ -39,6 +44,8 @@ export class StaleContextRevision extends Data.TaggedError("SessionProviderReque
 }> {}
 
 export interface CompleteInput {
+  readonly assistantMessageID?: ProviderRequest.Record["assistantMessageID"]
+  readonly connectionIdentityDigest?: string | null
   readonly invalidation?: ProviderRequest.Invalidation
   readonly continuation: ProviderRequest.Continuation
   readonly cacheReadReported?: boolean
@@ -51,6 +58,10 @@ export interface Tracker {
   readonly requestID: string
   readonly defaultInvalidation: ProviderRequest.Invalidation
   readonly observeAttempt: TransportAttempt.Observer
+  readonly observeEvent: (event: LLMEvent) => Effect.Effect<void>
+  readonly retryWait: () => Effect.Effect<void>
+  readonly retryResume: () => Effect.Effect<void>
+  readonly settle: () => Effect.Effect<void>
   readonly complete: (input: CompleteInput) => Effect.Effect<void>
 }
 
@@ -63,8 +74,13 @@ export interface Interface {
   readonly list: (
     sessionID: ProviderRequest.Record["sessionID"],
   ) => Effect.Effect<ReadonlyArray<ProviderRequest.Record>>
-  readonly recentSteps: (sessionID: ProviderRequest.Record["sessionID"]) => Effect.Effect<ReadonlyArray<ProviderRequest.Record>>
-  readonly listAll: (range?: { readonly from?: number; readonly to?: number }) => Effect.Effect<ReadonlyArray<ProviderRequest.Record>>
+  readonly recentSteps: (
+    sessionID: ProviderRequest.Record["sessionID"],
+  ) => Effect.Effect<ReadonlyArray<ProviderRequest.Record>>
+  readonly listAll: (range?: {
+    readonly from?: number
+    readonly to?: number
+  }) => Effect.Effect<ReadonlyArray<ProviderRequest.Record>>
   readonly summary: (sessionID: ProviderRequest.Record["sessionID"]) => Effect.Effect<ProviderRequest.Summary>
 }
 
@@ -76,6 +92,11 @@ type Pending = {
   readonly defaultInvalidation: ProviderRequest.Invalidation
   attempts: number
   completed: boolean
+  readonly started: bigint
+  firstOutput?: bigint
+  ended?: bigint
+  waiting?: bigint
+  retryWaitNs: bigint
 }
 
 type PreviousRequest = {
@@ -99,6 +120,42 @@ const addTokens = (left: TokenUsage.Info, right: TokenUsage.Info): TokenUsage.In
 })
 
 export type CostedRecord = ProviderRequest.Record & { readonly costProvenance?: ProviderRequest.CostProvenance }
+
+export function reportSpeed(records: readonly CostedRecord[]): ProviderRequest.Speed | undefined {
+  const first = records
+    .flatMap((record) => (record.timing?.firstOutputMs === undefined ? [] : [record.timing.firstOutputMs]))
+    .toSorted((a, b) => a - b)
+  const total = records
+    .flatMap((record) => (record.timing?.totalMs === undefined ? [] : [record.timing.totalMs]))
+    .toSorted((a, b) => a - b)
+  const generation = records.flatMap((record) => {
+    const sample = SessionCacheDiagnostics.generationSample(record.timing)
+    return sample === undefined ? [] : [sample]
+  })
+  const duration = generation.reduce((sum, sample) => sum + sample.durationNs, 0)
+  if (first.length === 0 && total.length === 0 && duration === 0) return undefined
+  return {
+    samples: first.length,
+    ...(first.length === 0
+      ? {}
+      : {
+          firstOutputP50Ms: first[Math.ceil(first.length * 0.5) - 1]!,
+          firstOutputP95Ms: first[Math.ceil(first.length * 0.95) - 1]!,
+        }),
+    ...(total.length === 0
+      ? {}
+      : {
+          totalP50Ms: total[Math.ceil(total.length * 0.5) - 1]!,
+          totalP95Ms: total[Math.ceil(total.length * 0.95) - 1]!,
+        }),
+    ...(duration === 0
+      ? {}
+      : {
+          outputTokensPerSecond:
+            generation.reduce((sum, sample) => sum + sample.tokens, 0) / (duration / 1_000_000_000),
+        }),
+  }
+}
 
 export function reportMetrics(records: readonly CostedRecord[]): ProviderRequest.ReportMetrics {
   const priced = records.some((record) => record.cost !== undefined)
@@ -138,7 +195,7 @@ export function summarize(records: readonly CostedRecord[]): ProviderRequest.Sum
     }
   >()
   for (const record of records) {
-    const key = JSON.stringify([record.model.providerID, record.model.id, record.model.variant])
+    const key = JSON.stringify([record.model.providerID, record.model.id, record.model.variant, record.model.profile])
     const current = models.get(key)
     if (!current) {
       models.set(key, {
@@ -181,7 +238,8 @@ export function summarize(records: readonly CostedRecord[]): ProviderRequest.Sum
             : right.cost - left.cost) ||
         left.model.providerID.localeCompare(right.model.providerID) ||
         left.model.id.localeCompare(right.model.id) ||
-        (left.model.variant ?? "").localeCompare(right.model.variant ?? ""),
+        (left.model.variant ?? "").localeCompare(right.model.variant ?? "") ||
+        (left.model.profile ?? "").localeCompare(right.model.profile ?? ""),
     )
   const latest = records.at(-1)
   return {
@@ -196,8 +254,11 @@ export function summarize(records: readonly CostedRecord[]): ProviderRequest.Sum
     tokens: metrics.tokens,
     ...(latest === undefined
       ? {}
-      : { latestInvalidation: latest.invalidation, latestNamespace: latest.promptCacheKey.slice(0, 8),
-          ...(latest.timing === undefined ? {} : { latestTiming: latest.timing }) }),
+      : {
+          latestInvalidation: latest.invalidation,
+          latestNamespace: latest.promptCacheKey.slice(0, 8),
+          ...(latest.timing === undefined ? {} : { latestTiming: latest.timing }),
+        }),
   }
 }
 
@@ -230,8 +291,8 @@ function defaultInvalidation(
   if (previous.source === "compaction" || compactedSincePrevious) return "compaction-reset"
   if (previous.model && (previous.model.providerID !== input.model.providerID || previous.model.id !== input.model.id))
     return "model-switched"
-  if (previous.model && previous.model.variant !== input.model.variant)
-    return "model-variant-switched"
+  if (previous.model && previous.model.variant !== input.model.variant) return "model-variant-switched"
+  if (previous.model && previous.model.profile !== input.model.profile) return "model-switched"
   if (previous.promptCacheKey === input.promptCacheKey) return "provider-not-reported"
   if (previous.systemDigest !== input.systemDigest) return "system-prefix-changed"
   if (previous.toolDigest !== input.toolDigest) return "tool-prefix-changed"
@@ -242,6 +303,8 @@ const rowRecord = (row: typeof SessionProviderRequestTable.$inferSelect): Provid
   id: row.id,
   sessionID: row.session_id,
   ...(row.input_id === null ? {} : { inputID: row.input_id }),
+  ...(row.assistant_message_id === null ? {} : { assistantMessageID: row.assistant_message_id }),
+  ...(row.connection_identity_digest === null ? {} : { connectionIdentityDigest: row.connection_identity_digest }),
   source: row.source,
   agent: row.agent,
   model: row.model,
@@ -265,6 +328,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const db = (yield* Database.Service).db
     const events = yield* EventRuntime.Service
+    const consent = yield* TelemetryConsent.Service
     const lock = Semaphore.makeUnsafe(1)
     const pending = new Map<string, Pending>()
 
@@ -272,7 +336,9 @@ const layer = Layer.effect(
       Effect.sync(() => {
         if (info.phase !== "started") return
         const current = pending.get(info.requestID)
-        if (current && !current.completed) current.attempts += 1
+        if (!current || current.completed) return
+        current.attempts += 1
+        current.ended = undefined
       })
 
     yield* ProviderRequestObserver.register(observeAttempt)
@@ -293,23 +359,33 @@ const layer = Layer.effect(
       db
         .select()
         .from(SessionProviderRequestTable)
-        .where(and(eq(SessionProviderRequestTable.session_id, sessionID), eq(SessionProviderRequestTable.source, "step")))
+        .where(
+          and(eq(SessionProviderRequestTable.session_id, sessionID), eq(SessionProviderRequestTable.source, "step")),
+        )
         .orderBy(desc(SessionProviderRequestTable.request))
         .limit(8)
         .all()
-        .pipe(Effect.orDie, Effect.map((rows) => rows.toReversed().map(rowRecord)))
+        .pipe(
+          Effect.orDie,
+          Effect.map((rows) => rows.toReversed().map(rowRecord)),
+        )
 
     const listAll: Interface["listAll"] = (range) =>
       db
         .select()
         .from(SessionProviderRequestTable)
-        .where(and(
-          range?.from === undefined ? undefined : gte(SessionProviderRequestTable.time_created, range.from),
-          range?.to === undefined ? undefined : lt(SessionProviderRequestTable.time_created, range.to),
-        ))
+        .where(
+          and(
+            range?.from === undefined ? undefined : gte(SessionProviderRequestTable.time_created, range.from),
+            range?.to === undefined ? undefined : lt(SessionProviderRequestTable.time_created, range.to),
+          ),
+        )
         .orderBy(asc(SessionProviderRequestTable.session_id), asc(SessionProviderRequestTable.request))
         .all()
-        .pipe(Effect.orDie, Effect.map((rows) => rows.map(rowRecord)))
+        .pipe(
+          Effect.orDie,
+          Effect.map((rows) => rows.map(rowRecord)),
+        )
 
     const summary: Interface["summary"] = (sessionID) =>
       Effect.gen(function* () {
@@ -356,7 +432,8 @@ const layer = Layer.effect(
                   : right.cost - left.cost) ||
               left.model.providerID.localeCompare(right.model.providerID) ||
               left.model.id.localeCompare(right.model.id) ||
-              (left.model.variant ?? "").localeCompare(right.model.variant ?? ""),
+              (left.model.variant ?? "").localeCompare(right.model.variant ?? "") ||
+              (left.model.profile ?? "").localeCompare(right.model.profile ?? ""),
           )
         const cost = rows.some((row) => row.cost !== null)
           ? Money.USD.make(rows.reduce((total, row) => total + (row.cost ?? 0), 0))
@@ -381,8 +458,11 @@ const layer = Layer.effect(
           ),
           ...(last === undefined
             ? {}
-            : { latestInvalidation: last.invalidation, latestNamespace: last.promptCacheKey.slice(0, 8),
-                ...(last.timing === null ? {} : { latestTiming: last.timing }) }),
+            : {
+                latestInvalidation: last.invalidation,
+                latestNamespace: last.promptCacheKey.slice(0, 8),
+                ...(last.timing === null ? {} : { latestTiming: last.timing }),
+              }),
         }
       })
 
@@ -450,6 +530,8 @@ const layer = Layer.effect(
                     defaultInvalidation: defaultInvalidation(previous, input, compactedSincePrevious),
                     attempts: 0,
                     completed: false,
+                    started: yield* Clock.currentTimeNanos,
+                    retryWaitNs: 0n,
                   })
                   return requestID
                 }),
@@ -463,10 +545,51 @@ const layer = Layer.effect(
                     if (!current || current.completed) return
                     current.completed = true
                     const time = yield* DateTime.now
+                    const now = yield* Clock.currentTimeNanos
+                    const alwaysOn =
+                      completion.timing === undefined
+                        ? {}
+                        : {
+                            ...(completion.timing.promptEvalDurationNs === undefined
+                              ? {}
+                              : { promptEvalDurationNs: completion.timing.promptEvalDurationNs }),
+                            ...(completion.timing.generationDurationNs === undefined
+                              ? {}
+                              : { generationDurationNs: completion.timing.generationDurationNs }),
+                            ...(completion.timing.observedGenerationDurationNs === undefined
+                              ? {}
+                              : { observedGenerationDurationNs: completion.timing.observedGenerationDurationNs }),
+                            ...(completion.timing.generatedTokens === undefined
+                              ? {}
+                              : { generatedTokens: completion.timing.generatedTokens }),
+                            ...(completion.timing.loadDurationNs === undefined
+                              ? {}
+                              : { loadDurationNs: completion.timing.loadDurationNs }),
+                          }
+                    const millis = (duration: bigint) => Math.max(0, Number(duration / 1_000_000n))
+                    const timing = {
+                      ...alwaysOn,
+                      ...((yield* consent.enabled())
+                        ? {
+                            ...(current.firstOutput === undefined
+                              ? {}
+                              : { firstOutputMs: millis(current.firstOutput - current.started) }),
+                            totalMs: millis((current.ended ?? now) - current.started),
+                            retryWaitMs: millis(
+                              current.retryWaitNs + (current.waiting === undefined ? 0n : now - current.waiting),
+                            ),
+                          }
+                        : {}),
+                    }
                     yield* events.publish(SessionEvent.ProviderRequestRecorded, {
                       id: requestID,
                       sessionID: input.sessionID,
                       inputID: input.inputID,
+                      assistantMessageID: completion.assistantMessageID ?? input.assistantMessageID,
+                      connectionIdentityDigest:
+                        completion.connectionIdentityDigest === null
+                          ? undefined
+                          : (completion.connectionIdentityDigest ?? input.connectionIdentityDigest),
                       source: input.source,
                       agent: input.agent,
                       model: input.model,
@@ -478,8 +601,10 @@ const layer = Layer.effect(
                       attempts: Math.max(1, current.attempts),
                       invalidation: completion.invalidation ?? current.defaultInvalidation,
                       continuation: completion.continuation,
-                      ...(completion.cacheReadReported === undefined ? {} : { cacheReadReported: completion.cacheReadReported }),
-                      ...(completion.timing === undefined ? {} : { timing: completion.timing }),
+                      ...(completion.cacheReadReported === undefined
+                        ? {}
+                        : { cacheReadReported: completion.cacheReadReported }),
+                      ...(Object.keys(timing).length === 0 ? {} : { timing }),
                       ...(completion.cost === undefined ? {} : { cost: completion.cost }),
                       tokens: completion.tokens,
                       time,
@@ -499,6 +624,36 @@ const layer = Layer.effect(
               requestID,
               defaultInvalidation: pending.get(requestID)?.defaultInvalidation ?? "first-request",
               observeAttempt,
+              observeEvent: Effect.fnUntraced(function* (event) {
+                const current = pending.get(requestID)
+                if (!current || current.completed) return
+                if (
+                  current.firstOutput === undefined &&
+                  (((event.type === "text-delta" ||
+                    event.type === "reasoning-delta" ||
+                    event.type === "tool-input-delta") &&
+                    event.text.length > 0) ||
+                    event.type === "tool-call")
+                )
+                  current.firstOutput = yield* Clock.currentTimeNanos
+                if (event.type === "step-finish" || event.type === "finish")
+                  current.ended ??= yield* Clock.currentTimeNanos
+              }),
+              retryWait: Effect.fnUntraced(function* () {
+                const current = pending.get(requestID)
+                if (current && !current.completed && current.waiting === undefined)
+                  current.waiting = yield* Clock.currentTimeNanos
+              }),
+              retryResume: Effect.fnUntraced(function* () {
+                const current = pending.get(requestID)
+                if (!current || current.completed || current.waiting === undefined) return
+                current.retryWaitNs += (yield* Clock.currentTimeNanos) - current.waiting
+                current.waiting = undefined
+              }),
+              settle: Effect.fnUntraced(function* () {
+                const current = pending.get(requestID)
+                if (current && !current.completed) current.ended ??= yield* Clock.currentTimeNanos
+              }),
               complete,
             }
           }),
@@ -512,5 +667,5 @@ const layer = Layer.effect(
 export const node = makeGlobalNode({
   service: Service,
   layer,
-  deps: [Database.node, EventRuntime.node],
+  deps: [Database.node, EventRuntime.node, TelemetryConsent.node],
 })

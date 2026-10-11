@@ -1,9 +1,12 @@
 import fs from "fs/promises"
+import { createHash } from "crypto"
 import path from "path"
 import { fileURLToPath } from "url"
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
 import { FileMutation } from "@ycoding-ai/core/file-mutation"
+import { Git } from "@ycoding-ai/core/git"
+import { Global } from "@ycoding-ai/core/global"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
@@ -87,7 +90,7 @@ const filesystem = Layer.effect(
   }),
 ).pipe(Layer.provide(LayerNode.compile(FSUtil.node)))
 
-const withTool = <A, E, R>(directory: string, body: (registry: ToolRegistry.Interface) => Effect.Effect<A, E, R>) => {
+const withTool = <A, E, R>(directory: string, body: (registry: ToolRegistry.Interface) => Effect.Effect<A, E, R>, data = path.join(directory, ".ycoding-test-data")) => {
   const activeLocation = Layer.succeed(
     Location.Service,
     Location.Service.of(location({ directory: AbsolutePath.make(directory) })),
@@ -102,6 +105,7 @@ const withTool = <A, E, R>(directory: string, body: (registry: ToolRegistry.Inte
           ToolRegistry.toolsNode,
           LocationMutation.node,
           FileMutation.node,
+          Git.node,
           writeToolNode,
         ]),
         [
@@ -110,6 +114,7 @@ const withTool = <A, E, R>(directory: string, body: (registry: ToolRegistry.Inte
           [Permission.node, permission],
           [SessionGuardrail.node, guardrail],
           [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
+          [Global.node, Global.layerWith({ data })],
         ],
       ),
     ),
@@ -340,6 +345,42 @@ describe("WriteTool", () => {
         Effect.promise(() =>
           Promise.all([active[Symbol.asyncDispose](), outside[Symbol.asyncDispose]()]).then(() => undefined),
         ),
+    ),
+  )
+
+  it.live("writes in a linked managed worktree without external-directory approval", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        const data = path.join(tmp.path, "data")
+        const worktree = path.join(
+          data,
+          "worktrees",
+          `repo_${createHash("sha256").update(path.join(tmp.path, ".git")).digest("hex")}`,
+          "linked",
+        )
+        return Effect.promise(async () => {
+          await Bun.$`git init`.cwd(tmp.path).quiet()
+          await Bun.$`git config user.email test@ycoding.test`.cwd(tmp.path).quiet()
+          await Bun.$`git config user.name Test`.cwd(tmp.path).quiet()
+          await Bun.$`git commit --allow-empty -m root`.cwd(tmp.path).quiet()
+          await fs.mkdir(path.dirname(worktree), { recursive: true })
+          await Bun.$`git worktree add -b linked ${worktree} HEAD`.cwd(tmp.path).quiet()
+        }).pipe(
+          Effect.andThen(
+            withTool(
+              tmp.path,
+              (registry) => executeTool(registry, call({
+                  path: path.join(worktree, "file.txt"),
+                  content: "managed",
+                })),
+              data,
+            ),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
     ),
   )
 })

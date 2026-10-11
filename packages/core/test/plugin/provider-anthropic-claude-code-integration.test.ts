@@ -170,6 +170,118 @@ it.live("switches only between explicitly signed-in managed profiles and never b
   }),
 )
 
+it.live("measures Claude profile activation reload work without contacting providers", () =>
+  Effect.gen(function* () {
+    const credentials = yield* Credential.Service
+    const integrations = yield* Integration.Service
+    const catalog = yield* Catalog.Service
+    const integrationID = Integration.ID.make("anthropic")
+    const accountDiscoveryMs: number[] = []
+    const integrationReloadMs: number[] = []
+    const catalogReloadMs: number[] = []
+    let activationDispatchMs = 0
+    let profileOverlayUpdateMs = 0
+    let unrelatedTransformRuns = 0
+    yield* catalog.transform((draft) => {
+      unrelatedTransformRuns++
+      draft.provider.update(Provider.ID.openai, (provider) => {
+        provider.package = Provider.aisdk("@ai-sdk/openai")
+      })
+    })
+    yield* catalog.transform((draft) => {
+      draft.provider.update(Provider.ID.anthropic, (provider) => {
+        provider.package = Provider.aisdk("@ai-sdk/anthropic")
+        provider.integrationID = integrationID
+      })
+      draft.model.update(Provider.ID.anthropic, CatalogModel.ID.make("claude-opus-5"), (model) => {
+        model.enabled = true
+        model.status = "active"
+      })
+    })
+    const first = yield* credentials.create({
+      integrationID,
+      label: "Personal",
+      value: Credential.OAuth.make({
+        type: "oauth",
+        methodID: claudeCodeMethodID,
+        access: profileA,
+        refresh: "fake-refresh-a",
+        expires: Number.MAX_SAFE_INTEGER,
+        metadata: { authKind: "claude-code", managed: true, source: profileA },
+      }),
+    })
+    yield* credentials.create({
+      integrationID,
+      label: "Work",
+      value: Credential.OAuth.make({
+        type: "oauth",
+        methodID: claudeCodeMethodID,
+        access: profileB,
+        refresh: "fake-refresh-b",
+        expires: Number.MAX_SAFE_INTEGER,
+        metadata: { authKind: "claude-code", managed: true, source: profileB },
+      }),
+    })
+    const accounts = [account(profileA, "fake-access-a"), account(profileB, "fake-access-b")]
+    const credentialSource = {
+      list: async () => {
+        const started = performance.now()
+        const result = accounts
+        accountDiscoveryMs.push(performance.now() - started)
+        return result
+      },
+      read: async (name: string) => accounts.find((item) => item.source === name)?.credentials ?? null,
+      write: async () => true,
+    } satisfies ClaudeCodeCredentialSource
+    const base = yield* PluginHost.make(yield* PluginRegistry.Service)
+    const measure = (samples: number[], effect: Effect.Effect<void>) =>
+      Effect.gen(function* () {
+        const started = performance.now()
+        yield* effect
+        samples.push(performance.now() - started)
+      })
+    yield* makeAnthropicPlugin({ credentialSource }).effect({
+      ...base,
+      integration: {
+        ...base.integration,
+        reload: () => measure(integrationReloadMs, base.integration.reload()),
+      },
+      catalog: {
+        ...base.catalog,
+        reload: () => measure(catalogReloadMs, base.catalog.reload()),
+      },
+    })
+    const unrelatedBeforeActivation = unrelatedTransformRuns
+    const activationStarted = performance.now()
+    yield* integrations.connection.activate(first.id)
+    activationDispatchMs = performance.now() - activationStarted
+    const selected = yield* eventually(
+      catalog.provider.get(Provider.ID.anthropic),
+      (provider) => provider?.settings?.claudeCodeSource === profileA,
+      1500,
+    )
+    profileOverlayUpdateMs = performance.now() - activationStarted
+    const selectedModel = yield* catalog.model.get(Provider.ID.anthropic, CatalogModel.ID.make("claude-opus-5"))
+    yield* eventually(Effect.succeed(catalogReloadMs.length), (count) => count === 1, 1500)
+    expect(selected?.settings).toMatchObject({ apiKey: "claude-code", claudeCodeSource: profileA })
+    expect(selectedModel).toMatchObject({
+      enabled: true,
+      settings: { apiKey: "claude-code", claudeCodeSource: profileA },
+    })
+    expect(accountDiscoveryMs).toHaveLength(2)
+    expect(integrationReloadMs).toHaveLength(1)
+    expect(catalogReloadMs).toHaveLength(1)
+    console.info("Claude profile activation reload timings", {
+      accountDiscoveryMs,
+      integrationReloadMs,
+      catalogReloadMs,
+      activationDispatchMs,
+      profileOverlayUpdateMs,
+      unrelatedTransformReplayed: unrelatedTransformRuns > unrelatedBeforeActivation,
+    })
+  }),
+)
+
 it.effect("removes legacy setup-token credentials during provider initialization", () =>
   Effect.gen(function* () {
     const credentials = yield* Credential.Service
@@ -212,6 +324,7 @@ it.live("signs in to a new isolated Claude profile without persisting OAuth toke
       id: claudeCodeMethodID,
       type: "oauth",
       label: "Claude Code account",
+      remote: true,
       prompts: undefined,
     })
     expect(info?.methods).toContainEqual({

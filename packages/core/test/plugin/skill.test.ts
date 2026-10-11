@@ -32,7 +32,7 @@ describe("SkillPlugin.Plugin", () => {
       ).pipe(
         Effect.provideService(
           Config.Service,
-          Config.Service.of({ reload: () => Effect.void, entries: () => Effect.succeed([]) }),
+          Config.Service.of({ diagnostics: () => Effect.succeed([]), reload: () => Effect.void, entries: () => Effect.succeed([]) }),
         ),
         Effect.provideService(
           Location.Service,

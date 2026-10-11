@@ -39,8 +39,14 @@ export function toSessionError(cause: unknown): SessionError.Error {
   }
   if (cause instanceof Permission.BlockedError) return { type: "permission.rejected", message: cause.message }
   if (cause instanceof Question.RejectedError) return { type: "aborted", message: cause.message }
-  if (cause instanceof ToolFailure || cause instanceof Tool.Failure)
-    return cause.error === undefined ? { type: "tool.execution", message: cause.message } : toSessionError(cause.error)
+  if (cause instanceof ToolFailure || cause instanceof Tool.Failure) {
+    if (cause.error === undefined) return { type: "tool.execution", message: cause.message }
+    const nested = toSessionError(cause.error)
+    if (nested.type !== "unknown") return nested
+    // The tool's own message is the curated explanation; an untyped cause only adds detail.
+    const detail = nested.message && nested.message !== cause.message ? `: ${nested.message}` : ""
+    return { type: "tool.execution", message: cause.message + detail }
+  }
   if (cause instanceof StepFailedError) return cause.error
   if (cause instanceof AgentNotFoundError) return { type: "unknown", message: cause.message }
   if (cause instanceof UserInterruptedError) return { type: "aborted", message: cause.message }

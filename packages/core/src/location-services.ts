@@ -1,4 +1,5 @@
 import { Effect, Layer, LayerMap } from "effect"
+import path from "node:path"
 import { Agent } from "./agent"
 import { AISDK } from "./aisdk"
 import { Browser } from "./browser"
@@ -53,6 +54,7 @@ import { SessionRunnerLLM } from "./session/runner/llm"
 import { SessionRunnerModel } from "./session/runner/model"
 import { SessionProviderState } from "./session/provider-state"
 import { SessionTitle } from "./session/title"
+import { SessionPrediction } from "./session/prediction"
 import { SessionTodo } from "./session/todo"
 import { Skill } from "./skill"
 import { SkillInstructions } from "./skill/instructions"
@@ -62,6 +64,7 @@ import { ReadToolFileSystem } from "./tool/read-filesystem"
 import { ToolRegistry } from "./tool/registry"
 import { ToolOutputStore } from "./tool-output-store"
 import { Vcs } from "./vcs"
+import { AbsolutePath } from "./schema"
 
 export { LocationServiceMap } from "./location-service-map"
 
@@ -121,6 +124,7 @@ const locationServiceNodes = [
   SessionContext.node,
   SessionGoal.node,
   SessionTitle.node,
+  SessionPrediction.node,
   SessionTodo.node,
   Snapshot.node,
   SessionProviderState.node,
@@ -143,7 +147,10 @@ export function buildLocationServiceMap(
   // payloads omit optional keys) and `{ directory, workspaceID: undefined }` are
   // different RcMap keys. The RcMap caches by the raw key before the build
   // callback runs, so canonicalize at the map boundary to the key-present shape.
-  const canonical = (ref: Location.Ref) => Location.Ref.make({ directory: ref.directory, workspaceID: ref.workspaceID })
+  const canonical = (ref: Location.Ref) => Location.Ref.make({
+    directory: AbsolutePath.make(path.resolve(ref.directory)),
+    workspaceID: ref.workspaceID,
+  })
   const map = Layer.effect(
     LocationServiceMap.Service,
     Effect.map(
@@ -156,14 +163,35 @@ export function buildLocationServiceMap(
           // Project), and the hoist walk is the only pass that can still slice
           // those back out.
           const location = LayerNode.hoist(locationServices, Node.tags.values.global, allReplacements)
+          const stages: Record<string, number> = {}
+          const timed: LayerNode.Replacement[] = []
+          const visited = new Set<LayerNode.Node<unknown, unknown, LayerNode.Tag | undefined>>()
+          const visit = (node: LayerNode.Node<unknown, unknown, LayerNode.Tag | undefined>) => {
+            if (visited.has(node)) return
+            visited.add(node)
+            node.dependencies.forEach(visit)
+            const implementation = node.implementation
+            if (!implementation) return
+            timed.push([node, {
+              ...node,
+              implementation: Layer.suspend(() => {
+                const started = performance.now()
+                return Layer.tap(implementation as Layer.Layer<unknown, unknown, unknown>, () => Effect.sync(() => {
+                  stages[node.name] = Math.round(performance.now() - started)
+                }))
+              }),
+            }])
+          }
+          visit(location.node)
 
-          return LayerNode.compile(location.node).pipe(
+          return LayerNode.compile(location.node, timed).pipe(
             Layer.fresh,
             Layer.tap(() =>
               Effect.logInfo("location services booted", {
                 directory: ref.directory,
                 workspaceID: ref.workspaceID,
                 durationMs: Math.round(performance.now() - startedAt),
+                stages,
               }),
             ),
             Layer.provide(LayerNode.compile(location.hoisted)),

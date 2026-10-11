@@ -83,10 +83,16 @@ const cassette = HttpRecorder.layer(cassetteName, {
     expect(incomingBody).toEqual(expected)
     return incoming.method === recorded.method && incoming.url === recorded.url
   },
-}).pipe(Layer.provide(process.env.RECORD === "true" ? FetchHttpClient.layer : Layer.succeed(
-  HttpClient.HttpClient,
-  HttpClient.make(() => Effect.die("Recorded runner tests cannot access the network")),
-)))
+}).pipe(
+  Layer.provide(
+    process.env.RECORD === "true"
+      ? FetchHttpClient.layer
+      : Layer.succeed(
+          HttpClient.HttpClient,
+          HttpClient.make(() => Effect.die("Recorded runner tests cannot access the network")),
+        ),
+  ),
+)
 const executor = RequestExecutor.layer.pipe(Layer.provide(cassette))
 const client = LLMClient.layer.pipe(Layer.provide(executor))
 const permission = Layer.succeed(
@@ -118,7 +124,7 @@ const referenceInstructions = Layer.mock(ReferenceInstructions.Service, {
 const mcpInstructions = Layer.mock(McpInstructions.Service, { load: () => Effect.succeed(Instructions.empty) })
 const config = Layer.succeed(
   Config.Service,
-  Config.Service.of({ reload: () => Effect.void, entries: () => Effect.succeed([]) }),
+  Config.Service.of({ diagnostics: () => Effect.succeed([]), reload: () => Effect.void, entries: () => Effect.succeed([]) }),
 )
 const pluginSupervisor = Layer.succeed(PluginSupervisor.Service, PluginSupervisor.Service.of({ flush: Effect.void }))
 const promptCatalog = Layer.mock(Catalog.Service, {
@@ -128,6 +134,8 @@ const promptCatalog = Layer.mock(Catalog.Service, {
     available: () => Effect.succeed([]),
   },
   model: {
+    defaultSelection: () => Effect.succeed(undefined),
+    forConnection: (model) => Effect.succeed(model),
     get: () => Effect.succeed(undefined),
     all: () => Effect.succeed([]),
     available: () => Effect.succeed([]),

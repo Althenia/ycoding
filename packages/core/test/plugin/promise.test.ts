@@ -1,19 +1,24 @@
 import { describe, expect } from "bun:test"
 import { Message, SystemPart } from "@ycoding-ai/ai"
-import { DateTime, Effect, Schema } from "effect"
+import { DateTime, Effect, Layer, Schema } from "effect"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Catalog } from "@ycoding-ai/core/catalog"
 import { CatalogModel } from "@ycoding-ai/core/model"
+import { Credential } from "@ycoding-ai/core/credential"
+import { Integration } from "@ycoding-ai/core/integration"
+import { MCP } from "@ycoding-ai/core/mcp/index"
 import { PluginRegistry } from "@ycoding-ai/core/plugin"
 import { PluginHooks } from "@ycoding-ai/core/plugin/hooks"
 import { PluginHost } from "@ycoding-ai/core/plugin/host"
 import { PluginPromise } from "@ycoding-ai/core/plugin/promise"
+import { PluginRuntime } from "@ycoding-ai/core/plugin/runtime"
 import { Session } from "@ycoding-ai/core/session"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionPending } from "@ycoding-ai/core/session/pending"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
 import { Provider } from "@ycoding-ai/core/provider"
 import { Plugin } from "@ycoding-ai/plugin"
+import { define } from "@ycoding-ai/plugin/effect/plugin"
 import type { SessionHooks } from "@ycoding-ai/plugin/effect/session"
 import { Model } from "@ycoding-ai/schema/model"
 import { testEffect } from "../lib/effect"
@@ -23,6 +28,37 @@ import { host as testHost } from "./host"
 const it = testEffect(PluginTestLayer)
 
 describe("fromPromise", () => {
+  it.effect("preserves parent Session identity when the plugin creates an analysis Session", () =>
+    Effect.gen(function* () {
+      const registry = yield* PluginRegistry.Service
+      const runtime = yield* PluginRuntime.Service
+      let received: Parameters<PluginRuntime.Interface["session"]["create"]>[0] | undefined
+      const host = yield* PluginHost.make(registry).pipe(
+        Effect.provideService(PluginRuntime.Service, {
+          ...runtime,
+          session: {
+            ...runtime.session,
+            create: (input) => {
+              received = input
+              return Effect.die("Controlled Session boundary")
+            },
+          },
+        }),
+      )
+      yield* PluginPromise.fromPromise(
+        Plugin.define({
+          id: "meeting-parent-forwarding",
+          setup: async (context) => {
+            await expect(
+              context.session.create({ parentID: "ses_meeting_parent", agent: "meeting-intelligence" }),
+            ).rejects.toBeDefined()
+          },
+        }),
+      ).effect(host)
+      expect(received).toMatchObject({ parentID: "ses_meeting_parent", agent: "meeting-intelligence" })
+      expect(received?.model).toBeUndefined()
+    }),
+  )
   it.effect("forwards transient session generation", () =>
     Effect.gen(function* () {
       const host = testHost({
@@ -41,6 +77,76 @@ describe("fromPromise", () => {
           },
         }),
       ).effect(host)
+    }),
+  )
+
+  it.effect("exposes the current Location MCP catalog, resource, and tool operations", () =>
+    Effect.gen(function* () {
+      const plugin = yield* PluginRegistry.Service
+      const server = new MCP.ServerInfo({ name: MCP.ServerName.make("meeting"), status: { status: "connected" } })
+      const tool = new MCP.Tool({
+        server: server.name,
+        name: "read_meeting",
+        inputSchema: { type: "object", properties: { id: { type: "string" } } },
+      })
+      const resource = MCP.ResourceContent.make({
+        server: server.name,
+        uri: "meeting://one",
+        contents: [{ type: "text", uri: "meeting://one", text: "notes" }],
+      })
+      const result = new MCP.ToolResult({
+        server: server.name,
+        tool: tool.name,
+        isError: false,
+        structured: { title: "Planning" },
+        content: [{ type: "text", text: "Planning" }],
+      })
+      const args = { opaque: { value: "preserve" }, constructor: "untrusted" }
+      let received: unknown
+      const mcp = Layer.mock(MCP.Service, {
+        servers: () => Effect.succeed([server]),
+        tools: () => Effect.succeed([tool]),
+        readResource: (input) => Effect.succeed(input.uri === "meeting://one" ? resource : undefined),
+        callTool: (input) => {
+          if (input.name === "fail")
+            return Effect.fail(
+              new MCP.ToolCallError({ server: MCP.ServerName.make(input.server), tool: input.name, message: "failed" }),
+            )
+          received = input
+          return Effect.succeed(result)
+        },
+      })
+      const host = yield* PluginHost.make(plugin).pipe(Effect.provide(mcp))
+
+      yield* PluginPromise.fromPromise(
+        Plugin.define({
+          id: "promise-mcp-domain",
+          setup: async (ctx) => {
+            expect(await ctx.mcp.servers()).toEqual([server])
+            expect(await ctx.mcp.tools()).toEqual([tool])
+            expect(await ctx.mcp.readResource({ server: "meeting", uri: "meeting://one" })).toEqual(resource)
+            expect(await ctx.mcp.readResource({ server: "meeting", uri: "meeting://missing" })).toBeUndefined()
+            expect(await ctx.mcp.callTool({ server: "meeting", name: "read_meeting", args })).toEqual(result)
+            await expect(ctx.mcp.callTool({ server: "meeting", name: "fail" })).rejects.toMatchObject({
+              _tag: "MCP.ToolCallError",
+              message: "failed",
+            })
+          },
+        }),
+      ).effect(host)
+
+      yield* define({
+        id: "effect-mcp-domain",
+        effect: (ctx) =>
+          Effect.gen(function* () {
+            expect(yield* ctx.mcp.servers()).toEqual([server])
+            expect(yield* ctx.mcp.tools()).toEqual([tool])
+            expect(yield* ctx.mcp.readResource({ server: "meeting", uri: "meeting://one" })).toEqual(resource)
+            expect(yield* ctx.mcp.callTool({ server: "meeting", name: "read_meeting", args })).toEqual(result)
+          }).pipe(Effect.orDie),
+      }).effect(host)
+
+      expect(received).toEqual({ server: "meeting", name: "read_meeting", args })
     }),
   )
 
@@ -122,6 +228,49 @@ describe("fromPromise", () => {
 
       expect(seen).toHaveLength(8)
       expect(new Set(seen).size).toBe(1)
+    }),
+  )
+
+  it.effect("returns the configured named-profile default selection through the direct Promise catalog adapter", () =>
+    Effect.gen(function* () {
+      const plugin = yield* PluginRegistry.Service
+      const catalog = yield* Catalog.Service
+      const credentials = yield* Credential.Service
+      const host = yield* PluginHost.make(plugin)
+      const providerID = Provider.ID.make("profile-default")
+      const modelID = CatalogModel.ID.make("configured-chat")
+      yield* credentials.create({
+        integrationID: Integration.ID.make(providerID),
+        label: "Work",
+        value: { type: "key", key: "fixture-profile-default" },
+      })
+      yield* catalog.transform((draft) =>
+        draft.model.update(providerID, modelID, (model) => {
+          model.enabled = true
+          model.variants = [{ id: CatalogModel.VariantID.make("high") }]
+        }),
+      )
+      let callbacks = 0
+      yield* PluginPromise.fromPromise(
+        Plugin.define({
+          id: "promise-profile-default",
+          setup: async (ctx) => {
+            await ctx.catalog.transform((draft) => {
+              callbacks += 1
+              draft.model.default.set(providerID, modelID, { profile: "Work", variant: "high" })
+            })
+            const selected = await ctx.catalog.model.default()
+            expect(selected.data).toMatchObject({
+              id: modelID,
+              providerID,
+              selection: { id: modelID, providerID, profile: "Work", variant: "high" },
+            })
+            expect(selected.data?.profiles).toEqual([{ name: "Work", active: true, variants: ["high"] }])
+            expect(JSON.stringify(selected.data)).not.toContain("fixture-profile-default")
+          },
+        }),
+      ).effect(host)
+      expect(callbacks).toBe(1)
     }),
   )
 

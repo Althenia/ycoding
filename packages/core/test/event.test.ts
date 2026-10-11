@@ -93,14 +93,64 @@ const durableData = (sessionID: Session.ID, text: string) => ({ sessionID, title
 
 /** Followed log read without markers: the old `durable` stream shape. */
 const tail = (events: EventRuntime.Interface, input: { aggregateID: string; after?: number }) =>
-  events.log({ ...input, follow: true }).pipe(Stream.filter((item): item is EventRuntime.Payload => !EventRuntime.isSynced(item)))
+  events
+    .log({ ...input, follow: true })
+    .pipe(Stream.filter((item): item is EventRuntime.Payload => !EventRuntime.isSynced(item)))
 
 const it = testEffect(
-  AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, Location.node]), [[Location.node, locationLayer]]),
+  AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, Location.node]), [
+    [Location.node, locationLayer],
+  ]),
 )
 const itWithoutLocation = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node])))
 
 describe("EventRuntime", () => {
+  it.effect("publishes a durable batch with consecutive sequences and rolls back without notifications", () =>
+    Effect.gen(function* () {
+      const events = yield* EventRuntime.Service
+      const db = (yield* Database.Service).db
+      const observed: EventRuntime.Payload[] = []
+      yield* events.listen((event) =>
+        Effect.sync(() => {
+          observed.push(event)
+        }),
+      )
+      const sessionID = Session.ID.create()
+      const committed = yield* events.publishBatch([
+        { definition: DurableMessage, data: durableData(sessionID, "first") },
+        { definition: DurableMessage, data: durableData(sessionID, "second") },
+      ])
+      expect(committed.map((event) => Number(event.durable?.seq))).toEqual([0, 1])
+      expect(observed.map((event) => event.data)).toEqual([
+        durableData(sessionID, "first"),
+        durableData(sessionID, "second"),
+      ])
+      const before = yield* db.select().from(EventTable).all()
+      const failed = yield* events
+        .publishBatch([
+          { definition: DurableMessage, data: durableData(sessionID, "rolled back") },
+          {
+            definition: DurableMessage,
+            data: durableData(sessionID, "fails"),
+            options: { commit: () => Effect.die(new Error("batch failed")) },
+          },
+        ])
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(failed)).toBe(true)
+      expect(yield* db.select().from(EventTable).all()).toEqual(before)
+      expect(observed).toHaveLength(2)
+      expect(Number((yield* events.sequences([sessionID])).get(sessionID))).toBe(1)
+      expect(
+        yield* events.publishBatch(
+          [{ definition: DurableMessage, data: durableData(sessionID, "condition refused") }],
+          { when: Effect.succeed(false) },
+        ),
+      ).toEqual([])
+      expect(yield* db.select().from(EventTable).all()).toEqual(before)
+      expect(observed).toHaveLength(2)
+    }),
+  )
+
   it.effect("subscribes to multiple event definitions with a discriminated payload union", () =>
     Effect.gen(function* () {
       const events = yield* EventRuntime.Service
@@ -1231,7 +1281,9 @@ describe("EventRuntime", () => {
 
   it.effect("log replays across configured read pages", () =>
     Effect.gen(function* () {
-      const eventLayer = EventRuntime.layerWith({ logReadPageSize: 2 }).pipe(Layer.provide(LayerNode.compile(Database.node)))
+      const eventLayer = EventRuntime.layerWith({ logReadPageSize: 2 }).pipe(
+        Layer.provide(LayerNode.compile(Database.node)),
+      )
 
       yield* Effect.gen(function* () {
         const events = yield* EventRuntime.Service

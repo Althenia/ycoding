@@ -4,12 +4,14 @@ import { and, eq, inArray, isNotNull, isNull } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
+import { EventRuntime } from "../event"
 import { SessionHistory } from "./history"
 import { MessageDecodeError } from "./error"
 import { SessionMessage } from "./message"
 import { Session } from "@ycoding-ai/schema/session"
 import { SessionMessageTable, SessionTable } from "./sql"
 import { SessionTask } from "./task"
+import { SessionProjector } from "./projector"
 import { fromRow } from "./info"
 
 export interface Interface {
@@ -80,4 +82,4 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = makeGlobalNode({ service: Service, layer, deps: [Database.node] })
+export const node = makeGlobalNode({ service: Service, layer, deps: [Database.node, EventRuntime.node, SessionProjector.node] })

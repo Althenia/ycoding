@@ -48,6 +48,7 @@ describe("XAIPlugin", () => {
         {
           id: Integration.MethodID.make("device"),
           type: "oauth",
+          remote: true,
           label: "xAI Grok OAuth (Headless / Remote / VPS)",
         },
         { type: "key", label: "Manually enter API Key" },

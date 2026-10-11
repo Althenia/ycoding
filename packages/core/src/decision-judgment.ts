@@ -19,7 +19,7 @@ export const Request = Schema.Struct({
         choices: Schema.Array(Schema.Struct({ value: ChoiceValue, description: Schema.optional(Text) })).check(
           Schema.isMinLength(1),
           Schema.isMaxLength(255),
-          Schema.makeFilter((choices) => new Set(choices.map((choice) => choice.value)).size === choices.length),
+          Schema.makeFilter((choices) => new Set(choices.map((choice) => choice.value)).size === choices.length, { expected: "unique string or Boolean choice values" }),
         ),
       }),
       Schema.Struct({
@@ -35,7 +35,7 @@ export const Request = Schema.Struct({
   ).check(
     Schema.isMinLength(1),
     Schema.isMaxLength(32),
-    Schema.makeFilter((questions) => new Set(questions.map((question) => question.name)).size === questions.length),
+    Schema.makeFilter((questions) => new Set(questions.map((question) => question.name)).size === questions.length, { expected: "unique question names" }),
   ),
 })
 

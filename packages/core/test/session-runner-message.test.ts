@@ -9,6 +9,7 @@ import { Agent } from "@ycoding-ai/core/agent"
 import { Shell } from "@ycoding-ai/schema/shell"
 import { ID, Name } from "@ycoding-ai/core/skill"
 import { DateTime, Schema } from "effect"
+import { SessionProviderState } from "@ycoding-ai/core/session/provider-state"
 
 const created = DateTime.makeUnsafe(0)
 const id = (value: string) => SessionMessage.ID.make(`msg_${value}`)
@@ -26,7 +27,68 @@ const managed = (mime: string, name: string, digest = "a".repeat(64), bytes = 4)
     name,
   })
 
+const withProvenance = (...input: Parameters<typeof toLLMMessages>) =>
+  toLLMMessages(
+    input[0],
+    input[1],
+    input[2],
+    new Map([
+      ...(input[3] ?? []),
+      ...input[0].map(
+        (message) => [SessionProviderState.accountKey(message.id), { accountIdentityDigest: "a".repeat(64) }] as const,
+      ),
+    ]),
+    input[4],
+    "a".repeat(64),
+  )
+
 describe("toLLMMessages", () => {
+  test("omits unknown and mismatched provider provenance without deleting canonical text or tool history", () => {
+    const message = SessionMessage.Assistant.make({
+      id: id("provenance"),
+      type: "assistant",
+      agent: build,
+      model,
+      content: [
+        SessionMessage.AssistantText.make({ type: "text", text: "ordinary response", phase: "commentary" }),
+        SessionMessage.AssistantReasoning.make({
+          type: "reasoning",
+          text: "ordinary reasoning",
+          state: { signature: "account-signature", encryptedContent: "account-ciphertext" },
+        }),
+        SessionMessage.AssistantTool.make({
+          type: "tool",
+          id: "canonical-call",
+          name: "lookup",
+          providerState: { itemId: "account-item" },
+          state: SessionMessage.ToolStateStreaming.make({ status: "streaming", input: "{}" }),
+          time: { created },
+        }),
+      ],
+      time: { created, completed: created },
+    })
+    const unknown = toLLMMessages([message], model)
+    const mismatched = toLLMMessages(
+      [message],
+      model,
+      model.providerID,
+      new Map([[SessionProviderState.accountKey(message.id), { accountIdentityDigest: "a".repeat(64) }]]),
+      undefined,
+      "b".repeat(64),
+    )
+    for (const history of [unknown, mismatched]) {
+      expect(history[0]?.content).toMatchObject([
+        { type: "text", text: "ordinary response", providerMetadata: undefined },
+        { type: "text", text: "ordinary reasoning" },
+        { type: "tool-call", id: "canonical-call", name: "lookup", input: {} },
+      ])
+      expect(JSON.stringify(history)).not.toContain("account-signature")
+      expect(JSON.stringify(history)).not.toContain("account-ciphertext")
+      expect(JSON.stringify(history)).not.toContain("account-item")
+    }
+    expect(JSON.stringify(withProvenance([message], model))).toContain("account-signature")
+  })
+
   test("omits empty and whitespace-only assistant content without trimming meaningful text or signed reasoning", () => {
     const assistant = (value: string, content: SessionMessage.Assistant["content"]) =>
       SessionMessage.Assistant.make({
@@ -37,7 +99,7 @@ describe("toLLMMessages", () => {
         content,
         time: { created, completed: created },
       })
-    const messages = toLLMMessages(
+    const messages = withProvenance(
       [
         assistant("empty", []),
         assistant("empty-text", [SessionMessage.AssistantText.make({ type: "text", text: "" })]),
@@ -86,7 +148,7 @@ describe("toLLMMessages", () => {
     const reloaded = Schema.decodeUnknownSync(SessionMessage.Assistant)(
       Schema.encodeSync(SessionMessage.Assistant)(durableMessage),
     )
-    const messages = toLLMMessages([reloaded], anthropicModel, "anthropic")
+    const messages = withProvenance([reloaded], anthropicModel, "anthropic")
 
     expect(messages[0]?.content).toEqual([
       { type: "reasoning", text: "", providerMetadata: { anthropic: { signature: "sig" } } },
@@ -117,7 +179,7 @@ describe("toLLMMessages", () => {
       }),
     ]
 
-    expect(toLLMMessages(history, openaiModel, "openai")).toMatchObject([
+    expect(withProvenance(history, openaiModel, "openai")).toMatchObject([
       {
         id: id("openai-compaction"),
         role: "assistant",
@@ -133,7 +195,7 @@ describe("toLLMMessages", () => {
       },
     ])
     expect(
-      toLLMMessages(
+      withProvenance(
         history,
         CatalogModel.Ref.make({ id: CatalogModel.ID.make("gpt-5.5"), providerID: Provider.ID.make("openai") }),
         "openai",
@@ -157,7 +219,7 @@ describe("toLLMMessages", () => {
       }),
     ]
 
-    expect(toLLMMessages(history, openaiModel, "openai")).toMatchObject([
+    expect(withProvenance(history, openaiModel, "openai")).toMatchObject([
       {
         content: [
           {
@@ -169,7 +231,7 @@ describe("toLLMMessages", () => {
       },
     ])
     expect(
-      toLLMMessages(
+      withProvenance(
         history,
         CatalogModel.Ref.make({ id: CatalogModel.ID.make("gpt-5.5"), providerID: Provider.ID.make("openai") }),
         "openai",
@@ -178,7 +240,7 @@ describe("toLLMMessages", () => {
   })
 
   test("places an agent switch boundary after prior skill instructions", () => {
-    const messages = toLLMMessages(
+    const messages = withProvenance(
       [
         SessionMessage.Skill.make({
           id: id("plan-skill"),
@@ -219,7 +281,7 @@ describe("toLLMMessages", () => {
 
   test("maps every top-level Session message type", () => {
     const file = managed("image/png", "hello.png")
-    const messages = toLLMMessages(
+    const messages = withProvenance(
       [
         SessionMessage.AgentSelected.make({
           id: id("agent"),
@@ -337,7 +399,7 @@ Earlier work
       managed("text/plain", "notes.txt", "f".repeat(64), 14),
       managed("application/x-directory", "src", "1".repeat(64), 15),
     ]
-    const messages = toLLMMessages(
+    const messages = withProvenance(
       [
         SessionMessage.User.make({
           id: id("user-documents"),
@@ -370,7 +432,7 @@ Earlier work
   test("names unavailable attachments without exposing their stored copy", () => {
     const notes = managed("text/plain", "notes.txt", "7".repeat(64), 16)
     const image = managed("image/png", "screen.png", "8".repeat(64), 32)
-    const messages = toLLMMessages(
+    const messages = withProvenance(
       [
         SessionMessage.User.make({
           id: id("user-unavailable"),
@@ -409,7 +471,7 @@ Earlier work
   test("uses transient materialized image bytes as provider media", () => {
     const image = managed("image/png", "image.png")
     const data = Uint8Array.from([0, 1, 2, 3])
-    const messages = toLLMMessages(
+    const messages = withProvenance(
       [
         SessionMessage.User.make({
           id: id("user-local-image"),
@@ -435,7 +497,7 @@ Earlier work
     const image = managed("image/png", "image.png")
 
     expect(() =>
-      toLLMMessages(
+      withProvenance(
         [
           SessionMessage.User.make({
             id: id("user-unmaterialized-image"),
@@ -454,7 +516,7 @@ Earlier work
   })
 
   test("replays durable tool media into canonical tool messages without structured base64", () => {
-    const messages = toLLMMessages(
+    const messages = withProvenance(
       [
         SessionMessage.Assistant.make({
           id: id("assistant"),
@@ -609,7 +671,7 @@ Earlier work
   })
 
   test("restores OpenAI encrypted reasoning metadata", () => {
-    const messages = toLLMMessages(
+    const messages = withProvenance(
       [
         SessionMessage.Assistant.make({
           id: id("assistant-openai-reasoning"),
@@ -643,7 +705,7 @@ Earlier work
       id: CatalogModel.ID.make("claude-fable-5"),
       providerID: Provider.ID.opencode,
     })
-    const messages = toLLMMessages(
+    const messages = withProvenance(
       [
         SessionMessage.Assistant.make({
           id: id("assistant-ycoding-reasoning"),
@@ -670,7 +732,7 @@ Earlier work
   })
 
   test("lowers failed assistant reasoning to text", () => {
-    const messages = toLLMMessages(
+    const messages = withProvenance(
       [
         SessionMessage.Assistant.make({
           id: id("assistant-failed"),
@@ -771,7 +833,7 @@ Earlier work
   })
 
   test("drops provider-native continuation metadata after a model switch", () => {
-    const messages = toLLMMessages(
+    const messages = withProvenance(
       [
         SessionMessage.Assistant.make({
           id: id("assistant-old-model"),
@@ -866,7 +928,7 @@ Earlier work
   })
 
   test("preserves provider metadata for a catalog alias with a different API model ID", () => {
-    const messages = toLLMMessages(
+    const messages = withProvenance(
       [
         SessionMessage.Assistant.make({
           id: id("assistant-alias"),

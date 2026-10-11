@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { DateTime, Effect, Fiber, Layer, Schema, Stream } from "effect"
+import { Context, DateTime, Effect, Fiber, Layer, LayerMap, Schema, Stream } from "effect"
 import * as TestClock from "effect/testing/TestClock"
 import path from "path"
 import { Message, SystemPart } from "@ycoding-ai/ai"
@@ -29,7 +29,15 @@ import { SessionOrchestrationIdentity } from "@ycoding-ai/core/session/orchestra
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { SessionStore } from "@ycoding-ai/core/session/store"
-import { SessionPendingTable, SessionTable, SessionTaskNotificationTable } from "@ycoding-ai/core/session/sql"
+import { SessionTask } from "@ycoding-ai/core/session/task"
+import { SessionProjector } from "@ycoding-ai/core/session/projector"
+import { SessionRunner } from "@ycoding-ai/core/session/runner"
+import { SessionCompactionExecution } from "@ycoding-ai/core/session/compaction-execution"
+import { SessionGoal } from "@ycoding-ai/core/session/goal"
+import { Shell } from "@ycoding-ai/core/shell"
+import { ProjectTable } from "@ycoding-ai/core/project/sql"
+import { EventTable } from "@ycoding-ai/core/event/sql"
+import { SessionPendingTable, SessionTable, SessionTaskNotificationTable, SessionTaskTable } from "@ycoding-ai/core/session/sql"
 import { PluginRegistry } from "@ycoding-ai/core/plugin"
 import { PluginHooks } from "@ycoding-ai/core/plugin/hooks"
 import { PluginHost } from "@ycoding-ai/core/plugin/host"
@@ -38,6 +46,7 @@ import { Permission } from "@ycoding-ai/core/permission"
 import { Question } from "@ycoding-ai/core/question"
 import { PluginSupervisor } from "@ycoding-ai/core/plugin/supervisor"
 import { SubagentTool } from "@ycoding-ai/core/tool/subagent"
+import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { SubagentControlTool } from "@ycoding-ai/core/tool/subagent-control"
 import { SubagentReportTool } from "@ycoding-ai/core/tool/subagent-report"
 import { ToolHooks } from "@ycoding-ai/core/tool/hooks"
@@ -48,7 +57,7 @@ import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 import { executeTool, settleTool, toolIdentity, waitForTool } from "./lib/tool"
 import { fixtureModels } from "./lib/models"
-import { eq } from "drizzle-orm"
+import { eq, sql } from "drizzle-orm"
 
 const childText = "child final response"
 const childModel = CatalogModel.Ref.make({ id: CatalogModel.ID.make("child"), providerID: Provider.ID.make("test") })
@@ -127,10 +136,12 @@ const executionNode = makeGlobalNode({
   deps: [Database.node, EventRuntime.node, SessionStore.node],
 })
 
-const layer = AppNodeBuilder.build(
+const subagentLayer = (database = Database.node) => AppNodeBuilder.build(
   LayerNode.group([
     Database.node,
     EventRuntime.node,
+    SessionAutonomy.node,
+    SessionStore.node,
     Job.node,
     ToolOutputStore.cleanupNode,
     Session.node,
@@ -142,9 +153,10 @@ const layer = AppNodeBuilder.build(
     PluginRuntime.providerNode,
     LocationServiceMap.node,
   ]),
-  [[SessionExecution.node, executionNode], fixtureModels],
+  [[Database.node, database], [SessionExecution.node, executionNode], fixtureModels],
 )
 
+const layer = subagentLayer()
 const it = testEffect(layer)
 
 const jobStartupFailureNode = makeGlobalNode({
@@ -216,6 +228,127 @@ const withSubagent = (location: Location.Ref) =>
   })
 
 describe("SubagentTool", () => {
+  it.live("preserves restart loss, queue reactivation, new launches, completion notices, and durable replay", () =>
+    Effect.acquireRelease(Effect.promise(() => tmpdir()), (dir) => Effect.promise(() => dir[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((dir) => Effect.gen(function* () {
+        const boot = subagentLayer(Database.configured({ path: path.join(dir.path, "restart.db") }))
+        const child = yield* Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const parent = yield* sessions.create({ location: { directory: AbsolutePath.make(dir.path) }, model: parentModel })
+          yield* withSubagent(parent.location)
+          const prepared = yield* SessionOrchestration.preflight(parent, { agent: Agent.ID.make("reviewer"), caller: toolIdentity.agent })
+            .pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location)))
+          const orchestration = (yield* PluginRuntime.Service).orchestration
+          return yield* orchestration.launch({ parentID: parent.id, parentAssistantMessageID: SessionMessage.ID.make("msg_restart_parent"),
+            toolCallID: "restart", agent: Agent.ID.make("reviewer"), description: "restart child", prompt: "initial", background: true, prepared })
+        }).pipe(Effect.provide(boot.pipe(Layer.fresh)), Effect.scoped)
+        const wakes = executionWakes.length
+
+        yield* Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const db = (yield* Database.Service).db
+          const events = yield* EventRuntime.Service
+          const orchestration = (yield* PluginRuntime.Service).orchestration
+          expect((yield* orchestration.get(child.parentID, child.sessionID)).state).toBe("lost")
+          const notifier = yield* SessionOrchestrationNotifier.Service
+          yield* notifier.dispatch
+          expect(executionWakes.slice(wakes)).toEqual([])
+          expect(yield* sessions.pending(child.parentID)).toEqual([])
+          expect((yield* db.select().from(SessionTaskNotificationTable).all().pipe(Effect.orDie))).toMatchObject([{ type: "lost", delivered: false }])
+          expect(yield* SessionTask.lostSessions(db)).toEqual(new Set([child.parentID]))
+          const outstanding = yield* sessions.outstanding()
+          expect(outstanding.sessions.has(child.parentID)).toBe(true)
+          expect(outstanding.lost).toEqual(new Set([child.parentID]))
+          expect((yield* db.select().from(EventTable).all().pipe(Effect.orDie)).filter((row) => row.type === "session.execution.started.1" || row.type === "session.provider.request.recorded.1")).toEqual([])
+          const parent = yield* sessions.get(child.parentID)
+          yield* withSubagent(parent.location)
+          const sent = yield* orchestration.send({ parentID: parent.id, childID: child.sessionID,
+            messageID: SessionMessage.ID.make("msg_restart_queue"), text: "finish", delivery: "queue" })
+          expect(sent.state).toBe("running")
+          yield* SessionTask.reconcileStaleTasks(db)
+          expect((yield* orchestration.get(parent.id, child.sessionID)).state).toBe("running")
+          const locations = yield* LocationServiceMap.Service
+          yield* locations.invalidate(parent.location)
+          yield* withSubagent(parent.location)
+          expect((yield* orchestration.get(parent.id, child.sessionID)).state).toBe("running")
+          const prepared = yield* SessionOrchestration.preflight(parent, { agent: Agent.ID.make("reviewer"), caller: toolIdentity.agent })
+            .pipe(Effect.provide(locations.get(parent.location)))
+          const fresh = yield* orchestration.launch({ parentID: parent.id, parentAssistantMessageID: SessionMessage.ID.make("msg_restart_fresh"),
+            toolCallID: "fresh", agent: Agent.ID.make("reviewer"), description: "fresh child", prompt: "new", background: true, prepared })
+          yield* SessionTask.reconcileStaleTasks(db)
+          expect((yield* orchestration.get(parent.id, fresh.sessionID)).state).toBe("running")
+
+          const runner = Layer.succeed(SessionRunner.Service, SessionRunner.Service.of({ drain: ({ sessionID }) => Effect.gen(function* () {
+            yield* SessionPending.promoteSteers(db, events, sessionID)
+            yield* SessionPending.promoteNextQueued(db, events, sessionID)
+            const declarationID = SessionMessage.ID.create()
+            yield* events.publish(SessionEvent.Step.Started, { sessionID, assistantMessageID: declarationID, agent: Agent.ID.make("reviewer"), model: childModel })
+            yield* events.publish(SessionEvent.Tool.Input.Started, { sessionID, assistantMessageID: declarationID, callID: "complete", name: "task_complete" })
+            yield* events.publish(SessionEvent.Tool.Called, { sessionID, assistantMessageID: declarationID, callID: "complete", input: {}, executed: false })
+            const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
+            const result = yield* settleTool(registry, { sessionID, ...toolIdentity,
+              call: { type: "tool-call", id: "complete", name: "task_complete", input: {} } })
+            expect(result.output?.structured).toEqual({ recorded: true })
+            yield* events.publish(SessionEvent.Tool.Success, { sessionID, assistantMessageID: declarationID, callID: "complete", structured: { recorded: true }, content: [], executed: false })
+            yield* events.publish(SessionEvent.Step.Ended, { sessionID, assistantMessageID: declarationID, finish: "tool-calls", tokens, cost: Money.USD.zero })
+            const assistantMessageID = SessionMessage.ID.create()
+            yield* events.publish(SessionEvent.Step.Started, { sessionID, assistantMessageID, agent: Agent.ID.make("reviewer"), model: childModel })
+            yield* events.publish(SessionEvent.Text.Started, { sessionID, assistantMessageID, ordinal: 0 })
+            yield* events.publish(SessionEvent.Text.Ended, { sessionID, assistantMessageID, ordinal: 0, text: childText })
+            yield* events.publish(SessionEvent.Step.Ended, { sessionID, assistantMessageID, finish: "stop", tokens, cost: Money.USD.zero })
+          }) }))
+          const local = Layer.effect(LocationServiceMap.Service, LayerMap.make((ref: Location.Ref) => Layer.mergeAll(locations.get(ref), runner,
+            Layer.mock(Shell.Service, { list: () => Effect.succeed([]) }),
+            Layer.mock(SessionGoal.Service, { continuation: () => Effect.die("no goal") }))))
+          const context = yield* Layer.build(SessionExecution.layer.pipe(
+            Layer.provide(local), Layer.provide(Layer.succeed(Database.Service, yield* Database.Service)),
+            Layer.provide(Layer.succeed(EventRuntime.Service, events)), Layer.provide(Layer.succeed(SessionStore.Service, yield* SessionStore.Service)),
+            Layer.provide(Layer.succeed(SessionAutonomy.Service, yield* SessionAutonomy.Service)), Layer.provide(Layer.succeed(Job.Service, yield* Job.Service)),
+            Layer.provide(Layer.mock(SessionCompactionExecution.Service, { start: () => Effect.die("unused"), run: () => Effect.die("unused") })),
+          ))
+          const execution = Context.get(context, SessionExecution.Service)
+          yield* sessions.prompt({ sessionID: parent.id, text: "Inspect the interrupted task", resume: false })
+          yield* execution.wake(parent.id)
+          yield* execution.awaitIdle(parent.id)
+          yield* notifier.dispatch
+          expect(yield* SessionTask.lostSessions(db)).toEqual(new Set())
+          expect((yield* sessions.outstanding()).lost).toEqual(new Set())
+          const lossAdmissions = db.select().from(EventTable).where(eq(EventTable.type, "session.input.admitted.1")).all().pipe(Effect.orDie,
+            Effect.map((rows) => rows.filter((row) => {
+              const input = Schema.decodeUnknownSync(SessionEvent.InputAdmitted.data)(row.data).input
+              return input.type === "synthetic" && input.data.metadata?.type === "lost"
+            })))
+          const losses = yield* lossAdmissions
+          expect(losses).toHaveLength(1)
+          expect((yield* (yield* SessionStore.Service).context(parent.id)).filter((message) => message.type === "synthetic" && message.metadata?.type === "lost")).toHaveLength(1)
+          for (const task of [child, fresh]) {
+            yield* execution.resume(task.sessionID)
+            expect((yield* orchestration.get(parent.id, task.sessionID)).state).toBe("completed")
+            yield* orchestration.settle(task.sessionID, { type: "completed", excerpt: childText })
+          }
+          yield* notifier.dispatch
+          yield* notifier.dispatch
+          expect(yield* lossAdmissions).toEqual(losses)
+          const notices = (yield* sessions.pending(parent.id)).filter((input) => input.type === "synthetic" && input.data.metadata?.type === "completed")
+          expect(notices).toHaveLength(2)
+          expect(new Set(notices.map((input) => input.type === "synthetic" ? input.data.metadata?.childID : undefined))).toEqual(new Set([child.sessionID, fresh.sessionID]))
+          const tasks = yield* db.select().from(SessionTaskTable).orderBy(SessionTaskTable.session_id).all().pipe(Effect.orDie)
+          const history = yield* db.select().from(EventTable).orderBy(sql`rowid`).all().pipe(Effect.orDie)
+          const projects = yield* db.select().from(ProjectTable).all().pipe(Effect.orDie)
+          const rebuilt = yield* Effect.gen(function* () {
+            const db = (yield* Database.Service).db
+            const events = yield* EventRuntime.Service
+            yield* db.insert(ProjectTable).values(projects).run().pipe(Effect.orDie)
+            for (const row of history) yield* events.replay({ id: row.id, aggregateID: row.aggregate_id, seq: row.seq,
+              type: row.type, created: DateTime.makeUnsafe(row.created), data: row.data })
+            return yield* db.select().from(SessionTaskTable).orderBy(SessionTaskTable.session_id).all().pipe(Effect.orDie)
+          }).pipe(Effect.provide(AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node])).pipe(Layer.fresh)), Effect.scoped)
+          expect(rebuilt).toEqual(tasks)
+        }).pipe(Effect.provide(subagentLayer(Database.configured({ path: path.join(dir.path, "restart.db") })).pipe(Layer.fresh)), Effect.scoped)
+      })),
+    ),
+  )
+
   it.effect("defines parent control and child report action unions", () =>
     Effect.sync(() => {
       expect(Schema.decodeUnknownSync(SubagentControlTool.Input)({ action: "list" })).toEqual({ action: "list" })
@@ -1001,7 +1134,14 @@ describe("SubagentTool", () => {
               delivery: "steer",
             })).state,
           ).toBe("running")
+          const notifier = yield* SessionOrchestrationNotifier.Service
+          yield* notifier.dispatch
+          const parentWakes = executionWakes.filter((id) => id === parent.id).length
           yield* orchestration.settle(child.sessionID, { type: "lost" })
+          yield* notifier.dispatch
+          expect(executionWakes.filter((id) => id === parent.id)).toHaveLength(parentWakes + 1)
+          const db = (yield* Database.Service).db
+          expect(yield* SessionTask.lostSessions(db)).toEqual(new Set())
           expect(
             (yield* orchestration.send({
               parentID: parent.id,
@@ -1371,7 +1511,20 @@ describe("SubagentTool", () => {
           const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
           const db = (yield* Database.Service).db
 
-          for (const mode of ["yolo", "goal"] as const) {
+          const autonomy = yield* SessionAutonomy.Service.pipe(Effect.provide(locations.get(parent.location)))
+          for (const yolo of [0, 1, 2, 3]) {
+            yield* autonomy.setYolo({ sessionID: parent.id, yolo })
+            expect(yield* autonomy.canAutoPermission(child.sessionID)).toBe(yolo >= 1)
+            expect(yield* autonomy.canAutoGuardrail(child.sessionID)).toBe(yolo >= 1)
+            expect(yield* autonomy.canAutoAnswer(child.sessionID)).toBe(yolo >= 2)
+            if (yolo >= 2) continue
+            const question = yield* orchestration.question(child.sessionID, `Manual question at YOLO ${yolo}`)
+            expect(question.autoAnswered).toBe(false)
+            expect(yield* orchestration.get(parent.id, child.sessionID)).toMatchObject({ state: "waiting", question: { id: question.question.id } })
+            yield* orchestration.answer({ parentID: parent.id, childID: child.sessionID, questionID: question.question.id, text: "Human answer" })
+          }
+
+          for (const mode of [2, 3, "goal"] as const) {
             yield* db
               .update(SessionTable)
               .set({
@@ -1388,7 +1541,7 @@ describe("SubagentTool", () => {
                           maxNoProgress: 3,
                         },
                       }
-                    : { mode: "normal", yolo: 2 },
+                    : { mode: "normal", yolo: mode },
               })
               .where(eq(SessionTable.id, parent.id))
               .run()
@@ -1469,7 +1622,7 @@ describe("SubagentTool", () => {
               .all()
               .pipe(Effect.orDie))
               .filter((item) => item.type === "question"),
-          ).toEqual([])
+          ).toHaveLength(2)
         }),
       ),
     ),

@@ -51,6 +51,60 @@ test("pins the canonical prompt-cache namespace digest", () => {
   )
 })
 
+test("reuses prepared cache digests without reading unchanged system and tool inputs again", () => {
+  const input = { ...base, sessionID: "ses_prepared_cache", routeID: "openai-responses" }
+  const expected = SessionRunnerCache.providerOptions(input, 0)
+  const actual = SessionRunnerCache.providerOptions(
+    {
+      ...input,
+      get system(): typeof input.system {
+        throw new Error("system digest was already prepared")
+      },
+      get tools(): typeof input.tools {
+        throw new Error("tool digest was already prepared")
+      },
+    },
+    0,
+    {
+      promptCacheKey: expected.promptCacheKey,
+      systemDigest: expected.systemDigest,
+      toolDigest: expected.toolDigest,
+    },
+  )
+  expect(actual).toEqual(expected)
+})
+
+test("prepared cache digests preserve provider request bytes across generation and prefix changes", async () => {
+  const model = configure({ apiKey: "fixture-key" }).responses("gpt-5.6")
+  for (const input of [
+    { ...base, generation: 0 },
+    { ...base, generation: 1 },
+    { ...base, system: [SystemPart.make("Changed instructions")], generation: 1 },
+    { ...base, tools: [...base.tools, ToolDefinition.make({ name: "alpha", description: "Alpha", inputSchema: { type: "object" } })], generation: 1 },
+  ]) {
+    const namespace = { ...input, sessionID: "ses_prepared_wire", routeID: "openai-responses", openaiMode: "explicit" as const }
+    const baseline = SessionRunnerCache.providerOptions(namespace, 0)
+    const reused = SessionRunnerCache.providerOptions(namespace, 0, {
+      promptCacheKey: SessionRunnerCache.promptCacheNamespace(namespace, 0),
+      systemDigest: SessionRunnerCache.systemDigest(namespace.system),
+      toolDigest: SessionRunnerCache.toolDigest(namespace.tools),
+    })
+    const prepare = (cache: typeof baseline) => Effect.runPromise(LLMClient.prepare<OpenAIResponsesBody>(LLM.request({
+      model,
+      system: namespace.system,
+      tools: namespace.tools,
+      messages: [Message.user("Same input")],
+      providerOptions: cache.providerOptions,
+      cache: cache.cache,
+    })))
+    const first = await prepare(baseline)
+    const second = await prepare(reused)
+    expect(JSON.stringify(second.body)).toBe(JSON.stringify(first.body))
+    expect(second.body.prompt_cache_key).toBe(first.body.prompt_cache_key)
+    expect(reused).toEqual(baseline)
+  }
+})
+
 test("keeps ordinary keys stable while isolating compaction cache scope", () => {
   const normal = SessionRunnerCache.promptCacheNamespace(base)
   const compaction = SessionRunnerCache.promptCacheNamespace({ ...base, scope: "compaction" })

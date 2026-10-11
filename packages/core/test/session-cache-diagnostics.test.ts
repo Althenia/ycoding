@@ -93,6 +93,21 @@ test("derives speed from the latest Step and at most eight recent requests", () 
   expect(SessionCacheDiagnostics.generationSpeed([])).toBeUndefined()
 })
 
+test("keeps the trend to the newest request's model and variant", () => {
+  const timing = (generatedTokens: number) => ({ generatedTokens, observedGenerationDurationNs: 1_000_000_000 })
+  const other = { model: model("anthropic"), timing: timing(100) }
+  const first = { model: model("openai"), timing: timing(40) }
+  const second = { model: model("openai"), timing: timing(60) }
+  expect(SessionCacheDiagnostics.generationSpeed([other, first, other, second])?.recent.map((sample) => sample.tokens))
+    .toEqual([40, 60])
+  expect(SessionCacheDiagnostics.generationSpeed([first, second], other)?.recent.map((sample) => sample.tokens))
+    .toEqual([100])
+  const variant = { model: { ...model("openai"), variant: CatalogModel.VariantID.make("high") }, timing: timing(80) }
+  expect(SessionCacheDiagnostics.generationSpeed([first, variant])?.recent.map((sample) => sample.tokens)).toEqual([80])
+  expect(SessionCacheDiagnostics.generationSpeed([first, { model: model("openai"), timing: { generatedTokens: 5 } }]))
+    .toEqual({ recent: [{ model: first.model, tokens: 40, durationNs: 1_000_000_000, tokensPerSecond: 40 }] })
+})
+
 test("excludes historical buffered bursts without hiding provider-timed samples", () => {
   const measured = { model: model("anthropic"), timing: {
     generatedTokens: 12, observedGenerationDurationNs: 2_000_000_000,

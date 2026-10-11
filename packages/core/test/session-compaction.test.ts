@@ -1,4 +1,4 @@
-import { expect } from "bun:test"
+import { afterAll, expect } from "bun:test"
 import { LLM, LLMClient, LLMError, LLMEvent, Message, Model, TransportReason, type LLMRequest } from "@ycoding-ai/ai"
 import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy"
 import { OpenAIChat, OpenAIResponses } from "@ycoding-ai/ai/protocols"
@@ -55,6 +55,11 @@ import { DateTime, Effect, Fiber, Layer, LayerMap, Schema, Stream } from "effect
 import { TestClock } from "effect/testing"
 import { and, asc, eq, inArray } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
+import { tmpdir } from "./fixture/tmpdir"
+
+const temporary = await tmpdir("ycoding-session-compaction-")
+afterAll(() => temporary[Symbol.asyncDispose]())
+const directory = AbsolutePath.make(temporary.path)
 
 const model = Model.make({
   id: "manifest-model",
@@ -75,11 +80,24 @@ const client = Layer.mock(LLMClient.Service)({
     requests.push(request)
     if (remoteEvents && request.model.route.id.startsWith("openai-codex-"))
       return remoteFailure
-        ? Stream.concat(Stream.fromIterable(remoteEvents), Stream.fail(new LLMError({ module: "test", method: "stream", reason: new TransportReason({ message: "Stream interrupted" }) })))
+        ? Stream.concat(
+            Stream.fromIterable(remoteEvents),
+            Stream.fail(
+              new LLMError({
+                module: "test",
+                method: "stream",
+                reason: new TransportReason({ message: "Stream interrupted" }),
+              }),
+            ),
+          )
         : Stream.fromIterable(remoteEvents)
     const text = responseForRequest?.(request)
     if (text === undefined) return Stream.make(LLMEvent.providerError({ message: "Missing manifest response" }))
-    return Stream.unwrap(beforeResponse.pipe(Effect.as(Stream.fromIterable([LLMEvent.textDelta({ id: "manifest", text }), ...(helperUsage ?? [])]))))
+    return Stream.unwrap(
+      beforeResponse.pipe(
+        Effect.as(Stream.fromIterable([LLMEvent.textDelta({ id: "manifest", text }), ...(helperUsage ?? [])])),
+      ),
+    )
   },
   generate: () => Effect.die("unused"),
 })
@@ -103,13 +121,23 @@ const unavailableHelpers = Layer.succeed(
     resolveModel: () => Effect.succeed(undefined),
   }),
 )
-const pricedHelpers = Layer.succeed(SessionHelperPolicy.Service, SessionHelperPolicy.Service.of({
-  settings: { titleMode: "local", models: {}, compactionScopes: {} }, localTitle,
-  resolveModel: () => Effect.succeed(SessionRunnerModel.resolved(model, undefined, [{
-    input: Money.USDPerMillionTokens.make(2), output: Money.USDPerMillionTokens.zero,
-    cache: { read: Money.USDPerMillionTokens.zero, write: Money.USDPerMillionTokens.make(2.5) },
-  }])),
-}))
+const pricedHelpers = Layer.succeed(
+  SessionHelperPolicy.Service,
+  SessionHelperPolicy.Service.of({
+    settings: { titleMode: "local", models: {}, compactionScopes: {} },
+    localTitle,
+    resolveModel: () =>
+      Effect.succeed(
+        SessionRunnerModel.resolved(model, undefined, [
+          {
+            input: Money.USDPerMillionTokens.make(2),
+            output: Money.USDPerMillionTokens.zero,
+            cache: { read: Money.USDPerMillionTokens.zero, write: Money.USDPerMillionTokens.make(2.5) },
+          },
+        ]),
+      ),
+  }),
+)
 const guardrailSnapshots = new Map<SessionSchema.ID, SessionGuardrail.Snapshot>()
 const guardrails = Layer.mock(SessionGuardrail.Service, {
   withSnapshot: (sessionID, use) =>
@@ -160,7 +188,7 @@ const testWithConfig = (compaction = new ConfigCompaction.Info({ keep_recent_mes
         [SessionRunnerModel.node, models],
         [SessionHelperPolicy.node, helperPolicy],
         [Project.node, projects],
-        [Location.node, Location.boundNode({ directory: AbsolutePath.make("/project") })],
+        [Location.node, Location.boundNode({ directory })],
         [LocationServiceMap.node, contextLocations],
       ],
     ),
@@ -258,7 +286,10 @@ const insertAssistant = Effect.fnUntraced(function* (
       id,
       type: "assistant",
       agent: Agent.defaultID,
-      model: CatalogModel.Ref.make({ id: CatalogModel.ID.make("manifest-model"), providerID: Provider.ID.make("test") }),
+      model: CatalogModel.Ref.make({
+        id: CatalogModel.ID.make("manifest-model"),
+        providerID: Provider.ID.make("test"),
+      }),
       content: [SessionMessage.AssistantText.make({ type: "text", text })],
       finish: "stop",
       time: { created: time, completed: time },
@@ -292,7 +323,10 @@ const insertAssistantTool = Effect.fnUntraced(function* (
       id,
       type: "assistant",
       agent: Agent.defaultID,
-      model: CatalogModel.Ref.make({ id: CatalogModel.ID.make("manifest-model"), providerID: Provider.ID.make("test") }),
+      model: CatalogModel.Ref.make({
+        id: CatalogModel.ID.make("manifest-model"),
+        providerID: Provider.ID.make("test"),
+      }),
       content: [
         SessionMessage.AssistantText.make({ type: "text", text: "The evidence collection step completed." }),
         SessionMessage.AssistantTool.make({
@@ -368,13 +402,13 @@ const seedSession = Effect.fnUntraced(function* (sessionID: SessionSchema.ID, se
   const db = (yield* Database.Service).db
   yield* db
     .insert(ProjectTable)
-    .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+    .values({ id: Project.ID.global, worktree: directory, sandboxes: [] })
     .onConflictDoNothing()
     .run()
     .pipe(Effect.orDie)
   yield* db
     .insert(SessionTable)
-    .values({ id: sessionID, project_id: Project.ID.global, directory: "/project", title: "Manifest test" })
+    .values({ id: sessionID, project_id: Project.ID.global, directory, title: "Manifest test" })
     .run()
     .pipe(Effect.orDie)
   yield* db.insert(EventSequenceTable).values({ aggregate_id: sessionID, seq: sequence }).run().pipe(Effect.orDie)
@@ -470,7 +504,9 @@ it.effect("validates a private remote-v2 manifest without placing ciphertext in 
       baseContextRevision: 0,
       coveredThrough: { messageID: SessionMessage.ID.make("msg_remote_boundary"), seq: EventRuntime.Seq.make(2) },
       protectedState: [],
-      retained: [{ messageID: SessionMessage.ID.make("msg_remote_user"), seq: EventRuntime.Seq.make(1), digest: "a".repeat(64) }],
+      retained: [
+        { messageID: SessionMessage.ID.make("msg_remote_user"), seq: EventRuntime.Seq.make(1), digest: "a".repeat(64) },
+      ],
       provider: "openai",
       modelID: "gpt-5.5",
       inputTokens: 1200,
@@ -502,7 +538,10 @@ it.effect("atomically activates an opaque Codex checkpoint without exposing its 
     const manifest = ContextManifest.remote({
       baseContextRevision: 0,
       coveredThrough: { messageID: latest, seq: EventRuntime.Seq.make(2) },
-      protectedState: SessionLiveState.toProtectedState({ ...live.sources, guardrails: { sequence: 0, digest: ContextManifest.payloadDigest(null) } }),
+      protectedState: SessionLiveState.toProtectedState({
+        ...live.sources,
+        guardrails: { sequence: 0, digest: ContextManifest.payloadDigest(null) },
+      }),
       retained: [{ messageID: latest, seq: EventRuntime.Seq.make(2), digest: ContextManifest.payloadDigest(row.data) }],
       provider: "openai",
       modelID: "gpt-5.5",
@@ -513,72 +552,141 @@ it.effect("atomically activates an opaque Codex checkpoint without exposing its 
     yield* context.activate({ sessionID, manifest })
     const stored = yield* db.select().from(SessionProviderStateLinkTable).all()
     expect(stored).toHaveLength(1)
-    expect(stored[0]?.message_id).toBe(SessionMessage.ID.make(`msg_compaction_${ContextManifest.manifestDigest(manifest)}`))
+    expect(stored[0]?.message_id).toBe(
+      SessionMessage.ID.make(`msg_compaction_${ContextManifest.manifestDigest(manifest)}`),
+    )
     expect(JSON.stringify(yield* SessionHistory.forModel(db, sessionID))).not.toContain("private-remote-payload")
-    const selected = yield* SessionHistory.forModel(db, sessionID, CatalogModel.Ref.make({ providerID: Provider.ID.make("openai"), id: CatalogModel.ID.make("gpt-5.5") }))
-    expect(selected.map((message) => message.id)).toEqual([latest, SessionMessage.ID.make(`msg_compaction_${ContextManifest.manifestDigest(manifest)}`)])
-    const switched = yield* SessionHistory.forModel(db, sessionID, CatalogModel.Ref.make({ providerID: Provider.ID.make("openai"), id: CatalogModel.ID.make("gpt-5.4") }))
+    const selected = yield* SessionHistory.forModel(
+      db,
+      sessionID,
+      CatalogModel.Ref.make({ providerID: Provider.ID.make("openai"), id: CatalogModel.ID.make("gpt-5.5") }),
+    )
+    expect(selected.map((message) => message.id)).toEqual([first, latest])
+    const switched = yield* SessionHistory.forModel(
+      db,
+      sessionID,
+      CatalogModel.Ref.make({ providerID: Provider.ID.make("openai"), id: CatalogModel.ID.make("gpt-5.4") }),
+    )
     expect(switched.map((message) => message.id)).toEqual([first, latest])
   }),
 )
 
-const codexModel = Model.make({ id: "codex-owner", provider: "openai", route: OpenAIResponses.route.with({ id: "openai-codex-responses" }) })
-const ownerRequest = () => Effect.succeed({
-  request: LLM.request({ model: codexModel, system: [{ type: "text" as const, text: "owner instructions" }],
-    messages: [Message.user("covered input")], tools: [{ name: "owner_tool", description: "owner tool", inputSchema: { type: "object" as const, properties: {} } }],
-    providerOptions: { openai: { promptCacheKey: "session-scoped-key", store: false } },
-  }),
-  cache: { promptCacheKey: "session-scoped-key", systemDigest: "system", toolDigest: "tools" },
-  cost: [], contextRevision: 0,
+const codexModel = Model.make({
+  id: "codex-owner",
+  provider: "openai",
+  route: OpenAIResponses.route.with({ id: "openai-codex-responses" }),
 })
+const ownerRequest = () =>
+  Effect.succeed({
+    accountIdentityDigest: "a".repeat(64),
+    request: LLM.request({
+      model: codexModel,
+      system: [{ type: "text" as const, text: "owner instructions" }],
+      messages: [Message.user("covered input")],
+      tools: [
+        { name: "owner_tool", description: "owner tool", inputSchema: { type: "object" as const, properties: {} } },
+      ],
+      providerOptions: { openai: { promptCacheKey: "session-scoped-key", store: false } },
+    }),
+    cache: { promptCacheKey: "session-scoped-key", systemDigest: "system", toolDigest: "tools" },
+    cost: [],
+    contextRevision: 0,
+  })
 
-it.effect("runs remote-v2 on the owner route despite a different compaction helper and activates only one opaque item", () =>
-  Effect.gen(function* () {
-    reset()
-    const db = (yield* Database.Service).db
-    const sessionID = SessionSchema.ID.make("ses_codex_remote_job")
-    const first = SessionMessage.ID.make("msg_codex_remote_old")
-    const retained = SessionMessage.ID.make("msg_codex_remote_user")
-    yield* seedSession(sessionID, 2)
-    yield* SessionContextState.initialize(db, sessionID, 0)
-    yield* insertAssistant(sessionID, first, 1, "old history ".repeat(300))
-    yield* insertMessage(sessionID, retained, 2, "Retained user input")
-    remoteEvents = [
-      LLMEvent.reasoningEnd({ id: "cmp_1", providerMetadata: { openai: { opaqueCompactionItem: { type: "compaction", id: "cmp_1", encrypted_content: "ciphertext" } } } }),
-      LLMEvent.stepFinish({ index: 0, reason: "stop", providerMetadata: { openai: { remoteCompactionCompleted: true } } }),
-    ]
-    const compaction = yield* SessionCompaction.Service
-    const manifest = yield* compaction.manifest(manifestJob(sessionID, { messageID: retained, seq: 2 }), ownerRequest)
-    expect(manifest.remote?.modelID).toBe("codex-owner")
-    expect(manifest.summary).toBeUndefined()
-    expect(requests).toHaveLength(1)
-    expect(requests[0].model.route.id).toBe("openai-codex-responses")
-    expect(requests[0].providerOptions?.openai?.promptCacheKey).toBe("session-scoped-key")
-    expect(requests[0].providerOptions?.openai?.parallelToolCalls).toBe(true)
-    expect(requests[0].tools.map((tool) => tool.name)).toEqual(["owner_tool"])
-    expect(requests[0].messages.at(-1)?.native?.openai).toEqual({ compactionTrigger: true })
-    const remoteRecords = yield* (yield* SessionProviderRequest.Service).list(sessionID)
-    expect(remoteRecords).toMatchObject([{ source: "compaction", routeID: "openai-codex-responses", promptCacheKey: "session-scoped-key" }])
-    retainManifestGuardrail(sessionID, manifest)
-    yield* (yield* SessionContextState.Service).activate({ sessionID, manifest })
-    expect((yield* db.select().from(SessionProviderStateLinkTable).all())).toHaveLength(1)
-    const next = SessionMessage.ID.make("msg_codex_remote_next")
-    const sequence = yield* db.select({ seq: EventSequenceTable.seq }).from(EventSequenceTable)
-      .where(eq(EventSequenceTable.aggregate_id, sessionID)).get()
-    yield* insertMessage(sessionID, next, (sequence?.seq ?? 2) + 1, "After checkpoint")
-    const ref = CatalogModel.Ref.make({ providerID: Provider.ID.make("openai"), id: CatalogModel.ID.make("codex-owner") })
-    const selected = yield* SessionHistory.forModel(db, sessionID, ref)
-    const materialized = yield* (yield* SessionProviderState.Service).materialize({
-      sessionID, provider: "openai", modelID: "codex-owner", stateless: true,
-    })
-    const lowered = toLLMMessages(selected, ref, "openai", materialized)
-    expect(lowered.map((message) => message.role)).toEqual(["user", "assistant", "user"])
-    expect(lowered[0].content).toMatchObject([{ type: "text", text: "Retained user input" }])
-    expect(lowered[1].content).toMatchObject([{ type: "reasoning", providerMetadata: { openai: { opaqueCompactionItem: { encrypted_content: "ciphertext" } } } }])
-    expect(lowered[2].content).toMatchObject([{ type: "text", text: "After checkpoint" }])
-    const other = CatalogModel.Ref.make({ providerID: Provider.ID.make("openai"), id: CatalogModel.ID.make("other-model") })
-    expect(JSON.stringify(toLLMMessages(yield* SessionHistory.forModel(db, sessionID, other), other, "openai", materialized))).not.toContain("ciphertext")
-  }),
+it.effect(
+  "runs remote-v2 on the owner route despite a different compaction helper and activates only one opaque item",
+  () =>
+    Effect.gen(function* () {
+      reset()
+      const db = (yield* Database.Service).db
+      const sessionID = SessionSchema.ID.make("ses_codex_remote_job")
+      const first = SessionMessage.ID.make("msg_codex_remote_old")
+      const retained = SessionMessage.ID.make("msg_codex_remote_user")
+      yield* seedSession(sessionID, 2)
+      yield* SessionContextState.initialize(db, sessionID, 0)
+      yield* insertAssistant(sessionID, first, 1, "old history ".repeat(300))
+      yield* insertMessage(sessionID, retained, 2, "Retained user input")
+      remoteEvents = [
+        LLMEvent.reasoningEnd({
+          id: "cmp_1",
+          providerMetadata: {
+            openai: { opaqueCompactionItem: { type: "compaction", id: "cmp_1", encrypted_content: "ciphertext" } },
+          },
+        }),
+        LLMEvent.stepFinish({
+          index: 0,
+          reason: "stop",
+          providerMetadata: { openai: { remoteCompactionCompleted: true } },
+        }),
+      ]
+      const compaction = yield* SessionCompaction.Service
+      const manifest = yield* compaction.manifest(manifestJob(sessionID, { messageID: retained, seq: 2 }), ownerRequest)
+      expect(manifest.remote?.modelID).toBe("codex-owner")
+      expect(manifest.summary).toBeUndefined()
+      expect(requests).toHaveLength(1)
+      expect(requests[0].model.route.id).toBe("openai-codex-responses")
+      expect(requests[0].providerOptions?.openai?.promptCacheKey).toBe("session-scoped-key")
+      expect(requests[0].providerOptions?.openai?.parallelToolCalls).toBe(true)
+      expect(requests[0].tools.map((tool) => tool.name)).toEqual(["owner_tool"])
+      expect(requests[0].messages.at(-1)?.native?.openai).toEqual({ compactionTrigger: true })
+      const remoteRecords = yield* (yield* SessionProviderRequest.Service).list(sessionID)
+      expect(remoteRecords).toMatchObject([
+        { source: "compaction", routeID: "openai-codex-responses", promptCacheKey: "session-scoped-key" },
+      ])
+      retainManifestGuardrail(sessionID, manifest)
+      yield* (yield* SessionContextState.Service).activate({ sessionID, manifest })
+      expect(yield* db.select().from(SessionProviderStateLinkTable).all()).toHaveLength(1)
+      const next = SessionMessage.ID.make("msg_codex_remote_next")
+      const sequence = yield* db
+        .select({ seq: EventSequenceTable.seq })
+        .from(EventSequenceTable)
+        .where(eq(EventSequenceTable.aggregate_id, sessionID))
+        .get()
+      yield* insertMessage(sessionID, next, (sequence?.seq ?? 2) + 1, "After checkpoint")
+      const ref = CatalogModel.Ref.make({
+        providerID: Provider.ID.make("openai"),
+        id: CatalogModel.ID.make("codex-owner"),
+      })
+      const selected = yield* SessionHistory.forModel(db, sessionID, ref, "a".repeat(64))
+      const materialized = yield* (yield* SessionProviderState.Service).materialize({
+        sessionID,
+        provider: "openai",
+        modelID: "codex-owner",
+        stateless: true,
+        accountIdentityDigest: "a".repeat(64),
+      })
+      const lowered = toLLMMessages(selected, ref, "openai", materialized, undefined, "a".repeat(64))
+      expect(lowered.map((message) => message.role)).toEqual(["user", "assistant", "user"])
+      expect(lowered[0].content).toMatchObject([{ type: "text", text: "Retained user input" }])
+      expect(lowered[1].content).toMatchObject([
+        {
+          type: "reasoning",
+          providerMetadata: { openai: { opaqueCompactionItem: { encrypted_content: "ciphertext" } } },
+        },
+      ])
+      expect(lowered[2].content).toMatchObject([{ type: "text", text: "After checkpoint" }])
+      const other = CatalogModel.Ref.make({
+        providerID: Provider.ID.make("openai"),
+        id: CatalogModel.ID.make("other-model"),
+      })
+      expect(
+        JSON.stringify(
+          toLLMMessages(
+            yield* SessionHistory.forModel(db, sessionID, other, "a".repeat(64)),
+            other,
+            "openai",
+            materialized,
+            undefined,
+            "a".repeat(64),
+          ),
+        ),
+      ).not.toContain("ciphertext")
+      const replacement = yield* SessionHistory.forModel(db, sessionID, ref, "b".repeat(64))
+      expect(replacement.map((message) => message.id)).toEqual([first, retained, next])
+      expect(
+        JSON.stringify(toLLMMessages(replacement, ref, "openai", materialized, undefined, "b".repeat(64))),
+      ).not.toContain("ciphertext")
+    }),
 )
 
 it.effect("sends a full Codex WebSocket compaction request with no response-id delta", () =>
@@ -589,18 +697,48 @@ it.effect("sends a full Codex WebSocket compaction request with no response-id d
     yield* seedSession(sessionID, 1)
     yield* insertMessage(sessionID, boundary, 1, "WebSocket source")
     remoteEvents = [
-      LLMEvent.reasoningEnd({ id: "cmp_ws", providerMetadata: { openai: { opaqueCompactionItem: { type: "compaction", id: "cmp_ws", encrypted_content: "ciphertext" } } } }),
-      LLMEvent.stepFinish({ index: 0, reason: "stop", providerMetadata: { openai: { remoteCompactionCompleted: true } } }),
-    ]
-    const websocket = Model.update(codexModel, { route: OpenAIResponses.webSocketRoute.with({ id: "openai-codex-websocket-responses" }) })
-    const prepare = () => ownerRequest().pipe(Effect.map((owner) => ({
-      ...owner,
-      request: LLM.request({ ...owner.request, model: websocket,
-        providerOptions: { openai: { promptCacheKey: "session-scoped-key", store: false, previousResponseId: "stale",
-          responsesWebSocket: { sessionKey: "session-scoped-key", fingerprint: "fingerprint", messageBoundary: 0, fullReplay: false } } },
+      LLMEvent.reasoningEnd({
+        id: "cmp_ws",
+        providerMetadata: {
+          openai: { opaqueCompactionItem: { type: "compaction", id: "cmp_ws", encrypted_content: "ciphertext" } },
+        },
       }),
-    })))
-    const manifest = yield* (yield* SessionCompaction.Service).manifest(manifestJob(sessionID, { messageID: boundary, seq: 1 }), prepare)
+      LLMEvent.stepFinish({
+        index: 0,
+        reason: "stop",
+        providerMetadata: { openai: { remoteCompactionCompleted: true } },
+      }),
+    ]
+    const websocket = Model.update(codexModel, {
+      route: OpenAIResponses.webSocketRoute.with({ id: "openai-codex-websocket-responses" }),
+    })
+    const prepare = () =>
+      ownerRequest().pipe(
+        Effect.map((owner) => ({
+          ...owner,
+          request: LLM.request({
+            ...owner.request,
+            model: websocket,
+            providerOptions: {
+              openai: {
+                promptCacheKey: "session-scoped-key",
+                store: false,
+                previousResponseId: "stale",
+                responsesWebSocket: {
+                  sessionKey: "session-scoped-key",
+                  fingerprint: "fingerprint",
+                  messageBoundary: 0,
+                  fullReplay: false,
+                },
+              },
+            },
+          }),
+        })),
+      )
+    const manifest = yield* (yield* SessionCompaction.Service).manifest(
+      manifestJob(sessionID, { messageID: boundary, seq: 1 }),
+      prepare,
+    )
     expect(manifest.remote?.itemID).toBe("cmp_ws")
     expect(requests[0].providerOptions?.openai?.responsesWebSocket).toMatchObject({ fullReplay: true })
     expect(requests[0].providerOptions?.openai?.previousResponseId).toBeUndefined()
@@ -620,10 +758,24 @@ it.effect("retains the newest real users in chronological order within the 64K t
     yield* insertMessage(sessionID, middle, 2, "Earlier real user")
     yield* insertMessage(sessionID, latest, 3, "Latest real user")
     remoteEvents = [
-      LLMEvent.reasoningEnd({ id: "cmp_retention", providerMetadata: { openai: { opaqueCompactionItem: { type: "compaction", id: "cmp_retention", encrypted_content: "ciphertext" } } } }),
-      LLMEvent.stepFinish({ index: 0, reason: "stop", providerMetadata: { openai: { remoteCompactionCompleted: true } } }),
+      LLMEvent.reasoningEnd({
+        id: "cmp_retention",
+        providerMetadata: {
+          openai: {
+            opaqueCompactionItem: { type: "compaction", id: "cmp_retention", encrypted_content: "ciphertext" },
+          },
+        },
+      }),
+      LLMEvent.stepFinish({
+        index: 0,
+        reason: "stop",
+        providerMetadata: { openai: { remoteCompactionCompleted: true } },
+      }),
     ]
-    const manifest = yield* (yield* SessionCompaction.Service).manifest(manifestJob(sessionID, { messageID: latest, seq: 3 }), ownerRequest)
+    const manifest = yield* (yield* SessionCompaction.Service).manifest(
+      manifestJob(sessionID, { messageID: latest, seq: 3 }),
+      ownerRequest,
+    )
     expect(manifest.remote?.retained.map((item) => item.messageID)).toEqual([middle, latest])
     expect(manifest.retainedTokens).toBeLessThanOrEqual(64_000)
   }),
@@ -640,16 +792,43 @@ for (const invalid of ["missing", "duplicate", "malformed", "stream error"] as c
       yield* SessionContextState.initialize((yield* Database.Service).db, sessionID, 0)
       yield* insertAssistant(sessionID, first, 1, "old context ".repeat(300))
       yield* insertMessage(sessionID, boundary, 2, "Retained input")
-      const valid = LLMEvent.reasoningEnd({ id: "cmp", providerMetadata: { openai: { opaqueCompactionItem: { type: "compaction", id: "cmp", encrypted_content: "ciphertext" } } } })
-      remoteEvents = [...(invalid === "missing" ? [] : invalid === "duplicate" ? [valid, valid] : [LLMEvent.reasoningEnd({ id: "cmp", providerMetadata: { openai: { opaqueCompactionItem: { type: "compaction", id: "cmp", encrypted_content: "" } } } })]), LLMEvent.stepFinish({ index: 0, reason: "stop", providerMetadata: { openai: { remoteCompactionCompleted: true } } })]
+      const valid = LLMEvent.reasoningEnd({
+        id: "cmp",
+        providerMetadata: {
+          openai: { opaqueCompactionItem: { type: "compaction", id: "cmp", encrypted_content: "ciphertext" } },
+        },
+      })
+      remoteEvents = [
+        ...(invalid === "missing"
+          ? []
+          : invalid === "duplicate"
+            ? [valid, valid]
+            : [
+                LLMEvent.reasoningEnd({
+                  id: "cmp",
+                  providerMetadata: {
+                    openai: { opaqueCompactionItem: { type: "compaction", id: "cmp", encrypted_content: "" } },
+                  },
+                }),
+              ]),
+        LLMEvent.stepFinish({
+          index: 0,
+          reason: "stop",
+          providerMetadata: { openai: { remoteCompactionCompleted: true } },
+        }),
+      ]
       remoteFailure = invalid === "stream error"
       responseForRequest = () => checkpoint(2, "Fallback checkpoint")
-      const manifest = yield* (yield* SessionCompaction.Service).manifest(manifestJob(sessionID, { messageID: boundary, seq: 2 }), ownerRequest)
+      const manifest = yield* (yield* SessionCompaction.Service).manifest(
+        manifestJob(sessionID, { messageID: boundary, seq: 2 }),
+        ownerRequest,
+      )
       expect(manifest.summary).toBeDefined()
       expect(manifest.remote).toBeUndefined()
       expect(requests.filter((request) => request.model.route.id === "openai-codex-responses")).toHaveLength(3)
-      expect((yield* (yield* SessionProviderRequest.Service).list(sessionID)).map((record) => record.invalidation))
-        .toEqual(["retry-fallback", "retry-fallback", "retry-fallback"])
+      expect(
+        (yield* (yield* SessionProviderRequest.Service).list(sessionID)).map((record) => record.invalidation),
+      ).toEqual(["retry-fallback", "retry-fallback", "retry-fallback"])
       expect(requests.some((request) => request.model.provider === "test")).toBe(true)
       expect(yield* (yield* Database.Service).db.select().from(SessionProviderStateLinkTable).all()).toEqual([])
     }),
@@ -835,7 +1014,7 @@ it.effect("uses bounded checkpoint TOON requests without asking the model to aut
               scope: "compaction",
               routeID: model.route.id,
               projectID: Project.ID.global,
-              directory: "/project",
+              directory,
               providerID: model.provider,
               modelID: model.id,
               policyRevision: CACHE_POLICY_REVISION,
@@ -883,7 +1062,7 @@ it.effect("uses one deterministic hidden child Session for compaction provider t
     expect(child.id).toMatch(/^ses_compaction_/)
     expect(child.parent_id).toBe(sessionID)
     expect(child.agent).toBe("compaction")
-    expect(child.model).toEqual({ providerID: "test", id: "manifest-model" })
+    expect(child.model).toEqual({ providerID: Provider.ID.make("test"), id: CatalogModel.ID.make("manifest-model") })
     const childID = SessionSchema.ID.make(child.id)
     expect(
       yield* db
@@ -922,10 +1101,16 @@ itPriced.effect("aggregates helper one-hour cache writes into the compaction req
     yield* insertAssistant(sessionID, first, 1, "helper hourly cost source ".repeat(200))
     yield* insertMessage(sessionID, boundary, 2, "Retain input")
     responseForRequest = () => checkpoint(2, "Costed helper checkpoint")
-    helperUsage = [0, 1].map((index) => LLMEvent.stepFinish({ index, reason: "stop", usage: {
-      cacheWriteInputTokens: 1_000,
-      providerMetadata: { anthropic: { cache_creation: { ephemeral_1h_input_tokens: 1_000 } } },
-    } }))
+    helperUsage = [0, 1].map((index) =>
+      LLMEvent.stepFinish({
+        index,
+        reason: "stop",
+        usage: {
+          cacheWriteInputTokens: 1_000,
+          providerMetadata: { anthropic: { cache_creation: { ephemeral_1h_input_tokens: 1_000 } } },
+        },
+      }),
+    )
     yield* generateManifest(manifestJob(sessionID, { messageID: boundary, seq: 2 }))
     const rows = yield* (yield* Database.Service).db.select().from(SessionProviderRequestTable).all()
     expect(rows).toHaveLength(1)
@@ -1139,7 +1324,10 @@ itWithTotalTimeout.effect("settles timeout fallback through execution and releas
           eq(EventTable.aggregate_id, sessionID),
           eq(
             EventTable.type,
-            EventRuntime.versionedType(SessionEvent.Compaction.Ended.type, SessionEvent.Compaction.Ended.durable.version),
+            EventRuntime.versionedType(
+              SessionEvent.Compaction.Ended.type,
+              SessionEvent.Compaction.Ended.durable.version,
+            ),
           ),
         ),
       )

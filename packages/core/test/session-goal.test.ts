@@ -3,8 +3,8 @@ import { LLMClient, LLMEvent, Model, type LLMRequest } from "@ycoding-ai/ai"
 import { OpenAIChat } from "@ycoding-ai/ai/protocols"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
+import { Catalog } from "@ycoding-ai/core/catalog"
 import { ConfigEfficiency } from "@ycoding-ai/core/config/efficiency"
-import { ConfigDecisions } from "@ycoding-ai/core/config/decisions"
 import { Decision } from "@ycoding-ai/core/decision"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -93,14 +93,12 @@ const helperPolicy = Layer.succeed(
     },
     localTitle,
     resolveModel: () =>
-      modelAvailable
-        ? Effect.succeed(SessionRunnerModel.resolved(model, undefined, cost))
-        : Effect.succeed(undefined),
+      modelAvailable ? Effect.succeed(SessionRunnerModel.resolved(model, undefined, cost)) : Effect.succeed(undefined),
   }),
 )
 const config = Layer.succeed(
   Config.Service,
-  Config.Service.of({
+  Config.Service.of({ diagnostics: () => Effect.succeed([]),
     reload: () => Effect.void,
     entries: () =>
       Effect.succeed([
@@ -115,10 +113,7 @@ const config = Layer.succeed(
       ]),
   }),
 )
-function goalTests(
-  settings?: ConfigDecisions.Info,
-  choose: Decision.Interface["choose"] = () => Effect.die("unconfigured goal must not call Decision"),
-) {
+function goalTests() {
   return testEffect(
     AppNodeBuilder.build(
       LayerNode.group([
@@ -136,22 +131,17 @@ function goalTests(
         [SessionRunnerModel.node, models],
         [SessionHelperPolicy.node, helperPolicy],
         [Config.node, config],
-        [Decision.node, Layer.mock(Decision.Service)({ settings: () => Effect.succeed(settings), choose })],
+        [Decision.node, Layer.mock(Decision.Service)({ evaluate: () => Effect.die("Goals must not request helper judgments") })],
       ],
     ),
   )
 }
 const it = goalTests()
-const agentGoalSettings = new ConfigDecisions.Info({
-  goal: new ConfigDecisions.AgentPolicy({ provider: "agent", min_confidence: 0.8 }),
-})
-
-const agentStop = goalTests(agentGoalSettings, () =>
-  Effect.succeed({ choice: "stop", confidence: 0.8, refused: false }),
-)
-agentStop.effect("accepts an agent goal stop at the estimated-confidence threshold without certifying completion", () =>
+it.effect("continues using the existing text steer without consulting a stop classifier", () =>
   Effect.gen(function* () {
     requests = []
+    modelAvailable = true
+    yield* configureGoalAgent
     const sessionID = Session.ID.make("ses_goal_agent_stop")
     yield* insertSession(sessionID)
     const store = yield* SessionStore.Service
@@ -163,46 +153,13 @@ agentStop.effect("accepts an agent goal stop at the estimated-confidence thresho
     const before = yield* autonomy.snapshot(sessionID)
     const goal = Schema.decodeUnknownSync(SessionAutonomy.Goal)(before.state.goal)
     const goals = yield* SessionGoal.Service
-    expect(yield* goals.continuation({ session, goal })).toEqual({ action: "stop" })
+    expect(yield* goals.continuation({ session, goal })).toEqual({ action: "continue", steer: "Inspect the SQLite migration failure next and verify the focused suite." })
     expect(yield* autonomy.snapshot(sessionID)).toEqual(before)
     expect(before.state.goal?.status).toBe("active")
-    expect(requests).toHaveLength(0)
+    expect(requests).toHaveLength(1)
   }),
 )
 
-for (const [name, answer] of [
-  ["low estimate", { confidence: 0.79 }],
-  ["wrong metric", { probability: 1 }],
-  ["nonfinite estimate", { confidence: Infinity }],
-  ["out-of-range estimate", { confidence: 1.01 }],
-  ["negative estimate", { confidence: -0.1 }],
-  ["refused estimate", { confidence: 1, refused: true }],
-] as const) {
-  const uncertain = goalTests(agentGoalSettings, () => Effect.succeed({ choice: "stop", refused: false, ...answer }))
-  uncertain.effect(`continues an active goal for agent ${name}`, () =>
-    Effect.gen(function* () {
-      requests = []
-      const sessionID = Session.ID.make("ses_goal_agent_uncertain")
-      yield* insertSession(sessionID)
-      const store = yield* SessionStore.Service
-      const session = yield* store
-        .get(sessionID)
-        .pipe(Effect.flatMap((value) => (value ? Effect.succeed(value) : Effect.die("missing session"))))
-      const autonomy = yield* SessionAutonomy.Service
-      yield* autonomy.setGoal({ sessionID, text: "Repair the migration" })
-      const before = yield* autonomy.snapshot(sessionID)
-      const goal = Schema.decodeUnknownSync(SessionAutonomy.Goal)(before.state.goal)
-      const goals = yield* SessionGoal.Service
-      expect(yield* goals.continuation({ session, goal, latestAssistantText: "Migration still fails." })).toEqual({
-        action: "continue",
-        steer:
-          "Active goal: Repair the migration\nCurrent iteration: 0\nLatest assistant response: Migration still fails.\nContinue toward the unchanged active goal; preserve its objective.",
-      })
-      expect(yield* autonomy.snapshot(sessionID)).toEqual(before)
-      expect(requests).toHaveLength(0)
-    }),
-  )
-}
 
 const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
 const projects = Layer.succeed(
@@ -227,36 +184,62 @@ const locations = Layer.effect(
   LocationServiceMap.Service,
   LayerMap.make(
     () =>
-      Layer.succeed(
-        SessionGoal.Service,
-        SessionGoal.Service.of({
-          continuation: () => Effect.die("unused"),
-          synthesize: ({ text }) => {
-            synthesisCalls.push(text)
-            if (text === "Delayed goal") return Effect.gen(function* () {
-              yield* Deferred.succeed(calculationEntered, undefined)
-              yield* Deferred.await(calculationRelease)
-              return "Delayed calculated objective"
-            })
-            if (text === "Interrupt synthesis") return Effect.interrupt
-            if (text === "Use the fallback")
-              return Effect.fail(new SessionGoal.Error({ code: "goal.model_unavailable" }))
-            if (text === "Fail steer") return Effect.succeed("Steer failure objective")
-            return Effect.succeed("Repair the migration and verify the suite passes.")
+      Layer.mergeAll(
+        Layer.mock(Catalog.Service, {
+          provider: {
+            get: () => Effect.succeed(undefined),
+            all: () => Effect.succeed([]),
+            available: () => Effect.succeed([]),
           },
-          steer: (input) => {
-            steerCalls.push(input)
-            if (input.goal.text === "Steer failure objective")
-              return Effect.fail(new SessionGoal.Error({ code: "goal.calculation_failed" }))
-            return Effect.succeed("Inspect the migration failure next and run the focused checks.")
+          model: {
+            get: () => Effect.succeed(undefined),
+            all: () => Effect.succeed([]),
+            available: () => Effect.succeed([]),
+            default: () => Effect.succeed(undefined),
+            defaultSelection: () => Effect.succeed(undefined),
+            forConnection: (model) => Effect.succeed(model),
+            small: () => Effect.succeed(undefined),
           },
         }),
+        Layer.succeed(
+          SessionGoal.Service,
+          SessionGoal.Service.of({
+            continuation: () => Effect.die("unused"),
+            synthesize: ({ text }) => {
+              synthesisCalls.push(text)
+              if (text === "Delayed goal")
+                return Effect.gen(function* () {
+                  yield* Deferred.succeed(calculationEntered, undefined)
+                  yield* Deferred.await(calculationRelease)
+                  return "Delayed calculated objective"
+                })
+              if (text === "Interrupt synthesis") return Effect.interrupt
+              if (text === "Use the fallback")
+                return Effect.fail(new SessionGoal.Error({ code: "goal.model_unavailable" }))
+              if (text === "Fail steer") return Effect.succeed("Steer failure objective")
+              return Effect.succeed("Repair the migration and verify the suite passes.")
+            },
+            steer: (input) => {
+              steerCalls.push(input)
+              if (input.goal.text === "Steer failure objective")
+                return Effect.fail(new SessionGoal.Error({ code: "goal.calculation_failed" }))
+              return Effect.succeed("Inspect the migration failure next and run the focused checks.")
+            },
+          }),
+        ),
       ) as unknown as Layer.Layer<LocationServices>,
   ),
 )
 const setIt = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node, SessionStore.node, SessionAutonomy.node, Session.node]),
+    LayerNode.group([
+      Database.node,
+      EventRuntime.node,
+      SessionProjector.node,
+      SessionStore.node,
+      SessionAutonomy.node,
+      Session.node,
+    ]),
     [
       [LocationServiceMap.node, locations],
       [Project.node, projects],
@@ -343,7 +326,7 @@ it.effect("synthesizes the goal through the configured goal model without a loca
   }),
 )
 
-it.effect("keeps the existing text steer path when goal decisions are omitted", () =>
+it.effect("always uses the existing text steer path for goal continuation", () =>
   Effect.gen(function* () {
     requests = []
     modelAvailable = true
@@ -351,10 +334,19 @@ it.effect("keeps the existing text steer path when goal decisions are omitted", 
     const sessionID = Session.ID.make("ses_goal_unconfigured_continuation")
     yield* insertSession(sessionID)
     const store = yield* SessionStore.Service
-    const session = yield* store.get(sessionID).pipe(Effect.flatMap((value) => value ? Effect.succeed(value) : Effect.die("missing session")))
+    const session = yield* store
+      .get(sessionID)
+      .pipe(Effect.flatMap((value) => (value ? Effect.succeed(value) : Effect.die("missing session"))))
     const goals = yield* SessionGoal.Service
-    expect(yield* goals.continuation({ session, goal: SessionAutonomy.makeGoal({ text: "Repair the migration" }), latestAssistantText: "Migration fails." })).toEqual({
-      action: "continue", steer: "Inspect the SQLite migration failure next and verify the focused suite.",
+    expect(
+      yield* goals.continuation({
+        session,
+        goal: SessionAutonomy.makeGoal({ text: "Repair the migration" }),
+        latestAssistantText: "Migration fails.",
+      }),
+    ).toEqual({
+      action: "continue",
+      steer: "Inspect the SQLite migration failure next and verify the focused suite.",
     })
     expect(requests).toHaveLength(1)
     expect(JSON.stringify(requests[0]?.messages)).toContain("Migration fails.")
@@ -524,56 +516,54 @@ it.effect("uses agent reports only as no-progress retry attempts", () =>
   }),
 )
 
-setIt.effect(
-  "stores synthesized goals without changing the admitted user prompt and preserves state on failure",
-  () =>
-    Effect.gen(function* () {
-      const session = yield* Session.Service
-      const events = yield* EventRuntime.Service
-      const created = yield* session.create({ location })
-      const inputID = SessionMessage.ID.create()
-      const rawText = "Fix the migration failure and run the relevant checks."
-      yield* events.publish(SessionEvent.InputAdmitted, {
-        sessionID: created.id,
-        inputID,
-        input: { type: "user", data: { text: rawText }, delivery: "steer" },
-      })
-      yield* events.publish(SessionEvent.InputPromoted, { sessionID: created.id, inputID })
-      const before = yield* session.context(created.id)
-      steerCalls.length = 0
+setIt.effect("stores synthesized goals without changing the admitted user prompt and preserves state on failure", () =>
+  Effect.gen(function* () {
+    const session = yield* Session.Service
+    const events = yield* EventRuntime.Service
+    const created = yield* session.create({ location })
+    const inputID = SessionMessage.ID.create()
+    const rawText = "Fix the migration failure and run the relevant checks."
+    yield* events.publish(SessionEvent.InputAdmitted, {
+      sessionID: created.id,
+      inputID,
+      input: { type: "user", data: { text: rawText }, delivery: "steer" },
+    })
+    yield* events.publish(SessionEvent.InputPromoted, { sessionID: created.id, inputID })
+    const before = yield* session.context(created.id)
+    steerCalls.length = 0
 
-      expect(yield* session.autonomy.set({ sessionID: created.id, goal: rawText })).toMatchObject({
-        mode: "normal",
-        yolo: 0,
-        goal: {
-          text: "Repair the migration and verify the suite passes.",
-          rawText,
-        },
-      })
-      expect(yield* session.context(created.id)).toEqual(before)
-      expect(steerCalls).toMatchObject([
-        {
-          goal: { text: "Repair the migration and verify the suite passes.", rawText, status: "active", iteration: 0 },
-          phase: "start",
-        },
-      ])
-      expect((yield* session.pending(created.id)).at(-1)).toMatchObject({
-        type: "synthetic",
-        data: {
-          text: "Inspect the migration failure next and run the focused checks.",
-          description: "Goal · steer",
-          metadata: { autonomy: { goal: true, iteration: 0 } },
-        },
-      })
+    expect(yield* session.autonomy.set({ sessionID: created.id, goal: rawText })).toMatchObject({
+      mode: "normal",
+      yolo: 0,
+      goal: {
+        text: "Repair the migration and verify the suite passes.",
+        rawText,
+      },
+    })
+    expect(yield* session.context(created.id)).toEqual(before)
+    expect(steerCalls).toMatchObject([
+      {
+        goal: { text: "Repair the migration and verify the suite passes.", rawText, status: "active", iteration: 0 },
+        phase: "start",
+      },
+    ])
+    expect((yield* session.pending(created.id)).at(-1)).toMatchObject({
+      type: "synthetic",
+      data: {
+        text: "Inspect the migration failure next and run the focused checks.",
+        description: "Goal · steer",
+        metadata: { autonomy: { goal: true, iteration: 0 } },
+      },
+    })
 
-      const failed = yield* session.autonomy
-        .set({ sessionID: created.id, goal: "  Use the fallback  " })
-        .pipe(Effect.exit)
-      expect(failed._tag).toBe("Failure")
-      expect(yield* session.autonomy.get(created.id)).toMatchObject({
-        goal: { text: "Repair the migration and verify the suite passes.", rawText },
-      })
-    }),
+    const failed = yield* session.autonomy
+      .set({ sessionID: created.id, goal: "  Use the fallback  " })
+      .pipe(Effect.exit)
+    expect(failed._tag).toBe("Failure")
+    expect(yield* session.autonomy.get(created.id)).toMatchObject({
+      goal: { text: "Repair the migration and verify the suite passes.", rawText },
+    })
+  }),
 )
 
 setIt.effect("does not activate or admit a goal when user-proxy steer generation fails", () =>
@@ -582,9 +572,7 @@ setIt.effect("does not activate or admit a goal when user-proxy steer generation
     const created = yield* session.create({ location })
     const before = yield* session.pending(created.id)
 
-    const failed = yield* session.autonomy
-      .set({ sessionID: created.id, goal: "Fail steer" })
-      .pipe(Effect.exit)
+    const failed = yield* session.autonomy.set({ sessionID: created.id, goal: "Fail steer" }).pipe(Effect.exit)
 
     expect(failed._tag).toBe("Failure")
     expect(yield* session.autonomy.get(created.id)).toEqual({ mode: "normal", yolo: 0 })
@@ -621,7 +609,13 @@ setIt.effect("R7 ordinary prompts preserve the user-owned goal and accumulated n
       resume: false,
     })
     expect(yield* session.autonomy.get(created.id)).toMatchObject({
-      goal: { text: "Repair the migration and verify the suite passes.", rawText: "Initial request", status: "active", noProgress: 1, maxNoProgress: 4 },
+      goal: {
+        text: "Repair the migration and verify the suite passes.",
+        rawText: "Initial request",
+        status: "active",
+        noProgress: 1,
+        maxNoProgress: 4,
+      },
     })
 
     yield* session.prompt({
@@ -631,7 +625,13 @@ setIt.effect("R7 ordinary prompts preserve the user-owned goal and accumulated n
       resume: false,
     })
     expect(yield* session.autonomy.get(created.id)).toMatchObject({
-      goal: { text: "Repair the migration and verify the suite passes.", rawText: "Initial request", status: "active", noProgress: 1, maxNoProgress: 4 },
+      goal: {
+        text: "Repair the migration and verify the suite passes.",
+        rawText: "Initial request",
+        status: "active",
+        noProgress: 1,
+        maxNoProgress: 4,
+      },
     })
     expect(synthesisCalls).toEqual(["Initial request"])
   }),
@@ -649,11 +649,22 @@ setIt.effect("R7 resumes the retained goal without synthesis and admits its cont
     yield* session.autonomy.set({ sessionID: created.id, goal: null })
     const before = yield* session.pending(created.id)
     const resumed = yield* session.autonomy.set({ sessionID: created.id, goal: true })
-    expect(resumed.goal).toMatchObject({ text: "Repair the migration and verify the suite passes.", rawText: "Explicit objective", status: "active", noProgress: 1 })
+    expect(resumed.goal).toMatchObject({
+      text: "Repair the migration and verify the suite passes.",
+      rawText: "Explicit objective",
+      status: "active",
+      noProgress: 1,
+    })
     expect(synthesisCalls).toEqual(["Explicit objective"])
     expect(steerCalls).toMatchObject([
-      { goal: { text: "Repair the migration and verify the suite passes.", status: "active", iteration: 0 }, phase: "start" },
-      { goal: { text: "Repair the migration and verify the suite passes.", status: "active", iteration: 0 }, phase: "start" },
+      {
+        goal: { text: "Repair the migration and verify the suite passes.", status: "active", iteration: 0 },
+        phase: "start",
+      },
+      {
+        goal: { text: "Repair the migration and verify the suite passes.", status: "active", iteration: 0 },
+        phase: "start",
+      },
     ])
     const pending = yield* session.pending(created.id)
     expect(pending).toHaveLength(before.length + 1)
@@ -668,19 +679,26 @@ setIt.effect("R7 resumes the retained goal without synthesis and admits its cont
   }),
 )
 
-setIt.effect("R7 refuses resume without a retained goal and commits combined YOLO only with successful calculation", () =>
-  Effect.gen(function* () {
-    const session = yield* Session.Service
-    const created = yield* session.create({ location })
-    expect(yield* session.autonomy.set({ sessionID: created.id, goal: true }).pipe(Effect.flip)).toMatchObject({ code: "goal.no_retained_goal" })
-    expect(yield* session.pending(created.id)).toEqual([])
-    yield* session.autonomy.set({ sessionID: created.id, goal: "Initial objective", yolo: 1 })
-    expect(yield* session.autonomy.get(created.id)).toMatchObject({ yolo: 1, goal: { rawText: "Initial objective" } })
-    const before = yield* session.pending(created.id)
-    expect((yield* session.autonomy.set({ sessionID: created.id, goal: "Use the fallback", yolo: 2 }).pipe(Effect.exit))._tag).toBe("Failure")
-    expect(yield* session.autonomy.get(created.id)).toMatchObject({ yolo: 1, goal: { rawText: "Initial objective" } })
-    expect(yield* session.pending(created.id)).toEqual(before)
-  }),
+setIt.effect(
+  "R7 refuses resume without a retained goal and commits combined YOLO only with successful calculation",
+  () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const created = yield* session.create({ location })
+      expect(yield* session.autonomy.set({ sessionID: created.id, goal: true }).pipe(Effect.flip)).toMatchObject({
+        code: "goal.no_retained_goal",
+      })
+      expect(yield* session.pending(created.id)).toEqual([])
+      yield* session.autonomy.set({ sessionID: created.id, goal: "Initial objective", yolo: 1 })
+      expect(yield* session.autonomy.get(created.id)).toMatchObject({ yolo: 1, goal: { rawText: "Initial objective" } })
+      const before = yield* session.pending(created.id)
+      expect(
+        (yield* session.autonomy.set({ sessionID: created.id, goal: "Use the fallback", yolo: 2 }).pipe(Effect.exit))
+          ._tag,
+      ).toBe("Failure")
+      expect(yield* session.autonomy.get(created.id)).toMatchObject({ yolo: 1, goal: { rawText: "Initial objective" } })
+      expect(yield* session.pending(created.id)).toEqual(before)
+    }),
 )
 
 setIt.effect("R7 stopping during calculation prevents late reactivation and continuation admission", () =>
@@ -689,13 +707,17 @@ setIt.effect("R7 stopping during calculation prevents late reactivation and cont
     const created = yield* session.create({ location })
     yield* session.autonomy.set({ sessionID: created.id, goal: "Initial objective" })
     const before = yield* session.pending(created.id)
-    const calculation = yield* session.autonomy.set({ sessionID: created.id, goal: "Delayed goal" }).pipe(Effect.exit, Effect.forkChild)
+    const calculation = yield* session.autonomy
+      .set({ sessionID: created.id, goal: "Delayed goal" })
+      .pipe(Effect.exit, Effect.forkChild)
     yield* Deferred.await(calculationEntered)
     yield* session.autonomy.set({ sessionID: created.id, goal: null })
     yield* Deferred.succeed(calculationRelease, undefined)
     const settled = yield* Fiber.join(calculation)
     expect(settled._tag).toBe("Failure")
-    expect(yield* session.autonomy.get(created.id)).toMatchObject({ goal: { rawText: "Initial objective", status: "stopped" } })
+    expect(yield* session.autonomy.get(created.id)).toMatchObject({
+      goal: { rawText: "Initial objective", status: "stopped" },
+    })
     expect(yield* session.pending(created.id)).toEqual(before)
   }),
 )

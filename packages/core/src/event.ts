@@ -125,6 +125,16 @@ export interface Subscribe {
 const isDefinition = (input: Definition | readonly Definition[]): input is Definition => !Array.isArray(input)
 
 export interface Interface {
+  readonly publishBatch: <const D extends readonly Definition[]>(
+    publications: {
+      readonly [K in keyof D]: {
+        readonly definition: D[K]
+        readonly data: Data<D[K]>
+        readonly options?: PublishOptions
+      }
+    },
+    options?: { readonly when?: Effect.Effect<boolean> },
+  ) => Effect.Effect<ReadonlyArray<Payload>>
   readonly publish: <D extends Definition>(
     definition: D,
     data: Data<D>,
@@ -213,6 +223,7 @@ export const layerWith = (options?: LayerOptions) =>
           readonly strictOwner?: boolean
         },
         commit?: (seq: number) => Effect.Effect<void>,
+        deferWake = false,
       ) {
         return Effect.gen(function* () {
           const durable = definition?.durable
@@ -354,7 +365,7 @@ export const layerWith = (options?: LayerOptions) =>
                       { behavior: "immediate" },
                     )
                     .pipe(Effect.orDie)
-                  if (committed) {
+                  if (committed && !deferWake) {
                     yield* Effect.forEach(
                       pubsub.durable.get(committed.aggregateID) ?? [],
                       (wake) => PubSub.publish(wake, undefined),
@@ -437,6 +448,80 @@ export const layerWith = (options?: LayerOptions) =>
           )
         })
       }
+
+      const publishBatch: Interface["publishBatch"] = (publications, options) =>
+        Effect.uninterruptible(
+          Effect.gen(function* () {
+            const serviceLocation = Option.getOrUndefined(yield* Effect.serviceOption(Location.Service))
+            const committed = yield* db
+              .transaction(
+                () =>
+                  Effect.gen(function* () {
+                    if (options?.when && !(yield* options.when)) return []
+                    return yield* Effect.forEach(
+                      publications as readonly {
+                        readonly definition: Definition
+                        readonly data: unknown
+                        readonly options?: PublishOptions
+                      }[],
+                      (publication) =>
+                        Effect.gen(function* () {
+                          const definition = publication.definition
+                          if (!definition.durable)
+                            return yield* Effect.die(
+                              new InvalidDurableEventError({
+                                type: definition.type,
+                                message: "Batch publication requires durable events",
+                              }),
+                            )
+                          const event = {
+                            id: publication.options?.id ?? ID.create(),
+                            created: yield* DateTime.now,
+                            type: definition.type,
+                            data: publication.data,
+                            metadata: publication.options?.metadata,
+                            location:
+                              publication.options?.location ??
+                              (serviceLocation
+                                ? { directory: serviceLocation.directory, workspaceID: serviceLocation.workspaceID }
+                                : undefined),
+                          }
+                          const result = yield* commitDurableEvent(
+                            definition,
+                            event as Payload,
+                            undefined,
+                            publication.options?.commit,
+                            true,
+                          )
+                          if (!result)
+                            return yield* Effect.die(
+                              new InvalidDurableEventError({
+                                type: definition.type,
+                                message: "Batch event was not committed",
+                              }),
+                            )
+                          return {
+                            ...event,
+                            durable: envelope(result.aggregateID, result.seq, definition.durable.version),
+                          } as Payload
+                        }),
+                    )
+                  }),
+                { behavior: "immediate" },
+              )
+              .pipe(Effect.orDie)
+            yield* Effect.forEach(
+              new Set(committed.map((event) => event.durable!.aggregateID)),
+              (aggregateID) =>
+                Effect.forEach(pubsub.durable.get(aggregateID) ?? [], (wake) => PubSub.publish(wake, undefined), {
+                  discard: true,
+                }),
+              { discard: true },
+            )
+            yield* Effect.forEach(committed, (event) => notify(event, true), { discard: true })
+            return committed
+          }),
+        )
 
       function replay(
         event: SerializedEvent,
@@ -696,6 +781,7 @@ export const layerWith = (options?: LayerOptions) =>
         })
 
       return Service.of({
+        publishBatch,
         publish,
         subscribe,
         log,

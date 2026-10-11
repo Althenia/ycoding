@@ -270,7 +270,7 @@ export function createClaudeCodeFetch(input: {
   readonly requestID?: () => string
   readonly billingSample?: (sessionID: string) => Promise<string | undefined>
   readonly onEvent?: (event: ClaudeCodeRequestEvent) => void
-  readonly onResponse?: (response: Response) => void | Promise<void>
+  readonly onResponse?: (response: Response, credentials: ClaudeCodeCredentials) => void | Promise<void>
 }) {
   const run = async (
     request: FetchInput,
@@ -296,7 +296,10 @@ export function createClaudeCodeFetch(input: {
     const latest = await input.credentials()
     if (!latest) throw new Error("Claude Code credentials are unavailable or expired. Run `claude auth login`.")
     const excluded = new Set<string>()
-    const sessionID = input.sessionID ?? requestHeader(request, init, "x-session-id")
+    const sessionID =
+      input.sessionID ??
+      requestHeader(request, init, "x-ycoding-session") ??
+      requestHeader(request, init, "x-session-id")
     const billingSample =
       sessionID && input.billingSample
         ? await Promise.resolve()
@@ -304,6 +307,7 @@ export function createClaudeCodeFetch(input: {
             .catch(() => undefined)
         : undefined
     let response = await run(request, init, latest, excluded, billingSample)
+    let dispatched = latest
     if (response.status === 401) {
       const rotated = await input.reload().catch(() => null)
       if (!rotated || rotated.accessToken === latest.accessToken) return response
@@ -312,6 +316,7 @@ export function createClaudeCodeFetch(input: {
         data: { sourceReloaded: true },
       })
       response = await run(request, init, rotated, excluded, billingSample)
+      dispatched = rotated
     }
     for (;;) {
       if (response.status !== 400 && response.status !== 429) break
@@ -323,9 +328,10 @@ export function createClaudeCodeFetch(input: {
       input.onEvent?.({ event: "beta-excluded", data: { beta } })
       const current = (await input.credentials()) ?? latest
       response = await run(request, init, current, excluded, billingSample)
+      dispatched = current
     }
     try {
-      await input.onResponse?.(response)
+      await input.onResponse?.(response, dispatched)
     } catch {
       input.onEvent?.({ event: "response-observer-failed" })
     }

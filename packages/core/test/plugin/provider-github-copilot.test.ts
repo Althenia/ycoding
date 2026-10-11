@@ -85,6 +85,7 @@ describe("GithubCopilotPlugin", () => {
         id: Integration.MethodID.make("device"),
         type: "oauth",
         label: "Login with GitHub Copilot",
+        remote: true,
         prompts: expect.any(Array),
       })
     }),

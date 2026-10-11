@@ -74,6 +74,12 @@ export function host(overrides: Overrides = {}): PluginContext {
         resolve: () => Effect.die("unused integration.connection.resolve"),
       },
     },
+    mcp: overrides.mcp ?? {
+      servers: () => Effect.die("unused mcp.servers"),
+      tools: () => Effect.die("unused mcp.tools"),
+      readResource: () => Effect.die("unused mcp.readResource"),
+      callTool: () => Effect.die("unused mcp.callTool"),
+    },
     plugin: overrides.plugin ?? {
       list: () => Effect.die("unused plugin.list"),
     },
@@ -195,10 +201,21 @@ export function catalogHost(catalog: Catalog.Interface): PluginContext["catalog"
             default: {
               get: () => {
                 const value = draft.model.default.get()
-                return value && { providerID: value.providerID, modelID: value.modelID }
+                return (
+                  value && {
+                    providerID: value.providerID,
+                    modelID: value.modelID,
+                    variant: value.variant,
+                    profile: value.profile,
+                  }
+                )
               },
-              set: (providerID, modelID) =>
-                draft.model.default.set(Provider.ID.make(providerID), CatalogModel.ID.make(modelID)),
+              set: (providerID, modelID, selection) =>
+                draft.model.default.set(Provider.ID.make(providerID), CatalogModel.ID.make(modelID), {
+                  variant:
+                    selection?.variant === undefined ? undefined : CatalogModel.VariantID.make(selection.variant),
+                  profile: selection?.profile,
+                }),
             },
           },
         }),
@@ -390,6 +407,13 @@ function modelInfo(value: CatalogModel.Info | CatalogModel.MutableInfo) {
     headers: value.headers && { ...value.headers },
     body: value.body && { ...value.body },
     daybreak: value.daybreak && [...value.daybreak],
+    profiles:
+      value.profiles &&
+      value.profiles.map((profile) => ({
+        ...profile,
+        variants: profile.variants && [...profile.variants],
+        daybreak: profile.daybreak && [...profile.daybreak],
+      })),
     capabilities: {
       ...value.capabilities,
       input: [...value.capabilities.input],

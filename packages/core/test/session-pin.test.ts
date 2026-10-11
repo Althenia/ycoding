@@ -40,7 +40,7 @@ const it = testEffect(
     ],
   ),
 )
-const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
+const location = Location.Ref.make({ directory: AbsolutePath.make(import.meta.dir) })
 
 describe("Session pin", () => {
   it.effect("rejects unknown sessions for both pin operations", () =>
@@ -85,6 +85,19 @@ describe("Session pin", () => {
         .map((event) => Schema.encodeSync(SessionEvent.Durable)(event).type)
       expect(log.filter((type) => type === SessionEvent.Pinned.type)).toHaveLength(1)
       expect(log.filter((type) => type === SessionEvent.Unpinned.type)).toHaveLength(1)
+    }),
+  )
+
+  it.effect("pins and unpins an owned child Session durably", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const parent = yield* session.create({ location })
+      const child = yield* session.create({ parentID: parent.id })
+
+      yield* session.pin(child.id)
+      expect((yield* session.get(child.id)).time.pinned).toBeDefined()
+      yield* session.unpin(child.id)
+      expect((yield* session.get(child.id)).time.pinned).toBeUndefined()
     }),
   )
 })

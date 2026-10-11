@@ -171,6 +171,7 @@ describe("Agent", () => {
         "god",
         "occam",
         "omoikane",
+        "prediction",
         "summary",
         "title",
         "wittgenstein",
@@ -259,7 +260,7 @@ describe("Agent", () => {
         "Keep the todo list up to date.",
         "Use the supplied tool schema or discovered signature, not capability prose, to construct a call. After invalid input, inspect the returned field or path and correct the request only when the previous call is known not to have mutated state. Treat denial, unavailability, and invalid input as distinct outcomes; never replay an uncertain mutation automatically.",
         "Bound repository searches by scope and output; reuse settled results, pivot a missing broad search to a likely file, symbol, caller, or directory, and repeat reads only for changed inputs or new evidence.",
-        "Never make atomic commits. Commit only when the task, one of its phases, or a complete piece of functionality is finished.",
+        "Never make atomic commits. Commit only when the task, one of its phases, or a complete piece of functionality is finished and its checks pass, as one commit that includes its tests, docs, and release-note entries. Never commit partial steps, follow-up fixes, or notes-only changes separately.",
         "For requests to change, build, or fix, make the requested in-scope local changes and run relevant non-destructive checks without asking first.",
         "For requests to answer, explain, review, diagnose, or plan, inspect the relevant material and report. Do not make changes unless the request also asks for them.",
         "Require confirmation before external writes, purchases, destructive or irreversible actions, dependency changes, data or schema migrations, CI/CD changes, public-contract breaks, or material scope expansion.",
@@ -293,7 +294,18 @@ describe("Agent", () => {
         throw new Error("expected maintained built-in prompts")
       }
       expect(god.system).toContain("Explicit permission denies remain denied.")
-      expect(god.system).toContain("Only effective YOLO 3 auto-approves guardrail reviews.")
+      expect(god.system).toContain("1 auto-approves ask permissions and ordinary guardrail reviews")
+      expect(god.system).toContain("Hard reviews always require a human decision.")
+      expect(god.system).toContain("Orchestrate; do not implement.")
+      expect(god.system).toContain("launch every ready independent task in parallel")
+      expect(god.system).toContain("score size, difficulty, complexity, and risk against a rubric")
+      expect(god.system).toContain("never leave the variant blank")
+      expect(god.system).toContain("Use the decision tool")
+      expect(god.system).toContain("Default to parallel execution to maximize development speed.")
+      expect(zeus.system).toContain("Issue independent tool calls together in one step")
+      expect(god.system).toContain("After a worktree's branch is merged into main, remove that worktree with `git worktree remove <path>`")
+      expect(god.system).not.toContain("Use durable subagents only for isolated work.")
+      expect(zeus.system).not.toContain("Orchestrate; do not implement.")
       expect(zeus.system).toContain("You are a durable child Session")
       expect(zeus.system).toContain("Do not spawn child agents")
       expect(title.system).toContain("Output exactly one natural thread title")
@@ -356,6 +368,7 @@ describe("Agent", () => {
 
       expect((yield* agent.get(Agent.ID.make("god")))?.permissions).toEqual([
         { action: "*", resource: "*", effect: "allow" },
+        { action: "worktree", resource: "*", effect: "ask" },
         { action: "external_directory", resource: "*", effect: "ask" },
         { action: "external_directory", resource: `${Global.Path.data}/shell/*/*`, effect: "allow" },
         { action: "external_directory", resource: `${Global.Path.tmp}/*`, effect: "allow" },

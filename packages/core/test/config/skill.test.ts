@@ -43,7 +43,7 @@ describe("ConfigSkillPlugin.Plugin", () => {
         Effect.provideService(Location.Service, Location.Service.of(location({ directory }))),
         Effect.provideService(
           Config.Service,
-          Config.Service.of({
+          Config.Service.of({ diagnostics: () => Effect.succeed([]),
             reload: () => Effect.void,
             entries: () =>
               Effect.succeed([

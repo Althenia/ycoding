@@ -61,7 +61,7 @@ describe("ConfigAgentPlugin.Plugin", () => {
         }),
       )
 
-      const config = Config.Service.of({
+      const config = Config.Service.of({ diagnostics: () => Effect.succeed([]),
         reload: () => Effect.void,
         entries: () =>
           Effect.succeed([
@@ -91,7 +91,10 @@ describe("ConfigAgentPlugin.Plugin", () => {
               info: decode({
                 permissions: [{ action: "read", resource: "*", effect: "allow" }],
                 agents: {
-                  reviewer: { model: "openrouter/openai/gpt-5#high", hidden: true },
+                  reviewer: {
+                    model: { providerID: "openrouter", model: "openai/gpt-5", variant: "high", profile: "Work" },
+                    hidden: true,
+                  },
                   removed: { disabled: true },
                   late: {
                     permissions: [{ action: "edit", resource: "*", effect: "allow" }],
@@ -124,7 +127,7 @@ describe("ConfigAgentPlugin.Plugin", () => {
         description: "Review changes",
         mode: "subagent",
         hidden: true,
-        model: { providerID: "openrouter", id: "openai/gpt-5", variant: "high" },
+        model: { providerID: "openrouter", id: "openai/gpt-5", variant: "high", profile: "Work" },
       })
       expect(reviewer.permissions).toEqual([
         ...defaultPermissions,
@@ -147,7 +150,7 @@ describe("ConfigAgentPlugin.Plugin", () => {
   it.effect("maps configured agent fields and preserves an unspecified model variant", () =>
     Effect.gen(function* () {
       const agents = yield* Agent.Service
-      const config = Config.Service.of({
+      const config = Config.Service.of({ diagnostics: () => Effect.succeed([]),
         reload: () => Effect.void,
         entries: () =>
           Effect.succeed([
@@ -216,7 +219,7 @@ describe("ConfigAgentPlugin.Plugin", () => {
       const build = Agent.ID.make("build")
       yield* agents.transform((editor) => editor.update(build, () => {}))
 
-      const config = Config.Service.of({
+      const config = Config.Service.of({ diagnostics: () => Effect.succeed([]),
         reload: () => Effect.void,
         entries: () =>
           Effect.succeed([
@@ -280,7 +283,7 @@ Use current fields.`,
             await fs.writeFile(path.join(tmp.path, "agents", "disabled.md"), "---\ndisabled: true\n---\nDisabled")
           })
           const agents = yield* Agent.Service
-          const config = Config.Service.of({
+          const config = Config.Service.of({ diagnostics: () => Effect.succeed([]),
             reload: () => Effect.void,
             entries: () =>
               Effect.succeed([
@@ -326,7 +329,7 @@ function loadHomePermissions(home: string) {
     const agents = yield* Agent.Service
     const build = Agent.ID.make("build")
     yield* agents.transform((editor) => editor.update(build, () => {}))
-    const config = Config.Service.of({
+    const config = Config.Service.of({ diagnostics: () => Effect.succeed([]),
       reload: () => Effect.void,
       entries: () =>
         Effect.succeed([

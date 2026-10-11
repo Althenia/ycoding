@@ -9,10 +9,11 @@ import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { WebLatency } from "@ycoding-ai/core/web-latency"
 import { WebLatencyTable } from "@ycoding-ai/core/web-latency/sql"
+import { TelemetryConsent } from "@ycoding-ai/core/telemetry-consent"
 import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 
-const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node])))
+const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, TelemetryConsent.node])))
 const sample = Schema.decodeUnknownSync(Telemetry.Sample)({
   kind: "request",
   at: "2026-10-04T12:00:00.000Z",
@@ -25,6 +26,8 @@ const sample = Schema.decodeUnknownSync(Telemetry.Sample)({
 
 it.effect("stores server receipt time and pages newest samples without Session or Location identity", () =>
   Effect.gen(function* () {
+    const consent = yield* TelemetryConsent.Service
+    yield* consent.set({ enabled: true, noticeVersion: 1 })
     const db = (yield* Database.Service).db
     expect(yield* WebLatency.append(db, [sample, { kind: "long-task", at: sample.at, durationMs: 70 }])).toEqual({
       accepted: 2,
@@ -46,11 +49,13 @@ it.effect("stores server receipt time and pages newest samples without Session o
   }),
 )
 
-it.effect("hides and prunes samples older than seven days by server receipt time", () =>
+it.effect("hides and prunes samples older than thirty days by server receipt time", () =>
   Effect.gen(function* () {
+    const consent = yield* TelemetryConsent.Service
+    yield* consent.set({ enabled: true, noticeVersion: 1 })
     const db = (yield* Database.Service).db
     yield* WebLatency.append(db, [sample])
-    yield* adjust("7 days")
+    yield* adjust("30 days")
     expect((yield* WebLatency.list(db, {})).data).toEqual([{ receivedAt: 0, sample }])
     yield* adjust("1 millis")
     expect((yield* WebLatency.list(db, {})).data).toEqual([])
@@ -60,9 +65,11 @@ it.effect("hides and prunes samples older than seven days by server receipt time
 
 it.effect("removes expired samples during housekeeping without a read request", () =>
   Effect.gen(function* () {
+    const consent = yield* TelemetryConsent.Service
+    yield* consent.set({ enabled: true, noticeVersion: 1 })
     const db = (yield* Database.Service).db
     yield* WebLatency.append(db, [sample])
-    yield* adjust("7 days")
+    yield* adjust("30 days")
     yield* adjust("1 millis")
     yield* WebLatency.prune(db)
     expect(yield* db.select().from(WebLatencyTable).all()).toEqual([])
@@ -71,6 +78,8 @@ it.effect("removes expired samples during housekeeping without a read request", 
 
 it.effect("retains at most ten thousand newest samples after a batch", () =>
   Effect.gen(function* () {
+    const consent = yield* TelemetryConsent.Service
+    yield* consent.set({ enabled: true, noticeVersion: 1 })
     const db = (yield* Database.Service).db
     for (let offset = 0; offset < 10_000; offset += 500)
       yield* db
@@ -92,6 +101,8 @@ it.live("reads retained samples after reopening the same isolated SQLite file", 
         const file = path.join(tmp.path, "web-latency.db")
         yield* Effect.gen(function* () {
           const database = yield* Database.Service
+          const consent = yield* TelemetryConsent.make(database.db)
+          yield* consent.set({ enabled: true, noticeVersion: 1 })
           return yield* WebLatency.append(database.db, [sample])
         }).pipe(Effect.provide(Database.layerFromPath(file)), Effect.scoped)
         const next = yield* Effect.gen(function* () {
@@ -102,4 +113,33 @@ it.live("reads retained samples after reopening the same isolated SQLite file", 
       }),
     (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
   ),
+)
+
+it.effect("defaults to undecided, persists decisions and refuses disabled append without writes", () =>
+  Effect.gen(function* () {
+    const database = yield* Database.Service
+    const consent = yield* TelemetryConsent.Service
+    expect(yield* consent.get()).toEqual({ noticeVersion: 1 })
+    expect(yield* consent.enabled()).toBe(false)
+    expect(yield* Effect.flip(WebLatency.append(database.db, [sample]))).toBeInstanceOf(Telemetry.TelemetryDisabled)
+    expect(yield* database.db.select().from(WebLatencyTable).all()).toEqual([])
+    expect(yield* consent.set({ enabled: true, noticeVersion: 1 })).toEqual({
+      enabled: true,
+      noticeVersion: 1,
+      decidedAt: 0,
+    })
+    expect(yield* consent.get()).toEqual({
+      noticeVersion: 1,
+      consent: { enabled: true, noticeVersion: 1, decidedAt: 0 },
+    })
+    expect(yield* consent.enabled()).toBe(true)
+    expect(
+      yield* WebLatency.append(database.db, [
+        { kind: "client", at: sample.at, surface: "web", metric: "transcript.load", durationMs: 10 },
+      ]),
+    ).toEqual({ accepted: 1 })
+    yield* consent.set({ enabled: false, noticeVersion: 1 })
+    expect(yield* Effect.flip(WebLatency.append(database.db, [sample]))).toBeInstanceOf(Telemetry.TelemetryDisabled)
+    expect(yield* database.db.select().from(WebLatencyTable).all()).toHaveLength(1)
+  }),
 )

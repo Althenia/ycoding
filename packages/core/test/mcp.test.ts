@@ -1,4 +1,5 @@
 import path from "node:path"
+import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { describe, expect, test } from "bun:test"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
@@ -169,8 +170,9 @@ function resourceServer(
 function resourceMcpLayer(
   server: string | typeof ConfigMCP.Server.Type,
   onFormCreated?: (form: Form.Info) => Effect.Effect<void>,
+  locationDirectory = import.meta.dir,
 ) {
-  const directory = AbsolutePath.make(import.meta.dir)
+  const directory = AbsolutePath.make(locationDirectory)
   const unusedIntegration = () => Effect.die("unused integration service")
   return MCP.layer.pipe(
     Layer.provideMerge(Form.layer),
@@ -178,7 +180,7 @@ function resourceMcpLayer(
       Layer.mergeAll(
         Layer.succeed(
           Config.Service,
-          Config.Service.of({
+          Config.Service.of({ diagnostics: () => Effect.succeed([]),
             reload: () => Effect.void,
             entries: () =>
               Effect.succeed([
@@ -216,6 +218,7 @@ function resourceMcpLayer(
         }),
         Layer.mock(Integration.Service, {
           connection: {
+            snapshot: () => Effect.die("unused Integration.snapshot"),
             active: unusedIntegration,
             resolve: unusedIntegration,
             key: unusedIntegration,
@@ -769,6 +772,49 @@ test("adds, disconnects, and reconnects MCP servers at runtime", async () => {
       }),
     ),
   )
+})
+
+test("checks local MCP working directories before spawning and connects from an existing directory", async () => {
+  await mkdir("/tmp/ycoding-mcp", { recursive: true })
+  const temporaryDirectory = await mkdtemp("/tmp/ycoding-mcp/mcp-test-")
+  const marker = path.join(temporaryDirectory, "started")
+  const serverConfig = new ConfigMCP.Local({
+    type: "local",
+    command: [process.execPath, path.join(import.meta.dir, "fixture/mcp-spawn-marker.ts")],
+    environment: { MCP_TEST_START_MARKER: marker },
+  })
+
+  try {
+    const missingDirectory = path.join(temporaryDirectory, "missing")
+    const missing = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* MCP.Service
+          yield* service.tools()
+          return yield* service.servers()
+        }).pipe(Effect.provide(resourceMcpLayer(serverConfig, undefined, missingDirectory))),
+      ),
+    )
+    expect(missing[0]?.status).toEqual({
+      status: "failed",
+      error: `Working directory does not exist: ${missingDirectory}`,
+    })
+    expect(await Bun.file(marker).exists()).toBe(false)
+
+    const existing = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* MCP.Service
+          yield* service.tools()
+          return yield* service.servers()
+        }).pipe(Effect.provide(resourceMcpLayer(serverConfig))),
+      ),
+    )
+    expect(existing[0]?.status).toEqual({ status: "connected" })
+    expect(await Bun.file(marker).text()).toBe("started")
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true })
+  }
 })
 
 test("serializes concurrent MCP lifecycle operations", async () => {

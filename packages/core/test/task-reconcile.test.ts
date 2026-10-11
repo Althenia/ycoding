@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Effect } from "effect"
+import { DateTime, Effect, Layer, Schema } from "effect"
 import { eq, inArray } from "drizzle-orm"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Database } from "@ycoding-ai/core/database/database"
@@ -17,6 +17,9 @@ import { SessionTable, SessionTaskTable } from "@ycoding-ai/core/session/sql"
 import { SessionTask } from "@ycoding-ai/core/session/task"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionStore } from "@ycoding-ai/core/session/store"
+import { SessionEvent } from "@ycoding-ai/core/session/event"
+import { SessionTaskNotificationTable } from "@ycoding-ai/core/session/sql"
+import { EventTable } from "@ycoding-ai/core/event/sql"
 import { testEffect } from "./lib/effect"
 import { rmSync } from "node:fs"
 
@@ -31,7 +34,7 @@ const staleStates = ["starting", "running", "waiting", "cancelling"] as const
 describe("SessionTask.reconcileStaleTasks", () => {
   const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node])))
 
-  it.effect("fails stale tasks and bumps parent orchestration revision idempotently", () =>
+  it.effect("records stale tasks as lost durably and reconciles only once per database", () =>
     Effect.gen(function* () {
       const db = (yield* Database.Service).db
       const parentID = SessionSchema.ID.make("ses_task_reconcile_parent")
@@ -97,7 +100,6 @@ describe("SessionTask.reconcileStaleTasks", () => {
           .pipe(Effect.orDie)
         idx++
       }
-      // terminal that should remain
       const termChild = SessionSchema.ID.make("ses_task_recon_term_completed")
       yield* db
         .insert(SessionTable)
@@ -147,22 +149,24 @@ describe("SessionTask.reconcileStaleTasks", () => {
       const afterStale = yield* db.select().from(SessionTaskTable).where(inArray(SessionTaskTable.state, [...staleStates])).all().pipe(Effect.orDie)
       expect(afterStale.length).toBe(0)
       const afterFailed = yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.state, "failed")).all().pipe(Effect.orDie)
-      // 4 stale became failed, term completed stays completed
-      expect(afterFailed.length).toBe(4)
+      expect(afterFailed.length).toBe(0)
+      const lost = yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.state, "lost")).all().pipe(Effect.orDie)
+      expect(lost.length).toBe(4)
+      const history = yield* db.select().from(EventTable).all().pipe(Effect.orDie)
+      expect(history).toHaveLength(4)
+      expect(history.every((row) => Schema.decodeUnknownSync(SessionEvent.Task.Updated.data)(row.data).change.type === "lost")).toBe(true)
       const afterParent = yield* db
         .select({ rev: SessionTable.orchestration_revision })
         .from(SessionTable)
         .where(eq(SessionTable.id, parentID))
         .get()
         .pipe(Effect.orDie)
-      expect(afterParent?.rev).toBe(6)
-      // revision incremented
-      for (const row of afterFailed) expect(row.revision).toBeGreaterThanOrEqual(1)
+      expect(afterParent?.rev).toBe(9)
+      for (const row of lost) expect(row.revision).toBeGreaterThanOrEqual(1)
       const termAfter = yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.session_id, termChild)).get().pipe(Effect.orDie)
       expect(termAfter?.state).toBe("completed")
       expect(termAfter?.revision).toBe(10)
 
-      // idempotent second run
       yield* SessionTask.reconcileStaleTasks(db)
       const secondParent = yield* db
         .select({ rev: SessionTable.orchestration_revision })
@@ -170,9 +174,8 @@ describe("SessionTask.reconcileStaleTasks", () => {
         .where(eq(SessionTable.id, parentID))
         .get()
         .pipe(Effect.orDie)
-      expect(secondParent?.rev).toBe(6)
+      expect(secondParent?.rev).toBe(9)
 
-      // AC3: new running task after reconcile stays running until next reconcile
       const newChild = SessionSchema.ID.make("ses_task_new_running")
       yield* db
         .insert(SessionTable)
@@ -200,12 +203,12 @@ describe("SessionTask.reconcileStaleTasks", () => {
         })
         .run()
         .pipe(Effect.orDie)
+      yield* SessionTask.reconcileStaleTasks(db)
       const newRow = yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.session_id, newChild)).get().pipe(Effect.orDie)
       expect(newRow?.state).toBe("running")
     }),
   )
 
-  // startup reconciliation via SessionStore layer init (simulated restart with file-backed DB)
   it.effect("startup hook reconciles stale tasks on SessionStore init", () =>
     Effect.gen(function* () {
       const tmpPath = `/tmp/ycoding-reconcile-test-${Date.now()}-${Math.random().toString(36).slice(2)}.db`
@@ -213,7 +216,6 @@ describe("SessionTask.reconcileStaleTasks", () => {
       const childID = SessionSchema.ID.make("ses_restart_child")
       const now = Date.now()
 
-      // First boot: create DB and stale task without triggering reconcile via store (use raw Database layer)
       const firstLayer = Database.layer({ path: tmpPath })
       yield* Effect.gen(function* () {
         const db = (yield* Database.Service).db
@@ -253,25 +255,68 @@ describe("SessionTask.reconcileStaleTasks", () => {
           .pipe(Effect.orDie)
       }).pipe(Effect.provide(firstLayer), Effect.scoped)
 
-      // Second boot: SessionStore init should auto-reconcile
       const secondLayer = AppNodeBuilder.build(
         LayerNode.group([Database.configured({ path: tmpPath }), EventRuntime.node, SessionProjector.node, SessionStore.node]),
       )
       yield* Effect.gen(function* () {
         const db = (yield* Database.Service).db
         const row = yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.session_id, childID)).get().pipe(Effect.orDie)
-        expect(row?.state).toBe("failed")
+        expect(row?.state).toBe("lost")
         expect(row?.revision).toBe(1)
         const parent = yield* db.select({ rev: SessionTable.orchestration_revision }).from(SessionTable).where(eq(SessionTable.id, parentID)).get().pipe(Effect.orDie)
         expect(parent?.rev).toBe(1)
       }).pipe(Effect.provide(secondLayer), Effect.scoped)
 
-      // cleanup
       try {
         rmSync(tmpPath)
         rmSync(`${tmpPath}-wal`, { force: true })
         rmSync(`${tmpPath}-shm`, { force: true })
       } catch {}
+    }),
+  )
+
+  it.effect("rebuilds the same task projection from the reconciled durable history", () =>
+    Effect.gen(function* () {
+      const db = (yield* Database.Service).db
+      const events = yield* EventRuntime.Service
+      const parentID = SessionSchema.ID.make("ses_fold_parent")
+      const childID = SessionSchema.ID.make("ses_fold_child")
+      yield* db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/tmp"), sandboxes: [] }).run().pipe(Effect.orDie)
+      for (const sessionID of [parentID, childID]) {
+        yield* events.publish(SessionEvent.Created, {
+          sessionID,
+          parentID: sessionID === childID ? parentID : undefined,
+          projectID: Project.ID.global,
+          location: { directory: AbsolutePath.make("/tmp") },
+          title: sessionID,
+          created: Date.now(),
+        })
+      }
+      yield* events.publish(SessionEvent.Task.Updated, { sessionID: childID, change: {
+        type: "launched", parentID, parentAssistantMessageID: SessionMessage.ID.make("msg_fold_parent"),
+        toolCallID: "call_fold", inputID: SessionMessage.ID.make("msg_fold_input"), description: "fold",
+        agent: Agent.ID.make("build"), model, promptDigest: "digest", background: true, delivery: "steer",
+      } })
+      yield* events.publish(SessionEvent.Task.Updated, { sessionID: childID, change: { type: "started" } })
+      yield* SessionTask.reconcileStaleTasks(db)
+      const live = yield* db.select().from(SessionTaskTable).all().pipe(Effect.orDie)
+      expect(live[0]?.state).toBe("lost")
+      const notifications = yield* db.select().from(SessionTaskNotificationTable).all().pipe(Effect.orDie)
+      const history = yield* db.select().from(EventTable).orderBy(EventTable.seq).all().pipe(Effect.orDie)
+      const replayLayer = AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node]))
+      const rebuilt = yield* Effect.gen(function* () {
+        const db = (yield* Database.Service).db
+        const events = yield* EventRuntime.Service
+        yield* db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/tmp"), sandboxes: [] }).run().pipe(Effect.orDie)
+        for (const row of history) yield* events.replay({
+          id: row.id, aggregateID: row.aggregate_id, seq: row.seq, type: row.type,
+          created: DateTime.makeUnsafe(row.created), data: row.data,
+        })
+        return { tasks: yield* db.select().from(SessionTaskTable).all().pipe(Effect.orDie),
+          notifications: yield* db.select().from(SessionTaskNotificationTable).all().pipe(Effect.orDie) }
+      }).pipe(Effect.provide(replayLayer.pipe(Layer.fresh)), Effect.scoped)
+      expect(rebuilt.tasks).toEqual(live)
+      expect(rebuilt.notifications).toEqual(notifications)
     }),
   )
 })

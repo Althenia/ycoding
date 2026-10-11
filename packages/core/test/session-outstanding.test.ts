@@ -36,6 +36,7 @@ const projects = Layer.succeed(Project.Service, Project.Service.of({
   commit: () => Effect.void,
 }))
 const executing = Session.ID.make("ses_executing")
+const location = { directory: AbsolutePath.make(process.env.YCODING_TEST_XDG_ROOT!) }
 const execution = Layer.succeed(SessionExecution.Service, SessionExecution.Service.of({
   active: Effect.succeed(new Set([executing])),
   resume: () => Effect.void,
@@ -54,7 +55,6 @@ it.effect("derives outstanding Sessions from pending input, active goal, tasks, 
     const jobs = yield* Job.Service
     const events = yield* EventRuntime.Service
     const db = (yield* Database.Service).db
-    const location = { directory: AbsolutePath.make("/project") }
     const pending = Session.ID.make("ses_pending")
     const goal = Session.ID.make("ses_goal")
     const parent = Session.ID.make("ses_parent")
@@ -94,7 +94,7 @@ it.effect("derives outstanding Sessions from pending input, active goal, tasks, 
 it.effect("reports no lost shell notices for a fresh Session", () =>
   Effect.gen(function* () {
     const sessions = yield* Session.Service
-    yield* sessions.create({ id: Session.ID.make("ses_fresh_shell"), location: { directory: AbsolutePath.make("/project") } })
+    yield* sessions.create({ id: Session.ID.make("ses_fresh_shell"), location })
     expect([...(yield* sessions.outstanding()).lost]).toEqual([])
   }),
 )
@@ -106,7 +106,7 @@ it.effect("a lost notice is cleared by the next execution even in the same milli
     const appProcess = yield* AppProcess.Service
     const db = (yield* Database.Service).db
     const sessionID = Session.ID.make("ses_same_millisecond")
-    yield* sessions.create({ id: sessionID, location: { directory: AbsolutePath.make("/project") } })
+    yield* sessions.create({ id: sessionID, location })
     yield* events.publish(SessionEvent.Execution.Started, { sessionID })
     const id = ShellSchema.ID.create()
     yield* ShellLedger.record(db, { id, pid: 2_000_000_000,
@@ -127,7 +127,7 @@ for (const terminal of ["completed", "cancelled", "timeout"] as const) {
       const jobs = yield* Job.Service
       const parent = Session.ID.make("ses_shell_parent")
       const child = Session.ID.make("ses_shell_child")
-      yield* sessions.create({ id: parent, location: { directory: AbsolutePath.make("/project") } })
+      yield* sessions.create({ id: parent, location })
       yield* sessions.create({ id: child, parentID: parent })
       const release = yield* Deferred.make<void>()
       const run = Deferred.await(release).pipe(Effect.as("done"))
@@ -158,7 +158,7 @@ it.effect("does not count nonshell jobs or malformed shell owners as running", (
     const sessions = yield* Session.Service
     const jobs = yield* Job.Service
     const owner = Session.ID.make("ses_other_job")
-    yield* sessions.create({ id: owner, location: { directory: AbsolutePath.make("/project") } })
+    yield* sessions.create({ id: owner, location })
     const release = yield* Deferred.make<void>()
     for (const input of [
       { type: "verification", metadata: { sessionID: owner } },
@@ -181,7 +181,7 @@ it.effect("rehydrates a failed family until any member starts a later execution"
     const events = yield* EventRuntime.Service
     const parent = Session.ID.make("ses_failed_parent")
     const child = Session.ID.make("ses_failed_child")
-    yield* sessions.create({ id: parent, location: { directory: AbsolutePath.make("/project") } })
+    yield* sessions.create({ id: parent, location })
     yield* sessions.create({ id: child, parentID: parent })
     yield* events.publish(SessionEvent.Execution.Failed, { sessionID: child, error: { type: "unknown", message: "failed" } })
     expect([...(yield* sessions.outstanding(true)).failed]).toEqual([parent])
@@ -196,7 +196,6 @@ it.effect("settles an execution that never reached a terminal event as failed, o
     const events = yield* EventRuntime.Service
     const db = (yield* Database.Service).db
     const store = yield* SessionStore.Service
-    const location = { directory: AbsolutePath.make("/project") }
     const model = { id: CatalogModel.ID.make("model"), providerID: Provider.ID.make("provider") }
     const tokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
     const killedParent = Session.ID.make("ses_killed_parent")

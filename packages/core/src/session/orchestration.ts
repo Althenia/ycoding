@@ -60,6 +60,9 @@ const taskPriority = sql<number>`case ${SessionTaskTable.state}
   when 'cancelling' then 3
   else 4
 end`
+const pinPriority = sql<number>`case when ${SessionTable.time_pinned} is null then 1 else 0 end`
+const orderedTaskPriority = sql<number>`case when ${SessionTable.time_pinned} is null then ${taskPriority} else 0 end`
+const orderedUpdated = sql<number>`case when ${SessionTable.time_pinned} is null then ${SessionTaskTable.time_updated} else 0 end`
 
 export type Page = {
   readonly data: ReadonlyArray<Task>
@@ -105,47 +108,38 @@ export const page = Effect.fn("SessionOrchestration.page")(function* (
         const cursor = input.cursor
         const previous = cursor?.direction === "previous"
         const boundary = cursor
-          ? previous
-            ? or(
-                lt(taskPriority, cursor.rank),
-                and(eq(taskPriority, cursor.rank), gt(SessionTaskTable.time_updated, cursor.updated)),
-                and(
-                  eq(taskPriority, cursor.rank),
-                  eq(SessionTaskTable.time_updated, cursor.updated),
-                  lt(SessionTaskTable.session_id, cursor.sessionID),
-                ),
-              )
-            : or(
-                gt(taskPriority, cursor.rank),
-                and(eq(taskPriority, cursor.rank), lt(SessionTaskTable.time_updated, cursor.updated)),
-                and(
-                  eq(taskPriority, cursor.rank),
-                  eq(SessionTaskTable.time_updated, cursor.updated),
-                  gt(SessionTaskTable.session_id, cursor.sessionID),
-                ),
-              )
+          ? cursor.rank === 5
+            ? previous
+              ? and(eq(pinPriority, 0), or(lt(SessionTable.time_pinned, cursor.updated), and(eq(SessionTable.time_pinned, cursor.updated), lt(SessionTaskTable.session_id, cursor.sessionID))))
+              : or(eq(pinPriority, 1), and(eq(pinPriority, 0), or(gt(SessionTable.time_pinned, cursor.updated), and(eq(SessionTable.time_pinned, cursor.updated), gt(SessionTaskTable.session_id, cursor.sessionID)))))
+            : previous
+              ? or(eq(pinPriority, 0), and(eq(pinPriority, 1), or(lt(taskPriority, cursor.rank), and(eq(taskPriority, cursor.rank), gt(SessionTaskTable.time_updated, cursor.updated)), and(eq(taskPriority, cursor.rank), eq(SessionTaskTable.time_updated, cursor.updated), lt(SessionTaskTable.session_id, cursor.sessionID)))))
+              : and(eq(pinPriority, 1), or(gt(taskPriority, cursor.rank), and(eq(taskPriority, cursor.rank), lt(SessionTaskTable.time_updated, cursor.updated)), and(eq(taskPriority, cursor.rank), eq(SessionTaskTable.time_updated, cursor.updated), gt(SessionTaskTable.session_id, cursor.sessionID))))
           : undefined
         const rows = yield* db
-          .select()
+          .select({ task: SessionTaskTable, pinnedAt: SessionTable.time_pinned })
           .from(SessionTaskTable)
+          .innerJoin(SessionTable, eq(SessionTable.id, SessionTaskTable.session_id))
           .where(and(eq(SessionTaskTable.parent_id, input.parentID), boundary))
           .orderBy(
-            previous ? desc(taskPriority) : asc(taskPriority),
-            previous ? asc(SessionTaskTable.time_updated) : desc(SessionTaskTable.time_updated),
+            previous ? desc(pinPriority) : asc(pinPriority),
+            previous ? desc(SessionTable.time_pinned) : asc(SessionTable.time_pinned),
+            previous ? desc(orderedTaskPriority) : asc(orderedTaskPriority),
+            previous ? asc(orderedUpdated) : desc(orderedUpdated),
             previous ? desc(SessionTaskTable.session_id) : asc(SessionTaskTable.session_id),
           )
           .limit(limit + 1)
           .all()
           .pipe(Effect.orDie)
         const hasMore = rows.length > limit
-        const data = (previous ? rows.slice(0, limit).toReversed() : rows.slice(0, limit)).map(taskFromRow)
+        const data = (previous ? rows.slice(0, limit).toReversed() : rows.slice(0, limit)).map((row) => ({ ...taskFromRow(row.task), pinnedAt: row.pinnedAt ?? undefined }))
         const first = data[0]
         const last = data.at(-1)
         const previousCursor =
           first && (previous ? hasMore : cursor !== undefined)
             ? ListAnchor.make({
-                rank: taskRank(first.state),
-                updated: first.time.updated,
+                rank: first.pinnedAt === undefined ? taskRank(first.state) : 5,
+                updated: first.pinnedAt ?? first.time.updated,
                 sessionID: first.sessionID,
                 direction: "previous",
               })
@@ -153,8 +147,8 @@ export const page = Effect.fn("SessionOrchestration.page")(function* (
         const nextCursor =
           last && (previous ? cursor !== undefined : hasMore)
             ? ListAnchor.make({
-                rank: taskRank(last.state),
-                updated: last.time.updated,
+                rank: last.pinnedAt === undefined ? taskRank(last.state) : 5,
+                updated: last.pinnedAt ?? last.time.updated,
                 sessionID: last.sessionID,
                 direction: "next",
               })
@@ -275,7 +269,10 @@ export const preflight = Effect.fn("SessionOrchestration.preflight")(function* (
   if (!caller) return yield* new InvalidRequestError({ message: "Parent agent is unavailable" })
   const models = yield* SessionRunnerModel.Service
   const resolved = yield* models
-    .resolve({ ...parent, model: selectModel(input.model, target.model, parent.model) })
+    .resolve(
+      { ...parent, model: selectModel(input.model, target.model, parent.model) },
+      { rebind: input.model?.profile !== undefined || target.model?.profile !== undefined },
+    )
     .pipe(Effect.mapError((error) => new InvalidRequestError({ message: error.message })))
   return { target, caller, resolved }
 })
@@ -426,7 +423,11 @@ const layer = Layer.effect(
         return taskFromRow(yield* owned(parentID, childID))
       }),
       launch: Effect.fn("SessionOrchestration.launch")((input) => {
-        const ids = SessionOrchestrationIdentity.launch(input.parentID, input.parentAssistantMessageID, input.toolCallID)
+        const ids = SessionOrchestrationIdentity.launch(
+          input.parentID,
+          input.parentAssistantMessageID,
+          input.toolCallID,
+        )
         return locks.withLock(ids.childID)(
           Effect.gen(function* () {
             const parent = yield* sessions.get(input.parentID)
@@ -456,6 +457,7 @@ const layer = Layer.effect(
                 existing.model.providerID === prepared.resolved.ref.providerID &&
                 existing.model.id === prepared.resolved.ref.id &&
                 existing.model.variant === prepared.resolved.ref.variant &&
+                existing.model.profile === prepared.resolved.ref.profile &&
                 existing.prompt_digest === promptDigest &&
                 existing.background === input.background &&
                 existing.delivery === "steer"
@@ -465,19 +467,20 @@ const layer = Layer.effect(
               }
               return yield* new ConflictError({ message: `Conflicting launch retry for ${ids.childID}` })
             }
-            yield* sessions.create({
-              id: ids.childID,
-              parentID: input.parentID,
-              title: input.description,
-              agent: prepared.target.id,
-              model: prepared.resolved.ref,
-              permissionCeiling: SessionPermissionCeiling.inherit(
-                parent.permissionCeiling,
-                prepared.caller.permissions,
-              ),
-            }).pipe(Effect.catchTag("Session.AgentNotSelectableError", (error) =>
-              Effect.fail(new InvalidRequestError({ message: error.message })),
-            ))
+            yield* sessions
+              .create({
+                id: ids.childID,
+                parentID: input.parentID,
+                title: input.description,
+                agent: prepared.target.id,
+                model: prepared.resolved.ref,
+                profileBinding: prepared.resolved.profileBinding,
+                permissionCeiling: SessionPermissionCeiling.inherit(
+                  parent.permissionCeiling,
+                  prepared.caller.permissions,
+                ),
+              })
+              .pipe(Effect.mapError((error) => new InvalidRequestError({ message: error.message })))
             yield* publish(
               ids.childID,
               {
@@ -566,9 +569,11 @@ const layer = Layer.effect(
               return yield* new ConflictError({ message: `Question ${input.questionID} is not open` })
             if (input.text === undefined && input.data === undefined)
               return yield* new InvalidRequestError({ message: "An answer requires text or data" })
-            const id = SessionOrchestrationIdentity.launch(row.parent_id, row.parent_assistant_message_id, row.tool_call_id).answer(
-              input.questionID,
-            )
+            const id = SessionOrchestrationIdentity.launch(
+              row.parent_id,
+              row.parent_assistant_message_id,
+              row.tool_call_id,
+            ).answer(input.questionID)
             yield* sessions
               .synthetic({
                 id,
@@ -662,10 +667,16 @@ const layer = Layer.effect(
               data,
               time: Date.now(),
             })
-            if (yield* autonomy.canAutoAnswer(childID).pipe(Effect.mapError(() => new TaskNotFoundError({ childID })))) {
+            if (
+              yield* autonomy.canAutoAnswer(childID).pipe(Effect.mapError(() => new TaskNotFoundError({ childID })))
+            ) {
               yield* sessions
                 .synthetic({
-                  id: SessionOrchestrationIdentity.launch(row.parent_id, row.parent_assistant_message_id, row.tool_call_id).answer(question.id),
+                  id: SessionOrchestrationIdentity.launch(
+                    row.parent_id,
+                    row.parent_assistant_message_id,
+                    row.tool_call_id,
+                  ).answer(question.id),
                   sessionID: childID,
                   text: `Parent answer:\n${JSON.stringify({
                     questionID: question.id,

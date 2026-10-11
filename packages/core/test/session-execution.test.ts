@@ -1,11 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { LLMClient, LLMError, TransportReason } from "@ycoding-ai/ai"
-import { llmClient } from "@ycoding-ai/core/effect/app-node-platform"
-import { Decision } from "@ycoding-ai/core/decision"
-import { ConfigDecisions } from "@ycoding-ai/core/config/decisions"
-import { Config } from "@ycoding-ai/core/config"
-import { SessionHelperPolicy, localTitle } from "@ycoding-ai/core/session/helper-policy"
-import { SessionProviderRequest } from "@ycoding-ai/core/session/provider-request"
+import { LLMError, TransportReason } from "@ycoding-ai/ai"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
@@ -42,7 +36,7 @@ import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
 import { Shell } from "@ycoding-ai/core/shell"
 import { ID, Info } from "@ycoding-ai/schema/shell"
-import { Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, LayerMap, Logger, Schema, Scope, Stream } from "effect"
+import { Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, LayerMap, Logger, Schema, Scope } from "effect"
 import { eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
@@ -51,69 +45,44 @@ const completionIt = testEffect(AppNodeBuilder.build(LayerNode.group([
   AppProcess.node, Database.node, EventRuntime.node, SessionStore.node, SessionProjector.node, Job.node,
 ])))
 
-const decisionIt = testEffect(AppNodeBuilder.build(LayerNode.group([
-  AppProcess.node, Database.node, EventRuntime.node, SessionStore.node, Job.node, SessionGoal.node,
-  Agent.node, Config.node, SessionHelperPolicy.node, SessionProviderRequest.node, llmClient,
-]), [
-  [Config.node, Layer.mock(Config.Service)({ entries: () => Effect.succeed([]) })],
-  [SessionHelperPolicy.node, Layer.mock(SessionHelperPolicy.Service)({ settings: { titleMode: "local", models: {} }, localTitle, resolveModel: () => Effect.die("configured continuation must not resolve a text model") })],
-  [llmClient, Layer.mock(LLMClient.Service)({ stream: () => Stream.die("configured continuation must not generate text") })],
-  [Decision.node, Layer.mock(Decision.Service)({
-    settings: () => Effect.succeed(new ConfigDecisions.Info({ goal: new ConfigDecisions.Policy({ provider: "openai", min_probability: 0.8 }) })),
-    choose: () => Effect.die("provide decision boundary per test"),
-  })],
-]))
-
-function configuredGoals(choose: Decision.Interface["choose"]) {
-  return SessionGoal.layer().pipe(
-    Layer.provide(Layer.succeed(Decision.Service, Decision.Service.of({
-      settings: () => Effect.succeed(new ConfigDecisions.Info({ goal: new ConfigDecisions.Policy({ provider: "openai", min_probability: 0.8 }) })),
-      evaluate: () => Effect.die("unused"),
-      choose,
-    }))),
-    Layer.build,
-    Effect.map((context) => Context.get(context, SessionGoal.Service)),
-  )
+function configuredGoals(continuation: SessionGoal.Interface["continuation"]) {
+  return Effect.succeed(SessionGoal.Service.of({
+    continuation, synthesize: () => Effect.die("unused"), steer: () => Effect.die("unused"),
+  }))
 }
 
-for (const scenario of [
-  { result: { choice: "stop", probability: 0.8, refused: false }, stopped: true },
-  { result: { choice: "stop", probability: 0.79, refused: false }, stopped: false },
-  { result: { choice: "stop", probability: 1, refused: true }, stopped: false },
-  { result: { choice: "continue", probability: 1, refused: false }, stopped: false },
-  { result: { choice: "stop", refused: false }, stopped: false },
-  { result: { refused: false }, stopped: false },
-] as const) {
-  decisionIt.effect(`configured goal continuation applies ${JSON.stringify(scenario.result)} through durable execution`, () =>
+  completionIt.effect("goal text continuation advances durable execution until an explicit stop", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
+      const events = yield* EventRuntime.Service
       const sessionID = Session.ID.make("ses_decision_flow")
       yield* seedSessions(database, [sessionID])
       const autonomy = SessionAutonomy.make({ db: database.db })
       yield* autonomy.setGoal({ sessionID, text: "Ship the fix" })
       yield* autonomy.report({ sessionID })
-      const calls: Decision.ChoiceInput[] = []
-      const goals = yield* configuredGoals((input) => Effect.sync(() => { calls.push(input); return scenario.result }))
+      const calls: Parameters<SessionGoal.Interface["continuation"]>[0][] = []
+      const goals = yield* configuredGoals((input) => Effect.sync(() => { calls.push(input); return { action: "continue", steer: "Inspect the next failure." } }))
       let drains = 0
       const scope = yield* Scope.make()
       const context = yield* buildExecution(scope, () => Effect.gen(function* () {
         drains += 1
-        yield* recordAssistant(database, sessionID, drains, [{ type: "text", text: "Verified focused tests." }])
+        yield* completionExchange(database, events, sessionID, {
+          declaration: false,
+          text: "Verified focused tests.",
+          suffix: `_decision_${drains}`,
+        })
         if (drains > 1) yield* autonomy.stop(sessionID).pipe(Effect.orDie)
       }), undefined, undefined, undefined, undefined, undefined, goals)
       const execution = Context.get(context, SessionExecution.Service)
       yield* execution.resume(sessionID)
       yield* execution.awaitIdle(sessionID)
-      expect(drains).toBe(scenario.stopped ? 1 : 2)
+      expect(drains).toBe(2)
       expect(yield* autonomy.get(sessionID)).toMatchObject({ goal: {
-        text: "Ship the fix", status: "stopped", iteration: scenario.stopped ? 0 : 1, noProgress: 1,
+        text: "Ship the fix", status: "stopped", iteration: 1, noProgress: 1,
       } })
-      expect(yield* admittedInputTexts(database)).toEqual(scenario.stopped ? [] : [
-        "Active goal: Ship the fix\nCurrent iteration: 0\nLatest assistant response: Verified focused tests.\nContinue toward the unchanged active goal; preserve its objective.",
-      ])
+      expect(yield* admittedInputTexts(database)).toEqual(["Inspect the next failure."])
       expect(calls).toHaveLength(1)
-      expect(calls[0]?.state).toEqual({ objective: "Ship the fix", iteration: 0, latestAssistantText: "Verified focused tests." })
-      expect(Object.keys(calls[0].choices)).toEqual(["continue", "stop"])
+      expect(calls[0]).toMatchObject({ goal: { text: "Ship the fix", iteration: 0 }, latestAssistantText: "Verified focused tests." })
       const history = yield* database.db.select().from(EventTable).all().pipe(Effect.orDie)
       expect(history.filter((row) => row.type === "session.work.completed.1")).toEqual([])
       const pending = yield* database.db.select().from(SessionPendingTable).where(eq(SessionPendingTable.session_id, sessionID)).all().pipe(Effect.orDie)
@@ -121,10 +90,9 @@ for (const scenario of [
       yield* Scope.close(scope, Exit.void)
     }),
   )
-}
 
 for (const change of ["stop", "replace", "resume"] as const) {
-  decisionIt.effect(`fences a pending stop decision after user ${change}`, () => Effect.gen(function* () {
+  completionIt.effect(`fences a pending text steer after user ${change}`, () => Effect.gen(function* () {
     const database = yield* Database.Service
     const sessionID = Session.ID.make("ses_decision_stale")
     yield* seedSessions(database, [sessionID])
@@ -133,7 +101,7 @@ for (const change of ["stop", "replace", "resume"] as const) {
     const entered = yield* Deferred.make<void>()
     const release = yield* Deferred.make<void>()
     const goals = yield* configuredGoals(() => Deferred.succeed(entered, undefined).pipe(
-      Effect.andThen(Deferred.await(release)), Effect.as({ choice: "stop", probability: 1, refused: false }),
+      Effect.andThen(Deferred.await(release)), Effect.as({ action: "continue" as const, steer: "Inspect the failure." }),
     ))
     const scope = yield* Scope.make()
     const context = yield* buildExecution(scope, () => Effect.void, undefined, undefined, undefined, undefined, undefined, goals)
@@ -156,7 +124,7 @@ for (const change of ["stop", "replace", "resume"] as const) {
   }))
 }
 
-decisionIt.effect("halts continuation on decision provider error without spending budget or claiming completion", () => Effect.gen(function* () {
+completionIt.effect("halts continuation on goal helper error without spending budget or claiming completion", () => Effect.gen(function* () {
   const database = yield* Database.Service
   const sessionID = Session.ID.make("ses_decision_error")
   yield* seedSessions(database, [sessionID])
@@ -164,7 +132,7 @@ decisionIt.effect("halts continuation on decision provider error without spendin
   yield* autonomy.setGoal({ sessionID, text: "Ship the fix" })
   let calls = 0
   const goals = yield* configuredGoals(() => Effect.sync(() => { calls += 1 }).pipe(
-    Effect.andThen(Effect.fail(new Decision.Error({ reason: "provider-failed" }))),
+    Effect.andThen(Effect.fail(new SessionGoal.Error({ code: "goal.calculation_failed" }))),
   ))
   const store = yield* SessionStore.Service
   const session = yield* store.get(sessionID).pipe(Effect.flatMap((value) => value ? Effect.succeed(value) : Effect.die("missing session")))
@@ -185,7 +153,7 @@ decisionIt.effect("halts continuation on decision provider error without spendin
 }))
 
 for (const blocker of ["child", "shell", "exhausted"] as const) {
-  decisionIt.effect(`does not call the decision provider while ${blocker} blocks continuation`, () => Effect.gen(function* () {
+  completionIt.effect(`does not generate a steer while ${blocker} blocks continuation`, () => Effect.gen(function* () {
     const database = yield* Database.Service
     const sessionID = Session.ID.make("ses_decision_blocked")
     const childID = Session.ID.make("ses_decision_child")
@@ -195,7 +163,7 @@ for (const blocker of ["child", "shell", "exhausted"] as const) {
     if (blocker === "exhausted") yield* autonomy.report({ sessionID })
     if (blocker === "child") yield* seedTask(database, { parentID: sessionID, childID, state: "running" })
     let calls = 0
-    const goals = yield* configuredGoals(() => Effect.sync(() => { calls += 1; return { choice: "stop", probability: 1, refused: false } }))
+    const goals = yield* configuredGoals(() => Effect.sync(() => { calls += 1; return { action: "continue", steer: "Inspect the failure." } }))
     const scope = yield* Scope.make()
     const context = yield* buildExecution(scope, () => Effect.void, undefined, undefined, () => Effect.succeed(blocker === "shell" ? [Info.make({
       id: ID.make("sh_decision"), status: "running", command: "work", cwd: "/project", shell: "/bin/sh", file: "/tmp/decision.log", metadata: { sessionID }, time: { started: 1 },
@@ -771,7 +739,7 @@ describe("SessionExecution lifecycle", () => {
     }),
   )
 
-  it.effect("durably stops a goal at idle without admitting a continuation or claiming completion", () =>
+  it.effect("an explicit stop prevents idle continuation without claiming completion", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
       const sessionID = Session.ID.make("ses_goal_decision_stop")
@@ -783,7 +751,8 @@ describe("SessionExecution lifecycle", () => {
       const context = yield* buildExecution(scope, () => Effect.gen(function* () {
         drains += 1
         if (drains > 1) yield* autonomy.stop(sessionID).pipe(Effect.orDie)
-      }), undefined, undefined, undefined, undefined, () => Effect.succeed({ action: "stop" }))
+        yield* autonomy.stop(sessionID).pipe(Effect.orDie)
+      }))
       const execution = Context.get(context, SessionExecution.Service)
       yield* execution.resume(sessionID)
       yield* execution.awaitIdle(sessionID)

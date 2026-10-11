@@ -22,6 +22,8 @@ export type StrategyID = typeof StrategyID.Type
 export const CreateInput = ProjectCopy.CreateInput
 export type CreateInput = typeof CreateInput.Type
 
+export type CreateOptions = CreateInput & { readonly branch?: string }
+
 export const RemoveInput = ProjectCopy.RemoveInput
 export type RemoveInput = typeof RemoveInput.Type
 
@@ -88,6 +90,7 @@ export interface Strategy {
   readonly create: (input: {
     sourceDirectory: AbsolutePath
     directory: AbsolutePath
+    branch?: string
   }) => Effect.Effect<Copy, Git.WorktreeError | DirectoryUnavailableError>
   readonly remove: (input: {
     directory: AbsolutePath
@@ -100,7 +103,7 @@ export { Event }
 
 export interface Interface {
   readonly register: (strategy: Strategy) => Effect.Effect<void, DuplicateStrategyError>
-  readonly create: (input: CreateInput) => Effect.Effect<Copy, Error>
+  readonly create: (input: CreateOptions) => Effect.Effect<Copy, Error>
   readonly remove: (input: RemoveInput) => Effect.Effect<void, Error>
   readonly refresh: (input: RefreshInput) => Effect.Effect<RefreshResult, Error>
 }
@@ -169,7 +172,7 @@ const layer = Layer.effect(
       return found
     })
 
-    const create = Effect.fn("ProjectCopy.create")(function* (input: CreateInput) {
+    const create = Effect.fn("ProjectCopy.create")(function* (input: CreateOptions) {
       const selected = yield* getStrategy(input.strategy)
       const sourceDirectory = yield* source(input.sourceDirectory, input.projectID)
       yield* fs.makeDirectory(input.directory, { recursive: true }).pipe(Effect.orDie)
@@ -177,6 +180,7 @@ const layer = Layer.effect(
       let suffix = 1
       let copyDirectory = AbsolutePath.make(path.join(input.directory, name))
       while (yield* fs.existsSafe(copyDirectory)) {
+        if (input.branch !== undefined) return yield* new DestinationExistsError({ directory: copyDirectory })
         suffix++
         if (suffix > 10) return yield* new DestinationExistsError({ directory: copyDirectory })
         copyDirectory = AbsolutePath.make(path.join(input.directory, `${name}-${suffix}`))
@@ -185,6 +189,7 @@ const layer = Layer.effect(
       const result = yield* selected.create({
         directory: copyDirectory,
         sourceDirectory,
+        branch: input.branch,
       })
       yield* changed(
         input.projectID,

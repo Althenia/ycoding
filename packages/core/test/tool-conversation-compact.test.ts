@@ -23,7 +23,7 @@ const it = testEffect(PluginTestLayer)
 const providerID = Provider.ID.make("advisor-test")
 const modelID = CatalogModel.ID.make("advisor-test")
 const advisorSessionID = SessionSchema.ID.make("ses_conversation_compact_advisor")
-const advisorConfig = Config.Service.of({
+const advisorConfig = Config.Service.of({ diagnostics: () => Effect.succeed([]),
   reload: () => Effect.void,
   entries: () =>
     Effect.succeed([

@@ -18,7 +18,9 @@ import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(
-  AppNodeBuilder.build(LayerNode.group([ProjectCopy.node, Database.node, EventRuntime.node, ProjectDirectories.node])),
+  AppNodeBuilder.build(
+    LayerNode.group([ProjectCopy.node, Database.node, EventRuntime.node, ProjectDirectories.node, Git.node]),
+  ),
 )
 
 function abs(input: string) {
@@ -136,6 +138,10 @@ describe("ProjectCopy", () => {
         name: "copy",
       })
       expect(created.directory).toBe(target)
+      const git = yield* Git.Service
+      const createdRepository = yield* git.repo.discover(created.directory)
+      expect(createdRepository).toBeDefined()
+      if (createdRepository) expect(yield* git.history.branch(createdRepository)).toBeUndefined()
       expect(yield* stored(input.projectID)).toEqual(
         [
           { directory: input.sourceDirectory, strategy: null },
@@ -148,6 +154,30 @@ describe("ProjectCopy", () => {
 
       expect(yield* stored(input.projectID)).toEqual([{ directory: input.sourceDirectory, strategy: null }])
       expect(yield* Effect.promise(() => Bun.file(target).exists())).toBe(false)
+    }),
+  )
+
+  it.live("creates a named branch when the internal branch option is supplied", () =>
+    Effect.gen(function* () {
+      const input = yield* setup()
+      const copy = yield* ProjectCopy.Service
+      const git = yield* Git.Service
+      const parent = abs(path.join(input.root.path, "..", "named-copy"))
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() => fs.rm(parent, { recursive: true, force: true })).pipe(Effect.ignore),
+      )
+      const created = yield* copy.create({
+        projectID: input.projectID,
+        strategy: gitWorktree,
+        sourceDirectory: input.sourceDirectory,
+        directory: parent,
+        name: "feature-one",
+        branch: "feature-one",
+      })
+      const createdRepository = yield* git.repo.discover(created.directory)
+      expect(createdRepository).toBeDefined()
+      if (createdRepository) expect(yield* git.history.branch(createdRepository)).toBe("feature-one")
+      yield* copy.remove({ projectID: input.projectID, directory: created.directory, force: false })
     }),
   )
 

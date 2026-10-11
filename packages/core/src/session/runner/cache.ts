@@ -17,6 +17,7 @@ export interface PromptCacheNamespaceInput {
   readonly providerID: string
   readonly modelID: string
   readonly variant?: string
+  readonly accountIdentityDigest?: string
   readonly policyRevision: string
   readonly permissions: Permission.Ruleset
   readonly system: LLMRequest["system"]
@@ -37,15 +38,19 @@ export const systemDigest = (system: LLMRequest["system"]): string =>
 const decodeSchema = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)))
 
 export const canonicalTools = (tools: LLMRequest["tools"]): LLMRequest["tools"] =>
-  tools.map((tool) => ToolDefinition.make({
-    name: tool.name,
-    description: tool.description,
-    inputSchema: decodeSchema(canonicalJson(tool.inputSchema)),
-    ...(tool.outputSchema === undefined ? {} : { outputSchema: decodeSchema(canonicalJson(tool.outputSchema)) }),
-    ...(tool.cache === undefined ? {} : { cache: tool.cache }),
-    ...(tool.metadata === undefined ? {} : { metadata: tool.metadata }),
-    ...(tool.native === undefined ? {} : { native: decodeSchema(canonicalJson(tool.native)) }),
-  })).toSorted((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0))
+  tools
+    .map((tool) =>
+      ToolDefinition.make({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: decodeSchema(canonicalJson(tool.inputSchema)),
+        ...(tool.outputSchema === undefined ? {} : { outputSchema: decodeSchema(canonicalJson(tool.outputSchema)) }),
+        ...(tool.cache === undefined ? {} : { cache: tool.cache }),
+        ...(tool.metadata === undefined ? {} : { metadata: tool.metadata }),
+        ...(tool.native === undefined ? {} : { native: decodeSchema(canonicalJson(tool.native)) }),
+      }),
+    )
+    .toSorted((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0))
 
 export const toolDigest = (tools: LLMRequest["tools"]): string =>
   Hash.sha256(
@@ -107,6 +112,7 @@ export const promptCacheNamespace = (
       providerID: input.providerID,
       modelID: input.modelID,
       variant: input.variant,
+      accountIdentityDigest: input.accountIdentityDigest,
       policyRevision: input.policyRevision,
       permissions: input.permissions.map((rule) => ({
         action: rule.action,
@@ -209,8 +215,16 @@ const PROFILE_GATED_ANTHROPIC_CACHE_ROUTES = new Set([
   "ai-sdk:@openrouter/ai-sdk-provider",
 ])
 
-export const providerOptions = (input: ProviderOptionsInput, now = Date.now()) => {
-  const baselineKey = promptCacheNamespace(input, now)
+export const providerOptions = (
+  input: ProviderOptionsInput,
+  now = Date.now(),
+  prepared = {
+    promptCacheKey: promptCacheNamespace(input, now),
+    systemDigest: systemDigest(input.system),
+    toolDigest: toolDigest(input.tools),
+  },
+) => {
+  const baselineKey = prepared.promptCacheKey
   const wirePromptCacheKey = supportsPromptCacheKey(input.routeID)
     ? promptCacheKeyForGeneration(input.sessionID, baselineKey, input.generation)
     : baselineKey
@@ -272,16 +286,16 @@ export const providerOptions = (input: ProviderOptionsInput, now = Date.now()) =
     : copilotClaudeChat
       ? { tools: false, system: true, messages: { tail: 2 } }
       : input.anthropicTtlSeconds !== undefined &&
-        ANTHROPIC_CACHE_ROUTES.has(input.routeID) &&
-        (!PROFILE_GATED_ANTHROPIC_CACHE_ROUTES.has(input.routeID) ||
-          cacheProfile(input.apiModelID)?.extendedTtl === true)
-      ? { tools: true, system: true, messages: { tail: 2 }, ttlSeconds: input.anthropicTtlSeconds }
-      : undefined
+          ANTHROPIC_CACHE_ROUTES.has(input.routeID) &&
+          (!PROFILE_GATED_ANTHROPIC_CACHE_ROUTES.has(input.routeID) ||
+            cacheProfile(input.apiModelID)?.extendedTtl === true)
+        ? { tools: true, system: true, messages: { tail: 2 }, ttlSeconds: input.anthropicTtlSeconds }
+        : undefined
   return {
     promptCacheKey: baselineKey,
     wirePromptCacheKey,
-    systemDigest: systemDigest(input.system),
-    toolDigest: toolDigest(input.tools),
+    systemDigest: prepared.systemDigest,
+    toolDigest: prepared.toolDigest,
     providerOptions: { openai, openrouter },
     ...(cache === undefined ? {} : { cache }),
   }

@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Effect } from "effect"
+import { Cause, Effect, Exit } from "effect"
 import { eq } from "drizzle-orm"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Database } from "@ycoding-ai/core/database/database"
@@ -201,6 +201,29 @@ describe("Session orchestration projection", () => {
     }),
   )
 
+  it.effect("rolls back a conflicting completion without poisoning later task publications", () =>
+    Effect.gen(function* () {
+      yield* seed
+      yield* launch()
+      yield* update({ type: "started" })
+      const db = (yield* Database.Service).db
+      const events = yield* EventRuntime.Service
+      const sequences = yield* events.sequences([childID])
+      yield* db.update(SessionTaskTable).set({ state: "failed", revision: 2 }).where(eq(SessionTaskTable.session_id, childID)).run()
+      const completion = yield* Effect.exit(update({ type: "completed", excerpt: "done" }))
+      expect(Exit.isFailure(completion)).toBe(true)
+      if (Exit.isFailure(completion)) {
+        expect(Cause.prettyErrors(completion.cause).some((error) => error.message.includes("Invalid completed transition from failed"))).toBe(true)
+      }
+      expect(yield* events.sequences([childID])).toEqual(sequences)
+      expect(yield* db.select().from(SessionTaskNotificationTable).all()).toEqual([])
+      yield* update({ type: "started" })
+      yield* update({ type: "completed", excerpt: "reactivated" })
+      expect(yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.session_id, childID)).get()).toMatchObject({ state: "completed" })
+      expect(yield* db.select().from(SessionTaskNotificationTable).all()).toHaveLength(1)
+    }),
+  )
+
   it.effect("reactivates every terminal task and clears stale execution state", () =>
     Effect.gen(function* () {
       yield* seed
@@ -338,12 +361,13 @@ describe("Session orchestration helpers", () => {
         .insert(SessionTable)
         .values([
           { id: pageParentID, project_id: Project.ID.global, directory: "/page", title: "parent" },
-          ...rows.map(([id]) => ({
+          ...rows.map(([id], index) => ({
             id: SessionSchema.ID.make(id),
             project_id: Project.ID.global,
             parent_id: pageParentID,
             directory: "/page",
             title: id,
+            time_pinned: index < 11 ? 50 + index : null,
           })),
         ])
         .run()
@@ -376,8 +400,8 @@ describe("Session orchestration helpers", () => {
       expect(first.data).toHaveLength(10)
       expect(first.data.map((task) => task.sessionID)).toEqual(
         [
-          "ses_wait_a",
           "ses_wait_b",
+          "ses_wait_a",
           "ses_start",
           "ses_run",
           "ses_cancel",
@@ -388,6 +412,8 @@ describe("Session orchestration helpers", () => {
           "ses_terminal_3",
         ].map((id) => SessionSchema.ID.make(id)),
       )
+      expect(first.data.map((task) => task.pinnedAt)).toEqual([50, 51, 52, 53, 54, 55, 56, 57, 58, 59])
+      expect(first.cursor.next).toMatchObject({ rank: 5, updated: 59 })
       expect(first.summary).toEqual({ total: 12, active: 5, running: 1, waiting: 2 })
       expect(first.cursor.next).toBeDefined()
       expect(first.cursor.previous).toBeUndefined()
@@ -399,6 +425,7 @@ describe("Session orchestration helpers", () => {
       expect(second.data.map((task) => task.sessionID)).toEqual(
         ["ses_terminal_2", "ses_terminal_1"].map((id) => SessionSchema.ID.make(id)),
       )
+      expect(second.data[0]?.pinnedAt).toBe(60)
       expect(second.cursor.previous).toBeDefined()
 
       const roundTrip = yield* SessionOrchestration.page(db, {
@@ -419,10 +446,12 @@ describe("Session orchestration helpers", () => {
     Effect.sync(() => {
       const spawn = CatalogModel.Ref.make({ providerID: Provider.ID.make("p"), id: CatalogModel.ID.make("spawn") })
       const agent = CatalogModel.Ref.make({ providerID: Provider.ID.make("p"), id: CatalogModel.ID.make("agent") })
-      const parent = CatalogModel.Ref.make({ providerID: Provider.ID.make("p"), id: CatalogModel.ID.make("parent") })
+      const parent = CatalogModel.Ref.make({ providerID: Provider.ID.make("p"), id: CatalogModel.ID.make("parent"), profile: "Owner" })
+      const explicitSpawn = CatalogModel.Ref.make({ providerID: Provider.ID.make("p"), id: CatalogModel.ID.make("spawn") })
       expect(SessionOrchestration.selectModel(spawn, agent, parent)).toBe(spawn)
       expect(SessionOrchestration.selectModel(undefined, agent, parent)).toBe(agent)
       expect(SessionOrchestration.selectModel(undefined, undefined, parent)).toBe(parent)
+      expect(SessionOrchestration.selectModel(explicitSpawn, undefined, parent)).toBe(explicitSpawn)
       expect(SessionOrchestration.selectModel(undefined, undefined, undefined)).toBeUndefined()
     }),
   )

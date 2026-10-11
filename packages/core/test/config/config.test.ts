@@ -19,6 +19,7 @@ import { Global } from "@ycoding-ai/core/global"
 import { Location } from "@ycoding-ai/core/location"
 import { Project } from "@ycoding-ai/core/project"
 import { Provider } from "@ycoding-ai/core/provider"
+import { Permission } from "@ycoding-ai/core/permission"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { WellKnown } from "@ycoding-ai/core/wellknown"
 import { Integration } from "@ycoding-ai/schema/integration"
@@ -37,6 +38,7 @@ const emptyCredentialNode = makeGlobalNode({
       all: () => Effect.succeed([]),
       list: () => Effect.succeed([]),
       get: () => Effect.succeed(undefined),
+      refresh: () => Effect.die("unused Credential.refresh"),
       create: () => Effect.die("unused Credential.create"),
       update: () => Effect.die("unused Credential.update"),
       activate: () => Effect.die("unused Credential.activate"),
@@ -107,6 +109,145 @@ const provider = {
 }
 
 describe("Config", () => {
+  for (const example of [
+    {
+      name: "unknown top-level key",
+      input: { shell: "/bin/zsh", unknown_setting: true },
+      expected: { shell: "/bin/zsh" },
+      paths: ["$.unknown_setting"],
+    },
+    {
+      name: "invalid named MCP server",
+      input: { mcp: { servers: { bad: { type: "local", command: 42 }, good: { type: "local", command: ["server"] } } } },
+      expected: { mcp: { servers: { good: { type: "local", command: ["server"] } } } },
+      paths: ["$.mcp.servers.bad"],
+    },
+    {
+      name: "invalid deep agent field",
+      input: { agents: { god: { description: "Kept", request: { headers: { bad: 42, good: "yes" } } }, helper: { system: "Kept too" } } },
+      expected: { agents: { god: { description: "Kept", request: { headers: { good: "yes" } } }, helper: { system: "Kept too" } } },
+      paths: ["$.agents.god.request.headers.bad"],
+    },
+    {
+      name: "invalid named provider command and reference",
+      input: { providers: { bad: { package: 42 }, good: { package: "native" } }, commands: { bad: { description: "No template" }, good: { template: "Run" } }, references: { bad: { path: 42 }, good: "/tmp" } },
+      expected: { providers: { good: { package: "native" } }, commands: { good: { template: "Run" } }, references: { good: "/tmp" } },
+      paths: ["$.providers.bad", "$.commands.bad", "$.references.bad"],
+    },
+    {
+      name: "removed key and invalid array item",
+      input: { snapshot: false, skills: ["kept", 42, "also-kept"], shell: "/bin/zsh" },
+      expected: { skills: ["kept", "also-kept"], shell: "/bin/zsh" },
+      paths: ["$.snapshot", "$.skills[1]"],
+    },
+    {
+      name: "unknown nested key",
+      input: { mcp: { servers: { good: { type: "local", command: ["server"], old_option: true } } } },
+      expected: { mcp: { servers: { good: { type: "local", command: ["server"] } } } },
+      paths: ["$.mcp.servers.good.old_option"],
+    },
+    {
+      name: "unknown key in a non-tagged union",
+      input: { references: { good: { path: "/tmp", typo: true } } },
+      expected: { references: { good: { path: "/tmp" } } },
+      paths: ["$.references.good.typo"],
+    },
+    {
+      name: "multiple invalid array items with original JSON indices",
+      input: { instructions: [42, "kept", false, "also-kept"] },
+      expected: { instructions: ["kept", "also-kept"] },
+      paths: ["$.instructions[0]", "$.instructions[2]"],
+    },
+    {
+      name: "names requiring bracket JSON paths",
+      input: { mcp: { servers: { "bad.server": { type: "remote", url: 42 }, good: { type: "remote", url: "https://example.com/mcp" } } } },
+      expected: { mcp: { servers: { good: { type: "remote", url: "https://example.com/mcp" } } } },
+      paths: ['$.mcp.servers["bad.server"]'],
+    },
+    {
+      name: "valid config unchanged",
+      input: { shell: "/bin/zsh", guardrails: { enabled: false }, permissions: [{ action: "read", resource: "*", effect: "allow" }], agents: { god: { steps: 4 } } },
+      expected: { shell: "/bin/zsh", guardrails: { enabled: false }, permissions: [{ action: "read", resource: "*", effect: "allow" }], agents: { god: { steps: 4 } } },
+      paths: [],
+    },
+  ]) {
+    it.live(`recovers ${example.name} through real config loading`, () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => Effect.gen(function* () {
+          const target = path.join(tmp.path, "ycoding.jsonc")
+          yield* Effect.promise(() => fs.writeFile(target, JSON.stringify(example.input)))
+          yield* Effect.gen(function* () {
+            const config = yield* Config.Service
+            const documents = (yield* config.entries()).filter((entry) => entry.type === "document")
+            expect(documents).toHaveLength(1)
+            expect(JSON.parse(JSON.stringify(documents[0]?.info))).toEqual(example.expected)
+            const diagnostics = yield* config.diagnostics()
+            expect(diagnostics.map((item) => item.jsonPath ?? "").toSorted((a, b) => a.localeCompare(b))).toEqual(example.paths.toSorted((a, b) => a.localeCompare(b)))
+            expect(diagnostics.every((item) => item.path === target)).toBe(true)
+          }).pipe(Effect.provide(testLayer(tmp.path)))
+        }),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      ),
+    )
+  }
+
+  for (const example of [
+    { name: "readable action", rules: [{ action: "shell", resource: 42, effect: "allow" }, { action: "*", resource: "*", effect: "allow" }], action: "shell", path: "$.permissions[0]" },
+    { name: "unreadable action", rules: [{ action: 42, resource: "*", effect: "deny" }, { action: "*", resource: "*", effect: "allow" }], action: "*", path: "$.permissions[0]" },
+    { name: "non-array ruleset", rules: { action: "shell", effect: "deny" }, action: "*", path: "$.permissions" },
+    { name: "unknown rule key", rules: [{ action: "shell", resource: "*", effect: "allow", typo: true }], action: "shell", path: "$.permissions[0]" },
+  ]) {
+    it.live(`fails closed for ${example.name} permissions in global and agent scopes`, () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => Effect.gen(function* () {
+          yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "ycoding.json"), JSON.stringify({
+            shell: "/bin/zsh", permissions: example.rules,
+            agents: { god: { description: "Kept", steps: -1, permissions: example.rules } },
+          })))
+          yield* Effect.gen(function* () {
+            const config = yield* Config.Service
+            const entries = yield* config.entries()
+            const global = Config.latest(entries, "permissions") ?? []
+            const agent = Config.latest(entries, "agents")?.god
+            expect(global.at(-1)).toEqual({ action: example.action, resource: "*", effect: "deny" })
+            expect(agent?.permissions?.at(-1)).toEqual({ action: example.action, resource: "*", effect: "deny" })
+            expect(agent?.description).toBe("Kept")
+            expect(Config.latest(entries, "shell")).toBe("/bin/zsh")
+            expect(Permission.evaluate("shell", "anything", global).effect).toBe("deny")
+            expect(Permission.evaluate("shell", "anything", agent?.permissions ?? []).effect).toBe("deny")
+            if (example.action === "*") expect(Permission.evaluate("read", "anything", global).effect).toBe("deny")
+            const diagnostics = yield* config.diagnostics()
+            for (const jsonPath of [example.path, example.path.replace("$.permissions", "$.agents.god.permissions")]) {
+              expect(diagnostics).toContainEqual(expect.objectContaining({ jsonPath, failClosed: true, message: expect.stringContaining("fails closed") }))
+            }
+          }).pipe(Effect.provide(testLayer(tmp.path)))
+        }),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      ),
+    )
+  }
+
+  for (const guardrails of [false, { enabled: false, max_concurrent_shells: 0 }, { enabled: "off" }, { enabled: false, typo: true }]) {
+    it.live(`fails closed for invalid guardrails ${JSON.stringify(guardrails)}`, () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => Effect.gen(function* () {
+          yield* Effect.promise(() => fs.mkdir(path.join(tmp.path, "global"), { recursive: true }))
+          yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "global/ycoding.json"), JSON.stringify({ guardrails: { enabled: false, max_concurrent_shells: 100 } })))
+          yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "ycoding.json"), JSON.stringify({ shell: "/bin/zsh", guardrails })))
+          yield* Effect.gen(function* () {
+            const config = yield* Config.Service
+            expect(Config.latest(yield* config.entries(), "guardrails")).toEqual({ enabled: true })
+            expect(Config.latest(yield* config.entries(), "shell")).toBe("/bin/zsh")
+            expect(yield* config.diagnostics()).toEqual([expect.objectContaining({ jsonPath: "$.guardrails", failClosed: true, message: expect.stringContaining("fails closed") })])
+          }).pipe(Effect.provide(testLayer(tmp.path)))
+        }),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      ),
+    )
+  }
   it.effect("decodes provider efficiency policy without changing omitted defaults", () =>
     Effect.sync(() => {
       const decoded = Schema.decodeUnknownSync(Config.Info)({
@@ -486,6 +627,7 @@ describe("Config", () => {
                     }),
                   ]),
                 get: () => Effect.die("unused Credential.get"),
+                refresh: () => Effect.die("unused Credential.refresh"),
                 create: () => Effect.die("unused Credential.create"),
                 update: () => Effect.die("unused Credential.update"),
                 activate: () => Effect.die("unused Credential.activate"),
@@ -986,7 +1128,7 @@ describe("Config", () => {
     ),
   )
 
-  it.live("rejects removed configuration keys", () =>
+  it.live("drops removed configuration keys without rejecting the document", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
@@ -998,23 +1140,54 @@ describe("Config", () => {
           )
           return yield* Effect.gen(function* () {
             const config = yield* Config.Service
-            expect((yield* config.entries()).filter((entry) => entry.type === "document")).toEqual([])
+            expect((yield* config.entries()).filter((entry) => entry.type === "document").map((entry) => entry.info)).toEqual([{}])
           }).pipe(Effect.provide(testLayer(tmp.path)))
         }),
       ),
     ),
   )
 
-  it.live("warns which removed configuration keys discarded the file", () => {
-    const warnings: { target: string; keys: string[] }[] = []
+  it.live("drops retired decisions config with one ordinary warning and diagnostic", () => {
+    const warnings: unknown[] = []
     const logger = Logger.map(Logger.formatStructured, (entry) => {
-      if (!Array.isArray(entry.message) || entry.message[0] !== "ignored config file with removed keys") return
+      if (Array.isArray(entry.message) && entry.message[0] === "recovered config item") warnings.push(entry.message[1])
+    })
+    return Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.gen(function* () {
+        const target = path.join(tmp.path, "ycoding.jsonc")
+        yield* Effect.promise(() => fs.writeFile(target, JSON.stringify({
+          decisions: {}, shell: "/bin/zsh",
+          mcp: { servers: { good: { type: "local", command: ["server"] } } },
+          guardrails: { enabled: false },
+        })))
+        yield* Effect.gen(function* () {
+          const config = yield* Config.Service
+          const entries = yield* config.entries()
+          const document = entries.find((entry) => entry.type === "document")
+          expect(document?.info).not.toHaveProperty("decisions")
+          expect(Config.latest(entries, "shell")).toBe("/bin/zsh")
+          expect(Config.latest(entries, "mcp")?.servers).toHaveProperty("good")
+          expect(Config.latest(entries, "guardrails")?.enabled).toBe(false)
+          expect(yield* config.diagnostics()).toEqual([{
+            path: target, jsonPath: "$.decisions", reason: "removed-keys", message: "Removed or unknown configuration key",
+          }])
+          expect<unknown>(warnings).toEqual(yield* config.diagnostics())
+        }).pipe(Effect.provide(testLayer(tmp.path)))
+      }),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(Effect.provide(Logger.layer([logger])))
+  })
+
+  it.live("warns once for each removed configuration key", () => {
+    const warnings: { path: string; jsonPath: string; reason: string; message: string }[] = []
+    const logger = Logger.map(Logger.formatStructured, (entry) => {
+      if (!Array.isArray(entry.message) || entry.message[0] !== "recovered config item") return
       const details: unknown = entry.message[1]
       if (typeof details !== "object" || details === null) return
-      if (!("target" in details) || !("keys" in details)) return
+      if (!("path" in details) || !("jsonPath" in details) || !("reason" in details) || !("message" in details)) return
       warnings.push({
-        target: String(details.target),
-        keys: Array.isArray(details.keys) ? details.keys.map(String) : [],
+        path: String(details.path), jsonPath: String(details.jsonPath), reason: String(details.reason), message: String(details.message),
       })
     })
     return Effect.acquireRelease(
@@ -1029,14 +1202,86 @@ describe("Config", () => {
           )
           return yield* Effect.gen(function* () {
             const config = yield* Config.Service
-            expect((yield* config.entries()).filter((entry) => entry.type === "document")).toEqual([])
-            expect(warnings).toEqual([{ target, keys: ["permission"] }])
+            expect(Config.latest(yield* config.entries(), "permissions")).toEqual([])
+            expect(warnings).toEqual([{ path: target, jsonPath: "$.permission", reason: "removed-keys", message: "Removed or unknown configuration key" }])
+            expect<unknown>(warnings).toEqual(yield* config.diagnostics())
           }).pipe(Effect.provide(testLayer(tmp.path)))
         }),
       ),
       Effect.provide(Logger.layer([logger])),
     )
   })
+
+  it.live("reports each invalid value while retaining the document", () => {
+    const warnings: { path: string; jsonPath: string; reason: string; message: string }[] = []
+    const logger = Logger.map(Logger.formatStructured, (entry) => {
+      if (!Array.isArray(entry.message) || entry.message[0] !== "recovered config item") return
+      const details: unknown = entry.message[1]
+      if (typeof details !== "object" || details === null) return
+      if (!("path" in details) || !("jsonPath" in details) || !("reason" in details) || !("message" in details)) return
+      warnings.push({ path: String(details.path), jsonPath: String(details.jsonPath), reason: String(details.reason), message: String(details.message) })
+    })
+    return Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const target = path.join(tmp.path, "ycoding.json")
+          yield* Effect.promise(() =>
+            fs.writeFile(
+              target,
+              JSON.stringify({
+                mcp: { servers: { docs: { type: "remote", url: "https://example.com/mcp" } } },
+                agents: { god: { description: "Kept", steps: -1, color: "invalid" } },
+              }),
+            ),
+          )
+          return yield* Effect.gen(function* () {
+            const config = yield* Config.Service
+            expect(Config.latest(yield* config.entries(), "mcp")?.servers).toHaveProperty("docs")
+            expect(Config.latest(yield* config.entries(), "agents")?.god.description).toBe("Kept")
+            expect(warnings).toHaveLength(2)
+            expect(warnings.map((item) => item.jsonPath).toSorted((a, b) => a.localeCompare(b))).toEqual(["$.agents.god.color", "$.agents.god.steps"])
+            expect(warnings.every((item) => item.path === target && item.reason === "invalid-values" && item.message.length > 0)).toBe(true)
+            expect<unknown>(warnings).toEqual(yield* config.diagnostics())
+          }).pipe(Effect.provide(testLayer(tmp.path)))
+        }),
+      ),
+      Effect.provide(Logger.layer([logger])),
+    )
+  })
+
+  it.live("reports unparsable documents and removed keys as diagnostics and clears them on reload", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const json = path.join(tmp.path, "ycoding.json")
+          const jsonc = path.join(tmp.path, "ycoding.jsonc")
+          yield* Effect.promise(() =>
+            Promise.all([
+              fs.writeFile(json, JSON.stringify({ snapshot: false })),
+              fs.writeFile(jsonc, "{ invalid"),
+            ]),
+          )
+          return yield* Effect.gen(function* () {
+            const config = yield* Config.Service
+            expect((yield* config.entries()).filter((entry) => entry.type === "document").map((entry) => entry.path)).toEqual([json])
+            expect(yield* config.diagnostics()).toEqual([
+              { path: json, jsonPath: "$.snapshot", reason: "removed-keys", message: "Removed or unknown configuration key" },
+              { path: jsonc, reason: "invalid-json", message: expect.stringContaining("offset") },
+            ])
+            yield* Effect.promise(() => fs.writeFile(jsonc, JSON.stringify({ $schema: "fixed" })))
+            yield* config.reload()
+            expect(yield* config.diagnostics()).toEqual([{ path: json, jsonPath: "$.snapshot", reason: "removed-keys", message: "Removed or unknown configuration key" }])
+          }).pipe(Effect.provide(testLayer(tmp.path)))
+        }),
+      ),
+    ),
+  )
 
   it.live("ignores an invalid file while loading valid config values", () =>
     Effect.acquireRelease(

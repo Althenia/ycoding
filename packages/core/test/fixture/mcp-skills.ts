@@ -331,7 +331,7 @@ export const skillsMcpLayer = (url: string) => {
       Layer.mergeAll(
         Layer.succeed(
           Config.Service,
-          Config.Service.of({
+          Config.Service.of({ diagnostics: () => Effect.succeed([]),
             reload: () => Effect.void,
             entries: () =>
               Effect.succeed([
@@ -359,6 +359,7 @@ export const skillsMcpLayer = (url: string) => {
         }),
         Layer.mock(Integration.Service, {
           connection: {
+            snapshot: () => Effect.die("unused Integration.snapshot"),
             active: unused,
             resolve: unused,
             key: unused,

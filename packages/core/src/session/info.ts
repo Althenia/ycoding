@@ -34,6 +34,7 @@ export function fromRow(row: typeof SessionTable.$inferSelect): SessionSchema.In
           id: CatalogModel.ID.make(row.model.id),
           providerID: Provider.ID.make(row.model.providerID),
           ...(row.model.variant === undefined ? {} : { variant: CatalogModel.VariantID.make(row.model.variant) }),
+          ...(row.model.profile === undefined ? {} : { profile: row.model.profile }),
         }
       : undefined,
     daybreak: row.daybreak ?? undefined,

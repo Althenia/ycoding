@@ -107,7 +107,7 @@ const permission = Layer.succeed(
 )
 const config = Layer.succeed(
   Config.Service,
-  Config.Service.of({ reload: () => Effect.void, entries: () => Effect.succeed(configEntries) }),
+  Config.Service.of({ diagnostics: () => Effect.succeed([]), reload: () => Effect.void, entries: () => Effect.succeed(configEntries) }),
 )
 const imageLayer = AppNodeBuilder.build(Image.node, [[Config.node, config]])
 const testFileSystem = Layer.effect(
@@ -138,6 +138,7 @@ const locationLayer = Layer.succeed(
 const mutation = Layer.succeed(
   LocationMutation.Service,
   LocationMutation.Service.of({
+    managedWorktree: () => Effect.succeed(false),
     resolve: (input) => {
       if (input.path === missingPath)
         return Effect.fail(new LocationMutation.PathError({ path: input.path, reason: "non_directory_ancestor" }))

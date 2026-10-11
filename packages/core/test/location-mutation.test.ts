@@ -1,8 +1,14 @@
 import fs from "fs/promises"
 import path from "path"
+import { $ } from "bun"
+import { createHash } from "crypto"
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer, Schema } from "effect"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
+import { Git } from "@ycoding-ai/core/git"
+import { Global } from "@ycoding-ai/core/global"
+import { FSUtil } from "@ycoding-ai/core/fs-util"
+import { LayerNodePlatform } from "@ycoding-ai/core/effect/app-node-platform"
 import { Location } from "@ycoding-ai/core/location"
 import { LocationMutation } from "@ycoding-ai/core/location-mutation"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
@@ -12,12 +18,49 @@ import { it } from "./lib/effect"
 
 function provide(directory: string) {
   return Effect.provide(
-    LayerNode.compile(LocationMutation.node, [
+    LayerNode.compile(
+      LayerNode.group([
+        LocationMutation.node,
+        Git.node,
+        FSUtil.node,
+        LayerNodePlatform.filesystem,
+        LayerNodePlatform.path,
+      ]),
+      [
+        [
+          Location.node,
+          Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(directory) }))),
+        ],
+        [Global.node, Global.layerWith({ data: path.join(directory, "data") })],
+      ],
+    ),
+  )
+}
+
+async function initRepository(directory: string) {
+  await fs.mkdir(directory, { recursive: true })
+  await $`git init`.cwd(directory).quiet()
+  await $`git config user.email test@ycoding.test`.cwd(directory).quiet()
+  await $`git config user.name Test`.cwd(directory).quiet()
+  await $`git commit --allow-empty -m root`.cwd(directory).quiet()
+}
+
+function provideRepository(directory: string, data: string) {
+  return LayerNode.compile(
+    LayerNode.group([
+      LocationMutation.node,
+      Git.node,
+      FSUtil.node,
+      LayerNodePlatform.filesystem,
+      LayerNodePlatform.path,
+    ]),
+    [
       [
         Location.node,
         Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(directory) }))),
       ],
-    ]),
+      [Global.node, Global.layerWith({ data })],
+    ],
   )
 }
 
@@ -158,6 +201,44 @@ describe("LocationMutation", () => {
           expect(target.externalDirectory?.directory).toBe(root)
         }).pipe(provide(directory)),
       ),
+    ),
+  )
+
+  it.live("trusts only a listed worktree of the Location repository under its keyed managed root", () =>
+    withTmp((base) =>
+      Effect.gen(function* () {
+        const root = path.join(base, "repo")
+        const data = path.join(base, "data")
+        yield* Effect.promise(() => initRepository(root))
+        const common = yield* Effect.promise(() => fs.realpath(path.join(root, ".git")))
+        const repoKey = `repo_${createHash("sha256").update(common).digest("hex")}`
+        const managed = path.join(data, "worktrees", repoKey, "feature-one")
+        const sibling = path.join(data, "worktrees", repoKey, "not-a-worktree")
+        const otherRoot = path.join(base, "other-repo")
+        const otherWorktree = path.join(data, "worktrees", repoKey, "other-repository")
+        yield* Effect.promise(async () => {
+          await fs.mkdir(path.dirname(managed), { recursive: true })
+          await $`git worktree add -b feature-one ${managed} HEAD`.cwd(root).quiet()
+          await fs.mkdir(sibling)
+          await initRepository(otherRoot)
+          await $`git worktree add --detach ${otherWorktree} HEAD`.cwd(otherRoot).quiet()
+        })
+        yield* Effect.provide(
+          Effect.gen(function* () {
+            const mutation = yield* LocationMutation.Service
+            for (const kind of ["file", "directory"] as const) {
+              expect(
+                (yield* mutation.resolve({ path: path.join(managed, "file.txt"), kind })).externalDirectory,
+              ).toBeUndefined()
+            }
+            expect((yield* mutation.resolve({ path: path.join(sibling, "file.txt") })).externalDirectory).toBeDefined()
+            expect(
+              (yield* mutation.resolve({ path: path.join(otherWorktree, "file.txt") })).externalDirectory,
+            ).toBeDefined()
+          }),
+          provideRepository(root, data),
+        )
+      }),
     ),
   )
 

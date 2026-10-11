@@ -11,7 +11,7 @@ import {
 import { Money } from "@ycoding-ai/schema/money"
 import { classifyProviderFailure } from "@ycoding-ai/ai/provider-error"
 import { SessionError } from "@ycoding-ai/schema/session-error"
-import { Cause, Clock, Effect, Exit, Fiber, FiberSet, Layer, Option, Semaphore, Stream } from "effect"
+import { Cause, Clock, Effect, Exit, Fiber, FiberSet, Layer, Option, Schedule, Semaphore, Stream } from "effect"
 import { Config } from "../../config"
 import { Database } from "../../database/database"
 import { EventRuntime } from "../../event"
@@ -31,7 +31,6 @@ import { SessionContext } from "../context"
 import { SessionCompactionJob } from "../compaction-job"
 import { SessionContextPressure } from "../context-pressure"
 import { SessionEvent } from "../event"
-import { SessionDecisionRouting } from "../decision-routing"
 import { SessionPending } from "../pending"
 import { SessionProviderRequest } from "../provider-request"
 import { SessionModelRequest } from "../model-request"
@@ -39,6 +38,7 @@ import { SessionMessage } from "../message"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
 import { SessionTitle } from "../title"
+import { SessionPrediction } from "../prediction"
 import { Service } from "./index"
 import { createLLMEventPublisher } from "./publish-llm-event"
 import { RelativePath } from "../../schema"
@@ -65,6 +65,8 @@ type StepEnd = {
 
 type AttemptState = {
   current?: SessionProviderRequest.Tracker
+  accountIdentityDigest?: string
+  mixedAccountProvenance?: boolean
   contextBreakdown?: ReturnType<typeof SessionContextPressure.breakdown>
   attempts: number
   continuationFallback?: boolean
@@ -109,7 +111,6 @@ const layer = Layer.effect(
     const permission = yield* Permission.Service
     const accounting = yield* ProjectArtifactAccounting.Service
     const artifactSource = yield* ProjectArtifactSource.Service
-    const routing = yield* SessionDecisionRouting.Service
     const resolveRequestedSkills = Effect.fn("SessionRunner.resolveRequestedSkills")(function* (
       selected: SessionContext.Selection,
       ids: ReadonlyArray<Skill.ID>,
@@ -220,31 +221,36 @@ const layer = Layer.effect(
         }
         return [{ source, text: entry.message.text, id: entry.message.id }]
       })
-      const projected = yield* Effect.forEach(
-        contextObservationBatches(candidates),
-        (batch) =>
-          db
-            .select({ id: EventTable.id, data: EventTable.data })
-            .from(EventTable)
-            .where(
-              and(
-                eq(EventTable.aggregate_id, selected.session.id),
-                eq(
-                  EventTable.type,
-                  EventRuntime.versionedType(SessionEvent.ContextObserved.type, SessionEvent.ContextObserved.durable.version),
-                ),
-                inArray(
-                  EventTable.id,
-                  batch.map((candidate) => EventRuntime.ID.make(String(candidate.id).replace(/^msg_/, "evt_"))),
+      const projected = yield* Effect.forEach(contextObservationBatches(candidates), (batch) =>
+        db
+          .select({ id: EventTable.id, data: EventTable.data })
+          .from(EventTable)
+          .where(
+            and(
+              eq(EventTable.aggregate_id, selected.session.id),
+              eq(
+                EventTable.type,
+                EventRuntime.versionedType(
+                  SessionEvent.ContextObserved.type,
+                  SessionEvent.ContextObserved.durable.version,
                 ),
               ),
-            )
-            .all()
-            .pipe(Effect.orDie),
+              inArray(
+                EventTable.id,
+                batch.map((candidate) => EventRuntime.ID.make(String(candidate.id).replace(/^msg_/, "evt_"))),
+              ),
+            ),
+          )
+          .all()
+          .pipe(Effect.orDie),
       ).pipe(Effect.map((batches) => batches.flat()))
       const trusted = new Set(
         projected.flatMap((event) => {
-          if (event.data.source !== "session-state" && event.data.source !== "team-view" && event.data.source !== "step-limit")
+          if (
+            event.data.source !== "session-state" &&
+            event.data.source !== "team-view" &&
+            event.data.source !== "step-limit"
+          )
             return []
           if (typeof event.data.text !== "string") return []
           return [`${event.id}\0${event.data.source}\0${event.data.text}`]
@@ -258,13 +264,18 @@ const layer = Layer.effect(
             eq(EventTable.aggregate_id, selected.session.id),
             eq(
               EventTable.type,
-              EventRuntime.versionedType(SessionEvent.ContextObserved.type, SessionEvent.ContextObserved.durable.version),
+              EventRuntime.versionedType(
+                SessionEvent.ContextObserved.type,
+                SessionEvent.ContextObserved.durable.version,
+              ),
             ),
           ),
         )
         .all()
         .pipe(Effect.orDie)
-      const observedSources = new Set(observed.flatMap((event) => (isContextSource(event.source) ? [event.source] : [])))
+      const observedSources = new Set(
+        observed.flatMap((event) => (isContextSource(event.source) ? [event.source] : [])),
+      )
       const latest = candidates.toReversed().reduce((result, candidate) => {
         const eventID = EventRuntime.ID.make(String(candidate.id).replace(/^msg_/, "evt_"))
         if (trusted.has(`${eventID}\0${candidate.source}\0${candidate.text}`) && !result.has(candidate.source))
@@ -273,9 +284,7 @@ const layer = Layer.effect(
       }, new Map<ContextSource, string>())
       const state = yield* liveState.load(selected.session.id).pipe(Effect.orDie)
       const inheritedTeam =
-        state.teamView === undefined
-          ? candidates.some((candidate) => candidate.source === "team-view")
-          : false
+        state.teamView === undefined ? candidates.some((candidate) => candidate.source === "team-view") : false
       const stepLimitReached = selected.agent.info.steps !== undefined && step >= selected.agent.info.steps
       const stepLimit = terminalResponseRecovery
         ? undefined
@@ -315,7 +324,6 @@ const layer = Layer.effect(
       recoveryMode: RecoveryMode = "normal",
       onPromotion?: () => void,
     ) {
-      yield* routing.route(sessionID, promotion)
       const selected = yield* context.select(sessionID)
       // Establish what the model knows before admitting what the user said, so
       // a blocked first step leaves pending inputs untouched.
@@ -398,19 +406,36 @@ const layer = Layer.effect(
                 contextSafetyMarginTokens: compactionPolicy.contextSafetyMarginTokens,
               },
               candidate: { context: initialContext, prepared: initialPrepared },
-              prepareOwner: (job) => Effect.gen(function* () {
-                const loaded = yield* context.load(yield* context.select(job.sessionID))
-                const through = yield* SessionHistory.entriesForModelThrough(db, job.sessionID, job.requestedThrough.seq)
-                const ids = new Set(through.map((entry) => entry.message.id))
-                const owner = yield* modelRequests.prepare({
-                  context: { ...loaded, messages: loaded.messages.filter((message) => ids.has(message.id) ||
-                    (message.type === "synthetic" && message.metadata?.remoteCompactionV2 === true)) },
-                  step: currentStep,
-                  disableContinuation: true,
-                })
-                return { request: owner.request, cache: owner.cache, cost: loaded.model.cost, modelRef: loaded.model.ref,
-                  contextRevision: loaded.contextRevision }
-              }),
+              prepareOwner: (job) =>
+                Effect.gen(function* () {
+                  const loaded = yield* context.load(yield* context.select(job.sessionID))
+                  const through = yield* SessionHistory.entriesForModelThrough(
+                    db,
+                    job.sessionID,
+                    job.requestedThrough.seq,
+                  )
+                  const ids = new Set(through.map((entry) => entry.message.id))
+                  const owner = yield* modelRequests.prepare({
+                    context: {
+                      ...loaded,
+                      messages: loaded.messages.filter(
+                        (message) =>
+                          ids.has(message.id) ||
+                          (message.type === "synthetic" && message.metadata?.remoteCompactionV2 === true),
+                      ),
+                    },
+                    step: currentStep,
+                    disableContinuation: true,
+                  })
+                  return {
+                    request: owner.request,
+                    cache: owner.cache,
+                    cost: loaded.model.cost,
+                    modelRef: loaded.model.ref,
+                    accountIdentityDigest: loaded.model.accountIdentityDigest,
+                    contextRevision: loaded.contextRevision,
+                  }
+                }),
               force: requestTrackerState.overflowRecovery === "pending",
               canReduce: (candidate, target) =>
                 SessionCompactionGate.canReduce(candidate.prepared.request, candidate.context.messages, target),
@@ -451,24 +476,27 @@ const layer = Layer.effect(
       const agent = loaded.agent
       const resolved = loaded.model
       let requestTracker = requestTrackerState.current
+      if (requestTracker && requestTrackerState.accountIdentityDigest !== resolved.accountIdentityDigest)
+        requestTrackerState.mixedAccountProvenance = true
       if (!requestTracker) {
-        requestTracker = yield* providerRequests.next({
-          sessionID: session.id,
-          expectedContextRevision: loaded.contextRevision,
-          inputID: loaded.messages.findLast((message) => message.type === "user")?.id,
-          source: "step",
-          agent: agent.id,
-          model: resolved.ref,
-          routeID: resolved.model.route.id,
-          promptCacheKey: originalPrepared.cache.promptCacheKey,
-          systemDigest: originalPrepared.cache.systemDigest,
-          toolDigest: originalPrepared.cache.toolDigest,
-        }).pipe(
-          Effect.catchTag("SessionProviderRequest.StaleContextRevision", () => Effect.succeed(undefined)),
-        )
-        if (!requestTracker)
-          return { _tag: "RestartAfterCompaction", step: currentStep, promoted } as const
+        requestTracker = yield* providerRequests
+          .next({
+            sessionID: session.id,
+            expectedContextRevision: loaded.contextRevision,
+            inputID: loaded.messages.findLast((message) => message.type === "user")?.id,
+            source: "step",
+            agent: agent.id,
+            model: resolved.ref,
+            connectionIdentityDigest: resolved.accountIdentityDigest,
+            routeID: resolved.model.route.id,
+            promptCacheKey: originalPrepared.cache.promptCacheKey,
+            systemDigest: originalPrepared.cache.systemDigest,
+            toolDigest: originalPrepared.cache.toolDigest,
+          })
+          .pipe(Effect.catchTag("SessionProviderRequest.StaleContextRevision", () => Effect.succeed(undefined)))
+        if (!requestTracker) return { _tag: "RestartAfterCompaction", step: currentStep, promoted } as const
         requestTrackerState.current = requestTracker
+        requestTrackerState.accountIdentityDigest = resolved.accountIdentityDigest
       }
       const startSnapshot = yield* snapshots.capture()
       const prepared = {
@@ -528,6 +556,7 @@ const layer = Layer.effect(
       let continuationFailure: ProviderErrorEvent | undefined
       let firstTextNs: bigint | undefined
       let firstReasoningNs: bigint | undefined
+      let firstToolInputNs: bigint | undefined
       let generationTiming: ReturnType<typeof SessionUsage.generationTiming>
       const [consumedInputID, ...remainingConsumedInputIDs] = consumedInputIDs
       let inputConsumptionPending = consumedInputID !== undefined
@@ -545,6 +574,7 @@ const layer = Layer.effect(
               )
             }
             if (overflowFailure || continuationFailure || publisher.hasProviderError()) return
+            yield* requestTracker.observeEvent(event)
             if (LLMEvent.is.providerError(event) && isContextOverflowFailure(event) && !publisher.hasRetryEvidence()) {
               overflowFailure = event
               return
@@ -571,6 +601,9 @@ const layer = Layer.effect(
               firstTextNs = yield* Clock.currentTimeNanos
             if (event.type === "reasoning-delta" && event.text.trim() && firstReasoningNs === undefined)
               firstReasoningNs = yield* Clock.currentTimeNanos
+            if (event.type === "tool-input-delta" && event.text.trim() && firstToolInputNs === undefined)
+              firstToolInputNs = yield* Clock.currentTimeNanos
+            const receivedNs = yield* Clock.currentTimeNanos
             yield* publish(event)
             if (LLMEvent.is.stepFinish(event)) {
               const settlement =
@@ -578,7 +611,10 @@ const layer = Layer.effect(
                 (yield* Effect.die(new Error("Step finish did not produce provider settlement")))
               const usage = stepUsage(settlement)
               generationTiming = SessionUsage.generationTiming(event.usage, {
-                text: firstTextNs, reasoning: firstReasoningNs, ended: yield* Clock.currentTimeNanos,
+                text: firstTextNs,
+                reasoning: firstReasoningNs,
+                toolInput: firstToolInputNs,
+                ended: receivedNs,
               })
               const speedTiming = { ...settlement.timing, ...generationTiming }
               yield* serialized(
@@ -649,6 +685,7 @@ const layer = Layer.effect(
           }),
         ),
         Effect.ensuring(serialized(publisher.flush())),
+        Effect.onExit(() => requestTracker.settle()),
       )
 
       const completeProviderRequest = (
@@ -661,7 +698,9 @@ const layer = Layer.effect(
               cost: Money.USD.zero,
               tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
             }
-        const estimatedCost = settlement ? SessionUsage.estimatedCost(effective.cost, settlement.tokens, settlement.oneHourCacheWrites) : undefined
+        const estimatedCost = settlement
+          ? SessionUsage.estimatedCost(effective.cost, settlement.tokens, settlement.oneHourCacheWrites)
+          : undefined
         const cache = settlement ? providerCache(settlement) : undefined
         const invalidation =
           override ??
@@ -670,13 +709,17 @@ const layer = Layer.effect(
             : requestTracker.defaultInvalidation === "compaction-reset"
               ? "compaction-reset"
               : settlement && settlement.tokens.cache.read > 0
-              ? "stable-hit"
-              : cache?.mechanism === "none"
-                ? "cache-disabled"
-                : cache && !cache.readReported
-                  ? "provider-not-reported"
-                  : undefined)
+                ? "stable-hit"
+                : cache?.mechanism === "none"
+                  ? "cache-disabled"
+                  : cache && !cache.readReported
+                    ? "provider-not-reported"
+                    : undefined)
         return requestTracker.complete({
+          assistantMessageID: publisher.currentMessageID(),
+          connectionIdentityDigest: requestTrackerState.mixedAccountProvenance
+            ? null
+            : requestTrackerState.accountIdentityDigest,
           tokens: usage.tokens,
           ...(estimatedCost === undefined ? {} : { cost: estimatedCost }),
           continuation:
@@ -687,8 +730,9 @@ const layer = Layer.effect(
                 : "full",
           ...(invalidation === undefined ? {} : { invalidation }),
           ...(cache === undefined ? {} : { cacheReadReported: cache.readReported }),
-          ...((settlement?.timing === undefined && generationTiming === undefined)
-            ? {} : { timing: { ...settlement?.timing, ...generationTiming } }),
+          ...(settlement?.timing === undefined && generationTiming === undefined
+            ? {}
+            : { timing: { ...settlement?.timing, ...generationTiming } }),
         })
       }
 
@@ -762,13 +806,17 @@ const layer = Layer.effect(
           if (contextOverflowFailure && !publisher.hasRetryEvidence()) {
             if (
               requestTrackerState.overflowRecovery === undefined &&
-              (limits?.context === undefined || limits.output === undefined ||
+              (limits?.context === undefined ||
+                limits.output === undefined ||
                 SessionCompactionGate.canReduce(
                   prepared.request,
                   loaded.messages,
-                  SessionCompactionGate.targetInputTokens({
-                    contextWindowTokens: limits.context,
-                  }, compactionPolicy),
+                  SessionCompactionGate.targetInputTokens(
+                    {
+                      contextWindowTokens: limits.context,
+                    },
+                    compactionPolicy,
+                  ),
                 ))
             ) {
               requestTrackerState.overflowRecovery = "pending"
@@ -973,11 +1021,7 @@ const layer = Layer.effect(
             (yield* SessionPending.has(db, session.id, "steer"))
           if (overflowLimit) return yield* new StepFailedError({ error: overflowLimit })
           if (streamInterrupted) return yield* Effect.interrupt
-          if (
-            stream._tag === "Failure" &&
-            !recoverableProviderFailure &&
-            !promotePendingSteerAfterProviderRecovery
-          )
+          if (stream._tag === "Failure" && !recoverableProviderFailure && !promotePendingSteerAfterProviderRecovery)
             return yield* Effect.failCause(stream.cause)
           if (userDeclined) return yield* Effect.interrupt
           if ((toolsInterrupted || infraError !== undefined) && settledFailure)
@@ -1002,7 +1046,9 @@ const layer = Layer.effect(
             providerRecovery: recoverableProviderFailure
               ? {
                   delay:
-                    llmFailure.reason._tag === "ProviderInternal" ? Math.max(0, llmFailure.reason.retryAfterMs ?? 0) : 0,
+                    llmFailure.reason._tag === "ProviderInternal"
+                      ? Math.max(0, llmFailure.reason.retryAfterMs ?? 0)
+                      : 0,
                 }
               : undefined,
             terminalSilence:
@@ -1027,6 +1073,10 @@ const layer = Layer.effect(
       const requestTrackerState: AttemptState = { attempts: 0 }
       const completeRetryFallback = () =>
         requestTrackerState.current?.complete({
+          assistantMessageID,
+          connectionIdentityDigest: requestTrackerState.mixedAccountProvenance
+            ? null
+            : requestTrackerState.accountIdentityDigest,
           invalidation: "retry-fallback",
           continuation: "fallback",
           cost: Money.USD.zero,
@@ -1034,7 +1084,7 @@ const layer = Layer.effect(
         }) ?? Effect.void
       while (true) {
         const attempt = yield* Effect.suspend(() =>
-          attemptStep(
+          (requestTrackerState.current?.retryResume() ?? Effect.void).pipe(Effect.andThen(attemptStep(
             sessionID,
             currentPromotion,
             currentStep,
@@ -1045,7 +1095,7 @@ const layer = Layer.effect(
             () => {
               promoted = true
             },
-          ),
+          ))),
         ).pipe(
           Effect.tapError((error) =>
             error instanceof SessionRunnerRetry.RetryableFailure
@@ -1056,7 +1106,9 @@ const layer = Layer.effect(
                 })
               : Effect.void,
           ),
-          Effect.retryOrElse(SessionRunnerRetry.schedule(events, sessionID, requestTrackerState.attempts), (error) => {
+          Effect.retryOrElse(SessionRunnerRetry.schedule(events, sessionID, requestTrackerState.attempts).pipe(
+            Schedule.tap(() => requestTrackerState.current?.retryWait() ?? Effect.void),
+          ), (error) => {
             if (!(error instanceof SessionRunnerRetry.RetryableFailure)) return Effect.fail(error)
             return completeRetryFallback().pipe(
               Effect.andThen(
@@ -1207,6 +1259,7 @@ export const node = makeLocationNode({
     SessionStore.node,
     SessionCompaction.node,
     SessionTitle.node,
+    SessionPrediction.node,
     Config.node,
     Snapshot.node,
     Database.node,
@@ -1215,7 +1268,6 @@ export const node = makeLocationNode({
     Permission.node,
     ProjectArtifactAccounting.node,
     ProjectArtifactSource.node,
-    SessionDecisionRouting.node,
   ],
 })
 

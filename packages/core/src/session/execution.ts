@@ -121,10 +121,6 @@ export const layer = Layer.effect(
         goal: snapshot.state.goal,
         latestAssistantText,
       })
-      if (continuation.action === "stop") {
-        yield* autonomy.stopGoalIfCurrent({ sessionID, expectedSequence: snapshot.sequence })
-        return undefined
-      }
       const advanced = yield* autonomy.advanceIfCurrent({ sessionID, expectedSequence: snapshot.sequence })
       if (!advanced.applied || !advanced.state.goal || advanced.state.goal.status !== "active") return undefined
       return {

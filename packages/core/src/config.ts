@@ -3,10 +3,10 @@ export * as Config from "./config"
 import { makeLocationNode } from "./effect/app-node"
 import path from "path"
 import { isDeepStrictEqual } from "node:util"
-import { type ParseError, parse } from "jsonc-parser"
-import { Context, Effect, Fiber, Layer, Option, PubSub, Schema, Scope, Semaphore, Stream } from "effect"
+import { type ParseError, parse, printParseErrorCode } from "jsonc-parser"
+import { Context, Effect, Fiber, Layer, PubSub, Result, Schema, SchemaIssue, Scope, Semaphore, Stream } from "effect"
 import { Permission } from "@ycoding-ai/schema/permission"
-import { Event } from "@ycoding-ai/schema/config"
+import { Diagnostic, Event } from "@ycoding-ai/schema/config"
 import { Integration } from "@ycoding-ai/schema/integration"
 import { Credential } from "./credential"
 import { EventRuntime } from "./event"
@@ -20,7 +20,6 @@ import { AbsolutePath, PositiveInt } from "./schema"
 import { ConfigAgent } from "./config/agent"
 import { ConfigAttachments } from "./config/attachments"
 import { ConfigCompaction } from "./config/compaction"
-import { ConfigDecisions } from "./config/decisions"
 import { ConfigCommand } from "./config/command"
 import { ConfigEfficiency } from "./config/efficiency"
 import { ConfigExperimental } from "./config/experimental"
@@ -31,6 +30,7 @@ import { ConfigLSP } from "./config/lsp"
 import { ConfigMCP } from "./config/mcp"
 import { ConfigModel } from "./config/model"
 import { ConfigMemory } from "./config/memory"
+import { ConfigPrediction } from "./config/prediction"
 import { ConfigPlugin } from "./config/plugin"
 import { ConfigProvider } from "./config/provider"
 import { ConfigProviderUsage } from "./config/provider-usage"
@@ -61,9 +61,6 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   default_agent: Schema.String.pipe(Schema.optional).annotate({
     description: "Default primary agent to use when no session agent is selected",
-  }),
-  decisions: ConfigDecisions.Info.pipe(Schema.optional).annotate({
-    description: "Typed decision providers and opt-in guardrail, routing, and goal policies",
   }),
   autoupdate: Schema.Union([Schema.Boolean, Schema.Literal("notify")])
     .pipe(Schema.optional)
@@ -116,6 +113,7 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   memory: ConfigMemory.Info.pipe(Schema.optional).annotate({
     description: "On-demand workspace knowledge and offline graph configuration",
   }),
+  prediction: ConfigPrediction.Info.pipe(Schema.optional),
   guardrails: ConfigGuardrail.Info.pipe(Schema.optional).annotate({
     description: "Session-wide guardrail enablement and runtime caps",
   }),
@@ -189,6 +187,7 @@ export function latest<K extends keyof Info>(entries: readonly Entry[], key: K):
 export interface Interface {
   /** Returns location config documents and discovery sources from lowest to highest priority. */
   readonly entries: () => Effect.Effect<Entry[]>
+  readonly diagnostics: () => Effect.Effect<Diagnostic[]>
   readonly reload: () => Effect.Effect<void>
 }
 
@@ -216,62 +215,32 @@ export const layer = (options?: Options) =>
       const names = ["ycoding.json", "ycoding.jsonc"]
       const reloadLock = Semaphore.makeUnsafe(1)
       const context = yield* Effect.context<Scope.Scope | FSUtil.Service>()
-      const decodeOptions = { errors: "all", onExcessProperty: "ignore", propertyOrder: "original" } as const
-      const decodeInfo = Schema.decodeUnknownOption(Info, decodeOptions)
-      const removedKeys = new Set([
-        "logLevel",
-        "server",
-        "command",
-        "reference",
-        "snapshot",
-        "plugin",
-        "autoshare",
-        "disabled_providers",
-        "enabled_providers",
-        "small_model",
-        "mode",
-        "agent",
-        "provider",
-        "permission",
-        "tools",
-        "attachment",
-        "layout",
-      ])
-
-      const removedConfigKeys = (input: unknown) => {
-        if (typeof input !== "object" || input === null || Array.isArray(input)) return []
-        const record = input as Record<string, unknown>
-        const keys = Object.keys(record).filter((key) => removedKeys.has(key))
-        const mcp = record.mcp
-        if (
-          typeof mcp === "object" &&
-          mcp !== null &&
-          !Array.isArray(mcp) &&
-          !("servers" in mcp) &&
-          Object.values(mcp).some((server) => typeof server === "object" && server !== null && "type" in server)
-        )
-          keys.push("mcp")
-        return keys
-      }
-
+      let discoveredDiagnostics: Diagnostic[] = []
       const parseInfo = Effect.fnUntraced(function* (text: string, target: string) {
         const errors: ParseError[] = []
         const input: unknown = parse(text, errors, { allowTrailingComma: true })
-        if (errors.length) return
-        const removed = removedConfigKeys(input)
-        if (removed.length) {
-          yield* Effect.logWarning("ignored config file with removed keys", { target, keys: removed })
-          return
+        if (errors.length) {
+          const message = errors
+            .map((error) => `${printParseErrorCode(error.error)} at offset ${error.offset}`)
+            .join("; ")
+          yield* Effect.logWarning("ignored config file with invalid JSON", { target, message })
+          discoveredDiagnostics.push({ path: target, reason: "invalid-json", message })
+          return undefined
         }
-        return Option.getOrUndefined(decodeInfo(input))
+        const recovered = recoverInfo(input, target)
+        for (const diagnostic of recovered.diagnostics) {
+          yield* Effect.logWarning("recovered config item", diagnostic)
+          discoveredDiagnostics.push(diagnostic)
+        }
+        return recovered.info
       })
 
       const loadFile = Effect.fnUntraced(function* (filepath: string) {
         const text = yield* fs.readFileStringSafe(filepath)
-        if (!text) return
+        if (!text) return undefined
         const substituted = yield* ConfigVariable.substitute({ type: "path", path: filepath, text })
         const info = yield* parseInfo(substituted, filepath)
-        if (!info) return
+        if (!info) return undefined
         return new Document({ type: "document", path: filepath, info })
       })
 
@@ -319,6 +288,7 @@ export const layer = (options?: Options) =>
       })
 
       const discover = Effect.fn("Config.discover")(function* () {
+        discoveredDiagnostics = []
         const globalDirectory = AbsolutePath.make(global.config)
         const globalAgentsDirectory = AbsolutePath.make(path.join(global.home, ".agents"))
         const globalClaudeDirectory = AbsolutePath.make(path.join(global.home, ".claude"))
@@ -397,7 +367,7 @@ export const layer = (options?: Options) =>
           : []
 
         const supplementary = yield* Effect.forEach(directories, loadDirectory).pipe(Effect.orDie)
-        return [
+        const entries = [
           ...claude,
           ...agents,
           ...(supplementary[0] ?? []),
@@ -407,6 +377,7 @@ export const layer = (options?: Options) =>
           ...(yield* loadWellknown().pipe(Effect.orDie)),
           ...content,
         ]
+        return { entries, diagnostics: discoveredDiagnostics }
       })
 
       const loadPolicies = (entries: readonly Entry[]) =>
@@ -418,8 +389,9 @@ export const layer = (options?: Options) =>
         )
 
       const initial = yield* discover()
-      yield* loadPolicies(initial)
-      let configs = initial
+      yield* loadPolicies(initial.entries)
+      let configs = initial.entries
+      let diagnostics = initial.diagnostics
       const updates = yield* PubSub.unbounded<Watcher.Update>()
       const subscriptions = new Map<string, Effect.Effect<unknown>>()
       const reconcile = Effect.fn("Config.reconcileWatches")(function* (entries: readonly Entry[]) {
@@ -454,11 +426,13 @@ export const layer = (options?: Options) =>
         reloadLock.withPermit(
           Effect.gen(function* () {
             const next = yield* discover()
-            const changed = !isDeepStrictEqual(configs, next)
+            const changed =
+              !isDeepStrictEqual(configs, next.entries) || !isDeepStrictEqual(diagnostics, next.diagnostics)
             if (changed) {
-              configs = next
-              yield* loadPolicies(next)
-              yield* reconcile(next)
+              configs = next.entries
+              diagnostics = next.diagnostics
+              yield* loadPolicies(next.entries)
+              yield* reconcile(next.entries)
             }
             if (!changed && !options?.notify) return
             yield* events.publish(Event.Updated, {})
@@ -512,11 +486,14 @@ export const layer = (options?: Options) =>
         Effect.forever,
         Effect.forkScoped({ startImmediately: true }),
       )
-      yield* reconcile(initial)
+      yield* reconcile(initial.entries)
 
       return Service.of({
         entries: Effect.fn("Config.entries")(function* () {
           return configs
+        }),
+        diagnostics: Effect.fn("Config.diagnostics")(function* () {
+          return diagnostics
         }),
         reload: () => reload({ notify: true }).pipe(Effect.provideContext(context)),
       })
@@ -541,3 +518,126 @@ export function configured(options?: Options) {
 }
 
 export const node = configured()
+
+const recoveryOptions = { errors: "all", onExcessProperty: "error", propertyOrder: "original" } as const
+const decodeInfo = Schema.decodeUnknownResult(Info, recoveryOptions)
+const decodeRule = Schema.decodeUnknownResult(Permission.Rule, recoveryOptions)
+const decodeGuardrails = Schema.decodeUnknownResult(ConfigGuardrail.Info, recoveryOptions)
+
+function recoverInfo(input: unknown, target: string) {
+  const diagnostics: Diagnostic[] = []
+  const record = configRecord(input) ? input : {}
+  const report = (keys: readonly PropertyKey[], reason: Diagnostic["reason"], message: string, failClosed?: boolean) => {
+    diagnostics.push({ path: target, jsonPath: configJsonPath(keys), reason, message, ...(failClosed ? { failClosed } : {}) })
+  }
+  if (!configRecord(input)) report([], "invalid-values", "Expected a configuration object")
+
+  const scopes = [
+    { value: record, keys: [] as PropertyKey[] },
+    ...Object.entries(configRecord(record.agents) ? record.agents : {}).flatMap(([id, value]) =>
+      configRecord(value) ? [{ value, keys: ["agents", id] }] : [],
+    ),
+  ]
+  for (const scope of scopes) {
+    if (!Object.hasOwn(scope.value, "permissions")) continue
+    const keys = [...scope.keys, "permissions"]
+    const rules = scope.value.permissions
+    if (!Array.isArray(rules)) {
+      scope.value.permissions = [{ action: "*", resource: "*", effect: "deny" }]
+      report(keys, "invalid-values", "Invalid permission ruleset; fails closed by denying every action on every resource", true)
+      continue
+    }
+    const denied: Permission.Rule[] = []
+    scope.value.permissions = [
+      ...rules.flatMap((rule, index) => {
+        const decoded = decodeRule(rule)
+        if (Result.isSuccess(decoded)) return [decoded.success]
+        const action = configRecord(rule) ? rule.action : undefined
+        const readable = typeof action === "string" && action.trim().length > 0
+        denied.push({ action: readable ? action : "*", resource: "*", effect: "deny" })
+        report(
+          [...keys, index],
+          configIssues(decoded.failure.issue).some((issue) => issue.tag === "UnexpectedKey") ? "removed-keys" : "invalid-values",
+          readable
+            ? "Invalid permission rule; fails closed by denying its action on every resource"
+            : "Invalid permission rule; fails closed by denying every action on every resource",
+          true,
+        )
+        return []
+      }),
+      ...denied,
+    ]
+  }
+  if (Object.hasOwn(record, "guardrails")) {
+    const decoded = decodeGuardrails(record.guardrails)
+    if (Result.isFailure(decoded)) {
+      record.guardrails = { enabled: true }
+      report(
+        ["guardrails"],
+        configIssues(decoded.failure.issue).some((issue) => issue.tag === "UnexpectedKey") ? "removed-keys" : "invalid-values",
+        "Invalid guardrails value; fails closed with guardrails enabled and default limits",
+        true,
+      )
+    }
+  }
+
+  while (true) {
+    const decoded = decodeInfo(record)
+    if (Result.isSuccess(decoded)) return { info: decoded.success, diagnostics }
+    const issues = configIssues(decoded.failure.issue).map((issue) => {
+      const keys = issue.tag === "MissingKey" ? issue.keys.slice(0, -1) : issue.keys
+      const named = keys[0] === "mcp" && keys[1] === "servers" && keys.length > 2
+        ? 3
+        : ["providers", "commands", "references"].includes(String(keys[0])) && keys.length > 1 ? 2 : keys.length
+      return { ...issue, keys: issue.tag === "UnexpectedKey" ? keys : keys.slice(0, named) }
+    })
+    const units = issues.filter((issue, index) => !issues.some((other, otherIndex) =>
+      (other.keys.length < issue.keys.length || (other.keys.length === issue.keys.length && otherIndex < index)) &&
+      other.keys.every((key, offset) => key === issue.keys[offset]),
+    ))
+    for (const unit of units) {
+      report(
+        unit.keys,
+        unit.tag === "UnexpectedKey" ? "removed-keys" : "invalid-values",
+        unit.tag === "UnexpectedKey" ? "Removed or unknown configuration key" : "Value does not match the configuration schema",
+      )
+    }
+    for (const unit of units.toReversed()) {
+      const parent = unit.keys.slice(0, -1).reduce<unknown>((value, key) =>
+        value !== null && typeof value === "object" && Object.hasOwn(value, key) ? Reflect.get(value, key) : undefined,
+      record)
+      const key = unit.keys.at(-1)
+      if (Array.isArray(parent) && typeof key === "number") {
+        parent.splice(key, 1)
+        continue
+      }
+      if (parent !== null && typeof parent === "object" && key !== undefined) Reflect.deleteProperty(parent, key)
+    }
+  }
+}
+
+function configRecord(input: unknown): input is Record<string, unknown> {
+  return input !== null && typeof input === "object" && !Array.isArray(input)
+}
+
+function configJsonPath(keys: readonly PropertyKey[]) {
+  return "$" + keys.map((key) => typeof key === "number"
+    ? `[${key}]`
+    : /^[a-zA-Z_$][\w$]*$/.test(String(key)) ? `.${String(key)}` : `[${JSON.stringify(String(key))}]`,
+  ).join("")
+}
+
+function configIssues(issue: SchemaIssue.Issue, keys: readonly PropertyKey[] = []): { keys: readonly PropertyKey[]; tag: SchemaIssue.Issue["_tag"] }[] {
+  switch (issue._tag) {
+    case "Pointer": return configIssues(issue.issue, [...keys, ...issue.path])
+    case "Encoding": return configIssues(issue.issue, keys)
+    case "Composite": return issue.issues.flatMap((child) => configIssues(child, keys))
+    case "AnyOf": {
+      if (issue.issues.length === 1) return configIssues(issue.issues[0], keys)
+      return issue.issues.map((child) => configIssues(child, keys))
+        .find((alternative) => alternative.length > 0 && alternative.every((child) => child.tag === "UnexpectedKey"))
+        ?? [{ keys, tag: issue._tag }]
+    }
+    default: return [{ keys, tag: issue._tag }]
+  }
+}

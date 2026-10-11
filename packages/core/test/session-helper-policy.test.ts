@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
-import { LLM, LLMClient } from "@ycoding-ai/ai"
+import { LLM, LLMClient, Model } from "@ycoding-ai/ai"
+import { OpenAIChat } from "@ycoding-ai/ai/protocols"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
 import { CatalogModel } from "@ycoding-ai/core/model"
@@ -12,11 +13,12 @@ import { SessionSchema } from "@ycoding-ai/core/session/schema"
 import { Money } from "@ycoding-ai/schema/money"
 import { DateTime, Effect, Schema } from "effect"
 
-const ref = (providerID: string, id: string, variant?: string) =>
+const ref = (providerID: string, id: string, variant?: string, profile?: string) =>
   CatalogModel.Ref.make({
     providerID: Provider.ID.make(providerID),
     id: CatalogModel.ID.make(id),
     ...(variant === undefined ? {} : { variant: CatalogModel.VariantID.make(variant) }),
+    ...(profile === undefined ? {} : { profile }),
   })
 
 test("local title produces one terminal-safe line without a provider call", () => {
@@ -38,15 +40,18 @@ test("helper settings carry no goal mode because goal synthesis is always model-
 })
 
 test("helper model precedence is agent override, role model, then session model", () => {
-  const agent = ref("anthropic", "claude-sonnet", "high")
-  const helper = ref("openai", "gpt-5-mini", "low")
-  const session = ref("openrouter", "openai/gpt-5.6", "medium")
+  const agent = ref("anthropic", "claude-sonnet", "high", "Agent account")
+  const helper = ref("openai", "gpt-5-mini", "low", "Helper account")
+  const session = ref("openrouter", "openai/gpt-5.6", "medium", "Session account")
 
   expect(selectHelperModel({ roleModel: helper, sessionModel: session, agentModel: agent })).toEqual(agent)
   expect(selectHelperModel({ roleModel: helper, sessionModel: session })).toEqual(helper)
   expect(selectHelperModel({ roleModel: "session", sessionModel: session })).toEqual(session)
   expect(selectHelperModel({ sessionModel: session })).toEqual(session)
   expect(selectHelperModel({})).toBeUndefined()
+  expect(selectHelperModel({ roleModel: ref("openai", "gpt-5-mini"), sessionModel: session })).toEqual(
+    ref("openai", "gpt-5-mini"),
+  )
 })
 
 test("helper policy reads independent role models", () => {
@@ -82,6 +87,22 @@ test("decision helper settings retain model variants and the explicit session se
     } } })
   }
   expect(() => Schema.decodeUnknownSync(Config.Info)({ efficiency: { helper_models: { decision: 42 } } })).toThrow()
+})
+
+test("prediction helper selection preserves session inheritance, profile and agent precedence", async () => {
+  const selected = "Personal#openai/prediction-model#low"
+  const info = Schema.decodeUnknownSync(Config.Info)({ efficiency: { helper_models: { prediction: selected } } })
+  expect(settings([new Config.Document({ type: "document", info })]).models.prediction).toEqual(ref("openai", "prediction-model", "low", "Personal"))
+  const session = SessionSchema.Info.make({ id: SessionSchema.ID.make("ses_prediction_model"), projectID: Project.ID.global,
+    location: { directory: AbsolutePath.make("/project") }, title: "Prediction", time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) }, cost: Money.USD.zero,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, model: ref("fixture", "owner", "medium", "Owner") })
+  const seen: Array<SessionSchema.Info["model"]> = []
+  const models: SessionRunnerModel.Interface = { resolve: input => Effect.sync(() => { seen.push(input.model); return SessionRunnerModel.resolved(Model.make({ id: "prediction-helper", provider: "fixture", route: OpenAIChat.route })) }) }
+  const agent = { ...Agent.Info.empty(Agent.ID.make("prediction")), model: ref("fixture", "pinned", "high") }
+  await Effect.runPromise(make(settings([new Config.Document({ type: "document", info })]), models).resolveModel(session, "prediction", agent))
+  await Effect.runPromise(make(settings([new Config.Document({ type: "document", info })]), models).resolveModel(session, "prediction"))
+  await Effect.runPromise(make(settings([]), models).resolveModel(session, "prediction"))
+  expect(seen).toEqual([agent.model, ref("openai", "prediction-model", "low", "Personal"), session.model])
 })
 
 test("decision helper resolution preserves agent, configured, session, and default model precedence with native routes", async () => {
@@ -136,7 +157,8 @@ test("decision helper resolution preserves agent, configured, session, and defau
 test("compaction model selection uses the owner Session scope before the hidden helper child exists", async () => {
   const main = ref("openai", "gpt-5.6-main", "high")
   const subagent = ref("openai", "gpt-5.6-subagent", "low")
-  const pinned = ref("anthropic", "claude-pinned")
+  const pinned = ref("openai", "claude-pinned")
+  const ownerModel = ref("openai", "owner", undefined, "Owner account")
   const selected: CatalogModel.Ref[] = []
   const policy = make(
     {
@@ -162,6 +184,7 @@ test("compaction model selection uses the owner Session scope before the hidden 
       time: { created: DateTime.makeUnsafe(1), updated: DateTime.makeUnsafe(1) },
       title: "Compaction owner",
       location: { directory: AbsolutePath.make("/project") },
+      model: ownerModel,
       ...(parentID === undefined ? {} : { parentID }),
     })
   const agent = Agent.Info.make({

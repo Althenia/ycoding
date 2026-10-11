@@ -17,6 +17,7 @@ import { SessionRunnerModel } from "./runner/model"
 import PROMPT_DEFAULT from "./runner/prompt/base.txt"
 import { readAttachments, toLLMMessages } from "./runner/to-llm-message"
 import { AttachmentStore } from "../attachment-store"
+import { SessionProviderState } from "./provider-state"
 
 export const layer = (options?: SessionModelHeaders.Options) =>
   Layer.effect(
@@ -28,12 +29,19 @@ export const layer = (options?: SessionModelHeaders.Options) =>
       const llm = yield* LLMClient.Service
       const models = yield* SessionRunnerModel.Service
       const attachments = yield* AttachmentStore.Service
+      const providerState = yield* SessionProviderState.Service
 
       return SessionGenerate.Service.of({
         generate: Effect.fn("SessionGenerate.generate")(function* (input) {
           const selection = yield* context.select(input.sessionID)
           const selected = yield* models.resolve(selection.session)
-          const history = yield* SessionHistory.preview(database.db, selection.session.id, selection.instructions)
+          const history = yield* SessionHistory.preview(
+            database.db,
+            selection.session.id,
+            selection.instructions,
+            selected.ref,
+            selected.accountIdentityDigest,
+          )
           const permissions = Permission.merge(
             selection.agent.info.permissions,
             selection.session.permissionCeiling ?? [],
@@ -43,6 +51,13 @@ export const layer = (options?: SessionModelHeaders.Options) =>
             .map(SystemPart.make)
           const providerMetadataKey = selected.model.route.providerMetadataKey ?? selected.model.provider
           const attachmentRead = yield* readAttachments(attachments, selection.session.id, history.messages)
+          const materialized = yield* providerState.materialize({
+            sessionID: selection.session.id,
+            provider: selected.model.provider,
+            modelID: selected.ref.id,
+            stateless: true,
+            accountIdentityDigest: selected.accountIdentityDigest,
+          })
           const contextEvent = yield* hooks.trigger("session", "context", {
             sessionID: selection.session.id,
             agent: selection.agent.id,
@@ -53,8 +68,9 @@ export const layer = (options?: SessionModelHeaders.Options) =>
                 history.messages,
                 selected.ref,
                 providerMetadataKey,
-                new Map(),
+                materialized,
                 attachmentRead.materialization,
+                selected.accountIdentityDigest,
               ),
               ...(history.instructionUpdate ? [Message.system(history.instructionUpdate)] : []),
               Message.user(input.prompt),
@@ -68,6 +84,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
             providerID: selected.ref.providerID,
             modelID: selected.ref.id,
             variant: selected.ref.variant,
+            accountIdentityDigest: selected.accountIdentityDigest,
             policyRevision: CACHE_POLICY_REVISION,
             permissions,
             system: contextEvent.system,
@@ -79,7 +96,13 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           const response = yield* llm.generate(
             LLM.request({
               model: selected.model,
-              http: { headers: SessionModelHeaders.make(selection.session, { ...options, providerID: selected.ref.providerID }) },
+              http: {
+                headers: SessionModelHeaders.make(selection.session, {
+                  ...options,
+                  providerID: selected.ref.providerID,
+                  accountIdentityDigest: selected.accountIdentityDigest,
+                }),
+              },
               providerOptions,
               system: contextEvent.system,
               messages: contextEvent.messages,
@@ -103,6 +126,7 @@ export function configured(options?: SessionModelHeaders.Options) {
       PluginHooks.node,
       SessionRunnerModel.node,
       AttachmentStore.node,
+      SessionProviderState.node,
       llmClient,
     ],
   })

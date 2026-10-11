@@ -116,7 +116,13 @@ const layer = Layer.effect(
     const load = Effect.fn("SessionContext.load")(function* (selection: Selection) {
       const contextRevision = yield* revision(selection.session.id)
       const model = yield* models.resolve(selection.session)
-      const history = yield* SessionHistory.entriesForRunner(db, selection.session.id, selection.instructions, model.ref)
+      const history = yield* SessionHistory.entriesForRunner(
+        db,
+        selection.session.id,
+        selection.instructions,
+        model.ref,
+        model.accountIdentityDigest,
+      )
       const live = yield* liveState.load(selection.session.id).pipe(Effect.orDie)
       return {
         session: selection.session,

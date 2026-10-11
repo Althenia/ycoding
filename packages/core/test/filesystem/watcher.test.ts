@@ -25,7 +25,7 @@ const it = testEffect(AppNodeBuilder.build(LayerNode.group([FSUtil.node, EventRu
 
 const configLayer = Layer.succeed(
   Config.Service,
-  Config.Service.of({
+  Config.Service.of({ diagnostics: () => Effect.succeed([]),
     reload: () => Effect.void,
     entries: () => Effect.succeed([]),
   }),

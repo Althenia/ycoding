@@ -125,11 +125,16 @@ describe("Permission", () => {
       yield* setup()
       const autonomy = yield* SessionAutonomy.Service
       const service = yield* Permission.Service
-      yield* autonomy.setMode({ sessionID: Session.ID.make("ses_test"), mode: "yolo" })
-
-      expect(yield* service.ask(assertion())).toEqual({ id: Permission.ID.create("per_test"), effect: "allow" })
-      yield* service.assert(assertion())
-      expect(yield* service.list()).toEqual([])
+      for (const yolo of [0, 1, 2, 3]) {
+        yield* autonomy.setYolo({ sessionID: Session.ID.make("ses_test"), yolo })
+        expect(yield* service.ask(assertion())).toEqual({ id: Permission.ID.create("per_test"), effect: yolo === 0 ? "ask" : "allow" })
+        if (yolo === 0) {
+          yield* service.reply({ requestID: Permission.ID.create("per_test"), reply: "once" })
+          continue
+        }
+        yield* service.assert(assertion())
+        expect(yield* service.list()).toEqual([])
+      }
     }),
   )
 

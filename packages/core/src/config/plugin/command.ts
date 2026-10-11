@@ -56,6 +56,7 @@ export const Plugin = define({
                 id: command.model.model,
                 providerID: command.model.providerID,
                 ...(command.model.variant === undefined ? {} : { variant: command.model.variant }),
+                ...(command.model.profile === undefined ? {} : { profile: command.model.profile }),
               }
             if (command.subtask !== undefined) item.subtask = command.subtask
           })

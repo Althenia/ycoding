@@ -27,7 +27,7 @@ const taskCompletion =
 const humanInput =
   "When progress requires user input, a decision, or review, call question with the blocker and the minimum actionable request; do not end with a prose-only request for the user to act. Use options for decisions and an empty options array for free-text input. Continue after the reply; do not call task_complete while blocked. Keep permission and guardrail approvals on their native request paths. Do not ask for routine progress, optional acknowledgement, or information you can obtain yourself. Preserve autonomy and permission rules; if question is unavailable or denied, report that blocker without bypassing it."
 const decisionUse =
-  "Prefer the decision tool for bounded classification, fixed-option selection, or rubric scoring when it materially helps the task; use deterministic checks for verifiable facts. Provider agent uses the configured hidden decision helper and model to return validated TOON with uncalibrated confidence estimates; automate only through explicitly configured min_confidence policies. OpenAI Decisions and TypeSafe Jev require separate API-key access and use native min_probability policies. Do not infer native API access from a ChatGPT/Codex subscription. Respect tool permissions and authorized disclosure to the selected model or provider. Treat refusals and low scores as uncertainty; never use judgments to bypass guardrails, grant approval, certify completion, or change the objective. Report unavailable or denied evaluation without repeated probes, silent provider switching, or enabling paid access."
+  'Use decision for a bounded typed judgment from a hidden helper model; confidence is self-reported and uncalibrated. Use it to choose a subagent model/variant among verified candidates, choose concrete options, classify risk, grade candidates or findings against a rubric, settle predicates tests cannot settle, or recommend an option before question. Use tests, grep, typecheck, and inventory for verifiable facts. Skip trivial or low-impact choices, unchanged judgments, and routine per-step classification. Supply self-contained authorized evidence and observable criteria; use neutral wording, distinct options with keep-current/other fallback, and distinct adjacent score levels. Batch independent questions; separate dependent ones. Example: {"provider":"agent","request":{"state":{"alternatives":"Two approaches have comparable cost; requirements are incomplete"},"questions":[{"type":"choice","name":"route","instructions":"Choose the better-supported approach","choices":[{"value":"keep-current","description":"Retain current approach"},{"value":"change","description":"Use the alternative"}]},{"type":"predicate","name":"ready","instructions":"Does the evidence support starting now?"}]}} Set the bar by the cost of being wrong. Treat refusal (including insufficient evidence), errors, low or close confidence, and disagreement with evidence as uncertainty; gather missing evidence, decide from evidence, or ask the user. Reuse settled judgments until evidence changes. Never treat judgments as permission, approval, the user’s answer, or completion proof. Preserve explicit owner choices and guardrails; report unavailable or denied evaluation without repeated probes.'
 const locationLayer = Layer.succeed(
   Location.Service,
   Location.Service.of(
@@ -45,6 +45,20 @@ const it = testEffect(
 )
 
 describe("InstructionBuiltIns", () => {
+  it.effect("teaches compact explicit judgments with valid batched examples and no removed policies", () => Effect.gen(function* () {
+    const builtins = yield* InstructionBuiltIns.Service
+    const source = (yield* builtins.load(sessionID)).find((item) => item.key === "core/decision-use")!
+    const value = yield* source.read
+    const text = typeof value === "string" ? value : ""
+    expect(text.split(/\s+/).length).toBeLessThanOrEqual(220)
+    for (const phrase of ["hidden helper", "uncalibrated", "tests", "grep", "typecheck", "inventory", "neutral", "observable", "adjacent", "dependent", "cost", "owner", "guardrails", "refusal", "keep-current"]) expect(text).toContain(phrase)
+    expect(text).not.toMatch(/advisory|automatic polic|scope tool|Use scope|native API/i)
+    const example = text.match(/Example: (\{.*\})/)
+    expect(example).not.toBeNull()
+    const { Decision } = yield* Effect.promise(() => import("../../src/decision"))
+    const { Schema } = yield* Effect.promise(() => import("effect"))
+    expect(Schema.is(Decision.Input)(JSON.parse(example![1]))).toBe(true)
+  }))
   test("guides reusable artifact learning without recording one-off failures", () => {
     expect(ProjectArtifactInstructions.content).toBe(
       "At a safe boundary after the primary task is complete and validated, create or update at most one Project Artifact for each newly learned reusable insight. The insight must be repeated, durable, repository-specific, and useful in future work. When correcting the immediate task, identify any validated repeated mistake, failed approach, or repository gotcha and the safer reusable rule it establishes; do not treat artifacts as punishment or record one-off failures. Never persist transient task state, current todos, user preferences, prompts, logs, secrets, credentials, private paths or URLs, customer data, or speculation. Search existing artifacts first and update the owned project version rather than duplicating it. Prefer a skill; use a command only for an invokable instruction-only template; use a least-privilege agent only for a genuine reusable role. Workflows are not a first-class artifact. Never create or enable a plugin automatically. Do not interrupt the primary task to author an artifact.",

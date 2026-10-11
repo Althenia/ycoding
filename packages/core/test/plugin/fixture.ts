@@ -12,6 +12,7 @@ import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { Global } from "@ycoding-ai/core/global"
 import { Integration } from "@ycoding-ai/core/integration"
 import { Location } from "@ycoding-ai/core/location"
+import { MCP } from "@ycoding-ai/core/mcp/index"
 import { Npm } from "@ycoding-ai/core/npm"
 import { PluginRegistry } from "@ycoding-ai/core/plugin"
 import { PluginHooks } from "@ycoding-ai/core/plugin/hooks"
@@ -58,6 +59,7 @@ export const PluginTestLayer = AppNodeBuilder.build(
     Catalog.node,
     Command.node,
     Integration.node,
+    MCP.node,
     PluginRuntime.node,
     ProviderUsageRuntime.node,
     PluginHooks.node,
@@ -70,5 +72,6 @@ export const PluginTestLayer = AppNodeBuilder.build(
     [Location.node, tempLocationLayer],
     [Npm.node, npmLayer],
     [ProviderUsageRuntime.node, providerUsageLayer],
+    [MCP.node, Layer.mock(MCP.Service, { prompts: () => Effect.succeed([]) })],
   ],
 ) as unknown as Layer.Layer<unknown, never>

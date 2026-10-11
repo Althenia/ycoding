@@ -3,9 +3,10 @@ import { ProviderUsage } from "@ycoding-ai/schema/provider-usage"
 import { ProviderUsageCache } from "@ycoding-ai/core/provider-usage/cache"
 import { ProviderUsageRuntime } from "@ycoding-ai/core/provider-usage"
 import { Credential } from "@ycoding-ai/core/credential"
+import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { Integration } from "@ycoding-ai/schema/integration"
 import { Provider } from "@ycoding-ai/core/provider"
-import { Deferred, Effect, Schema } from "effect"
+import { Deferred, Effect, Fiber, Schema } from "effect"
 
 const providerID = Provider.ID.make("test-provider")
 
@@ -61,10 +62,13 @@ describe("ProviderUsageCache", () => {
     )
 
     const [left, right] = await Effect.runPromise(
-      Effect.all([
-        cache.get({ key: "provider:credential", ttlMs: 60_000, load }),
-        cache.get({ key: "provider:credential", ttlMs: 60_000, load }),
-      ], { concurrency: "unbounded" }),
+      Effect.all(
+        [
+          cache.get({ key: "provider:credential", ttlMs: 60_000, load }),
+          cache.get({ key: "provider:credential", ttlMs: 60_000, load }),
+        ],
+        { concurrency: "unbounded" },
+      ),
     )
     expect(left).toEqual(right)
     expect(loads).toBe(1)
@@ -97,42 +101,150 @@ describe("ProviderUsageCache", () => {
 })
 
 describe("ProviderUsageRuntime", () => {
+  test("fences delayed replaced-account quota without re-fetching or blocking an independent profile", async () => {
+    const entered = Deferred.makeUnsafe<void>()
+    const release = Deferred.makeUnsafe<void>()
+    let work = new Credential.Info({
+      id: Credential.ID.make("cred_quota_work"),
+      integrationID: Integration.ID.make(providerID),
+      label: "Work",
+      value: { type: "key", key: "fixture-old" },
+    })
+    const personal = new Credential.Info({
+      id: Credential.ID.make("cred_quota_personal"),
+      integrationID: work.integrationID,
+      label: "Personal",
+      value: { type: "key", key: "fixture-personal" },
+    })
+    const calls: Credential.ID[] = []
+    const service = ProviderUsageRuntime.make({
+      credentials: { all: () => Effect.succeed([work, personal]) },
+      providers: { available: () => Effect.succeed([{ id: providerID }]) },
+      adapters: {
+        [providerID]: (input) =>
+          Effect.gen(function* () {
+            calls.push(input.credential.id)
+            if (input.credential.id === work.id && input.credential.accountGeneration === 0) {
+              yield* Deferred.succeed(entered, undefined)
+              yield* Deferred.await(release)
+            }
+            return snapshot(
+              input.credential.id === personal.id ? 50 : input.credential.accountGeneration === 0 ? 10 : 90,
+              1,
+            )
+          }),
+      },
+      now: () => 1,
+    })
+    const pending = Effect.runFork(service.get({ providerID, credentialID: work.id, refresh: true }))
+    await Effect.runPromise(Deferred.await(entered))
+    expect(await Effect.runPromise(service.get({ providerID, credentialID: personal.id }))).toMatchObject({
+      profile: "Personal",
+      windows: [{ used: 50 }],
+    })
+    work = new Credential.Info({
+      ...work,
+      accountGeneration: 1,
+      generation: 1,
+      value: { type: "key", key: "fixture-replacement" },
+    })
+    await Effect.runPromise(Deferred.succeed(release, undefined))
+    expect(await Effect.runPromise(Fiber.join(pending))).toMatchObject({ status: "unsupported", windows: [] })
+    expect(calls.filter((id) => id === work.id)).toHaveLength(1)
+    expect(await Effect.runPromise(service.get({ providerID, credentialID: work.id }))).toMatchObject({
+      profile: "Work",
+      windows: [{ used: 90 }],
+    })
+  })
+
   test("keeps Claude response observations bound to their account when the active profile changes", async () => {
     const id = Provider.ID.make("anthropic")
     const sources = ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"]
     let active = 0
+    const profiles = () =>
+      sources.map(
+        (source, index) =>
+          new Credential.Info({
+            id: Credential.ID.make(`cred_claude_${index}`),
+            integrationID: Integration.ID.make("anthropic"),
+            label: index === 0 ? "Personal" : "Work",
+            active: index === active,
+            value: {
+              type: "oauth",
+              methodID: Integration.MethodID.make("claude-code"),
+              access: source,
+              refresh: "",
+              expires: Number.MAX_SAFE_INTEGER,
+              metadata: { authKind: "claude-code", managed: true, source },
+            },
+          }),
+      )
     const service = ProviderUsageRuntime.make({
-      credentials: { all: () => Effect.succeed(sources.map((source, index) => new Credential.Info({
-        id: Credential.ID.make(`cred_claude_${index}`), integrationID: Integration.ID.make("anthropic"),
-        label: index === 0 ? "Personal" : "Work", active: index === active,
-        value: { type: "oauth", methodID: Integration.MethodID.make("claude-code"), access: source, refresh: "", expires: Number.MAX_SAFE_INTEGER,
-          metadata: { authKind: "claude-code", managed: true, source } },
-      }))) },
+      credentials: { all: () => Effect.succeed(profiles()) },
       providers: { available: () => Effect.succeed([{ id }]) },
-      adapters: { anthropic: (input) => Effect.succeed(new ProviderUsage.Snapshot({
-        providerID: id, label: "Claude", status: "available", source: "provider_internal_api", stability: "best_effort", updatedAt: 1,
-        windows: [new ProviderUsage.Window({ id: "session", label: "Session", unit: "percent", used: input.credential.label === "Personal" ? 15 : 75 })],
-      })) },
+      adapters: {
+        anthropic: (input) =>
+          Effect.succeed(
+            new ProviderUsage.Snapshot({
+              providerID: id,
+              label: "Claude",
+              status: "available",
+              source: "provider_internal_api",
+              stability: "best_effort",
+              updatedAt: 1,
+              windows: [
+                new ProviderUsage.Window({
+                  id: "session",
+                  label: "Session",
+                  unit: "percent",
+                  used: input.credential.label === "Personal" ? 15 : 75,
+                }),
+              ],
+            }),
+          ),
+      },
       now: () => 1,
     })
-    await Effect.runPromise(service.observe(new ProviderUsage.Observation({
-      providerID: id, label: "Claude", source: "response_headers", stability: "observed", observedAt: 2,
-      windows: [new ProviderUsage.Window({ id: "session", label: "Session", unit: "percent", used: 15 })],
-    }), sources[0]))
+    await Effect.runPromise(
+      service.observe(
+        new ProviderUsage.Observation({
+          providerID: id,
+          label: "Claude",
+          source: "response_headers",
+          stability: "observed",
+          observedAt: 2,
+          windows: [new ProviderUsage.Window({ id: "session", label: "Session", unit: "percent", used: 15 })],
+        }),
+        SessionRunnerModel.accountIdentityDigest(profiles()[0]!),
+      ),
+    )
     expect((await Effect.runPromise(service.get({ providerID: id }))).windows[0]?.used).toBe(15)
     active = 1
-    expect(await Effect.runPromise(service.get({ providerID: id }))).toMatchObject({ profile: "Work", windows: [{ used: 75 }] })
-    expect(await Effect.runPromise(service.get({ providerID: id, credentialID: Credential.ID.make("cred_claude_0") })))
-      .toMatchObject({ profile: "Personal", windows: [{ used: 15 }] })
+    expect(await Effect.runPromise(service.get({ providerID: id }))).toMatchObject({
+      profile: "Work",
+      windows: [{ used: 75 }],
+    })
+    expect(
+      await Effect.runPromise(service.get({ providerID: id, credentialID: Credential.ID.make("cred_claude_0") })),
+    ).toMatchObject({ profile: "Personal", source: "response_headers", windows: [{ used: 15 }] })
   })
 
   test("replacing a named profile's credentials does not reuse the previous account's quota", async () => {
     let generation = 0
     const service = ProviderUsageRuntime.make({
-      credentials: { all: () => Effect.succeed([new Credential.Info({
-        id: Credential.ID.make("cred_reconnected"), integrationID: Integration.ID.make("test-provider"), label: "Work", active: true, generation,
-        value: { type: "key", key: generation === 0 ? "first-account" : "second-account" },
-      })]) },
+      credentials: {
+        all: () =>
+          Effect.succeed([
+            new Credential.Info({
+              id: Credential.ID.make("cred_reconnected"),
+              integrationID: Integration.ID.make("test-provider"),
+              label: "Work",
+              active: true,
+              generation,
+              value: { type: "key", key: generation === 0 ? "first-account" : "second-account" },
+            }),
+          ]),
+      },
       providers: { available: () => Effect.succeed([{ id: providerID }]) },
       adapters: { [providerID]: (input) => Effect.succeed(snapshot(input.credential.generation === 0 ? 10 : 80, 1)) },
       now: () => 1,
@@ -144,17 +256,32 @@ describe("ProviderUsageRuntime", () => {
 
   test("reports only measured YCoding-local daily spend separately from account quotas", () => {
     const now = new Date(2026, 8, 27, 12).getTime()
-    const values = ProviderUsageRuntime.localSpendSnapshots([
-      { model: { providerID: "anthropic" }, cost: 0, timeCreated: now },
-      { model: { providerID: "anthropic" }, cost: 0.75, timeCreated: now - 1_000 },
-      { model: { providerID: "anthropic" }, cost: 2, timeCreated: now },
-      { model: { providerID: "openai" }, cost: null, timeCreated: now },
-      { model: { providerID: "opencode" }, cost: 0.25, timeCreated: now },
-      { model: { providerID: "xai" }, cost: 1, timeCreated: now - 86_400_000 },
-    ], now)
+    const values = ProviderUsageRuntime.localSpendSnapshots(
+      [
+        { model: { providerID: "anthropic" }, cost: 0, timeCreated: now },
+        { model: { providerID: "anthropic" }, cost: 0.75, timeCreated: now - 1_000 },
+        { model: { providerID: "anthropic" }, cost: 2, timeCreated: now },
+        { model: { providerID: "openai" }, cost: null, timeCreated: now },
+        { model: { providerID: "opencode" }, cost: 0.25, timeCreated: now },
+        { model: { providerID: "xai" }, cost: 1, timeCreated: now - 86_400_000 },
+      ],
+      now,
+    )
     expect(values).toMatchObject([
-      { providerID: "anthropic", profile: "YCoding local", source: "local_session", stability: "stable", windows: [{ id: "today", label: "Today", unit: "usd", used: 2.75 }] },
-      { providerID: "opencode", label: "OpenCode Zen", profile: "YCoding local", source: "local_session", windows: [{ used: 0.25 }] },
+      {
+        providerID: "anthropic",
+        profile: "YCoding local",
+        source: "local_session",
+        stability: "stable",
+        windows: [{ id: "today", label: "Today", unit: "usd", used: 2.75 }],
+      },
+      {
+        providerID: "opencode",
+        label: "OpenCode Zen",
+        profile: "YCoding local",
+        source: "local_session",
+        windows: [{ used: 0.25 }],
+      },
     ])
     expect(values).toHaveLength(2)
   })
@@ -162,21 +289,44 @@ describe("ProviderUsageRuntime", () => {
   test("lists local spend separately from a provider's account windows", async () => {
     const now = new Date(2026, 8, 27, 12).getTime()
     const service = ProviderUsageRuntime.make({
-      credentials: { all: () => Effect.succeed([new Credential.Info({
-        id: Credential.ID.make("cred_local_spend"), integrationID: Integration.ID.make("anthropic"),
-        label: "default", value: { type: "key", key: "secret" },
-      })]) },
+      credentials: {
+        all: () =>
+          Effect.succeed([
+            new Credential.Info({
+              id: Credential.ID.make("cred_local_spend"),
+              integrationID: Integration.ID.make("anthropic"),
+              label: "default",
+              value: { type: "key", key: "secret" },
+            }),
+          ]),
+      },
       providers: { available: () => Effect.succeed([{ id: Provider.ID.make("anthropic") }]) },
-      adapters: { anthropic: (input) => Effect.succeed(new ProviderUsage.Snapshot({
-        providerID: input.providerID, label: "Claude", status: "available", source: "provider_internal_api",
-        stability: "best_effort", updatedAt: now,
-        windows: [new ProviderUsage.Window({ id: "session", label: "Session", unit: "percent", used: 35 })],
-      })) },
+      adapters: {
+        anthropic: (input) =>
+          Effect.succeed(
+            new ProviderUsage.Snapshot({
+              providerID: input.providerID,
+              label: "Claude",
+              status: "available",
+              source: "provider_internal_api",
+              stability: "best_effort",
+              updatedAt: now,
+              windows: [new ProviderUsage.Window({ id: "session", label: "Session", unit: "percent", used: 35 })],
+            }),
+          ),
+      },
       localSpend: () => Effect.succeed([{ model: { providerID: "anthropic" }, cost: 0.5, timeCreated: now }]),
       now: () => now,
     })
-    expect((await Effect.runPromise(service.list({ refresh: true }))).map((item) => [item.profile, item.source, item.windows[0]?.id])).toEqual([
-      [undefined, "provider_internal_api", "session"], ["YCoding local", "local_session", "today"],
+    expect(
+      (await Effect.runPromise(service.list({ refresh: true }))).map((item) => [
+        item.profile,
+        item.source,
+        item.windows[0]?.id,
+      ]),
+    ).toEqual([
+      [undefined, "provider_internal_api", "session"],
+      ["YCoding local", "local_session", "today"],
     ])
   })
 
@@ -185,7 +335,8 @@ describe("ProviderUsageRuntime", () => {
     const service = ProviderUsageRuntime.make({
       credentials: { all: () => Effect.succeed([]) },
       providers: { available: () => Effect.succeed([]) },
-      adapters: {}, now: () => now,
+      adapters: {},
+      now: () => now,
       localSpend: () => Effect.succeed([{ model: { providerID: "anthropic" }, cost: 2, timeCreated: now }]),
     })
     expect(await Effect.runPromise(service.list())).toEqual([])
@@ -196,33 +347,46 @@ describe("ProviderUsageRuntime", () => {
     const started: string[] = []
     const service = ProviderUsageRuntime.make({
       credentials: {
-        all: () => Effect.succeed(["healthy", "failed"].map((id) => new Credential.Info({
-          id: Credential.ID.make(`cred_${id}`),
-          integrationID: Integration.ID.make(id),
-          label: "default",
-          value: { type: "key", key: "test-key", metadata: {} },
-        }))),
+        all: () =>
+          Effect.succeed(
+            ["healthy", "failed"].map(
+              (id) =>
+                new Credential.Info({
+                  id: Credential.ID.make(`cred_${id}`),
+                  integrationID: Integration.ID.make(id),
+                  label: "default",
+                  value: { type: "key", key: "test-key", metadata: {} },
+                }),
+            ),
+          ),
       },
       providers: {
         available: () => Effect.succeed(["healthy", "failed"].map((id) => ({ id: Provider.ID.make(id) }))),
       },
-      adapters: Object.fromEntries(["healthy", "failed"].map((id) => [id, (input: ProviderUsageRuntime.AdapterInput) =>
-        Effect.gen(function* () {
-          started.push(id)
-          if (started.length === 2) yield* Deferred.succeed(ready, undefined)
-          yield* Deferred.await(ready)
-          if (id === "failed") return yield* Effect.fail(new Error("private upstream details"))
-          return new ProviderUsage.Snapshot({
-            providerID: input.providerID,
-            label: input.label,
-            status: "available",
-            source: "provider_api",
-            stability: "stable",
-            updatedAt: input.updatedAt,
-            windows: [new ProviderUsage.Window({ id: "weekly", label: "Weekly", unit: "percent", used: 25 })],
-          })
-        }),
-      ] as const)),
+      adapters: Object.fromEntries(
+        ["healthy", "failed"].map(
+          (id) =>
+            [
+              id,
+              (input: ProviderUsageRuntime.AdapterInput) =>
+                Effect.gen(function* () {
+                  started.push(id)
+                  if (started.length === 2) yield* Deferred.succeed(ready, undefined)
+                  yield* Deferred.await(ready)
+                  if (id === "failed") return yield* Effect.fail(new Error("private upstream details"))
+                  return new ProviderUsage.Snapshot({
+                    providerID: input.providerID,
+                    label: input.label,
+                    status: "available",
+                    source: "provider_api",
+                    stability: "stable",
+                    updatedAt: input.updatedAt,
+                    windows: [new ProviderUsage.Window({ id: "weekly", label: "Weekly", unit: "percent", used: 25 })],
+                  })
+                }),
+            ] as const,
+        ),
+      ),
     })
 
     try {
@@ -250,11 +414,12 @@ describe("ProviderUsageRuntime", () => {
     const service = ProviderUsageRuntime.make({
       credentials: { all: () => Effect.succeed([credential]) },
       providers: {
-        available: () => Effect.succeed([
-          Provider.Info.empty(providerID),
-          Provider.Info.empty(unsupportedProviderID),
-          Provider.Info.empty(providerID),
-        ]),
+        available: () =>
+          Effect.succeed([
+            Provider.Info.empty(providerID),
+            Provider.Info.empty(unsupportedProviderID),
+            Provider.Info.empty(providerID),
+          ]),
       },
       adapters: {
         "test-provider": ({ providerID, label, updatedAt }) =>
@@ -340,13 +505,11 @@ describe("ProviderUsageRuntime", () => {
     expect(observed).toMatchObject({ source: "response_headers", stability: "observed", windows: [{ used: 35 }] })
     expect(loads).toBe(1)
 
-    const unsupported = await Effect.runPromise(
-      service.get({ providerID: Provider.ID.make("missing-provider") }),
-    )
+    const unsupported = await Effect.runPromise(service.get({ providerID: Provider.ID.make("missing-provider") }))
     expect(unsupported).toMatchObject({ status: "unsupported", windows: [] })
   })
 
-  test("lists one snapshot per stored profile and keeps observations on the active profile", async () => {
+  test("lists per-profile quotas without attributing account-unknown observations to the active profile", async () => {
     const profile = (id: string, label: string, active: boolean) =>
       new Credential.Info({
         id: Credential.ID.make(`cred_${id}`),
@@ -371,22 +534,33 @@ describe("ProviderUsageRuntime", () => {
           ]),
       },
       providers: { available: () => Effect.succeed([Provider.Info.empty(providerID), Provider.Info.empty(single)]) },
-      adapters: Object.fromEntries([providerID, single].map((id) => [id, (input: ProviderUsageRuntime.AdapterInput) =>
-        Effect.succeed(new ProviderUsage.Snapshot({
-          providerID: input.providerID,
-          label: input.label,
-          status: "available",
-          source: "provider_api",
-          stability: "stable",
-          updatedAt: input.updatedAt,
-          windows: [new ProviderUsage.Window({
-            id: "weekly",
-            label: "Weekly",
-            unit: "percent",
-            used: input.credential.label === "work" ? 10 : 60,
-          })],
-        })),
-      ] as const)),
+      adapters: Object.fromEntries(
+        [providerID, single].map(
+          (id) =>
+            [
+              id,
+              (input: ProviderUsageRuntime.AdapterInput) =>
+                Effect.succeed(
+                  new ProviderUsage.Snapshot({
+                    providerID: input.providerID,
+                    label: input.label,
+                    status: "available",
+                    source: "provider_api",
+                    stability: "stable",
+                    updatedAt: input.updatedAt,
+                    windows: [
+                      new ProviderUsage.Window({
+                        id: "weekly",
+                        label: "Weekly",
+                        unit: "percent",
+                        used: input.credential.label === "work" ? 10 : 60,
+                      }),
+                    ],
+                  }),
+                ),
+            ] as const,
+        ),
+      ),
       now: () => 100,
     })
     await Effect.runPromise(
@@ -404,10 +578,13 @@ describe("ProviderUsageRuntime", () => {
 
     const values = await Effect.runPromise(service.list({ refresh: true }))
 
-    expect(values.map((value) => [String(value.providerID), value.profile, value.source, value.windows[0]?.used])).toEqual([
+    expect(
+      values.map((value) => [String(value.providerID), value.profile, value.source, value.windows[0]?.used]),
+    ).toEqual([
       ["single-provider", undefined, "provider_api", 60],
-      ["test-provider", "personal", "response_headers", 90],
+      ["test-provider", "personal", "provider_api", 60],
       ["test-provider", "work", "provider_api", 10],
+      ["test-provider", undefined, "response_headers", 90],
     ])
     expect(JSON.stringify(values)).not.toContain("owner@example.com")
     expect(JSON.stringify(values)).not.toContain("secret-")

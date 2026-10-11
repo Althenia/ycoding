@@ -4,6 +4,7 @@ import { LLM, LLMClient, LLMError } from "@ycoding-ai/ai"
 import { Context, Effect, Layer, Schema } from "effect"
 import { AISDK } from "./aisdk"
 import { Catalog } from "./catalog"
+import { Credential } from "./credential"
 import { makeLocationNode } from "./effect/app-node"
 import { llmClient } from "./effect/app-node-platform"
 import { Integration } from "./integration"
@@ -22,10 +23,10 @@ export class ModelSelectionError extends Schema.TaggedErrorClass<ModelSelectionE
   { message: Schema.String },
 ) {}
 
-export class UnavailableError extends Schema.TaggedErrorClass<UnavailableError>()(
-  "Generate.UnavailableError",
-  { message: Schema.String, service: Schema.optional(Schema.String) },
-) {}
+export class UnavailableError extends Schema.TaggedErrorClass<UnavailableError>()("Generate.UnavailableError", {
+  message: Schema.String,
+  service: Schema.optional(Schema.String),
+}) {}
 
 export type Error = ModelSelectionError | UnavailableError
 
@@ -43,48 +44,70 @@ export const layer = Layer.effect(
     const integrations = yield* Integration.Service
     const llm = yield* LLMClient.Service
     const npm = yield* Npm.Service
+    const credentials = yield* Credential.Service
 
     const selectModel = Effect.fn("Generate.selectModel")(function* (requested?: CatalogModel.Ref) {
       const selected = requested
         ? yield* catalog.model.get(requested.providerID, requested.id)
-        : yield* catalog.model.default().pipe(
-            Effect.flatMap((model) =>
-              model && SessionRunnerModel.supported(model)
-                ? Effect.succeed(model)
-                : Effect.map(catalog.model.available(), (models) => models.find(SessionRunnerModel.supported)),
-            ),
-          )
+        : yield* catalog.model
+            .default()
+            .pipe(
+              Effect.flatMap((model) =>
+                model && SessionRunnerModel.supported(model)
+                  ? Effect.succeed(model)
+                  : Effect.map(catalog.model.available(), (models) => models.find(SessionRunnerModel.supported)),
+              ),
+            )
       if (!selected)
         return yield* new ModelSelectionError({
           message: requested
             ? `Model unavailable: ${requested.providerID}/${requested.id}`
             : "No model specified and no supported model is available",
         })
-      return yield* SessionRunnerModel.withVariant(selected, requested?.variant).pipe(
-        Effect.mapError(
-          () =>
-            new ModelSelectionError({
-              message: `Variant unavailable for ${selected.providerID}/${selected.id}: ${requested?.variant}`,
-            }),
-        ),
-      )
+      return selected
     })
 
     const runText = Effect.fn("Generate.text")(function* (input: TextInput) {
-      const selected = yield* selectModel(input.model)
+      const selection = input.model ?? (yield* catalog.model.defaultSelection())
+      const selected = yield* selectModel(selection)
       const provider = yield* catalog.provider.get(selected.providerID)
-      const connection = yield* integrations.connection.active(
-        provider?.integrationID ?? Integration.ID.make(selected.providerID),
+      const integrationID = provider?.integrationID ?? Integration.ID.make(selected.providerID)
+      const matching =
+        selection?.profile === undefined
+          ? []
+          : (yield* credentials.list(integrationID)).filter((credential) => credential.label === selection.profile)
+      if (selection?.profile !== undefined && matching.length !== 1)
+        return yield* new ModelSelectionError({
+          message: `Profile unavailable for ${selected.providerID}: ${selection.profile}`,
+        })
+      const connection =
+        selection?.profile === undefined
+          ? yield* integrations.connection.active(integrationID)
+          : { type: "credential" as const, id: matching[0]!.id, label: matching[0]!.label, active: matching[0]!.active }
+      const snapshot = connection ? yield* integrations.connection.snapshot(connection) : undefined
+      if (connection?.type === "credential" && !snapshot?.credential)
+        return yield* new UnavailableError({ message: "Selected generation credential is unavailable" })
+      if (
+        selection?.profile !== undefined &&
+        (!snapshot?.credential || snapshot.credential.accountGeneration !== matching[0]?.accountGeneration)
       )
-      const credential = connection ? yield* integrations.connection.resolve(connection) : undefined
+        return yield* new ModelSelectionError({
+          message: `Profile unavailable for ${selected.providerID}: ${selection.profile}`,
+        })
+      const contextual = yield* catalog.model.forConnection(selected, snapshot)
+      if (!contextual)
+        return yield* new ModelSelectionError({ message: `Model unavailable: ${selected.providerID}/${selected.id}` })
       const model = yield* SessionRunnerModel.fromCatalogModel(
-        selected,
-        credential,
+        yield* SessionRunnerModel.withVariant(contextual, selection?.variant).pipe(
+          Effect.mapError((error) => new ModelSelectionError({ message: error.message })),
+        ),
+        snapshot?.value,
         {
           loadPackage: (specifier) => Provider.loadPackage(specifier, npm),
-          loadAISDK: (model) => aisdk.model(model),
+          loadAISDK: (model, snapshot) => aisdk.model(model, snapshot),
         },
         connection,
+        snapshot,
       ).pipe(
         Effect.mapError((error) =>
           input.model
@@ -122,5 +145,5 @@ export const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [AISDK.node, Catalog.node, Integration.node, Npm.node, llmClient],
+  deps: [AISDK.node, Catalog.node, Integration.node, Credential.node, Npm.node, llmClient],
 })

@@ -169,6 +169,12 @@ export function fromPromise(plugin: Plugin) {
               resolve: (connection) => Effect.runPromiseWith(context)(host.integration.connection.resolve(connection)),
             },
           },
+          mcp: {
+            servers: () => run(host.mcp.servers()),
+            tools: () => run(host.mcp.tools()),
+            readResource: (input) => run(host.mcp.readResource(input)),
+            callTool: (input) => run(host.mcp.callTool(input)),
+          },
           plugin: {
             list: (input) => run(host.plugin.list(input)),
           },
@@ -204,6 +210,7 @@ export function fromPromise(plugin: Plugin) {
                     ? undefined
                     : {
                         id: input.id == null ? undefined : Session.ID.make(input.id),
+                        parentID: input.parentID == null ? undefined : Session.ID.make(input.parentID),
                         agent: input.agent == null ? undefined : Agent.ID.make(input.agent),
                         model: input.model == null ? undefined : model(input.model),
                         location:

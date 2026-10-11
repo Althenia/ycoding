@@ -4,7 +4,7 @@ import { and, eq, gt, inArray, sql } from "drizzle-orm"
 import { Effect, Schema } from "effect"
 import type { Database } from "../../database/database"
 import { EventRuntime } from "../../event"
-import { EventTable } from "../../event/sql"
+import { EventSequenceTable, EventTable } from "../../event/sql"
 import { SessionEvent } from "../event"
 import { SessionSchema } from "../schema"
 
@@ -21,27 +21,17 @@ export const reconcile = Effect.fn("SessionInterruptedExecution.reconcile")(func
   db: Database.Interface["db"],
   events: EventRuntime.Interface,
 ) {
-  const latest = db
-    .select({ aggregateID: EventTable.aggregate_id, seq: sql<number>`max(${EventTable.seq})`.as("seq") })
-    .from(EventTable)
-    .where(
-      inArray(
-        EventTable.type,
-        [
-          SessionEvent.Execution.Started,
-          SessionEvent.Execution.Succeeded,
-          SessionEvent.Execution.Failed,
-          SessionEvent.Execution.Interrupted,
-        ].map(versioned),
-      ),
-    )
-    .groupBy(EventTable.aggregate_id)
-    .as("latest_execution_event")
+  const latest = (type: string) =>
+    sql`(select max(${EventTable.seq}) from ${EventTable}
+      where ${EventTable.aggregate_id} = ${EventSequenceTable.aggregate_id}
+        and ${EventTable.type} = ${type})`
   const unterminated = yield* db
-    .select({ aggregateID: EventTable.aggregate_id })
-    .from(EventTable)
-    .innerJoin(latest, and(eq(EventTable.aggregate_id, latest.aggregateID), eq(EventTable.seq, latest.seq)))
-    .where(eq(EventTable.type, versioned(SessionEvent.Execution.Started)))
+    .select({ aggregateID: EventSequenceTable.aggregate_id })
+    .from(EventSequenceTable)
+    .where(sql`${latest(versioned(SessionEvent.Execution.Started))} > max(
+      coalesce(${latest(versioned(SessionEvent.Execution.Succeeded))}, -1),
+      coalesce(${latest(versioned(SessionEvent.Execution.Failed))}, -1),
+      coalesce(${latest(versioned(SessionEvent.Execution.Interrupted))}, -1))`)
     .all()
     .pipe(Effect.orDie)
   yield* Effect.forEach(

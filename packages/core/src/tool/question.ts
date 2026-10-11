@@ -23,15 +23,14 @@ Usage notes:
 - When \`custom\` is enabled (default), a "Type your own answer" option is added automatically; don't include "Other" or catch-all options
 - Answers are returned as arrays of labels; set \`multiple: true\` to allow selecting more than one
 - If you recommend a specific option, make that the first option in the list and add "(Recommended)" at the end of the label
-- Recommend the option that best matches the user's stated requirements and expectations; do not introduce new solutions or problems in the recommendation`
+- Recommend the option that best matches the user's stated requirements and expectations; do not introduce new solutions or problems in the recommendation
+- Make each question and option description self-contained`
 
 export const Input = Schema.Struct({
   questions: Schema.NonEmptyArray(Question.Prompt).annotate({ description: "Questions to ask" }),
 })
 
-export const Output = Schema.Struct({
-  answers: Schema.Array(Question.Answer),
-})
+export const Output = Schema.Struct({ answers: Schema.Array(Question.Answer) })
 export type Output = typeof Output.Type
 
 export class CancelledError extends Schema.TaggedErrorClass<CancelledError>()("QuestionTool.CancelledError", {}) {
@@ -44,12 +43,9 @@ export const toModelOutput = (
   questions: ReadonlyArray<Question.Prompt>,
   answers: ReadonlyArray<Question.Answer>,
 ) => {
-  const formatted = questions
-    .map(
-      (question, index) =>
-        `"${question.question}"="${answers[index]?.length ? answers[index].join(", ") : "Unanswered"}"`,
-    )
-    .join(", ")
+  const formatted = questions.map((question, index) =>
+    `"${question.question}"="${answers[index]?.length ? answers[index].join(", ") : "Unanswered"}"`,
+  ).join(", ")
   return `User has answered your questions: ${formatted}. You can now continue with the user's answers in mind.`
 }
 
@@ -58,76 +54,43 @@ export const Plugin = {
   effect: Effect.fn("QuestionTool.Plugin")(function* (ctx: PluginContext) {
     const forms = yield* Form.Service
     const permission = yield* Permission.Service
-
-    yield* ctx.tool
-      .transform((draft) =>
-        draft.add(
-          name,
-          Tool.make({
-            description,
-            input: Input,
-            output: Output,
-            toModelOutput: ({ input, output }) => [
-              { type: "text", text: toModelOutput(input.questions, output.answers) },
-            ],
-            execute: (input, context) =>
-              permission
-                .assert({
-                  action: "question",
-                  resources: ["*"],
-                  sessionID: context.sessionID,
-                  agent: context.agent,
-                  source: { type: "tool", messageID: context.messageID, callID: context.callID },
-                })
-                .pipe(
-                  Effect.mapError((error) => new ToolFailure({ message: "Permission denied: question", error })),
-                  Effect.andThen(
-                    forms
-                      .ask({
-                        sessionID: context.sessionID,
-                        title: "Questions",
-                        metadata: {
-                          kind: "question",
-                          tool: { messageID: context.messageID, callID: context.callID },
-                        },
-                        fields: [
-                          toField(input.questions[0], 0),
-                          ...input.questions.slice(1).map((question, index) => toField(question, index + 1)),
-                        ],
-                      })
-                      .pipe(Effect.orDie),
-                  ),
-                  Effect.flatMap((state) => {
-                    if (state.status === "cancelled") return Effect.die(new CancelledError())
-                    return Effect.succeed({
-                      answers: input.questions.map((_, index): Question.Answer => {
-                        const value = state.answer[`q${index}`]
-                        if (value === undefined) return []
-                        if (typeof value === "object") return Array.from(value)
-                        return [String(value)]
-                      }),
-                    })
-                  }),
-                ),
+    yield* ctx.tool.transform((draft) => draft.add(name, Tool.make({
+      description,
+      input: Input,
+      output: Output,
+      toModelOutput: ({ input, output }) => [{ type: "text", text: toModelOutput(input.questions, output.answers) }],
+      execute: (input, context) => permission.assert({
+        action: "question", resources: ["*"], sessionID: context.sessionID, agent: context.agent,
+        source: { type: "tool", messageID: context.messageID, callID: context.callID },
+      }).pipe(
+        Effect.mapError((error) => new ToolFailure({ message: "Permission denied: question", error })),
+        Effect.andThen(forms.ask({
+          sessionID: context.sessionID,
+          title: "Questions",
+          metadata: { kind: "question", tool: { messageID: context.messageID, callID: context.callID } },
+          fields: [toField(input.questions[0], 0), ...input.questions.slice(1).map((question, index) => toField(question, index + 1))],
+        }).pipe(
+          Effect.orDie,
+          Effect.flatMap((state) => {
+            if (state.status === "cancelled") return Effect.die(new CancelledError())
+            return Effect.succeed({ answers: input.questions.map((_, index): Question.Answer => {
+              const value = state.answer[`q${index}`]
+              if (value === undefined) return []
+              if (typeof value === "object") return Array.from(value)
+              return [String(value)]
+            }) })
           }),
-          { codemode: false },
-        ),
-      )
-      .pipe(Effect.orDie)
+        )),
+      ),
+    }), { codemode: false })).pipe(Effect.orDie)
   }),
 }
 
 function toField(question: Question.Prompt, index: number): Form.Field {
   return {
-    key: `q${index}`,
-    title: question.header,
-    description: question.question,
+    key: `q${index}`, title: question.header, description: question.question,
     type: question.multiple === true ? "multiselect" : "string",
-    options: question.options.map((option) => ({
-      value: option.label,
-      label: option.label,
-      description: option.description,
-    })),
+    options: question.options.map((option) => ({ value: option.label, label: option.label, description: option.description })),
     custom: true,
   }
 }

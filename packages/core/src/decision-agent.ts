@@ -15,6 +15,7 @@ import { EventRuntime } from "./event"
 import { CatalogModel } from "./model"
 import { SessionEvent } from "./session/event"
 import { SessionHelperPolicy } from "./session/helper-policy"
+import { SessionMessage } from "./session/message"
 import { SessionModelHeaders } from "./session/model-headers"
 import { SessionProviderRequest } from "./session/provider-request"
 import { SessionRunnerCache } from "./session/runner/cache"
@@ -35,6 +36,7 @@ export class Error extends Schema.TaggedErrorClass<Error>()("DecisionAgent.Error
 
 export interface Invocation {
   readonly sessionID: SessionSchema.ID
+  readonly inputID?: SessionMessage.ID
 }
 
 export interface Interface {
@@ -68,11 +70,11 @@ const layer = Layer.effect(Service, Effect.gen(function* () {
           encode(input),
           "Output exactly one TOON document with the following shape. The template shows a refusal only to demonstrate the fields; answer the questions when the supplied evidence supports a judgment.",
           DecisionJudgment.template(input),
-          "Confidence is your uncalibrated estimate, not a native probability. Use null for irrelevant fields, and use type refusal with confidence 0 when you cannot judge.",
+          "Before answering each question, weigh the plausible alternatives. Set confidence to how likely the answer is to be correct given only the supplied evidence, from 0 for no support to 1 for certainty; lower it when evidence conflicts or alternatives are close. Confidence remains your uncalibrated self-estimate. Abstain for insufficient evidence on any predicate, choice, or score: use type refusal, answer/choice/score null, and confidence 0. Never force an option or encode insufficient evidence as a low-confidence pick. Use null for irrelevant fields.",
         ].join("\n\n"),
         tools: [],
         generation: { maxTokens: 2048 },
-        http: { headers: SessionModelHeaders.make(session, { providerID: resolved.ref.providerID }) },
+        http: { headers: SessionModelHeaders.make(session, { providerID: resolved.ref.providerID, accountIdentityDigest: resolved.accountIdentityDigest }) },
       })
       const cache = SessionRunnerCache.providerOptions({
         projectID: session.projectID,
@@ -81,6 +83,7 @@ const layer = Layer.effect(Service, Effect.gen(function* () {
         providerID: resolved.ref.providerID,
         modelID: resolved.ref.id,
         variant: resolved.ref.variant,
+        accountIdentityDigest: resolved.accountIdentityDigest,
         policyRevision: CACHE_POLICY_REVISION,
         permissions: agent.permissions,
         system: base.system,
@@ -93,7 +96,8 @@ const layer = Layer.effect(Service, Effect.gen(function* () {
         openaiExtendedRetention: efficiency.openaiExtendedRetention,
       })
       const tracker = yield* requests.next({
-        sessionID: session.id, source: "decision", agent: agent.id, model: resolved.ref,
+        sessionID: session.id, inputID: context.inputID, source: "decision", agent: agent.id, model: resolved.ref,
+        connectionIdentityDigest: resolved.accountIdentityDigest,
         routeID: resolved.model.route.id, promptCacheKey: cache.promptCacheKey,
         systemDigest: cache.systemDigest, toolDigest: cache.toolDigest,
       })
@@ -115,6 +119,8 @@ const layer = Layer.effect(Service, Effect.gen(function* () {
         )
       })
       const exit = yield* llm.stream(request).pipe(
+        Stream.tap(tracker.observeEvent),
+        Stream.onExit(() => tracker.settle()),
         Stream.runForEach((event) => {
           if (LLMEvent.is.providerError(event) || LLMEvent.is.toolCall(event)) failed = true
           if (LLMEvent.is.finish(event)) {
@@ -136,7 +142,6 @@ const layer = Layer.effect(Service, Effect.gen(function* () {
           return Effect.void
         }),
         Effect.mapError(() => new Error({ reason: "provider-failed" })),
-        Effect.timeoutOrElse({ duration: Config.latest(entries, "decisions")?.timeout_ms ?? 10_000, orElse: () => Effect.fail(new Error({ reason: "timeout" })) }),
         Effect.ensuring(complete),
         Effect.exit,
       )

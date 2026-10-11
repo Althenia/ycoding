@@ -1,7 +1,7 @@
 export * as SessionOrchestrationNotifier from "./orchestration-notifier"
 
-import { Context, Effect, Layer, Stream } from "effect"
-import { and, asc, eq } from "drizzle-orm"
+import { Context, Effect, Layer, Schema, Stream } from "effect"
+import { and, asc, eq, not } from "drizzle-orm"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
 import { KeyedMutex } from "../effect/keyed-mutex"
@@ -11,6 +11,8 @@ import { SessionExecution } from "./execution"
 import { SessionEvent } from "./event"
 import { SessionOrchestrationIdentity } from "./orchestration-identity"
 import { SessionTaskNotificationTable, SessionTaskTable } from "./sql"
+import { SessionTask } from "./task"
+import { SessionSchema } from "./schema"
 
 export const NotificationBatchSize = 100
 export type DeliveryResult = "admitted" | "retry" | "quarantined"
@@ -54,13 +56,19 @@ const layer = Layer.effect(
     const execution = yield* SessionExecution.Service
     const sessions = yield* Session.Service
 
-    const service = make({
+    const lock = KeyedMutex.makeUnsafe<string>()
+    const notifier = (parentID?: SessionSchema.ID) => make({
       list: (limit) =>
         db
           .select({ notification: SessionTaskNotificationTable, task: SessionTaskTable })
           .from(SessionTaskNotificationTable)
           .innerJoin(SessionTaskTable, eq(SessionTaskTable.session_id, SessionTaskNotificationTable.task_session_id))
-          .where(eq(SessionTaskNotificationTable.delivered, false))
+          .where(and(
+            eq(SessionTaskNotificationTable.delivered, false),
+            parentID === undefined
+              ? not(SessionTask.restartLoss(db))
+              : and(eq(SessionTaskNotificationTable.parent_id, parentID), SessionTask.restartLoss(db)),
+          ))
           .orderBy(asc(SessionTaskNotificationTable.time_created), asc(SessionTaskNotificationTable.id))
           .limit(limit)
           .all()
@@ -90,7 +98,7 @@ const layer = Layer.effect(
             resume: false,
           })
           .pipe(
-            Effect.andThen(execution.wake(task.parent_id)),
+            Effect.andThen(parentID === undefined ? execution.wake(task.parent_id) : Effect.void),
             Effect.as("admitted" as const),
             Effect.catchTag("Session.NotFoundError", () =>
               Effect.logWarning("Parent Session missing for subagent notification").pipe(
@@ -123,6 +131,14 @@ const layer = Layer.effect(
           .run()
           .pipe(Effect.orDie, Effect.asVoid),
     })
+    const service = { dispatch: lock.withLock("outbox")(notifier().dispatch) }
+
+    const unsubscribe = yield* events.listen((event) =>
+      event.type === SessionEvent.Execution.Started.type
+        ? lock.withLock("outbox")(notifier(Schema.decodeUnknownSync(SessionEvent.Execution.Started.data)(event.data).sessionID).dispatch)
+        : Effect.void,
+    )
+    yield* Effect.addFinalizer(() => unsubscribe)
 
     yield* events.subscribe(SessionEvent.Task.Updated).pipe(
       Stream.runForEach(() => service.dispatch),

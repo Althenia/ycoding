@@ -45,7 +45,11 @@ describe("ConfigCommandPlugin.Plugin", () => {
               `---
 description: File review
 agent: reviewer
-model: anthropic/claude#high
+model:
+  providerID: anthropic
+  model: claude
+  variant: high
+  profile: Work
 subtask: true
 ---
 Review files`,
@@ -70,7 +74,7 @@ Review files`,
           ).pipe(
             Effect.provideService(
               Config.Service,
-              Config.Service.of({
+              Config.Service.of({ diagnostics: () => Effect.succeed([]),
                 reload: () => Effect.void,
                 entries: () =>
                   Effect.succeed([
@@ -94,6 +98,7 @@ Review files`,
                 providerID: Provider.ID.make("anthropic"),
                 id: CatalogModel.ID.make("claude"),
                 variant: CatalogModel.VariantID.make("high"),
+                profile: "Work",
               },
               subtask: true,
               locations: [AbsolutePath.make(path.join(tmp.path, "commands", "review.md"))],
