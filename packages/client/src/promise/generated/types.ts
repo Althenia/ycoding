@@ -1553,6 +1553,22 @@ export type SessionMessageCompactionCompleted = {
   recent?: string
 }
 
+export type SessionCompactionHistoryJob = {
+  jobID: string
+  trigger: "consider" | "advised" | "mandatory" | "manual"
+  status: "pending" | "running" | "completed" | "failed"
+  created: number
+  metrics?: SessionCompactionMetrics
+  code?:
+    | "cancelled"
+    | "superseded"
+    | "invalid_manifest"
+    | "protected_state_changed"
+    | "context_limit_unresolved"
+    | "migration_failed"
+    | "provider_failed"
+}
+
 export type SessionCompactionEnded = {
   id: string
   created: number
@@ -2480,6 +2496,14 @@ export type SessionMessageCompaction =
   | SessionMessageCompactionCompleted
   | SessionMessageCompactionFailedV1
   | SessionMessageCompactionFailed
+
+export type SessionCompactionHistory = {
+  data: Array<SessionCompactionHistoryJob>
+  truncated: boolean
+  completedBefore: number
+  completedCount: number
+  totalSavedTokens: number
+}
 
 export type SessionAutonomyState = {
   mode: SessionAutonomyMode
@@ -5306,6 +5330,10 @@ export type SessionCompactInput = {
 }
 
 export type SessionCompactOutput = { data: SessionCompactionResult }["data"]
+
+export type SessionCompactionListInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionCompactionListOutput = SessionCompactionHistory
 
 export type SessionWaitInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 

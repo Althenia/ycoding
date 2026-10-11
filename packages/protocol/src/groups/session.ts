@@ -912,6 +912,22 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         ),
     )
     .add(
+      HttpApiEndpoint.get("session.compaction.list", "/api/session/:sessionID/compaction", {
+        params: { sessionID: Session.ID },
+        success: SessionCompaction.History,
+        error: SessionNotFoundError,
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.compaction.list",
+            summary: "List session compactions",
+            description:
+              "Return the newest 100 job-keyed compaction jobs of the Session ordered by creation time then job ID, with truncated, the completed jobs before that window, and the cumulative completed count and saved tokens across the full history.",
+          }),
+        ),
+    )
+    .add(
       HttpApiEndpoint.post("session.wait", "/api/session/:sessionID/wait", {
         params: { sessionID: Session.ID },
         success: HttpApiSchema.NoContent,

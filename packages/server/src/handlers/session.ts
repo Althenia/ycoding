@@ -171,6 +171,12 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
       .handle(
+        "session.compaction.list",
+        Effect.fn(function* (ctx) {
+          return yield* session.compactionHistory(ctx.params.sessionID).pipe(Effect.mapError(mapSessionNotFound))
+        }),
+      )
+      .handle(
         "session.attachment.read",
         Effect.fn(function* (ctx) {
           return yield* session.attachmentRead(ctx.params.sessionID, ctx.params.digest).pipe(

@@ -16,7 +16,7 @@ async function renderTranscript(
   row: Parameters<typeof SessionRowView>[0]["row"],
   message: Parameters<typeof SessionRowView>[0]["message"] = () => undefined,
   compaction: NonNullable<Parameters<typeof SessionRowView>[0]["compaction"]> = () => undefined,
-  compactions: NonNullable<Parameters<typeof SessionRowView>[0]["compactions"]> = () => [],
+  history: NonNullable<Parameters<typeof SessionRowView>[0]["history"]> = () => undefined,
 ) {
   const app = await testRender(
     () => (
@@ -25,7 +25,7 @@ async function renderTranscript(
           <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
             <box flexDirection="column">
               <text>before</text>
-              <SessionRowView row={row} message={message} compaction={compaction} compactions={compactions} />
+              <SessionRowView row={row} message={message} compaction={compaction} history={history} />
               <text>after</text>
             </box>
           </ThemeProvider>
@@ -273,6 +273,13 @@ describe("transcript row residency", () => {
         { type: "compaction", jobID: lifecycle.jobID },
         () => undefined,
         (jobID) => (jobID === lifecycle.jobID ? lifecycle : undefined),
+        () => ({
+          data: [{ jobID: lifecycle.jobID, trigger: "advised", status: lifecycle.status, metrics: lifecycle.metrics, created: 3 }],
+          truncated: false,
+          completedBefore: 0,
+          completedCount: 1,
+          totalSavedTokens: 53_000,
+        }),
       )
 
       try {
@@ -373,38 +380,80 @@ describe("transcript row residency", () => {
     }
   })
 
-  test("sums completed compactions while retaining per-compaction metrics", async () => {
-    const first: DataSessionCompactionLifecycle = {
-      jobID: "cmp_first",
-      status: "completed",
-      revision: 1,
-      boundary: { messageID: "msg_first", seq: 1 },
-      metrics: { excludedMessages: 10, excludedParts: 0, inputTokens: 20_000, retainedTokens: 8_000 },
-      time: { created: 1 },
-    }
-    const second: DataSessionCompactionLifecycle = {
-      jobID: "cmp_second",
-      status: "completed",
-      revision: 2,
-      boundary: { messageID: "msg_second", seq: 2 },
-      metrics: { excludedMessages: 20, excludedParts: 0, inputTokens: 100_000, retainedTokens: 60_000 },
-      time: { created: 2 },
-    }
+  const completedJob = (jobID: string) => ({
+    jobID,
+    trigger: "advised",
+    status: "completed" as const,
+    metrics: { excludedMessages: 20, excludedParts: 0, inputTokens: 100_000, retainedTokens: 60_000 },
+    created: 2,
+  })
+  const completedLifecycle: DataSessionCompactionLifecycle = {
+    jobID: "cmp_this",
+    status: "completed",
+    revision: 4,
+    boundary: { messageID: "msg_this", seq: 4 },
+    metrics: { excludedMessages: 20, excludedParts: 0, inputTokens: 100_000, retainedTokens: 60_000 },
+    time: { created: 2 },
+  }
+
+  test("numbers the divider and totals savings from full-history data", async () => {
     const app = await renderTranscript(
-      { type: "compaction", jobID: second.jobID },
+      { type: "compaction", jobID: "cmp_this" },
       () => undefined,
-      (jobID) => (jobID === second.jobID ? second : undefined),
-      () => [first, second],
+      (jobID) => (jobID === "cmp_this" ? completedLifecycle : undefined),
+      () => ({
+        data: [completedJob("cmp_a"), completedJob("cmp_b"), completedJob("cmp_c"), completedJob("cmp_this")],
+        truncated: false,
+        completedBefore: 0,
+        completedCount: 4,
+        totalSavedTokens: 160_000,
+      }),
     )
 
     try {
-      expect(frame(app)).toContain("~52k tokens saved total")
-      expect(frame(app)).toContain("▓▓▓▓▓▓▓▓▓▓▓▓▓▓")
-      expect(frame(app)).toContain("██████████")
-      const bar = frame(app).split("\n").find((line) => line.includes("█") && line.includes("▓")) ?? ""
-      expect(bar.indexOf("█")).toBeLessThan(bar.indexOf("▓"))
-      expect(frame(app)).toContain("Compression #2 (~40k tokens removed, 40% reduction)")
+      expect(frame(app)).toContain("~160k tokens saved total")
+      expect(frame(app)).toContain("Compression #4 (~40k tokens removed, 40% reduction)")
       expect(frame(app)).toContain("Items: 20 messages compressed")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("offsets the number by completed jobs older than the history window", async () => {
+    const app = await renderTranscript(
+      { type: "compaction", jobID: "cmp_this" },
+      () => undefined,
+      (jobID) => (jobID === "cmp_this" ? completedLifecycle : undefined),
+      () => ({
+        data: [completedJob("cmp_this")],
+        truncated: true,
+        completedBefore: 96,
+        completedCount: 97,
+        totalSavedTokens: 3_880_000,
+      }),
+    )
+
+    try {
+      expect(frame(app)).toContain("Compression #97 (~40k tokens removed, 40% reduction)")
+      expect(frame(app)).toContain("~3880k tokens saved total")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("omits the number and total when history is unavailable", async () => {
+    const app = await renderTranscript(
+      { type: "compaction", jobID: "cmp_this" },
+      () => undefined,
+      (jobID) => (jobID === "cmp_this" ? completedLifecycle : undefined),
+    )
+
+    try {
+      expect(frame(app)).toContain("~ compacted")
+      expect(frame(app)).toContain("~40k tokens removed, 40% reduction")
+      expect(frame(app)).toContain("Items: 20 messages compressed")
+      expect(frame(app)).not.toContain("Compression #")
+      expect(frame(app)).not.toContain("saved total")
     } finally {
       app.renderer.destroy()
     }

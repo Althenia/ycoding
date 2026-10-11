@@ -27,12 +27,18 @@ function durable(sessionID: string, seq: number) {
 async function mountRows(
   sessionID: string,
   subagentTasks: SessionOrchestrationTask[] = [],
-  options: { messages?: () => Response | Promise<Response>; waitForMessages?: boolean } = {},
+  options: {
+    messages?: () => Response | Promise<Response>
+    compactionHistory?: (sessionID: string) => Response | Promise<Response>
+    waitForMessages?: boolean
+  } = {},
 ) {
   const events = createEventStream()
   const calls = createFetch((url) => {
     if (url.pathname === `/api/session/${sessionID}/snapshot`)
       return options.messages?.() ?? sessionSnapshot(sessionID, [])
+    const compaction = /^\/api\/session\/([^/]+)\/compaction$/.exec(url.pathname)
+    if (compaction) return options.compactionHistory?.(compaction[1])
     if (url.pathname === `/api/session/${sessionID}/subagent`)
       return json({
         data: subagentTasks,
@@ -594,7 +600,7 @@ test("keeps a resident background compaction before newer user and assistant cha
                         row={row}
                         message={(messageID) => mounted.data.session.message.get(sessionID, messageID)}
                         compaction={(currentJobID) => mounted.data.session.compaction.get(sessionID, currentJobID)}
-                        compactions={() => mounted.data.session.compaction.list(sessionID)}
+                        history={() => mounted.data.session.compaction.history(sessionID)}
                       />,
                     ]
                   if (row.type === "message" && row.messageID === "msg_user_during_compaction")
@@ -742,7 +748,7 @@ test("keeps a production compaction before newer assistant and tool rows after c
                         row={row}
                         message={(messageID) => mounted.data.session.message.get(sessionID, messageID)}
                         compaction={(currentJobID) => mounted.data.session.compaction.get(sessionID, currentJobID)}
-                        compactions={() => mounted.data.session.compaction.list(sessionID)}
+                        history={() => mounted.data.session.compaction.history(sessionID)}
                       />,
                     ]
                   if (row.type === "part" && row.ref.messageID === assistantMessageID)
@@ -840,7 +846,18 @@ test("renders only the latest completed compaction before later chat", async () 
       time: { created: 4 },
     },
   ]
-  const mounted = await mountRows(sessionID, [], { messages: () => sessionSnapshot(sessionID, messages) })
+  const mounted = await mountRows(sessionID, [], {
+    messages: () => sessionSnapshot(sessionID, messages),
+    compactionHistory: () =>
+      compactionHistory(
+        ["cmp_one", "cmp_two", "cmp_three"].map((jobID, index) => ({
+          jobID,
+          trigger: "advised",
+          status: "completed",
+          created: index + 1,
+        })),
+      ),
+  })
   const order = () =>
     mounted.rows.map((row) =>
       row.type === "compaction"
@@ -866,7 +883,7 @@ test("renders only the latest completed compaction before later chat", async () 
                         row={row}
                         message={(messageID) => mounted.data.session.message.get(sessionID, messageID)}
                         compaction={(jobID) => mounted.data.session.compaction.get(sessionID, jobID)}
-                        compactions={() => mounted.data.session.compaction.list(sessionID)}
+                        history={() => mounted.data.session.compaction.history(sessionID)}
                       />,
                     ]
                   if (row.type === "message" && row.messageID === "msg_later_chat")
@@ -883,12 +900,14 @@ test("renders only the latest completed compaction before later chat", async () 
     try {
       rendered.renderer.start()
       await rendered.waitForFrame((frame) => frame.includes("Later chat after compactions"))
-      const frame = rendered.captureCharFrame()
 
       expect(order()).toEqual(["compaction:cmp_three", "message:msg_later_chat"])
-      expect(frame).not.toContain("Compression #1")
-      expect(frame).not.toContain("Compression #2")
-      expect(frame.indexOf("Compression #3")).toBeLessThan(frame.indexOf("Later chat after compactions"))
+      await rendered.waitForFrame((frame) => frame.includes("Compression #3"))
+      const numbered = rendered.captureCharFrame()
+      expect(numbered).not.toContain("Compression #1")
+      expect(numbered).not.toContain("Compression #2")
+      expect(numbered.indexOf("Compression #3")).toBeGreaterThanOrEqual(0)
+      expect(numbered.indexOf("Compression #3")).toBeLessThan(numbered.indexOf("Later chat after compactions"))
     } finally {
       rendered.renderer.destroy()
     }
@@ -968,6 +987,385 @@ test("moves a completed compaction marker to its historical message position bef
     expect(mounted.rows.filter((row) => row.type === "compaction" && row.jobID === "cmp_ordered")).toEqual([
       compaction,
     ])
+  } finally {
+    mounted.destroy()
+  }
+})
+
+const retainedUser = (id: string, created: number): SessionMessageInfo => ({
+  id,
+  type: "user",
+  text: id,
+  files: [],
+  agents: [],
+  time: { created },
+})
+
+const completedCompaction = (jobID: string, boundaryID: string, created: number): SessionMessageInfo => ({
+  id: `msg_${jobID}`,
+  type: "compaction",
+  jobID,
+  trigger: "advised",
+  status: "completed",
+  revision: 1,
+  boundary: { messageID: boundaryID, seq: 1 },
+  metrics: { excludedMessages: 1, excludedParts: 0, inputTokens: 1_000, retainedTokens: 400 },
+  time: { created },
+})
+
+const compactionHistory = (
+  data: { jobID: string; trigger: string; status: string; created: number }[],
+  completedBefore = 0,
+  totalSavedTokens = 12_000,
+) =>
+  json({
+    data,
+    truncated: completedBefore > 0,
+    completedBefore,
+    completedCount: completedBefore + data.filter((job) => job.status === "completed").length,
+    totalSavedTokens,
+  })
+
+const rowOrder = (rows: SessionRow[]) =>
+  rows.map((row) =>
+    row.type === "compaction"
+      ? `compaction:${row.jobID}`
+      : row.type === "message"
+        ? `message:${row.messageID}`
+        : row.type === "part"
+          ? `part:${row.ref.partID}`
+          : row.type,
+  )
+
+test("renders a completed compaction before retained post-boundary messages from a snapshot", async () => {
+  const sessionID = "session-compaction-retained-snapshot"
+  const mounted = await mountRows(sessionID, [], {
+    messages: () =>
+      sessionSnapshot(sessionID, [
+        retainedUser("msg_boundary", 1),
+        retainedUser("msg_retained", 2),
+        completedCompaction("cmp_retained", "msg_boundary", 3),
+        retainedUser("msg_newer", 4),
+      ]),
+  })
+
+  try {
+    await wait(() => mounted.rows.some((row) => row.type === "compaction"))
+    expect(rowOrder(mounted.rows)).toEqual(["compaction:cmp_retained", "message:msg_retained", "message:msg_newer"])
+
+    const rendered = await testRender(
+      () => (
+        <TestTuiContexts>
+          <ConfigProvider config={createTuiResolvedConfig()}>
+            <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+              <box flexDirection="column">
+                {mounted.rows.flatMap((row) =>
+                  row.type === "compaction"
+                    ? [
+                        <SessionRowView
+                          row={row}
+                          message={(messageID) => mounted.data.session.message.get(sessionID, messageID)}
+                          compaction={(jobID) => mounted.data.session.compaction.get(sessionID, jobID)}
+                          history={() => mounted.data.session.compaction.history(sessionID)}
+                        />,
+                      ]
+                    : row.type === "message"
+                      ? [<text>{`Retained ${row.messageID}`}</text>]
+                      : [],
+                )}
+              </box>
+            </ThemeProvider>
+          </ConfigProvider>
+        </TestTuiContexts>
+      ),
+      { width: 84, height: 18 },
+    )
+    try {
+      rendered.renderer.start()
+      await rendered.waitForFrame((frame) => frame.includes("Retained msg_newer"))
+      const frame = rendered.captureCharFrame()
+      expect(frame.indexOf("~ compacted")).toBeGreaterThanOrEqual(0)
+      expect(frame.indexOf("~ compacted")).toBeLessThan(frame.indexOf("Retained msg_retained"))
+    } finally {
+      rendered.renderer.destroy()
+    }
+  } finally {
+    mounted.destroy()
+  }
+})
+
+test("places a live-completed compaction like a snapshot-hydrated one", async () => {
+  const sessionID = "session-compaction-retained-live"
+  const mounted = await mountRows(sessionID, [], {
+    messages: () => sessionSnapshot(sessionID, [retainedUser("msg_boundary", 1), retainedUser("msg_retained", 2)]),
+  })
+
+  try {
+    mounted.events.emit({
+      id: "evt_compaction_live_admitted",
+      created: 3,
+      type: "session.compaction.admitted",
+      location: { directory },
+      durable: durable(sessionID, 3),
+      data: { sessionID, jobID: "cmp_live" },
+    })
+    mounted.events.emit({
+      id: "evt_compaction_live_ended",
+      created: 4,
+      type: "session.compaction.ended",
+      location: { directory },
+      durable: durable(sessionID, 4),
+      data: {
+        sessionID,
+        jobID: "cmp_live",
+        revision: 1,
+        boundary: { messageID: "msg_boundary", seq: 1 },
+        metrics: { excludedMessages: 1, excludedParts: 0, inputTokens: 1_000, retainedTokens: 400 },
+      },
+    } as unknown as YCodingEvent)
+    await wait(() => mounted.data.session.compaction.get(sessionID, "cmp_live")?.status === "completed")
+    await wait(() => mounted.rows.some((row) => row.type === "compaction"))
+    expect(mounted.data.session.compaction.get(sessionID, "cmp_live")).not.toHaveProperty("messageID")
+    expect(rowOrder(mounted.rows)).toEqual(["compaction:cmp_live", "message:msg_retained"])
+  } finally {
+    mounted.destroy()
+  }
+})
+
+test("renders no compaction row when its message is no longer resident and appends live rows last", async () => {
+  const sessionID = "session-compaction-not-resident"
+  let snapshots = 0
+  const mounted = await mountRows(sessionID, [], {
+    messages: () => {
+      snapshots++
+      return snapshots === 1
+        ? sessionSnapshot(sessionID, [
+            retainedUser("msg_boundary", 1),
+            completedCompaction("cmp_gone", "msg_boundary", 2),
+            retainedUser("msg_before_resync", 3),
+          ])
+        : sessionSnapshot(sessionID, [retainedUser("msg_newest", 4)])
+    },
+  })
+
+  try {
+    await wait(() => mounted.rows.some((row) => row.type === "compaction"))
+    mounted.data.session.message.invalidate(sessionID)
+    await mounted.data.session.message.sync(sessionID)
+    await wait(() => !mounted.rows.some((row) => row.type === "compaction"))
+
+    mounted.events.emit({
+      id: "evt_text_after_resync",
+      created: 5,
+      type: "session.text.delta",
+      data: { sessionID, assistantMessageID: "msg_assistant_live", ordinal: 0, delta: "live" },
+    } as YCodingEvent)
+    await wait(() => mounted.rows.some((row) => row.type === "part"))
+    expect(rowOrder(mounted.rows)).toEqual(["message:msg_newest", "part:text:0"])
+  } finally {
+    mounted.destroy()
+  }
+})
+
+test("releases compaction lifecycles when a Session transcript is evicted", async () => {
+  const sessionID = "session-compaction-evict"
+  const mounted = await mountRows(sessionID, [], {
+    messages: () =>
+      sessionSnapshot(sessionID, [retainedUser("msg_boundary", 1), completedCompaction("cmp_evicted", "msg_boundary", 2)]),
+  })
+
+  try {
+    await wait(() => mounted.data.session.compaction.list(sessionID).length === 1)
+    mounted.data.session.message.evict(sessionID)
+    expect(mounted.data.session.compaction.list(sessionID)).toEqual([])
+  } finally {
+    mounted.destroy()
+  }
+})
+
+test("reads full compaction history after hydrating a completed lifecycle and again after it ends", async () => {
+  const sessionID = "session-compaction-history-reads"
+  let reads = 0
+  const mounted = await mountRows(sessionID, [], {
+    messages: () =>
+      sessionSnapshot(sessionID, [retainedUser("msg_boundary", 1), completedCompaction("cmp_first", "msg_boundary", 2)]),
+    compactionHistory: () => {
+      reads++
+      return reads === 1
+        ? compactionHistory([{ jobID: "cmp_first", trigger: "advised", status: "completed", created: 2 }], 41, 5_000)
+        : compactionHistory(
+            [
+              { jobID: "cmp_first", trigger: "advised", status: "completed", created: 2 },
+              { jobID: "cmp_second", trigger: "advised", status: "completed", created: 3 },
+            ],
+            41,
+            9_000,
+          )
+    },
+  })
+
+  try {
+    await wait(() => mounted.data.session.compaction.history(sessionID) !== undefined)
+    expect(reads).toBe(1)
+    expect(mounted.data.session.compaction.history(sessionID)).toMatchObject({ completedBefore: 41, totalSavedTokens: 5_000 })
+
+    mounted.events.emit({
+      id: "evt_compaction_second_admitted",
+      created: 3,
+      type: "session.compaction.admitted",
+      location: { directory },
+      durable: durable(sessionID, 3),
+      data: { sessionID, jobID: "cmp_second" },
+    })
+    mounted.events.emit({
+      id: "evt_compaction_second_ended",
+      created: 4,
+      type: "session.compaction.ended",
+      location: { directory },
+      durable: durable(sessionID, 4),
+      data: {
+        sessionID,
+        jobID: "cmp_second",
+        revision: 2,
+        boundary: { messageID: "msg_boundary", seq: 1 },
+        metrics: { excludedMessages: 1, excludedParts: 0, inputTokens: 1_000, retainedTokens: 400 },
+      },
+    } as unknown as YCodingEvent)
+    await wait(() => mounted.data.session.compaction.history(sessionID)?.totalSavedTokens === 9_000)
+    expect(reads).toBe(2)
+  } finally {
+    mounted.destroy()
+  }
+})
+
+test("refreshes compaction history after ended only for a resident transcript", async () => {
+  const sessionID = "session-compaction-history-resident"
+  const backgroundID = "session-compaction-history-background"
+  const reads: string[] = []
+  const mounted = await mountRows(sessionID, [], {
+    messages: () =>
+      sessionSnapshot(sessionID, [retainedUser("msg_boundary", 1), completedCompaction("cmp_resident", "msg_boundary", 2)]),
+    compactionHistory: (id) => {
+      reads.push(id)
+      return compactionHistory([])
+    },
+  })
+  const ended = (id: string, seq: number) =>
+    ({
+      id: `evt_history_ended_${id}`,
+      created: seq,
+      type: "session.compaction.ended",
+      location: { directory },
+      durable: durable(id, seq),
+      data: {
+        sessionID: id,
+        jobID: `cmp_${id}`,
+        revision: 1,
+        boundary: { messageID: "msg_boundary", seq: 1 },
+        metrics: { excludedMessages: 1, excludedParts: 0, inputTokens: 1_000, retainedTokens: 400 },
+      },
+    }) as unknown as YCodingEvent
+
+  try {
+    await wait(() => reads.length === 1)
+    mounted.events.emit(ended(backgroundID, 7))
+    await wait(() => mounted.data.session.compaction.get(backgroundID, `cmp_${backgroundID}`)?.status === "completed")
+    mounted.events.emit(ended(sessionID, 8))
+    await wait(() => reads.length === 2)
+    expect(reads).toEqual([sessionID, sessionID])
+    expect(mounted.data.session.compaction.history(backgroundID)).toBeUndefined()
+  } finally {
+    mounted.destroy()
+  }
+})
+
+test("does not read compaction history for a Session without a visible compaction lifecycle", async () => {
+  const sessionID = "session-compaction-history-none"
+  let reads = 0
+  const mounted = await mountRows(sessionID, [], {
+    messages: () => sessionSnapshot(sessionID, [retainedUser("msg_only", 1)]),
+    compactionHistory: () => {
+      reads++
+      return compactionHistory([])
+    },
+  })
+
+  try {
+    await mounted.data.session.compaction.sync(sessionID)
+    expect(reads).toBe(0)
+    expect(mounted.data.session.compaction.history(sessionID)).toBeUndefined()
+  } finally {
+    mounted.destroy()
+  }
+})
+
+test("leaves compaction history unavailable when the read fails and keeps the divider", async () => {
+  const sessionID = "session-compaction-history-failed"
+  let reads = 0
+  const mounted = await mountRows(sessionID, [], {
+    messages: () =>
+      sessionSnapshot(sessionID, [retainedUser("msg_boundary", 1), completedCompaction("cmp_failed_read", "msg_boundary", 2)]),
+    compactionHistory: () => {
+      reads++
+      return json({ error: "unavailable" }, { status: 500 })
+    },
+  })
+
+  try {
+    await wait(() => reads === 1)
+    await wait(() => mounted.rows.some((row) => row.type === "compaction"))
+    await Bun.sleep(20)
+    expect(mounted.data.session.compaction.history(sessionID)).toBeUndefined()
+  } finally {
+    mounted.destroy()
+  }
+})
+
+test("renders the server-provided compression number and releases history on eviction", async () => {
+  const sessionID = "session-compaction-history-number"
+  const mounted = await mountRows(sessionID, [], {
+    messages: () =>
+      sessionSnapshot(sessionID, [retainedUser("msg_boundary", 1), completedCompaction("cmp_numbered", "msg_boundary", 2)]),
+    compactionHistory: () =>
+      compactionHistory([{ jobID: "cmp_numbered", trigger: "advised", status: "completed", created: 2 }], 41, 64_000),
+  })
+
+  try {
+    await wait(() => mounted.data.session.compaction.history(sessionID) !== undefined)
+    const rendered = await testRender(
+      () => (
+        <TestTuiContexts>
+          <ConfigProvider config={createTuiResolvedConfig()}>
+            <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+              <box flexDirection="column">
+                {mounted.rows.flatMap((row) =>
+                  row.type === "compaction"
+                    ? [
+                        <SessionRowView
+                          row={row}
+                          message={(messageID) => mounted.data.session.message.get(sessionID, messageID)}
+                          compaction={(jobID) => mounted.data.session.compaction.get(sessionID, jobID)}
+                          history={() => mounted.data.session.compaction.history(sessionID)}
+                        />,
+                      ]
+                    : [],
+                )}
+              </box>
+            </ThemeProvider>
+          </ConfigProvider>
+        </TestTuiContexts>
+      ),
+      { width: 100, height: 12 },
+    )
+    try {
+      rendered.renderer.start()
+      await rendered.waitForFrame((frame) => frame.includes("Compression #42"))
+    } finally {
+      rendered.renderer.destroy()
+    }
+
+    mounted.data.session.message.evict(sessionID)
+    expect(mounted.data.session.compaction.history(sessionID)).toBeUndefined()
   } finally {
     mounted.destroy()
   }

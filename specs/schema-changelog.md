@@ -2,6 +2,15 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+## 2026-10-11: Add Session Compaction History Read
+
+- Add `SessionCompaction.HistoryJob` (`jobID`, `trigger`, `status`, `created`, optional `metrics` on completed jobs, optional `code` on failed jobs) and `SessionCompaction.History` (`data`, `truncated`, `completedBefore`, `completedCount`, `totalSavedTokens`).
+- Add Location-scoped `GET /api/session/:sessionID/compaction` (`session.compaction.list`), returning `SessionCompaction.History` and failing with `SessionNotFoundError` for an unknown Session.
+
+Compatibility:
+
+- The shapes and operation are additive and read-only, require no stored-data migration, and use the regenerated Promise and Effect clients.
+
 ## 2026-10-10: Add Consent-Gated Local Telemetry
 
 - Add `Telemetry.NoticeVersion`, `CurrentNoticeVersion`, `Consent`, `ConsentState`, `ConsentInput`, `ClientSample`, and HTTP 403 `TelemetryDisabled`. Machine-global consent defaults to undecided/off and persists in the single-row `telemetry_consent` table.

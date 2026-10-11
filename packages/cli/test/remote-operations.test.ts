@@ -661,67 +661,24 @@ describe("backend Session authorization", () => {
     expect(calls.map((call) => call.method)).toEqual(["listPage"])
   })
 
-  test("lists bounded pre-boundary compactions with exact full-history totals at the verified Location", async () => {
-    const messages = [
-      { id: "msg_user", type: "user", text: "private", time: { created: 0 } },
-      ...Array.from({ length: 103 }, (_, index) => ({
-        id: `msg_${index}`, type: "compaction", jobID: `cmp_${index}`, trigger: "manual", status: "completed",
-        metrics: { excludedMessages: 3, excludedParts: 1, inputTokens: 100, retainedTokens: 40 },
-        time: { created: index + 1 },
-      })),
-    ]
+  test("relays the local compaction history read at the verified Location without reading the transcript", async () => {
+    const history = {
+      data: [
+        { jobID: "cmp_a", trigger: "auto", status: "running", created: 1 },
+        { jobID: "cmp_b", trigger: "manual", status: "failed", code: "cancelled", created: 2 },
+        { jobID: "cmp_c", trigger: "manual", status: "completed", metrics: { excludedMessages: 3, excludedParts: 1, inputTokens: 100, retainedTokens: 40 }, created: 3 },
+      ],
+      truncated: true, completedBefore: 3, completedCount: 4, totalSavedTokens: 240,
+    }
     const { local, registry, subscriptions, calls } = await harness({
       sessions: [sessionInfo("ses_1", { updated: 1, directory: "/bound" })],
-      results: { messages: async () => messages },
+      results: { compactionList: async () => history },
     })
     const run = (sessionID = "ses_1") => executeRemoteOperation({ request: { ...request("session.compaction.list"), sessionID }, sessions: registry, subscriptions, local })
     expect(errorOf(await run("ses_foreign")).code).toBe("session_not_allowed")
-    expect(calls.some((call) => call.method === "messages")).toBe(false)
-    const history = valueOf(await run()) as { data: Array<Record<string, unknown>>; truncated: boolean; completedBefore: number; completedCount: number; totalSavedTokens: number }
-    expect(history).toMatchObject({ truncated: true, completedBefore: 3, completedCount: 103, totalSavedTokens: 6_180 })
-    expect(history.data).toHaveLength(100)
-    expect(history.data[0]).toEqual({ jobID: "cmp_3", trigger: "manual", status: "completed", metrics: { excludedMessages: 3, excludedParts: 1, inputTokens: 100, retainedTokens: 40 }, created: 4 })
-    expect(history.data.at(-1)?.jobID).toBe("cmp_102")
-    expect(JSON.stringify(history)).not.toContain("private")
-    expect(calls.filter((call) => call.method === "messages")).toEqual([{ method: "messages", args: ["ses_1", { directory: "/bound" }] }])
-  })
-
-  test("includes running and failed compactions without treating their tokens as saved", async () => {
-    const { local, registry, subscriptions } = await harness({ results: { messages: async () => [
-      { id: "msg_a", type: "compaction", jobID: "cmp_a", trigger: "auto", status: "running", time: { created: 1 } },
-      { id: "msg_b", type: "compaction", jobID: "cmp_b", trigger: "manual", status: "failed", code: "cancelled", error: { message: "private" }, time: { created: 2 } },
-    ] } })
-    expect(valueOf(await executeRemoteOperation({ request: request("session.compaction.list"), sessions: registry, subscriptions, local }))).toEqual({
-      data: [{ jobID: "cmp_a", trigger: "auto", status: "running", created: 1 }, { jobID: "cmp_b", trigger: "manual", status: "failed", code: "cancelled", created: 2 }],
-      truncated: false, completedBefore: 0, completedCount: 0, totalSavedTokens: 0,
-    })
-  })
-
-  test("orders compaction history by creation time and job ID like the TUI", async () => {
-    const { local, registry, subscriptions } = await harness({ results: { messages: async () => [
-      { id: "msg_late", type: "compaction", jobID: "cmp_late", trigger: "manual", status: "running", time: { created: 9 } },
-      { id: "msg_b", type: "compaction", jobID: "cmp_b", trigger: "manual", status: "running", time: { created: 1 } },
-      { id: "msg_a", type: "compaction", jobID: "cmp_a", trigger: "manual", status: "running", time: { created: 1 } },
-    ] } })
-    const history = valueOf(await executeRemoteOperation({ request: request("session.compaction.list"), sessions: registry, subscriptions, local })) as { data: Array<{ jobID: string }> }
-    expect(history.data.map((entry) => entry.jobID)).toEqual(["cmp_a", "cmp_b", "cmp_late"])
-  })
-
-  test("measures connector projection of a 5000-message Session without relaying message content", async () => {
-    const messages = [...Array.from({ length: 5_000 }, (_, index) => ({ id: `msg_${index}`, type: "user", text: "synthetic content ".repeat(30), time: { created: index } })),
-      { id: "msg_compact", type: "compaction", time: { created: 5_001 }, jobID: "cmp_1", trigger: "manual", status: "completed", metrics: { excludedMessages: 4, excludedParts: 0, inputTokens: 1_000, retainedTokens: 400 } }]
-    const localResponse = JSON.stringify(messages)
-    const test = await harness({ results: { messages: async () => JSON.parse(localResponse) } })
-    const localBytes = Buffer.byteLength(localResponse)
-    const started = performance.now()
-    const frames = await executeRemoteOperation({ request: request("session.compaction.list"), sessions: test.registry, subscriptions: test.subscriptions, local: test.local })
-    const projectionMs = performance.now() - started
-    const relayBytes = frames.reduce((total, frame) => total + Buffer.byteLength(JSON.stringify(frame)), 0)
-    expect(frames).toHaveLength(1)
-    expect(valueOf(frames)).toMatchObject({ data: [{ jobID: "cmp_1" }], completedCount: 1, totalSavedTokens: 600 })
-    expect(localBytes).toBeGreaterThan(2_000_000)
-    expect(relayBytes).toBeLessThan(RemoteLimits.maxAgentMessageChars)
-    console.info(JSON.stringify({ scenario: "connector compaction projection, synthetic local messages", messages: messages.length, localBytes, relayBytes, projectionMs: Number(projectionMs.toFixed(2)) }))
+    expect(calls.some((call) => call.method === "compactionList")).toBe(false)
+    expect(valueOf(await run())).toEqual(history)
+    expect(calls.filter((call) => call.method === "compactionList")).toEqual([{ method: "compactionList", args: ["ses_1", { directory: "/bound" }] }])
   })
 
   test("serves every backend session from the global list", async () => {
@@ -1691,7 +1648,7 @@ function readMethod(operation: (typeof readOperations)[number]) {
   const method: Record<(typeof readOperations)[number], keyof LocalServer> = {
     "session.get": "getSession",
     "session.messages": "messages",
-    "session.compaction.list": "messages",
+    "session.compaction.list": "compactionList",
     "session.snapshot": "snapshot",
     "session.pending.list": "pendingList",
     "session.todo.list": "todoList",

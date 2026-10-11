@@ -829,26 +829,8 @@ async function run(input: OperationInput) {
       return null
     case "messages":
       return { data: await input.local.messages(sessionID, location) }
-    case "compaction.list": {
-      const history = (await input.local.messages(sessionID, location)).filter((message) =>
-        message.type === "compaction" && "jobID" in message,
-      ).toSorted((a, b) => a.time.created - b.time.created || a.jobID.localeCompare(b.jobID))
-      const completed = history.filter((message) => message.status === "completed" && "metrics" in message)
-      return {
-        data: history.slice(-RemoteLimits.maxCompactionHistory).map((message) => ({
-          jobID: message.jobID,
-          trigger: message.trigger,
-          status: message.status,
-          created: message.time.created,
-          ...(message.status === "completed" ? { metrics: message.metrics } : {}),
-          ...(message.status === "failed" ? { code: message.code } : {}),
-        })),
-        truncated: history.length > RemoteLimits.maxCompactionHistory,
-        completedBefore: history.slice(0, -RemoteLimits.maxCompactionHistory).filter((message) => message.status === "completed").length,
-        completedCount: completed.length,
-        totalSavedTokens: completed.reduce((total, message) => total + message.metrics.inputTokens - message.metrics.retainedTokens, 0),
-      }
-    }
+    case "compaction.list":
+      return await input.local.compactionList(sessionID, location)
     case "todo.list":
       return { data: await input.local.todoList(sessionID, location) }
     case "autonomy.get":

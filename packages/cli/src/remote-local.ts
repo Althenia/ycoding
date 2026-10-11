@@ -34,7 +34,7 @@ import { createHash } from "node:crypto"
 import { stat } from "node:fs/promises"
 import { Service, type Endpoint } from "@ycoding-ai/client/effect/service"
 import { Telemetry } from "@ycoding-ai/schema/telemetry"
-import { RemoteLimits, type RemoteLatencySample, type RemoteTelemetryConsent, type RemoteTelemetryConsentState, type RemoteUsageReportInput } from "@ycoding-ai/remote"
+import { RemoteLimits, type RemoteCompactionHistory, type RemoteLatencySample, type RemoteTelemetryConsent, type RemoteTelemetryConsentState, type RemoteUsageReportInput } from "@ycoding-ai/remote"
 
 // The bridge's only view of the local YCoding server: the same Protocol routes
 // the TUI uses, addressed with a Location derived from the backend inventory.
@@ -135,6 +135,7 @@ export type LocalServer = {
   readonly shellList: (location: LocalLocation) => Promise<readonly unknown[]>
   readonly shellRemove: (shellID: string, location: LocalLocation) => Promise<void>
   readonly messages: (sessionID: string, location: LocalLocation) => Promise<readonly SessionMessageInfo[]>
+  readonly compactionList: (sessionID: string, location: LocalLocation) => Promise<RemoteCompactionHistory>
   readonly log: (sessionID: string, location: LocalLocation, after?: number) => Promise<readonly unknown[]>
   readonly autonomyGet: (sessionID: string, location: LocalLocation) => Promise<unknown>
   readonly permissionList: (sessionID: string, location: LocalLocation) => Promise<unknown>
@@ -247,6 +248,8 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
       }),
     messages: (sessionID, location) =>
       call(() => client.message.list({ sessionID }, request(location, timeoutMs))),
+    compactionList: (sessionID, location) =>
+      call(() => client.session.compaction.list({ sessionID }, request(location, timeoutMs))),
     activeSessions: () => call(() => client.session.active({ signal: AbortSignal.timeout(timeoutMs) })),
     outstandingSessions: (failures) => call(() => client.session.outstanding(failures ? { failures: true } : undefined,
       { signal: AbortSignal.timeout(timeoutMs) })),

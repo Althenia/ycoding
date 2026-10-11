@@ -1,5 +1,6 @@
 import { Cause, DateTime, Effect, Layer, Option, Schema, Context, Stream, Scope } from "effect"
 import { ListAnchor } from "@ycoding-ai/schema/session"
+import { History } from "@ycoding-ai/schema/session-compaction"
 import { Event } from "@ycoding-ai/schema/event"
 import type { Model } from "@ycoding-ai/schema/model"
 import { Money } from "@ycoding-ai/schema/money"
@@ -191,6 +192,7 @@ export class OperationUnavailableError extends Schema.TaggedErrorClass<Operation
 export { AttachmentReadError, InvalidCursorError, MessageDecodeError, NotFoundError }
 
 export const MaxAttachmentReadBytes = 10 * 1024 * 1024
+const CompactionHistoryLimit = 100
 
 export class PromptConflictError extends Schema.TaggedErrorClass<PromptConflictError>()("Session.PromptConflictError", {
   sessionID: SessionSchema.ID,
@@ -298,6 +300,7 @@ export interface Interface {
     { readonly mime: string; readonly bytes: number; readonly data: string },
     NotFoundError | AttachmentReadError
   >
+  readonly compactionHistory: (sessionID: SessionSchema.ID) => Effect.Effect<History, NotFoundError>
   readonly remove: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
   readonly archive: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
   readonly unarchive: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
@@ -1126,6 +1129,69 @@ const layer = Layer.effect(
           ),
         )
         return { mime, bytes: bytes.byteLength, data: Buffer.from(bytes).toString("base64") }
+      }),
+      compactionHistory: Effect.fn("Session.compactionHistory")(function* (sessionID) {
+        yield* result.get(sessionID)
+        const scope = sql`session_id = ${sessionID} AND type = 'compaction' AND json_extract(data, '$.jobID') IS NOT NULL`
+        const history = yield* db
+          .transaction(() =>
+            Effect.gen(function* () {
+              const window = yield* db.all<{
+                jobID: unknown
+                trigger: unknown
+                status: unknown
+                created: unknown
+                code: unknown
+                excludedMessages: unknown
+                excludedParts: unknown
+                inputTokens: unknown
+                retainedTokens: unknown
+              }>(sql`
+                SELECT json_extract(data, '$.jobID') AS jobID, json_extract(data, '$.trigger') AS trigger,
+                       json_extract(data, '$.status') AS status, json_extract(data, '$.time.created') AS created, json_extract(data, '$.code') AS code,
+                       json_extract(data, '$.metrics.excludedMessages') AS excludedMessages,
+                       json_extract(data, '$.metrics.excludedParts') AS excludedParts,
+                       json_extract(data, '$.metrics.inputTokens') AS inputTokens,
+                       json_extract(data, '$.metrics.retainedTokens') AS retainedTokens
+                FROM session_message WHERE ${scope}
+                ORDER BY created DESC, jobID DESC LIMIT ${CompactionHistoryLimit}
+              `)
+              const totals = yield* db.get<{ total: number; completed: number; saved: number }>(sql`
+                SELECT count(*) AS total,
+                       coalesce(sum(json_extract(data, '$.status') = 'completed'), 0) AS completed,
+                       coalesce(sum(CASE WHEN json_extract(data, '$.status') = 'completed'
+                         THEN json_extract(data, '$.metrics.inputTokens') - json_extract(data, '$.metrics.retainedTokens') END), 0) AS saved
+                FROM session_message WHERE ${scope}
+              `)
+              return { window, totals }
+            }),
+          )
+          .pipe(Effect.orDie)
+        const jobs = history.window.toReversed().map((row) => ({
+          jobID: row.jobID,
+          trigger: row.trigger,
+          status: row.status,
+          created: row.created,
+          ...(row.status === "completed"
+            ? {
+                metrics: {
+                  excludedMessages: row.excludedMessages,
+                  excludedParts: row.excludedParts,
+                  inputTokens: row.inputTokens,
+                  retainedTokens: row.retainedTokens,
+                },
+              }
+            : {}),
+          ...(row.status === "failed" ? { code: row.code } : {}),
+        }))
+        const totals = history.totals ?? { total: 0, completed: 0, saved: 0 }
+        return yield* Schema.decodeUnknownEffect(History)({
+          data: jobs,
+          truncated: totals.total > CompactionHistoryLimit,
+          completedBefore: totals.completed - jobs.filter((job) => job.status === "completed").length,
+          completedCount: totals.completed,
+          totalSavedTokens: totals.saved,
+        }).pipe(Effect.orDie)
       }),
       diagnostics: Effect.fn("Session.diagnostics")(function* (sessionID) {
         const session = yield* result.get(sessionID)

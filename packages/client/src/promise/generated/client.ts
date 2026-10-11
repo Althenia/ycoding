@@ -95,6 +95,8 @@ import type {
   SessionShellOutput,
   SessionCompactInput,
   SessionCompactOutput,
+  SessionCompactionListInput,
+  SessionCompactionListOutput,
   SessionWaitInput,
   SessionWaitOutput,
   SessionRevertStageInput,
@@ -1167,6 +1169,19 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ).then((value) => value.data),
+      compaction: {
+        list: (input: SessionCompactionListInput, requestOptions?: RequestOptions) =>
+          request<SessionCompactionListOutput>(
+            {
+              method: "GET",
+              path: `/api/session/${encodeURIComponent(input.sessionID)}/compaction`,
+              successStatus: 200,
+              declaredStatuses: [404, 400, 401],
+              empty: false,
+            },
+            requestOptions,
+          ),
+      },
       wait: (input: SessionWaitInput, requestOptions?: RequestOptions) =>
         request<SessionWaitOutput>(
           {

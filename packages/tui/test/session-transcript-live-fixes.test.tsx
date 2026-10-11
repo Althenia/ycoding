@@ -765,6 +765,18 @@ const restorationMessages = [
   })),
   { id: "msg_after_tail", type: "user", text: "LATEST CHAT AFTER COMPACTION", time: { created: 30 } },
 ] as SessionMessageInfo[]
+const restorationCompaction = {
+  id: "msg_compaction_restore",
+  type: "compaction",
+  jobID: "cmp_restore",
+  trigger: "advised",
+  status: "completed",
+  revision: 1,
+  boundary: { messageID: "msg_boundary_restore", seq: 2 },
+  metrics: { excludedMessages: 2, excludedParts: 0, inputTokens: 10_000, retainedTokens: 1_000 },
+  time: { created: 3 },
+} as SessionMessageInfo
+const restorationState = { compacted: false }
 const restorationChildMessages = [
   { id: "msg_child", type: "user", text: "CHILD SESSION TRANSCRIPT", time: { created: 1 } },
 ] as SessionMessageInfo[]
@@ -774,7 +786,11 @@ function restorationRoute(url: URL) {
   if (url.pathname === `/api/session/${restorationParentID}`) return json({ data: restorationParent })
   if (url.pathname === `/api/session/${restorationChildID}`) return json({ data: restorationChild })
   if (url.pathname === `/api/session/${restorationParentID}/snapshot`)
-    return sessionSnapshot(restorationParentID, restorationMessages, { session: restorationParent })
+    return sessionSnapshot(
+      restorationParentID,
+      restorationState.compacted ? restorationMessages.toSpliced(2, 0, restorationCompaction) : restorationMessages,
+      { session: restorationParent },
+    )
   if (url.pathname === `/api/session/${restorationChildID}/snapshot`)
     return sessionSnapshot(restorationChildID, restorationChildMessages, { session: restorationChild })
   if (url.pathname === `/api/session/${restorationParentID}/subagent`)
@@ -1194,6 +1210,7 @@ test("restores main-session tail and non-tail view across repeated subagent navi
     if (!parentScroll) throw new Error("missing parent transcript scrollbox")
     await scrollToTop()
     expect(screen.frame()).toContain("COVERED HISTORY MUST STAY PRUNED")
+    restorationState.compacted = true
     screen.events.emit({
       id: "evt_compaction_restore",
       created: 3,
@@ -1219,6 +1236,7 @@ test("restores main-session tail and non-tail view across repeated subagent navi
     const restoredNonTailTop = await navigateToParent()
     await scrollToTop()
     expect(screen.frame()).not.toContain("COVERED HISTORY MUST STAY PRUNED")
+    expect(screen.frame()).toContain("~ compacted")
     expect(restoredNonTailTop).toBe(savedTop)
 
     const restored = screen.scrollbox()
@@ -1235,7 +1253,11 @@ test("restores main-session tail and non-tail view across repeated subagent navi
     expect(screen.scrollbox()?.scrollHeight).toBe(residentHeight)
     expect(screen.frame()).toContain("LATEST CHAT AFTER COMPACTION")
     expect(screen.frame()).not.toContain("COVERED HISTORY MUST STAY PRUNED")
+    await scrollToTop()
+    expect(screen.frame()).toContain("~ compacted")
+    expect(screen.frame()).not.toContain("COVERED HISTORY MUST STAY PRUNED")
   } finally {
+    restorationState.compacted = false
     await screen.dispose()
   }
 }, 120_000)

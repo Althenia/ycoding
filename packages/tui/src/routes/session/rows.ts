@@ -48,24 +48,6 @@ export async function resolveMessageJump(input: {
   return "loaded" as const
 }
 
-function residentCompactionBoundary(sessionID: string, messages: SessionMessageInfo[], compactionList: ReturnType<ReturnType<typeof useData>["session"]["compaction"]["list"]>) {
-  const fromStore = compactionList
-    .filter((lifecycle) => lifecycle.status === "completed" && !!lifecycle.boundary)
-    .map((lifecycle) => messages.findIndex((message) => message.id === lifecycle.boundary!.messageID))
-    .reduce((latest, position) => Math.max(latest, position), -1)
-  const fromMessages = messages
-    .filter(
-      (message): message is Extract<SessionMessageInfo, { type: "compaction" }> =>
-        message.type === "compaction" &&
-        "jobID" in message &&
-        (message as unknown as { status: string }).status === "completed" &&
-        !!(message as unknown as { boundary?: unknown }).boundary,
-    )
-    .map((message) => messages.findIndex((item) => item.id === (message as unknown as { boundary: { messageID: string } }).boundary.messageID))
-    .reduce((latest, position) => Math.max(latest, position), -1)
-  return Math.max(fromStore, fromMessages)
-}
-
 export function createSessionRows(sessionID: Accessor<string>) {
   const mountedSessionID = sessionID()
   const data = useData()
@@ -73,39 +55,32 @@ export function createSessionRows(sessionID: Accessor<string>) {
   const [rows, setRows] = createStore<SessionRow[]>([])
   const revertBoundary = () => data.session.get(sessionID())?.revert?.messageID
 
-  function hydrateCompactionLifecycle(targetID: string) {
-    // Re-derive completed compaction boundaries from both the store lifecycle
-    // and the resident message payloads so pruning is reapplied before
-    // resident rows are published on sessionID change. This covers the
-    // keep_recent_messages:0 case where covered rows must stay pruned after
-    // jumping to a subagent and back (previously only initial hydration/reconnect pruned).
-    const messages = data.session.message.list(targetID)
-    void data.session.compaction.list(targetID)
-    void messages
-  }
-
   function reduce() {
     const messages = data.session.message.list(sessionID())
     const inputs = new Set(data.session.input.list(sessionID()))
     const revertID = revertBoundary()
-    const compactions = data.session.compaction.list(sessionID())
-    const compactionBoundaryIndex = residentCompactionBoundary(sessionID(), messages, compactions)
-    const pruned = compactionBoundaryIndex === -1 ? messages : messages.filter((message, index) => index > compactionBoundaryIndex || message.type === "compaction")
-    const latestLifecycle = compactions.filter(compactionTranscriptVisible).at(-1)
-    const latestLegacy = pruned.findLast(
+    const residentIDs = new Set(messages.map((message) => message.id))
+    const latestLifecycle = data.session.compaction
+      .list(sessionID())
+      .filter(
+        (lifecycle) =>
+          compactionTranscriptVisible(lifecycle) && (!lifecycle.messageID || residentIDs.has(lifecycle.messageID)),
+      )
+      .at(-1)
+    const latestLegacy = messages.findLast(
       (message): message is Extract<SessionMessageInfo, { type: "compaction" }> =>
         message.type === "compaction" && compactionMessageTranscriptVisible(message),
     )
     const showLifecycle =
       latestLifecycle !== undefined &&
       (latestLegacy === undefined || latestLifecycle.time.created >= latestLegacy.time.created)
-    const visible = (revertID ? pruned.filter((message) => message.id < revertID) : pruned).filter(
+    const visible = (revertID ? messages.filter((message) => message.id < revertID) : messages).filter(
       (message) => message.type !== "compaction" || (!showLifecycle && message.id === latestLegacy?.id),
     )
     const rows = reduceSessionRows(visible, inputs, data.session.status(sessionID()) === "idle")
     if (showLifecycle) {
       const row: SessionRow = { type: "compaction", jobID: latestLifecycle.jobID }
-      const index = compactionRowIndex(latestLifecycle, messages, rows)
+      const index = latestLifecycle.status === "completed" ? 0 : compactionRowIndex(latestLifecycle, messages, rows)
       if (index === -1) rows.push(row)
       else rows.splice(index, 0, row)
     }
@@ -150,14 +125,12 @@ export function createSessionRows(sessionID: Accessor<string>) {
   createEffect(
     on([sessionID, () => client.connection.status()], ([id, status]) => {
       if (status !== "connected") return
-      hydrateCompactionLifecycle(id)
       setRows(reconcile(reduce(), { key: "key" }))
       void data.session.pending.sync(id).catch(() => undefined)
       void data.session.diagnostics.sync(id).catch(() => undefined)
       void data.session.message.sync(id).then(
         () => {
           if (sessionID() !== id) return
-          hydrateCompactionLifecycle(id)
           setRows(reconcile(reduce(), { key: "key" }))
         },
         () => undefined,
@@ -531,23 +504,7 @@ function rowKey(row: SessionRow, message?: SessionMessageInfo): string {
   }
 }
 
-function compactionRowIndex(
-  lifecycle: {
-    messageID?: string
-    status: "pending" | "running" | "completed" | "failed"
-    boundary?: { messageID: string; seq: number }
-  },
-  messages: SessionMessageInfo[],
-  rows: SessionRow[],
-) {
-  if (!lifecycle.messageID) {
-    if (lifecycle.status !== "completed" || !lifecycle.boundary) return -1
-    return rows.findIndex((row) => {
-      if (row.type === "compaction") return false
-      if (row.type !== "message") return true
-      return messages.find((message) => message.id === row.messageID)?.type !== "compaction"
-    })
-  }
+function compactionRowIndex(lifecycle: { messageID?: string }, messages: SessionMessageInfo[], rows: SessionRow[]) {
   const position = messages.findIndex((message) => message.id === lifecycle.messageID)
   if (position === -1) return -1
   const laterMessageIDs = new Set(messages.slice(position + 1).map((message) => message.id))

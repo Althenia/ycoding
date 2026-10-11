@@ -157,6 +157,8 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
     if (url.pathname === "/api/form/request")
       return json({ location: { directory, project: { id: "proj_test", directory: worktree } }, data: [] })
     if (/^\/api\/session\/[^/]+\/guardrail\/request$/.test(url.pathname)) return json({ data: [] })
+    if (/^\/api\/session\/[^/]+\/compaction$/.test(url.pathname))
+      return json({ data: [], truncated: false, completedBefore: 0, completedCount: 0, totalSavedTokens: 0 })
     if (/^\/api\/session\/[^/]+\/diagnostics$/.test(url.pathname)) return json({ data: null })
     if (/^\/api\/session\/[^/]+\/usage$/.test(url.pathname)) return json({ data: null })
     // Provider-usage refresh is read-only and best effort. Absent usage renders as unreported, so the

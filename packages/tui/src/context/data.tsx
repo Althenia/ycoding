@@ -26,6 +26,7 @@ import type {
   SessionMessageAssistantText,
   SessionMessageAssistantTool,
   SessionInfo,
+  SessionCompactionListOutput,
   SessionDiagnosticsOutput,
   SessionOrchestrationPage,
   SessionPendingInfo,
@@ -192,6 +193,7 @@ type Store = {
     message: Record<string, SessionMessageInfo[]>
     history: Record<string, DataSessionHistory>
     compaction: Record<string, Record<string, DataSessionCompactionLifecycle>>
+    compactionHistory: Record<string, SessionCompactionListOutput>
     pending: Record<string, SessionPendingInfo[]>
     subagent: Record<string, SubagentPage>
     todo: Record<string, SessionTodoInfo[]>
@@ -641,6 +643,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         message: {},
         history: {},
         compaction: {},
+        compactionHistory: {},
         pending: {},
         subagent: {},
         todo: {},
@@ -723,14 +726,12 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         })
         .reduce((latest, position) => Math.max(latest, position), -1)
       const fromMessages = messages
-        .filter(
-          (message): message is Extract<SessionMessageInfo, { type: "compaction" }> =>
-            message.type === "compaction" &&
-            "jobID" in message &&
-            (message as unknown as { status: string }).status === "completed" &&
-            !!(message as unknown as { boundary?: unknown }).boundary,
-        )
-        .map((message) => messages.findIndex((item) => item.id === (message as unknown as { boundary: { messageID: string } }).boundary.messageID))
+        .flatMap((message) => {
+          const current = currentCompaction(message)
+          return current && "boundary" in current
+            ? [messages.findIndex((item) => item.id === current.boundary.messageID)]
+            : []
+        })
         .reduce((latest, position) => Math.max(latest, position), -1)
       const boundary = Math.max(fromStore, fromMessages)
       if (boundary === -1) return messages
@@ -787,6 +788,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           })
           if (mutations?.size === 0) messageMutations.delete(sessionID)
         })
+        refreshCompactionHistory(sessionID)
         await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
         props.recordTelemetry?.("transcript.load", performance.now() - started)
       } catch (error) {
@@ -856,6 +858,24 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         ...store.session.compaction[sessionID],
         [lifecycle.jobID]: mergeCompactionLifecycle(store.session.compaction[sessionID]?.[lifecycle.jobID], lifecycle),
       })
+    }
+
+    function syncCompactionHistory(sessionID: string) {
+      const visible = Object.values(store.session.compaction[sessionID] ?? {}).some(
+        (lifecycle) => lifecycle.status !== "failed" || lifecycle.code === "cancelled" || lifecycle.code === "superseded",
+      )
+      if (!visible) return Promise.resolve()
+      return sync.run(`session.compaction:${sessionID}`, async (current) => {
+        const history = await client.api.session.compaction.list({ sessionID })
+        if (!current()) return
+        setStore("session", "compactionHistory", sessionID, history)
+      })
+    }
+
+    function refreshCompactionHistory(sessionID: string) {
+      if (store.session.message[sessionID] === undefined && !messageSyncLoad.has(sessionID)) return
+      sync.invalidate(`session.compaction:${sessionID}`)
+      void syncCompactionHistory(sessionID).catch(() => undefined)
     }
 
     function updateCompaction(sessionID: string, lifecycle: DataSessionCompactionLifecycle) {
@@ -1032,6 +1052,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       sync.forget(`session.pending:${sessionID}`)
       sync.forget(`session.subagent:${sessionID}`)
       sync.forget(`session.message:${sessionID}`)
+      sync.forget(`session.compaction:${sessionID}`)
       sync.forget(`session.diagnostics:${sessionID}`)
       sync.forget(`session.usage:${sessionID}`)
       sync.forget(`session.todo:${sessionID}`)
@@ -1046,6 +1067,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           delete draft.message[sessionID]
           delete draft.history[sessionID]
           delete draft.compaction[sessionID]
+          delete draft.compactionHistory[sessionID]
           delete draft.diagnostics[sessionID]
           delete draft.prediction[sessionID]
           delete draft.predictionDismissed[sessionID]
@@ -1792,6 +1814,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             metrics: event.data.metrics,
             time: { created: event.created },
           })
+          refreshCompactionHistory(event.data.sessionID)
           break
         case "session.compaction.failed":
           updateCompaction(event.data.sessionID, {
@@ -2138,11 +2161,14 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             olderLoads.delete(sessionID)
             streamSequence.delete(sessionID)
             sync.forget(`session.message:${sessionID}`)
+            sync.forget(`session.compaction:${sessionID}`)
             setStore(
               "session",
               produce((draft) => {
                 delete draft.message[sessionID]
                 delete draft.history[sessionID]
+                delete draft.compaction[sessionID]
+                delete draft.compactionHistory[sessionID]
               }),
             )
             pruneMetadata()
@@ -2160,6 +2186,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               (a, b) => a.time.created - b.time.created || a.jobID.localeCompare(b.jobID),
             )
           },
+          history(sessionID: string) {
+            return store.session.compactionHistory[sessionID]
+          },
+          sync: syncCompactionHistory,
         },
         permission: {
           list(sessionID: string) {

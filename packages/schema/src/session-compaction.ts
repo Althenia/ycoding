@@ -66,3 +66,22 @@ export const Result = Schema.Struct({
   timeCreated: DateTimeUtcFromMillis,
   failure: optional(FailureCode),
 }).annotate({ identifier: "SessionCompaction.Result" })
+
+export interface HistoryJob extends Schema.Schema.Type<typeof HistoryJob> {}
+export const HistoryJob = Schema.Struct({
+  jobID: ID,
+  trigger: Trigger,
+  status: Schema.Literals(["pending", "running", "completed", "failed"]),
+  created: NonNegativeInt,
+  metrics: optional(Metrics),
+  code: optional(FailureCode),
+}).annotate({ identifier: "SessionCompaction.HistoryJob" })
+
+export interface History extends Schema.Schema.Type<typeof History> {}
+export const History = Schema.Struct({
+  data: Schema.Array(HistoryJob),
+  truncated: Schema.Boolean,
+  completedBefore: NonNegativeInt,
+  completedCount: NonNegativeInt,
+  totalSavedTokens: Schema.Int,
+}).annotate({ identifier: "SessionCompaction.History" })

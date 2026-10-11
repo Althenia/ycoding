@@ -1783,7 +1783,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                         message={(messageID) => data.session.message.get(route.sessionID, messageID)}
                         activeSkills={activeSkills}
                         compaction={(jobID) => data.session.compaction.get(route.sessionID, jobID)}
-                        compactions={() => data.session.compaction.list(route.sessionID)}
+                        history={() => data.session.compaction.history(route.sessionID)}
                         assistantIdentity={assistantIdentity()}
                         hideSubagentTools={!session()?.parentID}
                         boundaryID={mountedBoundaries()[index()]}
@@ -2079,7 +2079,7 @@ export function SessionRowView(props: {
   message: (messageID: string) => SessionMessageInfo | undefined
   activeSkills?: () => ReadonlySet<string>
   compaction?: (jobID: string) => DataSessionCompactionLifecycle | undefined
-  compactions?: () => DataSessionCompactionLifecycle[]
+  history?: () => CompactionHistory | undefined
   assistantIdentity?: { label: string; subagent: boolean }
   hideSubagentTools?: boolean
   boundaryID?: string
@@ -2139,7 +2139,7 @@ export function SessionRowView(props: {
           <Match when={props.row.type === "compaction" ? props.row : undefined}>
             {(row) => (
               <Show when={props.compaction?.(row().jobID)}>
-                {(item) => <CompactionLifecycleMessage lifecycle={item()} compactions={props.compactions?.()} />}
+                {(item) => <CompactionLifecycleMessage lifecycle={item()} history={props.history?.()} />}
               </Show>
             )}
           </Match>
@@ -2768,20 +2768,23 @@ function compactionLabel(lifecycle: {
   return ""
 }
 
+type CompactionHistory = {
+  data: readonly { jobID: string; status: "pending" | "running" | "completed" | "failed" }[]
+  completedBefore: number
+  totalSavedTokens: number
+}
+
 function CompactionLifecycleMessage(props: {
   lifecycle: DataSessionCompactionLifecycle
-  compactions?: DataSessionCompactionLifecycle[]
+  history?: CompactionHistory
 }) {
   const { theme } = useTheme()
   const color = () => theme.text.hint
-  const completed = createMemo(() =>
-    (props.compactions?.length ? props.compactions : [props.lifecycle]).filter(
-      (lifecycle): lifecycle is DataSessionCompactionLifecycle & { metrics: NonNullable<DataSessionCompactionLifecycle["metrics"]> } =>
-        lifecycle.status === "completed" && lifecycle.metrics !== undefined,
-    ),
-  )
-  const compression = createMemo(() => completed().findIndex((lifecycle) => lifecycle.jobID === props.lifecycle.jobID))
-  const saved = createMemo(() => completed().reduce((total, lifecycle) => total + lifecycle.metrics.inputTokens - lifecycle.metrics.retainedTokens, 0))
+  const number = createMemo(() => {
+    const index = props.history?.data.filter((job) => job.status === "completed").findIndex((job) => job.jobID === props.lifecycle.jobID)
+    if (props.history === undefined || index === undefined || index < 0) return undefined
+    return props.history.completedBefore + 1 + index
+  })
   const reduction = createMemo(() => {
     const metrics = props.lifecycle.metrics
     if (!metrics || metrics.inputTokens === 0) return 0
@@ -2804,7 +2807,9 @@ function CompactionLifecycleMessage(props: {
       <Show when={props.lifecycle.status === "completed" && props.lifecycle.metrics}>
         {(metrics) => (
           <box paddingLeft={3} paddingTop={1} flexDirection="column">
-            <text fg={theme.text.subdued}>~{compactTokenCount(saved())} tokens saved total</text>
+            <Show when={number() !== undefined}>
+              <text fg={theme.text.subdued}>~{compactTokenCount(props.history?.totalSavedTokens ?? 0)} tokens saved total</text>
+            </Show>
             <box border width="100%" flexDirection="row" borderColor={theme.border.default}>
               <box flexGrow={Math.max(1, metrics().inputTokens - metrics().retainedTokens)} backgroundColor={theme.text.subdued}>
                 <text fg={theme.background.default}>{composition().removed}</text>
@@ -2814,7 +2819,7 @@ function CompactionLifecycleMessage(props: {
               </box>
             </box>
             <text fg={theme.text.default}>
-              Compression #{compression() + 1} (~{compactTokenCount(metrics().inputTokens - metrics().retainedTokens)} tokens removed, {reduction()}% reduction)
+              {number() === undefined ? "" : `Compression #${number()} `}(~{compactTokenCount(metrics().inputTokens - metrics().retainedTokens)} tokens removed, {reduction()}% reduction)
             </text>
             <text fg={theme.text.subdued}>Items: {metrics().excludedMessages} messages compressed · {Locale.todayTimeOrDateTime(props.lifecycle.time.created)}</text>
           </box>
