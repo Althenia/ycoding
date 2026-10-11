@@ -17,6 +17,7 @@ import { useClipboard } from "../../context/clipboard"
 import type { ClipboardReadOptions, ClipboardTemporary } from "../../clipboard"
 import { useClient } from "../../context/client"
 import { useRoute } from "../../context/route"
+import { usePromptRef } from "../../context/prompt"
 import { useEvent } from "../../context/event"
 import { editorSelectionKey, useEditorContext, type EditorSelection } from "../../context/editor"
 import { normalizePromptContent, openEditor } from "../../editor"
@@ -44,6 +45,7 @@ import { createFadeIn } from "../../util/signal"
 import { DialogSkill } from "../dialog-skill"
 import { DialogBtwExport } from "../dialog-btw-export"
 import { DialogSuggest } from "../dialog-suggest"
+import { DialogPromptGenerate } from "../dialog-prompt-generate"
 import { DialogSessionGoal } from "../dialog-session-goal"
 import { useConfig } from "../../config"
 import { usePromptMove } from "./move"
@@ -54,6 +56,7 @@ import { useLocation } from "../../context/location"
 import { Keymap, type KeymapCommand } from "../../context/keymap"
 import {
   confirmSessionCreation,
+  createSessionID,
   goalToggleAction,
   parseGoalCommand,
   restoreSessionSubmission,
@@ -65,6 +68,7 @@ import {
 import { daybreakPlan, daybreakSuccessLabel, daybreakTitle, modelDaybreak } from "../../util/session-daybreak"
 import { modelVariantIDs } from "../../util/model"
 import { openBtwSession, steerBtwConclusion } from "../../util/session"
+import { establishLandingSession } from "../../util/landing-session"
 import type { ModelDaybreak, ModelRef, SessionAutonomyState } from "@ycoding-ai/client"
 
 registerYCodingSpinner()
@@ -233,6 +237,13 @@ const stashed = new WeakMap<
   { prompt: PromptInfo; cursor: number; temporaryAttachments?: Map<string, ClipboardTemporary> }
 >()
 const activePrompts = new WeakMap<object, { clear: (sessionID: string | undefined, prompt: PromptInfo) => void }>()
+const fillEmptyPrompt = new WeakMap<PromptRef, (text: string, delivery?: "queue") => boolean>()
+
+function goalComposerText(text: string) {
+  const trimmed = text.trim()
+  if (trimmed === "/goal" || trimmed.startsWith("/goal ") || trimmed.startsWith("/goal\n")) return trimmed
+  return `/goal ${trimmed}`
+}
 
 function argumentSlash(input: string, commands: readonly KeymapCommand[]) {
   const head = parseSlashHead(input, /\s/)
@@ -259,6 +270,7 @@ export function Prompt(props: PromptProps) {
   const client = useClient()
   const editor = useEditorContext()
   const route = useRoute()
+  const promptRef = usePromptRef()
   const data = useData()
   const keymapCommands = Keymap.useCommands()
   const currentLocation = useLocation()
@@ -809,6 +821,15 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
+        title: "Generate prompt",
+        description: "Draft a prompt from a rough intent",
+        name: "session.prompt.generate",
+        category: "Session",
+        palette: true,
+        slash: { name: "prompt", arguments: true as const },
+        run: (text: string | undefined) => generatePrompt(text),
+      },
+      {
         title: "Send to main chat",
         name: "session.btw.send",
         category: "Session",
@@ -1001,6 +1022,19 @@ export function Prompt(props: PromptProps) {
     },
   }
 
+  fillEmptyPrompt.set(ref, (text, delivery) => {
+    if (store.prompt.text !== "" || (!input.isDestroyed && input.plainText !== "")) return false
+    input.setText(text)
+    setStore("prompt", {
+      ...emptyPrompt(),
+      text,
+      ...(delivery === "queue" ? { delivery } : {}),
+    })
+    input.focus()
+    input.gotoBufferEnd()
+    return true
+  })
+
   onMount(() => {
     const saved = stashed.get(client)
     stashed.delete(client)
@@ -1041,6 +1075,7 @@ export function Prompt(props: PromptProps) {
       void releaseTemporaryAttachments()
     }
     setInputTarget(undefined)
+    fillEmptyPrompt.delete(ref)
     props.ref?.(undefined)
   })
 
@@ -1593,6 +1628,145 @@ export function Prompt(props: PromptProps) {
 
   let submitting = false
   let landingTransferred = false
+
+  function landingPromptTarget() {
+    const submissionLocation = currentLocation.current
+    const agents = data.location.agent.list(submissionLocation)
+    const models = data.location.model.list(submissionLocation)
+    if (!agents || !models) {
+      toast.show({
+        title: "Model selection needs attention",
+        message: "The agent and model catalog is not available yet. Refresh models and providers or retry; draft retained.",
+        variant: "warning",
+      })
+      return
+    }
+    const agentID = local.agent.current()?.id
+    if (!agentID) {
+      promptModelWarning()
+      return
+    }
+    const selectedModel = local.model.current()
+    const variant = local.model.variant.current()
+    const info =
+      selectedModel && models.find((item) => item.providerID === selectedModel.providerID && item.id === selectedModel.modelID)
+    const profileUnavailable =
+      selectedModel?.profile !== undefined && !info?.profiles?.some((item) => item.name === selectedModel.profile)
+    const modelUnavailable = selectedModel?.profile === undefined && info?.enabled === false
+    const variants = modelVariantIDs({ model: info, profile: selectedModel?.profile })
+    if (!selectedModel || !info || profileUnavailable || modelUnavailable || (variant !== undefined && !variants.includes(variant))) {
+      toast.show({
+        title: "Model selection needs attention",
+        message: profileUnavailable
+          ? `Profile ${selectedModel?.profile} is unavailable for ${info?.name ?? selectedModel?.modelID}. Choose another profile or Use provider default; draft retained.`
+          : modelUnavailable
+            ? `Model ${info?.name ?? selectedModel?.modelID} is unavailable for the provider default; choose an available profile or model; draft retained.`
+            : "The selected model or effort is unavailable in the current catalog. Refresh the catalog or choose an available model and effort; draft retained.",
+        variant: "warning",
+      })
+      return
+    }
+    return {
+      agentID,
+      model: {
+        providerID: selectedModel.providerID,
+        id: selectedModel.modelID,
+        variant,
+        ...(selectedModel.profile === undefined ? {} : { profile: selectedModel.profile }),
+      },
+      autonomy: {
+        yolo: yoloLevel(props.autonomy ?? { yolo: 0 }),
+        ...(props.autonomy?.goal?.status === "active" ? { goal: props.autonomy.goal.text } : {}),
+      },
+      daybreak: props.landingDaybreak,
+    }
+  }
+
+  async function openGeneratedSession() {
+    if (landingTransferred) return
+    const target = landingPromptTarget()
+    if (!target) return
+    const directory = await move.getDirectory()
+    const base = data.location.default()
+    const created = await establishLandingSession({
+      api: client.api,
+      id: createSessionID(),
+      location: directory ? { ...base, directory } : base,
+      agent: target.agentID,
+      model: target.model,
+      autonomy: target.autonomy,
+      daybreak: target.daybreak,
+    }).catch((error: unknown) => {
+      toast.error(error)
+    })
+    if (!created) return
+    await data.session.sync(created.id).catch((error: unknown) => {
+      toast.error(error)
+    })
+    if (!data.session.get(created.id)) return
+    const previous = promptRef.current
+    landingTransferred = true
+    route.navigate({ type: "session", sessionID: created.id })
+    return { id: created.id, previous }
+  }
+
+  async function generatedComposer(sessionID: string, previous?: PromptRef) {
+    if (props.sessionID === sessionID) return promptRef.current
+    const deadline = Date.now() + 5_000
+    while (Date.now() < deadline) {
+      const current = promptRef.current
+      if (route.data.type === "session" && route.data.sessionID === sessionID && current && current !== previous) return current
+      await new Promise((resolve) => setTimeout(resolve, 16))
+    }
+  }
+
+  async function generatePrompt(text: string | undefined) {
+    if (text === undefined) {
+      const draft = "/prompt "
+      input.setText(draft)
+      setStore("prompt", { ...emptyPrompt(), text: draft })
+      input.gotoBufferEnd()
+      return
+    }
+    const intent = text.trim()
+    if (!intent) {
+      toast.show({ message: "Add what you want after /prompt", variant: "info" })
+      return
+    }
+    const choice = await DialogPromptGenerate.show(dialog, { session: props.sessionID !== undefined })
+    if (!choice) return
+    const opened = props.sessionID ? undefined : await openGeneratedSession()
+    const sessionID = props.sessionID ?? opened?.id
+    if (!sessionID) return
+    const composer = await generatedComposer(sessionID, opened?.previous)
+    if (!composer) {
+      toast.show({ message: "Could not open the new Session", variant: "error" })
+      return
+    }
+    toast.show({ message: "Generating prompt…", variant: "info" })
+    const result = await data.session.promptGenerate
+      .request(sessionID, { mode: choice.mode, intent, memory: choice.memory })
+      .catch((error: unknown) => {
+        toast.error(error)
+      })
+    if (!result) return
+    if (result.status === "unavailable") {
+      toast.show({ message: "No prompt could be generated", variant: "info" })
+      return
+    }
+    const draft = choice.mode === "goal" ? goalComposerText(result.text) : result.text
+    const current = promptRef.current
+    const delivery = choice.mode === "queue" ? "queue" : undefined
+    if (
+      route.data.type === "session" &&
+      route.data.sessionID === sessionID &&
+      current &&
+      fillEmptyPrompt.get(current)?.(draft, delivery)
+    )
+      return
+    toast.show({ message: "Draft not empty; generated prompt discarded", variant: "info" })
+  }
+
   createEffect(() => {
     const sessionID = landingSubmissionSessionID()
     if (props.sessionID || !sessionID || !data.session.get(sessionID)) return
@@ -1797,6 +1971,7 @@ export function Prompt(props: PromptProps) {
         : undefined,
       history: currentHistory,
       cursor: input.cursorOffset,
+      ...(store.prompt.delivery === "queue" ? { delivery: "queue" as const } : {}),
     }
     const targetSessionID = props.sessionID ?? landingSubmissionSessionID()
     const key = submissionKey(targetSessionID, payload)
@@ -2354,6 +2529,7 @@ export function Prompt(props: PromptProps) {
                 if (value !== "") dismissPrediction()
                 draftRevision += 1
                 setStore("prompt", "text", value)
+                if (value.trim() === "") setStore("prompt", "delivery", undefined)
                 auto()?.onInput(value)
                 void syncExtmarksWithPromptParts()
                 setCursorVersion((value) => value + 1)
@@ -2431,6 +2607,17 @@ export function Prompt(props: PromptProps) {
             </Show>
             </box>
           </box>
+          <Show when={store.prompt.delivery === "queue" && store.prompt.text.trim() !== ""}>
+            <box
+              paddingLeft={props.inset?.left ?? (props.landing ? 3 : 1)}
+              paddingRight={props.inset?.right ?? 2}
+              flexShrink={0}
+            >
+              <text fg={theme.text.subdued} wrapMode="none">
+                ⋯ will queue
+              </text>
+            </box>
+          </Show>
           <Show when={operationText()}>
             {(message) => (
               <box

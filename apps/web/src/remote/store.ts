@@ -165,7 +165,7 @@ function emptyTeam(rootID: string, status: TeamView["status"]): TeamView {
 
 export type PendingMutation = {
   readonly id: string
-  readonly kind: "prompt" | "command" | "compact" | "skill" | "model" | "agent" | "interrupt" | "permission" | "guardrail" | "form" | "autonomy" | "goal" | "prediction"
+  readonly kind: "prompt" | "command" | "compact" | "skill" | "model" | "agent" | "interrupt" | "permission" | "guardrail" | "form" | "autonomy" | "goal" | "prediction" | "promptGenerate"
   readonly label: string
   readonly state: "sending" | "unknown" | "failed"
   readonly phase?: "preparing" | "admitting"
@@ -213,6 +213,10 @@ export type RemoteStoreState = {
   readonly selectedSessionInfo?: SessionInfoView
   readonly confirmedModelSwitches?: Readonly<Record<string, { readonly revision: number; readonly model: ModelRefView }>>
   readonly drafts: Readonly<Record<string, string>>
+  /** Exact draft text that must be admitted with delivery queue. Cleared when that draft is replaced or sent. */
+  readonly queuedPromptDrafts?: Readonly<Record<string, string>>
+  /** Bumped when a generated prompt fills a draft so the composer can place the caret at the end. */
+  readonly promptDraftFocus?: { readonly sessionID: string; readonly revision: number }
   /** Latest dismissed prediction source per composer scope. A request clears one Session so its next event can show. */
   readonly dismissedPredictions: readonly { readonly sessionID: string; readonly scope: string; readonly source: string }[]
   /** Bumps whenever the device connection is replaced or ended; read resources are keyed by device and generation. */
@@ -334,6 +338,7 @@ export type RemoteStore = {
   readonly interrupt: () => Promise<void>
   readonly dismissPrediction: (sessionID: string, scope: string, source: string) => void
   readonly requestPrediction: (input: { readonly memory: readonly ("repository" | "knowledge")[]; readonly hint?: string }) => Promise<boolean>
+  readonly requestPromptGenerate: (input: { readonly mode: "start" | "steer" | "queue" | "goal"; readonly intent: string; readonly memory: readonly ("repository" | "knowledge")[]; readonly workspaceID?: string; readonly agent?: string; readonly model?: ModelRefView }) => Promise<boolean>
   readonly replyPermission: (id: string, reply: "once" | "always" | "reject") => Promise<void>
   readonly replyGuardrail: (id: string, reply: "once" | "always" | "reject") => Promise<void>
   readonly replyForm: (formID: string, answer: Readonly<Record<string, string | number | boolean | readonly string[]>>) => Promise<void>
@@ -1318,6 +1323,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         team: undefined, familyActivity: undefined,
         teamCues: [],
         drafts: {},
+        queuedPromptDrafts: {},
+        promptDraftFocus: undefined,
         mutations: container.state.mutations.filter((mutation) => mutation.operation !== "session.goal.set"),
         mutationToasts: (container.state.mutationToasts ?? []).filter((toast) => !container.state.mutations.some((mutation) => mutation.operation === "session.goal.set" && mutation.id === toast.id)),
         sessionCreation: undefined,
@@ -2497,6 +2504,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       sessionHasNext: false,
       sessionHasPrevious: false,
       drafts: {},
+      queuedPromptDrafts: {},
+      promptDraftFocus: undefined,
       mutations: container.state.mutations.filter((mutation) => mutation.operation !== "session.goal.set"),
       mutationToasts: [],
       sessionCreation: undefined,
@@ -2768,7 +2777,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       clearImageSources()
       cancelFamilyRefresh?.()
       cancelFamilyRefresh = undefined
-      const drafts = container.state.activeDeviceID === deviceID ? container.state.drafts : {}
+      const sameDevice = container.state.activeDeviceID === deviceID
+      const drafts = sameDevice ? container.state.drafts : {}
+      const queuedPromptDrafts = sameDevice ? container.state.queuedPromptDrafts : {}
+      const promptDraftFocus = sameDevice ? container.state.promptDraftFocus : undefined
       const creation = container.state.sessionCreation?.deviceID === deviceID ? container.state.sessionCreation : undefined
       const previous = transport
       transport = undefined
@@ -2794,7 +2806,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       subscribedSessionID = undefined
       queued = []
       sessionsToken += 1
-      endScope({ activeDeviceID: deviceID, transport: { kind: "idle" }, telemetryConsent: { status: "loading" }, sessions: [], carouselSessions: [], carouselStatus: "loading", sessionStatus: undefined, advertised: [], activeSessionID: undefined, view: undefined, notice: undefined, drafts,
+      endScope({ activeDeviceID: deviceID, transport: { kind: "idle" }, telemetryConsent: { status: "loading" }, sessions: [], carouselSessions: [], carouselStatus: "loading", sessionStatus: undefined, advertised: [], activeSessionID: undefined, view: undefined, notice: undefined, drafts, queuedPromptDrafts, promptDraftFocus,
         mutations: container.state.mutations.filter((mutation) => mutation.operation !== "session.goal.set"),
         mutationToasts: [],
         lastRelayDrop: container.state.activeDeviceID === deviceID ? container.state.lastRelayDrop : undefined,
@@ -3049,7 +3061,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     },
     setDraft: (sessionID, text) => {
       if (sessionID !== container.state.activeSessionID) return
-      setState({ drafts: { ...container.state.drafts, [sessionID]: text } })
+      const queued = container.state.queuedPromptDrafts
+      setState({
+        drafts: { ...container.state.drafts, [sessionID]: text },
+        ...(queued?.[sessionID] !== undefined && text !== queued[sessionID] ? { queuedPromptDrafts: Object.fromEntries(Object.entries(queued).filter(([id]) => id !== sessionID)) } : {}),
+      })
     },
     loadCatalog: async (target, options = {}) => {
       const owner = transport
@@ -3218,12 +3234,19 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       if (container.state.transport.kind !== "open" || container.state.connection.kind === "offline") return false
       if (text.length === 0 && !input.files?.length && !input.agents?.length && !input.skills?.length) return false
       if (input.skills !== undefined && (input.skills.length > RemoteLimits.maxPromptSkills || input.skills.some((id) => !id.trim() || id.length > 128))) return false
-      if (!requestFits("session.prompt", sessionID, { text, delivery: input.delivery, agents: input.agents, skills: input.skills }, input.files)) return false
+      const queuedDraft = container.state.queuedPromptDrafts?.[sessionID]
+      const delivery = queuedDraft !== undefined && queuedDraft.trim() === text ? "queue" : input.delivery
+      if (!requestFits("session.prompt", sessionID, { text, delivery, agents: input.agents, skills: input.skills }, input.files)) return false
       const messageID = createMessageID()
-      return acceptSend({ id: messageID, kind: "prompt", label: input.delivery === "queue" ? "Queued prompt" : "Prompt", state: "sending", phase: "preparing",
-        created: now(), sessionID, operation: "session.prompt", input: { id: messageID, text, delivery: input.delivery,
+      const accepted = acceptSend({ id: messageID, kind: "prompt", label: delivery === "queue" ? "Queued prompt" : "Prompt", state: "sending", phase: "preparing",
+        created: now(), sessionID, operation: "session.prompt", input: { id: messageID, text, delivery,
           ...(input.files === undefined ? {} : { files: input.files }), ...(input.agents === undefined ? {} : { agents: input.agents }),
           ...(input.skills?.length ? { skills: input.skills } : {}) } }, input)
+      if (accepted && queuedDraft !== undefined && queuedDraft.trim() === text) {
+        const queued = container.state.queuedPromptDrafts
+        setState({ queuedPromptDrafts: Object.fromEntries(Object.entries(queued ?? {}).filter(([id]) => id !== sessionID)) })
+      }
+      return accepted
     },
     runCommand: async (input) => {
       const sessionID = container.state.activeSessionID
@@ -3330,6 +3353,55 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         return false
       }
       return outcome.status === "ok"
+    },
+    requestPromptGenerate: async (input) => {
+      const intent = input.intent.trim().slice(0, 4000)
+      if (!intent) {
+        setState({ notice: "Add what you want after /prompt" })
+        return false
+      }
+      let sessionID = container.state.activeSessionID
+      if (input.workspaceID !== undefined) {
+        if (input.mode === "steer" || input.mode === "queue") return false
+        const created = await api.createSession({
+          workspaceID: input.workspaceID,
+          ...(input.agent === undefined ? {} : { agent: input.agent }),
+          ...(input.model === undefined ? {} : { model: input.model }),
+        })
+        if (created === undefined) return false
+        sessionID = created
+      }
+      if (sessionID === undefined) return false
+      const token = selectionToken
+      const outcome = await request({
+        id: `prompt_generate_${now()}_${createMessageID()}`,
+        kind: "promptGenerate",
+        label: "Generate prompt",
+        state: "sending",
+        sessionID,
+        operation: "session.promptGenerate",
+        input: { mode: input.mode, intent, memory: [...input.memory] },
+      }, { sessionID })
+      if (token !== selectionToken || container.state.activeSessionID !== sessionID) return false
+      if (outcome.status !== "ok") return false
+      if (predictionUnavailable(outcome.value)) {
+        setState({ notice: "No prompt could be generated" })
+        return false
+      }
+      const text = generatedPromptText(outcome.value)
+      if (text === undefined) return false
+      if ((container.state.drafts[sessionID] ?? "") !== "") {
+        setState({ notice: "Draft not empty; generated prompt discarded" })
+        return false
+      }
+      const next = input.mode === "goal" ? `/goal ${text}` : text
+      const queued = container.state.queuedPromptDrafts ?? {}
+      setState({
+        drafts: { ...container.state.drafts, [sessionID]: next },
+        queuedPromptDrafts: input.mode === "queue" ? { ...queued, [sessionID]: next } : Object.fromEntries(Object.entries(queued).filter(([id]) => id !== sessionID)),
+        promptDraftFocus: { sessionID, revision: (container.state.promptDraftFocus?.revision ?? 0) + 1 },
+      })
+      return true
     },
     replyPermission: async (id, reply) => {
       const sessionID = container.state.activeSessionID
@@ -3488,7 +3560,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       transport?.close(1000, "disposed")
       transport = undefined
       subscribedSessionID = undefined
-      setState({ drafts: {}, sessionCreation: undefined,
+      setState({ drafts: {}, queuedPromptDrafts: {}, promptDraftFocus: undefined, sessionCreation: undefined,
         mutations: container.state.mutations.filter((mutation) => mutation.operation !== "session.goal.set" && !abandoned.has(mutation.id)),
         mutationToasts: (container.state.mutationToasts ?? []).filter((toast) => !abandoned.has(toast.id) && !container.state.mutations.some((mutation) => mutation.operation === "session.goal.set" && mutation.id === toast.id)),
         team: undefined, familyActivity: undefined, teamCues: [] })
@@ -3801,4 +3873,8 @@ function mutationText(mutation: PendingMutation) {
 
 function predictionUnavailable(value: unknown) {
   return typeof value === "object" && value !== null && "status" in value && value.status === "unavailable"
+}
+
+function generatedPromptText(value: unknown) {
+  return typeof value === "object" && value !== null && "status" in value && value.status === "generated" && "text" in value && typeof value.text === "string" ? value.text : undefined
 }

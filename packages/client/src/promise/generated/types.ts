@@ -45,6 +45,7 @@ export type TelemetryRequestSample = {
     | "session.attachment.upload"
     | "session.interrupt"
     | "session.prediction"
+    | "session.promptGenerate"
     | "session.permission.list"
     | "session.permission.reply"
     | "session.guardrail.status"
@@ -283,6 +284,8 @@ export type InstructionEntryKey = string
 export type SessionGenerateResponse = { data: { text: string } }
 
 export type SessionPredictionResponse = { data: { status: "suggested"; text: string } | { status: "unavailable" } }
+
+export type SessionPromptGenerateResponse = { data: { status: "generated"; text: string } | { status: "unavailable" } }
 
 export type SessionEventArtifactProvenance = {
   scopeID: string
@@ -4121,6 +4124,7 @@ export type ServerTelemetryAppendInput = {
             | "session.attachment.upload"
             | "session.interrupt"
             | "session.prediction"
+            | "session.promptGenerate"
             | "session.permission.list"
             | "session.permission.reply"
             | "session.guardrail.status"
@@ -5406,6 +5410,27 @@ export type SessionPredictionInput = {
 }
 
 export type SessionPredictionOutput = SessionPredictionResponse["data"]
+
+export type SessionPromptGenerateInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly mode: {
+    readonly mode: "start" | "steer" | "queue" | "goal"
+    readonly intent: string
+    readonly memory: ReadonlyArray<"repository" | "knowledge">
+  }["mode"]
+  readonly intent: {
+    readonly mode: "start" | "steer" | "queue" | "goal"
+    readonly intent: string
+    readonly memory: ReadonlyArray<"repository" | "knowledge">
+  }["intent"]
+  readonly memory: {
+    readonly mode: "start" | "steer" | "queue" | "goal"
+    readonly intent: string
+    readonly memory: ReadonlyArray<"repository" | "knowledge">
+  }["memory"]
+}
+
+export type SessionPromptGenerateOutput = SessionPromptGenerateResponse["data"]
 
 export type SessionLogInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]

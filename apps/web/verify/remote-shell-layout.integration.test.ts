@@ -282,6 +282,24 @@ describe("remote shell layout", () => {
           table: root?.getAttribute('role') === 'table',
         } })()`)).toEqual({ count: 3, announcements: 1, busy: true, table: false })
         expect(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector + ' .loading-placeholder--session')})?.getBoundingClientRect().height >= 64 && document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+        if (view === "sessions") expect(await page.evaluate<boolean>(`(() => {
+          const head = document.querySelector('.sessions-page > .page-head')
+          const card = document.querySelector('.running-sessions .loading-placeholder__shape')
+          const heading = document.querySelector('.running-sessions h2')
+          if (!(head instanceof HTMLElement) || !(card instanceof HTMLElement) || !(heading instanceof HTMLElement)) return false
+          const headBox = head.getBoundingClientRect()
+          const cardBox = card.getBoundingClientRect()
+          const headingBox = heading.getBoundingClientRect()
+          const between = [...document.querySelectorAll('.sessions-page *')].some((node) => {
+            if (!(node instanceof HTMLElement) || node === head || head.contains(node) || node.contains(card)) return false
+            const box = node.getBoundingClientRect()
+            if (box.height < 24 || box.bottom <= headBox.bottom + 1 || box.top >= cardBox.top - 1) return false
+            const style = getComputedStyle(node)
+            const bordered = [style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth].some((width, index) => parseFloat(width) > 0 && [style.borderTopStyle, style.borderRightStyle, style.borderBottomStyle, style.borderLeftStyle][index] !== 'none')
+            return bordered && !(node.innerText || '').trim()
+          })
+          return !between && headingBox.top >= headBox.bottom - 1 && cardBox.top - headingBox.bottom <= 16
+        })()`), "Sessions header sits on the Running and recent heading and the first skeleton").toBe(true)
         for (let attempt = 0; attempt < 20 && await page.evaluate<number>(`Number(getComputedStyle(document.querySelector(${JSON.stringify(selector + ' .loading-placeholder__shape')})).opacity)`) < 0.9; attempt += 1) await Bun.sleep(25)
         await Bun.write(new URL(`../../../.cache/tmp/shell-loading-${view}-${width}x${height}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
         expect(await page.evaluate<number>(`window.remotePendingSessionLists()`)).toBe(1)
@@ -1497,6 +1515,45 @@ describe("remote shell layout", () => {
       }
     }
   }, 60_000)
+
+  test("pins the composer to a stubbed keyboard on phone and tablet without a navigation band", async () => {
+    for (const [width, height, offsetTop, keyboardHeight] of [[390, 844, 0, 420], [820, 1180, 40, 700]] as const) {
+      const page = await fixture("scenario=conversation-tool-terminal-output-390", width, "Run sanity checks on worker threads.", undefined, height)
+      try {
+        await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden'; })()`)
+        const visualBottom = offsetTop + keyboardHeight
+        await page.evaluate(`(() => {
+          const stub = Object.assign(new EventTarget(), { height: ${keyboardHeight}, width: ${width}, offsetTop: ${offsetTop}, offsetLeft: 0, scale: 1, pageTop: ${offsetTop}, pageLeft: 0 })
+          Object.defineProperty(window, 'visualViewport', { configurable: true, value: stub })
+          window.viewportStub = stub
+          window.dispatchEvent(new Event('resize'))
+        })()`)
+        const open = await page.evaluate<{ keyboard: boolean; inset: string; nav: string; composerBottom: number; appHeight: number; appBlock: string }>(`(() => {
+          const app = document.querySelector('.app')
+          const composer = document.querySelector('.composer-resident:not([inert]) .composer, .mini-composer__mount .composer')
+          const nav = document.querySelector('.bottom-nav')
+          return { keyboard: app?.hasAttribute('data-keyboard-open') === true, inset: app?.style.getPropertyValue('--yc-keyboard-inset') ?? '', nav: nav ? getComputedStyle(nav).display : 'missing', composerBottom: composer?.getBoundingClientRect().bottom ?? -1, appHeight: app?.getBoundingClientRect().height ?? -1, appBlock: app ? getComputedStyle(app).blockSize : '' }
+        })()`)
+        expect(open.keyboard, JSON.stringify({ width, open })).toBe(true)
+        expect(open.inset, JSON.stringify({ width, open })).toBe(`${height - offsetTop - keyboardHeight}px`)
+        expect(open.nav, JSON.stringify({ width, open })).toBe("none")
+        expect(Math.abs(open.composerBottom - visualBottom), JSON.stringify({ width, open, visualBottom })).toBeLessThanOrEqual(2)
+        expect(open.appHeight, JSON.stringify({ width, open })).toBeGreaterThan(keyboardHeight + 80)
+        await page.evaluate(`(() => { Object.assign(window.viewportStub, { height: ${height}, offsetTop: 0, pageTop: 0 }); window.dispatchEvent(new Event('resize')) })()`)
+        const closed = await page.evaluate<{ keyboard: boolean; inset: string }>(`(() => { const app = document.querySelector('.app'); return { keyboard: app?.hasAttribute('data-keyboard-open') === true, inset: app?.style.getPropertyValue('--yc-keyboard-inset') ?? '' } })()`)
+        expect(closed, JSON.stringify({ width, closed })).toEqual({ keyboard: false, inset: "0px" })
+      } finally { await page.close() }
+    }
+    const desktop = await fixture("scenario=conversation-tool-terminal-output-390", 1440, "Run sanity checks on worker threads.", undefined, 900)
+    try {
+      await desktop.evaluate(`(() => {
+        const stub = Object.assign(new EventTarget(), { height: 400, width: 1440, offsetTop: 0, offsetLeft: 0, scale: 1, pageTop: 0, pageLeft: 0 })
+        Object.defineProperty(window, 'visualViewport', { configurable: true, value: stub })
+        window.dispatchEvent(new Event('resize'))
+      })()`)
+      expect(await desktop.evaluate<boolean>(`document.querySelector('.app')?.hasAttribute('data-keyboard-open') === true`)).toBe(false)
+    } finally { await desktop.close() }
+  }, 40_000)
 })
 
 function labelAsymmetry(selector: string) {

@@ -231,18 +231,20 @@ describe("responsive contract", () => {
     expect(base(composer, ".mini-composer__autocomplete")).toMatchObject({ overflow: "auto", "min-block-size": "0" })
   })
 
-  test("fills the visual viewport with phone picker sheets whose header stays fixed while the list scrolls", async () => {
+  test("sizes phone picker sheets to their content up to the visual viewport while the list scrolls", async () => {
     const composer = await readStylesheet("../remote/ui/composer.css")
     const phone = (rule: { readonly header: string; readonly conditions: readonly string[] }, header: string) => rule.header === header && rule.conditions.includes("@media (max-width: 767px)")
+    const cap = "calc(var(--composer-sheet-height, 100dvh) - env(safe-area-inset-top) - env(safe-area-inset-bottom))"
+    const anchor = "max(env(safe-area-inset-bottom), calc(100dvh - (var(--composer-sheet-top, 0px) + var(--composer-sheet-height, 100dvh))))"
     const picker = declarationsWhere(composer, (rule) => phone(rule, ".mini-picker__surface.mini-picker__surface--sheet"))
-    expect(picker).toMatchObject({ "inset-inline": "0", "inset-block": "var(--composer-sheet-top,0px) auto", "block-size": "var(--composer-sheet-height,100dvh)", "max-block-size": "none", "border-radius": "0", overflow: "hidden" })
+    expect(picker).toMatchObject({ "inset-inline": "0", "inset-block-start": "auto", "inset-block-end": anchor, "block-size": "auto", "max-block-size": cap, "border-radius": "0", overflow: "hidden" })
     expect(picker["padding-block"]).toBe("env(safe-area-inset-top) env(safe-area-inset-bottom)")
     expect(declarationsWhere(composer, (rule) => phone(rule, ".mini-picker__surface--sheet > :not(.mini-picker__list)"))).toMatchObject({ flex: "none" })
-    expect(declarationsWhere(composer, (rule) => phone(rule, ".mini-picker__surface--sheet .mini-picker__list"))).toMatchObject({ flex: "1 1 auto", "min-block-size": "0", "overscroll-behavior": "contain" })
+    expect(declarationsWhere(composer, (rule) => phone(rule, ".mini-picker__surface--sheet .mini-picker__list"))).toMatchObject({ display: "grid", flex: "0 1 auto", "align-content": "start", "min-block-size": "0", "overscroll-behavior": "contain" })
+    expect(declarationsWhere(composer, (rule) => phone(rule, ".mini-picker__surface--sheet .mini-picker__option"))["min-block-size"]).toBe("var(--yc-hit-min)")
     const selection = base(composer, ".composer__selection-sheet")
-    expect(selection).toMatchObject({ position: "fixed", "inset-block-start": "var(--composer-sheet-top,0px)", "block-size": "var(--composer-sheet-height,100dvh)", overflow: "hidden", "border-radius": "0" })
-    expect(selection["max-block-size"]).toBeUndefined()
-    expect(base(composer, ".composer__selection-options")).toMatchObject({ flex: "1 1 auto", "min-block-size": "0", overflow: "auto" })
+    expect(selection).toMatchObject({ position: "fixed", "inset-block-start": "auto", "inset-block-end": anchor, "block-size": "auto", "max-block-size": cap, overflow: "hidden", "border-radius": "0" })
+    expect(base(composer, ".composer__selection-options")).toMatchObject({ flex: "0 1 auto", "align-content": "start", "min-block-size": "0", overflow: "auto" })
   })
 
   test("keeps keyboard focus off the sheet outline and never sizes a phone sheet with 100vh", async () => {
@@ -256,6 +258,16 @@ describe("responsive contract", () => {
     const hidden = remote.rules.filter((rule) => rule.header.includes(".app-header__end > :not("))
     expect(hidden.length).toBeGreaterThan(0)
     for (const rule of hidden) expect(rule.header).toContain(".app-header__team")
+  })
+
+  test("collapses the phone navigation row while the keyboard is open without shrinking the shell", async () => {
+    const remote = await readStylesheet("remote.css")
+    const phone = "@media (max-width: 767px)"
+    expect(base(remote, ".app")["block-size"]).toBe("100dvh")
+    expect(declarationsWhere(remote, (rule) => rule.header === ".app[data-keyboard-open] > .bottom-nav" && rule.conditions.length === 0).display).toBe("none")
+    expect(declarationsWhere(remote, (rule) => rule.header === ".app[data-keyboard-open]" && rule.conditions.includes(phone))["grid-template-rows"]).toBe("auto minmax(0, 1fr) 0px")
+    expect(declarationsWhere(remote, (rule) => rule.header === ".app[data-keyboard-open]:has(> .status-strip)" && rule.conditions.includes(phone))["grid-template-rows"]).toBe("auto auto minmax(0, 1fr) 0px")
+    expect(remote.rules.some((rule) => rule.header === ".app[data-keyboard-open]" && rule.declarations["block-size"] !== undefined)).toBe(false)
   })
 
   test("bounds the application shell column to the viewport", async () => {

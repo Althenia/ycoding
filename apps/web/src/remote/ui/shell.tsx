@@ -8,6 +8,7 @@ import { browserStorage, readStored, writeStored } from "../../lib/storage"
 import { Chip } from "../../ui/chip"
 import { Icon, type IconName } from "../../ui/icon"
 import { Modal } from "../../ui/modal"
+import { watchKeyboardChrome } from "../../ui/visual-viewport"
 import { CustomSelect } from "../../ui/custom-select"
 import { BrandMark, ThemeToggle } from "../../ui/site"
 import { isAlertDeviceID, readSessionSearch, sessionSearch } from "../alert"
@@ -147,6 +148,12 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   const updatePhoneLayout = createThrottler(() => setPhoneLayout(readPhoneLayout()), { wait: 50 })
   window.addEventListener("resize", updatePhoneLayout.maybeExecute)
   onCleanup(() => window.removeEventListener("resize", updatePhoneLayout.maybeExecute))
+  let releaseKeyboardChrome: (() => void) | undefined
+  const bindKeyboardChrome = (element: HTMLDivElement) => {
+    releaseKeyboardChrome?.()
+    releaseKeyboardChrome = watchKeyboardChrome(element)
+  }
+  onCleanup(() => releaseKeyboardChrome?.())
 
   const office = createOfficeSettings()
   const state = () => remote.state()
@@ -395,7 +402,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
 
   return (
     <Show when={entry() === "workspace"} fallback={<SignInScreen />}>
-      <div class={`app app--${viewClass()}${view() === "/remote/session" && selected() && ownsSessionDevice() ? " app--selected" : view() === "/remote" ? " app--empty" : ""}${view() === "/remote/session" && managedChild() ? " app--managed-child" : ""}${view() === "/remote/session" && selectedLoading() ? " app--selected-loading" : ""}${railCollapsed() ? " app--rail-collapsed" : ""}${officeShown() ? " app--office" : ""}${showNewSession() ? " app--new-session" : ""}`}>
+      <div ref={bindKeyboardChrome} class={`app app--${viewClass()}${view() === "/remote/session" && selected() && ownsSessionDevice() ? " app--selected" : view() === "/remote" ? " app--empty" : ""}${view() === "/remote/session" && managedChild() ? " app--managed-child" : ""}${view() === "/remote/session" && selectedLoading() ? " app--selected-loading" : ""}${railCollapsed() ? " app--rail-collapsed" : ""}${officeShown() ? " app--office" : ""}${showNewSession() ? " app--new-session" : ""}`}>
         <a class="skip-link" href="#remote-main">Skip to content</a>
         <aside id="session-rail" class="workspace__rail" aria-label="Workspace navigation">
           <div class="workspace__rail-head">

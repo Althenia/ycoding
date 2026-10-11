@@ -1116,6 +1116,32 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         ),
     )
     .add(
+      HttpApiEndpoint.post("session.promptGenerate", "/api/session/:sessionID/prompt-generate", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({
+          mode: Schema.Literals(["start", "steer", "queue", "goal"]),
+          intent: Schema.String.check(Schema.isMaxLength(4000), Schema.isPattern(/\S/)),
+          memory: Schema.Array(Schema.Literals(["repository", "knowledge"])),
+        }),
+        success: Schema.Struct({
+          data: Schema.Union([
+            Schema.Struct({ status: Schema.Literal("generated"), text: Schema.String }),
+            Schema.Struct({ status: Schema.Literal("unavailable") }),
+          ]),
+        }).annotate({ identifier: "SessionPromptGenerateResponse" }),
+        error: SessionNotFoundError,
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.promptGenerate",
+            summary: "Draft a prompt from an intent",
+            description:
+              "Generates one draft prompt for the mode from the intent, bounded recent conversation and selected memory. Nothing is admitted or sent. A new request cancels an earlier in-flight one for the Session.",
+          }),
+        ),
+    )
+    .add(
       HttpApiEndpoint.get("session.log", "/api/experimental/session/:sessionID/log", {
         params: { sessionID: Session.ID },
         query: {

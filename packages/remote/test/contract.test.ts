@@ -411,6 +411,47 @@ describe("remote envelope: request", () => {
     expect(requireSession("session.prediction")).toBe(true)
   })
 
+  test("validates session.promptGenerate mode, intent, and memory and classifies the operation as a mutation", () => {
+    const frame = (input?: unknown) =>
+      JSON.stringify({
+        type: "request",
+        id: "prompt_1",
+        operation: "session.promptGenerate",
+        sessionID: "ses_1",
+        ...(input === undefined ? {} : { input }),
+      })
+    for (const input of [
+      { mode: "start", intent: "Open the task", memory: [] },
+      { mode: "steer", intent: "Change the check", memory: ["repository"] },
+      { mode: "queue", intent: "x".repeat(4_000), memory: ["knowledge", "repository"] },
+      { mode: "goal", intent: "  Ship it  ", memory: ["knowledge"] },
+    ]) {
+      expect(parseClientMessage(frame(input))).toEqual({
+        ok: true,
+        value: { type: "request", id: "prompt_1", operation: "session.promptGenerate", sessionID: "ses_1", input },
+      })
+    }
+    for (const input of [
+      {},
+      { mode: "start", intent: "Open", memory: ["repository", "repository"] },
+      { mode: "start", intent: "Open", memory: ["other"] },
+      { mode: "start", intent: "   ", memory: [] },
+      { mode: "start", intent: "", memory: [] },
+      { mode: "start", intent: "x".repeat(4_001), memory: [] },
+      { mode: "later", intent: "Open", memory: [] },
+      { intent: "Open", memory: [] },
+      { mode: "start", memory: [] },
+      { mode: "start", intent: "Open", memory: [], hint: "no" },
+      { mode: "start", intent: "Open" },
+    ]) expect(parseClientMessage(frame(input))).toMatchObject({ ok: false, error: { code: "invalid_message" } })
+    expect(parseClientMessage(JSON.stringify({ type: "request", id: "prompt_1", operation: "session.promptGenerate", input: { mode: "start", intent: "Open", memory: [] } }))).toMatchObject({
+      ok: false,
+      error: { code: "session_required" },
+    })
+    expect(remoteOperationAccess["session.promptGenerate"]).toBe("mutation")
+    expect(requireSession("session.promptGenerate")).toBe(true)
+  })
+
   test("admits only bounded parent-scoped subagent page inputs", () => {
     expect(parseClientMessage('{"type":"request","id":"a","operation":"session.subagent.list","sessionID":"ses_parent"}')).toMatchObject({ ok: true })
     expect(parseClientMessage('{"type":"request","id":"a","operation":"session.subagent.list","sessionID":"ses_parent","input":{"cursor":"page_2"}}')).toMatchObject({ ok: true })
@@ -654,6 +695,7 @@ describe("remote operations", () => {
       "session.attachment.upload",
       "session.interrupt",
       "session.prediction",
+      "session.promptGenerate",
       "session.permission.list",
       "session.permission.reply",
       "session.guardrail.status",

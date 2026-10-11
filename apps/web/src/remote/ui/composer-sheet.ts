@@ -1,4 +1,5 @@
 import { createEffect, createSignal, onCleanup, type Accessor, type JSX } from "solid-js"
+import { watchVisualViewport } from "../../ui/visual-viewport"
 import { sheetFrame } from "./composer-logic"
 
 export function createSheetFrame(active: Accessor<boolean>): Accessor<JSX.CSSProperties | undefined> {
@@ -8,21 +9,7 @@ export function createSheetFrame(active: Accessor<boolean>): Accessor<JSX.CSSPro
       setFrame(undefined)
       return
     }
-    const viewport = window.visualViewport
-    let scheduled: number | undefined
-    const measure = () => {
-      scheduled = undefined
-      setFrame(sheetFrame(viewport ?? undefined))
-    }
-    const schedule = () => { scheduled ??= requestAnimationFrame(measure) }
-    measure()
-    viewport?.addEventListener("resize", schedule)
-    viewport?.addEventListener("scroll", schedule)
-    onCleanup(() => {
-      viewport?.removeEventListener("resize", schedule)
-      viewport?.removeEventListener("scroll", schedule)
-      if (scheduled !== undefined) cancelAnimationFrame(scheduled)
-    })
+    onCleanup(watchVisualViewport((viewport) => setFrame(sheetFrame(viewport ?? undefined))))
   })
   return () => {
     const value = frame()

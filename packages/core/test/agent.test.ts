@@ -172,6 +172,7 @@ describe("Agent", () => {
         "occam",
         "omoikane",
         "prediction",
+        "prompt",
         "summary",
         "title",
         "wittgenstein",
@@ -186,6 +187,18 @@ describe("Agent", () => {
       expect(yield* agent.get(Agent.ID.make("general"))).toBeUndefined()
       expect(yield* agent.get(Agent.ID.make("analyze"))).toBeUndefined()
       expect(yield* agent.get(Agent.ID.make("brainstorm"))).toBeUndefined()
+      const prompt = agents.find((item) => String(item.id) === "prompt")
+      expect(prompt).toMatchObject({ id: Agent.ID.make("prompt"), mode: "primary", hidden: true })
+      if (!prompt) throw new Error("expected prompt agent")
+      expect(Agent.isSelectable(prompt)).toBe(false)
+      expect(prompt.system).toContain("Output only the prompt text")
+      expect(prompt.system).toContain("same language as the intent")
+      expect(prompt.system).toContain("comprehensive task opening")
+      expect(prompt.system).toContain("mid-run correction")
+      expect(prompt.system).toContain("follow-up task")
+      expect(prompt.system).toContain("verifiable completion criteria")
+      expect(prompt.system).toContain("Never invent repository facts")
+      expect(Permission.evaluate("shell", "*", prompt.permissions).effect).toBe("deny")
       for (const id of ["GSD", "architech", "god", "yangi", "occam", "omoikane", "wittgenstein", "zeus"]) {
         const item = agents.find((agent) => String(agent.id) === id)
         if (!item) throw new Error(`expected built-in agent ${id}`)

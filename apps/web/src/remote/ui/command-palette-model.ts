@@ -100,6 +100,7 @@ function sessionActions(context: PaletteContext): readonly PaletteAction[] {
     { id: "session.compact", title: "Compact session", description: "Summarize earlier context", group: "Session", keywords: "/compact /summarize summarize context", intent: { type: "compact" } },
     { id: "session.goal", title: "Set goal…", description: "Start an autonomous goal in the composer", group: "Session", keywords: "/goal autonomous autonomy", intent: { type: "draft", text: "/goal " } },
     { id: "session.suggest", title: "Suggest next message", description: "Suggest your next message", group: "Session", keywords: "/suggest prediction next message", intent: { type: "draft", text: "/suggest " } },
+    { id: "session.prompt", title: "Generate prompt", description: "Generate a prompt from a rough intent", group: "Session", keywords: "/prompt generate prompt", intent: { type: "draft", text: "/prompt " } },
     ...(session.goalActive
       ? [{ id: "session.goal.stop", title: "Stop goal", description: "End the active autonomous goal", group: "Session" as const, keywords: "goal autonomous cancel", intent: { type: "stopGoal" as const } }]
       : []),
@@ -120,7 +121,7 @@ function commandActions(context: PaletteContext): readonly PaletteAction[] {
   const session = context.session
   if (!session || !context.connected || session.managedChild) return []
   return context.commands
-    .filter((command) => command.name !== "compact" && command.name !== "goal" && command.name !== "yolo" && command.name !== "suggest")
+    .filter((command) => command.name !== "compact" && command.name !== "goal" && command.name !== "yolo" && command.name !== "suggest" && command.name !== "prompt")
     .filter((command) => submission(`/${command.name}`, [], {
       status: "ready",
       agents: [],

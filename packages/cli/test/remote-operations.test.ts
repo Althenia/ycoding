@@ -1527,6 +1527,63 @@ describe("operation mapping", () => {
     expect(calls.filter((call) => call.method === "prediction")).toEqual([])
   })
 
+  test("forwards session.promptGenerate at the verified Location and rejects invalid input", async () => {
+    const moved = sessionInfo("ses_1", { updated: 1, directory: "/work/moved" })
+    const generated = { status: "generated", text: "Fix the build and verify it." }
+    const { local, registry, subscriptions, calls } = await harness({
+      sessions: [moved],
+      results: {
+        getSession: async () => moved,
+        listPage: async () => ({ data: [moved] }),
+        promptGenerate: async () => generated,
+      },
+    })
+    const forwarded = await executeRemoteOperation({
+      request: request("session.promptGenerate", {
+        mode: "steer",
+        intent: "Cover the regression",
+        memory: ["knowledge", "repository"],
+      }),
+      sessions: registry,
+      subscriptions,
+      local,
+    })
+    expect(valueOf(forwarded)).toEqual(generated)
+    expect(calls.at(-1)).toEqual({
+      method: "promptGenerate",
+      args: ["ses_1", { directory: "/work/moved" }, { mode: "steer", intent: "Cover the regression", memory: ["knowledge", "repository"] }],
+    })
+
+    const unavailable = await harness({
+      sessions: [moved],
+      results: { getSession: async () => moved, promptGenerate: async () => ({ status: "unavailable" }) },
+    })
+    expect(valueOf(await executeRemoteOperation({
+      request: request("session.promptGenerate", { mode: "goal", intent: "Ship it", memory: [] }),
+      sessions: unavailable.registry,
+      subscriptions: unavailable.subscriptions,
+      local: unavailable.local,
+    }))).toEqual({ status: "unavailable" })
+
+    calls.length = 0
+    for (const input of [
+      { mode: "start", intent: "Open", memory: ["repository", "repository"] },
+      { mode: "later", intent: "Open", memory: [] },
+      { mode: "start", intent: "   ", memory: [] },
+      { mode: "start", intent: "x".repeat(4_001), memory: [] },
+      { mode: "start", intent: "Open", memory: [], directory: "/tmp" },
+      { intent: "Open", memory: [] },
+    ]) {
+      expect(errorOf(await executeRemoteOperation({
+        request: request("session.promptGenerate", input),
+        sessions: registry,
+        subscriptions,
+        local,
+      })).code).toBe("invalid_message")
+    }
+    expect(calls.filter((call) => call.method === "promptGenerate")).toEqual([])
+  })
+
   test("returns each read body verbatim and validates subscriptions without owning relay state", async () => {
     const snapshot = { sourceEpoch: "epoch_1", session: sessionInfo("ses_1", { updated: 1 }), messages: [], watermark: { seq: 4 } }
     const { local, registry, subscriptions, calls } = await harness({

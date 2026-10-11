@@ -877,6 +877,12 @@ async function run(input: OperationInput) {
         memory: validated.memory,
         ...(validated.hint === undefined ? {} : { hint: validated.hint }),
       })
+    case "promptGenerate":
+      return input.local.promptGenerate(sessionID, location, {
+        mode: validated.mode,
+        intent: validated.intent,
+        memory: validated.memory,
+      })
     case "compact":
       return { data: await input.local.compact(sessionID, location, validated.id) }
     case "permission.reply":
@@ -973,6 +979,7 @@ type Validated =
   | { readonly kind: "prompt"; readonly input: LocalPrompt }
   | { readonly kind: "interrupt" }
   | { readonly kind: "prediction"; readonly memory: readonly ("repository" | "knowledge")[]; readonly hint?: string }
+  | { readonly kind: "promptGenerate"; readonly mode: "start" | "steer" | "queue" | "goal"; readonly intent: string; readonly memory: readonly ("repository" | "knowledge")[] }
   | { readonly kind: "permission.reply"; readonly requestID: string; readonly reply: Reply; readonly message?: string }
   | { readonly kind: "guardrail.reply"; readonly requestID: string; readonly reply: Reply }
   | { readonly kind: "form.reply"; readonly formID: string; readonly answer: FormAnswer }
@@ -1143,6 +1150,8 @@ function validate(request: RemoteRequest): Validated {
     }
     case "session.prediction":
       return { kind: "prediction", ...predictionInput(fields) }
+    case "session.promptGenerate":
+      return { kind: "promptGenerate", ...promptGenerateInput(fields) }
     case "session.prompt":
       return {
         kind: "prompt",
@@ -1698,6 +1707,7 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.prompt": ["id", "text", "files", "agents", "delivery", "resume", "skills"],
   "session.interrupt": [],
   "session.prediction": ["memory", "hint"],
+  "session.promptGenerate": ["mode", "intent", "memory"],
   "session.permission.reply": ["requestID", "reply", "message"],
   "session.guardrail.reply": ["requestID", "reply"],
   "session.form.reply": ["formID", "answer"],
@@ -1737,6 +1747,7 @@ const mutations: ReadonlySet<string> = new Set([
   "session.prompt",
   "session.interrupt",
   "session.prediction",
+  "session.promptGenerate",
   "session.permission.reply",
   "session.guardrail.reply",
   "session.form.reply",
@@ -1922,6 +1933,19 @@ function literal<const Values extends readonly string[]>(value: unknown, values:
 
 function isPredictionScope(value: unknown): value is "repository" | "knowledge" {
   return value === "repository" || value === "knowledge"
+}
+
+function promptGenerateInput(fields: Readonly<Record<string, unknown>>) {
+  const memory = fields.memory
+  if (!Array.isArray(memory) || memory.length > 2 || new Set(memory).size !== memory.length || !memory.every(isPredictionScope))
+    throw new OperationError("invalid_message", "Invalid prompt memory")
+  const intent = requireString(fields.intent, "intent", 4_000)
+  if (intent.trim().length === 0) throw new OperationError("invalid_message", "Invalid intent")
+  return {
+    mode: literal(fields.mode, ["start", "steer", "queue", "goal"] as const, "mode"),
+    intent,
+    memory: memory.filter(isPredictionScope),
+  }
 }
 
 function predictionInput(fields: Readonly<Record<string, unknown>>) {

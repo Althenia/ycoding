@@ -15,7 +15,7 @@ export const ID = Schema.String.check(Schema.isStartsWith("prq_")).pipe(
 )
 export type ID = typeof ID.Type
 
-export const Source = Schema.Literals(["step", "title", "goal", "compaction", "decision", "prediction"])
+export const Source = Schema.Literals(["step", "title", "goal", "compaction", "decision", "prediction", "prompt"])
 export type Source = typeof Source.Type
 
 export const Invalidation = Schema.Literals([

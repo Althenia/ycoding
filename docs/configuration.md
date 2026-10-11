@@ -365,7 +365,7 @@ The field reference below expands the overview. `unset` means the field is optio
 | `provider_usage.codex_app_server.cwd`                                                                             | string                                                                                                          | unset                           | Client working directory.                                                                                                                                                         |
 | `provider_usage.codex_app_server.timeout_ms`                                                                      | positive integer `<= 30000`                                                                                     | unset                           | App-server timeout.                                                                                                                                                               |
 | `efficiency.title`                                                                                                | `local` \| `model` \| `off`                                                                                     | `local`                         | Title policy.                                                                                                                                                                     |
-| `efficiency.helper_models.title`, `.goal`, `.decision`, `.prediction`, `.compaction.main`, `.compaction.subagent` | model selector \| `session`                                                                                     | `session`                       | Independent model selection for title, goal, decision, next-message prediction, and ContextManifest helpers.                                                                      |
+| `efficiency.helper_models.title`, `.goal`, `.decision`, `.prediction`, `.prompt`, `.compaction.main`, `.compaction.subagent` | model selector \| `session`                                                                                     | `session`                       | Independent model selection for title, goal, decision, next-message prediction, prompt drafting, and ContextManifest helpers.                                                     |
 | `efficiency.prompt_cache.anthropic_ttl`                                                                           | `adaptive` \| `5m` \| `1h`                                                                                      | `adaptive`                      | Cache lifetime policy.                                                                                                                                                            |
 | `efficiency.prompt_cache.openai_mode`                                                                             | `auto` \| `implicit` \| `explicit`                                                                              | `auto`                          | OpenAI cache lowering.                                                                                                                                                            |
 | `efficiency.prompt_cache.openai_extended_retention`                                                               | boolean                                                                                                         | `false`                         | Pre-GPT-5.6 OpenAI and Meta Muse Spark `24h` retention request.                                                                                                                   |
@@ -442,6 +442,7 @@ The optional `efficiency` block controls provider-request amplification and prom
 | `title`                                  | `local`, `model`, `off`        | `local`    | Generate Session titles locally, with a model, or not at all.                                                    |
 | `helper_models.title`                    | model selector, `session`      | `session`  | Model for model-generated Session titles.                                                                        |
 | `helper_models.prediction`               | model selector, `session`      | `session`  | Model for next-message prediction; an explicit `agents.prediction.model` takes precedence.                       |
+| `helper_models.prompt`                   | model selector, `session`      | `session`  | Model for `/prompt` drafts; an explicit `agents.prompt.model` takes precedence.                                  |
 | `helper_models.goal`                     | model selector, `session`      | `session`  | Model for model-based goal synthesis.                                                                            |
 | `helper_models.decision`                 | model selector, `session`      | `session`  | Model for hidden decision-agent judgments; an explicit `agents.decision.model` takes precedence.                 |
 | `helper_models.compaction.main`          | model selector, `session`      | `session`  | Model for ContextManifest generation in main chats.                                                              |
@@ -554,6 +555,20 @@ Predictions run only when requested with `/suggest [hint]` in the TUI or web com
 ```json
 {
   "efficiency": { "helper_models": { "prediction": "session" } }
+}
+```
+
+### Prompt generation
+
+| Key                               | Type                        | Default   | Contract                                                                                                                     |
+| --------------------------------- | --------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `efficiency.helper_models.prompt` | model selector or `session` | `session` | Resolve like the title helper: explicit `agents.prompt.model` wins, otherwise use this selection or the Session/default model. |
+
+Prompt drafts run only when requested with `/prompt <intent>` in the TUI or web composer; no configuration key enables or disables them. The hidden primary `prompt` agent has its own prompt-drafting system prompt and no tools; override it with `agents.prompt.system` if needed. The helper receives the mode (`start`, `steer`, `queue`, or `goal`), the trimmed intent of at most 4,000 characters, the latest user text and assistant text parts bounded to 2,000 and 4,000 characters when present, and at most three snippets of at most 600 characters from each selected memory scope whose selected agent's effective `memory_read` is `allow` or `ask`; `deny` skips that scope, and memory failures degrade to drafting without snippets. Accepted output is at most 8,000 characters and may span lines. Prompt requests use ordinary provider pricing, usage, and privacy policies and are accounted under source `prompt`, including partial usage before cancellation. A newer request for the same Session, or moving, deleting, or archiving the Session, cancels an in-flight request; input admission and execution do not.
+
+```json
+{
+  "efficiency": { "helper_models": { "prompt": "session" } }
 }
 ```
 

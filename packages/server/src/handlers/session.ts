@@ -1,6 +1,7 @@
 import { Session } from "@ycoding-ai/core/session"
 import { InstructionEntry } from "@ycoding-ai/core/session/instruction-entry"
 import { SessionPrediction } from "@ycoding-ai/core/session/prediction"
+import { SessionPromptGenerator } from "@ycoding-ai/core/session/prompt-generator"
 import { DateTime, Effect, Schema, Stream } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
@@ -1077,6 +1078,20 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
             data: yield* prediction.request(ctx.params.sessionID, {
               memory: ctx.payload.memory,
               ...(ctx.payload.hint === undefined ? {} : { hint: ctx.payload.hint }),
+            }),
+          }
+        }),
+      )
+      .handle(
+        "session.promptGenerate",
+        Effect.fn(function* (ctx) {
+          yield* session.get(ctx.params.sessionID).pipe(Effect.mapError(mapSessionNotFound))
+          const prompts = yield* SessionPromptGenerator.Service
+          return {
+            data: yield* prompts.request(ctx.params.sessionID, {
+              mode: ctx.payload.mode,
+              intent: ctx.payload.intent,
+              memory: ctx.payload.memory,
             }),
           }
         }),

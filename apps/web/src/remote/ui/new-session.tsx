@@ -39,6 +39,20 @@ export function NewSessionComposer(props: { readonly workspaceID?: string; reado
   })
   const create = async (submission: ComposerSubmission) => {
     if (disabled()) return false
+    if (submission.kind === "promptGenerate") {
+      const previous = remote.state().activeSessionID
+      const accepted = await remote.store.requestPromptGenerate({
+        mode: submission.input.mode ?? "start",
+        intent: submission.input.intent ?? "",
+        memory: submission.input.memory ?? [],
+        workspaceID: workspaceID(),
+        ...(submission.input.agent ? { agent: submission.input.agent } : {}),
+        ...(submission.input.model ? { model: submission.input.model } : {}),
+      })
+      const created = remote.state().activeSessionID
+      if (mounted && created && created !== previous) props.onCreated(created)
+      return accepted
+    }
     if (submission.kind !== "prompt" && submission.kind !== "command") return false
     const prompt = submission.kind === "command"
       ? { command: submission.input.command, ...(submission.input.arguments ? { arguments: submission.input.arguments } : {}), ...(submission.input.files ? { files: submission.input.files } : {}), ...(submission.input.agents ? { agents: submission.input.agents } : {}) }

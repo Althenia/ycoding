@@ -1,6 +1,7 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import { Portal } from "solid-js/web"
 import { Icon } from "../../ui/icon"
+import { visualViewportFrame, watchVisualViewport } from "../../ui/visual-viewport"
 import { Modal } from "../../ui/modal"
 import { useTheme } from "../../theme/theme-store"
 import { catalogKey, type CatalogTarget } from "../catalog"
@@ -233,19 +234,20 @@ function PaletteBody(props: {
   })
 
   onMount(() => {
-    const viewport = window.visualViewport
-    if (!viewport) return
     const root = document.documentElement
-    const sync = () => {
-      root.style.setProperty("--command-palette-top", `${viewport.offsetTop}px`)
-      root.style.setProperty("--command-palette-height", `${viewport.height}px`)
+    const sync = (viewport: { readonly offsetTop: number; readonly height: number } | null) => {
+      const frame = visualViewportFrame(viewport)
+      if (!frame) {
+        root.style.removeProperty("--command-palette-top")
+        root.style.removeProperty("--command-palette-height")
+        return
+      }
+      root.style.setProperty("--command-palette-top", `${frame.top}px`)
+      root.style.setProperty("--command-palette-height", `${frame.height}px`)
     }
-    sync()
-    viewport.addEventListener("resize", sync)
-    viewport.addEventListener("scroll", sync)
+    const release = watchVisualViewport(sync)
     onCleanup(() => {
-      viewport.removeEventListener("resize", sync)
-      viewport.removeEventListener("scroll", sync)
+      release()
       root.style.removeProperty("--command-palette-top")
       root.style.removeProperty("--command-palette-height")
     })

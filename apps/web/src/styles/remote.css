@@ -1773,6 +1773,23 @@ body:has(.app) {
   }
 }
 
+/* The composer margin consumes --yc-keyboard-inset. The phone navigation row is 0px
+   while that attribute is set so the bar cannot sit between the composer and the keyboard.
+   The shell block size stays 100dvh. */
+.app[data-keyboard-open] > .bottom-nav {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .app[data-keyboard-open] {
+    grid-template-rows: auto minmax(0, 1fr) 0px;
+  }
+
+  .app[data-keyboard-open]:has(> .status-strip) {
+    grid-template-rows: auto auto minmax(0, 1fr) 0px;
+  }
+}
+
 /* --- settings ----------------------------------------------------------- */
 
 .settings {

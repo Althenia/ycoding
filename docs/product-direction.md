@@ -34,6 +34,8 @@ The terminal application is the primary product and release surface.
 
 Next-message prediction runs on request with `/suggest [hint]` in the TUI and web composer and uses bounded recent conversation text, the optional hint, and only the project or global memory scopes chosen in its dialog. TUI and web acceptance fills the composer without sending.
 
+`/prompt <intent>` drafts one prompt for review in the TUI or web composer. The caller chooses a mode (`start`, `steer`, `queue`, or `goal`) and the same project or global memory scopes. The draft uses the intent, bounded recent conversation, and selected memory, and it is never sent automatically.
+
 Changes that affect sessions, prompts, tools, permissions, subagents, skills, project artifacts, cache diagnostics, or transcript history must be proven through the CLI/TUI path.
 
 Supported presentation surfaces are the terminal application and the SolidJS remote web client. The public site and remote client share `ycoding.althenia.app`. The public site publishes its documentation both as pages and as Markdown for AI agents (`/llms.txt`, `/llms-full.txt`, `/docs/<slug>.md`). Opening the remote client while signed out shows only an OAuth sign-in screen; Google is the supported provider. The browser and relay own no repository, shell, tool, model, or Session execution authority. There is no hosted-agent runtime, Electron shell, or native office client in the current product.

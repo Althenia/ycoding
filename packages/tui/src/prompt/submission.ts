@@ -15,6 +15,7 @@ import type { PromptInfo } from "./history"
 import type { promptSkillMetadata } from "./skill"
 import { projectedPromptInput } from "./codec"
 import type { SessionSubmissionRetry, YoloLevel } from "../util/session-autonomy"
+import { createLandingSession, landingAutonomyPayload, persistLandingAutonomy, persistLandingDaybreak } from "../util/landing-session"
 import { submitPrompt } from "../component/prompt/prompt-admission"
 import { errorMessage } from "../util/error"
 import { isConflictError, isInvalidRequestError } from "@ycoding-ai/client"
@@ -33,6 +34,7 @@ export type PromptSubmissionPayload = {
   editor?: { key: string; text: string }
   history: PromptInfo
   cursor: number
+  delivery?: "queue"
 }
 
 type Submission = {
@@ -129,28 +131,22 @@ export function createPromptSubmissions(input: {
     if (!submission.creationConfirmed) {
       update(entry, { phase: "Creating session" })
       const session = await request(entry, "create", (signal) =>
-        input
-          .api()
-          .session.create(
-            { id: sessionID, location: entry.location, agent: payload.agentID, model: payload.model },
-            { signal },
-          ),
+        createLandingSession(input.api(), {
+          id: sessionID,
+          location: entry.location,
+          agent: payload.agentID,
+          model: payload.model,
+          signal,
+        }),
       )
       submission.creationConfirmed = true
       input.created?.(session)
     }
-    if (
-      payload.autonomy &&
-      (payload.autonomy.yolo > 0 || payload.autonomy.goal !== undefined) &&
-      !entry.completed.has("autonomy")
-    ) {
+    const autonomy = landingAutonomyPayload(payload.autonomy)
+    if (autonomy && !entry.completed.has("autonomy")) {
       update(entry, { phase: "Setting autonomy" })
-      const autonomy =
-        payload.autonomy.goal === undefined
-          ? { yolo: payload.autonomy.yolo }
-          : { yolo: payload.autonomy.yolo, goal: payload.autonomy.goal }
       await request(entry, "autonomy", (signal) =>
-        input.api().session.autonomy.set({ sessionID, payload: autonomy }, { signal }),
+        persistLandingAutonomy(input.api(), { sessionID, payload: autonomy, signal }),
       )
       entry.completed.add("autonomy")
     }
@@ -158,7 +154,7 @@ export function createPromptSubmissions(input: {
       update(entry, { phase: "Selecting Daybreak" })
       const daybreak = payload.daybreak
       await request(entry, "daybreak", (signal) =>
-        input.api().session.daybreak.set({ sessionID, daybreak }, { signal }),
+        persistLandingDaybreak(input.api(), { sessionID, daybreak, signal }),
       )
       entry.completed.add("daybreak")
     }
@@ -234,6 +230,7 @@ export function createPromptSubmissions(input: {
                   agents: payload.agents,
                   resume: false,
                   ...(payload.modelSelectionPending ? { model: payload.model } : {}),
+                  ...(payload.delivery ? { delivery: payload.delivery } : {}),
                 },
                 { signal },
               ),
@@ -253,6 +250,7 @@ export function createPromptSubmissions(input: {
                 agents: payload.agents,
                 metadata: resume && entry.command ? entry.admitted!.data.metadata : payload.metadata,
                 resume,
+                ...(payload.delivery ? { delivery: payload.delivery } : {}),
               },
               { signal },
             ),

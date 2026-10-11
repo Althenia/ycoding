@@ -80,7 +80,7 @@ export function createSessionMessageID() {
   return `msg_${crypto.randomUUID()}`
 }
 
-function createSessionID() {
+export function createSessionID() {
   return `ses_${crypto.randomUUID()}`
 }
 

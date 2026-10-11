@@ -55,6 +55,7 @@ import { SessionRunnerModel } from "./session/runner/model"
 import { SessionProviderState } from "./session/provider-state"
 import { SessionTitle } from "./session/title"
 import { SessionPrediction } from "./session/prediction"
+import { SessionPromptGenerator } from "./session/prompt-generator"
 import { SessionTodo } from "./session/todo"
 import { Skill } from "./skill"
 import { SkillInstructions } from "./skill/instructions"
@@ -125,6 +126,7 @@ const locationServiceNodes = [
   SessionGoal.node,
   SessionTitle.node,
   SessionPrediction.node,
+  SessionPromptGenerator.node,
   SessionTodo.node,
   Snapshot.node,
   SessionProviderState.node,

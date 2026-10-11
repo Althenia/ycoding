@@ -47,6 +47,16 @@ test("suggest is a Session slash action and keeps an optional hint", () => {
   expect(submission("/suggest  keep the hint spacing ", [], { ...catalog, commands: [{ name: "suggest", description: "Configured suggest" }] }, "queue")).toEqual({ kind: "suggest", input: { hint: "keep the hint spacing" } })
 })
 
+test("prompt is a slash action and keeps a required intent", () => {
+  const listed = optionsForTrigger("/", "prompt", catalog, [])
+  expect(listed[0]).toEqual({ label: "/prompt", description: "Generate a prompt from a rough intent", kind: "command", value: "prompt" })
+  expect(optionsForTrigger("/", "prompt", catalog, [], false)[0]).toEqual({ label: "/prompt", description: "Generate a prompt from a rough intent", kind: "command", value: "prompt" })
+  expect(submission("/prompt", [], catalog, "steer")).toEqual({ kind: "promptGenerate", input: {} })
+  expect(submission("/prompt   ", [], catalog, "queue")).toEqual({ kind: "promptGenerate", input: {} })
+  expect(submission("/prompt focus the tests", [], catalog, "steer")).toEqual({ kind: "promptGenerate", input: { intent: "focus the tests" } })
+  expect(submission("/prompt  keep the intent spacing ", [], { ...catalog, commands: [{ name: "prompt", description: "Configured prompt" }] }, "queue")).toEqual({ kind: "promptGenerate", input: { intent: "keep the intent spacing" } })
+})
+
 test("dollar activation, at mentions, and hash alias produce the TUI prompt parts and skill requests", () => {
   const skill = optionsForTrigger("$", "aud", catalog, [])[0]!
   const dollar = applyMention("$aud", 0, 4, skill, [])

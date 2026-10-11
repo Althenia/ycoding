@@ -105,6 +105,22 @@ test("prediction helper selection preserves session inheritance, profile and age
   expect(seen).toEqual([agent.model, ref("openai", "prediction-model", "low", "Personal"), session.model])
 })
 
+test("prompt helper selection preserves session inheritance, profile and agent precedence", async () => {
+  const selected = "Personal#openai/prompt-model#low"
+  const info = Schema.decodeUnknownSync(Config.Info)({ efficiency: { helper_models: { prompt: selected } } })
+  expect(settings([new Config.Document({ type: "document", info })]).models.prompt).toEqual(ref("openai", "prompt-model", "low", "Personal"))
+  const session = SessionSchema.Info.make({ id: SessionSchema.ID.make("ses_prompt_model"), projectID: Project.ID.global,
+    location: { directory: AbsolutePath.make("/project") }, title: "Prompt", time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) }, cost: Money.USD.zero,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, model: ref("fixture", "owner", "medium", "Owner") })
+  const seen: Array<SessionSchema.Info["model"]> = []
+  const models: SessionRunnerModel.Interface = { resolve: input => Effect.sync(() => { seen.push(input.model); return SessionRunnerModel.resolved(Model.make({ id: "prompt-helper", provider: "fixture", route: OpenAIChat.route })) }) }
+  const agent = { ...Agent.Info.empty(Agent.ID.make("prompt")), model: ref("fixture", "pinned", "high") }
+  await Effect.runPromise(make(settings([new Config.Document({ type: "document", info })]), models).resolveModel(session, "prompt", agent))
+  await Effect.runPromise(make(settings([new Config.Document({ type: "document", info })]), models).resolveModel(session, "prompt"))
+  await Effect.runPromise(make(settings([]), models).resolveModel(session, "prompt"))
+  expect(seen).toEqual([agent.model, ref("openai", "prompt-model", "low", "Personal"), session.model])
+})
+
 test("decision helper resolution preserves agent, configured, session, and default model precedence with native routes", async () => {
   const pinned = ref("fixture", "pinned", "high")
   const configured = ref("fixture", "configured", "low")

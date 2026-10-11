@@ -163,6 +163,11 @@ export type LocalServer = {
     location: LocalLocation,
     input: { readonly memory: readonly ("repository" | "knowledge")[]; readonly hint?: string },
   ) => Promise<{ readonly status: "suggested"; readonly text: string } | { readonly status: "unavailable" }>
+  readonly promptGenerate: (
+    sessionID: string,
+    location: LocalLocation,
+    input: { readonly mode: "start" | "steer" | "queue" | "goal"; readonly intent: string; readonly memory: readonly ("repository" | "knowledge")[] },
+  ) => Promise<{ readonly status: "generated"; readonly text: string } | { readonly status: "unavailable" }>
   readonly compact: (sessionID: string, location: LocalLocation, id: string) => Promise<unknown>
   readonly permissionReply: (
     sessionID: string,
@@ -377,6 +382,13 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
         sessionID,
         memory: input.memory,
         ...(input.hint === undefined ? {} : { hint: input.hint }),
+      }, request(location, timeoutMs))),
+    promptGenerate: (sessionID, location, input) =>
+      call(() => client.session.promptGenerate({
+        sessionID,
+        mode: input.mode,
+        intent: input.intent,
+        memory: input.memory,
       }, request(location, timeoutMs))),
     compact: (sessionID, location, id) => call(async () => {
       const result = await client.session.compact({ sessionID, id }, request(location, RemoteLimits.compactionTimeoutMs))

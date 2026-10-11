@@ -6,6 +6,11 @@
   min-block-size: 196px;
 }
 
+.running-sessions--loading {
+  grid-template-rows: auto auto;
+  min-block-size: 0;
+}
+
 .running-sessions--ready .running-sessions__list { animation: running-sessions-reveal var(--yc-dur-base) var(--yc-ease-entrance) both; }
 @keyframes running-sessions-reveal { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 

@@ -1,5 +1,6 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import { Portal } from "solid-js/web"
+import { watchVisualViewport, visualViewportFrame } from "./visual-viewport"
 import { Icon } from "./icon"
 import { Modal } from "./modal"
 import "./custom-select.css"
@@ -133,8 +134,7 @@ export function CustomSelect(props: {
       updateSheetFrame()
     }
     media.addEventListener("change", resize)
-    window.visualViewport?.addEventListener("resize", updateSheetFrame)
-    window.visualViewport?.addEventListener("scroll", updateSheetFrame)
+    const releaseViewport = watchVisualViewport(() => updateSheetFrame())
     const outside = (event: PointerEvent) => {
       if (!open() || !(event.target instanceof Node)) return
       if (compact()) {
@@ -145,15 +145,12 @@ export function CustomSelect(props: {
     }
     document.addEventListener("pointerdown", outside)
     window.addEventListener("resize", positionSurface)
-    window.addEventListener("resize", updateSheetFrame)
     window.addEventListener("scroll", positionSurface, true)
     onCleanup(() => {
       media.removeEventListener("change", resize)
-      window.visualViewport?.removeEventListener("resize", updateSheetFrame)
-      window.visualViewport?.removeEventListener("scroll", updateSheetFrame)
+      releaseViewport()
       document.removeEventListener("pointerdown", outside)
       window.removeEventListener("resize", positionSurface)
-      window.removeEventListener("resize", updateSheetFrame)
       window.removeEventListener("scroll", positionSurface, true)
     })
   })
@@ -186,11 +183,8 @@ export function CustomSelect(props: {
   }
 
   function updateSheetFrame() {
-    const viewport = window.visualViewport
-    setSheetFrame({
-      top: Math.max(0, Math.round(viewport?.offsetTop ?? 0)),
-      height: Math.round(viewport?.height ?? window.innerHeight),
-    })
+    const frame = visualViewportFrame(window.visualViewport)
+    setSheetFrame(frame ?? { top: 0, height: Math.round(window.innerHeight) })
   }
 
   const options = () => (

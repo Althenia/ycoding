@@ -38,20 +38,23 @@ describe("command palette stylesheet", () => {
     expect(dialog["block-size"]).toBe("min(520px, 80vh)")
   })
 
-  test("on the phone layout the palette is a full-viewport sheet that follows the visual viewport", async () => {
+  test("on the phone layout the palette is a content-sized sheet capped by the visual viewport", async () => {
     const { sheet } = await readPalette()
     const surface = inCondition(sheet, ".overlay--command-palette .overlay__surface", PHONE_LAYOUT_QUERY)
     expect(surface).toMatchObject({
-      "inset-block-start": "var(--command-palette-top, 0px)",
-      "inset-block-end": "auto",
+      "inset-block-start": "auto",
+      "inset-block-end": "max(env(safe-area-inset-bottom), calc(100dvh - (var(--command-palette-top, 0px) + var(--command-palette-height, 100dvh))))",
       "inset-inline": "0",
       translate: "none",
       "inline-size": "100%",
-      "block-size": "var(--command-palette-height, 100dvh)",
-      "max-block-size": "none",
+      "block-size": "auto",
+      "max-block-size": "calc(var(--command-palette-height, 100dvh) - env(safe-area-inset-top) - env(safe-area-inset-bottom))",
       "border-radius": "0",
+      overflow: "hidden",
     })
     expect(surface["block-size"]).not.toContain("100vh")
+    expect(surface["max-block-size"]).not.toContain("100vh")
+    expect(inCondition(sheet, ".overlay--command-palette .command-palette__list", PHONE_LAYOUT_QUERY)).toMatchObject({ flex: "0 1 auto" })
     expect(inCondition(sheet, ".command-palette__description", PHONE_LAYOUT_QUERY)).toMatchObject({ "flex-basis": "100%", "white-space": "normal" })
   })
 

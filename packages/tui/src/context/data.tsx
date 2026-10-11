@@ -1972,6 +1972,23 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             })
           },
         },
+        promptGenerate: {
+          request(
+            sessionID: string,
+            input: {
+              mode: "start" | "steer" | "queue" | "goal"
+              intent: string
+              memory: ReadonlyArray<"repository" | "knowledge">
+            },
+          ) {
+            return client.api.session.promptGenerate({
+              sessionID,
+              mode: input.mode,
+              intent: input.intent,
+              memory: input.memory,
+            })
+          },
+        },
         input: {
           list(sessionID: string) {
             return store.session.input[sessionID] ?? []

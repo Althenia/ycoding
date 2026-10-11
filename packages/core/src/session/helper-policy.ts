@@ -10,7 +10,7 @@ import { SessionRunnerModel } from "./runner/model"
 import { SessionSchema } from "./schema"
 
 export type TitleMode = "local" | "model" | "off"
-export type Role = "title" | "goal" | "decision" | "compaction" | "prediction"
+export type Role = "title" | "goal" | "decision" | "compaction" | "prediction" | "prompt"
 export type CompactionScope = "main" | "subagent"
 export type ModelSelection = CatalogModel.Ref | "session"
 
@@ -91,6 +91,7 @@ export const settings = (entries: readonly Config.Entry[]): Settings => {
   const efficiency = Config.latest(entries, "efficiency")
   const title = configuredModel(efficiency?.helper_models?.title)
   const prediction = configuredModel(efficiency?.helper_models?.prediction)
+  const prompt = configuredModel(efficiency?.helper_models?.prompt)
   const goal = configuredModel(efficiency?.helper_models?.goal)
   const decision = configuredModel(efficiency?.helper_models?.decision)
   const compactionMain = configuredModel(efficiency?.helper_models?.compaction?.main)
@@ -100,6 +101,7 @@ export const settings = (entries: readonly Config.Entry[]): Settings => {
     models: {
       ...(title === undefined ? {} : { title }),
       ...(prediction === undefined ? {} : { prediction }),
+      ...(prompt === undefined ? {} : { prompt }),
       ...(goal === undefined ? {} : { goal }),
       ...(decision === undefined ? {} : { decision }),
     },

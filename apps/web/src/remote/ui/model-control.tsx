@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js"
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { Portal } from "solid-js/web"
 import { Icon } from "../../ui/icon"
 import type { ModelOption } from "../catalog"
@@ -39,9 +39,10 @@ export function ModelControl(props: { readonly models: readonly ModelOption[]; r
   const profileLabel = () => selected()?.profile === undefined ? option()?.enabled === false ? "Choose a profile" : "Default"
     : option()?.profiles?.some((profile) => profile.name === selected()?.profile) ? selected()!.profile : `Unavailable: ${selected()!.profile}`
   const profiles = () => [...(option()?.enabled === false ? [] : [{ value: "", label: "Use provider default", detail: "Use the provider's default profile" }]), ...(option()?.profiles ?? []).map((profile) => ({ value: profile.name, label: profile.name, detail: profile.active ? "Global provider default" : undefined }))]
-  const models = (): (ModelOption & { readonly recentSelection?: ModelRefView })[] => orderedModelOptions(props.models, props.recent ?? [], selected()).filter((item) => `${item.name} ${item.id} ${item.providerName ?? item.providerID}`.toLowerCase().includes(query().toLowerCase()))
+  // The row template reads this for every model. A plain function repeats the catalog sort and freezes the sheet.
+  const models = createMemo((): (ModelOption & { readonly recentSelection?: ModelRefView })[] => orderedModelOptions(props.models, props.recent ?? [], selected()).filter((item) => `${item.name} ${item.id} ${item.providerName ?? item.providerID}`.toLowerCase().includes(query().toLowerCase())))
   const isRecent = (item: ModelOption & { readonly recentSelection?: ModelRefView }) => item.recentSelection !== undefined
-  const recentCount = () => models().filter(isRecent).length
+  const recentCount = createMemo(() => models().filter(isRecent).length)
   let trigger: HTMLButtonElement | undefined
   let surface: HTMLDivElement | undefined
   let search: HTMLInputElement | undefined

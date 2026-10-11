@@ -73,6 +73,7 @@ export const Operation = Schema.Literals([
   "session.attachment.upload",
   "session.interrupt",
   "session.prediction",
+  "session.promptGenerate",
   "session.permission.list",
   "session.permission.reply",
   "session.guardrail.status",

@@ -102,6 +102,7 @@ const store: RemoteStore = {
   cancelUpload: () => { requests.push({ operation: "upload.cancel", input: {} }); update({ ...state(), upload: undefined, uploadError: "Attachment upload cancelled. Files were not sent." }) },
   interrupt: async () => { requests.push({ operation: "session.interrupt", input: {} }) },
   requestPrediction: async (input) => { requests.push({ operation: "session.prediction", input }); return true },
+  requestPromptGenerate: async (input) => { requests.push({ operation: "session.promptGenerate", input }); return true },
   createSession: async (input: unknown) => { requests.push({ operation: "session.create", input }); return "ses_created" },
   retrySessionCreation: async () => "ses_created", dismissSessionCreation: () => {},
   signInURL: () => "", logout: async () => {}, createEnrollment: async () => ({ ok: false, status: 503, kind: "http", message: "Unavailable" }), revokeDevice: async () => ({ ok: false, status: 503, kind: "http", message: "Unavailable" }),

@@ -9,7 +9,7 @@ import { defaultComposerModel, readPreferredModel, readRecentModels, rememberRec
 import { contextWindowDisplay, generationSpeedDisplay } from "../projection"
 import { nextMessagePrediction, acceptNextMessagePrediction } from "../view-model"
 import type { ModelRefView } from "../projection"
-import { applyMention, autocompleteBound, effortLabel, modelSelection, modelSelectionKey, modelSpeeds, needsCatalogRead, optionsForTrigger, reconcileMentions, sameModel, submission, suggestionTrigger, tokenKey, triggerAt, type MentionPart } from "./composer-logic"
+import { applyMention, autocompleteBound, effortLabel, modelSelection, modelSelectionKey, modelSpeeds, needsCatalogRead, optionsForTrigger, promptGenerateModes, queuedDraftDelivery, queuedPromptIndicator, reconcileMentions, sameModel, submission, suggestionTrigger, tokenKey, triggerAt, type MentionPart, type PromptGenerateMode } from "./composer-logic"
 import { ComposerPicker } from "./composer-picker"
 import { containTab, createSheetFrame } from "./composer-sheet"
 import { attachmentLimit, encodeAttachment, type ComposerAttachment } from "./composer-attachment"
@@ -61,6 +61,7 @@ export function MiniComposer(props: {
   const [contextPinned, setContextPinned] = createSignal(false)
   const [contextLeaving, setContextLeaving] = createSignal(false)
   const [dockCollapsed, setDockCollapsed] = createSignal(readComposerDockCollapsed())
+  const [promptGenerate, setPromptGenerate] = createSignal<{ readonly intent: string; readonly returnFocus: HTMLElement }>()
   let input: HTMLTextAreaElement | undefined
   let dockToggle: HTMLButtonElement | undefined
   let inputWrap: HTMLDivElement | undefined
@@ -93,6 +94,11 @@ export function MiniComposer(props: {
   const catalog = (): CatalogView | undefined => targetKey() ? remote.state().catalogs[targetKey()!] : undefined
   const current = () => props.target && "sessionID" in props.target && remote.state().selectedSessionInfo?.id === props.target.sessionID ? remote.state().selectedSessionInfo : undefined
   const sessionTarget = () => props.target !== undefined && "sessionID" in props.target
+  const queuedDraft = () => {
+    const target = props.target
+    if (!target || !("sessionID" in target)) return undefined
+    return remote.state().queuedPromptDrafts?.[target.sessionID]
+  }
   const collapsed = () => dockCollapsed() && sessionTarget()
   const predictionView = () => props.target && "sessionID" in props.target && remote.state().view?.id === props.target.sessionID ? remote.state().view : undefined
   const predictionSource = () => predictionView()?.messages.findLast(message => message.kind === "assistant")?.id
@@ -115,7 +121,22 @@ export function MiniComposer(props: {
   }
   createEffect(() => { if (props.text !== "") dismissPrediction() })
   createEffect(() => { if (remote.state().transport.kind !== "open") dismissPrediction() })
+  const promptDraftFocus = remote.select((current) => current.promptDraftFocus, (left, right) => left?.sessionID === right?.sessionID && left?.revision === right?.revision)
   createEffect(() => { if (predictionView()?.autonomy?.goal?.status === "active") dismissPrediction() })
+  createEffect(() => {
+    const focus = promptDraftFocus()
+    const target = props.target
+    const sessionID = target && "sessionID" in target ? target.sessionID : undefined
+    if (!focus || sessionID !== focus.sessionID) return
+    const revision = focus.revision
+    const length = untrack(() => props.text.length)
+    queueMicrotask(() => {
+      if (promptDraftFocus()?.revision !== revision) return
+      input?.focus({ preventScroll: true })
+      input?.setSelectionRange(length, length)
+      setCursor(length)
+    })
+  })
   const upload = () => props.target && "sessionID" in props.target && remote.state().upload?.sessionID === props.target.sessionID ? remote.state().upload : undefined
   const currentModel = () => {
     if (!current()) return undefined
@@ -372,8 +393,23 @@ export function MiniComposer(props: {
     const chosenModel = selectedModel()
     const pendingAgent = current()?.agent === chosenAgent ? undefined : chosenAgent
     const pendingModel = current() === undefined || modelPending() ? chosenModel : undefined
-    const requested = submission(props.text, parts(), catalog(), delivery(), pendingAgent, pendingModel, modelPending() && forcedModelSwitches()[modelKey() ?? ""] !== undefined)
+    const requested = submission(props.text, parts(), catalog(), queuedDraftDelivery(props.text, queuedDraft(), delivery()), pendingAgent, pendingModel, modelPending() && forcedModelSwitches()[modelKey() ?? ""] !== undefined)
     if (requested.kind === "invalid") { setAttachmentError(requested.message); return }
+    if (requested.kind === "promptGenerate") {
+      const intent = requested.input.intent
+      if (!intent) {
+        void remote.store.requestPromptGenerate({ mode: "start", intent: "", memory: [] })
+        return
+      }
+      const active = document.activeElement
+      const returnFocus = active instanceof HTMLElement && active !== document.body ? active : input
+      if (!returnFocus) return
+      setPromptGenerate({ intent, returnFocus })
+      props.onText("")
+      setParts([])
+      setCursor(0)
+      return
+    }
     if ((requested.kind === "prompt" || requested.kind === "command") && modelChoice().blocked) { setAttachmentError(modelChoice().warning); return }
     if (requested.kind !== "prompt" && requested.kind !== "command" && (!props.target || !("sessionID" in props.target))) {
       setAttachmentError("Open a session to use this slash action.")
@@ -466,6 +502,7 @@ export function MiniComposer(props: {
           onPaste={(event) => { const files = Array.from(event.clipboardData?.files ?? []); if (!files.length) return; event.preventDefault(); void addFiles(files) }}
           onClick={(event) => setCursor(event.currentTarget.selectionStart)}
           onKeyUp={(event) => { if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) setCursor(event.currentTarget.selectionStart) }} onKeyDown={keyDown} />
+        <Show when={queuedPromptIndicator(props.text, queuedDraft())}>{(label) => <p class="composer__queue-indicator" role="status">{label()}</p>}</Show>
         <Show when={suggesting()}><div class="mini-composer__suggestions" style={{ "--composer-suggest-max": bound() === undefined ? undefined : `${bound()}px` }}>
           <div class="mini-composer__suggestions-head"><strong>Suggestions</strong><button type="button" aria-label="Close suggestions" onPointerDown={(event) => event.preventDefault()} onClick={() => dismissSuggestions()}><Icon name="close" size={16} />Close</button></div>
           <div ref={autocomplete} class="mini-composer__autocomplete" id="composer-autocomplete" role="listbox" aria-label="Suggestions" style={{ "--composer-name-width": `${Math.min(20, Math.max(9, ...options().map((item) => item.label.length)))}ch` }}>
@@ -510,7 +547,41 @@ export function MiniComposer(props: {
     }}><Icon name="chevron-down" size={16} /><span>{collapsed() ? "Show composer" : "Hide composer"}</span></button>
     </div></Show>
     </div>
+    <Show when={promptGenerate()} keyed>{(request) => <PromptGenerateDialog sessionSelected={sessionTarget()} returnFocus={request.returnFocus} onClose={() => setPromptGenerate(undefined)} onConfirm={(mode, memory) => {
+      if (sessionTarget()) {
+        void remote.store.requestPromptGenerate({ mode, intent: request.intent, memory })
+        return
+      }
+      const chosenAgent = selectedAgent()
+      const chosenModel = selectedModel()
+      const pendingAgent = current()?.agent === chosenAgent ? undefined : chosenAgent
+      const pendingModel = current() === undefined || modelPending() ? chosenModel : undefined
+      void props.onSubmit({ kind: "promptGenerate", input: { intent: request.intent, mode, memory, ...(pendingAgent ? { agent: pendingAgent } : {}), ...(pendingModel ? { model: pendingModel } : {}) } })
+    }} />}</Show>
   </>
+}
+
+function PromptGenerateDialog(props: {
+  readonly sessionSelected: boolean
+  readonly returnFocus: HTMLElement
+  readonly onClose: () => void
+  readonly onConfirm: (mode: PromptGenerateMode, memory: readonly ("repository" | "knowledge")[]) => void
+}) {
+  const [mode, setMode] = createSignal<PromptGenerateMode>("start")
+  const [repository, setRepository] = createSignal(false)
+  const [knowledge, setKnowledge] = createSignal(false)
+  let close: (() => void) | undefined
+  return <Modal class="overlay--confirm" label="Generate prompt" returnFocus={props.returnFocus} onClose={props.onClose} requestClose={(handoff) => { close = handoff }}>
+    <div role="radiogroup" aria-label="Prompt mode">
+      <For each={promptGenerateModes(props.sessionSelected)}>{(option) => <label class="check"><input type="radio" name="prompt-generate-mode" value={option.id} checked={mode() === option.id} autofocus={option.id === "start"} onChange={() => setMode(option.id)} /><span class="check__body"><span class="check__title">{option.label}</span></span></label>}</For>
+    </div>
+    <label class="check"><input type="checkbox" checked={repository()} onChange={(event) => setRepository(event.currentTarget.checked)} /><span class="check__body"><span class="check__title">Project memory (this repository)</span></span></label>
+    <label class="check"><input type="checkbox" checked={knowledge()} onChange={(event) => setKnowledge(event.currentTarget.checked)} /><span class="check__body"><span class="check__title">Global memory (shared knowledge)</span></span></label>
+    <div class="device-cleanup-actions">
+      <button type="button" class="button button--secondary" onClick={() => close?.()}>Cancel</button>
+      <button type="button" class="button button--primary" onClick={() => { props.onConfirm(mode(), [...(repository() ? ["repository" as const] : []), ...(knowledge() ? ["knowledge" as const] : [])]); close?.() }}>Generate</button>
+    </div>
+  </Modal>
 }
 
 function SuggestDialog(props: {

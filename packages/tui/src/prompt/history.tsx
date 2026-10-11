@@ -21,6 +21,7 @@ export type PromptInfo = Types.DeepMutable<Pick<SessionPromptInput, "text" | "fi
   pasted: PastedText[]
   skills?: PromptSkill[]
   mode?: "normal" | "shell"
+  delivery?: "queue"
 }
 
 export type PromptPartRef = {
@@ -58,6 +59,7 @@ export function parsePromptInfo(value: unknown): PromptInfo | undefined {
   if (typeof input.text !== "string" || !Array.isArray(input.pasted)) return
   const prompt = structuredClone(input) as PromptInfo
   prompt.files = prompt.files?.filter((file) => !file.uri.startsWith("data:"))
+  delete prompt.delivery
   return prompt
 }
 

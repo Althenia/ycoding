@@ -49,7 +49,11 @@ describe("shared selector mobile sheets", () => {
         expect(state.bodyHeadGap).toBeCloseTo(0, 0)
         expect(state.subtitleBodyGap).toBeCloseTo(state.bodyPaddingTop, 0)
         expect(state.listSubtitleGap).toBeCloseTo(state.subtitleListMargin, 0)
-        expect(state.fullHeight).toBe(true)
+        expect(state.fullHeight).toBe(false)
+        expect(state.contentSized).toBe(true)
+        expect(state.bottomTracksVisualViewport).toBe(true)
+        expect(state.tallestOption).toBeGreaterThanOrEqual(44)
+        expect(state.tallestOption).toBeLessThanOrEqual(56)
         expect(state.confirmReachable).toBe(true)
         expect(state.bodyClipped).toBe(true)
         expect(state.pageOverflow).toBe(false)
@@ -155,6 +159,9 @@ async function openMachinePicker(width: number, height: number) {
 async function geometry(page: { evaluate<T>(expression: string): Promise<T> }) {
   return page.evaluate<{
     fullHeight: boolean
+    contentSized: boolean
+    bottomTracksVisualViewport: boolean
+    tallestOption: number
     topTracksVisualViewport: boolean
     headingReachable: boolean
     confirmReachable: boolean
@@ -196,6 +203,9 @@ async function geometry(page: { evaluate<T>(expression: string): Promise<T> }) {
     const viewportBottom = viewportTop + viewport.height
     return {
       fullHeight: Math.abs(surfaceBox.height - viewport.height) <= 1,
+      contentSized: surfaceBox.height < viewport.height - 8,
+      bottomTracksVisualViewport: Math.abs(surfaceBox.bottom - viewportBottom) <= 2,
+      tallestOption: Math.max(0, ...[...dialog.querySelectorAll('[role="option"]')].map((option) => option.getBoundingClientRect().height)),
       topTracksVisualViewport: Math.abs(surfaceBox.top - viewportTop) <= 1,
       headingReachable: headingBox.top >= viewportTop && headingBox.bottom <= viewportBottom,
       confirmReachable: confirmBox.top >= viewportTop && confirmBox.bottom <= viewportBottom,

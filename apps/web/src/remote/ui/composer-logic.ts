@@ -9,6 +9,24 @@ export type MentionPart =
 export type ComposerOption = { readonly label: string; readonly description?: string; readonly kind: "command" | "file" | "agent" | "skill"; readonly value: string; readonly uri?: string }
 const unsupportedSlashActions = new Set(["cd", "editor", "skills", "btw", "btw-send", "daybreak", "move"])
 
+export type PromptGenerateMode = "start" | "steer" | "queue" | "goal"
+
+export function promptGenerateModes(sessionSelected: boolean) {
+  return [
+    { id: "start" as const, label: "Start a task" },
+    ...(sessionSelected ? [{ id: "steer" as const, label: "Steer" }, { id: "queue" as const, label: "Queue follow-up" }] : []),
+    { id: "goal" as const, label: "Goal objective" },
+  ]
+}
+
+export function queuedPromptIndicator(draft: string, queued: string | undefined) {
+  return queued !== undefined && queued === draft && draft !== "" ? "This message will be queued" : undefined
+}
+
+export function queuedDraftDelivery(draft: string, queued: string | undefined, selected: "steer" | "queue"): "steer" | "queue" {
+  return queuedPromptIndicator(draft, queued) ? "queue" : selected
+}
+
 export function effortLabel(variant: string, model?: ModelOption): string {
   const labels: Record<string, string> = { none: "None", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra High", "extra high": "Extra High", max: "Max", default: "Default" }
   const prefix = model?.providerID === "cursor" ? [model.name, model.id,
@@ -171,7 +189,7 @@ export function optionsForTrigger(trigger: Trigger, query: string, catalog: Cata
   const resources: ComposerOption[] = [...catalog.references, ...catalog.resources]
     .map((resource) => ({ label: `@${resource.name}`, description: resource.description, kind: "file", value: resource.name, uri: resource.uri }))
   const candidates: ComposerOption[] = trigger === "/"
-    ? [...(sessionActions ? [{ label: "/compact", description: "Compact this Session's context", kind: "command" as const, value: "compact" }, { label: "/goal", description: "Set an autonomous goal", kind: "command" as const, value: "goal" }, { label: "/yolo", description: "Set the autonomy level", kind: "command" as const, value: "yolo" }, { label: "/suggest", description: "Suggest your next message", kind: "command" as const, value: "suggest" }] : []), ...catalog.commands.filter((command) => !unsupportedSlashActions.has(command.name) && command.name !== "compact" && (!sessionActions || command.name !== "goal" && command.name !== "yolo" && command.name !== "suggest")).map((command) => ({ label: `/${command.name}`, description: command.description, kind: "command" as const, value: command.name })), ...(sessionActions ? skills.filter((skill) => catalog.skills.find((entry) => entry.id === skill.value)?.slash).map((skill) => ({ ...skill, label: `/${skill.value}` })) : [])]
+    ? [...(sessionActions ? [{ label: "/compact", description: "Compact this Session's context", kind: "command" as const, value: "compact" }, { label: "/goal", description: "Set an autonomous goal", kind: "command" as const, value: "goal" }, { label: "/yolo", description: "Set the autonomy level", kind: "command" as const, value: "yolo" }, { label: "/suggest", description: "Suggest your next message", kind: "command" as const, value: "suggest" }] : []), { label: "/prompt", description: "Generate a prompt from a rough intent", kind: "command" as const, value: "prompt" }, ...catalog.commands.filter((command) => !unsupportedSlashActions.has(command.name) && command.name !== "compact" && command.name !== "prompt" && (!sessionActions || command.name !== "goal" && command.name !== "yolo" && command.name !== "suggest")).map((command) => ({ label: `/${command.name}`, description: command.description, kind: "command" as const, value: command.name })), ...(sessionActions ? skills.filter((skill) => catalog.skills.find((entry) => entry.id === skill.value)?.slash).map((skill) => ({ ...skill, label: `/${skill.value}` })) : [])]
     : trigger === "@" ? [...catalog.references.map((resource) => resources.find((item) => item.uri === resource.uri)!), ...agents, ...catalog.resources.map((resource) => resources.find((item) => item.uri === resource.uri)!), ...files.map((file) => ({ label: `@${file.path}`, kind: "file" as const, value: file.path, uri: file.uri }))]
       : trigger === "$" ? skills : [...skills.map((skill) => ({ ...skill, label: catalog.skills.find((item) => item.id === skill.value)?.name ?? skill.label })), ...agents.map((agent) => ({ ...agent, label: catalog.agents.find((item) => item.id === agent.value)?.name ?? agent.label }))]
   return candidates.map((option) => ({ option, score: Math.max(fuzzy(option.value, query), fuzzy(option.description ?? "", query) - 20) }))
@@ -227,6 +245,11 @@ export function submission(text: string, parts: readonly MentionPart[], catalog:
   if (command?.[1] === "suggest") {
     const hint = command[2]?.trim()
     return { kind: "suggest" as const, input: hint ? { hint } : {} }
+  }
+  if (command?.[1] === "prompt") {
+    const intent = command[2]?.trim()
+    const input: { intent?: string; mode?: PromptGenerateMode; memory?: readonly ("repository" | "knowledge")[]; agent?: string; model?: ModelRefView } = intent ? { intent } : {}
+    return { kind: "promptGenerate" as const, input }
   }
   if (command && unsupportedSlashActions.has(command[1]!)) return { kind: "invalid" as const, message: "This slash action is unavailable in the web composer." }
   const files: FileAttachmentInput[] = parts.filter((part): part is Extract<MentionPart, { kind: "file" }> => part.kind === "file")

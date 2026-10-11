@@ -70,6 +70,7 @@ export const remoteOperations = [
   "session.attachment.upload",
   "session.interrupt",
   "session.prediction",
+  "session.promptGenerate",
   "session.permission.list",
   "session.permission.reply",
   "session.guardrail.status",
@@ -134,6 +135,7 @@ export const remoteSessionOperations = [
   "session.attachment.upload",
   "session.interrupt",
   "session.prediction",
+  "session.promptGenerate",
   "session.permission.list",
   "session.permission.reply",
   "session.guardrail.status",
@@ -200,6 +202,7 @@ export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation">
   "session.attachment.upload": "mutation",
   "session.interrupt": "mutation",
   "session.prediction": "mutation",
+  "session.promptGenerate": "mutation",
   "session.permission.list": "read",
   "session.permission.reply": "mutation",
   "session.guardrail.status": "read",
@@ -813,6 +816,10 @@ function validOperationInput(operation: RemoteOperation, input: unknown): boolea
   if (operation === "session.prediction") return isRecord(input) && predictionMemory(input.memory) &&
     (input.hint === undefined || (typeof input.hint === "string" && input.hint.length <= 2_000)) &&
     Object.keys(input).every((key) => key === "memory" || key === "hint")
+  if (operation === "session.promptGenerate") return isRecord(input) && predictionMemory(input.memory) &&
+    (input.mode === "start" || input.mode === "steer" || input.mode === "queue" || input.mode === "goal") &&
+    typeof input.intent === "string" && input.intent.length <= 4_000 && input.intent.trim().length > 0 &&
+    Object.keys(input).every((key) => key === "mode" || key === "intent" || key === "memory")
   if (operation === "session.skill") return isRecord(input) && validName(input.skill) &&
     (input.id === undefined || (typeof input.id === "string" && /^msg_[A-Za-z0-9_-]+$/.test(input.id) && input.id.length <= 128)) &&
     (input.resume === undefined || typeof input.resume === "boolean") &&
