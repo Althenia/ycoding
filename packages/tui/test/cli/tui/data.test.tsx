@@ -3235,6 +3235,142 @@ test("skips initial instruction state and projects later updates with their mess
   }
 })
 
+test("places an instruction notice before a resident assistant and keeps it there across refresh", async () => {
+  const sessionID = "session-instruction-order"
+  const assistant = {
+    id: "msg_assistant",
+    type: "assistant" as const,
+    agent: "build",
+    model: { providerID: "fixture", id: "fixture" },
+    content: [{ type: "text" as const, text: "Streaming answer" }],
+    time: { created: 8 },
+  }
+  const notice = {
+    id: SessionMessage.ID.fromEvent(EventRuntime.ID.make("evt_instruction_date")),
+    type: "system" as const,
+    text: "Instructions updated: core/date",
+    time: { created: 3 },
+  }
+  const later = {
+    id: "msg_later",
+    type: "synthetic" as const,
+    text: "Later note",
+    description: "Later note",
+    time: { created: 12 },
+  }
+  let snapshotMessages: readonly unknown[] = []
+  let watermark = 1
+  const events = createEventStream()
+  const calls = createFetch(
+    (url) =>
+      url.pathname === `/api/session/${sessionID}/snapshot`
+        ? sessionSnapshot(sessionID, snapshotMessages, {
+            watermark: { type: "log.synced", aggregateID: sessionID, seq: watermark },
+          })
+        : undefined,
+    events,
+  )
+  let sync!: ReturnType<typeof useData>
+  let ready!: () => void
+  const mounted = new Promise<void>((resolve) => {
+    ready = resolve
+  })
+
+  function Probe() {
+    sync = useData()
+    onMount(ready)
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await mounted
+    await sync.session.message.sync(sessionID)
+    emitEvent(events, {
+      id: "evt_step",
+      created: 8,
+      type: "session.step.started",
+      durable: durable(sessionID, 8),
+      data: {
+        sessionID,
+        assistantMessageID: assistant.id,
+        agent: "build",
+        model: assistant.model,
+      },
+    })
+    emitEvent(events, {
+      id: "evt_text",
+      created: 9,
+      type: "session.text.started",
+      durable: durable(sessionID, 9),
+      data: { sessionID, assistantMessageID: assistant.id, ordinal: 0 },
+    })
+    emitEvent(events, {
+      id: "evt_text_end",
+      created: 10,
+      type: "session.text.ended",
+      durable: durable(sessionID, 10),
+      data: { sessionID, assistantMessageID: assistant.id, ordinal: 0, text: "Streaming answer" },
+    })
+    await wait(() => sync.session.message.get(sessionID, assistant.id)?.type === "assistant")
+    emitEvent(events, {
+      id: "evt_instruction_date",
+      created: 3,
+      type: "session.instructions.updated",
+      durable: durable(sessionID, 3, 2),
+      data: { sessionID, delta: { "core/date": "1".repeat(64) } },
+    })
+    await wait(() => sync.session.message.list(sessionID).some((message) => message.id === notice.id))
+    expect(sync.session.message.list(sessionID).map((message) => message.id)).toEqual([notice.id, assistant.id])
+
+    emitEvent(events, {
+      id: "evt_later",
+      created: 12,
+      type: "session.synthetic",
+      durable: durable(sessionID, 12),
+      data: { sessionID, text: "Later note", description: "Later note" },
+    })
+    await wait(() => sync.session.message.list(sessionID).some((message) => message.id === later.id))
+    expect(sync.session.message.list(sessionID).map((message) => message.id)).toEqual([
+      notice.id,
+      assistant.id,
+      later.id,
+    ])
+
+    snapshotMessages = [assistant]
+    watermark = 12
+    sync.session.message.invalidate(sessionID)
+    await sync.session.message.sync(sessionID)
+    expect(sync.session.message.list(sessionID).map((message) => message.id)).toEqual([
+      notice.id,
+      assistant.id,
+      later.id,
+    ])
+
+    snapshotMessages = [notice, assistant, later]
+    sync.session.message.invalidate(sessionID)
+    await sync.session.message.sync(sessionID)
+    expect(sync.session.message.list(sessionID).map((message) => message.id)).toEqual([
+      notice.id,
+      assistant.id,
+      later.id,
+    ])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 function sessionInfo(id: string, parentID: string | undefined, cost = 0) {
   return {
     id,

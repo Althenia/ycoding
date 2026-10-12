@@ -132,13 +132,47 @@ export const snapshotWindow = Effect.fn("SessionHistory.snapshotWindow")(functio
     .limit(limit)
     .all()
     .pipe(Effect.orDie)
+  const decoded = yield* Effect.forEach(rows.toReversed(), (row) =>
+    decodeMessageRow(row.message).pipe(Effect.map((message) => ({ seq: row.message.seq, message }))),
+  )
+  const oldest = decoded[0]?.seq
+  const hasMore = Boolean(rows[0]?.hasMore)
+  const notices = (yield* InstructionState.transcriptNotices(db, sessionID)).filter((notice) => {
+    if (compaction && notice.seq < compaction.seq) return false
+    if (before !== undefined && notice.seq >= before) return false
+    if (oldest === undefined) return true
+    if (notice.seq < oldest) return !hasMore
+    return true
+  })
   return {
-    messages: yield* Effect.forEach(rows.toReversed(), (row) => decodeMessageRow(row.message)),
-    ...(rows[0]?.hasMore
+    messages: mergeTranscript(decoded, notices),
+    ...(hasMore
       ? { before: Buffer.from(`${cursorOwner(sessionID)}:${rows.at(-1)!.message.seq}`).toString("base64url") }
       : {}),
   }
 })
+
+export const transcript = Effect.fn("SessionHistory.transcript")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+) {
+  const compaction = yield* latestCompaction(db, sessionID)
+  const entries = yield* messageEntries(db, sessionID)
+  const notices = (yield* InstructionState.transcriptNotices(db, sessionID)).filter(
+    (notice) => compaction === undefined || notice.seq >= compaction.seq,
+  )
+  return mergeTranscript(entries, notices)
+})
+
+function mergeTranscript(
+  entries: ReadonlyArray<{ readonly seq: number; readonly message: SessionMessage.Info }>,
+  notices: ReadonlyArray<{ readonly seq: number; readonly message: SessionMessage.Info }>,
+) {
+  const ids = new Set(entries.map((entry) => entry.message.id))
+  return [...entries, ...notices.filter((notice) => !ids.has(notice.message.id))]
+    .toSorted((left, right) => left.seq - right.seq)
+    .map((entry) => entry.message)
+}
 
 export function visibleForModel<T extends { readonly seq: number; readonly message: SessionMessage.Info }>(
   entries: ReadonlyArray<T>,

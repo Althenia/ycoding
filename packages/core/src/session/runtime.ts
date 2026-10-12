@@ -1062,7 +1062,7 @@ const layer = Layer.effect(
               const session = yield* result.get(sessionID)
               const history =
                 options?.limit === undefined
-                  ? { messages: yield* SessionHistory.load(db, sessionID) }
+                  ? { messages: yield* SessionHistory.transcript(db, sessionID) }
                   : yield* SessionHistory.snapshotWindow(db, sessionID, options.limit, before)
               const sequence = yield* EventRuntime.latestSequence(db, sessionID)
               const watermark: EventLog.Synced = {

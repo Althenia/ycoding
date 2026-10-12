@@ -704,6 +704,7 @@ Instruction state is Session-owned.
 - Discovery observes ambient global and upward-project instruction sources.
 - Guidance and persisted instruction entries are composed explicitly by the session runner.
 - `session.instructions.updated` stores changed source keys and content hashes.
+- A chronological update, and not the initial baseline, is derived into the session snapshot at that event's sequence. The transcript notice lists the changed source keys. The runner publishes the update before the assistant step that first uses it, so the notice stays before that step and every message created after the update.
 - Instruction blob content is stored once; instruction state is a rebuildable fold cache.
 - Initial complete instruction loading blocks on unavailable required sources; later unavailable sources retain their previous value.
 - Completed compaction advances the instruction epoch.

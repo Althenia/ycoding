@@ -607,6 +607,14 @@ describe("unknown and ignored events", () => {
     expect(view.unhandledEvents).toBe(0)
   })
 
+  test("projects chronological instruction updates as the same system notice the snapshot carries", () => {
+    let view = applySessionEvent(createSessionView("ses_a"), { id: "evt_baseline", created: 1, type: "session.instructions.updated", metadata: { instructions: { initial: true } }, data: { sessionID: "ses_a", delta: { "core/date": "0".repeat(64) } } }, 1)
+    expect(view.messages).toHaveLength(0)
+    view = applySessionEvent(view, { id: "evt_update", created: 2, type: "session.instructions.updated", data: { sessionID: "ses_a", delta: { "core/date": "1".repeat(64), "core/instructions": "2".repeat(64) } } }, 2)
+    expect(view.messages).toEqual([{ kind: "system", id: "msg_update", text: "Instructions updated: core/date, core/instructions", created: 2 }])
+    expect(view.unhandledEvents).toBe(0)
+  })
+
   test("counts malformed payloads rather than guessing fields", () => {
     const view = applySessionEvent(createSessionView("ses_a"), { type: "session.text.delta", data: {} }, 1)
     expect(view.unhandledEvents).toBe(1)

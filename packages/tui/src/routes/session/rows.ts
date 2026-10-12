@@ -167,7 +167,7 @@ export function createSessionRows(sessionID: Accessor<string>) {
     on(
       () =>
         data.session.message.list(sessionID()).flatMap((message) =>
-          message.type === "user" || message.type === "synthetic"
+          message.type === "user" || message.type === "synthetic" || message.type === "system"
             ? [
                 {
                   id: message.id,

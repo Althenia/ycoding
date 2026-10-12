@@ -367,6 +367,27 @@ const instructionUpdatesAfter = Effect.fnUntraced(function* (
   return yield* eventRows(db, sessionID, [instructionEventType], after)
 })
 
+export const transcriptNotices = Effect.fn("InstructionState.transcriptNotices")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+) {
+  const state = yield* readState(db, sessionID)
+  if (!state) return []
+  return (yield* instructionUpdatesAfter(db, sessionID, state.epoch_start)).flatMap((row) => {
+    const keys = Object.keys(decodeInstructionsUpdated(row.data).delta)
+    if (keys.length === 0) return []
+    return [{
+      seq: row.seq,
+      message: SessionMessage.System.make({
+        id: SessionMessage.ID.fromEvent(EventRuntime.ID.make(row.id)),
+        type: "system",
+        text: `Instructions updated: ${keys.join(", ")}`,
+        time: { created: DateTime.makeUnsafe(row.created) },
+      }),
+    }]
+  })
+})
+
 const eventRows = Effect.fnUntraced(function* (
   db: DatabaseService,
   sessionID: SessionSchema.ID,

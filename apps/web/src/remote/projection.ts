@@ -382,7 +382,6 @@ const ignoredEventTypes: readonly string[] = [
   "session.work.completed",
   "session.file-change.recorded",
   "guardrail.decided",
-  "session.instructions.updated",
   "session.task.updated",
   "session.project-artifacts-ended",
   "session.moved",
@@ -968,6 +967,16 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         ...(stringField(data.source) ? { source: stringField(data.source) } : {}),
         created: now,
       })
+    case "session.instructions.updated": {
+      const keys = Object.keys(recordField(data.delta) ?? {})
+      if (keys.length === 0 || recordField(event.metadata?.instructions)?.initial === true) return view
+      return pushMessage(view, {
+        kind: "system",
+        id: (event.id ?? `instructions_${view.messages.length}`).replace(/^evt_/, "msg_"),
+        text: `Instructions updated: ${keys.join(", ")}`,
+        created: event.created ?? now,
+      })
+    }
     case "session.compaction.admitted":
       return withCompaction(view, data, "pending", event.created ?? now)
     case "session.compaction.started":
@@ -1209,12 +1218,12 @@ function bump(view: SessionView): SessionView {
 
 function readEvent(
   payload: unknown,
-): { readonly type: string; readonly id?: string; readonly created?: number; readonly data: Record<string, unknown> } | undefined {
+): { readonly type: string; readonly id?: string; readonly created?: number; readonly metadata?: Record<string, unknown>; readonly data: Record<string, unknown> } | undefined {
   if (!isRecord(payload)) return undefined
   const type = stringField(payload.type)
   if (type === undefined) return undefined
   if (!isRecord(payload.data)) return undefined
-  return { type, id: stringField(payload.id), created: numberField(payload.created), data: payload.data }
+  return { type, id: stringField(payload.id), created: numberField(payload.created), metadata: recordField(payload.metadata), data: payload.data }
 }
 
 function applyAdmitted(view: SessionView, data: Record<string, unknown>, now: number): SessionView {

@@ -336,6 +336,7 @@ function reconcileCanonicalMessages(
     }
     messages[position] = message
   })
+  const currentIndex = new Map(current.map((message, index) => [message.id, index]))
   current.forEach((message) => {
     const position = positions.get(message.id)
     const preserve = touched.has(message.id) || active.has(message.id) ||
@@ -343,8 +344,16 @@ function reconcileCanonicalMessages(
       (position === undefined && older.has(message.id))
     if (!preserve) return
     if (position === undefined) {
-      positions.set(message.id, messages.length)
-      messages.push(message)
+      const origin = currentIndex.get(message.id) ?? current.length
+      const insertAt = current
+        .slice(origin + 1)
+        .map((later) => positions.get(later.id))
+        .find((later) => later !== undefined) ?? messages.length
+      messages.splice(insertAt, 0, message)
+      positions.forEach((value, id) => {
+        if (value >= insertAt) positions.set(id, value + 1)
+      })
+      positions.set(message.id, insertAt)
       return
     }
     messages[position] = message
@@ -682,6 +691,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     const messageVersion = new Map<string, number>()
     const messageMutations = new Map<string, Map<string, number>>()
     const messageMutationSeq = new Map<string, Map<string, number>>()
+    const messageOrderSeq = new Map<string, Map<string, number>>()
     const olderMessageIDs = new Map<string, Set<string>>()
     const historyOwner = new Map<string, object>()
     const olderLoads = new Map<string, Promise<void>>()
@@ -708,6 +718,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       const residentIDs = new Set(resident.map((message) => message.id))
       messageMutationSeq.get(sessionID)?.forEach((_, id) => {
         if (!residentIDs.has(id)) messageMutationSeq.get(sessionID)?.delete(id)
+      })
+      messageOrderSeq.get(sessionID)?.forEach((_, id) => {
+        if (!residentIDs.has(id)) messageOrderSeq.get(sessionID)?.delete(id)
       })
       olderMessageIDs.get(sessionID)?.forEach((id) => {
         if (!residentIDs.has(id)) olderMessageIDs.get(sessionID)?.delete(id)
@@ -934,6 +947,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
                 const sequences = messageMutationSeq.get(sessionID) ?? new Map<string, number>()
                 sequences.set(item.id, applyingSequence)
                 messageMutationSeq.set(sessionID, sequences)
+                const order = messageOrderSeq.get(sessionID) ?? new Map<string, number>()
+                if (!order.has(item.id)) order.set(item.id, applyingSequence)
+                messageOrderSeq.set(sessionID, order)
               }
             }
           })
@@ -948,6 +964,17 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         if (index.has(item.id)) return
         index.set(item.id, messages.length)
         messages.push(item)
+      },
+      place(sessionID: string, messages: SessionMessageInfo[], index: Map<string, number>, item: SessionMessageInfo, seq: number) {
+        if (index.has(item.id)) return
+        const sequences = messageOrderSeq.get(sessionID)
+        const later = messages.findIndex((message) => {
+          const messageSeq = sequences?.get(message.id)
+          return messageSeq !== undefined && messageSeq > seq
+        })
+        messages.splice(later === -1 ? messages.length : later, 0, item)
+        index.clear()
+        messages.forEach((message, position) => index.set(message.id, position))
       },
       activeAssistant(messages: SessionMessageInfo[]) {
         const item = messages.findLast((item) => item.type === "assistant" && !item.time.completed)
@@ -1043,6 +1070,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       messageVersion.delete(sessionID)
       messageMutations.delete(sessionID)
       messageMutationSeq.delete(sessionID)
+      messageOrderSeq.delete(sessionID)
       olderMessageIDs.delete(sessionID)
       historyOwner.delete(sessionID)
       olderLoads.delete(sessionID)
@@ -1428,14 +1456,15 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             instructions.initial === true
           )
             break
+          if (Object.keys(event.data.delta).length === 0) break
           message.update(event.data.sessionID, (draft, index) => {
-            message.append(draft, index, {
+            message.place(event.data.sessionID, draft, index, {
               id: messageIDFromEvent(event.id),
               type: "system",
               text: `Instructions updated: ${Object.keys(event.data.delta).join(", ")}`,
               metadata: event.metadata,
               time: { created: event.created },
-            })
+            }, event.durable.seq)
           })
           break
         case "session.context.observed":
@@ -2173,6 +2202,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             messageVersion.delete(sessionID)
             messageMutations.delete(sessionID)
             messageMutationSeq.delete(sessionID)
+            messageOrderSeq.delete(sessionID)
             olderMessageIDs.delete(sessionID)
             historyOwner.delete(sessionID)
             olderLoads.delete(sessionID)
