@@ -73,17 +73,19 @@ const make = (dependencies: Dependencies) => {
     db: Database.Interface["db"],
     input: {
       readonly session: SessionSchema.Info
-      readonly request: string | ((history: ReadonlyArray<SessionMessage.Info>) => string)
+      readonly request: string | ((assistant: SessionMessage.Assistant | undefined) => string)
     },
   ) {
     const agent = yield* dependencies.agents.get(Agent.ID.make("goal"))
     if (!agent) return yield* Effect.fail(new Error({ code: "goal.model_unavailable" }))
     const resolved = yield* dependencies.helpers.resolveModel(input.session, "goal", agent)
     if (!resolved) return yield* Effect.fail(new Error({ code: "goal.model_unavailable" }))
-    const history = yield* SessionHistory.load(db, input.session.id)
-    const requestText = typeof input.request === "string" ? input.request : input.request(history)
-    const context = history
-      .slice(-12)
+    const latestUser = yield* SessionHistory.latest(db, input.session.id, "user")
+    const requestText =
+      typeof input.request === "string"
+        ? input.request
+        : input.request(yield* SessionHistory.latest(db, input.session.id, "assistant"))
+    const context = (yield* SessionHistory.recent(db, input.session.id, 12))
       .flatMap((message) => {
         if (message.type === "user") return [`User: ${message.text}`]
         if (message.type === "assistant")
@@ -143,7 +145,7 @@ const make = (dependencies: Dependencies) => {
     })
     const tracker = yield* dependencies.requests.next({
       sessionID: input.session.id,
-      inputID: history.findLast((message) => message.type === "user")?.id,
+      inputID: latestUser?.id,
       source: "goal",
       agent: agent.id,
       model: resolved.ref,
@@ -219,8 +221,7 @@ const make = (dependencies: Dependencies) => {
     (db: Database.Interface["db"], input: Parameters<Interface["steer"]>[0]) =>
       generate(db, {
         session: input.session,
-        request: (history) => {
-          const assistant = history.findLast((message) => message.type === "assistant")
+        request: (assistant) => {
           const latestAssistantText =
             input.latestAssistantText ??
             assistant?.content

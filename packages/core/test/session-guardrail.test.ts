@@ -194,6 +194,18 @@ describe("SessionGuardrailMatch", () => {
     })
   })
 
+  test.each([
+    "bash <<'EOF'\nrm -rf ~\nEOF",
+    "cat <<'EOF' | sh\nrm -rf ~\nEOF",
+    "rm -rf ~>/dev/null",
+    "rm -rf ~ 2>&1 | tail -1",
+  ])("keeps home deletion denied around heredocs and redirects: %s", (command) => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths })).toMatchObject({
+      decision: "deny",
+      ruleIDs: ["standard.catastrophic.rm-user-home"],
+    })
+  })
+
   test("requires hard approval for destructive Git commands", () => {
     expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: ["git reset --hard HEAD~1"] })).toMatchObject({
       decision: "ask",
@@ -465,6 +477,13 @@ describe("SessionGuardrailMatch", () => {
     ["shell", "task-runner --output=/outside/new.txt"], ["shell", "printf x > /outside/new.txt"],
     ["shell", "printf x 2>>/outside/new.txt"], ["shell", "touch '$HOME/new.txt'"],
     ["shell", "touch '${PWD}/../new.txt'"], ["shell", "touch ~/new.txt"], ["shell", "rm -f /outside/new.txt"],
+    ["shell", "echo x > /outside/file"], ["shell", "echo x>/outside/file"], ["shell", "echo x &>/outside/file"],
+    ["shell", "printf x >>~/outside.log"], ["shell", "cp a ~/outside"], ["shell", "echo x | tee /outside/file"],
+    ["shell", "cat <<'EOF' > /outside/file\nbody\nEOF"], ["shell", "bash <<'EOF'\ntouch /outside/file\nEOF"],
+    ["shell", "cat <<'EOF' | sh\ntouch /outside/file\nEOF"], ["shell", "cat <<EOF > notes.md\n$(touch /outside/file)\nEOF"],
+    ["shell", "cat <<'EOF' > notes.md\nbody\nEOF\ntouch /outside/file"],
+    ["shell", "git -C /outside commit -m msg"],
+    ["shell", "git checkout -b x /outside/file"], ["shell", "curl -o /outside/file https://example.com/a"],
   ])("reviews recognized outside-repo paths: %s %s", (action, resource) => {
     expect(SessionGuardrailMatch.evaluate({ action, resources: [resource], paths }))
       .toMatchObject({ decision: "ask", hardReview: false, ruleIDs: ["standard.review.outside-repo"] })
@@ -476,6 +495,15 @@ describe("SessionGuardrailMatch", () => {
     ["shell", "cd src && touch ../file"],
     ["shell", "touch /tmp/file /private/tmp/file /var/tmp/file /private/var/tmp/file /var/folders/cache/file"],
     ["shell", "cat /outside/file; git -C /outside status"], ["shell", "printf x >/dev/null"], ["read", "/outside/file"],
+    ["shell", "cat <<'EOF' > notes.md\nSee /Users/other/repo and ~/elsewhere\nrm -rf ~\nEOF"],
+    ["shell", "cat <<-EOF > notes.md\n\tPlain /outside/text\n\tEOF"],
+    ["shell", "git add -A && git commit -q -m \"fix: handle /outside/path text\" 2>&1 | tail -3"],
+    ["shell", "git commit -am \"/abs text\""], ["shell", "git commit --message=\"/abs text\""],
+    ["shell", "git commit -m \"$(cat <<'EOF'\nfix: touch /outside/file in docs\nEOF\n)\""],
+    ["shell", "gh pr create --title \"/abs title\" --body \"See /outside/file\" 2>&1"],
+    ["shell", "gh api /repos/owner/repo/pulls > pulls.json"], ["shell", "echo /outside/file > notes.txt"],
+    ["shell", "printf '%s\\n' /outside/a ~/b > notes.txt"], ["shell", "task-runner fetch https://example.com/outside/path"],
+    ["shell", "task-runner run 2>&1 | tail -5"], ["shell", "task-runner run &>/dev/null"],
   ])("keeps repo, temporary, device, executable and read-only paths exempt: %s %s", (action, resource) => {
     expect(SessionGuardrailMatch.evaluate({ action, resources: [resource], paths }))
       .toMatchObject({ decision: "allow", hardReview: false, ruleIDs: [] })

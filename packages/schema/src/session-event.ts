@@ -118,6 +118,16 @@ export const ProfileBound = Event.durable({
 })
 export type ProfileBound = typeof ProfileBound.Type
 
+export const GuardrailApproved = Event.durable({
+  type: "session.guardrail.approved",
+  ...options,
+  schema: {
+    ...Base,
+    directories: Schema.Array(Schema.String),
+  },
+})
+export type GuardrailApproved = typeof GuardrailApproved.Type
+
 export const DaybreakSet = Event.durable({
   type: "session.daybreak.set",
   ...options,
@@ -909,6 +919,7 @@ export const DurableDefinitions = Event.inventory(
   UsageRecorded,
   ProviderRequestRecorded,
   ProfileBound,
+  GuardrailApproved,
 )
 
 // Durable replay accepts legacy and current payloads for the same event type.
@@ -919,7 +930,9 @@ export const Durable = Schema.Union(DurableDefinitions, { mode: "oneOf" }).annot
 export type DurableEvent = typeof Durable.Type
 
 const Public = Schema.Union(Definitions, { mode: "oneOf" })
-export const All = Schema.Union([Public, UsageRecorded, ProviderRequestRecorded, ProfileBound], { mode: "oneOf" })
+export const All = Schema.Union([Public, UsageRecorded, ProviderRequestRecorded, ProfileBound, GuardrailApproved], {
+  mode: "oneOf",
+})
 export type Event = typeof All.Type
 export type Type = Event["type"]
 

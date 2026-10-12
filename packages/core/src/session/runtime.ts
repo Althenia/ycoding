@@ -2419,12 +2419,9 @@ const layer = Layer.effect(
           SessionEvent.Execution.Failed.type,
           SessionEvent.Execution.Failed.durable.version,
         )
-        const latest = db
-          .select({ aggregateID: EventTable.aggregate_id, seq: sql<number>`max(${EventTable.seq})`.as("seq") })
-          .from(EventTable)
-          .where(inArray(EventTable.type, [startedType, failedType]))
-          .groupBy(EventTable.aggregate_id)
-          .as("latest_execution")
+        const latest = (type: string) =>
+          sql`(select max(latest.seq) from ${EventTable} as latest
+            where latest.aggregate_id = ${SessionTable.id} and latest.type = ${type})`
         const history = yield* db
           .select({
             aggregateID: EventTable.aggregate_id,
@@ -2432,8 +2429,14 @@ const layer = Layer.effect(
             created: EventTable.created,
             id: EventTable.id,
           })
-          .from(EventTable)
-          .innerJoin(latest, and(eq(EventTable.aggregate_id, latest.aggregateID), eq(EventTable.seq, latest.seq)))
+          .from(SessionTable)
+          .crossJoin(EventTable)
+          .where(
+            and(
+              eq(EventTable.aggregate_id, SessionTable.id),
+              eq(EventTable.seq, sql`max(coalesce(${latest(startedType)}, -1), coalesce(${latest(failedType)}, -1))`),
+            ),
+          )
           .orderBy(asc(EventTable.created), asc(EventTable.id))
           .all()
           .pipe(Effect.orDie)

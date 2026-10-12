@@ -3,12 +3,15 @@ export * as SessionGuardrail from "./guardrail"
 import path from "path"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import { Session } from "@ycoding-ai/schema/session"
-import { Context, Deferred, Effect, Layer, Schema } from "effect"
+import { and, asc, eq } from "drizzle-orm"
+import { Context, Deferred, Effect, Layer, Option, Schema } from "effect"
 import { Config } from "../config"
 import { ConfigGuardrail } from "../config/guardrail"
+import { Database } from "../database/database"
 import { makeLocationNode } from "../effect/app-node"
 import { KeyedMutex } from "../effect/keyed-mutex"
 import { EventRuntime } from "../event"
+import { EventTable } from "../event/sql"
 import { FSUtil } from "../fs-util"
 import { Global } from "../global"
 import { Location } from "../location"
@@ -17,6 +20,7 @@ import { Permission } from "../permission"
 import { Hash } from "../util/hash"
 import { SessionAutonomy } from "./autonomy"
 import { SessionErrors } from "./error"
+import { SessionEvent } from "./event"
 import { SessionStore } from "./store"
 import { SessionGuardrailCounter } from "./guardrail-counter"
 import { SessionGuardrailMatch } from "./guardrail-match"
@@ -102,7 +106,12 @@ interface Pending {
   readonly request: Guardrail.Request
   readonly deferred: Deferred.Deferred<void, DeclinedError>
   readonly review: ManagedReservation
-  readonly approvalKey: string
+  readonly directories: ReadonlyArray<string>
+}
+
+interface Classification {
+  readonly evaluation: Evaluation
+  readonly directories: ReadonlyArray<string>
 }
 
 interface ManagedReservation extends Reservation {
@@ -113,18 +122,12 @@ type LoadResult =
   | { readonly type: "document"; readonly document: ConfigGuardrail.Document }
   | { readonly type: "invalid"; readonly path: string }
 
-interface ApprovalKeyInput {
-  readonly rootSessionID: Session.ID
-  readonly action: string
-  readonly ruleIDs: ReadonlyArray<string>
-  readonly resources: ReadonlyArray<string>
-  readonly metadata?: Guardrail.Request["metadata"]
-}
-
 const noReservation: Reservation = { release: Effect.void }
 
-function approvalKey(input: ApprovalKeyInput) {
-  return JSON.stringify([input.rootSessionID, input.action, input.ruleIDs, input.resources, input.metadata ?? null])
+const decodeApproval = Schema.decodeUnknownOption(SessionEvent.GuardrailApproved.data)
+
+function classified(evaluation: Evaluation): Classification {
+  return { evaluation, directories: [] }
 }
 
 function canonicalJSON(value: unknown): string {
@@ -152,6 +155,7 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const config = yield* Config.Service
+    const database = yield* Database.Service
     const fs = yield* FSUtil.Service
     const global = yield* Global.Service
     const events = yield* EventRuntime.Service
@@ -170,7 +174,6 @@ export const layer = Layer.effect(
       reviews: settings?.max_pending_reviews ?? 16,
     })
     const pending = new Map<Guardrail.RequestID, Pending>()
-    const reusableApprovals = new Map<string, Session.ID>()
     const approvals = new Map<Session.ID, number>()
     const blocked = new Map<Session.ID, number>()
     const sequences = new Map<Session.ID, number>()
@@ -204,23 +207,29 @@ export const layer = Layer.effect(
             ),
           ),
         { discard: true },
-      ).pipe(
-        Effect.andThen(
-          Effect.forEach(
-            Array.from(reusableApprovals.entries()),
-            ([key, rootSessionID]) =>
-              withRootLock(
-                rootSessionID,
-                Effect.sync(() => {
-                  if (!reusableApprovals.delete(key)) return
-                  advanceUnlocked(rootSessionID)
-                }),
-              ),
-            { discard: true },
-          ),
-        ),
       ),
     )
+
+    const approvedDirectories = (rootSessionID: Session.ID) =>
+      database.db
+        .select({ data: EventTable.data })
+        .from(EventTable)
+        .where(
+          and(
+            eq(EventTable.aggregate_id, rootSessionID),
+            eq(EventTable.type, EventRuntime.versionedType(SessionEvent.GuardrailApproved.type, 1)),
+          ),
+        )
+        .orderBy(asc(EventTable.seq))
+        .all()
+        .pipe(
+          Effect.orDie,
+          Effect.map((rows) =>
+            rows.flatMap((row) =>
+              Option.match(decodeApproval(row.data), { onNone: () => [], onSome: (data) => data.directories }),
+            ),
+          ),
+        )
 
     function root(sessionID: Session.ID): Effect.Effect<Session.ID, SessionErrors.NotFoundError> {
       return Effect.gen(function* () {
@@ -267,7 +276,7 @@ export const layer = Layer.effect(
       return yield* Effect.forEach([...repositories.map((entry) => entry.path), global.config], loadDirectory)
     })
 
-    const evaluate: Interface["evaluate"] = Effect.fn("SessionGuardrail.evaluate")(function* (input: EvaluateInput) {
+    const classify = Effect.fn("SessionGuardrail.evaluate")(function* (input: EvaluateInput) {
       const rootSessionID = yield* root(input.sessionID)
       const paths = {
         workdir: typeof input.metadata?.workdir === "string" ? input.metadata.workdir : location.directory,
@@ -286,12 +295,12 @@ export const layer = Layer.effect(
             invalidFiles: [],
           })),
         })
-        return {
+        return classified({
           rootSessionID,
           ...(standard.decision === "deny" || standard.hardReview
             ? standard
             : { decision: "allow" as const, ruleIDs: [], standard: false, hardReview: false }),
-        }
+        })
       }
       const loaded = yield* documents()
       const result = {
@@ -303,33 +312,42 @@ export const layer = Layer.effect(
           custom: loaded,
         }),
       }
-      if (!result.standard || result.ruleIDs[0] !== "standard.review.outside-repo" || input.skipReview === true) return result
+      if (!result.standard || result.ruleIDs[0] !== "standard.review.outside-repo" || input.skipReview === true)
+        return classified(result)
       const directories = input.resources.flatMap((resource) =>
         SessionGuardrailStandard.outsideTargets(input.action, resource, paths)).reduce((result, target) => {
         result.set(target.path, result.get(target.path) === true || target.directory)
         return result
       }, new Map<string, boolean>())
       const candidates = [...directories.keys()]
+      const boundary = (target: string) => (directories.get(target) === true ? target : path.dirname(target))
+      const approved = yield* approvedDirectories(rootSessionID)
       const trustedPaths = yield* Effect.filter(candidates, (target) =>
-        locationMutation.managedWorktree(target).pipe(
+        approved.some((directory) => FSUtil.contains(directory, target))
+          ? Effect.succeed(true)
+          : locationMutation.repositoryWorktree(target).pipe(
           Effect.catch(() => Effect.succeed(false)),
-          Effect.flatMap((managed) => {
-            if (managed || globalRoots.some((root) => target === root || target.startsWith(`${root}${path.sep}`)))
+          Effect.flatMap((checkout) => {
+            if (checkout || globalRoots.some((root) => target === root || target.startsWith(`${root}${path.sep}`)))
               return Effect.succeed(true)
-            const boundary = directories.get(target) === true ? target : path.dirname(target)
             return permission.evaluateEffective({
               sessionID: input.sessionID,
               action: "external_directory",
-              resource: path.join(boundary, "*").replaceAll("\\", "/"),
+              resource: path.join(boundary(target), "*").replaceAll("\\", "/"),
             }).pipe(Effect.map((effect) => effect === "allow"))
           }),
         ))
       const resources = SessionGuardrailStandard.semanticResources(input.action, input.resources, paths).filter((resource) =>
         SessionGuardrailStandard.outsidePaths(input.action, resource, { ...paths, trustedPaths }).length > 0)
-      const allowed = { rootSessionID, decision: "allow" as const, ruleIDs: [], standard: false, hardReview: false }
-      if (resources.length === 0) return allowed
-      return result
+      if (resources.length === 0)
+        return classified({ rootSessionID, decision: "allow", ruleIDs: [], standard: false, hardReview: false })
+      return {
+        ...classified(result),
+        directories: [...new Set(candidates.filter((target) => !trustedPaths.includes(target)).map(boundary))],
+      }
     })
+
+    const evaluate: Interface["evaluate"] = (input) => classify(input).pipe(Effect.map((result) => result.evaluation))
 
     const reserveUnlocked = (rootSessionID: Session.ID, kind: SessionGuardrailCounter.Kind) =>
       counters.reserve(rootSessionID, kind).pipe(
@@ -356,7 +374,8 @@ export const layer = Layer.effect(
 
     const assert = Effect.fn("SessionGuardrail.assert")((input: EvaluateInput) =>
       Effect.gen(function* () {
-        const result = yield* evaluate(input)
+        const classification = yield* classify(input)
+        const result = classification.evaluation
         if (result.decision === "deny") {
           yield* withRootLock(
             result.rootSessionID,
@@ -380,13 +399,6 @@ export const layer = Layer.effect(
             reason: result.reason ?? "Session guardrail denied this action",
           })
         }
-        const reusableApprovalKey = approvalKey({
-          rootSessionID: result.rootSessionID,
-          action: input.action,
-          ruleIDs: result.ruleIDs,
-          resources: input.resources,
-          metadata: input.metadata,
-        })
         const admission = yield* withRootLock(
           result.rootSessionID,
           Effect.gen(function* () {
@@ -396,7 +408,6 @@ export const layer = Layer.effect(
             if (
               result.decision === "allow" ||
               input.skipReview ||
-              (!result.hardReview && reusableApprovals.has(reusableApprovalKey)) ||
               (result.decision === "ask" && !result.hardReview && autoGuardrail)
             ) {
               const reservation = yield* reserveActionUnlocked(result.rootSessionID, input.action)
@@ -425,7 +436,7 @@ export const layer = Layer.effect(
               ...(input.metadata === undefined ? {} : { metadata: structuredClone(input.metadata) }),
             })
             const deferred = yield* Deferred.make<void, DeclinedError>()
-            pending.set(request.id, { request, deferred, review, approvalKey: reusableApprovalKey })
+            pending.set(request.id, { request, deferred, review, directories: classification.directories })
             advanceUnlocked(result.rootSessionID)
             yield* events
               .publish(Guardrail.Event.Asked, request)
@@ -477,12 +488,17 @@ export const layer = Layer.effect(
             yield* Deferred.fail(item.deferred, new DeclinedError({ requestID: item.request.id }))
             return yield* Effect.void
           }
-          approvals.set(item.request.rootSessionID, (approvals.get(item.request.rootSessionID) ?? 0) + 1)
-          advanceUnlocked(item.request.rootSessionID)
-          if (reply === "always" && !reusableApprovals.has(item.approvalKey)) {
-            reusableApprovals.set(item.approvalKey, item.request.rootSessionID)
+          if (reply === "always" && item.directories.length > 0) {
+            yield* events
+              .publish(SessionEvent.GuardrailApproved, {
+                sessionID: item.request.rootSessionID,
+                directories: [...item.directories],
+              })
+              .pipe(Effect.onError(() => Deferred.fail(item.deferred, new DeclinedError({ requestID: item.request.id }))))
             advanceUnlocked(item.request.rootSessionID)
           }
+          approvals.set(item.request.rootSessionID, (approvals.get(item.request.rootSessionID) ?? 0) + 1)
+          advanceUnlocked(item.request.rootSessionID)
           yield* Deferred.succeed(item.deferred, undefined)
           return yield* Effect.void
         }),
@@ -516,6 +532,7 @@ export const layer = Layer.effect(
 
     const snapshotUnlocked = Effect.fnUntraced(function* (rootSessionID: Session.ID) {
       const current = yield* statusUnlocked(rootSessionID)
+      const approved = yield* approvedDirectories(rootSessionID)
       return {
         sequence: sequences.get(rootSessionID) ?? 0,
         digest: Hash.sha256(
@@ -552,10 +569,7 @@ export const layer = Layer.effect(
                 metadata: request.metadata ?? null,
               }))
               .toSorted((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)),
-            reusableApprovals: Array.from(reusableApprovals.entries())
-              .filter(([, approvalRootSessionID]) => approvalRootSessionID === rootSessionID)
-              .map(([key]) => key)
-              .toSorted(),
+            approvedDirectories: [...new Set(approved)].toSorted(),
           }),
         ),
       }
@@ -587,6 +601,7 @@ export const node = makeLocationNode({
   layer,
   deps: [
     Config.node,
+    Database.node,
     FSUtil.node,
     Global.node,
     LocationMutation.node,

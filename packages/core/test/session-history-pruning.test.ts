@@ -253,6 +253,152 @@ it.effect("keeps remote retained messages and account/model provenance selection
   }),
 )
 
+it.effect("reads only retained and later payloads under a matching remote manifest", () =>
+  Effect.gen(function* () {
+    const db = (yield* Database.Service).db
+    const fixture = yield* historyFixture(db, { count: 40 })
+    const covered = fixture.count - 11
+    const model = Model.Ref.make({ providerID: Provider.ID.make("test"), id: Model.ID.make("owner") })
+    const account = "b".repeat(64)
+    yield* db
+      .update(CompactionManifestBlobTable)
+      .set({
+        content: {
+          remote: {
+            provider: "test",
+            modelID: "owner",
+            digest: ContextManifest.payloadDigest({ private: "state" }),
+            itemID: "cmp_private",
+            retained: [3, 17].map((index) => ({
+              messageID: fixture.ids[index],
+              seq: index,
+              digest: ContextManifest.payloadDigest({ text: `${index}:` + "x".repeat(32), time: { created: index } }),
+            })),
+          },
+        },
+      })
+      .where(eq(CompactionManifestBlobTable.digest, fixture.manifestDigest))
+      .run()
+    yield* db
+      .insert(SessionProviderRequestTable)
+      .values({
+        id: ProviderRequest.ID.make("prq_history_remote_bounded"),
+        session_id: fixture.sessionID,
+        assistant_message_id: SessionMessage.ID.make(`msg_compaction_${fixture.manifestDigest}`),
+        connection_identity_digest: account,
+        source: "compaction",
+        agent: Agent.ID.make("compaction"),
+        model,
+        route_id: "test",
+        prompt_cache_key: "history",
+        system_digest: "s",
+        tool_digest: "t",
+        request: 1,
+        attempts: 1,
+        invalidation: "first-request",
+        continuation: "full",
+        tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+        time_created: 0,
+      })
+      .run()
+    const expected = [
+      fixture.ids[3],
+      fixture.ids[17],
+      SessionMessage.ID.make(`msg_compaction_${fixture.manifestDigest}`),
+      ...fixture.ids.slice(covered + 1),
+    ]
+    expect((yield* SessionHistory.forModel(db, fixture.sessionID, model, account)).map((message) => message.id)).toEqual(
+      expected,
+    )
+    yield* db.run(
+      sql`UPDATE session_message SET data = 'covered invalid JSON'
+        WHERE session_id = ${fixture.sessionID} AND seq <= ${covered} AND seq NOT IN (3, 17)`,
+    )
+    expect((yield* SessionHistory.forModel(db, fixture.sessionID, model, account)).map((message) => message.id)).toEqual(
+      expected,
+    )
+    expect(Exit.isFailure(yield* SessionHistory.forModel(db, fixture.sessionID).pipe(Effect.exit))).toBe(true)
+  }),
+)
+
+it.effect("reads latest, recent, and unsettled tool messages from bounded rows after the completed V1 floor", () =>
+  Effect.gen(function* () {
+    const db = (yield* Database.Service).db
+    const fixture = yield* historyFixture(db, { count: 40 })
+    const model = { providerID: "test", id: "model" }
+    const tool = (id: string, status: "streaming" | "running" | "completed") => ({
+      type: "tool",
+      id,
+      name: "echo",
+      state:
+        status === "streaming"
+          ? { status, input: "{" }
+          : { status, input: {}, structured: {}, content: [] },
+      time: { created: 1 },
+    })
+    const assistant = (content: ReadonlyArray<unknown>) => ({ agent: "build", model, content, time: { created: 1 } })
+    const rows = [
+      { type: "assistant", data: assistant([tool("call_before_floor", "running")]) },
+      { type: "skill", data: { skill: "review", name: "Review", text: "before floor", time: { created: 1 } } },
+      { type: "user", data: { text: "before floor", time: { created: 1 } } },
+      {
+        type: "compaction",
+        data: { reason: "auto", status: "completed", summary: "V1 summary", recent: "", time: { created: 1 } },
+      },
+      { type: "user", data: { text: "after floor", time: { created: 1 } } },
+      { type: "assistant", data: { bogus: true } },
+      { type: "assistant", data: assistant([{ type: "text", text: "Done" }, tool("call_streaming", "streaming")]) },
+      { type: "synthetic", data: { bogus: true } },
+      { type: "assistant", data: assistant([tool("call_completed", "completed")]) },
+      { type: "assistant", data: assistant([tool("call_running", "running")]) },
+      {
+        type: "compaction",
+        data: {
+          jobID: "cmp_current",
+          trigger: "manual",
+          status: "completed",
+          revision: 1,
+          boundary: { messageID: fixture.ids[29], seq: 29 },
+          metrics: { excludedMessages: 1, excludedParts: 0, inputTokens: 10, retainedTokens: 5 },
+          time: { created: 1 },
+        },
+      },
+      { type: "synthetic", data: { text: "newest", time: { created: 1 } } },
+    ] as const
+    const ids = rows.map((_, index) => SessionMessage.ID.make(`msg_history_bounded_${index}`))
+    yield* Effect.forEach(
+      rows,
+      (row, index) =>
+        db.run(
+          sql`INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data)
+            VALUES (${ids[index]}, ${fixture.sessionID}, ${row.type}, ${fixture.count + index},
+              ${fixture.count + index}, ${fixture.count + index}, ${JSON.stringify(row.data)})`,
+        ),
+      { discard: true },
+    )
+
+    expect((yield* SessionHistory.latest(db, fixture.sessionID, "assistant"))?.id).toBe(ids[9])
+    expect((yield* SessionHistory.latest(db, fixture.sessionID, "user"))?.id).toBe(ids[4])
+    expect(yield* SessionHistory.latest(db, fixture.sessionID, "skill")).toBeUndefined()
+    expect((yield* SessionHistory.recent(db, fixture.sessionID, 4)).map((message) => message.id)).toEqual(ids.slice(8))
+    expect((yield* SessionHistory.unsettledToolMessages(db, fixture.sessionID)).map((message) => message.id)).toEqual([
+      ids[6],
+      ids[9],
+    ])
+    expect(Exit.isFailure(yield* SessionHistory.load(db, fixture.sessionID).pipe(Effect.exit))).toBe(true)
+    yield* db.run(sql`DELETE FROM session_message WHERE id IN (${ids[5]}, ${ids[7]})`)
+    expect((yield* SessionHistory.recent(db, fixture.sessionID, 100)).map((message) => message.id)).toEqual(
+      (yield* SessionHistory.load(db, fixture.sessionID)).map((message) => message.id),
+    )
+    expect((yield* SessionHistory.recent(db, fixture.sessionID, 100)).map((message) => message.id)).toEqual([
+      ids[3],
+      ids[4],
+      ids[6],
+      ...ids.slice(8),
+    ])
+  }),
+)
+
 it.effect("releases an interrupted history snapshot before another aggregate commits", () =>
   Effect.gen(function* () {
     const db = (yield* Database.Service).db

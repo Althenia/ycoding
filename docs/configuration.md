@@ -248,6 +248,7 @@ The MCP shape where server names appear directly under `mcp` is also rejected. U
 | `tool_output`           | object                                | Tool-output truncation limits.                                                              |
 | `mcp`                   | object                                | MCP defaults and named servers.                                                             |
 | `compaction`            | object                                | Selective-compaction retention, budget, manifest, and advisory policy.                      |
+| `session_retention`     | object                                | Global-only idle Session family deletion; see [Session retention](#session-retention).      |
 | `skills`                | string array                          | Additional skill directories or HTTP(S) sources.                                            |
 | `commands`              | record                                | Named slash commands.                                                                       |
 | `instructions`          | string array                          | Accepted by Schema, but no current runtime consumer reads this field. Do not rely on it.    |
@@ -619,7 +620,7 @@ The noninteractive client does not approve requests locally: any remaining permi
 
 Home-directory expansion applies to path resources for `external_directory`, `read`, and `edit`. It does not rewrite shell command text.
 
-The `worktree` permission controls listing and creating managed Git worktrees; its built-in default is `ask`. Creation also passes through the Session `file_mutation` guardrail. Managed worktrees are stored at `<data>/worktrees/<repo-key>/<name>`, where `repo-key` is `repo_` plus the SHA-256 of the canonical Git common directory, and branch names match directory names. Only a linked worktree listed for the same Git repository is treated as internal for `external_directory`; all other outside paths remain external.
+The `worktree` permission controls listing and creating managed Git worktrees; its built-in default is `ask`. Creation also passes through the Session `file_mutation` guardrail. Managed worktrees are stored at `<data>/worktrees/<repo-key>/<name>`, where `repo-key` is `repo_` plus the SHA-256 of the canonical Git common directory, and branch names match directory names. Every checkout listed for the same Git repository (the main checkout and its linked worktrees) is treated as internal for `external_directory`; all other outside paths remain external.
 
 `glob` and `grep` search roots must resolve inside the active Location, including through symlinks. `grep` also accepts an absolute file path directly inside YCoding's managed tool-output directory. A direct file search checks `read` permission before scanning; a directory search checks `read` for each matched file before returning any results. A denied match rejects the search result. `webfetch` checks its `webfetch` URL permission before every HTTP redirect destination, refusing an unapproved destination and limiting chains to ten redirects.
 
@@ -1199,7 +1200,7 @@ Soft thresholds are runtime-owned. A Session starts background compaction once w
 | `guardrails.max_concurrent_subagents` | positive integer | `8`     | Running-subagent cap per root Session family.                                                             |
 | `guardrails.max_pending_reviews`      | positive integer | `16`    | Pending-review cap per root Session family.                                                               |
 
-Standard recursive-deletion rules exclude `/tmp`, `/private/tmp`, `/var/tmp`, `/private/var/tmp`, `/var/folders`, and the process `TMPDIR`, including descendants. Filesystem root, configured or other exact user homes, and system-directory deletion are denied. Project-root, ancestor, and direct home-child deletion, destructive Git, force push, and destructive database statements require hard human review. Edits, writes, patches, and shell commands that reach outside the repository require ordinary review through the normal review/YOLO path, without helper classification; this repository's managed worktrees and temporary roots count as inside, and recognized read-only shell commands are exempt. Paths under YCoding's global config, data, cache, state, temporary, bin, log, and repos directories, including descendants, do not require that review. A path is also exempt when the calling Session's effective `external_directory` permission is `allow`, using the same directory-glob resource and `~` expansion as other path permissions from global and project `permissions` and from the agent. `ask` and `deny` do not exempt a path. A shell command that also reaches a non-exempt outside path still requires review. These exemptions do not apply to hard reviews or catastrophic denies. Publication, production deployment, security-policy changes, and MCP execution have no standard guardrail rule.
+Standard recursive-deletion rules exclude `/tmp`, `/private/tmp`, `/var/tmp`, `/private/var/tmp`, `/var/folders`, and the process `TMPDIR`, including descendants. Filesystem root, configured or other exact user homes, and system-directory deletion are denied. Project-root, ancestor, and direct home-child deletion, destructive Git, force push, and destructive database statements require hard human review. Edits, writes, patches, and shell commands that reach outside the repository require ordinary review through the normal review/YOLO path, without helper classification; every checkout of this repository (the main checkout and every linked worktree sharing its Git common directory) and temporary roots count as inside, and recognized read-only shell commands are exempt. Paths under YCoding's global config, data, cache, state, temporary, bin, log, and repos directories, including descendants, do not require that review. A path is also exempt when the calling Session's effective `external_directory` permission is `allow`, using the same directory-glob resource and `~` expansion as other path permissions from global and project `permissions` and from the agent. `ask` and `deny` do not exempt a path. A shell command that also reaches a non-exempt outside path still requires review. These exemptions do not apply to hard reviews or catastrophic denies. Publication, production deployment, security-policy changes, and MCP execution have no standard guardrail rule.
 
 Custom rule files are direct `guardrails/*.md` children of the global config directory and each discovered repository `Config.Directory`; nested directories are not scanned. Source layers evaluate nearest repository first, then broader repositories, then the global directory. Within a layer, rules sort by descending numeric `priority`, then deterministic lexical file path and rule ID. See [`guardrails-and-provider-usage.md`](./guardrails-and-provider-usage.md#custom-guardrails) for the complete file contract and the unoverrideable catastrophic-deny, reply, and transient-approval rules.
 
@@ -1359,9 +1360,27 @@ Temporary headless browsing is started explicitly from the current Session's **I
 
 The URL must use HTTP or HTTPS without embedded credentials. Stop the paired Chrome bridge before starting isolated mode, or stop isolated mode before creating extension pairing. Browser permissions and Session guardrails still govern model actions. See the [isolated-browser contract](../specs/isolated-browser.md) for temporary-state semantics, restrictions, and environment-specific validation evidence and limits.
 
+## Session retention
+
+```json
+{
+  "session_retention": {
+    "days": 7
+  }
+}
+```
+
+| Key                      | Type             | Default | Effect                                                                                     |
+| ------------------------ | ---------------- | ------- | ------------------------------------------------------------------------------------------ |
+| `session_retention.days` | positive integer | `7`     | Delete a root Session family once every member has been idle for longer than this many days. |
+
+`session_retention` is global-only: the server reads it from the global configuration directory, `YCODING_CONFIG`, and `YCODING_CONFIG_CONTENT`, and ignores it in project configuration, because one SQLite database serves every project. Retention is read when a sweep runs; the first sweep loads it in the background. See [automatic Session retention](./runtime.md#automatic-session-retention) for family scope, exemptions, scheduling, and the cross-process limitation.
+
 ## Automatic SQLite space reclamation
 
-Database initialization automatically converts `auto_vacuum=NONE` databases to `INCREMENTAL` using a one-time SQLite `VACUUM`. Later initializations reclaim at most 256 free pages without rebuilding the database. An existing `FULL` auto-vacuum setting is preserved. These operations reclaim unused pages; they do not delete records.
+Database initialization automatically converts `auto_vacuum=NONE` databases to `INCREMENTAL` using a one-time SQLite `VACUUM`. Later initializations reclaim at most 256 free pages without rebuilding the database. An existing `FULL` auto-vacuum setting is preserved. Each initialization then runs `PRAGMA optimize=0x10002`. These operations reclaim unused pages and refresh query-planner statistics; they do not delete records.
+
+After a [Session retention](#session-retention) sweep deletes any Session, the server reclaims every free page in bounded `PRAGMA incremental_vacuum(2048)` batches, yielding between batches, so no single write transaction holds the database lock for long. Each hourly sweep runs `PRAGMA optimize`.
 
 The initial conversion requires a write lock and may need temporary free disk space up to twice the database size. It can delay startup. If SQLite cannot obtain the lock within the five-second busy timeout, or the conversion fails, startup fails rather than silently skipping conversion; existing records remain intact and the next start retries. Keep a backup before upgrading a large database and close other writers during the first start.
 

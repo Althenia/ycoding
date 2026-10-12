@@ -167,8 +167,7 @@ const layer = Layer.effect(
     const failInterruptedTools = Effect.fn("SessionRunner.failInterruptedTools")(function* (
       sessionID: SessionSchema.ID,
     ) {
-      for (const message of yield* store.context(sessionID)) {
-        if (message.type !== "assistant") continue
+      for (const message of yield* SessionHistory.unsettledToolMessages(db, sessionID)) {
         for (const tool of message.content) {
           if (tool.type !== "tool" || (tool.state.status !== "streaming" && tool.state.status !== "running")) continue
           yield* events.publish(SessionEvent.Tool.Failed, {

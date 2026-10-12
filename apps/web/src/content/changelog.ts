@@ -22,6 +22,19 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.10.4",
+    date: "2026-10-12",
+    title: "Automatic Session retention and directory-wide guardrail approvals",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Idle Sessions are deleted automatically. A root Session and all of its subagents are removed, with their history, once every member has been idle for more than 7 days. Pinned Sessions, Sessions with an active goal, suspended or running Sessions, Sessions with unsent input, and Sessions another Session was forked from are kept. Change the number of days with session_retention.days in your global configuration. Freed database space is returned to disk in small batches, and attachment files are not deleted." },
+      { tag: "Changed", text: "Choosing Allow for this session on an outside-repository guardrail review now approves that request's outside directory (and everything inside it) for the Session and its subagents, and is remembered after a restart. Hard reviews still always ask." },
+      { tag: "Changed", text: "Guardrails ask about work outside the repository less often: heredoc text, commit and PR message text, and URLs are no longer treated as paths, and the repository's main checkout and its other worktrees count as inside the repository." },
+      { tag: "Changed", text: "Long Sessions and large databases stay faster: starting each run, goal continuation, subagent completion, outstanding-failure status, and remote-compaction steps read only the messages they need, and SQLite keeps its query statistics up to date." },
+      { tag: "Fixed", text: "Shell redirections written without a space, such as cmd>/path/file, or next to 2>&1 are reviewed when they write outside the repository." },
+    ],
+  },
+  {
     version: "0.10.3",
     date: "2026-10-12",
     title: "Bounded reads and parent-session subagent answers",

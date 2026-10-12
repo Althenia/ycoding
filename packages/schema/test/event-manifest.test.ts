@@ -62,6 +62,25 @@ describe("public event manifest", () => {
     expect(Schema.is(SessionEvent.PublicDurable)(event)).toBe(false)
   })
 
+  test("keeps directory-scoped guardrail approvals private while accepting them in durable replay", () => {
+    const definition = EventManifest.Durable.get("session.guardrail.approved.1")
+    expect(definition).toBe(SessionEvent.GuardrailApproved)
+    expect(definition?.durable).toEqual({ aggregate: "sessionID", version: 1 })
+    const data = { sessionID: SessionID.make("ses_root"), directories: ["/home/user/x"] }
+    expect(Schema.decodeUnknownSync(SessionEvent.GuardrailApproved.data)(data)).toEqual(data)
+    expect(EventManifest.Latest.has("session.guardrail.approved")).toBe(false)
+    expect(EventManifest.Server.has("session.guardrail.approved")).toBe(false)
+    const event = Schema.decodeUnknownSync(SessionEvent.GuardrailApproved)({
+      id: "evt_guardrail",
+      created: 1,
+      type: "session.guardrail.approved",
+      durable: { aggregateID: "ses_root", seq: 1, version: 1 },
+      data,
+    })
+    expect(Schema.is(SessionEvent.All)(event)).toBe(true)
+    expect(Schema.is(SessionEvent.PublicDurable)(event)).toBe(false)
+  })
+
   test("publishes one canonical minimal durable work completion contract", () => {
     const definition = EventManifest.Latest.get("session.work.completed")
     expect(definition).toBeDefined()
@@ -205,6 +224,7 @@ describe("public event manifest", () => {
         "session.agent.selected.1",
         "session.model.selected.1",
         "session.profile.bound.1",
+        "session.guardrail.approved.1",
         "session.daybreak.set.1",
         "session.project-artifacts-ended.1",
         "session.moved.1",
@@ -268,6 +288,7 @@ describe("public event manifest", () => {
       SessionEvent.UsageRecorded,
       SessionEvent.ProviderRequestRecorded,
       SessionEvent.ProfileBound,
+      SessionEvent.GuardrailApproved,
     ])
     expect(SessionEvent.UsageRecorded.durability).toBe("durable")
     expect(SessionEvent.ProviderRequestRecorded.durability).toBe("durable")

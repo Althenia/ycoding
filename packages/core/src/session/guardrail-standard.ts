@@ -141,13 +141,7 @@ export function outsideTargets(action: string, resource: string, paths: Paths): 
     : action === "shell" && !readOnlyShell(resource)
       ? shellWorkdirs(resource, paths).flatMap(({ segment, workdir }) => {
           const invocation = executable(segment.tokens)
-          const commandIndex = segment.tokens.findIndex((token) => !["sudo", "command", "env", "nohup"].includes(path.basename(token)) &&
-            !token.startsWith("-") && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(token))
-          const tokens = segment.tokens.slice(commandIndex + 1)
-          const operands = tokens.flatMap((token) => {
-            const value = token.replace(/^(?:\d*[<>]+|[^=]+=)/, "")
-            return !value || value.startsWith("-") || /^[<>]|^&\d+$/.test(value) ? [] : [value]
-          })
+          const operands = shellOperands(segment.tokens)
           const separator = invocation?.name === "cd" ? invocation.args.indexOf("--") : -1
           const cdOperand = invocation?.name === "cd"
             ? separator >= 0 ? invocation.args[separator + 1] : invocation.args.find((token) => !token.startsWith("-"))
@@ -175,6 +169,55 @@ function isOutside(target: string, paths: Paths) {
   if (relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))) return false
   if (target === "/dev" || target.startsWith("/dev/")) return false
   return !isTemporary(target, paths.workdir, paths) && !paths.trustedPaths?.includes(target)
+}
+
+const redirection = /^(?:\d*|&)(<<<|<<-?|<>|>>|>\||>&|<&|>|<)(.*)$/s
+const heredocConsumers = new Set(["cat", "tee", "git", "gh"])
+const gitMessageCommands = new Set(["commit", "tag", "merge", "stash", "notes"])
+const gitValueOptions = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace"])
+const ghTextOptions = new Set(["--title", "-t", "--body", "-b", "--notes", "--subject"])
+const ghApiValueOptions = new Set([
+  "-X", "--method", "-H", "--header", "-f", "--raw-field", "-F", "--field", "-q", "--jq", "-t", "--template",
+  "-p", "--preview", "--input", "--hostname", "--cache",
+])
+
+function shellOperands(tokens: ReadonlyArray<string>) {
+  const redirects: string[] = []
+  const words: string[] = []
+  for (let index = 0; index < tokens.length; index++) {
+    const operator = tokens[index].match(redirection)
+    if (!operator) {
+      words.push(tokens[index])
+      continue
+    }
+    const target = operator[2] || tokens[++index]
+    if (target === undefined || operator[1].startsWith("<<")) continue
+    if ((operator[1] === ">&" || operator[1] === "<&") && /^(?:\d+|-)$/.test(target)) continue
+    redirects.push(target)
+  }
+  const commandIndex = words.findIndex((token) => !["sudo", "command", "env", "nohup"].includes(path.basename(token)) &&
+    !token.startsWith("-") && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(token))
+  const args = commandArguments(path.basename(words[commandIndex] ?? ""), words.slice(commandIndex + 1)).flatMap((token) => {
+    const value = token.replace(/^[^=]+=/, "")
+    return !value || value.startsWith("-") || /^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? [] : [value]
+  })
+  return [...redirects, ...args]
+}
+
+function commandArguments(name: string, args: ReadonlyArray<string>) {
+  if (name === "echo" || name === "printf") return []
+  if (name === "git") {
+    const subcommand = args.findIndex((arg, index) => !arg.startsWith("-") && !gitValueOptions.has(args[index - 1]))
+    if (!gitMessageCommands.has(args[subcommand])) return args
+    return args.filter((arg, index) => index <= subcommand ||
+      !(/^-[A-Za-z]*m$|^--message$/.test(args[index - 1]) || arg.startsWith("--message=")))
+  }
+  if (name !== "gh") return args
+  const endpoint = args[0] === "api"
+    ? args.findIndex((arg, index) => index > 0 && !arg.startsWith("-") && !ghApiValueOptions.has(args[index - 1]))
+    : -1
+  return args.filter((arg, index) => index !== endpoint && !ghTextOptions.has(args[index - 1]) &&
+    !/^--(?:title|body|notes|subject)=/.test(arg))
 }
 
 function isTemporary(target: string, workdir: string, paths?: Paths) {
@@ -516,12 +559,36 @@ function shellSegments(command: string): ReadonlyArray<ShellSegment> {
   let tokenStart = 0
   let quote: "'" | '"' | undefined
   let escaped = false
+  let tokenQuoted = false
+  let heredocs: Array<{ readonly delimiter: string; readonly strip: boolean; readonly quoted: boolean; readonly command: string }> = []
+  let linePiped = false
   const pushToken = (end: number) => {
     if (!token) return
+    const operator = tokens.at(-1)?.match(/^\d*<<(-?)$/)
+    const attached = token.match(/^\d*<<(-?)([^<].*)$/s)
     tokens.push(token)
     rawTokens.push(command.slice(tokenStart, end))
     ranges.push(`${segments.length}:${tokens.length - 1}`)
+    const heredoc = /^\d*<<-?$/.test(token) ? undefined : operator ? { strip: operator[1] === "-", delimiter: token }
+      : attached ? { strip: attached[1] === "-", delimiter: attached[2] } : undefined
+    if (heredoc) heredocs.push({ ...heredoc, quoted: tokenQuoted, command: path.basename(tokens[0]) })
     token = ""
+    tokenQuoted = false
+  }
+  const skipHeredocs = (newline: number) => {
+    const pending = heredocs
+    const piped = linePiped
+    heredocs = []
+    linePiped = false
+    if (pending.length === 0) return newline
+    const end = pending.reduce<number | undefined>((cursor, heredoc) => {
+      if (cursor === undefined || !heredocConsumers.has(heredoc.command)) return undefined
+      const lines = command.slice(cursor).split("\n")
+      const closing = lines.findIndex((line) => (heredoc.strip ? line.replace(/^\t+/, "") : line) === heredoc.delimiter)
+      if (closing < 0 || (!heredoc.quoted && lines.slice(0, closing).some((line) => /\$\(|`/.test(line)))) return undefined
+      return cursor + lines.slice(0, closing + 1).join("\n").length + 1
+    }, newline + 1)
+    return piped || end === undefined ? newline : end - 2
   }
   const pushSegment = (next: Connector, nextSeparator: string, end: number) => {
     pushToken(end)
@@ -544,6 +611,7 @@ function shellSegments(command: string): ReadonlyArray<ShellSegment> {
     if (character === "\\" && quote !== "'") {
       if (!token) tokenStart = index
       escaped = true
+      tokenQuoted = true
       continue
     }
     if (quote) {
@@ -554,14 +622,33 @@ function shellSegments(command: string): ReadonlyArray<ShellSegment> {
     if (character === "'" || character === '"') {
       if (!token) tokenStart = index
       quote = character
+      tokenQuoted = true
       continue
     }
     if (character === ";" || character === "\n") {
       pushSegment("always", `${character} `, index)
+      if (character === "\n") index = skipHeredocs(index)
+      continue
+    }
+    if (character === "<" || character === ">") {
+      if (token && !/^(?:\d+|&|(?:\d*|&)[<>][<>&|]*)$/.test(token)) pushToken(index)
+      if (!token) tokenStart = index
+      token += character
+      continue
+    }
+    if (character === "&" && /^(?:\d*|&)[<>]+$/.test(token)) {
+      token += character
+      continue
+    }
+    if (character === "&" && command[index + 1] === ">") {
+      pushToken(index)
+      tokenStart = index
+      token = character
       continue
     }
     if (character === "|" || character === "&") {
       const repeated = command[index + 1] === character
+      if (character === "|" && !repeated) linePiped = true
       pushSegment(repeated ? (character === "|" ? "or" : "and") : "always", ` ${character}${repeated ? character : ""} `, index)
       if (repeated) index++
       continue

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
+import { sql } from "drizzle-orm"
 import { DateTime, Effect, Layer, Schema } from "effect"
 import { TestClock } from "effect/testing"
 import { Agent } from "@ycoding-ai/core/agent"
@@ -576,6 +577,100 @@ describe("ProjectArtifactSource", () => {
       () => Effect.promise(() => fs.rm(dataRoot, { recursive: true, force: true })),
     ),
   )
+
+  terminalIt.effect("observes terminal markers after the completed compaction floor without decoding unrelated rows", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(async () => {
+        await fs.rm(dataRoot, { recursive: true, force: true })
+        await fs.mkdir(dataRoot, { recursive: true })
+      }),
+      () =>
+        Effect.gen(function* () {
+          details.clear()
+          observed.length = 0
+          listFailure = false
+          observeResult = []
+          const source = yield* ProjectArtifactSource.Service
+          yield* source.refresh()
+          const db = (yield* Database.Service).db
+          const events = yield* EventRuntime.Service
+          const sessionID = Session.ID.make("ses_terminal_floor")
+          yield* seedTerminalSession(db, sessionID, 40, undefined, [])
+          const time = DateTime.makeUnsafe(41)
+          const artifact = (kind: ProjectArtifact.Kind) => ({
+            scopeID,
+            versionID: ProjectArtifact.VersionID.make("pav_terminal"),
+            kind,
+            id: ProjectArtifact.ID.make("review"),
+            sourceScope: "project" as const,
+          })
+          const standardSkill = (id: string) =>
+            SessionMessage.Skill.make({
+              id: SessionMessage.ID.make(id),
+              type: "skill",
+              skill: Skill.ID.make("standard"),
+              name: Skill.Name.make("Standard"),
+              text: "standard prompt text",
+              time: { created: time },
+            })
+          const rows = [
+            encodeMessage(standardSkill("msg_floor_standard_before")),
+            { reason: "auto", status: "completed", summary: "V1 summary", recent: "", time: { created: 41 } },
+            encodeMessage(
+              SessionMessage.AgentSelected.make({
+                id: SessionMessage.ID.make("msg_floor_agent"),
+                type: "agent-switched",
+                agent: Agent.ID.make("build"),
+                artifact: artifact("agent"),
+                time: { created: time },
+              }),
+            ),
+            encodeMessage(
+              SessionMessage.User.make({
+                id: SessionMessage.ID.make("msg_floor_command"),
+                type: "user",
+                text: "private command input",
+                metadata: { projectArtifact: artifact("command") },
+                time: { created: time },
+              }),
+            ),
+            encodeMessage(standardSkill("msg_floor_standard_after")),
+            { bogus: true },
+            encodeMessage(
+              SessionMessage.Assistant.make({
+                id: SessionMessage.ID.make("msg_floor_latest"),
+                type: "assistant",
+                agent: Agent.ID.make("build"),
+                model: modelRef,
+                content: [terminalTool("call-floor-skill", "skill", "completed", time)],
+                time: { created: time, completed: time },
+              }),
+            ),
+          ]
+          const types = ["skill", "compaction", "agent-switched", "user", "skill", "synthetic", "assistant"] as const
+          yield* Effect.forEach(
+            rows,
+            (data, index) =>
+              db.run(
+                sql`INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data)
+                  VALUES (${`msg_floor_row_${index}`}, ${sessionID}, ${types[index]}, ${3 + index}, 41, 41,
+                    ${JSON.stringify(data)})`,
+              ),
+            { discard: true },
+          )
+          yield* events.publish(SessionEvent.Execution.Succeeded, { sessionID })
+          yield* waitFor(() => observed.length === 1)
+          expect(observed[0]).toMatchObject({
+            terminalMessageID: "msg_floor_row_6",
+            kind: "agent",
+            externalConfounded: true,
+            standardInvocationCount: 2,
+            completedToolCount: 1,
+          })
+        }),
+      () => Effect.promise(() => fs.rm(dataRoot, { recursive: true, force: true })),
+    ),
+  )
 })
 
 function writeSkill(version: string, content: string, revision: number) {
@@ -812,5 +907,5 @@ function observation(
 function waitFor(predicate: () => boolean, remaining = 100): Effect.Effect<void> {
   if (predicate()) return Effect.void
   if (remaining === 0) return Effect.die(new Error("Timed out waiting for source terminal observer"))
-  return Effect.promise(() => Bun.sleep(1)).pipe(Effect.andThen(waitFor(predicate, remaining - 1)))
+  return Effect.promise(() => Bun.sleep(1)).pipe(Effect.andThen(Effect.suspend(() => waitFor(predicate, remaining - 1))))
 }

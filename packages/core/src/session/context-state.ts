@@ -114,10 +114,15 @@ export const initialize = Effect.fn("SessionContextState.initialize")(function* 
     .pipe(Effect.orDie)
 })
 
+export interface EntryFloor {
+  readonly after: number
+  readonly retained?: ReadonlyArray<SessionMessage.ID>
+}
+
 export function selectEntries<Entry extends { readonly seq?: number; readonly message: SessionMessage.Info }, E, R>(
   db: DatabaseService,
   sessionID: SessionSchema.ID,
-  loadEntries: (after?: number) => Effect.Effect<ReadonlyArray<Entry>, E, R>,
+  loadEntries: (floor?: EntryFloor) => Effect.Effect<ReadonlyArray<Entry>, E, R>,
   model?: CatalogModel.Ref,
   accountIdentityDigest?: string,
 ) {
@@ -155,7 +160,13 @@ export function selectEntries<Entry extends { readonly seq?: number; readonly me
         ? remote
         : undefined
     const retained = matchingRemote && new Set(matchingRemote.retained.map((item) => item.messageID))
-    const entries = yield* loadEntries(summary?.coveredThrough.seq)
+    const entries = yield* loadEntries(
+      summary
+        ? { after: summary.coveredThrough.seq }
+        : retained
+          ? { after: state.covered_through_seq, retained: [...retained] }
+          : undefined,
+    )
     const active = summary
       ? entries.filter((entry) => entry.seq === undefined || entry.seq > summary.coveredThrough.seq)
       : matchingRemote

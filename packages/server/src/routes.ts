@@ -31,6 +31,7 @@ import { ModelsDev } from "@ycoding-ai/core/models-dev"
 import { SessionRestart } from "@ycoding-ai/core/session/execution/restart"
 import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
 import { SessionOrchestrationNotifier } from "@ycoding-ai/core/session/orchestration-notifier"
+import { SessionRetention } from "@ycoding-ai/core/session/retention"
 import { PluginRuntime } from "@ycoding-ai/core/plugin/runtime"
 import { SdkPlugins } from "@ycoding-ai/core/plugin/sdk"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
@@ -62,6 +63,7 @@ const applicationServices = LayerNode.group([
   EventLogger.node,
   httpClient,
   ToolOutputStore.cleanupNode,
+  SessionRetention.node,
   Job.node,
   Project.node,
   ProjectInventory.node,
@@ -128,6 +130,10 @@ function makeRoutes<AuthError, AuthServices>(
         file: options.config?.file,
         content: options.config?.content,
       }),
+    ],
+    [
+      SessionRetention.node,
+      SessionRetention.configured({ file: options.config?.file, content: options.config?.content }),
     ],
     [InstructionDiscovery.node, InstructionDiscovery.configured({ project: options.config?.project })],
     [Command.node, Command.configured({ gitbash: options.windows?.gitbash })],

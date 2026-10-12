@@ -3,7 +3,7 @@ export * as ProjectArtifactStandardSourceRegistry from "./source-registry"
 export { StandardSourceRegistry, make, registryNode } from "./source-registry"
 
 import path from "path"
-import { and, eq, sql } from "drizzle-orm"
+import { and, eq, gte, inArray, sql } from "drizzle-orm"
 import { define } from "@ycoding-ai/plugin/effect/plugin"
 import { ProjectArtifact } from "@ycoding-ai/schema/project-artifact"
 import { Project } from "@ycoding-ai/schema/project"
@@ -21,6 +21,8 @@ import { EventTable } from "../event/sql"
 import { Database } from "../database/database"
 import { SessionEvent } from "../session/event"
 import { SessionStore } from "../session/store"
+import { SessionHistory } from "../session/history"
+import { SessionMessageTable } from "../session/sql"
 import { SessionAutonomy } from "../session/autonomy"
 import { State } from "../state"
 import { Hash } from "../util/hash"
@@ -254,8 +256,26 @@ const layer = Layer.effect(
               session.location.workspaceID !== location.workspaceID
             )
               return
-            const messages = yield* sessions.context(event.data.sessionID)
-            const assistant = messages.findLast((message) => message.type === "assistant")
+            const assistant = yield* SessionHistory.latest(db, event.data.sessionID, "assistant")
+            const compaction = yield* SessionHistory.latestCompaction(db, event.data.sessionID)
+            const markers = yield* db
+              .select({
+                type: SessionMessageTable.type,
+                artifact: sql<string | null>`json_extract(${SessionMessageTable.data}, '$.artifact.kind')`,
+                projectArtifact: sql<string | null>`case
+                  when json_type(${SessionMessageTable.data}, '$.metadata.projectArtifact.kind') = 'text'
+                  then json_extract(${SessionMessageTable.data}, '$.metadata.projectArtifact.kind') end`,
+              })
+              .from(SessionMessageTable)
+              .where(
+                and(
+                  eq(SessionMessageTable.session_id, event.data.sessionID),
+                  inArray(SessionMessageTable.type, ["skill", "agent-switched", "user"]),
+                  compaction ? gte(SessionMessageTable.seq, compaction.seq) : undefined,
+                ),
+              )
+              .all()
+              .pipe(Effect.orDie)
             const terminal = assistant
               ? `${event.data.sessionID}:${assistant.id}`
               : `${event.data.sessionID}:boundary:${event.durable?.seq ?? 0}`
@@ -272,15 +292,13 @@ const layer = Layer.effect(
               .get(event.data.sessionID)
               .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(SessionAutonomy.defaultState)))
             const activations = Array.from(managedActivations.get(event.data.sessionID)?.values() ?? [])
-            const managedKinds = [...messages.flatMap((message) => {
-              if (message.type === "skill" && message.artifact) return [message.artifact.kind]
-              if (message.type === "agent-switched" && message.artifact) return [message.artifact.kind]
-              if (message.type !== "user") return []
-              const artifact = message.metadata?.projectArtifact
-              return artifact && typeof artifact === "object" && artifact !== null && "kind" in artifact && typeof artifact.kind === "string"
-                ? [artifact.kind]
-                : []
-            }), ...activations.map((activation) => activation.artifact.kind)]
+            const managedKinds = [
+              ...markers.flatMap((marker) => {
+                const kind = marker.type === "user" ? marker.projectArtifact : marker.artifact
+                return kind === null ? [] : [kind]
+              }),
+              ...activations.map((activation) => activation.artifact.kind),
+            ]
             const managedTool = (tool: (typeof tools)[number]) =>
               activations.some(
                 (activation) =>
@@ -302,7 +320,7 @@ const layer = Layer.effect(
                 modelID: session.model ? `${session.model.providerID}/${session.model.id}` : "unknown",
                 goalMode: execution?.goalMode ?? false,
                 standardInvocationCount: ProjectArtifact.Revision.make(
-                  messages.filter((message) => message.type === "skill" && message.artifact === undefined).length +
+                  markers.filter((marker) => marker.type === "skill" && marker.artifact === null).length +
                     tools.filter(
                       (tool) =>
                         tool.state.status === "completed" &&

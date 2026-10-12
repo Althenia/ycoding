@@ -37,16 +37,29 @@ const databaseLayer = Layer.effect(
     yield* DatabaseMigration.apply(db)
     const autoVacuum = yield* db.get<{ auto_vacuum: number }>("PRAGMA auto_vacuum")
     if (autoVacuum?.auto_vacuum === 0) {
-      // Existing databases need one transactional rebuild to add the pointer map required by
-      // incremental vacuum. Later startups reclaim a bounded number of free pages without rebuilding.
       yield* db.run("PRAGMA auto_vacuum = INCREMENTAL")
       yield* db.run("VACUUM")
     }
     if (autoVacuum?.auto_vacuum === 2) yield* db.run("PRAGMA incremental_vacuum(256)")
+    yield* db.run("PRAGMA optimize=0x10002")
 
     return { db }
   }).pipe(Effect.orDie),
 )
+
+export const reclaim = Effect.fn("Database.reclaim")(function* (db: DatabaseShape) {
+  let free = yield* freelist(db)
+  while (free > 0) {
+    yield* db.run("PRAGMA incremental_vacuum(2048)")
+    yield* Effect.yieldNow
+    const remaining = yield* freelist(db)
+    if (remaining >= free) return
+    free = remaining
+  }
+})
+
+const freelist = (db: DatabaseShape) =>
+  db.get<{ freelist_count: number }>("PRAGMA freelist_count").pipe(Effect.map((row) => row?.freelist_count ?? 0))
 
 export function filename(options?: Options) {
   if (options?.path === ":memory:" || (options?.path && isAbsolute(options.path))) return options.path

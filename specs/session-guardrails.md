@@ -64,7 +64,7 @@ This is a bounded recognizer, not a complete shell parser or executable sandbox.
 
 ### Outside-repository recognition boundary
 
-The repository is the Location's version-control worktree root, or the Location directory when it has no version control, and everything below it. This repository's managed worktrees (Git-listed linked worktrees under the YCoding data `worktrees` root, the same set `LocationMutation` trusts for `external_directory`) and the temporary roots above count as inside.
+The repository is the Location's version-control worktree root, or the Location directory when it has no version control, and everything below it. Every checkout of this repository (the main checkout and every Git-listed linked worktree sharing its canonical Git common directory, the same set `LocationMutation` trusts for `external_directory`) and the temporary roots above count as inside.
 
 `file_mutation` (edit, write, and patch commits) targeting a path outside the repository requires ordinary review. A shell command requires ordinary review when its working directory, a `cd` target (a bare `cd` means home), or any operand, redirection target, or `--option=value` path resolves outside the repository. Shell resolution reuses the deletion recognizer's working-directory tracking and `~`, `$HOME`, `$PWD`, `$TMPDIR` expansion. Device paths under `/dev` and the executable position of each command are not targets. Deterministically recognized read-only shell commands are exempt even when they name outside paths, and read-only tools are not guarded; reading outside the repository remains governed by the `external_directory` permission. Like deletion recognition, this is a bounded recognizer: it does not detect paths produced by substitution, `sh -c` payloads, `eval`, `xargs`, `find -exec`, scripts, or programs that write outside the repository without naming the path.
 
@@ -75,7 +75,7 @@ Outside-repository ordinary reviews always use the normal review and effective Y
 A review request blocks the guarded operation until the user replies:
 
 - `once` permits that operation attempt;
-- `always` permits the attempt and records a transient reusable approval;
+- `always` permits the attempt and, for an ordinary outside-repository review, records the request's outside directories (a directory target itself, otherwise its parent, including descendants) as a private durable `session.guardrail.approved` event on the root Session; with no outside directories it approves only that attempt;
 - `reject` fails the blocked operation.
 
 A request with `hardReview: true` advertises only `once` and `reject`. It cannot use a transient `always` approval, and a direct `always` reply fails the waiting operation rather than approving it. Hard reviews are never auto-approved by YOLO 0-3, active goals, agent automation, permission auto-answering, or any reusable approval. Ordinary reviews auto-approve at effective YOLO 1-3.
@@ -128,5 +128,5 @@ After a 500 ms pending-review checkpoint, an unresolved guardrail review emits *
 - Hard reviews cannot be bypassed by disabled ordinary guardrails, custom allow rules, reusable approvals, agent or goal automation, or YOLO 3.
 - Raw custom file content and command history are not rendered in the sidebar.
 - Invalid enabled policy never silently disables the standard profile.
-- `always` approvals are exact-match, root-family, Location-service/process-memory state and are checked only after fresh evaluation still asks.
+- `always` approvals are durable, root-family directory approvals that survive restarts and apply in every process sharing the database; they are checked only after fresh evaluation still asks, pass only when every outside target lies under an approved directory, and never settle a hard review.
 - Descendants cannot escape root-family policy or counters.

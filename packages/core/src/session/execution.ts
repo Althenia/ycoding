@@ -18,6 +18,7 @@ import { SessionAutonomy } from "./autonomy"
 import { SessionCompactionExecution } from "./compaction-execution"
 import { SessionMessage } from "./message"
 import { SessionPending } from "./pending"
+import { SessionHistory } from "./history"
 import { SessionTaskTable } from "./sql"
 import { and, eq, inArray } from "drizzle-orm"
 import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
@@ -110,7 +111,7 @@ export const layer = Layer.effect(
         return (yield* shell.list()).some((info) => info.metadata.sessionID === sessionID)
       }).pipe(Effect.provide(locations.get(session.location)))
       if (activeShell) return undefined
-      const assistant = (yield* store.context(sessionID)).findLast((message) => message.type === "assistant")
+      const assistant = yield* SessionHistory.latest(db, sessionID, "assistant")
       const latestAssistantText = assistant?.content
         .filter((part): part is Extract<(typeof assistant.content)[number], { type: "text" }> => part.type === "text")
         .map((part) => part.text)
@@ -178,8 +179,7 @@ export const layer = Layer.effect(
         })
         return
       }
-      const messages = yield* store.context(sessionID)
-      const assistant = messages.findLast((message) => message.type === "assistant")
+      const assistant = yield* SessionHistory.latest(db, sessionID, "assistant")
       const text = assistant?.content
         .filter((part): part is Extract<(typeof assistant.content)[number], { type: "text" }> => part.type === "text")
         .map((part) => part.text)

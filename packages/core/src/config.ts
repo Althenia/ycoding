@@ -34,6 +34,7 @@ import { ConfigPlugin } from "./config/plugin"
 import { ConfigProvider } from "./config/provider"
 import { ConfigProviderUsage } from "./config/provider-usage"
 import { ConfigReference } from "./config/reference"
+import { ConfigSessionRetention } from "./config/session-retention"
 import { ConfigShell } from "./config/shell"
 import { ConfigToolOutput } from "./config/tool-output"
 import { ConfigVariable } from "./config/variable"
@@ -108,6 +109,10 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   compaction: ConfigCompaction.Info.pipe(Schema.optional).annotate({
     description: "Conversation compaction behavior",
+  }),
+  session_retention: ConfigSessionRetention.Info.pipe(Schema.optional).annotate({
+    description:
+      "Automatic deletion of idle root Session families. Read from global configuration only (default days: 7)",
   }),
   memory: ConfigMemory.Info.pipe(Schema.optional).annotate({
     description: "On-demand workspace knowledge and offline graph configuration",

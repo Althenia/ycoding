@@ -272,6 +272,7 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
     yield* SessionEvent.match(event, {
       "session.created": () => Effect.void,
       "session.profile.bound": () => Effect.void,
+      "session.guardrail.approved": () => Effect.void,
       "session.work.completed": () => Effect.void,
       "session.usage.updated": () => Effect.void,
       "session.diagnostics.updated": () => Effect.void,

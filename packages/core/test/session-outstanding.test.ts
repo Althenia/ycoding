@@ -5,6 +5,9 @@ import { EventTable } from "@ycoding-ai/core/event/sql"
 import { adjust } from "effect/testing/TestClock"
 import { eq } from "drizzle-orm"
 import { Database } from "@ycoding-ai/core/database/database"
+import { DatabaseMigration } from "@ycoding-ai/core/database/migration"
+import { sqliteLayer } from "@ycoding-ai/core/database/sqlite.bun"
+import { EffectDrizzleSqlite } from "@ycoding-ai/effect-drizzle-sqlite"
 import { AppProcess } from "@ycoding-ai/core/process"
 import { ShellLedger } from "@ycoding-ai/core/shell/ledger"
 import { Shell as ShellSchema } from "@ycoding-ai/schema/shell"
@@ -45,9 +48,21 @@ const execution = Layer.succeed(SessionExecution.Service, SessionExecution.Servi
   awaitIdle: () => Effect.void,
   withTransition: (_sessionID, effect) => effect,
 }))
+const queries: { sql: string; params: unknown[] }[] = []
+const database = Layer.effect(Database.Service, Effect.gen(function* () {
+  const db = yield* EffectDrizzleSqlite.make().pipe(
+    Effect.provideService(EffectDrizzleSqlite.EffectLogger, {
+      logQuery: (sql, params) => Effect.sync(() => { queries.push({ sql, params }) }),
+    }),
+    Effect.provide(EffectDrizzleSqlite.DefaultServices),
+  )
+  yield* db.run("PRAGMA foreign_keys = ON")
+  yield* DatabaseMigration.apply(db)
+  return { db }
+})).pipe(Layer.provide(sqliteLayer({ filename: ":memory:" })))
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([
   AppProcess.node, Database.node, EventRuntime.node, SessionProjector.node, SessionStore.node, Session.node, LocationServiceMap.node, Job.node,
-]), [[Project.node, projects], [SessionExecution.node, execution]]))
+]), [[Project.node, projects], [SessionExecution.node, execution], [Database.node, database]]))
 
 it.effect("derives outstanding Sessions from pending input, active goal, tasks, notices, and shell jobs", () =>
   Effect.gen(function* () {
@@ -184,7 +199,15 @@ it.effect("rehydrates a failed family until any member starts a later execution"
     yield* sessions.create({ id: parent, location })
     yield* sessions.create({ id: child, parentID: parent })
     yield* events.publish(SessionEvent.Execution.Failed, { sessionID: child, error: { type: "unknown", message: "failed" } })
+    queries.length = 0
     expect([...(yield* sessions.outstanding(true)).failed]).toEqual([parent])
+    const query = queries.find((entry) => entry.params.includes("session.execution.failed.1"))
+    expect(query).toBeDefined()
+    const db = (yield* Database.Service).db
+    const plan = yield* db.$client.unsafe<{ detail: string }>(`EXPLAIN QUERY PLAN ${query!.sql}`, query!.params)
+    expect(plan.filter((row) => /\bSCAN (event|latest)\b/.test(row.detail))).toEqual([])
+    expect(plan.filter((row) => /SEARCH latest USING COVERING INDEX event_aggregate_type_seq_idx \(aggregate_id=\? AND type=\?\)/.test(row.detail))).toHaveLength(2)
+    expect(plan.some((row) => /SEARCH event USING INDEX event_aggregate_seq_idx \(aggregate_id=\? AND seq=\?\)/.test(row.detail))).toBe(true)
     yield* events.publish(SessionEvent.Execution.Started, { sessionID: parent })
     expect([...(yield* sessions.outstanding(true)).failed]).toEqual([])
   }),

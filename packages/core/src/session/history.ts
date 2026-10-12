@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, gte, inArray, lt, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, gte, inArray, lt, or, sql } from "drizzle-orm"
 import { createHash } from "node:crypto"
 import { DateTime, Effect, Schema } from "effect"
 import { Database } from "../database/database"
@@ -43,7 +43,7 @@ const messageRows = Effect.fnUntraced(function* (
   db: DatabaseService,
   sessionID: SessionSchema.ID,
   compaction: { readonly seq: number } | undefined,
-  after?: number,
+  floor?: SessionContextState.EntryFloor,
 ) {
   const rows = yield* db
     .select()
@@ -52,7 +52,7 @@ const messageRows = Effect.fnUntraced(function* (
       and(
         eq(SessionMessageTable.session_id, sessionID),
         compaction ? gte(SessionMessageTable.seq, compaction.seq) : undefined,
-        after === undefined ? undefined : gt(SessionMessageTable.seq, after),
+        floorCondition(floor),
       ),
     )
     .orderBy(asc(SessionMessageTable.seq))
@@ -60,6 +60,14 @@ const messageRows = Effect.fnUntraced(function* (
     .pipe(Effect.orDie)
   return rows
 })
+
+function floorCondition(floor: SessionContextState.EntryFloor | undefined) {
+  if (!floor) return undefined
+  return or(
+    gt(SessionMessageTable.seq, floor.after),
+    floor.retained?.length ? inArray(SessionMessageTable.id, [...floor.retained]) : undefined,
+  )
+}
 
 const decodeMessageRow = (row: typeof SessionMessageTable.$inferSelect) =>
   decode({ ...row.data, id: row.id, type: row.type }).pipe(
@@ -72,8 +80,12 @@ const decodeMessageRow = (row: typeof SessionMessageTable.$inferSelect) =>
     ),
   )
 
-const messageEntries = Effect.fnUntraced(function* (db: DatabaseService, sessionID: SessionSchema.ID, after?: number) {
-  const rows = yield* messageRows(db, sessionID, yield* latestCompaction(db, sessionID), after)
+const messageEntries = Effect.fnUntraced(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  floor?: SessionContextState.EntryFloor,
+) {
+  const rows = yield* messageRows(db, sessionID, yield* latestCompaction(db, sessionID), floor)
   return yield* Effect.forEach(rows, (row) =>
     decodeMessageRow(row).pipe(Effect.map((message) => ({ seq: row.seq, message }))),
   )
@@ -82,6 +94,82 @@ const messageEntries = Effect.fnUntraced(function* (db: DatabaseService, session
 export const load = Effect.fn("SessionHistory.load")(function* (db: DatabaseService, sessionID: SessionSchema.ID) {
   return (yield* messageEntries(db, sessionID)).map((entry) => entry.message)
 })
+
+export function latest<T extends SessionMessage.Type>(db: DatabaseService, sessionID: SessionSchema.ID, type: T) {
+  return Effect.gen(function* () {
+    const compaction = yield* latestCompaction(db, sessionID)
+    const row = yield* db
+      .select()
+      .from(SessionMessageTable)
+      .where(
+        and(
+          eq(SessionMessageTable.session_id, sessionID),
+          eq(SessionMessageTable.type, type),
+          compaction ? gte(SessionMessageTable.seq, compaction.seq) : undefined,
+        ),
+      )
+      .orderBy(desc(SessionMessageTable.seq))
+      .limit(1)
+      .get()
+      .pipe(Effect.orDie)
+    if (!row) return undefined
+    const message = yield* decodeMessageRow(row)
+    return hasType(message, type) ? message : undefined
+  }).pipe(Effect.withSpan("SessionHistory.latest"))
+}
+
+export const recent = Effect.fn("SessionHistory.recent")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  limit: number,
+) {
+  const compaction = yield* latestCompaction(db, sessionID)
+  const rows = yield* db
+    .select()
+    .from(SessionMessageTable)
+    .where(
+      and(
+        eq(SessionMessageTable.session_id, sessionID),
+        compaction ? gte(SessionMessageTable.seq, compaction.seq) : undefined,
+      ),
+    )
+    .orderBy(desc(SessionMessageTable.seq))
+    .limit(limit)
+    .all()
+    .pipe(Effect.orDie)
+  return yield* Effect.forEach(rows.toReversed(), decodeMessageRow)
+})
+
+export const unsettledToolMessages = Effect.fn("SessionHistory.unsettledToolMessages")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+) {
+  const compaction = yield* latestCompaction(db, sessionID)
+  const rows = yield* db
+    .select()
+    .from(SessionMessageTable)
+    .where(
+      and(
+        eq(SessionMessageTable.session_id, sessionID),
+        eq(SessionMessageTable.type, "assistant"),
+        compaction ? gte(SessionMessageTable.seq, compaction.seq) : undefined,
+        sql`exists (select 1 from json_each(${SessionMessageTable.data}, '$.content') as part
+          where json_extract(part.value, '$.type') = 'tool'
+            and json_extract(part.value, '$.state.status') in ('streaming', 'running'))`,
+      ),
+    )
+    .orderBy(asc(SessionMessageTable.seq))
+    .all()
+    .pipe(Effect.orDie)
+  return (yield* Effect.forEach(rows, decodeMessageRow)).filter((message) => hasType(message, "assistant"))
+})
+
+function hasType<T extends SessionMessage.Type>(
+  message: SessionMessage.Info,
+  type: T,
+): message is Extract<SessionMessage.Info, { readonly type: T }> {
+  return message.type === type
+}
 
 const cursorOwner = (sessionID: SessionSchema.ID) => createHash("sha256").update(sessionID).digest("hex").slice(0, 16)
 
@@ -204,7 +292,7 @@ const entriesVisibleForModel = Effect.fnUntraced(function* (
   const selection = yield* SessionContextState.selectEntries(
     db,
     sessionID,
-    (after) => messageEntries(db, sessionID, after).pipe(Effect.map((entries) => visibleForModel(entries, boundary))),
+    (floor) => messageEntries(db, sessionID, floor).pipe(Effect.map((entries) => visibleForModel(entries, boundary))),
     model,
     accountIdentityDigest,
   )
@@ -289,7 +377,7 @@ export const observationState = Effect.fn("SessionHistory.observationState")(fun
         const latest = new Map<ObservationSource, string>()
         const present = new Set<ObservationSource>()
         while (!exhausted && latest.size < 3) {
-          const selection = yield* SessionContextState.selectEntries(db, sessionID, (after) =>
+          const selection = yield* SessionContextState.selectEntries(db, sessionID, (floor) =>
             Effect.gen(function* () {
               if (!boundaryLoaded) {
                 boundary = (yield* db
@@ -300,7 +388,7 @@ export const observationState = Effect.fn("SessionHistory.observationState")(fun
                       eq(SessionMessageTable.session_id, sessionID),
                       eq(SessionMessageTable.type, "synthetic"),
                       compaction ? gte(SessionMessageTable.seq, compaction.seq) : undefined,
-                      after === undefined ? undefined : gt(SessionMessageTable.seq, after),
+                      floor?.retained === undefined ? floorCondition(floor) : undefined,
                       sql`json_type(${SessionMessageTable.data}, '$.metadata.projectArtifactsEnded') in ('object', 'array')`,
                     ),
                   )
@@ -317,7 +405,7 @@ export const observationState = Effect.fn("SessionHistory.observationState")(fun
                   and(
                     eq(SessionMessageTable.session_id, sessionID),
                     compaction ? gte(SessionMessageTable.seq, compaction.seq) : undefined,
-                    after === undefined ? undefined : gt(SessionMessageTable.seq, after),
+                    floorCondition(floor),
                     before === undefined ? undefined : lt(SessionMessageTable.seq, before),
                     inArray(SessionMessageTable.type, ["system", "synthetic"]),
                     sql`json_extract(${SessionMessageTable.data}, '$.metadata.contextSource') in ('session-state', 'team-view', 'step-limit')`,

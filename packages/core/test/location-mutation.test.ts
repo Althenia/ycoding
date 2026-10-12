@@ -242,6 +242,50 @@ describe("LocationMutation", () => {
     ),
   )
 
+  it.live("recognizes every checkout of the Location repository through canonical paths and no other repository", () =>
+    withTmp((base) =>
+      Effect.gen(function* () {
+        if (process.platform === "win32") return
+        const main = path.join(base, "main")
+        const current = path.join(base, "current")
+        const sibling = path.join(base, "sibling")
+        const other = path.join(base, "other")
+        const link = path.join(base, "link")
+        yield* Effect.promise(async () => {
+          await initRepository(main)
+          await $`git worktree add -b current ${current} HEAD`.cwd(main).quiet()
+          await $`git worktree add -b sibling ${sibling} HEAD`.cwd(main).quiet()
+          await initRepository(other)
+          await fs.mkdir(path.join(base, "plain"))
+          await fs.symlink(current, link)
+        })
+        yield* Effect.provide(
+          Effect.gen(function* () {
+            const mutation = yield* LocationMutation.Service
+            for (const target of [
+              path.join(main, "src", "new.ts"), path.join(sibling, "README.md"), sibling,
+              path.join(link, "src", "new.ts"), path.join(current, "file"),
+            ]) expect(yield* mutation.repositoryWorktree(target)).toBe(true)
+            for (const target of [path.join(other, "file"), path.join(base, "plain", "file"), base])
+              expect(yield* mutation.repositoryWorktree(target)).toBe(false)
+            for (const target of [path.join(main, "src", "new.ts"), path.join(sibling, "README.md")])
+              expect((yield* mutation.resolve({ path: target })).externalDirectory).toBeUndefined()
+            expect((yield* mutation.resolve({ path: path.join(other, "file") })).externalDirectory).toBeDefined()
+          }),
+          provideRepository(link, path.join(base, "data")),
+        )
+      }),
+    ),
+  )
+
+  it.live("recognizes no checkout outside a Git repository", () =>
+    withTmp((directory) =>
+      Effect.gen(function* () {
+        expect(yield* (yield* LocationMutation.Service).repositoryWorktree(path.join(directory, "file"))).toBe(false)
+      }).pipe(provide(directory)),
+    ),
+  )
+
   it.live("anchors prospective external descendants at their stable existing directory", () =>
     withTmp((directory) =>
       withTmp((outside) =>
