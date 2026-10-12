@@ -86,6 +86,8 @@ test("real durable edit completion advances the snapshot watermark and invalidat
     await local.permissionReply(sessionID, location, String(permission.id), "once")
     const success = await until(async () => (await local.log(sessionID, location, Number(beforeSeq))).map(record)
       .find((event) => event.type === "session.tool.success" && record(event.data).callID === "call_captured_edit"))
+    await until(async () => (await local.log(sessionID, location, Number(record(success.durable).seq))).map(record)
+      .find((event) => event.type === "session.execution.succeeded"))
     const after = record(await local.snapshot(sessionID, location, { limit: 1 }))
     expect(after.sourceEpoch).toBe(before.sourceEpoch)
     expect(record(success.durable).seq).toBeGreaterThan(Number(beforeSeq))
