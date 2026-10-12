@@ -1,7 +1,7 @@
 ---
 version: alpha
 name: YCoding Chrome control indicators
-description: In-page cursor, tab-title marker, and toolbar badge that show which Chrome tabs YCoding is controlling.
+description: In-page cursor with the YCoding mark, tab-title glyph marker, and toolbar badge that show which Chrome tabs YCoding is controlling.
 surface: native
 extends: ../../DESIGN.md
 colors:
@@ -35,6 +35,10 @@ components:
     typography: "{typography.agent-label}"
     rounded: "{rounded.agent-label}"
     padding: 3px 6px
+    gap: 4px
+  agent-mark:
+    textColor: "{colors.agent-label-text}"
+    size: 12px
   agent-ripple:
     size: 22px
   toolbar-badge:
@@ -57,11 +61,11 @@ controls:
 
 ## Overview
 
-The Chrome extension marks every tab YCoding is controlling so the person using Chrome can see it: a fixed title prefix in the tab strip, a labelled cursor inside the page, and a per-tab toolbar badge. Chrome's native debugger infobar is separate, owned by Chrome, and cannot be restyled. The extension popup is a separate pre-existing surface (see Exceptions). Sources: `docs/browser-extension.md`, `specs/v2/browser.md`, `extensions/chrome/indicator.js`, `extensions/chrome/service-worker.js`.
+The Chrome extension marks every tab YCoding is controlling so the person using Chrome can see it: a fixed YCoding glyph before the title in the tab strip, a cursor inside the page whose label carries the YCoding mark, and a per-tab toolbar badge. Chrome's native debugger infobar is separate, owned by Chrome, and cannot be restyled. The extension popup is a separate pre-existing surface (see Exceptions). Sources: `docs/browser-extension.md`, `specs/v2/browser.md`, `extensions/chrome/indicator.js`, `extensions/chrome/service-worker.js`.
 
 ## Principles
 
-- Show control where the user already looks: the tab strip first, then the page, then the toolbar. Color never carries the signal alone; every indicator has text (`extensions/chrome/indicator.js`).
+- Show control where the user already looks: the tab strip first, then the page, then the toolbar. Color never carries the signal alone; every indicator has text: the tab glyph is a title character, and the cursor label and badge carry words (`extensions/chrome/indicator.js`).
 - Show only what the extension knows to be true. The cursor moves only to the coordinates of an action that is actually dispatched; it never wanders, and it stays hidden for actions without a target (`extensions/chrome/service-worker.js`).
 - Carry no private text. The marker is a static prefix and the cursor label is one of a fixed action set; typed text, Session titles, Session IDs, and URLs never enter the page DOM (`extensions/chrome/indicator.js`).
 - Refuse control rather than hide it. When the marker cannot be shown and confirmed on a tab, the extension rejects the operation before dispatch (`extensions/chrome/test/service-worker.test.js`).
@@ -80,6 +84,7 @@ The Chrome extension marks every tab YCoding is controlling so the person using 
 | X8 | approved | The popup MUST render text in Geist and its local service address and pairing code in Geist Mono, from faces embedded in `popup.css`, and MUST NOT fetch a font or add a font file, permission, or CSP source. | `extensions/chrome/test/popup.test.js`, `extensions/chrome/test/fonts.test.js`, `packages/server/test-integration/browser-owned-chrome.test.ts` |
 | X9 | approved | The page label MUST use Geist through a page-scoped `FontFace` under the alias `YCodingGeist`, registered once per document with the first cursor without delaying the label, removed with the marker whether loaded or pending, and MUST fall back to the system UI stack, never blocking the action, when the face cannot be installed. | `extensions/chrome/test/indicator.test.js`, `extensions/chrome/test/service-worker.test.js`, `packages/server/test-integration/browser-owned-chrome.test.ts` |
 | X10 | approved | The popup MUST use 320px intrinsic width, 12px outer/card padding, a 24px canonical mark, a 15px heading and 13px body text. Controls MUST be at least 34px (44px for coarse pointers); secondary help MUST remain keyboard accessible, with pairing authority visible before Connect. | `extensions/chrome/test/popup.test.js`, `packages/server/test-integration/browser-owned-chrome.test.ts` |
+| X11 | approved | The title marker MUST be the glyph `Ⓨ` (U+24CE CIRCLED LATIN CAPITAL LETTER Y) followed by one space, and the cursor label chip MUST draw the monochrome mark path of `assets/brand/ycoding-mark-mono.svg` inline before its words in the label text color; neither MAY add an archive entry, fetch an asset, or use an emoji. | `extensions/chrome/test/indicator.test.js`, `packages/cli/test/chrome-extension-packaging.test.ts` |
 | X7 | approved | Documented `colors`, `rounded`, `typography`, `motion.duration`, `layers`, and component sizes MUST equal `extensions/chrome/indicator.js`, with `popup-body` and `popup-mono` equal to the `--font-sans` and `--font-mono` values in `popup.css`, and documented values MUST NOT be missing from or extra to them. | `extensions/chrome/test/design-md.test.js` |
 
 ## Colors
@@ -88,7 +93,7 @@ The purple cursor, label, and ripple, and the green badge, are the existing exte
 
 ## Typography
 
-The label is 12px, 1.2 line height, regular weight, white on the label color, in Geist. The page has no Geist, so the extension installs the embedded face into the controlled document as `YCodingGeist`, a name no site is likely to use, so a site's own `Geist` family is never replaced. The `FontFace` API takes bytes directly, so the label does not depend on the page's `font-src` policy. The face is registered before it loads and the label never waits for it: it shows the fallback with `font-display: swap` and switches when the face is loaded. A load that fails removes its face, a load that settles after the marker ended cannot add it back, and removing the marker removes the face, loaded or pending. If the face cannot be installed the label falls back to the system UI stack. The popup body is 13px, 1.45 line height, Geist, set on `body` because Chrome's extension-page default style sets a system family there and would override one inherited from `:root`; the local service address and pairing code are Geist Mono. Both faces are variable (100-900) and embedded in `popup.css` as data URLs, so the popup needs no network, permission, or CSP source. Native surfaces (the tab title, toolbar badge, and debugger infobar) use Chrome's own font and are outside this rule.
+The label is 12px, 1.2 line height, regular weight, white on the label color, in Geist. The page has no Geist, so the extension installs the embedded face into the controlled document as `YCodingGeist`, a name no site is likely to use, so a site's own `Geist` family is never replaced. The `FontFace` API takes bytes directly, so the label does not depend on the page's `font-src` policy. The face is registered before it loads and the label never waits for it: it shows the fallback with `font-display: swap` and switches when the face is loaded. A load that fails removes its face, a load that settles after the marker ended cannot add it back, and removing the marker removes the face, loaded or pending. If the face cannot be installed the label falls back to the system UI stack. The popup body is 13px, 1.45 line height, Geist, set on `body` because Chrome's extension-page default style sets a system family there and would override one inherited from `:root`; the local service address and pairing code are Geist Mono. Both faces are variable (100-900) and embedded in `popup.css` as data URLs, so the popup needs no network, permission, or CSP source. Native surfaces (the tab title, toolbar badge, and debugger infobar) use Chrome's own font and are outside this rule; `Ⓨ` has no default emoji presentation, so the tab strip draws it as a text glyph from the platform fonts.
 
 ## Layout
 
@@ -100,7 +105,7 @@ The overlay host uses the maximum z-index (`layers.agent-overlay`) so the cursor
 
 ## Shapes
 
-The cursor is a pointer arrow whose tip is its hotspot. The label is a 5px-radius chip beside the arrow. The click ripple is a circle centered on the hotspot.
+The cursor is a pointer arrow whose tip is its hotspot. The label is a 5px-radius chip beside the arrow that starts with the monochrome Y mark, `agent-mark` square, separated from its words by the `agent-label` gap. The click ripple is a circle centered on the hotspot.
 
 ## Motion
 
@@ -108,22 +113,23 @@ The cursor eases to each real target over `cursor-move`; a click adds a ripple o
 
 ## Components
 
-- **Tab marker**: the document title prefix `[YCoding] ` followed by the page's own title. Marker state lives in the extension-owned overlay host's data attributes, not in text visible to the page beyond the prefix.
-- **Agent cursor**: arrow, tip on the action coordinates, with a label chip reading `YCoding · Click`, `YCoding · Type`, or `YCoding · Scroll`. No label appears for actions without a target.
+- **Tab marker**: the document title prefix `Ⓨ ` (the circled Y glyph and one space) followed by the page's own title. Chrome's tab strip renders only title text, so the mark is a glyph rather than the SVG mark. Marker state lives in the extension-owned overlay host's data attributes, not in text visible to the page beyond the prefix.
+- **Agent cursor**: arrow, tip on the action coordinates, with a label chip showing the agent mark followed by `YCoding · Click`, `YCoding · Type`, or `YCoding · Scroll`. No label appears for actions without a target.
+- **Agent mark**: the monochrome Y silhouette from `assets/brand/ycoding-mark-mono.svg`, cropped to its geometry, drawn as inline SVG in `agent-label-text` at `agent-mark` size, hidden from assistive technology.
 - **Toolbar badge**: the text `ON` on `badge-on` for each tab with an attached debugger.
 - **Popup help**: native details, collapsed by default, with a 34px summary (44px for coarse pointers), muted text, owned plus/minus marker, pointer cursor and the control focus ring. Keep pairing scope and review requirements visible before Connect; place secondary debugger guidance in help. Use border/surface scrollbar roles, no overflow anchoring, focus-colored caret and text selection, and no tap highlight.
 
 ## Accessibility
 
-Each signal carries text: the title prefix, the label words, and the badge text. The marker updates the document title, which assistive technology reads as part of the page name; this is intended disclosure that automation is active. The label chip's white text on the label color exceeds 7:1. The cursor is presentational and never receives focus.
+Each signal carries text: the title glyph, which assistive technology announces as its Unicode name, the label words, and the badge text. The marker updates the document title, which assistive technology reads as part of the page name; this is intended disclosure that automation is active. The label chip's white text on the label color exceeds 7:1. The cursor and its mark are presentational and never receive focus.
 
 ## Verification
 
-X1 to X6: `bun test` in `extensions/chrome` (service-worker fixture case) and the real Chrome for Testing suite `bun test test-integration/browser-owned-chrome.test.ts` from `packages/server`, which needs `YCODING_TEST_ISOLATED_BROWSER_CHROME`. X7: `bun test test/design-md.test.js` from `extensions/chrome`, which includes scratch-copy mutation probes in both directions. Lint this file, `../../DESIGN.md`, `../../apps/web/DESIGN.md`, and `../../packages/tui/DESIGN.md` with `python3 ~/.agents/skills/daedalus/scripts/design_md.py lint <file> --strict`. Native tab-strip pixels, the debugger infobar, and native Cancel are not reproducible in headless Chrome and remain manual checks.
+X1 to X6 and X11: `bun test` in `extensions/chrome` (service-worker fixture case) and the real Chrome for Testing suite `bun test test-integration/browser-owned-chrome.test.ts` from `packages/server`, which needs `YCODING_TEST_ISOLATED_BROWSER_CHROME`; X11 also runs `bun test --cwd packages/cli test/chrome-extension-packaging.test.ts` against the bundled worker. X7: `bun test test/design-md.test.js` from `extensions/chrome`, which includes scratch-copy mutation probes in both directions. Lint this file, `../../DESIGN.md`, `../../apps/web/DESIGN.md`, and `../../packages/tui/DESIGN.md` with `python3 ~/.agents/skills/daedalus/scripts/design_md.py lint <file> --strict`. Native tab-strip pixels, the debugger infobar, and native Cancel are not reproducible in headless Chrome and remain manual checks.
 
 ## Maintenance
 
-Read `../../DESIGN.md` and this file before changing any extension appearance. Change the rule first, update `indicator.js` and this file in the same change, run strict lint and the drift test, and obtain approval before altering a color, label, marker prefix, or motion value.
+Read `../../DESIGN.md` and this file before changing any extension appearance. Change the rule first, update `indicator.js` and this file in the same change, run strict lint and the drift test, and obtain approval before altering a color, label, marker glyph, mark, or motion value.
 
 ## Do's and Don'ts
 
@@ -131,6 +137,7 @@ Read `../../DESIGN.md` and this file before changing any extension appearance. C
 - Do fail closed when the marker cannot be shown.
 - Don't animate toward a coordinate no action uses, or show typed text in the label.
 - Don't add tab groups, favicon changes, or native window focus changes to signal control.
+- Don't replace the tab glyph or chip mark with an emoji or a fetched or packaged image.
 
 ## Exceptions
 

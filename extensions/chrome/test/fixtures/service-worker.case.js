@@ -1136,7 +1136,7 @@ describe("Chrome control marker", () => {
     try {
       const observation = await observe(socket, shared[0].tabID)
       expect(observation).toMatchObject({ type: "observation" })
-      expect(harness.cursorDOM.document.title).toBe("[YCoding] Inbox")
+      expect(harness.cursorDOM.document.title).toBe("Ⓨ Inbox")
       expect(harness.cursorDOM.markers()).toHaveLength(1)
       expect(indexOf(([, method]) => method === "Runtime.evaluate")).toBeLessThan(
         indexOf(([, method]) => method === "Accessibility.getFullAXTree"),
@@ -1173,8 +1173,8 @@ describe("Chrome control marker", () => {
       expect(shared[0].title).toBe("Inbox")
       expect(await observe(socket, shared[0].tabID)).toMatchObject({ title: "Inbox" })
       await socket.receive({ type: "relinquish", callID: "release-title", tabID: shared[0].tabID, generation: "bridge-1" })
-      harness.cursorDOM.setPageTitle("[YCoding] real")
-      expect(await observe(socket, shared[0].tabID, "observe-title-again")).toMatchObject({ title: "[YCoding] real" })
+      harness.cursorDOM.setPageTitle("Ⓨ real")
+      expect(await observe(socket, shared[0].tabID, "observe-title-again")).toMatchObject({ title: "Ⓨ real" })
     } finally {
       await stopBridge()
     }
@@ -1186,12 +1186,12 @@ describe("Chrome control marker", () => {
       await observe(socket, shared[0].tabID)
       harness.cursorDOM.setPageTitle("Inbox (3)")
       await flush()
-      expect(harness.cursorDOM.document.title).toBe("[YCoding] Inbox (3)")
-      harness.cursorDOM.setPageTitle("[YCoding] My notes")
+      expect(harness.cursorDOM.document.title).toBe("Ⓨ Inbox (3)")
+      harness.cursorDOM.setPageTitle("Ⓨ My notes")
       await flush()
-      expect(harness.cursorDOM.document.title).toBe("[YCoding] [YCoding] My notes")
+      expect(harness.cursorDOM.document.title).toBe("Ⓨ Ⓨ My notes")
       await socket.receive({ type: "relinquish", callID: "release-dynamic", tabID: shared[0].tabID, generation: "bridge-1" })
-      expect(harness.cursorDOM.document.title).toBe("[YCoding] My notes")
+      expect(harness.cursorDOM.document.title).toBe("Ⓨ My notes")
     } finally {
       await stopBridge()
     }
@@ -1202,7 +1202,7 @@ describe("Chrome control marker", () => {
     try {
       harness.cursorDOM.removeTitle()
       await observe(socket, shared[0].tabID)
-      expect(harness.cursorDOM.document.title).toBe("[YCoding]")
+      expect(harness.cursorDOM.document.title).toBe("Ⓨ")
       await socket.receive({ type: "relinquish", callID: "release-created", tabID: shared[0].tabID, generation: "bridge-1" })
       expect(harness.cursorDOM.document.querySelector("title")).toBeNull()
 
@@ -1313,7 +1313,7 @@ describe("Chrome control marker", () => {
       harness.cursorDOM.setPageTitle("Next")
       await harness.debuggerEvents.emit({ tabId: 17 }, "Page.frameNavigated", { frame: { url: "https://example.test/next" } })
       await flush()
-      expect(harness.cursorDOM.document.title).toBe("[YCoding] Next")
+      expect(harness.cursorDOM.document.title).toBe("Ⓨ Next")
       expect(harness.commands.filter((item) => item.method === "Page.createIsolatedWorld")).toHaveLength(2)
     } finally {
       await stopBridge()
@@ -1346,7 +1346,7 @@ describe("Chrome control marker", () => {
         await refresh().callback()
       }
       expect(harness.cursorDOM.markers()).toHaveLength(1)
-      expect(harness.cursorDOM.document.title).toBe("[YCoding] Inbox")
+      expect(harness.cursorDOM.document.title).toBe("Ⓨ Inbox")
       expect(harness.commands.filter((item) => item.method === "Page.createIsolatedWorld")).toHaveLength(1)
 
       harness.cursorDOM.clock.advance(timing.expiry - 1)
@@ -1525,7 +1525,7 @@ describe("Chrome control marker", () => {
       await flush()
       expect(harness.cursorDOM.document.title).toBe("Inbox (2)")
       await observe(socket, shared[0].tabID, "observe-after-removal")
-      expect(harness.cursorDOM.document.title).toBe("[YCoding] Inbox (2)")
+      expect(harness.cursorDOM.document.title).toBe("Ⓨ Inbox (2)")
     } finally {
       await stopBridge()
     }
@@ -1534,16 +1534,16 @@ describe("Chrome control marker", () => {
   test("keeps a title the website itself starts with the marker text when the page removes the marker", async () => {
     const { socket, shared } = await connect("i")
     try {
-      harness.cursorDOM.setPageTitle("[YCoding] real")
+      harness.cursorDOM.setPageTitle("Ⓨ real")
       await observe(socket, shared[0].tabID)
-      expect(harness.cursorDOM.document.title).toBe("[YCoding] [YCoding] real")
+      expect(harness.cursorDOM.document.title).toBe("Ⓨ Ⓨ real")
       harness.cursorDOM.markers()[0].remove()
       await flush()
-      expect(harness.cursorDOM.document.title).toBe("[YCoding] real")
+      expect(harness.cursorDOM.document.title).toBe("Ⓨ real")
       await observe(socket, shared[0].tabID, "observe-website-prefix")
-      expect(harness.cursorDOM.document.title).toBe("[YCoding] [YCoding] real")
+      expect(harness.cursorDOM.document.title).toBe("Ⓨ Ⓨ real")
       await socket.receive({ type: "relinquish", callID: "release-website-prefix", tabID: shared[0].tabID, generation: "bridge-1" })
-      expect(harness.cursorDOM.document.title).toBe("[YCoding] real")
+      expect(harness.cursorDOM.document.title).toBe("Ⓨ real")
     } finally {
       await stopBridge()
     }
@@ -1574,7 +1574,7 @@ describe("Chrome control marker", () => {
       const anchor = shared.find((item) => item.url.endsWith("/form"))
       const second = shared.find((item) => item.url.endsWith("/second"))
       const observation = await observe(socket, anchor.tabID)
-      expect(harness.cursorDOM.document.title).toBe("[YCoding] Inbox")
+      expect(harness.cursorDOM.document.title).toBe("Ⓨ Inbox")
       await socket.receive(action("group-title", anchor.tabID, observation, { type: "group", tabIDs: [anchor.tabID, second.tabID], title: "Task" }))
       expect(socket.outgoing.find((message) => message.callID === "group-title")).toMatchObject({ type: "result", title: "Inbox" })
       await socket.receive(action("ungroup-title", anchor.tabID, observation, { type: "ungroup", tabIDs: [anchor.tabID, second.tabID], groupID: 7 }))
@@ -1710,7 +1710,7 @@ describe("Chrome control marker", () => {
       await waitFor(() => socket.outgoing.some((message) => message.callID === "open-marked"))
       expect(socket.outgoing.find((message) => message.callID === "open-marked")).toMatchObject({ type: "opened" })
       expect(evaluations(24).length).toBeGreaterThan(0)
-      expect(harness.cursorDOM.document.title).toBe("[YCoding] Inbox")
+      expect(harness.cursorDOM.document.title).toBe("Ⓨ Inbox")
       await socket.receive({ type: "release", tabID: "btab_owned_marked", generation: "bridge-1" })
       expect(harness.cursorDOM.markers()).toHaveLength(0)
 

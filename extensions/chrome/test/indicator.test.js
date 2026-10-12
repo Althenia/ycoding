@@ -11,8 +11,8 @@ test("the page expiry outlasts several missed refreshes and is checked more ofte
   expect(timing.clear).toBeLessThan(timing.mark)
 })
 
-test("the title marker is a fixed ASCII prefix that ends with one separating space", () => {
-  expect(TITLE_PREFIX).toBe("[YCoding] ")
+test("the title marker is the circled Y glyph followed by one separating space", () => {
+  expect(TITLE_PREFIX).toBe("\u24CE ")
 })
 
 test("the serialized marker script is self-contained and runs with only page globals", async () => {
@@ -71,6 +71,27 @@ test.skipIf(!Bun.which("node"))("the source module serialized under Node runs wi
 
 const fontData = Buffer.from("wOF2-test-payload").toString("base64")
 const cursor = { x: 5, y: 6, label: "Click", click: false }
+
+test("the cursor label chip draws the monochrome brand mark inline before its words in the label text color", async () => {
+  const asset = await Bun.file(new URL("../../../assets/brand/ycoding-mark-mono.svg", import.meta.url)).text()
+  const page = createFakePage()
+  await page.evaluate(markerScript("mark", cursor))
+  const walk = (node) => [node, ...node.children.flatMap(walk), ...(node.shadow ? walk(node.shadow) : [])]
+  const chip = walk(page.hosts()[0]).find((node) => node.tagName === "SPAN" && node.children.length > 0)
+  const [mark, words] = chip.children
+  expect(chip.children).toHaveLength(2)
+  expect(mark.tagName).toBe("SVG")
+  expect(mark.attributes.get("viewBox")).toBe("40 40 176 176")
+  expect(mark.attributes.get("width")).toBe(String(parseInt(tokens.components["agent-mark"].size)))
+  expect(mark.attributes.get("height")).toBe(String(parseInt(tokens.components["agent-mark"].size)))
+  expect(mark.attributes.get("aria-hidden")).toBe("true")
+  expect(mark.children.map((path) => [path.tagName, path.attributes.get("d"), path.attributes.get("fill")])).toEqual([
+    ["PATH", /<path d="([^"]+)"/.exec(asset)?.[1], tokens.colors["agent-label-text"]],
+  ])
+  expect(words.tagName).toBe("SPAN")
+  expect(words.textContent).toBe("YCoding · Click")
+  expect(chip.style.cssText).toContain(`gap:${tokens.components["agent-label"].gap}`)
+})
 
 describe("the label font", () => {
   test("installs one page-scoped face under a unique alias when a cursor arrives with font data", async () => {

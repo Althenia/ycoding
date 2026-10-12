@@ -37,14 +37,14 @@ Owned open needs per-site `browser_navigate` and `browser_read` permissions befo
 
 ## Control marker
 
-- Before an observe or action is dispatched, the extension shows the fixed title prefix `[YCoding] ` on the tab, reads it back, and rejects the operation with `dispatched: false` when it cannot; a tab it attached for that operation is detached again. Group and ungroup mark and confirm every member before the group changes. Owned open marks the new tab before reporting it open.
+- Before an observe or action is dispatched, the extension shows the fixed title prefix `Ⓨ ` (U+24CE and one space) on the tab, reads it back, and rejects the operation with `dispatched: false` when it cannot; a tab it attached for that operation is detached again. Group and ungroup mark and confirm every member before the group changes. Owned open marks the new tab before reporting it open.
 - The prefix preserves the page's own title, including later changes, and cleanup restores the last page-authored title and removes a title element only when the marker created it and the page never authored one. Titles reported to Core exclude an installed prefix and never other text.
 - A pinned tab is refused because the tab strip shows only its icon.
 - Explicit release, stop, forget, disconnect, and revocation clear the marker with a bounded wait before detaching. Without a command path (native Cancel, worker loss or reload, crash) the page removes the marker when its 15-second deadline, refreshed every 5 seconds while control lasts, passes; it also checks on visibility and resume events. The deadline is held in the page, so a page frozen and thawed after expiry cleans up on thaw.
 - Marker commands for one tab run in order. Cleanup waits, up to its bound, for a marker command already sent, and a marker command that has not been sent when cleanup starts is dropped, so a late refresh cannot repaint a cleared marker or restart the refresh timer.
 - When the page removes the marker element, the page restores the title only if it still holds the marker's own text; a title the website authored, including one that starts with the marker prefix, is kept.
 - The extension keeps one isolated-world context per document because `Page.createIsolatedWorld` creates a new world on every call.
-- The cursor label is one of `Click`, `Type`, `Scroll`; the cursor tip lands on the coordinates of the dispatched action and reduced-motion preferences remove its animation. Visual rules are in `extensions/chrome/DESIGN.md`.
+- The cursor label is the YCoding mark followed by one of `Click`, `Type`, `Scroll`; the cursor tip lands on the coordinates of the dispatched action and reduced-motion preferences remove its animation. Visual rules are in `extensions/chrome/DESIGN.md`.
 
 ## Profile and non-interruption boundary
 

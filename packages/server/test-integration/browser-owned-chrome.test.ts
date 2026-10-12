@@ -1215,7 +1215,7 @@ async function markerLifecycle(extensionDirectory: string) {
   const live = await startMarkerBridge(extensionDirectory)
   try {
     const { client, popupSession, workerSession } = live
-    const prefix = "[YCoding] "
+    const prefix = "Ⓨ "
     const plainID = await live.open("/plain")
     const cspID = await live.open("/csp")
     const dynamicID = await live.open("/dynamic")
@@ -1301,7 +1301,7 @@ async function markerLifecycle(extensionDirectory: string) {
 
     const dynamic = await live.profileAt(markerOwner, "/dynamic")
     expect((await live.observe(markerOwner, dynamic, "marker-dynamic")).status).toBe(200)
-    const tick = (title: string) => Number(/^\[YCoding\] tick (\d+)$/.exec(title)?.[1] ?? Number.NaN)
+    const tick = (title: string) => Number(/^Ⓨ tick (\d+)$/.exec(title)?.[1] ?? Number.NaN)
     const first = tick(await live.awaitTitle("/dynamic", (title) => tick(title) >= 0, "marked dynamic title"))
     await live.awaitTitle("/dynamic", (title) => tick(title) > first, "dynamic title keeps changing under the marker")
     const released = await live.post(markerOwner, "release", {
@@ -1338,7 +1338,7 @@ async function markerLifecycle(extensionDirectory: string) {
 
     const noTitle = await live.profileAt(markerOther, "/notitle")
     expect((await live.observe(markerOther, noTitle, "marker-notitle")).status).toBe(200)
-    await live.awaitTitle("/notitle", (title) => title === "[YCoding]", "marked page without a title")
+    await live.awaitTitle("/notitle", (title) => title === "Ⓨ", "marked page without a title")
     const noTitlePage = await live.pageSessionAt("/notitle")
     expect(
       (
@@ -1472,9 +1472,9 @@ async function markerExpiry(extensionDirectory: string) {
     expect(scrolled.status, await scrolled.clone().text()).toBe(200)
     const visiblePage = await live.pageSessionAt("/plain")
     expect(await loadedFaces(client, visiblePage, "YCodingGeist")).toEqual(["loaded"])
-    await live.awaitTitle("/plain", (title) => title.startsWith("[YCoding] "), "visible marker")
-    await live.awaitTitle("/second", (title) => title.startsWith("[YCoding] "), "hidden marker")
-    await live.awaitTitle("/csp", (title) => title.startsWith("[YCoding] "), "frozen marker")
+    await live.awaitTitle("/plain", (title) => title.startsWith("Ⓨ "), "visible marker")
+    await live.awaitTitle("/second", (title) => title.startsWith("Ⓨ "), "hidden marker")
+    await live.awaitTitle("/csp", (title) => title.startsWith("Ⓨ "), "frozen marker")
 
     const frozenPage = await live.pageSessionAt("/csp")
     await client.send("Page.enable", {}, frozenPage)
@@ -1504,7 +1504,7 @@ async function markerExpiry(extensionDirectory: string) {
 
     const frozenUntil = lostAt + timing.expiry + 3_000
     await Bun.sleep(Math.max(0, frozenUntil - Date.now()))
-    expect(await live.targetTitle("/csp")).toMatch(/^\[YCoding\] /)
+    expect(await live.targetTitle("/csp")).toMatch(/^Ⓨ /)
     await client.send("Page.setWebLifecycleState", { state: "active" }, frozenPage)
     await live.awaitTitle(
       "/csp",

@@ -17,12 +17,15 @@ export const tokens = {
   layers: { "agent-overlay": 2147483647 },
   components: {
     "agent-cursor": { height: "20px" },
-    "agent-label": { padding: "3px 6px" },
+    "agent-label": { padding: "3px 6px", gap: "4px" },
+    "agent-mark": { size: "12px" },
     "agent-ripple": { size: "22px" },
   },
 }
 
-export const TITLE_PREFIX = "[YCoding] "
+export const TITLE_PREFIX = "Ⓨ "
+
+const MARK_PATH = "M40 40h40l48 64 48-64h40l-64 96v80h-48v-80z"
 
 export const LABELS = { click: "Click", type: "Type", scroll: "Scroll" }
 
@@ -55,6 +58,9 @@ export function markerScript(op, cursor, font) {
       labelText: tokens.colors["agent-label-text"],
       labelRadius: tokens.rounded["agent-label"],
       labelPadding: tokens.components["agent-label"].padding,
+      labelGap: tokens.components["agent-label"].gap,
+      mark: MARK_PATH,
+      markSize: parseInt(tokens.components["agent-mark"].size),
       labelFont: `${label.fontSize}/${String(label.lineHeight)} ${label.fontFamily}`,
       ripple: tokens.colors["agent-ripple"],
       rippleSize: parseInt(tokens.components["agent-ripple"].size),
@@ -191,8 +197,20 @@ async function agentMarker(options) {
     shape.setAttribute("fill", style.arrow)
     arrow.append(shape)
     const chip = document.createElement("span")
-    chip.textContent = `YCoding · ${label}`
-    chip.style.cssText = `position:absolute;left:14px;top:15px;padding:${style.labelPadding};border-radius:${style.labelRadius};background:${style.labelBackground};color:${style.labelText};font:${style.labelFont};white-space:nowrap;pointer-events:none;`
+    chip.style.cssText = `position:absolute;left:14px;top:15px;display:flex;align-items:center;gap:${style.labelGap};padding:${style.labelPadding};border-radius:${style.labelRadius};background:${style.labelBackground};color:${style.labelText};font:${style.labelFont};white-space:nowrap;pointer-events:none;`
+    const mark = document.createElementNS("http://www.w3.org/2000/svg", "svg")
+    mark.setAttribute("viewBox", "40 40 176 176")
+    mark.setAttribute("width", String(style.markSize))
+    mark.setAttribute("height", String(style.markSize))
+    mark.setAttribute("aria-hidden", "true")
+    mark.style.cssText = "display:block;flex:none;pointer-events:none;"
+    const silhouette = document.createElementNS("http://www.w3.org/2000/svg", "path")
+    silhouette.setAttribute("d", style.mark)
+    silhouette.setAttribute("fill", style.labelText)
+    mark.append(silhouette)
+    const words = document.createElement("span")
+    words.textContent = `YCoding · ${label}`
+    chip.append(mark, words)
     cursor.append(arrow, chip)
     root.append(cursor)
     document.documentElement.append(host)

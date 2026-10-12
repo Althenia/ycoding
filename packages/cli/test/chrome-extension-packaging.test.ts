@@ -58,7 +58,8 @@ test("bundles the indicator module into service-worker.js and keeps protocol.js 
   await packaged(async (_, extension) => {
     const worker = await readFile(path.join(extension, "service-worker.js"), "utf8")
     expect([...worker.matchAll(/(?:from|import\()\s*["']([^"']+)["']/g)].map((match) => match[1])).toEqual(["./protocol.js"])
-    expect(worker).toContain("[YCoding] ")
+    expect(worker).toContain('"\u24CE "')
+    expect(worker).toContain("M40 40h40l48 64 48-64h40l-64 96v80h-48v-80z")
     expect(worker).toContain("markerScript")
   })
 })

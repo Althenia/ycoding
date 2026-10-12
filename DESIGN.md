@@ -60,7 +60,7 @@ Product motion is functional: entrances, exits, and state feedback; reduced-moti
 
 Web action icons use the owned `Icon` SVG registry: 24-unit viewBox, 1.6-unit rounded strokes, and `currentColor` (`apps/web/src/ui/icon.tsx`). The terminal uses cell-width Unicode glyphs paired with text or status context; neither surface substitutes a generic third-party icon or an emoji for the Y mark (`packages/tui/DESIGN.md`).
 
-The browser-control launcher, its popup header, and the Meeting live page use the canonical Y mark.
+The browser-control launcher, its popup header, and the Meeting live page use the canonical Y mark. The browser-control cursor label uses the monochrome mark; Chrome's text-only tab strip uses the glyph documented in `extensions/chrome/DESIGN.md`.
 
 ## Mark
 

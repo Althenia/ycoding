@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { tokens } from "../indicator.js"
 
 const GROUPS = ["colors", "typography", "rounded", "motion.duration", "layers", "layout", "spacing", "controls"]
-const COMPONENT_LITERALS = ["height", "size", "padding"]
+const COMPONENT_LITERALS = ["height", "size", "padding", "gap"]
 
 function mapping(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -88,6 +88,12 @@ describe("extension DESIGN.md token drift", () => {
       [document, { ...tokens, layers: { ...tokens.layers, extra: 1 } }, "layers.extra"],
       [document.replace("cursor-move: 320ms", "cursor-move: 1ms"), tokens, "motion.duration.cursor-move"],
       [document.replace("padding: 3px 6px", "padding: 0"), tokens, "components.agent-label.padding"],
+      [document.replace("gap: 4px", "gap: 0"), tokens, "components.agent-label.gap"],
+      [
+        document,
+        { ...tokens, components: { ...tokens.components, "agent-mark": { size: "16px" } } },
+        "components.agent-mark.size",
+      ],
       [document.replace("fontFamily: Geist Mono,", "fontFamily: Mono,"), tokens, "typography.popup-mono.fontFamily"],
       [document.replace("fontSize: 13px", "fontSize: 14px"), tokens, "typography.popup-body.fontSize"],
       [document.replace("popup-width: 320px", "popup-width: 360px"), tokens, "layout.popup-width"],
