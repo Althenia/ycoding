@@ -209,9 +209,11 @@ test("pages explicit completion receipts without a browser subscription and refr
     expect(test.calls.filter((call) => call.method === "completions").slice(0, 2).map((call) => call.args)).toEqual([
       [{ limit: 200 }], [{ limit: 200, after: "ses_1" }],
     ])
+    const reads = test.calls.filter((call) => call.method === "completions").length
     seq = 20
-    test.streams[0].stream.onEvent({ type: "session.work.completed", data: { sessionID: "ses_1", inputID: "msg_input", assistantMessageID: "msg_final" } })
+    test.streams[0].stream.onEvent({ id: "evt_ses_1_20", created: 1_000, type: "session.work.completed", durable: { aggregateID: "ses_1", seq: 20, version: 1 }, data: { sessionID: "ses_1", inputID: "msg_input", assistantMessageID: "msg_final" } })
     await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "completions" && frame.data.some((item) => item.seq === 20)))
+    expect(test.calls.filter((call) => call.method === "completions")).toHaveLength(reads)
     expect(sentEvents(test.records[0])).toHaveLength(0)
   } finally { await test.bridge.close() }
 })
@@ -252,6 +254,34 @@ test("discards a pending completion page from a prior opening of the same connec
     expect(sentFrames(test.records[0]).filter((frame) => frame.type === "completions").flatMap((frame) => frame.data).every((item) => item.sessionID === "ses_current")).toBe(true)
     expect(test.calls.filter((call) => call.method === "completions").some((call) => (call.args[0] as { after?: string }).after === "ses_stale")).toBe(false)
   } finally { resolve({ data: [] }); await test.bridge.close() }
+})
+
+test("live completion receipts wait for a complete baseline and reject stale or child ownership", async () => {
+  const first = Promise.withResolvers<SessionCompletionsOutput>()
+  let reads = 0
+  const test = harness({ sessions: [entry, { sessionID: "ses_child", directory: "/work", workspaceID: undefined, title: "Child" }], results: {
+    completions: () => ++reads === 1 ? first.promise : { data: [completion("ses_1", 20)] },
+    getSession: (id: string) => id === "ses_child" ? { ...sessionInfo(id), parentID: "ses_1" } : sessionInfo(id),
+  } })
+  const receipt = (sessionID: string, seq: number) => ({ id: `evt_${sessionID}_${seq}`, created: 1_000, type: "session.work.completed", durable: { aggregateID: sessionID, seq, version: 1 }, data: { sessionID, inputID: "msg_input", assistantMessageID: "msg_final" } })
+  try {
+    await test.bridge.connect()
+    await waitFor(() => reads === 1 && test.streams[0] !== undefined ? true : undefined)
+    test.streams[0]!.stream.onEvent(receipt("ses_1", 20))
+    expect(sentFrames(test.records[0]!).filter((frame) => frame.type === "completions")).toEqual([])
+    first.resolve({ data: [completion("ses_1", 12)] })
+    await waitFor(() => sentFrames(test.records[0]!).find((frame) => frame.type === "completions" && frame.data.some((item) => item.seq === 20)))
+    const before = test.calls.filter((call) => call.method === "getSession").length
+    test.streams[0]!.stream.onEvent(receipt("ses_child", 30))
+    await waitFor(() => test.calls.filter((call) => call.method === "getSession").length > before ? true : undefined)
+    expect(sentFrames(test.records[0]!).filter((frame) => frame.type === "completions").flatMap((frame) => frame.data).some((item) => item.sessionID === "ses_child")).toBe(false)
+    test.streams[0]!.stream.onEnd()
+    await waitFor(() => test.streams.length === 2 ? true : undefined)
+    const current = test.calls.filter((call) => call.method === "getSession").length
+    test.streams[0]!.stream.onEvent(receipt("ses_stale", 30))
+    expect(test.calls.filter((call) => call.method === "getSession")).toHaveLength(current)
+    expect(sentFrames(test.records[0]!).filter((frame) => frame.type === "completions").flatMap((frame) => frame.data).some((item) => item.sessionID === "ses_stale")).toBe(false)
+  } finally { first.resolve({ data: [] }); await test.bridge.close() }
 })
 
 function sessionsFrame(record: ConnectionRecord) {

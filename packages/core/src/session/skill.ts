@@ -13,7 +13,6 @@ import { SkillTool } from "../tool/skill"
 import { SessionEvent } from "./event"
 import { SessionMessage } from "./message"
 import { SessionSchema } from "./schema"
-import { SessionSkillStatus } from "./skill-status"
 import { SessionStore } from "./store"
 
 const locks = KeyedMutex.makeUnsafe<SessionSchema.ID>()
@@ -56,7 +55,7 @@ export const activate = Effect.fn("SessionSkill.activate")(function* (
 ) {
   return yield* locks.withLock(input.session.id)(
     Effect.gen(function* () {
-      const active = SessionSkillStatus.list(yield* services.store.context(input.session.id), []).some(
+      const active = (yield* services.store.skills(input.session.id)).some(
         (status) => status.id === input.skill.id && status.state === "active",
       )
       if (active) return

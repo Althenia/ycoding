@@ -1,6 +1,6 @@
-import type { TextareaRenderable } from "@opentui/core"
+import type { ScrollBoxRenderable, TextareaRenderable } from "@opentui/core"
 import type { SessionOrchestrationTask } from "@ycoding-ai/client"
-import { createEffect, createMemo, createSignal, onCleanup, onMount, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js"
 import { useClient } from "../../context/client"
 import { useData } from "../../context/data"
 import { Keymap } from "../../context/keymap"
@@ -73,28 +73,81 @@ export function SubagentBlockedSurface(props: {
   )
 }
 
-export function SubagentQuestionNotice(props: { task: SessionOrchestrationTask }) {
+export function SubagentQuestionNotice(props: {
+  task: SessionOrchestrationTask
+  onAnswer?: () => void
+  stale?: boolean
+  answering?: boolean
+}) {
   const { theme } = useTheme()
   const route = useRoute()
   const shortcut = Keymap.useShortcut("session.child.first")
+  let details: ScrollBoxRenderable | undefined
+  Keymap.createLayer(() => ({
+    mode: "subagent-answer",
+    priority: 1,
+    enabled: () => Boolean(props.answering),
+    commands: [
+      {
+        bind: "pageup",
+        title: "Previous question page",
+        run: () => details?.scrollBy(-Math.max(1, details.viewport.height)),
+      },
+      {
+        bind: "pagedown",
+        title: "Next question page",
+        run: () => details?.scrollBy(Math.max(1, details.viewport.height)),
+      },
+    ],
+  }))
   return (
-    <box
-      paddingLeft={3}
-      paddingRight={2}
-      paddingBottom={1}
-      flexShrink={0}
-      onMouseUp={() => route.navigate({ type: "session", sessionID: props.task.sessionID })}
-    >
-      <text fg={theme.text.feedback.warning.default}>
-        ? {props.task.agent} awaiting input{" "}
+    <box paddingLeft={3} paddingRight={2} paddingBottom={1} flexShrink={0}>
+      <text
+        fg={theme.text.feedback.warning.default}
+        onMouseUp={() => route.navigate({ type: "session", sessionID: props.task.sessionID })}
+      >
+        ? {props.task.agent} {props.stale ? "question changed or resolved" : "awaiting input"}{" "}
         <span style={{ fg: theme.text.subdued }}>· {shortcut()?.replaceAll("ctrl+", "⌃")} subagents</span>
       </text>
-      <text fg={theme.text.feedback.warning.default}>{props.task.question?.text}</text>
+      <scrollbox
+        maxHeight={6}
+        minHeight={1}
+        flexShrink={0}
+        scrollX={false}
+        contentOptions={{ flexShrink: 0, minHeight: 0 }}
+        scrollbarOptions={{ visible: false }}
+        ref={(value: ScrollBoxRenderable) => {
+          details = value
+        }}
+      >
+        <text flexShrink={0} fg={theme.text.feedback.warning.default}>
+          {props.task.question?.text}
+        </text>
+      </scrollbox>
+      <Show when={props.answering}>
+        <text fg={theme.text.subdued}>pgup/pgdn question</text>
+      </Show>
+      <Show when={props.onAnswer}>
+        <text
+          fg={theme.text.action.primary.default}
+          onMouseUp={(event) => {
+            event.stopPropagation()
+            props.onAnswer?.()
+          }}
+        >
+          Answer
+        </text>
+      </Show>
     </box>
   )
 }
 
-export function SubagentAnswerComposer(props: { task: SessionOrchestrationTask }) {
+export function SubagentAnswerComposer(props: {
+  task: SessionOrchestrationTask
+  enabled?: boolean
+  onClose?: () => void
+  onAnswered?: () => void
+}) {
   const { theme } = useTheme()
   const client = useClient()
   const data = useData()
@@ -106,26 +159,40 @@ export function SubagentAnswerComposer(props: { task: SessionOrchestrationTask }
   let textarea: TextareaRenderable | undefined
   let answered = false
 
-  onMount(() => onCleanup(keymap.mode.push("subagent-answer")))
+  createEffect(() => {
+    if (props.enabled === false) return
+    onCleanup(keymap.mode.push("subagent-answer"))
+  })
   createEffect(() => {
     if (!textarea || textarea.isDestroyed) return
-    if (dialog.stack.length > 0) return textarea.blur()
+    if (props.enabled === false || dialog.stack.length > 0) return textarea.blur()
     textarea.focus()
   })
 
   async function submit() {
-    if (submitting() || answered || dialog.stack.length > 0 || !textarea?.plainText.trim()) return
+    if (
+      props.enabled === false ||
+      submitting() ||
+      answered ||
+      dialog.stack.length > 0 ||
+      !textarea ||
+      textarea.isDestroyed ||
+      !textarea.plainText.trim()
+    )
+      return
     if (props.task.state !== "waiting" || !questionID || props.task.question?.id !== questionID) {
       setFeedback("Question changed or resolved · answer retained")
       return
     }
+    const parentID = props.task.parentID
+    const childID = props.task.sessionID
     const text = textarea.plainText
     setSubmitting(true)
     setFeedback(undefined)
     const result = await client.api.session.subagent
       .answer({
-        parentID: props.task.parentID,
-        childID: props.task.sessionID,
+        parentID,
+        childID,
         questionID,
         text,
       })
@@ -139,27 +206,33 @@ export function SubagentAnswerComposer(props: { task: SessionOrchestrationTask }
       return
     }
     answered = true
-    if (!textarea.isDestroyed && textarea.plainText === text) textarea.clear()
+    const unchanged = !textarea.isDestroyed && textarea.plainText === text
+    if (unchanged) textarea.clear()
     setFeedback("Answer sent")
-    data.session.subagent.invalidate(props.task.parentID)
+    data.session.subagent.invalidate(parentID)
     void data.session.subagent
-      .sync(props.task.parentID)
+      .sync(parentID)
       .catch((error: unknown) => setFeedback(`Answer sent · refresh failed: ${errorMessage(error)}`))
+    if (unchanged) props.onAnswered?.()
   }
 
   Keymap.createLayer(() => ({
     mode: "subagent-answer",
-    commands: [{ id: "prompt.submit", title: "Submit subagent answer", run: () => void submit() }],
+    enabled: () => props.enabled !== false,
+    commands: [
+      { id: "prompt.submit", title: "Submit subagent answer", run: () => void submit() },
+      ...(props.onClose ? [{ bind: "escape", title: "Return to parent draft", run: () => props.onClose?.() }] : []),
+    ],
     bindings: ["prompt.submit"],
   }))
 
   return (
-    <box paddingLeft={3} paddingRight={2} paddingTop={1} flexShrink={0}>
+    <box visible={props.enabled !== false} paddingLeft={3} paddingRight={2} paddingTop={1} flexShrink={0}>
       <textarea
         ref={(value: TextareaRenderable) => {
           textarea = value
           value.traits = { status: "ANSWER" }
-          value.focus()
+          if (props.enabled !== false) value.focus()
         }}
         placeholder="Enter answer"
         placeholderColor={theme.text.subdued}
@@ -173,6 +246,11 @@ export function SubagentAnswerComposer(props: { task: SessionOrchestrationTask }
       />
       <Show when={submitting() || feedback()}>
         <text fg={theme.text.subdued}>{submitting() ? "Sending answer…" : feedback()}</text>
+      </Show>
+      <Show when={props.onClose}>
+        <text fg={theme.text.subdued} onMouseUp={() => props.onClose?.()}>
+          esc return to draft · enter send answer
+        </text>
       </Show>
     </box>
   )

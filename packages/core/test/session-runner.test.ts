@@ -68,6 +68,8 @@ import { SessionRunCoordinator } from "@ycoding-ai/core/session/run-coordinator"
 import { SessionRunner } from "@ycoding-ai/core/session/runner"
 import * as SessionRunnerLLM from "@ycoding-ai/core/session/runner/llm"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
+import { MAX_STEPS_RESET_PROMPT } from "@ycoding-ai/core/session/runner/max-steps"
+import { renderTeamObservation } from "@ycoding-ai/core/session/orchestration-view"
 import { SessionModelHeaders } from "@ycoding-ai/core/session/model-headers"
 import { SessionUsage } from "@ycoding-ai/core/session/usage"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
@@ -124,12 +126,14 @@ import {
   Stream,
 } from "effect"
 import { TestClock } from "effect/testing"
-import { and, asc, eq, lte } from "drizzle-orm"
+import { Statement } from "effect/unstable/sql"
+import { and, asc, eq, lte, sql } from "drizzle-orm"
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "fs/promises"
 import { tmpdir } from "os"
 import path from "path"
 import { AttachmentStore } from "@ycoding-ai/core/attachment-store"
 import { testEffect } from "./lib/effect"
+import { observationMessageData } from "./fixture/session-observations"
 import { registerToolPlugin } from "./lib/tool"
 import { agentHost, catalogHost, host } from "./plugin/host"
 import PROMPT_DEFAULT from "../src/session/runner/prompt/base.txt"
@@ -869,6 +873,7 @@ const it = testEffect(
       SessionRunnerLLM.node,
       SessionCompactionJob.node,
       SessionContextState.node,
+      SessionLiveState.node,
       SessionGuardrail.node,
       SessionCompactionExecution.node,
       SessionExecution.node,
@@ -1638,6 +1643,146 @@ describe("SessionRunnerLLM", () => {
       expect([...(yield* execution.active)]).toEqual([])
     }),
   )
+  it.effect("does not read full message payloads for observation deduplication", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      response = reply.text("Complete answer", "payload-read")
+      yield* admit(session, "Preserve the complete prompt")
+      const runner = yield* SessionRunner.Service
+      const queries: string[] = []
+      yield* runner.drain({ sessionID, force: true }).pipe(
+        Effect.provideService(Statement.CurrentTransformer, (statement) =>
+          Effect.sync(() => {
+            queries.push(statement.compile()[0])
+            return statement
+          }),
+        ),
+      )
+      const payloadReads = queries.filter(
+        (query) =>
+          query.startsWith("select ") &&
+          query.includes('from "session_message"') &&
+          query.slice(0, query.indexOf(" from ")).includes('"data"') &&
+          query.endsWith('order by "session_message"."seq" asc') &&
+          !query.includes('"type" in') &&
+          !query.includes(" limit "),
+      )
+      expect(payloadReads).toHaveLength(2)
+      expect(requests).toHaveLength(1)
+      expect(requests[0].messages).toMatchObject([
+        { role: "user", content: [{ type: "text", text: "Preserve the complete prompt" }] },
+        {
+          role: "system",
+          content: [{ type: "text", text: expect.stringContaining("Authoritative current Session state") }],
+        },
+      ])
+    }),
+  )
+
+  it.effect("bounds observation deduplication pages and finds trusted values behind forged latest candidates", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const db = (yield* Database.Service).db
+      const live = yield* SessionLiveState.Service
+      const state = yield* live.load(sessionID)
+      const sources = ["session-state", "team-view", "step-limit"] as const
+      const latest = [state.text, renderTeamObservation([]).text, MAX_STEPS_RESET_PROMPT]
+      const observations = Array.from({ length: 1253 }, (_, index) => {
+        const source = index < 1003 ? sources[index % 3] : "team-view"
+        const text =
+          index >= 1000 && index < 1003 ? latest[index % 3] : `Distinct observation ${index}: ${"x".repeat(2048)}`
+        return { source, text }
+      })
+      const rows = observations.map((observation, index) => {
+        return {
+          id: SessionMessage.ID.make(`msg_many_observation_${index}`),
+          session_id: sessionID,
+          type: observation.source === "team-view" ? ("synthetic" as const) : ("system" as const),
+          seq: 1000 + index,
+          time_created: index,
+          time_updated: index,
+          data: observationMessageData({
+            id: SessionMessage.ID.make(`msg_many_observation_${index}`),
+            type: observation.source === "team-view" ? "synthetic" : "system",
+            text: observation.text,
+            metadata: { contextSource: observation.source },
+            ...(observation.source === "team-view" ? { description: "TeamView update" } : {}),
+            time: { created: index },
+          }),
+        }
+      })
+      yield* EventRuntime.reserveSequence(db, sessionID, rows.at(-1)!.seq)
+      for (let offset = 0; offset < rows.length; offset += 50) {
+        yield* db
+          .insert(SessionMessageTable)
+          .values(rows.slice(offset, offset + 50))
+          .run()
+        if (offset < 1003)
+          yield* db
+            .insert(EventTable)
+            .values(
+              rows.slice(offset, Math.min(offset + 50, 1003)).map((row) => ({
+                id: EventRuntime.ID.make(String(row.id).replace(/^msg_/, "evt_")),
+                aggregate_id: sessionID,
+                seq: row.seq,
+                created: row.time_created,
+                type: EventRuntime.versionedType(
+                  SessionEvent.ContextObserved.type,
+                  SessionEvent.ContextObserved.durable.version,
+                ),
+                data: {
+                  sessionID,
+                  source: observations[row.seq - 1000].source,
+                  text: observations[row.seq - 1000].text,
+                },
+              })),
+            )
+            .run()
+      }
+      response = reply.text("Complete answer", "many-observations")
+      yield* admit(session, "Keep every historical observation in model context")
+      const queries: Array<{ sql: string; params: ReadonlyArray<unknown> }> = []
+      const runner = yield* SessionRunner.Service
+      yield* runner.drain({ sessionID, force: true }).pipe(
+        Effect.provideService(Statement.CurrentTransformer, (statement) =>
+          Effect.sync(() => {
+            const [sql, params] = statement.compile()
+            queries.push({ sql, params })
+            return statement
+          }),
+        ),
+      )
+      const pages = queries.filter(
+        (query) =>
+          query.sql.includes('from "session_message"') &&
+          query.sql.includes('"type" in') &&
+          query.sql.slice(0, query.sql.indexOf(" from ")).includes('"data"'),
+      )
+      expect(pages).toHaveLength(3)
+      expect(
+        pages.every(
+          (query) => query.sql.includes('order by "session_message"."seq" desc limit ?') && query.params.at(-1) === 100,
+        ),
+      ).toBe(true)
+      const trust = queries.filter(
+        (query) => query.sql.includes('from "event"') && query.sql.includes('"event"."id" in'),
+      )
+      expect(trust.every((query) => query.params.length <= 102)).toBe(true)
+      expect(requests).toHaveLength(1)
+      expect(JSON.stringify(requests[0].messages)).toContain(observations[0].text)
+      expect(JSON.stringify(requests[0].messages)).toContain(observations.at(-1)!.text)
+      expect(
+        (yield* session.context(sessionID)).filter((message) => message.metadata?.contextSource !== undefined),
+      ).toHaveLength(rows.length)
+      yield* db.run(
+        sql`UPDATE session_message SET data = json_set(data, '$.text', 1) WHERE id = ${rows[0].id}`,
+      )
+      yield* admit(session, "Reject corrupt historical context before contacting the model")
+      expect(Exit.isFailure(yield* runner.drain({ sessionID, force: true }).pipe(Effect.exit))).toBe(true)
+      expect(requests).toHaveLength(1)
+    }),
+  )
+
   it.effect("retains delivered Session state as visible append-only history", () =>
     Effect.gen(function* () {
       const session = yield* setup
@@ -9430,6 +9575,61 @@ describe("SessionRunnerLLM", () => {
       expect(defect).toBeInstanceOf(Error)
       if (!(defect instanceof Error)) return
       expect(defect.message).toBe("Tool input delta before start: call-1")
+    }),
+  )
+
+  it.effect("an owned subagent answer wakes the real runner and completes the waiting child", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const database = yield* Database.Service
+      const events = yield* EventRuntime.Service
+      const autonomy = yield* SessionAutonomy.Service
+      const execution = yield* realExecution
+      const scope = yield* Scope.Scope
+      const context = yield* Layer.buildWithScope(AppNodeBuilder.build(SessionOrchestration.node, [
+        [Database.node, Layer.succeed(Database.Service, database)],
+        [EventRuntime.node, Layer.succeed(EventRuntime.Service, events)],
+        [SessionAutonomy.node, Layer.succeed(SessionAutonomy.Service, autonomy)],
+        [SessionExecution.node, Layer.succeed(SessionExecution.Service, execution)],
+        [Session.node, Layer.succeed(Session.Service, session)],
+      ]), scope)
+      const orchestration = Context.get(context, SessionOrchestration.Service)
+      const child = yield* session.create({ parentID: sessionID, title: "Waiting boundary check" })
+      yield* events.publish(SessionEvent.Task.Updated, {
+        sessionID: child.id,
+        change: {
+          type: "launched",
+          parentID: sessionID,
+          parentAssistantMessageID: SessionMessage.ID.make("msg_question_parent"),
+          toolCallID: "call_question_child",
+          inputID: SessionMessage.ID.make("msg_question_child"),
+          description: "Check the selected boundary",
+          agent: Agent.ID.make("build"),
+          model: { id: CatalogModel.ID.make("fake-model"), providerID: Provider.ID.make("fake") },
+          promptDigest: "question-fixture",
+          background: true,
+          delivery: "steer",
+        },
+      })
+      yield* events.publish(SessionEvent.Task.Updated, { sessionID: child.id, change: { type: "started" } })
+      const question = yield* orchestration.question(child.id, "Which boundary should I check?")
+      expect(question.autoAnswered).toBe(false)
+      expect(yield* orchestration.get(sessionID, child.id)).toMatchObject({ state: "waiting" })
+      response = reply.text("Selected boundary checked and verified.", "text-question-resumed")
+      streamGate = yield* Deferred.make<void>()
+      streamStarted = yield* Deferred.make<void>()
+      yield* orchestration.answer({ parentID: sessionID, childID: child.id, questionID: question.question.id, text: "/goal stays literal in this answer" })
+      yield* Deferred.await(streamStarted)
+      expect(requests).toHaveLength(1)
+      expect(JSON.stringify(requests[0]!.messages)).toContain("/goal stays literal in this answer")
+      expect(yield* session.pending(child.id)).toEqual([])
+      yield* Deferred.succeed(streamGate, undefined)
+      yield* execution.awaitIdle(child.id)
+      expect(yield* orchestration.get(sessionID, child.id)).toMatchObject({ state: "completed", question: undefined })
+      expect((yield* session.context(child.id)).filter((message) => message.type === "assistant")).toMatchObject([
+        { finish: "stop", content: [{ type: "text", text: "Selected boundary checked and verified." }] },
+      ])
+      expect([...(yield* execution.active)]).toEqual([])
     }),
   )
 })

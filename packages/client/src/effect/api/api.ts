@@ -677,8 +677,18 @@ export type Endpoint7_0Input = { readonly sessionID: Endpoint7_0Request["params"
 export type Endpoint7_0Output = EffectValue<ReturnType<RawClient["server.message"]["session.messages"]>>["data"]
 export type MessageListOperation<E = never> = (input: Endpoint7_0Input) => Effect.Effect<Endpoint7_0Output, E>
 
+type Endpoint7_1Request = Parameters<RawClient["server.message"]["session.capturedInputs"]>[0]
+export type Endpoint7_1Input = {
+  readonly sessionID: Endpoint7_1Request["params"]["sessionID"]
+  readonly after?: Endpoint7_1Request["query"]["after"]
+  readonly limit?: Endpoint7_1Request["query"]["limit"]
+}
+export type Endpoint7_1Output = EffectValue<ReturnType<RawClient["server.message"]["session.capturedInputs"]>>
+export type MessageCapturedInputsOperation<E = never> = (input: Endpoint7_1Input) => Effect.Effect<Endpoint7_1Output, E>
+
 export interface MessageApi<E = never> {
   readonly list: MessageListOperation<E>
+  readonly capturedInputs: MessageCapturedInputsOperation<E>
 }
 
 type Endpoint8_0Request = Parameters<RawClient["server.model"]["model.list"]>[0]

@@ -9,6 +9,7 @@ import { groupSessionShells } from "../../../util/session"
 import { SubagentsTab } from "./subagents-tab"
 import { ShellTab } from "./shell-tab"
 import { SideChatsTab } from "./side-chats-tab"
+import type { SessionOrchestrationTask } from "@ycoding-ai/client"
 
 interface ComposerHint {
   label: string
@@ -41,6 +42,7 @@ export type ComposerProps = {
   defaultTab?: string
   onClose?: () => void
   prompt?: JSX.Element
+  onSubagentAnswer?: (task: SessionOrchestrationTask) => void
 }
 
 export function Composer(props: ComposerProps) {
@@ -181,7 +183,7 @@ export function Composer(props: ComposerProps) {
                 </box>
               </Show>
             </box>
-            <SubagentsTab sessionID={props.sessionID} />
+            <SubagentsTab sessionID={props.sessionID} onAnswer={props.onSubagentAnswer} />
             <ShellTab sessionID={props.sessionID} />
             <SideChatsTab sessionID={props.sessionID} />
             <box flexDirection="row" flexShrink={0}>

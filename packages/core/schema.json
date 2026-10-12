@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "6861a3d6-4613-46b1-974e-d4781e5887ee",
+  "id": "83e2f476-3cef-4caf-8ef7-6e9f883324a1",
   "prevIds": [
-    "34121609-0e89-4ff9-924e-f9943b6ff5de"
+    "6861a3d6-4613-46b1-974e-d4781e5887ee"
   ],
   "ddl": [
     {
@@ -7068,6 +7068,20 @@
       "where": null,
       "origin": "manual",
       "name": "session_time_updated_id_idx",
+      "entityType": "indexes",
+      "table": "session"
+    },
+    {
+      "columns": [
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": "json_extract(\"session\".\"autonomy\", '$.goal.status') = 'active'",
+      "origin": "manual",
+      "name": "session_active_goal_idx",
       "entityType": "indexes",
       "table": "session"
     },

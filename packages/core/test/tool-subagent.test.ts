@@ -1060,6 +1060,19 @@ describe("SubagentTool", () => {
           ).toEqual(["steer", "steer", "queue"])
 
           const question = yield* orchestration.question(child.sessionID, "Proceed?", { risk: "low" })
+          expect(yield* orchestration.get(parent.id, child.sessionID)).toMatchObject({
+            state: "waiting",
+            question: { id: question.question.id, text: "Proceed?" },
+          })
+          const notifier = yield* SessionOrchestrationNotifier.Service
+          yield* notifier.dispatch
+          expect(executionWakes.filter((id) => id === parent.id)).toHaveLength(1)
+          expect(yield* sessions.pending(parent.id)).toEqual([
+            expect.objectContaining({
+              type: "synthetic",
+              data: expect.objectContaining({ metadata: expect.objectContaining({ source: "subagent_notification", childID: child.sessionID, type: "question" }) }),
+            }),
+          ])
           expect(
             yield* Effect.exit(
               orchestration.send({
@@ -1076,12 +1089,18 @@ describe("SubagentTool", () => {
           ).toMatchObject({
             _tag: "Failure",
           })
+          const answerWakes = executionWakes.filter((id) => id === child.sessionID).length
           yield* orchestration.answer({
             parentID: parent.id,
             childID: child.sessionID,
             questionID: question.question.id,
             text: "yes",
           })
+          expect(yield* orchestration.get(parent.id, child.sessionID)).toMatchObject({ state: "running", question: undefined })
+          expect(executionWakes.filter((id) => id === child.sessionID)).toHaveLength(answerWakes + 1)
+          expect((yield* sessions.pending(child.sessionID)).filter((item) => item.type === "synthetic" && item.data.metadata?.kind === "answer")).toEqual([
+            expect.objectContaining({ data: expect.objectContaining({ metadata: expect.objectContaining({ parentID: parent.id, childID: child.sessionID, questionID: question.question.id }) }) }),
+          ])
           expect(
             yield* Effect.exit(
               orchestration.answer({
@@ -1134,7 +1153,6 @@ describe("SubagentTool", () => {
               delivery: "steer",
             })).state,
           ).toBe("running")
-          const notifier = yield* SessionOrchestrationNotifier.Service
           yield* notifier.dispatch
           const parentWakes = executionWakes.filter((id) => id === parent.id).length
           yield* orchestration.settle(child.sessionID, { type: "lost" })

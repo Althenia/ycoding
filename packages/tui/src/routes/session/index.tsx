@@ -41,6 +41,7 @@ import type {
   SessionMessageUser,
   SessionInfo,
   SessionAutonomyState,
+  SessionOrchestrationTask,
 } from "@ycoding-ai/client"
 import { capturedChildSessionIDs, capturedPartPatches, capturedPatch, groupCapturedPatches, summarizeCapturedChanges } from "@ycoding-ai/client/file-change-summary"
 import { SessionOrchestrationIdentity } from "@ycoding-ai/core/session/orchestration-identity"
@@ -631,6 +632,18 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   const waitingChild = createMemo(() =>
     data.session.subagent.page(route.sessionID)?.data.find((task) => task.state === "waiting" && task.question),
   )
+  const [answeringChild, setAnsweringChild] = createSignal<SessionOrchestrationTask>()
+  const childAnswer = createMemo(() => {
+    const selected = answeringChild()
+    if (!selected) return undefined
+    return data.session.subagent.page(route.sessionID)?.data.find((task) => task.sessionID === selected.sessionID)
+      ?? { ...selected, state: "running" as const, question: undefined }
+  })
+  const answerChild = (task: SessionOrchestrationTask) => {
+    if (disabled() || task.state !== "waiting" || !task.question) return
+    setComposer("open", false)
+    setAnsweringChild(task)
+  }
   createEffect(
     on([() => route.sessionID, () => client.connection.status()], ([sessionID, status]) => {
       if (status !== "connected") return
@@ -1897,7 +1910,12 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                 </box>
               </Show>
               <PluginSlot name="session.composer.top" input={{ sessionID: route.sessionID }} />
-              <Show when={waitingChild()}>{(task) => <SubagentQuestionNotice task={task()} />}</Show>
+              <Show when={answeringChild() ?? waitingChild()}>{(task) => <SubagentQuestionNotice
+                task={task()}
+                answering={Boolean(answeringChild()) && !disabled() && !composer.open}
+                stale={Boolean(answeringChild() && (childAnswer()?.state !== "waiting" || childAnswer()?.question?.id !== task().question?.id))}
+                onAnswer={!disabled() && !answeringChild() ? () => answerChild(task()) : undefined}
+              />}</Show>
               <Show when={blockedReason()}>
                 {(reason) => (
                   <box paddingLeft={1} flexShrink={0}>
@@ -1917,7 +1935,8 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                 open={composer.open}
                 defaultTab={composer.tab}
                 onClose={() => setComposer("open", false)}
-                prompt={composer.open && !disabled() ? <SessionPrompt /> : undefined}
+                onSubagentAnswer={!subagent() ? answerChild : undefined}
+                prompt={composer.open && !disabled() && !answeringChild() ? <SessionPrompt /> : undefined}
               /></Show>
               <Switch>
                 <Match when={activeGuardrailRequest()}>{(request) => <GuardrailPrompt request={request()} />}</Match>
@@ -1946,9 +1965,24 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                 </Match>
                 <Match when={session()?.parentID && !btw()}>{null}</Match>
                 <Match when={!disabled() && !composer.open}>
-                  <SessionPrompt />
+                  <SessionPrompt visible={!answeringChild()} />
                 </Match>
               </Switch>
+              <Show when={answeringChild()?.question?.id} keyed>
+                {(questionID) => {
+                  const childID = answeringChild()!.sessionID
+                  const close = () => {
+                    if (answeringChild()?.sessionID === childID && answeringChild()?.question?.id === questionID)
+                      setAnsweringChild(undefined)
+                  }
+                  return <SubagentAnswerComposer
+                    task={childAnswer()!}
+                    enabled={!disabled() && !composer.open}
+                    onClose={close}
+                    onAnswered={close}
+                  />
+                }}
+              </Show>
               <Show when={subagent() && !blockedQuestion()}>
                 <SubagentEconomicsSurface economics={economics()} />
               </Show>
@@ -1986,21 +2020,21 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     </context.Provider>
   )
 
-  function SessionPrompt() {
+  function SessionPrompt(props: { visible?: boolean }) {
     return (
       <pluginRuntime.Slot
         name="session_prompt"
         mode="replace"
         session_id={route.sessionID}
-        visible={true}
-        disabled={false}
+        visible={props.visible !== false}
+        disabled={props.visible === false}
         on_submit={toBottom}
         ref={bind}
       >
         <Prompt
-          visible={true}
+          visible={props.visible !== false}
           ref={bind}
-          disabled={false}
+          disabled={props.visible === false}
           submitDisabled={!sessionReady()}
           onSubmit={toBottom}
           sessionID={route.sessionID}

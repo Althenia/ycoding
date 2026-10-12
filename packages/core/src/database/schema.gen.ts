@@ -989,6 +989,9 @@ export default {
       )
       yield* tx.run(`CREATE INDEX \`session_time_updated_id_idx\` ON \`session\` (\`time_updated\`,\`id\`);`)
       yield* tx.run(
+        `CREATE INDEX \`session_active_goal_idx\` ON \`session\` (\`id\`) WHERE json_extract("session"."autonomy", '$.goal.status') = 'active';`,
+      )
+      yield* tx.run(
         `CREATE INDEX \`session_project_time_updated_id_idx\` ON \`session\` (\`project_id\`,\`time_updated\`,\`id\`);`,
       )
       yield* tx.run(

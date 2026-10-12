@@ -85,16 +85,15 @@ export const latest = Effect.fn("SessionCompletion.latest")(function* (
   )
     return yield* Effect.die(new RangeError("Invalid completion page"))
   const latest = db
-    .select({ aggregateID: EventTable.aggregate_id, seq: sql<number>`max(${EventTable.seq})`.as("seq") })
+    .select({ id: EventTable.id })
     .from(EventTable)
-    .where(eq(EventTable.type, versioned(SessionEvent.Work.Completed)))
-    .groupBy(EventTable.aggregate_id)
-    .as("latest_completion")
+    .where(and(eq(EventTable.aggregate_id, SessionTable.id), eq(EventTable.type, versioned(SessionEvent.Work.Completed))))
+    .orderBy(desc(EventTable.seq))
+    .limit(1)
   const rows = yield* db
     .select({ id: EventTable.id, seq: EventTable.seq, created: EventTable.created, data: EventTable.data })
-    .from(EventTable)
-    .innerJoin(latest, and(eq(EventTable.aggregate_id, latest.aggregateID), eq(EventTable.seq, latest.seq)))
-    .innerJoin(SessionTable, eq(SessionTable.id, EventTable.aggregate_id))
+    .from(SessionTable)
+    .innerJoin(EventTable, eq(EventTable.id, sql`(${latest})`))
     .where(
       and(isNull(SessionTable.parent_id), input.after === undefined ? undefined : gt(SessionTable.id, input.after)),
     )

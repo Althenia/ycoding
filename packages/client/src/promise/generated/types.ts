@@ -329,6 +329,27 @@ export type GuardrailCounter1 = { id: string; current: number; limit: number; sc
 
 export type GuardrailRisk = { level: number; label: string; score: number; metric: "confidence" | "probability" }
 
+export type SessionCapturedChangesInput = {
+  id: string
+  type: "user" | "synthetic" | "assistant"
+  metadata?: { kind?: string; questionID?: string }
+  content?: Array<{
+    type: "tool"
+    id?: string
+    name: string
+    state: {
+      status?: string
+      input?: { questionID?: string }
+      structured?: {
+        files?: Array<{ file?: string; patch: string; status?: string }>
+        sessionID?: string
+        action?: string
+        task?: { sessionID?: string }
+      }
+    }
+  }>
+}
+
 export type ModelCapabilities = { tools: boolean; input: Array<string>; output: Array<string> }
 
 export type ModelVariant = {
@@ -1821,6 +1842,8 @@ export type GuardrailAsked = {
     metadata?: { [x: string]: JsonValue }
   }
 }
+
+export type SessionCapturedChangesPage = { data: Array<SessionCapturedChangesInput>; next?: number }
 
 export type ModelCost = {
   tier?: { type: "context"; size: number }
@@ -5488,6 +5511,14 @@ export type GuardrailRequestReplyOutput = void
 export type MessageListInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 
 export type MessageListOutput = SessionMessagesResponse["data"]
+
+export type MessageCapturedInputsInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly after?: { readonly after?: number | undefined; readonly limit?: number | undefined }["after"]
+  readonly limit?: { readonly after?: number | undefined; readonly limit?: number | undefined }["limit"]
+}
+
+export type MessageCapturedInputsOutput = SessionCapturedChangesPage
 
 export type ModelListInput = {
   readonly location?: {

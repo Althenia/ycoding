@@ -1,6 +1,7 @@
 import { expect } from "bun:test"
 import { eq } from "drizzle-orm"
 import { Effect, Layer } from "effect"
+import { Statement } from "effect/unstable/sql"
 import { Database } from "@ycoding-ai/core/database/database"
 import { EventRuntime } from "@ycoding-ai/core/event"
 import { EventSequenceTable, EventTable } from "@ycoding-ai/core/event/sql"
@@ -274,6 +275,48 @@ it.effect("uses source-owned sequence fences across protected-state ABA transiti
     })
 
     expect("project_artifacts" in (yield* service.load(sessionID)).sources).toBe(false)
+  }),
+)
+
+it.effect("bounds latest protected-state sequence probes to one database row", () =>
+  Effect.gen(function* () {
+    yield* seed
+    const db = (yield* Database.Service).db
+    const types = [SessionEvent.InstructionsUpdated, SessionEvent.InputAdmitted, SessionEvent.Forked]
+    yield* db
+      .insert(EventTable)
+      .values(
+        types.flatMap((event, source) =>
+          Array.from({ length: 40 }, (_, index) => ({
+            id: EventRuntime.ID.make(`evt_probe_${source}_${index}`),
+            aggregate_id: sessionID,
+            seq: 21 + source * 40 + index,
+            created: index,
+            type: EventRuntime.versionedType(event.type, event.durable.version),
+            data: {},
+          })),
+        ),
+      )
+      .run()
+      .pipe(Effect.orDie)
+    const queries: Array<{ sql: string; params: ReadonlyArray<unknown> }> = []
+    const captured = yield* SessionLiveState.captureDatabase(db, sessionID).pipe(
+      Effect.provideService(Statement.CurrentTransformer, (statement) =>
+        Effect.sync(() => {
+          const [sql, params] = statement.compile()
+          if (sql.includes('from "event"')) queries.push({ sql, params })
+          return statement
+        }),
+      ),
+    )
+    expect(captured.sources.instructions.sequence).toBe(60)
+    expect(captured.sources.pending_work.sequence).toBe(100)
+    expect(captured.sources.permissions.sequence).toBe(140)
+    expect(queries).toHaveLength(3)
+    for (const query of queries) {
+      expect(query.sql).toContain('order by "event"."seq" desc limit ?')
+      expect(query.params.at(-1)).toBe(1)
+    }
   }),
 )
 

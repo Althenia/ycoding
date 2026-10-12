@@ -299,7 +299,7 @@ function defaultInvalidation(
   return "prefix-changed"
 }
 
-const rowRecord = (row: typeof SessionProviderRequestTable.$inferSelect): ProviderRequest.Record => ({
+export const rowRecord = (row: typeof SessionProviderRequestTable.$inferSelect): ProviderRequest.Record => ({
   id: row.id,
   sessionID: row.session_id,
   ...(row.input_id === null ? {} : { inputID: row.input_id }),

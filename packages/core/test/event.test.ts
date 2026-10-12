@@ -103,8 +103,137 @@ const it = testEffect(
   ]),
 )
 const itWithoutLocation = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node])))
+const queueSnapshots: ReadonlyArray<number>[] = []
+const itObserved = testEffect(
+  AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, Location.node]), [
+    [Location.node, locationLayer],
+    [EventRuntime.node, EventRuntime.layerWith({ onLiveQueueChange: (queued) => queueSnapshots.push(queued) })],
+  ]),
+)
 
 describe("EventRuntime", () => {
+  for (const subscription of ["typed", "multiple", "all"] as const) {
+    itObserved.live(
+      `does not retain other Locations${subscription === "multiple" ? " or unrelated types" : ""} behind a blocked ${subscription} subscriber`,
+      () =>
+        Effect.gen(function* () {
+          queueSnapshots.length = 0
+          const events = yield* EventRuntime.Service
+          const entered = yield* Deferred.make<void>()
+          const release = yield* Deferred.make<void>()
+          const received: string[] = []
+          const consumer = yield* (
+            subscription === "all"
+              ? events.subscribe()
+              : subscription === "typed"
+                ? events.subscribe(Message)
+                : events.subscribe([Message, CountMessage])
+          ).pipe(
+            Stream.take(2),
+            Stream.runForEach((event) =>
+              Effect.gen(function* () {
+                if (event.type !== Message.type) return
+                const data = Schema.decodeUnknownSync(Message.data)(event.data)
+                received.push(data.text)
+                if (data.text !== "first") return
+                yield* Deferred.succeed(entered, undefined)
+                yield* Deferred.await(release)
+              }),
+            ),
+            Effect.forkScoped({ startImmediately: true }),
+          )
+          yield* events.publish(Message, { text: "first" })
+          yield* Deferred.await(entered)
+          for (let index = 0; index < 16; index++) {
+            yield* events.publish(
+              Message,
+              { text: `other ${index}` },
+              {
+                location: Location.Ref.make({ directory: AbsolutePath.make("elsewhere") }),
+              },
+            )
+            if (subscription === "multiple") yield* events.publish(GlobalMessage, { text: `unrelated ${index}` })
+          }
+          expect(queueSnapshots.at(-1)).toEqual([0])
+          yield* events.publish(Message, { text: "second" })
+          expect(queueSnapshots.at(-1)).toEqual([1])
+          yield* Deferred.succeed(release, undefined)
+          yield* Fiber.join(consumer)
+          expect(received).toEqual(["first", "second"])
+          expect(queueSnapshots.at(-1)).toEqual([])
+        }),
+    )
+  }
+
+  itObserved.live("releases matching queued payloads when a blocked subscriber is interrupted", () =>
+    Effect.gen(function* () {
+      queueSnapshots.length = 0
+      const events = yield* EventRuntime.Service
+      const entered = yield* Deferred.make<void>()
+      const consumer = yield* events.subscribe([Message, CountMessage]).pipe(
+        Stream.runForEach(() => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never))),
+        Effect.forkScoped({ startImmediately: true }),
+      )
+      yield* events.publish(Message, { text: "blocked" })
+      yield* Deferred.await(entered)
+      yield* events.publish(Message, { text: "queued" })
+      expect(queueSnapshots.at(-1)).toEqual([1])
+      yield* Fiber.interrupt(consumer)
+      expect(queueSnapshots.at(-1)).toEqual([])
+      const next = yield* events
+        .subscribe(Message)
+        .pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped({ startImmediately: true }))
+      yield* events.publish(Message, { text: "new subscription" })
+      expect((yield* Fiber.join(next)).map((event) => event.data.text)).toEqual(["new subscription"])
+      expect(queueSnapshots.at(-1)).toEqual([])
+    }),
+  )
+
+  itObserved.live("delivers every matching live and durable event in order after a subscriber stalls", () =>
+    Effect.gen(function* () {
+      queueSnapshots.length = 0
+      const events = yield* EventRuntime.Service
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const sessionID = Session.ID.create()
+      const received: string[] = []
+      const expected = ["count:0"]
+      const consumer = yield* events.subscribe([CountMessage, DurableMessage]).pipe(
+        Stream.take(129),
+        Stream.runForEach((event) =>
+          Effect.gen(function* () {
+            received.push(event.type === CountMessage.type ? `count:${event.data.count}` : event.data.title)
+            if (received.length !== 1) return
+            yield* Deferred.succeed(entered, undefined)
+            yield* Deferred.await(release)
+          }),
+        ),
+        Effect.forkScoped({ startImmediately: true }),
+      )
+      yield* events.publish(CountMessage, { count: 0 })
+      yield* Deferred.await(entered)
+      for (let index = 1; index <= 128; index++) {
+        expected.push(index % 2 === 0 ? `count:${index}` : `durable:${index}`)
+        if (index % 2 === 0) {
+          yield* events.publish(CountMessage, { count: index })
+          continue
+        }
+        yield* events.publish(DurableMessage, durableData(sessionID, `durable:${index}`))
+      }
+      expect(queueSnapshots.at(-1)).toEqual([128])
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.join(consumer)
+      expect(received).toEqual(expected)
+      expect(queueSnapshots.at(-1)).toEqual([])
+      const durable = yield* events.log({ aggregateID: sessionID }).pipe(Stream.runCollect)
+      expect(
+        durable.flatMap((event) =>
+          EventRuntime.isSynced(event) ? [] : [Schema.decodeUnknownSync(DurableMessage.data)(event.data).title],
+        ),
+      ).toEqual(expected.filter((value) => value.startsWith("durable:")))
+    }),
+  )
+
   it.effect("publishes a durable batch with consecutive sequences and rolls back without notifications", () =>
     Effect.gen(function* () {
       const events = yield* EventRuntime.Service

@@ -22,6 +22,18 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.10.3",
+    date: "2026-10-12",
+    title: "Bounded reads and parent-session subagent answers",
+    tags: ["Changed", "Fixed"],
+    changes: [
+      { tag: "Changed", text: "Answer a waiting subagent's full question from its parent Session's notice or the open Subagents list. Your literal answer is sent to the child question—not as a prompt or command—and resumes the child; your ordinary draft is kept and pending approvals still take precedence." },
+      { tag: "Changed", text: "Large Session skill, diagnostic, usage, and captured-change reads now use bounded batches while preserving their complete results and totals. This does not limit full model context or canonical transcript copy and export." },
+      { tag: "Fixed", text: "Captured shell output stays ordered and drains before command completion, even when output consumers fall behind." },
+      { tag: "Changed", text: "Live Session updates are admitted only for the matching event type and Location, so unrelated project events do not accumulate in the Session listener." },
+    ],
+  },
+  {
     version: "0.10.2",
     date: "2026-10-12",
     title: "Prompt drafts, quieter guardrails, and mobile fixes",

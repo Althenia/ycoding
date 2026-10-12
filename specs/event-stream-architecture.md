@@ -5,7 +5,7 @@
 The public HTTP event stream uses one Server-scoped encoded feed with one independently bounded queue per connection.
 
 ```text
-Core EventV2.listen()
+Core EventRuntime.listen()
           |
           | one global subscription
           v
@@ -192,9 +192,15 @@ Because method, path, schema, and wire representation do not change:
 - TUI decoding and reconnect behavior do not change;
 - client regeneration is not required.
 
-## Core Cleanup
+## Core Subscription Boundary
 
-The Server no longer uses `EventV2.liveBounded`, so Core removes that dead helper and its transport-specific overflow error. The feed registers one observer through the existing `listen` interface; other listeners are unchanged.
+The HTTP EventFeed registers one global observer through `EventRuntime.listen`; its 4,096-frame per-connection queues and independent overflow behavior remain separate from Core's in-process `EventRuntime.subscribe` streams.
+
+### Core typed subscriptions
+
+`EventRuntime.subscribe()` is a volatile in-process stream, distinct from the public HTTP feed. It accepts no filter, one event definition, or a nonempty list of definitions. At stream acquisition it captures the current Location when one exists. Publication filters by event type and excludes an event whose explicit Location differs from the captured Location before offering it to the subscriber queue; events without a Location remain visible.
+
+Each Core subscription owns an unbounded queue. Matching events remain queued in publication order while a consumer is stalled; this subscription path has no queue-capacity overflow or drop behavior. Releasing the stream scope unregisters the subscriber and shuts down its queue. The stream starts at subscription and has no replay across disconnection; consumers that require durable recovery use the aggregate `log` contract.
 
 Transactional projector registration is unrelated and remains unchanged.
 
@@ -224,6 +230,7 @@ Behavioral tests cover:
 - healthy delivery of events after another subscriber overflows;
 - filtering internal events before capacity;
 - failure of current subscribers after malformed public encoding;
-- continued delivery to later subscribers after an encoding failure.
+- continued delivery to later subscribers after an encoding failure;
+- Core typed subscriptions filter by event definition and captured Location before queue admission, preserve matching event order while a consumer stalls, and release queued payloads when their scope ends.
 
-Package typechecks and the existing Core event/event-logger suites protect the Core interface migration.
+The Core subscription tests run with `bun test test/event.test.ts` from `packages/core`; the Server feed tests run with `bun test test/event-feed.test.ts` from `packages/server`.

@@ -163,7 +163,7 @@ test("exposes every standard HTTP API group", () => {
   expect(Object.keys(client.keepAwake)).toEqual(["get", "set"])
   expect(Object.keys(client.debug)).toEqual(["location"])
   expect(Object.keys(client.debug.location)).toEqual(["list", "evict"])
-  expect(Object.keys(client.message)).toEqual(["list"])
+  expect(Object.keys(client.message)).toEqual(["list", "capturedInputs"])
   expect(Object.keys(client.integration)).toEqual(["list", "get", "wellknown", "connect", "oauth", "command"])
   expect(Object.keys(client.integration.wellknown)).toEqual(["add"])
   expect(Object.keys(client.integration.connect)).toEqual(["key"])

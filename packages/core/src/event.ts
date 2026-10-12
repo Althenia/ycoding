@@ -1,6 +1,6 @@
 export * as EventRuntime from "./event"
 
-import { Cause, Context, DateTime, Effect, Layer, Option, PubSub, Schema, Stream } from "effect"
+import { Cause, Context, DateTime, Effect, Layer, Option, PubSub, Queue, Schema, Stream } from "effect"
 import { Event } from "@ycoding-ai/schema/event"
 import type { Data, Definition, Payload } from "@ycoding-ai/schema/event"
 import type { EventLog } from "@ycoding-ai/schema/event-log"
@@ -174,6 +174,7 @@ export class Service extends Context.Service<Service, Interface>()("@ycoding/Eve
 
 export interface LayerOptions {
   readonly beforeAggregateRead?: (aggregateID: string) => Effect.Effect<void>
+  readonly onLiveQueueChange?: (queued: ReadonlyArray<number>) => void
   /** Maximum durable rows read per page while replaying or tailing an aggregate log. */
   readonly logReadPageSize?: number
 }
@@ -183,33 +184,31 @@ export const layerWith = (options?: LayerOptions) =>
     Service,
     Effect.gen(function* () {
       const pubsub = {
-        live: yield* PubSub.unbounded<Payload>(),
         durable: new Map<string, Set<PubSub.PubSub<void>>>(),
-        typed: new Map<string, PubSub.PubSub<Payload>>(),
       }
+      const subscribers = new Set<{
+        readonly queue: Queue.Queue<Payload>
+        readonly types?: ReadonlySet<string>
+        readonly location?: Location.Ref
+      }>()
       const projectors = new Map<string, Subscriber[]>()
       const listeners = new Array<Subscriber>()
+      const observeQueues = options?.onLiveQueueChange
+        ? () => options.onLiveQueueChange?.(Array.from(subscribers, (subscriber) => Queue.sizeUnsafe(subscriber.queue)))
+        : undefined
       const { db } = yield* Database.Service
       const logReadPageSize = options?.logReadPageSize ?? 512
 
-      const getOrCreate = (definition: Definition) =>
-        Effect.gen(function* () {
-          const existing = pubsub.typed.get(definition.type)
-          if (existing) return existing
-          const created = yield* PubSub.unbounded<Payload>()
-          pubsub.typed.set(definition.type, created)
-          return created
-        })
-
       yield* Effect.addFinalizer(() =>
         Effect.gen(function* () {
-          yield* PubSub.shutdown(pubsub.live)
+          yield* Effect.forEach(subscribers, (subscriber) => Queue.shutdown(subscriber.queue), { discard: true })
+          subscribers.clear()
+          observeQueues?.()
           yield* Effect.forEach(
             pubsub.durable.values(),
             (pubsubs) => Effect.forEach(pubsubs, PubSub.shutdown, { discard: true }),
             { discard: true },
           )
-          yield* Effect.forEach(pubsub.typed.values(), PubSub.shutdown, { discard: true })
         }),
       )
 
@@ -420,9 +419,18 @@ export const layerWith = (options?: LayerOptions) =>
             (listener) => (isolateListeners ? observe(event, listener) : listener(event)),
             { discard: true },
           )
-          const typed = pubsub.typed.get(event.type)
-          if (typed) yield* PubSub.publish(typed, event)
-          yield* PubSub.publish(pubsub.live, event)
+          for (const subscriber of subscribers) {
+            if (subscriber.types && !subscriber.types.has(event.type)) continue
+            if (
+              subscriber.location &&
+              event.location &&
+              (subscriber.location.directory !== event.location.directory ||
+                subscriber.location.workspaceID !== event.location.workspaceID)
+            )
+              continue
+            Queue.offerUnsafe(subscriber.queue, event)
+          }
+          observeQueues?.()
         })
       }
 
@@ -601,41 +609,41 @@ export const layerWith = (options?: LayerOptions) =>
           .pipe(Effect.orDie)
       }
 
-      const local = <A extends Payload>(stream: Stream.Stream<A>) =>
-        Stream.unwrap(
-          Effect.serviceOption(Location.Service).pipe(
-            Effect.map((location) =>
-              Option.match(location, {
-                onNone: () => stream,
-                onSome: (location) =>
-                  stream.pipe(
-                    Stream.filter(
-                      (event) =>
-                        !event.location ||
-                        (event.location.directory === location.directory &&
-                          event.location.workspaceID === location.workspaceID),
-                    ),
-                  ),
-              }),
-            ),
-          ),
-        )
-
       function subscribe(): Stream.Stream<Payload>
       function subscribe<D extends Definition>(definition: D): Stream.Stream<Payload<D>>
       function subscribe<const D extends readonly [Definition, ...Definition[]]>(
         definitions: D,
       ): Stream.Stream<SubscribePayload<D>>
       function subscribe(input?: Definition | readonly Definition[]): Stream.Stream<Payload> {
-        if (input === undefined) return streamLive()
-        if (isDefinition(input)) {
-          return local(Stream.unwrap(getOrCreate(input).pipe(Effect.map((pubsub) => Stream.fromPubSub(pubsub)))))
-        }
-        const types = new Set(input.map((definition) => definition.type))
-        return streamLive().pipe(Stream.filter((event) => types.has(event.type)))
+        return Stream.unwrap(
+          Effect.gen(function* () {
+            const queue = yield* Queue.unbounded<Payload>()
+            const location = Option.getOrUndefined(yield* Effect.serviceOption(Location.Service))
+            const subscriber = {
+              queue,
+              types:
+                input === undefined
+                  ? undefined
+                  : new Set(isDefinition(input) ? [input.type] : input.map((definition) => definition.type)),
+              location: location ? { directory: location.directory, workspaceID: location.workspaceID } : undefined,
+            }
+            yield* Effect.acquireRelease(
+              Effect.sync(() => {
+                subscribers.add(subscriber)
+                observeQueues?.()
+              }),
+              () =>
+                Effect.sync(() => subscribers.delete(subscriber)).pipe(
+                  Effect.andThen(Queue.shutdown(queue)),
+                  Effect.andThen(Effect.sync(() => observeQueues?.())),
+                ),
+            )
+            return observeQueues
+              ? Stream.fromQueue(queue).pipe(Stream.tap(() => Effect.sync(observeQueues)))
+              : Stream.fromQueue(queue)
+          }),
+        )
       }
-
-      const streamLive = (): Stream.Stream<Payload> => local(Stream.fromPubSub(pubsub.live))
 
       const readAfter = (
         aggregateID: string,

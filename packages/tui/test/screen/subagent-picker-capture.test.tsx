@@ -109,8 +109,9 @@ test("captures populated subagent picker states at reference terminal dimensions
         expectAt(lines, 64, 3, "Enter attach")
         expectAt(lines, 64, 18, "↑↓ move")
         expectAt(lines, 64, 28, "⌃x k cancel")
-        expectAt(lines, 64, 43, "r answer")
-        expectAt(lines, 64, 54, "Esc close")
+        expectAt(lines, 64, 43, "p pin")
+        expectAt(lines, 64, 51, "r answer")
+        expectAt(lines, 64, 62, "Esc close")
       }
       const inactiveHeading = lines.findIndex((line) => line.includes("INACTIVE"))
       const hints = lines.findIndex((line, index) => index > inactiveHeading && line.includes("Enter attach"))

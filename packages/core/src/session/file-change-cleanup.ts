@@ -1,6 +1,6 @@
 export * as SessionFileChangeCleanup from "./file-change-cleanup"
 
-import { inArray, lt } from "drizzle-orm"
+import { and, asc, eq, gt, inArray, lt, or, sql } from "drizzle-orm"
 import { Context, Duration, Effect, Layer, Schedule } from "effect"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
@@ -23,20 +23,43 @@ const layer = Layer.effect(
     return Service.of({
       cleanup: Effect.fn("SessionFileChangeCleanup.cleanup")(function* (now = Date.now()) {
         const active = new Set(yield* execution.active)
-        const sessions = yield* db
-          .select({ id: SessionTable.id })
-          .from(SessionTable)
-          .where(lt(SessionTable.time_updated, now - Duration.toMillis(retention)))
-          .all()
-          .pipe(Effect.orDie)
-        const expired = sessions.map((session) => session.id).filter((sessionID) => !active.has(sessionID))
-        if (expired.length === 0) return 0
-        return yield* db
-          .delete(SessionFileChangeTable)
-          .where(inArray(SessionFileChangeTable.session_id, expired))
-          .returning({ sessionID: SessionFileChangeTable.session_id })
-          .all()
-          .pipe(Effect.orDie, Effect.map((rows) => rows.length))
+        let cursor: { id: (typeof SessionTable.$inferSelect)["id"]; updated: number } | undefined
+        let deleted = 0
+        while (true) {
+          const sessions = yield* db
+            .select({ id: SessionTable.id, updated: SessionTable.time_updated })
+            .from(SessionTable)
+            .where(
+              and(
+                lt(SessionTable.time_updated, now - Duration.toMillis(retention)),
+                cursor
+                  ? or(
+                      gt(SessionTable.time_updated, cursor.updated),
+                      and(eq(SessionTable.time_updated, cursor.updated), gt(SessionTable.id, cursor.id)),
+                    )
+                  : undefined,
+              ),
+            )
+            .orderBy(asc(SessionTable.time_updated), asc(SessionTable.id))
+            .limit(200)
+            .all()
+            .pipe(Effect.orDie)
+          const expired = sessions.map((session) => session.id).filter((id) => !active.has(id))
+          if (expired.length > 0)
+            deleted += yield* db
+              .transaction(() =>
+                Effect.gen(function* () {
+                  yield* db
+                    .delete(SessionFileChangeTable)
+                    .where(inArray(SessionFileChangeTable.session_id, expired))
+                    .run()
+                  return (yield* db.get<{ count: number }>(sql`SELECT changes() AS count`))!.count
+                }),
+              )
+              .pipe(Effect.orDie)
+          if (sessions.length < 200) return deleted
+          cursor = sessions.at(-1)!
+        }
       }),
     })
   }),

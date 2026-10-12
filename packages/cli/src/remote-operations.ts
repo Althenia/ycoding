@@ -76,7 +76,7 @@ const maxCapturedCacheEntries = 32
 const maxCapturedChildReads = 4
 const directoryPermissionTtlMs = 30_000
 
-type CapturedGroup = ReturnType<typeof summarizeCapturedChanges>[number]["files"][number] & { readonly placementMessageID: string }
+type CapturedGroup = RemoteCapturedChangesPage["data"][number]
 type CapturedEntry = {
   readonly parentKey: string
   readonly members: ReadonlyMap<string, string | null>
@@ -1281,10 +1281,7 @@ async function capturedChangesPage(input: OperationInput, owner: SessionInfo, se
     }
   }
   const files: Array<RemoteCapturedChangesPage["data"][number]> = []
-  for (const original of groups.slice(offset)) {
-    const group = JSON.stringify(original).length > maxCapturedPageChars
-      ? { ...original, additions: 0, deletions: 0, files: [{ path: original.path, diff: "", additions: 0, deletions: 0, status: original.status, unavailable: true }] }
-      : original
+  for (const group of groups.slice(offset)) {
     if (files.length >= maxCapturedFilesPerPage || files.length > 0 && JSON.stringify([...files, group]).length > maxCapturedPageChars) break
     files.push(group)
   }
@@ -1299,33 +1296,36 @@ async function capturedChangesPage(input: OperationInput, owner: SessionInfo, se
 
 async function capturedGroups(input: OperationInput, owner: SessionInfo, sessionID: string, location: LocalLocation) {
   const cache = input.cache?.capturedChanges
-  const parentKey = cache === undefined ? undefined : await eventPosition(input.local, sessionID, location)
-  const cached = parentKey === undefined ? undefined : cache?.get(sessionID)
+  const parentKey = await eventPosition(input.local, sessionID, location)
+  const cached = cache?.get(sessionID)
   const checked = new Map<string, Awaited<ReturnType<typeof capturedMember>>>()
   if (cache !== undefined && cached !== undefined && cached.parentKey === parentKey) {
-    const members = await limited([...cached.members.keys()], (childID) => capturedMember(input, owner, childID, true))
+    const members = await limited([...cached.members.keys()], (childID) => capturedMember(input, owner, childID))
     for (const member of members) checked.set(member.childID, member)
     if (members.every((member) => member.key === cached.members.get(member.childID))) {
+      if (!await capturedStable(input, owner, parentKey, members))
+        throw new OperationError("internal_error", "Captured changes changed while reading; refresh to try again")
       cache.delete(sessionID)
       cache.set(sessionID, cached)
       return cached
     }
   }
 
-  const parent = await input.local.messages(sessionID, location)
+  const parent = await input.local.capturedInputs(sessionID, location)
   const members = await limited(owner.parentID === undefined ? capturedChildSessionIDs(parent) : [], async (childID) => {
-    const member = checked.get(childID) ?? await capturedMember(input, owner, childID, cache !== undefined)
-    return { ...member, messages: member.child === undefined ? undefined : await input.local.messages(member.child.id, locationInfo(member.child)) }
+    const member = checked.get(childID) ?? await capturedMember(input, owner, childID)
+    return { ...member, messages: member.child === undefined ? undefined : await input.local.capturedInputs(member.child.id, locationInfo(member.child)) }
   })
   const children = new Map(members.flatMap((member) => member.messages === undefined ? [] : [[member.childID, member.messages] as const]))
   const groups = summarizeCapturedChanges(parent, children, (assistantMessageID, callID) => SessionOrchestrationIdentity.send(sessionID, assistantMessageID, callID))
     .flatMap((unit) => unit.files.map((file) => ({ placementMessageID: unit.placementMessageID, ...file })))
+    .map((original) => JSON.stringify(original).length > maxCapturedPageChars
+      ? { ...original, additions: 0, deletions: 0, files: [{ path: original.path, diff: "", additions: 0, deletions: 0, status: original.status, unavailable: true }] }
+      : original)
   const digest = createHash("sha256").update(sessionID).update(JSON.stringify(groups)).digest("hex")
-  const stable = cache !== undefined && parentKey !== undefined &&
-    await eventPosition(input.local, sessionID, location) === parentKey &&
-    (await limited(members, async (member) => member.child === undefined || member.key !== undefined &&
-      await eventPosition(input.local, member.child.id, locationInfo(member.child)) === member.key)).every(Boolean)
-  if (cache !== undefined && parentKey !== undefined && stable) {
+  if (!await capturedStable(input, owner, parentKey, members))
+    throw new OperationError("internal_error", "Captured changes changed while reading; refresh to try again")
+  if (cache !== undefined) {
     cache.delete(sessionID)
     cache.set(sessionID, { parentKey, members: new Map(members.map((member) => [member.childID, member.key ?? null] as const)), groups, digest })
     if (cache.size > maxCapturedCacheEntries) cache.delete(cache.keys().next().value!)
@@ -1333,17 +1333,32 @@ async function capturedGroups(input: OperationInput, owner: SessionInfo, session
   return { groups, digest }
 }
 
-async function capturedMember(input: OperationInput, owner: SessionInfo, childID: string, keyed: boolean) {
+async function capturedStable(input: OperationInput, owner: SessionInfo, parentKey: string, members: readonly Awaited<ReturnType<typeof capturedMember>>[]) {
+  const current = await input.sessions.verify(owner.id)
+  if (current === undefined || current.parentID !== owner.parentID || JSON.stringify(locationInfo(current)) !== JSON.stringify(locationInfo(owner)) ||
+    await eventPosition(input.local, owner.id, locationInfo(current)) !== parentKey) return false
+  return (await limited(members, async (member) => {
+    if (member.child === undefined) return true
+    const current = await capturedMember(input, owner, member.childID)
+    return current.key === member.key && JSON.stringify(current.child === undefined ? null : locationInfo(current.child)) === JSON.stringify(member.child === undefined ? null : locationInfo(member.child))
+  })).every(Boolean)
+}
+
+async function capturedMember(input: OperationInput, owner: SessionInfo, childID: string) {
   const child = await input.sessions.verify(childID)
   if (child?.parentID !== owner.id || child.agent === "btw") return { childID, key: null }
-  return { childID, child, key: keyed ? await eventPosition(input.local, child.id, locationInfo(child)) : undefined }
+  return { childID, child, key: await eventPosition(input.local, child.id, locationInfo(child)) }
 }
 
 async function eventPosition(local: LocalServer, sessionID: string, location: LocalLocation) {
   const snapshot = await local.snapshot(sessionID, location, { limit: 1 })
   const epoch = field(snapshot, "sourceEpoch")
-  const seq = field(field(snapshot, "watermark"), "seq")
-  return typeof epoch === "string" && typeof seq === "number" ? `${epoch}:${seq}` : undefined
+  const watermark = field(snapshot, "watermark")
+  const seq = field(watermark, "seq")
+  if (typeof epoch !== "string" || epoch.length === 0 || typeof watermark !== "object" || watermark === null || Array.isArray(watermark) ||
+    (seq === undefined ? field(watermark, "type") !== "log.synced" || field(watermark, "aggregateID") !== sessionID : typeof seq !== "number" || !Number.isSafeInteger(seq) || seq < 0))
+    throw new OperationError("internal_error", "Captured change position is unavailable; refresh to try again")
+  return `${epoch}:${seq === undefined ? "empty" : seq}`
 }
 
 async function limited<Item, Result>(items: readonly Item[], read: (item: Item) => Promise<Result>) {

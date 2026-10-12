@@ -67,7 +67,8 @@ const catalog = Layer.mock(Catalog.Service, {
     forConnection: (model) => Effect.succeed(model),
     get: (providerID, modelID) => {
       const cost =
-        providerID === Provider.ID.make("openai") && modelID === CatalogModel.ID.make("provider-priced")
+        providerID === Provider.ID.make("openai") &&
+        (modelID === CatalogModel.ID.make("provider-priced") || modelID.startsWith("tier-priced"))
           ? 2
           : providerID === Provider.ID.openrouter &&
               ["anthropic/fallback-priced", "openai/provider-priced"].includes(modelID)
@@ -84,6 +85,16 @@ const catalog = Layer.mock(Catalog.Service, {
                   output: Money.USDPerMillionTokens.make(cost * 4),
                   cache: { read: Money.USDPerMillionTokens.zero, write: Money.USDPerMillionTokens.zero },
                 },
+                ...(modelID.startsWith("tier-priced")
+                  ? [
+                      {
+                        tier: { type: "context" as const, size: 2_000 },
+                        input: Money.USDPerMillionTokens.make(4),
+                        output: Money.USDPerMillionTokens.make(0),
+                        cache: { read: Money.USDPerMillionTokens.make(0), write: Money.USDPerMillionTokens.make(0) },
+                      },
+                    ]
+                  : []),
               ],
             },
       )
@@ -115,6 +126,191 @@ const it = testEffect(
 const location = Location.Ref.make({ directory: AbsolutePath.make(process.cwd()) })
 
 describe("Session.log", () => {
+  it.effect("returns encoded empty and helper-only usage reports with zero counters and absent unknown costs", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const events = yield* EventRuntime.Service
+      const empty = yield* session.usageReportAll({ group: "model" })
+      expect(empty.rows).toEqual([])
+      expect(empty.total).toEqual({
+        logical: 0,
+        physical: 0,
+        helpers: 0,
+        continued: 0,
+        fallback: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+      expect(Schema.encodeSync(ProviderRequest.Report)(empty)).toBeDefined()
+      const created = yield* session.create({ location })
+      yield* events.publish(SessionEvent.ProviderRequestRecorded, {
+        id: ProviderRequest.ID.make("prq_helper_only"),
+        sessionID: created.id,
+        source: "title",
+        agent: Agent.defaultID,
+        model: CatalogModel.Ref.make({ providerID: Provider.ID.make("custom"), id: CatalogModel.ID.make("unpriced") }),
+        routeID: "test",
+        promptCacheKey: "key",
+        systemDigest: "system",
+        toolDigest: "tools",
+        request: 1,
+        attempts: 1,
+        invalidation: "first-request",
+        continuation: "full",
+        tokens: { input: 1, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        time: DateTime.makeUnsafe(0),
+      })
+      const helper = yield* session.usageReportAll({ group: "model" })
+      expect(helper.total).toMatchObject({
+        logical: 1,
+        physical: 1,
+        helpers: 1,
+        continued: 0,
+        fallback: 0,
+        cacheReadReported: false,
+      })
+      expect(helper.rows[0]).toMatchObject({
+        logical: 1,
+        physical: 1,
+        helpers: 1,
+        continued: 0,
+        fallback: 0,
+        cacheReadReported: false,
+      })
+      expect(helper.total.cost).toBeUndefined()
+      expect(helper.rows[0]?.cost).toBeUndefined()
+      expect(Schema.encodeSync(ProviderRequest.Report)(helper)).toBeDefined()
+    }),
+  )
+  it.effect("preserves the first scoped model label when variant and profile share an encoded group key", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const events = yield* EventRuntime.Service
+      const db = (yield* Database.Service).db
+      const variant = yield* session.create({ location })
+      const profile = yield* session.create({ location })
+      for (const [index, item] of [variant, profile].entries()) {
+        yield* events.publish(SessionEvent.ProviderRequestRecorded, {
+          id: ProviderRequest.ID.make(`prq_collision_${index}`),
+          sessionID: item.id,
+          source: "step",
+          agent: Agent.defaultID,
+          model: CatalogModel.Ref.make({
+            providerID: Provider.ID.make("openai"),
+            id: CatalogModel.ID.make("model"),
+            ...(index === 0 ? { variant: CatalogModel.VariantID.make("high") } : { profile: "high" }),
+          }),
+          routeID: "test",
+          promptCacheKey: "key",
+          systemDigest: "system",
+          toolDigest: "tools",
+          request: 1,
+          attempts: 1,
+          invalidation: "first-request",
+          continuation: "full",
+          cost: Money.USD.make(0),
+          tokens: { input: 1, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          timing: { firstOutputMs: index === 0 ? 10 : 20 },
+          time: DateTime.makeUnsafe(0),
+        })
+        yield* db
+          .update(SessionTable)
+          .set({ time_updated: index === 0 ? 20 : 10 })
+          .where(eq(SessionTable.id, item.id))
+          .run()
+          .pipe(Effect.orDie)
+      }
+      const report = yield* session.usageReportAll({ group: "model" })
+      expect(report.rows).toMatchObject([
+        {
+          key: "openai/model/high",
+          label: "openai/model · high",
+          logical: 2,
+          speed: { samples: 2, firstOutputP50Ms: 10, firstOutputP95Ms: 20 },
+        },
+      ])
+      expect(report.rowCount).toBe(1)
+    }),
+  )
+  it.effect("keeps breadth-first family latest-request tie order and child-only scope", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const events = yield* EventRuntime.Service
+      const db = (yield* Database.Service).db
+      const root = yield* session.create({ id: Session.ID.make("ses_order_root"), location })
+      const first = yield* session.create({ id: Session.ID.make("ses_order_a"), parentID: root.id })
+      const second = yield* session.create({ id: Session.ID.make("ses_order_b"), parentID: root.id })
+      const firstChild = yield* session.create({ id: Session.ID.make("ses_order_a_child"), parentID: first.id })
+      const secondChild = yield* session.create({ id: Session.ID.make("ses_order_b_child"), parentID: second.id })
+      for (const item of [root, first, second, firstChild, secondChild]) {
+        yield* events.publish(SessionEvent.ProviderRequestRecorded, {
+          id: ProviderRequest.ID.make(`prq_${item.id}`),
+          sessionID: item.id,
+          source: "step",
+          agent: Agent.defaultID,
+          model: CatalogModel.Ref.make({ providerID: Provider.ID.make("openai"), id: CatalogModel.ID.make("model") }),
+          routeID: "test",
+          promptCacheKey: item.id.replace("ses_order_", ""),
+          systemDigest: "system",
+          toolDigest: "tools",
+          request: 1,
+          attempts: 1,
+          invalidation: "first-request",
+          continuation: "full",
+          cost: Money.USD.make(0),
+          tokens: { input: 1, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          time: DateTime.makeUnsafe(0),
+        })
+        yield* db
+          .update(SessionTable)
+          .set({ time_updated: 10 })
+          .where(eq(SessionTable.id, item.id))
+          .run()
+          .pipe(Effect.orDie)
+      }
+      const rootUsage = yield* session.usage(root.id)
+      expect(rootUsage.logical).toBe(5)
+      expect(rootUsage.latestNamespace).toBe("a_child")
+      const childUsage = yield* session.usage(first.id)
+      expect(childUsage.logical).toBe(1)
+      expect(childUsage.latestNamespace).toBe("a")
+    }),
+  )
+  it.effect("prices bounded historical pages per token tier and safely orders corrected groups", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const events = yield* EventRuntime.Service
+      const created = yield* session.create({ location })
+      for (let index = 0; index < 201; index += 1)
+        yield* events.publish(SessionEvent.ProviderRequestRecorded, {
+          id: ProviderRequest.ID.make(`prq_tier_${index}`),
+          sessionID: created.id,
+          source: "step",
+          agent: Agent.defaultID,
+          model: CatalogModel.Ref.make({
+            providerID: Provider.ID.make("openai"),
+            id: CatalogModel.ID.make("tier-priced'quoted"),
+          }),
+          routeID: "test",
+          promptCacheKey: "key",
+          systemDigest: "system",
+          toolDigest: "tools",
+          request: index + 1,
+          attempts: 1,
+          invalidation: "first-request",
+          continuation: "full",
+          tokens: { input: index % 2 === 0 ? 1_000 : 3_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          time: DateTime.makeUnsafe(index),
+        })
+      const report = yield* session.usageReportAll({ group: "model", sort: "cost", order: "desc", limit: 1 })
+      expect(report.rows).toHaveLength(1)
+      expect(report.rows[0]?.key).toBe("openai/tier-priced'quoted")
+      expect(report.rows[0]?.logical).toBe(201)
+      expect(report.rows[0]?.cost).toBeCloseTo(1.402, 12)
+      expect(report.total.cost).toBeCloseTo(1.402, 12)
+      expect(report.rows[0]?.costProvenance).toBe("current_catalog")
+      expect((yield* session.usageAll()).cost).toBeCloseTo(1.402, 12)
+    }),
+  )
   it.effect("reports speed from field-specific populations in both Session and global reports", () =>
     Effect.gen(function* () {
       const session = yield* Session.Service

@@ -1,6 +1,6 @@
 export * as SessionStore from "./store"
 
-import { and, eq, inArray, isNotNull, isNull } from "drizzle-orm"
+import { and, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
@@ -13,10 +13,21 @@ import { SessionMessageTable, SessionTable } from "./sql"
 import { SessionTask } from "./task"
 import { SessionProjector } from "./projector"
 import { fromRow } from "./info"
+import type { Info } from "./skill-status"
+import { SessionCacheDiagnostics } from "./cache-diagnostics"
+import { Money } from "@ycoding-ai/schema/money"
 
 export interface Interface {
   readonly get: (sessionID: Session.ID) => Effect.Effect<Session.Info | undefined>
   readonly context: (sessionID: Session.ID) => Effect.Effect<SessionMessage.Info[], MessageDecodeError>
+  readonly skills: (
+    sessionID: Session.ID,
+    instructionKeys?: ReadonlyArray<string>,
+  ) => Effect.Effect<Info[], MessageDecodeError>
+  readonly diagnostics: (
+    sessionID: Session.ID,
+    boundary?: SessionMessage.ID,
+  ) => Effect.Effect<Session.CacheDiagnostics | undefined, MessageDecodeError>
   readonly message: (
     messageID: SessionMessage.ID,
   ) => Effect.Effect<{ readonly sessionID: Session.ID; readonly message: SessionMessage.Info } | undefined>
@@ -41,6 +52,60 @@ const layer = Layer.effect(
       }),
       context: Effect.fn("SessionStore.context")(function* (sessionID) {
         return yield* SessionHistory.load(db, sessionID)
+      }),
+      skills: Effect.fn("SessionStore.skills")(function* (sessionID, instructionKeys) {
+        const { SessionSkillStatus } = yield* Effect.promise(() => import("./skill-status"))
+        return yield* SessionSkillStatus.load(db, sessionID, instructionKeys)
+      }),
+      diagnostics: Effect.fn("SessionStore.diagnostics")(function* (sessionID, boundary) {
+        const legacy = yield* SessionHistory.latestCompaction(db, sessionID)
+        const anchor = boundary
+          ? yield* db
+              .select({ seq: SessionMessageTable.seq })
+              .from(SessionMessageTable)
+              .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.id, boundary)))
+              .get()
+              .pipe(Effect.orDie)
+          : undefined
+        if (boundary && (!anchor || (legacy && anchor.seq < legacy.seq))) return undefined
+        const row = yield* db
+          .get<{ id: string; data: string }>(
+            sql`
+          SELECT id, json_patch('{}', json_object('model', json_extract(data, '$.model'),
+            'tokens', json_extract(data, '$.tokens'), 'cost', json_extract(data, '$.cost'),
+            'diagnostics', json_extract(data, '$.diagnostics'))) AS data
+          FROM session_message
+          WHERE session_id = ${sessionID} AND type = 'assistant' AND json_type(data, '$.tokens') = 'object'
+            AND seq >= ${legacy?.seq ?? 0} AND seq < ${anchor?.seq ?? Number.MAX_SAFE_INTEGER}
+            AND seq > coalesce((SELECT max(seq) FROM session_message
+              WHERE session_id = ${sessionID} AND type = 'compaction' AND json_extract(data, '$.status') = 'completed'
+                AND seq >= ${legacy?.seq ?? 0} AND seq < ${anchor?.seq ?? Number.MAX_SAFE_INTEGER}), -1)
+          ORDER BY seq DESC LIMIT 1
+        `,
+          )
+          .pipe(Effect.orDie)
+        if (!row) return undefined
+        const assistant = yield* Schema.decodeUnknownEffect(
+          Schema.fromJsonString(
+            Schema.Struct({
+              model: SessionMessage.Assistant.fields.model,
+              tokens: SessionMessage.Assistant.fields.tokens,
+              cost: SessionMessage.Assistant.fields.cost,
+              diagnostics: SessionMessage.Assistant.fields.diagnostics,
+            }),
+          ),
+        )(row.data).pipe(
+          Effect.mapError(() => new MessageDecodeError({ sessionID, messageID: SessionMessage.ID.make(row.id) })),
+        )
+        if (!assistant.tokens) return undefined
+        return SessionCacheDiagnostics.calculate({
+          model: assistant.model,
+          tokens: assistant.tokens,
+          estimatedCost: assistant.cost ?? Money.USD.zero,
+          contextLimit: assistant.diagnostics?.contextLimit,
+          contextBreakdown: assistant.diagnostics?.contextBreakdown,
+          providerCache: assistant.diagnostics?.providerCache,
+        })
       }),
       message: Effect.fn("SessionStore.message")(function* (messageID) {
         const row = yield* db
@@ -82,4 +147,8 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = makeGlobalNode({ service: Service, layer, deps: [Database.node, EventRuntime.node, SessionProjector.node] })
+export const node = makeGlobalNode({
+  service: Service,
+  layer,
+  deps: [Database.node, EventRuntime.node, SessionProjector.node],
+})

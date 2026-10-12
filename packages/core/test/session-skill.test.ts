@@ -24,6 +24,7 @@ import { SessionEvent } from "@ycoding-ai/schema/session-event"
 import { InstructionDiscovery } from "@ycoding-ai/core/instruction-discovery"
 import { Instructions } from "@ycoding-ai/core/instructions"
 import { SessionContext } from "@ycoding-ai/core/session/context"
+import { Catalog } from "@ycoding-ai/core/catalog"
 import { InstructionState } from "@ycoding-ai/core/session/instruction-state"
 import { testEffect } from "./lib/effect"
 
@@ -85,6 +86,22 @@ const locations = Layer.effect(
         Layer.mock(Permission.Service, { evaluateEffective: () => Effect.succeed("allow") }),
         instructionDiscovery,
         sessionContext,
+        Layer.mock(Catalog.Service, {
+          provider: {
+            get: () => Effect.succeed(undefined),
+            all: () => Effect.succeed([]),
+            available: () => Effect.succeed([]),
+          },
+          model: {
+            get: () => Effect.succeed(undefined),
+            all: () => Effect.succeed([]),
+            available: () => Effect.succeed([]),
+            default: () => Effect.succeed(undefined),
+            defaultSelection: () => Effect.succeed(undefined),
+            forConnection: (model) => Effect.succeed(model),
+            small: () => Effect.succeed(undefined),
+          },
+        }),
       ) as unknown as Layer.Layer<LocationServices>,
   ),
 )

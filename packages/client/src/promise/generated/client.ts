@@ -139,6 +139,8 @@ import type {
   GuardrailRequestReplyOutput,
   MessageListInput,
   MessageListOutput,
+  MessageCapturedInputsInput,
+  MessageCapturedInputsOutput,
   ModelListInput,
   ModelListOutput,
   ModelDefaultInput,
@@ -1438,6 +1440,18 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ).then((value) => value.data),
+      capturedInputs: (input: MessageCapturedInputsInput, requestOptions?: RequestOptions) =>
+        request<MessageCapturedInputsOutput>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/message/captured-inputs`,
+            query: { after: input["after"], limit: input["limit"] },
+            successStatus: 200,
+            declaredStatuses: [404, 500, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
     },
     model: {
       list: (input?: ModelListInput, requestOptions?: RequestOptions) =>

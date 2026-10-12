@@ -1,5 +1,7 @@
 import { Session } from "@ycoding-ai/core/session"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
+import { SessionCapturedChanges } from "@ycoding-ai/core/session/captured-changes"
+import { Database } from "@ycoding-ai/core/database/database"
 import { Effect, Schema, Stream } from "effect"
 import { HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -15,7 +17,19 @@ export const MessageHandler = HttpApiBuilder.group(Api, "server.message", (handl
   Effect.gen(function* () {
     const session = yield* Session.Service
 
-    return handlers.handle(
+    return handlers.handle("session.capturedInputs", Effect.fn(function* (ctx) {
+      const database = yield* Database.Service
+      return yield* SessionCapturedChanges.page(database.db, { sessionID: ctx.params.sessionID, after: ctx.query.after, limit: ctx.query.limit ?? 200 }).pipe(
+        Effect.catchTag("Session.NotFoundError", (error) => Effect.fail(new SessionNotFoundError({ sessionID: error.sessionID, message: `Session not found: ${error.sessionID}` }))),
+        Effect.catchTag("Session.MessageDecodeError", (error) => {
+          const ref = `err_${crypto.randomUUID().slice(0, 8)}`
+          return Effect.logError("failed to decode captured change input").pipe(
+            Effect.annotateLogs({ ref, sessionID: error.sessionID, messageID: error.messageID }),
+            Effect.andThen(Effect.fail(new UnknownError({ message: "Unexpected server error. Check server logs for details.", ref }))),
+          )
+        }),
+      )
+    })).handle(
       "session.messages",
       Effect.fn(function* (ctx) {
         const messages = yield* session

@@ -42,11 +42,13 @@ test("real durable edit completion advances the snapshot watermark and invalidat
   const sessionID = "ses_captured_flow"
   const location = { directory }
   let transcriptReads = 0
+  let capturedReads = 0
   let inventoryReads = 0
   const local = createLocalServer({ url: server.base, auth: { type: "basic", username: "ycoding", password } })
   const counted = {
     ...local,
     messages: (...args: Parameters<typeof local.messages>) => { transcriptReads++; return local.messages(...args) },
+    capturedInputs: (...args: Parameters<typeof local.capturedInputs>) => { capturedReads++; return local.capturedInputs(...args) },
     listPage: (...args: Parameters<typeof local.listPage>) => { inventoryReads++; return local.listPage(...args) },
   }
   const sessions = createSessionRegistry({ local: counted })
@@ -77,7 +79,8 @@ test("real durable edit completion advances the snapshot watermark and invalidat
     expect(typeof beforeSeq).toBe("number")
     expect(await read()).toEqual({ data: [] })
     expect(await read()).toEqual({ data: [] })
-    expect(transcriptReads).toBe(1)
+    expect(transcriptReads).toBe(0)
+    expect(capturedReads).toBe(1)
     expect(await readFile(join(directory, "sample.txt"), "utf8")).toBe("old\n")
 
     await local.permissionReply(sessionID, location, String(permission.id), "once")
@@ -92,7 +95,8 @@ test("real durable edit completion advances the snapshot watermark and invalidat
     const captured = await read()
     expect(captured.data).toMatchObject([{ path: "sample.txt", additions: 1, deletions: 1, status: "modified" }])
     expect(captured.data[0]?.files[0]?.diff).toContain("-old\n+new")
-    expect(transcriptReads).toBe(2)
+    expect(transcriptReads).toBe(0)
+    expect(capturedReads).toBe(2)
     expect(inventoryReads).toBe(0)
   } finally {
     await server.close()

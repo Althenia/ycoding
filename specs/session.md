@@ -93,6 +93,8 @@ The public interrupt operation verifies that the durable Session exists. An unkn
 
 The managed server records graceful-shutdown interruptions through private Session suspension. Shutdown marks active Sessions before interrupting them; startup never resumes a suspended Session, so the user resumes it manually. Hard-crash recovery and exactly-once provider or tool execution remain out of scope. See [Managed restart suspension](./session-restart-continuation.md).
 
+The active-goal query used by `GET /api/session/outstanding` uses a partial index on Session IDs whose stored goal status is `active`.
+
 ## Work Completion Is Explicit
 
 `task_complete` records the agent's declaration that its current admitted work is finished and verified. Its successful tool result is not a completion event. Core accepts the declaration only after that drain succeeds and a later text-only final Step settles with non-whitespace final text and finish reason `stop`. A failed Step or tool after the declaration, interruption, later admitted input, or a committed revert invalidates that declaration. Declarations from an earlier drain cannot certify resumed work.
@@ -102,6 +104,14 @@ Acceptance checks the root's descendant family for executing descendants, pendin
 Acceptance publishes version-1 `session.work.completed` with only `{ sessionID, inputID, assistantMessageID }`. Its deterministic event identity prevents duplicate acceptance for the same admission/revert epoch. The event is a completion fact, not a transcript row or a current-running flag. Transcript text, execution success, and an idle status alone do not establish it.
 
 Authenticated `GET /api/session/completions` returns `SessionWorkCompletion.Page`: `{ data: Receipt[], next?: SessionID }`. Each receipt contains `{ id: EventID, seq, created, sessionID, inputID, assistantMessageID }`, where `created` is epoch milliseconds and `seq` belongs to that Session. The read returns the latest accepted receipt per existing root Session, ordered by Session ID; `after` is an exclusive Session-ID cursor. `limit` defaults to 200 and accepts integers from 1 through 200. It takes no caller-selected Location. This is a current per-root receipt read, not a global event cursor or a complete completion-history feed.
+
+The completion page selects each root Session's latest accepted receipt by descending aggregate sequence, then applies the root cursor, ordering, and page limit; it does not group the full event history to form the page.
+
+The remote connector sends a full paged completion baseline on connection, event-stream recovery, and periodic refresh (60 seconds by default). After a baseline succeeds, a verified live root `session.work.completed` event is forwarded as one receipt. An event received before baseline or a failed direct delivery schedules a full baseline. Each baseline starts without an `after` cursor; the connector retains no per-Session completion high-water cursor.
+
+## Parent Answers Resume Waiting Subagents
+
+`POST /api/session/:parentID/subagent/:childID/question/:questionID/answer` accepts `{ text?, data? }` and requires at least one answer value. Core verifies the parent-child ownership, waiting task, and current question ID. It records a deterministic synthetic child steer with the parent, child, and question IDs; answer text remains literal input, not a prompt or command. The `question_answered` event returns the task to `running` before Core wakes the child. The runner promotes the synthetic answer into model-visible history, so the resumed provider request receives it. The task reaches `completed` only when that resumed child execution settles successfully; a changed or resolved question cannot receive an answer addressed to its former ID.
 
 ## Model Selection Requires Context Fit
 
@@ -233,6 +243,8 @@ OpenAI public API-key and ChatGPT/Codex subscription routes have separate cache 
 
 The bounded Session diagnostics response includes the latest provider-request invalidation reason without exposing prompt content, full cache keys, system digests, or tool digests. Compatibility reads treat a missing historical model variant as `default`. The owner's first provider request after an ended compaction reports `compaction-reset`; otherwise a changed provider or model produces `model-switched`, and a changed normalized variant produces `model-variant-switched`. These reasons take precedence over system, tool, and generic prefix-change reasons.
 
+The diagnostics reader selects only model, token, cost, and diagnostics fields from the latest qualifying assistant projection after compaction and before an optional revert boundary. It does not load assistant text or tool payloads. Request totals come from stored per-model aggregates; the invalidation reason uses the latest provider-request record, and speed uses at most the Session's last eight Step requests.
+
 The instance-wide live stream emits `session.diagnostics.updated` when a provider step reports terminal usage, before waiting for local tools started by that step. Its payload is the normalized last-step `SessionCacheDiagnostics.Info`; the TUI may use it to refresh context and cache telemetry while the step remains active. The event is ephemeral and has no replay guarantee. Terminal `session.step.ended` or token-bearing `session.step.failed` remains the durable source used by the diagnostics endpoint after reconnect or restart.
 
 `SessionCacheDiagnostics.ContextBreakdown` (`Session.ContextBreakdown`) has seven nonnegative integer fields: `system`, `tools`, `user`, `assistant`, `reasoning`, `toolCalls`, and `other`. The runner estimates the prepared request's model-visible input by counting system text and serialized tool definitions with the context-budget estimator and each message part with the media-aware JSON estimator. System message text joins `system`; assistant tool-call inputs and tool results join `toolCalls`; non-text parts not otherwise classified join `other`. All seven fields are present, including zero counts, and their sum is the breakdown total rather than the provider-reported context total. This independent estimate does not alter the compaction estimate or admission behavior.
@@ -251,6 +263,8 @@ The runtime verifies observation provenance against the durable event, not calle
 
 At serialized safe boundaries after prompt promotion and after compaction reload, Core compares each selected trusted source with its latest observation and appends only changed text. An A → B → A sequence appends all three facts without modifying or moving earlier bytes. Restart does not duplicate unchanged text; compaction or revert refreshes a missing selected observation. Session-state includes folded goals and reminders, clearing ended goals explicitly. Step-limit entry and exit both observe state, and step-limit tool-disable enforcement applies. TeamView is available on all provider routes, including Codex, and retains final terminal child state. An empty update clears a previously observed or inherited view when no children remain; a Session with no prior view receives no initial empty observation. These automatic stored notices do not authorize routine assistant narration.
 
+Before this comparison, Core reads matching system and synthetic projection rows newest-first in sequence pages of 100 until it finds the latest text for each source or exhausts the rows. Candidate text is retained only when its corresponding durable event confirms the source and text; source presence is tracked separately. This state lookup does not replace or truncate the complete model-visible history.
+
 `sessions.log({ sessionID, after?, follow? })` verifies the Session and reads public durable Session events after an exclusive aggregate sequence. With `follow: true`, it subscribes before replay and emits one synchronization marker at the captured watermark before live durable events continue.
 
 Every Session-log item carries the running server's `sourceEpoch`. `GET /api/session/:sessionID/snapshot` atomically returns the canonical Session projection and messages with the exact `log.synced` watermark they reflect and the same `sourceEpoch`; clients must discard cross-epoch synchronization state after a source-epoch change.
@@ -263,7 +277,9 @@ The remote connector bounds a windowed snapshot to at most 64 relay chunks by re
 
 Live-only text, reasoning, tool-input, and compaction deltas are intentionally absent from replay. The instance-wide live event stream has different schemas and no replay guarantee.
 
-There is no separate finite Session-history endpoint. Request/response consumers use authoritative Session projections such as messages, pending input, and context; replay consumers use the durable log.
+The canonical `message.list` endpoint still returns every projected message; there is no paged variant of the full transcript. The narrow `GET /api/session/:sessionID/message/captured-inputs` (`message.capturedInputs`) endpoint supplies the remote captured-change summary without returning full message bodies. Its query accepts `after` as an exclusive nonnegative message sequence and `limit` from 1 through 200 (default 200); the response is `{ data: Input[], next?: number }`, where `next` is the last returned sequence when another page exists. Each input contains the canonical message ID and type (`user`, `synthetic`, or `assistant`); synthetic metadata may include `kind` and `questionID`; assistant content includes only selected tool attribution and edit/patch metadata. Message text, reasoning, and ordinary tool output are omitted. Recorded patch strings are retained for validation and grouping, so the page is bounded by row count, not by total bytes. The endpoint does not replace `message.list` for consumers that require the full canonical transcript.
+
+The remote connector brackets parent and captured-child reads with source-epoch and event-sequence snapshots, and revalidates current ownership and Location before returning or caching a summary. If any Session changes during the read, the operation fails without returning partial groups or caching a mixed snapshot.
 
 ## Bounded Managed Subagent Pages
 

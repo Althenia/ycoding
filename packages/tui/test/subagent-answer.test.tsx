@@ -31,6 +31,7 @@ const task: SessionOrchestrationTask = {
 
 async function mount(input?: { gate?: Promise<void>; fail?: boolean; refreshFails?: boolean }) {
   const [current, update] = createSignal(task)
+  const [enabled, setEnabled] = createSignal(true)
   const writes: { path: string; body: unknown }[] = []
   const events = createEventStream()
   const transport = createFetch(async (url, request) => {
@@ -58,7 +59,7 @@ async function mount(input?: { gate?: Promise<void>; fail?: boolean; refreshFail
                   <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
                     <ToastProvider>
                       <DialogProvider>
-                        <SubagentAnswerComposer task={current()} />
+                        <SubagentAnswerComposer task={current()} enabled={enabled()} />
                       </DialogProvider>
                     </ToastProvider>
                   </ThemeProvider>
@@ -77,6 +78,7 @@ async function mount(input?: { gate?: Promise<void>; fail?: boolean; refreshFail
     app,
     writes,
     update,
+    setEnabled,
     dispose() {
       app.renderer.destroy()
       events.disconnect()
@@ -115,6 +117,26 @@ test("blank answers do nothing and bracketed multiline Unicode paste remains lit
     fixture.app.mockInput.pressKey("RETURN")
     await fixture.app.waitForFrame((frame) => frame.includes("Answer sent"))
     expect(fixture.writes[0]?.body).toEqual({ text })
+  } finally {
+    fixture.dispose()
+  }
+})
+
+test("review ownership pauses answers without discarding the draft", async () => {
+  const fixture = await mount()
+  try {
+    await fixture.app.mockInput.typeText("Retain across review")
+    fixture.setEnabled(false)
+    await fixture.app.renderOnce()
+    fixture.app.mockInput.pressKey("RETURN")
+    await fixture.app.renderOnce()
+    expect(fixture.writes).toEqual([])
+    expect(fixture.app.captureCharFrame()).not.toContain("Retain across review")
+    fixture.setEnabled(true)
+    await fixture.app.waitForFrame((frame) => frame.includes("Retain across review"))
+    fixture.app.mockInput.pressKey("RETURN")
+    await fixture.app.waitForFrame((frame) => frame.includes("Answer sent"))
+    expect(fixture.writes[0]?.body).toEqual({ text: "Retain across review" })
   } finally {
     fixture.dispose()
   }

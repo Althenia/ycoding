@@ -82,6 +82,9 @@ export const SessionTable = sqliteTable(
   },
   (table) => [
     index("session_time_updated_id_idx").on(table.time_updated, table.id),
+    index("session_active_goal_idx")
+      .on(table.id)
+      .where(sql`json_extract(${table.autonomy}, '$.goal.status') = 'active'`),
     index("session_project_time_updated_id_idx").on(table.project_id, table.time_updated, table.id),
     index("session_workspace_time_updated_id_idx").on(table.workspace_id, table.time_updated, table.id),
     index("session_parent_time_updated_id_idx").on(table.parent_id, table.time_updated, table.id),

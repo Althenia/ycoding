@@ -17,13 +17,14 @@ import { SessionCacheDiagnostics } from "./cache-diagnostics"
 import { SessionPermissionCeiling } from "./permission-ceiling"
 import { SessionProviderRequest } from "./provider-request"
 import { SessionUsage } from "./usage"
-import type { ProviderRequest } from "@ycoding-ai/schema/provider-request"
+import { SessionUsageRead, type Aggregate, type PricingRef } from "./usage-read"
+import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { SessionAutonomy } from "./autonomy"
 import { SessionCompactionJob } from "./compaction-job"
 import { SessionCompactionExecution } from "./compaction-execution"
 import { SessionCompaction } from "./compaction"
 import { SessionContextState } from "./context-state"
-import { Info, list } from "./skill-status"
+import { Info } from "./skill-status"
 import { SessionGoal } from "./goal"
 import { SessionGuardrail } from "./guardrail"
 import { Base64, FileAttachment, ManagedAttachmentContent, Prompt } from "@ycoding-ai/schema/prompt"
@@ -473,7 +474,10 @@ export class Service extends Context.Service<Service, Interface>()("@ycoding/Ses
 
 function usageReportGroup(
   group: ProviderRequest.ReportGroup,
-  item: { readonly record: SessionProviderRequest.CostedRecord; readonly session: SessionSchema.Info },
+  item: {
+    readonly record: Pick<SessionProviderRequest.CostedRecord, "model" | "agent" | "time">
+    readonly session: Pick<SessionSchema.Info, "id" | "title" | "projectID">
+  },
   projects: ReadonlyArray<Project.Info>,
   formatter?: Intl.DateTimeFormat,
 ) {
@@ -517,101 +521,81 @@ function usageReportGroup(
   return { key: iso.slice(0, 7), label: iso.slice(0, 7) }
 }
 
-function usageReportTokenTotal(row: ProviderRequest.ReportRow) {
-  return row.tokens.input + row.tokens.output + row.tokens.reasoning + row.tokens.cache.read + row.tokens.cache.write
-}
-
-function usageReportComparator(
-  sort: ProviderRequest.ReportSort,
-  order: ProviderRequest.ReportOrder,
-  localHour: boolean,
-) {
-  return (left: ProviderRequest.ReportRow, right: ProviderRequest.ReportRow) => {
-    const key = localHour
-      ? Date.parse(left.key) - Date.parse(right.key)
-      : left.key < right.key
-        ? -1
-        : left.key > right.key
-          ? 1
-          : 0
-    if (sort === "key") return order === "asc" ? key : -key
-    const metric = (row: ProviderRequest.ReportRow) => {
-      if (sort === "cost") return row.cost ?? 0
-      if (sort === "tokens") return usageReportTokenTotal(row)
-      if (sort === "steps") return row.logical
-      if (sort === "input") return row.tokens.input
-      if (sort === "output") return row.tokens.output
-      if (sort === "reasoning") return row.tokens.reasoning
-      if (sort === "cacheRead") return row.tokens.cache.read
-      return row.tokens.cache.write
-    }
-    const leftMetric = metric(left)
-    const rightMetric = metric(right)
-    const comparison = leftMetric < rightMetric ? -1 : leftMetric > rightMetric ? 1 : 0
-    return (order === "asc" ? comparison : -comparison) || key
-  }
-}
-
-function buildUsageReport(
-  input: ProviderRequest.ReportInput,
-  items: ReadonlyArray<{
-    readonly record: SessionProviderRequest.CostedRecord
-    readonly session: SessionSchema.Info
-  }>,
-  projects: ReadonlyArray<Project.Info>,
-): ProviderRequest.Report {
-  const records = items.filter(({ record }) => {
-    const time = DateTime.toEpochMillis(record.time)
-    return (input.from === undefined || time >= input.from) && (input.to === undefined || time < input.to)
-  })
-  const grouped = new Map<string, { readonly label: string; readonly records: SessionProviderRequest.CostedRecord[] }>()
-  const formatter =
-    input.timeZone && (input.group === "hour" || input.group === "day" || input.group === "month")
-      ? new Intl.DateTimeFormat("en-US", {
-          timeZone: input.timeZone,
-          year: "numeric",
-          month: "2-digit",
-          day: "2-digit",
-          hour: "2-digit",
-          hourCycle: "h23",
-          timeZoneName: "longOffset",
-        })
-      : undefined
-  for (const item of records) {
-    const group = usageReportGroup(input.group, item, projects, formatter)
-    const current = grouped.get(group.key)
-    if (current) {
-      current.records.push(item.record)
-      continue
-    }
-    grouped.set(group.key, { label: group.label, records: [item.record] })
-  }
-  const rows = Array.from(grouped, ([key, value]) => {
-    const speed = SessionProviderRequest.reportSpeed(value.records)
-    return {
-      key,
-      label: value.label,
-      ...SessionProviderRequest.reportMetrics(value.records),
-      ...(speed === undefined ? {} : { speed }),
-    }
-  }).toSorted(
-    usageReportComparator(
-      input.sort ?? "key",
-      input.order ?? "asc",
-      input.group === "hour" && input.timeZone !== undefined,
-    ),
-  )
-  const offset = input.offset ?? 0
-  const limit = input.limit ?? 100
-  const page = rows.slice(offset, offset + limit)
-  const nextOffset = offset + page.length < rows.length ? offset + page.length : undefined
+function combineUsage(
+  left: ProviderRequest.ReportMetrics,
+  right: ProviderRequest.ReportMetrics,
+): ProviderRequest.ReportMetrics {
   return {
-    group: input.group,
-    rows: page,
-    total: SessionProviderRequest.reportMetrics(records.map((item) => item.record)),
-    rowCount: rows.length,
-    ...(nextOffset === undefined ? {} : { nextOffset }),
+    logical: left.logical + right.logical,
+    physical: left.physical + right.physical,
+    helpers: left.helpers + right.helpers,
+    continued: left.continued + right.continued,
+    fallback: left.fallback + right.fallback,
+    tokens: {
+      input: left.tokens.input + right.tokens.input,
+      output: left.tokens.output + right.tokens.output,
+      reasoning: left.tokens.reasoning + right.tokens.reasoning,
+      cache: {
+        read: left.tokens.cache.read + right.tokens.cache.read,
+        write: left.tokens.cache.write + right.tokens.cache.write,
+      },
+    },
+    ...(left.cost === undefined && right.cost === undefined
+      ? {}
+      : {
+          cost: Money.USD.make((left.cost ?? 0) + (right.cost ?? 0)),
+          costProvenance:
+            left.costProvenance === "current_catalog" || right.costProvenance === "current_catalog"
+              ? "current_catalog"
+              : "recorded",
+        }),
+    ...(left.logical + right.logical === 0
+      ? {}
+      : {
+          cacheReadReported:
+            (left.logical === 0 || left.cacheReadReported === true) &&
+            (right.logical === 0 || right.cacheReadReported === true),
+        }),
   }
+}
+
+function usageMetrics(item: Aggregate): ProviderRequest.ReportMetrics {
+  return {
+    logical: item.logical,
+    physical: item.physical,
+    helpers: item.helpers,
+    continued: item.continued,
+    fallback: item.fallback,
+    tokens: {
+      input: item.input,
+      output: item.output,
+      reasoning: item.reasoning,
+      cache: { read: item.cacheRead, write: item.cacheWrite },
+    },
+    ...(item.logical === 0 ? {} : { cacheReadReported: item.cacheReadReported === 1 }),
+    ...(item.priced === 0
+      ? {}
+      : { cost: Money.USD.make(item.cost), costProvenance: item.currentCatalog ? "current_catalog" : "recorded" }),
+  }
+}
+
+type UsagePricing = ReadonlyMap<
+  string,
+  { provider: CatalogModel.Info["cost"]; router: CatalogModel.Info["cost"] } | undefined
+>
+
+function usagePrice(pricing: UsagePricing, item: Effect.Success<ReturnType<typeof SessionUsageRead.unpriced>>[number]) {
+  const record = SessionProviderRequest.rowRecord(item.record)
+  const options = pricing.get(
+    JSON.stringify([
+      item.directory,
+      item.workspaceID,
+      record.model.providerID,
+      record.model.id,
+      record.model.profile ?? null,
+    ]),
+  )
+  return options ? SessionUsage.estimatedCatalogCost(options.provider, options.router, record.tokens)?.cost : undefined
 }
 
 const layer = Layer.effect(
@@ -797,71 +781,361 @@ const layer = Layer.effect(
           ),
         )
     })
-    const family = Effect.fnUntraced(function* (session: SessionSchema.Info) {
-      if (session.parentID) return [session]
-      const sessions = [session]
+    const usageRoot = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
+      const session = yield* db
+        .select({ id: SessionTable.id, parentID: SessionTable.parent_id })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      if (!session) return yield* new NotFoundError({ sessionID })
+      return session
+    })
+    const usageFamily = Effect.fnUntraced(function* (session: Effect.Success<ReturnType<typeof usageRoot>>) {
+      if (session.parentID) return [session.id]
+      const sessions = [session.id]
       const seen = new Set<SessionSchema.ID>([session.id])
       for (const current of sessions) {
-        const children = yield* result.list({ parentID: current.id })
-        sessions.push(
-          ...children.data.filter((child) => {
-            if (seen.has(child.id)) return false
-            seen.add(child.id)
-            return true
-          }),
-        )
+        let cursor: { id: SessionSchema.ID; updated: number } | undefined
+        while (true) {
+          const children = yield* db
+            .select({ id: SessionTable.id, updated: SessionTable.time_updated })
+            .from(SessionTable)
+            .where(
+              and(
+                eq(SessionTable.parent_id, current),
+                cursor
+                  ? or(
+                      lt(SessionTable.time_updated, cursor.updated),
+                      and(eq(SessionTable.time_updated, cursor.updated), lt(SessionTable.id, cursor.id)),
+                    )
+                  : undefined,
+              ),
+            )
+            .orderBy(desc(SessionTable.time_updated), desc(SessionTable.id))
+            .limit(200)
+            .all()
+            .pipe(Effect.orDie)
+          children
+            .filter((child) => !seen.has(child.id))
+            .forEach((child) => {
+              seen.add(child.id)
+              sessions.push(child.id)
+            })
+          if (children.length < 200) break
+          cursor = children.at(-1)!
+        }
       }
       return sessions
     })
-    const estimated = Effect.fnUntraced(function* (
-      session: SessionSchema.Info,
-      records: ReadonlyArray<ProviderRequest.Record>,
+    const usageScope = Effect.fnUntraced(function* (
+      session?: Effect.Success<ReturnType<typeof usageRoot>>,
+      range: Pick<ProviderRequest.ReportInput, "from" | "to"> = {},
     ) {
-      if (records.every((record) => record.cost !== undefined || record.source === "decision")) return records
-      const catalog = yield* Catalog.Service.pipe(
-        Effect.provide(locations.get(session.location)),
-        Effect.catchCause((cause) =>
-          isMissingLocation(Cause.squash(cause)) ? Effect.succeed(undefined) : Effect.failCause(cause),
-        ),
-      )
-      if (catalog === undefined) return records
-      return yield* Effect.forEach(records, (record) => {
-        if (record.cost !== undefined || record.source === "decision") return Effect.succeed(record)
-        return Effect.gen(function* () {
-          const provider = yield* catalog.model.get(record.model.providerID, record.model.id, record.model.profile)
-          const openrouter = yield* catalog.model.get(
-            Provider.ID.openrouter,
-            CatalogModel.ID.make(
-              record.model.providerID === Provider.ID.openrouter
-                ? record.model.id
-                : `${record.model.providerID}/${record.model.id}`,
-            ),
-          )
-          const cost = SessionUsage.estimatedCatalogCost(provider?.cost ?? [], openrouter?.cost ?? [], record.tokens)
-          return cost === undefined ? record : { ...record, cost: cost.cost, costProvenance: "current_catalog" }
-        })
-      })
-    })
-    const costedRecords = (session: SessionSchema.Info) =>
-      providerRequests.list(session.id).pipe(Effect.flatMap((records) => estimated(session, records)))
-    const globalCostedRecords = Effect.fnUntraced(function* (range?: { readonly from?: number; readonly to?: number }) {
-      const sessions = (yield* result.list({ order: "asc" })).data
-      const recordsBySession = new Map<SessionSchema.ID, ProviderRequest.Record[]>()
-      for (const record of yield* providerRequests.listAll(range)) {
-        const records = recordsBySession.get(record.sessionID)
-        if (records) records.push(record)
-        else recordsBySession.set(record.sessionID, [record])
+      const sessions = session ? yield* usageFamily(session) : undefined
+      return {
+        sessions,
+        where: sql`${sessions ? sql`s.id IN (SELECT value FROM json_each(${JSON.stringify(sessions)}))` : sql`1`}
+        ${range.from === undefined ? sql`` : sql`AND r.time_created >= ${range.from}`}
+        ${range.to === undefined ? sql`` : sql`AND r.time_created < ${range.to}`}`,
       }
-      return yield* Effect.forEach(
-        sessions.flatMap((session) => {
-          const records = recordsBySession.get(session.id)
-          return records === undefined ? [] : [{ session, records }]
-        }),
-        (item) =>
-          estimated(item.session, item.records).pipe(
-            Effect.map((records) => records.map((record) => ({ record, session: item.session }))),
-          ),
-      ).pipe(Effect.map((items) => items.flat()))
+    })
+    const pricingSnapshot = <A>(
+      scope: ReturnType<typeof usageScope>,
+      read: (pricing: UsagePricing, selection: Effect.Success<ReturnType<typeof usageScope>>) => Effect.Effect<A>,
+    ) =>
+      Effect.gen(function* () {
+        const pricing = new Map<
+          string,
+          { provider: CatalogModel.Info["cost"]; router: CatalogModel.Info["cost"] } | undefined
+        >()
+        const catalogs = new Map<string, Catalog.Interface | undefined>()
+        while (true) {
+          const settled = yield* db
+            .transaction(() =>
+              Effect.gen(function* () {
+                const selection = yield* scope
+                const missing = new Map<string, PricingRef>()
+                let after: string | undefined
+                while (true) {
+                  const refs: ReadonlyArray<PricingRef> = yield* SessionUsageRead.pricingRefs(
+                    db,
+                    selection.where,
+                    after,
+                  )
+                  refs.filter((ref) => !pricing.has(ref.key)).forEach((ref) => missing.set(ref.key, ref))
+                  if (refs.length < 200) break
+                  after = refs.at(-1)!.key
+                }
+                if (missing.size > 0) return { type: "prepare" as const, refs: missing }
+                return { type: "complete" as const, value: yield* read(pricing, selection) }
+              }),
+            )
+            .pipe(Effect.orDie)
+          if (settled.type === "complete") return settled.value
+          for (const ref of settled.refs.values()) {
+            const location = Location.Ref.make({
+              directory: AbsolutePath.make(ref.directory),
+              workspaceID: ref.workspaceID ? Workspace.ID.make(ref.workspaceID) : undefined,
+            })
+            const identity = JSON.stringify([ref.directory, ref.workspaceID])
+            if (!catalogs.has(identity)) {
+              const context = yield* locations
+                .contextEffect(location)
+                .pipe(
+                  Effect.catchCause((cause) =>
+                    isMissingLocation(Cause.squash(cause)) ? Effect.succeed(undefined) : Effect.failCause(cause),
+                  ),
+                )
+              catalogs.set(identity, context ? Context.get(context, Catalog.Service) : undefined)
+            }
+            const catalog = catalogs.get(identity)
+            if (!catalog) {
+              pricing.set(ref.key, undefined)
+              continue
+            }
+            const provider = yield* catalog.model.get(
+              Provider.ID.make(ref.provider),
+              CatalogModel.ID.make(ref.model),
+              ref.profile ?? undefined,
+            )
+            const router = yield* catalog.model.get(
+              Provider.ID.openrouter,
+              CatalogModel.ID.make(
+                ref.provider === Provider.ID.openrouter ? ref.model : `${ref.provider}/${ref.model}`,
+              ),
+            )
+            pricing.set(ref.key, { provider: provider?.cost ?? [], router: router?.cost ?? [] })
+          }
+        }
+      }).pipe(Effect.scoped)
+    const readUsageReport: (
+      input: ProviderRequest.ReportInput,
+      projectInfos: ReadonlyArray<Project.Info>,
+      pricing: UsagePricing,
+      sessions?: ReadonlyArray<SessionSchema.ID>,
+    ) => Effect.Effect<ProviderRequest.Report> = Effect.fnUntraced(function* (input, projectInfos, pricing, sessions) {
+      const where = sql`${sessions ? sql`s.id IN (SELECT value FROM json_each(${JSON.stringify(sessions)}))` : sql`1`}
+        ${input.from === undefined ? sql`` : sql`AND r.time_created >= ${input.from}`}
+        ${input.to === undefined ? sql`` : sql`AND r.time_created < ${input.to}`}`
+      const key = yield* SessionUsageRead.key(db, where, input.group, input.timeZone)
+      const formatter =
+        input.timeZone && ["hour", "day", "month"].includes(input.group)
+          ? new Intl.DateTimeFormat("en-US", {
+              timeZone: input.timeZone,
+              year: "numeric",
+              month: "2-digit",
+              day: "2-digit",
+              hour: "2-digit",
+              hourCycle: "h23",
+              timeZoneName: "longOffset",
+            })
+          : undefined
+      const corrections = new Map<string, number>()
+      let after: ProviderRequest.ID | undefined
+      while (true) {
+        const page: Effect.Success<ReturnType<typeof SessionUsageRead.unpriced>> = yield* SessionUsageRead.unpriced(
+          db,
+          where,
+          after,
+        )
+        for (const item of page) {
+          const record = SessionProviderRequest.rowRecord(item.record)
+          const session = {
+            id: item.sessionID,
+            title: item.title,
+            projectID: item.projectID,
+          }
+          const cost = usagePrice(pricing, item)
+          if (cost === undefined) continue
+          const group = usageReportGroup(input.group, { record, session }, projectInfos, formatter)
+          corrections.set(group.key, (corrections.get(group.key) ?? 0) + cost)
+        }
+        if (page.length < 200) break
+        after = page.at(-1)!.record.id
+      }
+      const correction =
+        corrections.size === 0
+          ? sql`NULL`
+          : sql`CASE CAST(${key} AS TEXT) ${sql.join(
+              [...corrections].map(
+                ([group, cost]) =>
+                  sql`WHEN ${sql.raw(`'${group.replaceAll("'", "''")}'`)} THEN ${sql.raw(String(cost))}`,
+              ),
+              sql` `,
+            )} END`
+      const totals = usageMetrics((yield* SessionUsageRead.totals(db, where))!)
+      const total =
+        corrections.size === 0
+          ? totals
+          : combineUsage(totals, {
+              ...SessionProviderRequest.reportMetrics([]),
+              cost: Money.USD.make([...corrections.values()].reduce((sum, cost) => sum + cost, 0)),
+              costProvenance: "current_catalog",
+            })
+      const metric =
+        input.sort === "cost"
+          ? sql`cost`
+          : input.sort === "tokens"
+            ? sql`input + output + reasoning + cacheRead + cacheWrite`
+            : input.sort === "steps"
+              ? sql`logical`
+              : input.sort === "input"
+                ? sql`input`
+                : input.sort === "output"
+                  ? sql`output`
+                  : input.sort === "reasoning"
+                    ? sql`reasoning`
+                    : input.sort === "cacheRead"
+                      ? sql`cacheRead`
+                      : input.sort === "cacheWrite"
+                        ? sql`cacheWrite`
+                        : input.group === "hour" && input.timeZone
+                          ? sql`strftime('%s', key)`
+                          : sql`key`
+      const order = sql`${metric} ${input.order === "desc" ? sql`DESC` : sql`ASC`} ${input.sort && input.sort !== "key" ? sql`, key ASC` : sql``}`
+      const offset = input.offset ?? 0
+      const limit = input.limit ?? 100
+      const page = yield* SessionUsageRead.page(db, where, key, order, offset, limit, correction)
+      const observations = yield* SessionUsageRead.observations(db, where, input.group, key, page, sessions)
+      const rows = page.map((item) => {
+        const observation = observations.get(item.key)!
+        const group = usageReportGroup(
+          input.group,
+          {
+            record: {
+              model: Schema.decodeUnknownSync(Schema.fromJsonString(CatalogModel.Ref))(observation.model),
+              agent: Agent.ID.make(item.agent),
+              time: DateTime.makeUnsafe(item.time),
+            },
+            session: {
+              id: SessionSchema.ID.make(item.sessionID),
+              title: item.title,
+              projectID: Project.ID.make(item.projectID),
+            },
+          },
+          projectInfos,
+          formatter,
+        )
+        const speed = observation.speed
+        return {
+          key: item.key,
+          label: group.label,
+          ...usageMetrics(item),
+          ...(speed === undefined ? {} : { speed }),
+        }
+      })
+      const rowCount = yield* SessionUsageRead.count(db, where, key)
+      return {
+        group: input.group,
+        rows,
+        total,
+        rowCount,
+        ...(offset + rows.length < rowCount ? { nextOffset: offset + rows.length } : {}),
+      }
+    })
+    const readUsageSummary: (
+      pricing: UsagePricing,
+      sessions?: ReadonlyArray<SessionSchema.ID>,
+    ) => Effect.Effect<ProviderRequest.Summary> = Effect.fnUntraced(function* (pricing, sessions) {
+      const where = sessions ? sql`s.id IN (SELECT value FROM json_each(${JSON.stringify(sessions)}))` : sql`1`
+      const key = sql`json_array(json_extract(r.model, '$.providerID'), json_extract(r.model, '$.id'), json_extract(r.model, '$.variant'), json_extract(r.model, '$.profile'))`
+      const groups = new Map<
+        string,
+        { metrics: ProviderRequest.ReportMetrics; model: ProviderRequest.Record["model"] }
+      >()
+      const decodeModel = Schema.decodeUnknownSync(Schema.fromJsonString(CatalogModel.Ref))
+      let total = SessionProviderRequest.reportMetrics([])
+      let after: string | undefined
+      while (true) {
+        const page: ReadonlyArray<Aggregate> = yield* SessionUsageRead.grouped(db, where, key, after)
+        for (const item of page) {
+          const model = decodeModel(item.model)
+          const metrics = usageMetrics(item)
+          total = combineUsage(total, metrics)
+          groups.set(item.key, { metrics, model })
+        }
+        if (page.length < 200) break
+        after = page.at(-1)!.key
+      }
+      let unpricedAfter: ProviderRequest.ID | undefined
+      while (true) {
+        const page: Effect.Success<ReturnType<typeof SessionUsageRead.unpriced>> = yield* SessionUsageRead.unpriced(
+          db,
+          where,
+          unpricedAfter,
+        )
+        for (const item of page) {
+          const record = SessionProviderRequest.rowRecord(item.record)
+          const cost = usagePrice(pricing, item)
+          if (cost === undefined) continue
+          const identity = JSON.stringify([
+            record.model.providerID,
+            record.model.id,
+            record.model.variant ?? null,
+            record.model.profile ?? null,
+          ])
+          const current = groups.get(identity)!
+          const correction = {
+            ...SessionProviderRequest.reportMetrics([]),
+            cost,
+            costProvenance: "current_catalog" as const,
+          }
+          total = combineUsage(total, correction)
+          groups.set(identity, { ...current, metrics: combineUsage(current.metrics, correction) })
+        }
+        if (page.length < 200) break
+        unpricedAfter = page.at(-1)!.record.id
+      }
+      const models = [...groups.values()]
+        .map((group) => ({
+          model: group.model,
+          requests: group.metrics.logical,
+          tokens: group.metrics.tokens,
+          cacheReadReported: group.metrics.cacheReadReported,
+          ...(group.metrics.cost === undefined
+            ? {}
+            : { cost: group.metrics.cost, costProvenance: group.metrics.costProvenance }),
+        }))
+        .sort(
+          (left, right) =>
+            (left.cost === undefined
+              ? right.cost === undefined
+                ? 0
+                : 1
+              : right.cost === undefined
+                ? -1
+                : right.cost - left.cost) ||
+            left.model.providerID.localeCompare(right.model.providerID) ||
+            left.model.id.localeCompare(right.model.id) ||
+            (left.model.variant ?? "").localeCompare(right.model.variant ?? "") ||
+            (left.model.profile ?? "").localeCompare(right.model.profile ?? ""),
+        )
+      const latest = yield* SessionUsageRead.latest(db, where, sessions)
+      return {
+        logical: total.logical,
+        physical: total.physical,
+        helpers: total.helpers,
+        continued: total.continued,
+        fallback: total.fallback,
+        tokens: total.tokens,
+        ...(total.cacheReadReported === undefined ? {} : { cacheReadReported: total.cacheReadReported }),
+        ...(total.cost === undefined ? {} : { cost: total.cost }),
+        ...(models.length === 0 ? {} : { models }),
+        ...(latest
+          ? {
+              latestInvalidation: latest.invalidation,
+              latestNamespace: latest.namespace,
+              ...(latest.timing === null
+                ? {}
+                : {
+                    latestTiming: Schema.decodeUnknownSync(Schema.fromJsonString(ProviderRequest.Timing))(
+                      latest.timing,
+                    ),
+                  }),
+            }
+          : {}),
+      }
     })
     const decode = (row: typeof SessionMessageTable.$inferSelect) =>
       decodeMessage({ ...row.data, id: row.id, type: row.type }).pipe(
@@ -1195,10 +1469,7 @@ const layer = Layer.effect(
       }),
       diagnostics: Effect.fn("Session.diagnostics")(function* (sessionID) {
         const session = yield* result.get(sessionID)
-        const diagnostics = SessionCacheDiagnostics.fromMessages(
-          yield* store.context(sessionID),
-          session.revert?.messageID,
-        )
+        const diagnostics = yield* store.diagnostics(sessionID, session.revert?.messageID)
         if (!diagnostics) return diagnostics
         const generationSpeed = SessionCacheDiagnostics.generationSpeed(yield* providerRequests.recentSteps(sessionID))
         return {
@@ -1208,35 +1479,26 @@ const layer = Layer.effect(
         }
       }),
       usage: Effect.fn("Session.usage")(function* (sessionID) {
-        const session = yield* result.get(sessionID)
-        const records = yield* Effect.forEach(yield* family(session), costedRecords)
-        return SessionProviderRequest.summarize(
-          records
-            .flat()
-            .toSorted((left, right) => DateTime.toEpochMillis(left.time) - DateTime.toEpochMillis(right.time)),
+        const session = yield* usageRoot(sessionID)
+        return yield* pricingSnapshot(usageScope(session), (pricing, selection) =>
+          readUsageSummary(pricing, selection.sessions),
         )
       }),
       usageReport: Effect.fn("Session.usageReport")(function* (input) {
-        const session = yield* result.get(input.sessionID)
+        const session = yield* usageRoot(input.sessionID)
         const projectInfos = input.group === "project" ? yield* projects.list() : []
-        return buildUsageReport(
-          input,
-          yield* Effect.forEach(yield* family(session), (item) =>
-            costedRecords(item).pipe(Effect.map((records) => records.map((record) => ({ record, session: item })))),
-          ).pipe(Effect.map((items) => items.flat())),
-          projectInfos,
+        return yield* pricingSnapshot(usageScope(session, input), (pricing, selection) =>
+          readUsageReport(input, projectInfos, pricing, selection.sessions),
         )
       }),
       usageAll: Effect.fn("Session.usageAll")(function* () {
-        return SessionProviderRequest.summarize(
-          (yield* globalCostedRecords())
-            .map((item) => item.record)
-            .toSorted((left, right) => DateTime.toEpochMillis(left.time) - DateTime.toEpochMillis(right.time)),
-        )
+        return yield* pricingSnapshot(usageScope(), (pricing) => readUsageSummary(pricing))
       }),
       usageReportAll: Effect.fn("Session.usageReportAll")(function* (input) {
         const projectInfos = input.group === "project" ? yield* projects.list() : []
-        return buildUsageReport(input, yield* globalCostedRecords(input), projectInfos)
+        return yield* pricingSnapshot(usageScope(undefined, input), (pricing) =>
+          readUsageReport(input, projectInfos, pricing),
+        )
       }),
       autonomy: {
         get: Effect.fn("Session.autonomy.get")(function* (sessionID) {
@@ -1475,21 +1737,13 @@ const layer = Layer.effect(
       }),
       skills: Effect.fn("Session.skills")(function* (sessionID) {
         const session = yield* result.get(sessionID)
-        const rows = yield* db
-          .select()
-          .from(SessionMessageTable)
-          .where(eq(SessionMessageTable.session_id, sessionID))
-          .orderBy(asc(SessionMessageTable.seq))
-          .all()
-          .pipe(Effect.orDie)
-        const messages = yield* Effect.forEach(rows, decode)
         const contextModule = yield* Effect.promise<typeof import("./context")>(() => import("./" + "context"))
         const context = yield* contextModule.SessionContext.Service.pipe(
           Effect.provide(locations.get(session.location)),
         )
         const selection = yield* context.select(sessionID)
         const keys = yield* InstructionState.activeKeys(db, selection.instructions, sessionID)
-        return list(messages, keys)
+        return yield* store.skills(sessionID, keys)
       }),
       pending: Effect.fn("Session.pending")(function* (sessionID) {
         yield* result.get(sessionID)

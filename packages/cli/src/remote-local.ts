@@ -135,6 +135,7 @@ export type LocalServer = {
   readonly shellList: (location: LocalLocation) => Promise<readonly unknown[]>
   readonly shellRemove: (shellID: string, location: LocalLocation) => Promise<void>
   readonly messages: (sessionID: string, location: LocalLocation) => Promise<readonly SessionMessageInfo[]>
+  readonly capturedInputs: (sessionID: string, location: LocalLocation) => Promise<Awaited<ReturnType<YCodingClient["message"]["capturedInputs"]>>["data"]>
   readonly compactionList: (sessionID: string, location: LocalLocation) => Promise<RemoteCompactionHistory>
   readonly log: (sessionID: string, location: LocalLocation, after?: number) => Promise<readonly unknown[]>
   readonly autonomyGet: (sessionID: string, location: LocalLocation) => Promise<unknown>
@@ -253,6 +254,18 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
       }),
     messages: (sessionID, location) =>
       call(() => client.message.list({ sessionID }, request(location, timeoutMs))),
+    capturedInputs: (sessionID, location) => call(async () => {
+      const data: Awaited<ReturnType<YCodingClient["message"]["capturedInputs"]>>["data"] = []
+      let after: number | undefined
+      for (;;) {
+        const page = await client.message.capturedInputs({ sessionID, after, limit: 200 }, request(location, timeoutMs))
+        if (page.next !== undefined && (page.data.length === 0 || !Number.isSafeInteger(page.next) || page.next < 0 || after !== undefined && page.next <= after))
+          throw new LocalFailure("server", "Captured input pagination did not advance")
+        data.push(...page.data)
+        if (page.next === undefined) return data
+        after = page.next
+      }
+    }),
     compactionList: (sessionID, location) =>
       call(() => client.session.compaction.list({ sessionID }, request(location, timeoutMs))),
     activeSessions: () => call(() => client.session.active({ signal: AbortSignal.timeout(timeoutMs) })),

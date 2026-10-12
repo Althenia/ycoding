@@ -31,6 +31,8 @@ import {
 import type { LocalEventStream, LocalServer } from "./remote-local"
 import { RemoteScheduler } from "./remote-scheduler"
 import { CloudflareRemoteTransport } from "./remote-transport"
+import { SessionWorkCompletion } from "@ycoding-ai/schema/session-work-completion"
+import { Schema } from "effect"
 
 // The local relay agent. It dials out to the relay over WSS and never listens,
 // never proxies a caller-supplied URL or method, and never follows a remote
@@ -125,6 +127,7 @@ export class RemoteAgent {
   private completionTimer?: ReturnType<typeof setTimeout>
   private conflictTimer?: ReturnType<typeof setTimeout>
   private completionReading?: object
+  private completionBaselineOwner?: object
   private completionDirty = false
   private completionRetryAttempt = 0
   private lastStatus?: string
@@ -492,6 +495,7 @@ export class RemoteAgent {
         if (page.next === undefined) break
         after = page.next
       }
+      this.completionBaselineOwner = owner
       this.completionRetryAttempt = 0
     } catch (error) {
       if (this.connection !== connection || this.statusOwner !== owner || this.state !== "live") return
@@ -512,6 +516,42 @@ export class RemoteAgent {
           this.scheduleCompletions()
         }
       }
+    }
+  }
+
+  private async sendCompletion(event: object, streamGeneration: number) {
+    const connection = this.connection
+    const owner = this.statusOwner
+    if (connection === undefined || owner === undefined || this.state !== "live" || this.eventStreamGeneration !== streamGeneration) return
+    if (this.completionBaselineOwner !== owner) {
+      this.scheduleCompletions()
+      return
+    }
+    const data = Reflect.get(event, "data")
+    const durable = Reflect.get(event, "durable")
+    const receipt = Schema.decodeUnknownOption(SessionWorkCompletion.Receipt)({
+      id: Reflect.get(event, "id"),
+      created: Reflect.get(event, "created"),
+      seq: typeof durable === "object" && durable !== null ? Reflect.get(durable, "seq") : undefined,
+      sessionID: typeof data === "object" && data !== null ? Reflect.get(data, "sessionID") : undefined,
+      inputID: typeof data === "object" && data !== null ? Reflect.get(data, "inputID") : undefined,
+      assistantMessageID: typeof data === "object" && data !== null ? Reflect.get(data, "assistantMessageID") : undefined,
+    })
+    if (receipt._tag === "None" || typeof durable !== "object" || durable === null || Reflect.get(durable, "aggregateID") !== receipt.value.sessionID) {
+      this.scheduleCompletions()
+      return
+    }
+    try {
+      const session = await this.registry.verify(receipt.value.sessionID)
+      if (this.connection !== connection || this.statusOwner !== owner || this.state !== "live" || this.eventStreamGeneration !== streamGeneration) return
+      if (session === undefined || session.parentID !== undefined) return
+      const title = alertTitle(session.title)
+      if (!await this.send(serializeCompletions({ type: "completions", data: [{ ...receipt.value, ...(title === undefined ? {} : { title }) }], more: false }), connection))
+        throw new Error("Completion receipt delivery interrupted")
+    } catch (error) {
+      if (this.connection !== connection || this.statusOwner !== owner || this.state !== "live" || this.eventStreamGeneration !== streamGeneration) return
+      this.diagnostic(`could not deliver work completion: ${describe(error)}`)
+      this.scheduleCompletions()
     }
   }
 
@@ -578,7 +618,7 @@ export class RemoteAgent {
     if (connection === undefined || this.state !== "live") return
     if (typeof event === "object" && event !== null) {
       const type = Reflect.get(event, "type")
-      if (type === "session.work.completed") this.scheduleCompletions()
+      if (type === "session.work.completed") void this.sendCompletion(event, streamGeneration)
       if (typeof type === "string" && (type.startsWith("session.step.") || type.startsWith("session.execution.") ||
         type.startsWith("session.task.") || type.startsWith("session.shell.") || type.startsWith("shell.") ||
         type.startsWith("session.input.") || type.startsWith("permission.") || type.startsWith("form.") || type.startsWith("guardrail."))) {

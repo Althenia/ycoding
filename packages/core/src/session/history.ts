@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, gte, lt, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, gte, inArray, lt, sql } from "drizzle-orm"
 import { createHash } from "node:crypto"
 import { DateTime, Effect, Schema } from "effect"
 import { Database } from "../database/database"
@@ -270,6 +270,132 @@ export const forModel = Effect.fn("SessionHistory.forModel")(function* (
   accountIdentityDigest?: string,
 ) {
   return (yield* entriesVisibleForModel(db, sessionID, model, accountIdentityDigest)).map((entry) => entry.message)
+})
+
+export type ObservationSource = "session-state" | "team-view" | "step-limit"
+
+export const observationState = Effect.fn("SessionHistory.observationState")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+) {
+  return yield* db
+    .transaction(() =>
+      Effect.gen(function* () {
+        const compaction = yield* latestCompaction(db, sessionID)
+        let boundary = yield* latestProjectArtifactBoundary(db, sessionID)
+        let boundaryLoaded = boundary !== undefined
+        let before: number | undefined
+        let exhausted = false
+        const latest = new Map<ObservationSource, string>()
+        const present = new Set<ObservationSource>()
+        while (!exhausted && latest.size < 3) {
+          const selection = yield* SessionContextState.selectEntries(db, sessionID, (after) =>
+            Effect.gen(function* () {
+              if (!boundaryLoaded) {
+                boundary = (yield* db
+                  .select({ seq: SessionMessageTable.seq })
+                  .from(SessionMessageTable)
+                  .where(
+                    and(
+                      eq(SessionMessageTable.session_id, sessionID),
+                      eq(SessionMessageTable.type, "synthetic"),
+                      compaction ? gte(SessionMessageTable.seq, compaction.seq) : undefined,
+                      after === undefined ? undefined : gt(SessionMessageTable.seq, after),
+                      sql`json_type(${SessionMessageTable.data}, '$.metadata.projectArtifactsEnded') in ('object', 'array')`,
+                    ),
+                  )
+                  .orderBy(desc(SessionMessageTable.seq))
+                  .limit(1)
+                  .get()
+                  .pipe(Effect.orDie))?.seq
+                boundaryLoaded = true
+              }
+              const rows = yield* db
+                .select()
+                .from(SessionMessageTable)
+                .where(
+                  and(
+                    eq(SessionMessageTable.session_id, sessionID),
+                    compaction ? gte(SessionMessageTable.seq, compaction.seq) : undefined,
+                    after === undefined ? undefined : gt(SessionMessageTable.seq, after),
+                    before === undefined ? undefined : lt(SessionMessageTable.seq, before),
+                    inArray(SessionMessageTable.type, ["system", "synthetic"]),
+                    sql`json_extract(${SessionMessageTable.data}, '$.metadata.contextSource') in ('session-state', 'team-view', 'step-limit')`,
+                  ),
+                )
+                .orderBy(desc(SessionMessageTable.seq))
+                .limit(100)
+                .all()
+                .pipe(Effect.orDie)
+              before = rows.at(-1)?.seq
+              exhausted = rows.length < 100
+              const entries = yield* Effect.forEach(rows.toReversed(), (row) =>
+                decodeMessageRow(row).pipe(Effect.map((message) => ({ seq: row.seq, message }))),
+              )
+              return visibleForModel(entries, boundary)
+            }),
+          )
+          const candidates = selection.entries
+            .toReversed()
+            .flatMap<{ source: ObservationSource; text: string; id: SessionMessage.ID }>((entry) => {
+              const source = entry.message.metadata?.contextSource
+              if (source !== "session-state" && source !== "team-view" && source !== "step-limit") return []
+              if (source === "team-view") {
+                if (entry.message.type !== "synthetic" || entry.message.description !== "TeamView update") return []
+                return [{ source, text: entry.message.text, id: entry.message.id }]
+              }
+              if (entry.message.type !== "system") return []
+              return [{ source, text: entry.message.text, id: entry.message.id }]
+            })
+          const projected =
+            candidates.length === 0
+              ? []
+              : yield* db
+                  .select({ id: EventTable.id, data: EventTable.data })
+                  .from(EventTable)
+                  .where(
+                    and(
+                      eq(EventTable.aggregate_id, sessionID),
+                      eq(
+                        EventTable.type,
+                        EventRuntime.versionedType(
+                          SessionEvent.ContextObserved.type,
+                          SessionEvent.ContextObserved.durable.version,
+                        ),
+                      ),
+                      inArray(
+                        EventTable.id,
+                        candidates.map((candidate) =>
+                          EventRuntime.ID.make(String(candidate.id).replace(/^msg_/, "evt_")),
+                        ),
+                      ),
+                    ),
+                  )
+                  .all()
+                  .pipe(Effect.orDie)
+          const trusted = new Set(
+            projected.flatMap((event) => {
+              if (
+                event.data.source !== "session-state" &&
+                event.data.source !== "team-view" &&
+                event.data.source !== "step-limit"
+              )
+                return []
+              if (typeof event.data.text !== "string") return []
+              return [`${event.id}\0${event.data.source}\0${event.data.text}`]
+            }),
+          )
+          for (const candidate of candidates) {
+            present.add(candidate.source)
+            const eventID = EventRuntime.ID.make(String(candidate.id).replace(/^msg_/, "evt_"))
+            if (!latest.has(candidate.source) && trusted.has(`${eventID}\0${candidate.source}\0${candidate.text}`))
+              latest.set(candidate.source, candidate.text)
+          }
+        }
+        return { latest, present }
+      }),
+    )
+    .pipe(Effect.orDie)
 })
 
 export const entriesForRunner = Effect.fn("SessionHistory.entriesForRunner")(function* (

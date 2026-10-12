@@ -75,18 +75,8 @@ type AttemptState = {
 }
 
 type RecoveryMode = "normal" | "terminal-response" | "provider"
-type ContextSource = "session-state" | "team-view" | "step-limit"
-type ObservationCandidate = {
-  readonly source: ContextSource
-  readonly text: string
-  readonly id: SessionMessage.ID
-}
-
-const isContextSource = (value: unknown): value is ContextSource =>
+const isContextSource = (value: unknown): value is SessionHistory.ObservationSource =>
   value === "session-state" || value === "team-view" || value === "step-limit"
-
-export const contextObservationBatches = <Value>(values: ReadonlyArray<Value>) =>
-  Array.from({ length: Math.ceil(values.length / 500) }, (_, index) => values.slice(index * 500, (index + 1) * 500))
 
 const layer = Layer.effect(
   Service,
@@ -204,58 +194,7 @@ const layer = Layer.effect(
       step: number,
       terminalResponseRecovery: boolean,
     ) {
-      const history = yield* SessionHistory.entriesForRunner(db, selected.session.id, selected.instructions)
-      const candidates: ReadonlyArray<ObservationCandidate> = history.entries.flatMap<ObservationCandidate>((entry) => {
-        const source = entry.message.metadata?.contextSource
-        if (!isContextSource(source)) {
-          return []
-        }
-        if (source === "team-view") {
-          if (entry.message.type !== "synthetic" || entry.message.description !== "TeamView update") {
-            return []
-          }
-          return [{ source, text: entry.message.text, id: entry.message.id }]
-        }
-        if (entry.message.type !== "system") {
-          return []
-        }
-        return [{ source, text: entry.message.text, id: entry.message.id }]
-      })
-      const projected = yield* Effect.forEach(contextObservationBatches(candidates), (batch) =>
-        db
-          .select({ id: EventTable.id, data: EventTable.data })
-          .from(EventTable)
-          .where(
-            and(
-              eq(EventTable.aggregate_id, selected.session.id),
-              eq(
-                EventTable.type,
-                EventRuntime.versionedType(
-                  SessionEvent.ContextObserved.type,
-                  SessionEvent.ContextObserved.durable.version,
-                ),
-              ),
-              inArray(
-                EventTable.id,
-                batch.map((candidate) => EventRuntime.ID.make(String(candidate.id).replace(/^msg_/, "evt_"))),
-              ),
-            ),
-          )
-          .all()
-          .pipe(Effect.orDie),
-      ).pipe(Effect.map((batches) => batches.flat()))
-      const trusted = new Set(
-        projected.flatMap((event) => {
-          if (
-            event.data.source !== "session-state" &&
-            event.data.source !== "team-view" &&
-            event.data.source !== "step-limit"
-          )
-            return []
-          if (typeof event.data.text !== "string") return []
-          return [`${event.id}\0${event.data.source}\0${event.data.text}`]
-        }),
-      )
+      const history = yield* SessionHistory.observationState(db, selected.session.id)
       const observed = yield* db
         .selectDistinct({ source: sql<string>`json_extract(${EventTable.data}, '$.source')` })
         .from(EventTable)
@@ -269,28 +208,27 @@ const layer = Layer.effect(
                 SessionEvent.ContextObserved.durable.version,
               ),
             ),
+            inArray(sql<string>`json_extract(${EventTable.data}, '$.source')`, [
+              "session-state",
+              "team-view",
+              "step-limit",
+            ]),
           ),
         )
+        .limit(3)
         .all()
         .pipe(Effect.orDie)
       const observedSources = new Set(
         observed.flatMap((event) => (isContextSource(event.source) ? [event.source] : [])),
       )
-      const latest = candidates.toReversed().reduce((result, candidate) => {
-        const eventID = EventRuntime.ID.make(String(candidate.id).replace(/^msg_/, "evt_"))
-        if (trusted.has(`${eventID}\0${candidate.source}\0${candidate.text}`) && !result.has(candidate.source))
-          result.set(candidate.source, candidate.text)
-        return result
-      }, new Map<ContextSource, string>())
       const state = yield* liveState.load(selected.session.id).pipe(Effect.orDie)
-      const inheritedTeam =
-        state.teamView === undefined ? candidates.some((candidate) => candidate.source === "team-view") : false
+      const inheritedTeam = state.teamView === undefined ? history.present.has("team-view") : false
       const stepLimitReached = selected.agent.info.steps !== undefined && step >= selected.agent.info.steps
       const stepLimit = terminalResponseRecovery
         ? undefined
         : stepLimitReached
           ? MAX_STEPS_PROMPT
-          : observedSources.has("step-limit") || candidates.some((candidate) => candidate.source === "step-limit")
+          : observedSources.has("step-limit") || history.present.has("step-limit")
             ? MAX_STEPS_RESET_PROMPT
             : undefined
       const observations = [
@@ -303,7 +241,7 @@ const layer = Layer.effect(
         ...(stepLimit ? [{ source: "step-limit" as const, text: stepLimit }] : []),
       ]
       yield* Effect.forEach(
-        observations.filter((observation) => latest.get(observation.source) !== observation.text),
+        observations.filter((observation) => history.latest.get(observation.source) !== observation.text),
         (observation) =>
           events.publish(SessionEvent.ContextObserved, {
             sessionID: selected.session.id,

@@ -63,13 +63,7 @@ function unitEnd(bytes: Buffer, start: number): number | undefined {
   const lead = bytes[start]
   if (lead <= 0x7f) return start + 1
   const width =
-    lead >= 0xc2 && lead <= 0xdf
-      ? 2
-      : lead >= 0xe0 && lead <= 0xef
-        ? 3
-        : lead >= 0xf0 && lead <= 0xf4
-          ? 4
-          : undefined
+    lead >= 0xc2 && lead <= 0xdf ? 2 : lead >= 0xe0 && lead <= 0xef ? 3 : lead >= 0xf0 && lead <= 0xf4 ? 4 : undefined
   if (width === undefined) return start + 1
   for (let offset = 1; offset < width; offset += 1) {
     if (start + offset >= bytes.length) return undefined
@@ -431,25 +425,38 @@ export const layer = (options?: ShellSelect.Options) =>
                 stream.once("error", () => resolve())
               })
               const outputDone = Deferred.makeUnsafe<void>()
+              const outputFailed = Deferred.makeUnsafe<never, Error>()
+              stream.on("error", (error) => Deferred.doneUnsafe(outputFailed, Effect.fail(error)))
+              yield* Effect.addFinalizer(() => Effect.sync(() => stream.destroy()))
               const pump = handle.all.pipe(
                 Stream.runForEach((chunk: Uint8Array) =>
-                  Effect.sync(() => {
-                    stream.write(chunk)
-                    session.size += chunk.length
+                  Effect.callback<void, Error>((resume) => {
+                    stream.write(chunk, (error) =>
+                      resume(
+                        error
+                          ? Effect.fail(error)
+                          : Effect.sync(() => {
+                              session.size += chunk.length
+                            }),
+                      ),
+                    )
                   }),
                 ),
               )
-              runFork(
-                Effect.gen(function* () {
-                  yield* pump.pipe(Effect.catch(() => Effect.void))
-                  yield* Effect.promise(
-                    () =>
-                      new Promise<void>((resolve) => {
-                        stream.end(() => resolve())
-                      }),
-                  )
-                  yield* Deferred.succeed(outputDone, undefined)
-                }).pipe(Effect.catch(() => Deferred.succeed(outputDone, undefined))),
+              yield* Effect.gen(function* () {
+                yield* pump
+                yield* Effect.callback<void>((resume) => {
+                  stream.end(() => resume(Effect.void))
+                })
+              }).pipe(
+                Effect.raceFirst(Deferred.await(outputFailed)),
+                Effect.catch((error) =>
+                  Effect.logWarning("Shell output capture failed", { id, error }).pipe(
+                    Effect.andThen(handle.kill().pipe(Effect.catch(() => Effect.void))),
+                  ),
+                ),
+                Effect.ensuring(Deferred.succeed(outputDone, undefined)),
+                Effect.forkScoped,
               )
               yield* Effect.promise(() => opened)
               if (owner)
@@ -568,7 +575,14 @@ export const layer = (options?: ShellSelect.Options) =>
       })
 
       return Service.of({
-        prepare, create, list, get, wait, timeout, output, remove,
+        prepare,
+        create,
+        list,
+        get,
+        wait,
+        timeout,
+        output,
+        remove,
         noticeOwed: (id, sessionID) => ShellLedger.noticeOwed(database, id, sessionID),
         noticeAdmitted: (id) => ShellLedger.noticeAdmitted(database, id),
       })
@@ -579,7 +593,15 @@ export function configured(options?: ShellSelect.Options) {
   return makeLocationNode({
     service: Service,
     layer: layer(options),
-    deps: [EventRuntime.node, Location.node, Config.node, Global.node, AppProcess.node, ShellSandbox.node, Database.node],
+    deps: [
+      EventRuntime.node,
+      Location.node,
+      Config.node,
+      Global.node,
+      AppProcess.node,
+      ShellSandbox.node,
+      Database.node,
+    ],
   })
 }
 

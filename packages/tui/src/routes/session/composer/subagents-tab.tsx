@@ -204,7 +204,7 @@ export function SubagentMetadata(props: { model?: string; cacheHit?: string; ela
   )
 }
 
-export function SubagentsTab(props: { sessionID: string }) {
+export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: SessionOrchestrationTask) => void }) {
   const route = useRouteData("session")
   const shortcuts = Keymap.useShortcuts()
   const data = useData()
@@ -314,7 +314,7 @@ export function SubagentsTab(props: { sessionID: string }) {
           { label: "↑↓", shortcut: "move", gapAfter: 3 },
           ...(canCancelSubagent(entry.status) ? [{ label: "⌃x k", shortcut: "cancel", gapAfter: 4 }] : []),
           { label: shortcuts.get("composer.subagent.pin.toggle") ?? "p", shortcut: entry.pinnedAt === undefined ? "pin" : "unpin", gapAfter: 3 },
-          ...(entry.status === "waiting" && entry.awaitingInput ? [{ label: "r", shortcut: "answer", gapAfter: 3 }] : []),
+          ...(entry.status === "waiting" && entry.awaitingInput ? [{ label: shortcuts.get("composer.subagent.answer") ?? "r", shortcut: "answer", gapAfter: 3 }] : []),
           ...(pager().older ? [{ label: "⌃n", shortcut: "older", gapAfter: 3 }] : []),
           ...(pager().newer ? [{ label: "⌃p", shortcut: "newer", gapAfter: 3 }] : []),
           { label: "Esc", shortcut: "close" },
@@ -393,7 +393,10 @@ export function SubagentsTab(props: { sessionID: string }) {
         bind: "r",
         run() {
           const entry = selectedEntry()
-          if (entry?.awaitingInput) navigate({ type: "session", sessionID: entry.sessionID })
+          const task = page()?.data.find((task) => task.sessionID === entry?.sessionID)
+          if (task?.state !== "waiting" || !task.question) return
+          if (props.onAnswer) return props.onAnswer(task)
+          navigate({ type: "session", sessionID: task.sessionID })
         },
       },
       {
