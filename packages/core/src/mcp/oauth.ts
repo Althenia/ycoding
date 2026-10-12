@@ -2,8 +2,9 @@ export * as MCPOAuth from "./oauth"
 
 import { auth, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js"
 import type { OAuthClientInformationMixed, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js"
+import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js"
 import { createServer } from "node:http"
-import { Deferred, Effect } from "effect"
+import { Deferred, Effect, Option, Schema } from "effect"
 import { Credential } from "@ycoding-ai/schema/credential"
 import { ConfigMCP } from "../config/mcp"
 import { OauthCallbackPage } from "../oauth/page"
@@ -94,6 +95,57 @@ export const memoryStore = (): Store => {
       verifier = value
     },
   }
+}
+
+type Exchange = { readonly ok: boolean; readonly body: ArrayBuffer; readonly init: ResponseInit }
+
+const exchanges = new Map<string, Promise<Exchange>>()
+const rotations = new Map<string, string>()
+const decodeRotation = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Struct({ refresh_token: Schema.String })))
+
+export const refreshFetch =
+  (onRejected: (refreshToken: string) => void): FetchLike =>
+  async (url, init) => {
+    const body = init?.body
+    const refreshToken =
+      body instanceof URLSearchParams && body.get("grant_type") === "refresh_token" ? body.get("refresh_token") : null
+    if (!refreshToken) return fetch(url, init)
+    const superseded = rotations.get(refreshToken)
+    if (superseded !== undefined) {
+      rotations.delete(refreshToken)
+      exchanges.delete(superseded)
+    }
+    const key = `${url}\u0000${body}`
+    const result = await (exchanges.get(key) ?? exchange(key, refreshToken, url, init))
+    if (!result.ok) onRejected(refreshToken)
+    return new Response(result.body, result.init)
+  }
+
+const exchange = (key: string, refreshToken: string, url: string | URL, init?: RequestInit) => {
+  const pending = fetch(url, init).then(
+    async (response): Promise<Exchange> => {
+      const result = {
+        ok: response.ok,
+        body: await response.arrayBuffer(),
+        init: { status: response.status, statusText: response.statusText, headers: response.headers },
+      }
+      const rotated = result.ok
+        ? Option.getOrUndefined(decodeRotation(new TextDecoder().decode(result.body)))?.refresh_token
+        : undefined
+      if (rotated === undefined || rotated === refreshToken) {
+        exchanges.delete(key)
+        return result
+      }
+      rotations.set(rotated, key)
+      return result
+    },
+    (error) => {
+      exchanges.delete(key)
+      throw error
+    },
+  )
+  exchanges.set(key, pending)
+  return pending
 }
 
 /** Reads the dynamically-registered client info we stash in a credential's metadata, for token refresh. */

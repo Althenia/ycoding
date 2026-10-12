@@ -8,6 +8,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { UnauthorizedError, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js"
+import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js"
 import { z } from "zod"
 import {
   CallToolResultSchema,
@@ -244,7 +245,7 @@ export const connect = Effect.fnUntraced(function* (
   directory: string,
   // Only consumed by the remote transport; stdio servers have no auth concept. A provider with no
   // stored token (and a no-op redirect) surfaces an UnauthorizedError, which we map to needs_auth.
-  authProvider?: OAuthClientProvider,
+  auth?: { readonly provider: OAuthClientProvider; readonly fetch?: FetchLike },
   elicitation?: ElicitationHandler,
 ) {
   const transport: Transport = yield* Effect.gen(function* () {
@@ -281,7 +282,8 @@ export const connect = Effect.fnUntraced(function* (
       return yield* new ConnectError({ server, message: `Invalid MCP URL for "${server}"` })
     return new StreamableHTTPClientTransport(new URL(config.url), {
       requestInit: config.headers ? { headers: config.headers } : undefined,
-      authProvider,
+      authProvider: auth?.provider,
+      fetch: auth?.fetch,
     })
   })
   const client = new Client(

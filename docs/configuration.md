@@ -820,6 +820,8 @@ Remote server fields:
 
 OAuth fields are `client_id`, `client_secret`, `scope`, `callback_port`, and `redirect_uri`.
 
+A remote server's OAuth credentials are stored as profiles of its integration, keyed by server name and URL, and every Location and process sharing the data directory uses them. Each connection uses the integration's active profile and reads the stored credential on every request, so a token refreshed or rotated by one connection is used by all of them. When the server rejects the access token, the connection refreshes it with the stored refresh token and retries the request. It keeps the stored refresh token when the token response omits one and stores the rotated token when one is returned. Within one process, a refresh token is exchanged once. Concurrent identical refresh requests share that exchange. When the exchange returns a rotated refresh token, later requests presenting the exchanged token reuse its result until a request presents the rotated token. When a refresh is rejected after the stored token has already been replaced, the connection retries with the replacement. When the token still stored is rejected, the connection removes that profile and reports `needs_auth`. Access tokens are refreshed only after the server rejects them, not ahead of their expiry. Simultaneous refreshes of one single-use refresh token from different processes are not coordinated.
+
 Default MCP timeouts are:
 
 | Phase                                                     | Default    |

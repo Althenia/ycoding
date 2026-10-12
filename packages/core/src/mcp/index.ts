@@ -305,10 +305,11 @@ export const layer = Layer.effect(
         connection,
       })
 
-    // Builds the connect-time auth provider for a remote OAuth-integration server. The SDK presents and
-    // refreshes stored tokens, persisting refreshes back to the same credential row. The provider never
-    // opens a browser, so an auth-gated connect ends in UnauthorizedError -> needs_auth rather than a redirect.
-    const connectProvider = Effect.fnUntraced(function* (entry: ServerEntry) {
+    // Builds the connect-time auth for a remote OAuth-integration server. The SDK presents and refreshes the
+    // active profile's tokens, reading the stored row on every use because other Locations and processes rotate
+    // the same credential. The provider never opens a browser, so an auth-gated connect ends in
+    // UnauthorizedError -> needs_auth rather than a redirect.
+    const connectAuth = Effect.fnUntraced(function* (entry: ServerEntry) {
       if (entry.config.type !== "remote" || !entry.integrationID) return undefined
       const remote = entry.config
       const oauth = remote.oauth || undefined
@@ -319,43 +320,65 @@ export const layer = Layer.effect(
         // No browser during connect: an auth-gated server surfaces needs_auth instead of opening a browser.
         onRedirect: () => {},
       }
-      const stored = yield* credentials.list(entry.integrationID)
-      const found = stored.find((credential) => credential.value.type === "oauth")
+      const active = yield* integration.connection.active(entry.integrationID)
+      const found = active?.type === "credential" ? yield* credentials.get(active.id) : undefined
       if (!found || found.value.type !== "oauth")
         // No stored credential yet: an empty in-memory store still lets the SDK run the auth handshake, which
         // ends in UnauthorizedError -> needs_auth. Returning no provider instead would let the transport throw
         // a raw HTTP error, hiding the auth requirement behind a generic failed status. Anonymous servers are
         // unaffected: tokens() returns undefined, so no auth header is sent and the SDK never calls auth().
-        return MCPOAuth.provider({ ...base, store: MCPOAuth.memoryStore() })
+        return { provider: MCPOAuth.provider({ ...base, store: MCPOAuth.memoryStore() }) }
       const credentialID = found.id
       const methodID = found.value.methodID
-      let current: Credential.OAuth | undefined = found.value
-      return MCPOAuth.provider({
-        ...base,
-        // Drop a credential the SDK rejected so the next connect cleanly reports needs_auth. Uses the raw
-        // credential service (no integration event) to avoid re-triggering the reconnect subscriber mid-connect.
-        invalidate: async (scope) => {
-          if (scope === "verifier" || scope === "discovery") return
-          current = undefined
-          await Effect.runPromise(credentials.remove(credentialID))
-        },
-        store: {
-          tokens: async () => (current ? MCPOAuth.toTokens(current) : undefined),
-          saveTokens: async (tokens) => {
-            current = MCPOAuth.toCredential({
-              methodID,
-              serverUrl: remote.url,
-              tokens,
-              client: current ? MCPOAuth.clientFromCredential(current) : undefined,
-            })
-            await Effect.runPromise(credentials.update(credentialID, { value: current }))
+      const latest = async () => {
+        const credential = await Effect.runPromise(credentials.get(credentialID))
+        return credential?.value.type === "oauth" ? credential.value : undefined
+      }
+      const rejected = new Set<string>()
+      return {
+        fetch: MCPOAuth.refreshFetch((refreshToken) => {
+          rejected.add(refreshToken)
+        }),
+        provider: MCPOAuth.provider({
+          ...base,
+          // Drop the credential only when the server rejected the refresh token it still stores; a rejection of a
+          // token another holder already rotated keeps the newer row, which the SDK's retry then presents. Uses the
+          // raw credential service (no integration event) to avoid re-triggering the reconnect subscriber mid-connect.
+          invalidate: async (scope) => {
+            if (scope === "verifier" || scope === "discovery") return
+            const stored = await latest()
+            if (stored && !rejected.has(stored.refresh)) return
+            await Effect.runPromise(credentials.remove(credentialID))
           },
-          clientInformation: async () => (current ? MCPOAuth.clientFromCredential(current) : undefined),
-          saveClientInformation: async () => {},
-          codeVerifier: async () => undefined,
-          saveCodeVerifier: async () => {},
-        },
-      })
+          store: {
+            tokens: async () => {
+              const stored = await latest()
+              return stored ? MCPOAuth.toTokens(stored) : undefined
+            },
+            saveTokens: async (tokens) => {
+              const stored = await latest()
+              if (!stored) return
+              await Effect.runPromise(
+                credentials.update(credentialID, {
+                  value: MCPOAuth.toCredential({
+                    methodID,
+                    serverUrl: remote.url,
+                    tokens,
+                    client: MCPOAuth.clientFromCredential(stored),
+                  }),
+                }),
+              )
+            },
+            clientInformation: async () => {
+              const stored = await latest()
+              return stored ? MCPOAuth.clientFromCredential(stored) : undefined
+            },
+            saveClientInformation: async () => {},
+            codeVerifier: async () => undefined,
+            saveCodeVerifier: async () => {},
+          },
+        }),
+      }
     })
 
     const elicitation = {
@@ -555,10 +578,10 @@ export const layer = Layer.effect(
         yield* events.publish(McpEvent.StatusChanged, { server: name }).pipe(Effect.ignore)
         const scope = yield* Scope.fork(root)
         entry.scope = scope
-        const authProvider = yield* connectProvider(entry)
+        const auth = yield* connectAuth(entry)
         // List tools as part of connect so a failure here marks the server failed rather than
         // leaving it connected with a silently empty tool list and no path to recover.
-        const result = yield* MCPClient.connect(name, entry.config, location.directory, authProvider, elicitation).pipe(
+        const result = yield* MCPClient.connect(name, entry.config, location.directory, auth, elicitation).pipe(
           Effect.flatMap((connection) => connection.tools().pipe(Effect.map((tools) => ({ connection, tools })))),
           Scope.provide(scope),
           Effect.exit,
