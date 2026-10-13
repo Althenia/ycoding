@@ -22,6 +22,7 @@ mod session_list;
 mod session_outstanding;
 mod session_read_models;
 mod session_revert;
+mod session_services;
 mod session_state;
 mod session_subagent;
 

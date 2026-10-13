@@ -119,6 +119,11 @@ pub enum Failure {
     },
     InvalidCursor(String),
     Conflict(String),
+    InstructionEntryValueTooLarge {
+        actual_bytes: i64,
+        max_bytes: i64,
+        message: ycoding_core::ycoding_schema::LosslessString,
+    },
     Unavailable(String),
 }
 
@@ -457,6 +462,21 @@ impl Failure {
                 })
             }
             Failure::Conflict(message) => invalid(&message, "conflict"),
+            Failure::InstructionEntryValueTooLarge {
+                actual_bytes,
+                max_bytes,
+                message,
+            } if declared(v5::InstructionEntryValueTooLargeError::full_name()) => {
+                encoded(v5::InstructionEntryValueTooLargeError {
+                    tag: 1,
+                    actual_bytes,
+                    max_bytes,
+                    message: convert::wire(&message),
+                })
+            }
+            Failure::InstructionEntryValueTooLarge { .. } => {
+                invalid("Instruction entry value is too large", "too_large")
+            }
             Failure::Invalid(message) => encoded(v5::InvalidRequestError {
                 tag: 1,
                 message: convert::text(&message),

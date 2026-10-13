@@ -3,7 +3,7 @@ use crate::{
     dispatch::{Dispatcher, Failure, Invocation, RegistrationError},
     event_subscribe, form, guardrail, ids, message, permission, question, session_autonomy,
     session_create, session_helpers, session_list, session_outstanding, session_read_models,
-    session_revert, session_state, session_subagent,
+    session_revert, session_services, session_state, session_subagent,
 };
 use ycoding_core::session::{pending, run_coordinator};
 use ycoding_core::ycoding_schema::{
@@ -32,6 +32,22 @@ pub fn standard() -> Result<Dispatcher, RegistrationError> {
     dispatcher.handle("session.diagnostics", session_state::diagnostics)?;
     dispatcher.handle("session.usage", session_read_models::usage)?;
     dispatcher.handle("session.usageReport", session_read_models::usage_report)?;
+    dispatcher.handle("session.completions", session_services::completions)?;
+    dispatcher.handle("session.context", session_services::context)?;
+    dispatcher.handle("session.background", session_services::background)?;
+    dispatcher.handle(
+        "session.instructions.entry.list",
+        session_services::instruction_entry_list,
+    )?;
+    dispatcher.handle(
+        "session.instructions.entry.put",
+        session_services::instruction_entry_put,
+    )?;
+    dispatcher.handle(
+        "session.instructions.entry.remove",
+        session_services::instruction_entry_remove,
+    )?;
+    dispatcher.handle("session.wait", session_services::wait)?;
     dispatcher.handle(
         "session.capturedInputs",
         session_read_models::captured_inputs,

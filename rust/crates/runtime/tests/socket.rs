@@ -480,8 +480,11 @@ async fn every_local_operation_answers_with_a_declared_typed_outcome() {
                 "session.archive",
                 "session.autonomy.get",
                 "session.autonomy.set",
+                "session.background",
                 "session.capturedInputs",
                 "session.compaction.list",
+                "session.completions",
+                "session.context",
                 "session.create",
                 "session.diagnostics",
                 "session.form.cancel",
@@ -494,6 +497,9 @@ async fn every_local_operation_answers_with_a_declared_typed_outcome() {
                 "session.guardrail.request.list",
                 "session.guardrail.request.reply",
                 "session.guardrail.status",
+                "session.instructions.entry.list",
+                "session.instructions.entry.put",
+                "session.instructions.entry.remove",
                 "session.interrupt",
                 "session.list",
                 "session.log",
@@ -528,7 +534,8 @@ async fn every_local_operation_answers_with_a_declared_typed_outcome() {
                 "session.unarchive",
                 "session.unpin",
                 "session.usage",
-                "session.usageReport"
+                "session.usageReport",
+                "session.wait"
             ]
         );
         let environment = Arc::new(ycoding_runtime::Environment {
