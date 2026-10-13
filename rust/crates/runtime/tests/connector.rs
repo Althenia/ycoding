@@ -517,6 +517,7 @@ async fn local_remote_controls_validate_boolean_and_persist_last_intent() {
             .await,
     );
     assert_eq!(off.data.state, 1);
+    assert_eq!(off.data.device, None);
     let invalid = failure(
         dispatcher
             .invoke(
@@ -1180,6 +1181,7 @@ async fn local_control_socket_owns_enable_disable_and_server_lifetime_cleanup() 
     let off: v5::RemoteGetResult =
         support::success(local.call("remote.get", machine(), Vec::new()).await);
     assert_eq!(off.data.state, 1);
+    assert_eq!(off.data.device, None);
     let enabled: v5::RemoteSetResult = support::success(
         local
             .call(
@@ -1198,6 +1200,7 @@ async fn local_control_socket_owns_enable_disable_and_server_lifetime_cleanup() 
     let online: v5::RemoteGetResult =
         support::success(local.call("remote.get", machine(), Vec::new()).await);
     assert_eq!(online.data.state, 3);
+    assert_eq!(online.data.device, None);
     let disabled: v5::RemoteSetResult = support::success(
         local
             .call(

@@ -298,6 +298,7 @@ impl Fixture {
             skills: Arc::new(tokio::sync::Mutex::new(skill::Service::new(
                 &path.join("skills"),
             ))),
+            roots: roots.clone(),
             diagnostics: vec![],
             plugins: vec![],
             ready: Arc::new(|| Box::pin(async { Ok(()) })),

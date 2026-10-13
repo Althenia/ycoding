@@ -612,6 +612,7 @@ pub fn location_info(info: &location::Info) -> v5::LocationInfo {
             id: wire(info.project.id.as_lossless()),
             directory: wire(info.project.directory.as_lossless()),
         },
+        backend_paths: None,
     }
 }
 

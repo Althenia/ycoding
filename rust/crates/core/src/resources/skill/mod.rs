@@ -1,4 +1,5 @@
-use super::config::Entry;
+use super::config::{Entry, Roots};
+use crate::platform::filesystem::contains;
 use crate::resources::discovery::{
     Diagnostic, Error, Kind, absolute_path, markdown, object, read_text, scan, trim,
 };
@@ -270,6 +271,25 @@ fn insert_skill(skills: &mut Vec<Info>, skill: Info) {
         return;
     }
     skills.push(skill);
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scope {
+    Global,
+    Project,
+}
+pub fn scope(info: &Info, project: &Path, roots: &Roots) -> Option<Scope> {
+    let location = Path::new(info.location.as_lossless().as_str()?);
+    if contains(project, location) {
+        return Some(Scope::Project);
+    }
+    [
+        roots.home.join(".agents/skills"),
+        roots.home.join(".claude/skills"),
+        roots.config.join("skills"),
+    ]
+    .iter()
+    .any(|directory| contains(directory, location))
+    .then_some(Scope::Global)
 }
 pub fn available<'a>(skills: &'a [Info], agent: &ycoding_schema::agent::Info) -> Vec<&'a Info> {
     skills

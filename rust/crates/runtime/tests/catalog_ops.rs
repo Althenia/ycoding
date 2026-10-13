@@ -64,8 +64,18 @@ fn fixture(catalog: Catalog, refresh: CatalogTask) -> CatalogServices {
     ];
     let models = Arc::new(model::Resolver::new(catalog));
     let mut skills = skill::Service::new(Path::new("/tmp/ycoding-catalog-skills"));
-    for (name, content) in [("first", "user"), ("second", "other"), ("first", "project")] {
-        skills.source(Source::Embedded(ycoding_core::ycoding_schema::skill::EmbeddedSource { skill: ycoding_core::ycoding_schema::skill::Info::decode(&parse_json(&format!(r#"{{"id":"{name}","name":"{name}","description":"fixture","slash":true,"autoinvoke":false,"conflicts":{{"skills":["other"],"instructions":["core/instructions"]}},"location":"/project/skills/{name}/SKILL.md","content":"{content}"}}"#)).unwrap()).unwrap() }));
+    for (name, content, location) in [
+        ("first", "user", "/project/skills/first/SKILL.md"),
+        ("second", "other", "/project/skills/second/SKILL.md"),
+        ("first", "project", "/project/skills/first/SKILL.md"),
+        (
+            "global",
+            "global",
+            "/home/fixture/.agents/skills/global/SKILL.md",
+        ),
+        ("builtin", "builtin", "/builtin/skills/builtin/SKILL.md"),
+    ] {
+        skills.source(Source::Embedded(ycoding_core::ycoding_schema::skill::EmbeddedSource { skill: ycoding_core::ycoding_schema::skill::Info::decode(&parse_json(&format!(r#"{{"id":"{name}","name":"{name}","description":"fixture","slash":true,"autoinvoke":false,"conflicts":{{"skills":["other"],"instructions":["core/instructions"]}},"location":"{location}","content":"{content}"}}"#)).unwrap()).unwrap() }));
     }
     CatalogServices {
         generate: Arc::new(generate::Service {
@@ -97,6 +107,7 @@ fn fixture(catalog: Catalog, refresh: CatalogTask) -> CatalogServices {
             .unwrap(),
         ),
         skills: Arc::new(tokio::sync::Mutex::new(skills)),
+        roots,
         diagnostics: ycoding_core::resources::config::decode_document(
             r#"{"permissions":[{"action":"shell","resource":42,"effect":"allow"}]}"#,
             "/project/ycoding.json",
@@ -381,7 +392,30 @@ async fn agents_commands_references_skills_diagnostics_and_plugins_use_location_
             },
         )
         .await;
-        assert_eq!(skills.data.items.len(), 2);
+        assert_eq!(skills.data.items.len(), 4);
+        assert_eq!(
+            skills
+                .data
+                .items
+                .iter()
+                .map(|skill| (units(&skill.id), skill.scope))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    "first".into(),
+                    Some(v5::ConfigurationScope::ConfigurationscopeProject as i32)
+                ),
+                (
+                    "second".into(),
+                    Some(v5::ConfigurationScope::ConfigurationscopeProject as i32)
+                ),
+                (
+                    "global".into(),
+                    Some(v5::ConfigurationScope::ConfigurationscopeGlobal as i32)
+                ),
+                ("builtin".into(), None),
+            ]
+        );
         assert_eq!(units(&skills.data.items[0].content), "user");
         assert_eq!(skills.data.items[0].slash, Some(true));
         assert_eq!(skills.data.items[0].autoinvoke, Some(false));

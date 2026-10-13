@@ -152,7 +152,11 @@ async fn get(
         .ok_or_else(|| Failure::Unavailable("Remote connector is not composed".into()))?;
     let (state, message) = state(control.status());
     Ok(v5::RemoteGetResult {
-        data: v5::RemoteGetResultData { state, message },
+        data: v5::RemoteGetResultData {
+            state,
+            message,
+            device: None,
+        },
     })
 }
 

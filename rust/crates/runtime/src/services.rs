@@ -185,6 +185,7 @@ pub struct CatalogServices {
     pub commands: Arc<ycoding_core::resources::command::Service>,
     pub references: Arc<ycoding_core::resources::reference::Service>,
     pub skills: Arc<tokio::sync::Mutex<ycoding_core::resources::skill::Service>>,
+    pub roots: ycoding_core::resources::config::Roots,
     pub diagnostics: Vec<ycoding_core::ycoding_schema::config::Diagnostic>,
     pub plugins: Vec<ycoding_core::ycoding_schema::plugin::Info>,
     pub ready: CatalogTask,

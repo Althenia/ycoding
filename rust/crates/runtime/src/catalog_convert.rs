@@ -293,7 +293,10 @@ pub fn reference(info: &reference::Info) -> Result<v5::ReferenceInfo, Failure> {
     })
 }
 
-pub fn skill(info: &skill::Info) -> Result<v5::SkillInfo, Failure> {
+pub fn skill(
+    info: &skill::Info,
+    scope: Option<ycoding_core::resources::skill::Scope>,
+) -> Result<v5::SkillInfo, Failure> {
     Ok(v5::SkillInfo {
         id: convert::wire(&info.id),
         name: convert::wire(&info.name),
@@ -320,6 +323,14 @@ pub fn skill(info: &skill::Info) -> Result<v5::SkillInfo, Failure> {
             .transpose()?,
         location: convert::wire(info.location.as_lossless()),
         content: convert::wire(&info.content),
+        scope: scope.map(|scope| match scope {
+            ycoding_core::resources::skill::Scope::Global => {
+                v5::ConfigurationScope::ConfigurationscopeGlobal as i32
+            }
+            ycoding_core::resources::skill::Scope::Project => {
+                v5::ConfigurationScope::ConfigurationscopeProject as i32
+            }
+        }),
     })
 }
 
