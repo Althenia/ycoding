@@ -125,6 +125,12 @@ During request assembly, PNG, JPEG, GIF, and WebP files are reread into transien
 
 The idempotent `managed-attachments-v1` application migration scans `session.input.admitted.1` events plus user rows in `session_pending` and `session_message`. It imports legacy base64 payloads, verifies rows already using managed references, rewrites all three stores in one database transaction, and records its completion marker only after every row succeeds.
 
+### Revision 5 asset and Form delivery
+
+The revision 5 connection delivers filesystem and managed-attachment assets as one pending read: a nonterminal metadata Result followed by an exact raw-byte bulk body. Asset success exposes both the canonical metadata Result and the body only at successful BulkEnd. Metadata and body ownership remain bounded and charged until the consumer releases them; cancellation or reconstruction of transmitted work yields unknown, not replay. The [connection contract](../packages/protocol/src/v5/connection/README.md) defines metadata validation, empty assets, fixed pieces, consumption deadlines and relay forwarding. Rust composition registers these reads through `Dispatcher.handle_asset` with a validated `Asset<ResultType>` and owns its read/materialization budget before producing bytes.
+
+Local revision 5 Form callers select a recorded Location's global namespace with `Scope.global_form { directory, workspace_id? }` and params.sessionID `global`. This scope supports create/list/get/state/reply/cancel without a Session row and isolates ownership by the selected Location. Global Form settlement events retain the global owner and publish as sessionless ephemeral events; other event owners retain strict Session-ID validation. Real-Session forms continue to resolve placement from that Session. Remote Form callers remain restricted to verified real Sessions and cannot select this global namespace.
+
 ### Execution ownership
 
 `SessionExecution` is process-global and keyed by Session ID. It uses a process-local coordinator to:

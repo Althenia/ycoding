@@ -2,6 +2,7 @@ use super::{
     Budgets, Ledger, ReservationBudget, SharedReservation, event_reservation_bytes, events,
 };
 use crate::{limits, v5};
+use prost::Message;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::{cell::RefCell, rc::Rc};
 
@@ -72,12 +73,26 @@ pub enum Outcome {
         start: v5::BulkStart,
         bytes: Rc<Vec<u8>>,
     },
+    AssetSuccess {
+        settlement: v5::Settlement,
+        metadata: Rc<v5::AssetMetadataResult>,
+        start: v5::BulkStart,
+        bytes: Rc<Vec<u8>>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Decision {
     Send(v5::Frame),
     Established,
+    AssetMetadata {
+        request_id: String,
+        metadata: Rc<v5::AssetMetadataResult>,
+    },
+    EventBatchReleased {
+        ticket: u64,
+        consumed: bool,
+    },
     Request(v5::Request),
     Settled {
         request_id: String,
@@ -116,6 +131,11 @@ pub struct EventMetadata {
     pub message_id: Option<String>,
     pub priority: v5::PriorityMode,
 }
+#[derive(Debug, PartialEq)]
+pub struct RelayInterestDelta {
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+}
 
 pub struct Connection {
     config: Config,
@@ -145,6 +165,9 @@ pub struct Connection {
     subscriptions: BTreeMap<String, Subscription>,
     awaiting_subscription: BTreeMap<String, Pending>,
     sending_subscriptions: BTreeMap<String, Subscription>,
+    relay_clients: BTreeMap<String, (v5::SubscriptionSnapshot, u64)>,
+    relay_identities: BTreeMap<String, (String, u64)>,
+    forwarded_tickets: BTreeSet<u64>,
     resync_fences: BTreeMap<u64, v5::Scope>,
     event_ticket: u64,
     handed_events: BTreeMap<u64, (u64, String)>,
@@ -196,11 +219,14 @@ struct Queued {
     event_key: Option<String>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct Pending {
     operation_id: u32,
     scope: v5::Scope,
     sent: bool,
+    asset_count: Option<u64>,
+    asset_metadata: Option<Rc<v5::AssetMetadataResult>>,
+    asset_charge: u64,
 }
 
 struct Subscription {
@@ -223,11 +249,166 @@ struct Transfer {
     complete: bool,
     started: bool,
     handed_pieces: u32,
+    asset_metadata: Option<Rc<v5::AssetMetadataResult>>,
+    asset_charge: u64,
 }
 
 impl Connection {
     pub fn reservation(&self) -> SharedReservation {
         self.reservation.clone()
+    }
+    pub fn relay_subscription_id(&self, session_id: &str) -> Option<&str> {
+        self.relay_identities
+            .get(session_id)
+            .map(|(id, _)| id.as_str())
+    }
+    pub fn relay_interest_retained_bytes(&self) -> u64 {
+        self.relay_clients
+            .values()
+            .map(|(_, bytes)| *bytes)
+            .chain(self.relay_identities.values().map(|(_, bytes)| *bytes))
+            .sum()
+    }
+    pub fn update_relay_interests(
+        &mut self,
+        snapshot: v5::SubscriptionSnapshot,
+        now_ms: u64,
+    ) -> Result<RelayInterestDelta, ProtocolError> {
+        self.time(now_ms)?;
+        if self.phase != Phase::Established
+            || self.config.local_role != v5::PeerRole::Agent
+            || self.config.peer_role != v5::PeerRole::Relay
+        {
+            return Err(ProtocolError::Direction);
+        }
+        if snapshot.client_id.is_empty()
+            || snapshot.session_ids.iter().any(String::is_empty)
+            || snapshot.session_ids.iter().collect::<BTreeSet<_>>().len()
+                != snapshot.session_ids.len()
+        {
+            return Err(ProtocolError::Malformed);
+        }
+        let before = self
+            .relay_clients
+            .values()
+            .flat_map(|(entry, _)| entry.session_ids.iter().map(String::as_str))
+            .collect::<BTreeSet<_>>();
+        let after = self
+            .relay_clients
+            .iter()
+            .filter(|(id, _)| *id != &snapshot.client_id)
+            .flat_map(|(_, (entry, _))| entry.session_ids.iter().map(String::as_str))
+            .chain(snapshot.session_ids.iter().map(String::as_str))
+            .collect::<BTreeSet<_>>();
+        if snapshot.session_ids.len() > limits::SUBSCRIPTIONS as usize
+            || after.len() > limits::SUBSCRIPTIONS as usize
+            || (!snapshot.session_ids.is_empty()
+                && !self.relay_clients.contains_key(&snapshot.client_id)
+                && self.relay_clients.len() >= limits::RELAY_PEERS as usize)
+            || snapshot.encoded_len() as u64 > limits::SERVER_FRAME_BYTES
+        {
+            return Err(ProtocolError::Limit);
+        }
+        let delta = RelayInterestDelta {
+            added: after
+                .difference(&before)
+                .map(|id| (*id).to_string())
+                .collect(),
+            removed: before
+                .difference(&after)
+                .map(|id| (*id).to_string())
+                .collect(),
+        };
+        let bytes = snapshot.encoded_len() as u64;
+        if !snapshot.session_ids.is_empty() && !self.reserve(bytes) {
+            return Err(ProtocolError::Limit);
+        }
+        let previous = if snapshot.session_ids.is_empty() {
+            self.relay_clients.remove(&snapshot.client_id)
+        } else {
+            self.relay_clients
+                .insert(snapshot.client_id.clone(), (snapshot, bytes))
+        };
+        if let Some((_, bytes)) = previous {
+            self.release(bytes)?;
+        }
+        for session in &delta.removed {
+            if let Some((id, bytes)) = self.relay_identities.remove(session) {
+                self.release(bytes)?;
+                self.release_subscription(&id, Direction::Send)?;
+            }
+        }
+        Ok(delta)
+    }
+    pub fn release_relay_client(
+        &mut self,
+        client_id: &str,
+        now_ms: u64,
+    ) -> Result<RelayInterestDelta, ProtocolError> {
+        self.update_relay_interests(
+            v5::SubscriptionSnapshot {
+                client_id: client_id.into(),
+                session_ids: Vec::new(),
+            },
+            now_ms,
+        )
+    }
+    pub fn register_relay_interest(
+        &mut self,
+        session_id: String,
+        subscription_id: String,
+        source_epoch: String,
+        now_ms: u64,
+    ) -> Result<(), ProtocolError> {
+        self.time(now_ms)?;
+        if self.phase != Phase::Established
+            || self.config.local_role != v5::PeerRole::Agent
+            || self.config.peer_role != v5::PeerRole::Relay
+            || subscription_id.is_empty()
+            || source_epoch.is_empty()
+            || !self
+                .relay_clients
+                .values()
+                .any(|(entry, _)| entry.session_ids.contains(&session_id))
+            || self.relay_identities.contains_key(&session_id)
+            || self.sending_subscriptions.contains_key(&subscription_id)
+        {
+            return Err(ProtocolError::Malformed);
+        }
+        if self.sending_subscriptions.len() >= limits::SUBSCRIPTIONS as usize {
+            return Err(ProtocolError::Limit);
+        }
+        let bytes = (session_id.len() + subscription_id.len() + source_epoch.len()) as u64;
+        if bytes > limits::SERVER_FRAME_BYTES || !self.reserve(bytes) {
+            return Err(ProtocolError::Limit);
+        }
+        let Some(descriptor) = self
+            .descriptors
+            .iter()
+            .find(|descriptor| descriptor.diagnostic_name == "event.subscribe")
+        else {
+            self.release(bytes)?;
+            return Err(ProtocolError::Unknown);
+        };
+        self.sending_subscriptions.insert(
+            subscription_id.clone(),
+            Subscription {
+                event_types: descriptor.event_types.clone(),
+                scope: v5::Scope {
+                    target: Some(v5::scope::Target::Session(session_id.clone())),
+                },
+                source_epoch: Some(source_epoch),
+                hydration: None,
+                bytes: 0,
+                events: 0,
+                invalidated: false,
+                ending: false,
+                resync_required: false,
+            },
+        );
+        self.relay_identities
+            .insert(session_id, (subscription_id, bytes));
+        Ok(())
     }
     pub fn stats(&self) -> Stats {
         Stats {
@@ -302,6 +483,9 @@ impl Connection {
         let mut decisions = Vec::new();
         for id in invalid {
             if let Some(pending) = self.requests.remove(&id) {
+                if self.release(pending.asset_charge).is_err() {
+                    return self.close(ProtocolError::Limit);
+                }
                 if self.remove_output(&id, None).is_err() {
                     return self.close(ProtocolError::Limit);
                 }
@@ -314,7 +498,9 @@ impl Connection {
                 for transfer_id in transfers {
                     if let Some(transfer) = self.transfers.remove(&transfer_id)
                         && self.config.local_role != v5::PeerRole::Relay
-                        && self.release(transfer.start.byte_count).is_err()
+                        && self
+                            .release(transfer.start.byte_count + transfer.asset_charge)
+                            .is_err()
                     {
                         return self.close(ProtocolError::Limit);
                     }
@@ -411,6 +597,7 @@ impl Connection {
                 operation_id,
                 scope,
                 sent: false,
+                ..Default::default()
             },
         );
         self.next_request = next;
@@ -432,7 +619,9 @@ impl Connection {
                 target: Some(v5::cancel::Target::RequestId(request_id.into())),
             }))?;
         }
-        self.requests.remove(request_id);
+        if let Some(pending) = self.requests.remove(request_id) {
+            self.release(pending.asset_charge)?;
+        }
         self.remove_output(request_id, None)?;
         let ids = self
             .transfers
@@ -444,7 +633,7 @@ impl Connection {
             if let Some(transfer) = self.transfers.remove(&id)
                 && self.config.local_role != v5::PeerRole::Relay
             {
-                self.release(transfer.start.byte_count)?;
+                self.release(transfer.start.byte_count + transfer.asset_charge)?;
             }
         }
         Ok(vec![Decision::Settled {
@@ -469,8 +658,25 @@ impl Connection {
             .get(&result.request_id)
             .ok_or(ProtocolError::Unknown)?;
         self.result_contract(&result, pending.operation_id)?;
+        if matches!(result.outcome, Some(v5::result::Outcome::AssetMetadata(_)))
+            && pending.asset_count.is_some()
+        {
+            return Err(ProtocolError::Malformed);
+        }
         if self.queues[0].iter().any(|queued| matches!(&queued.frame.body, Some(v5::frame::Body::Result(existing)) if existing.request_id == result.request_id)) || self.outgoing_transfers.values().any(|transfer| transfer.start.request_id == result.request_id) { return Err(ProtocolError::Malformed); }
-        self.queue_reserved(v5::frame::Body::Result(result), reserve_bytes, self.now)
+        let request_id = result.request_id.clone();
+        let count = match &result.outcome {
+            Some(v5::result::Outcome::AssetMetadata(metadata)) => Some(metadata.byte_count),
+            _ => None,
+        };
+        self.queue_reserved(v5::frame::Body::Result(result), reserve_bytes, self.now)?;
+        if let Some(count) = count {
+            self.incoming
+                .get_mut(&request_id)
+                .ok_or(ProtocolError::Unknown)?
+                .asset_count = Some(count);
+        }
+        Ok(())
     }
 
     pub fn enqueue(
@@ -550,6 +756,8 @@ impl Connection {
                         complete: false,
                         started: false,
                         handed_pieces: 0,
+                        asset_metadata: None,
+                        asset_charge: 0,
                     },
                 );
             }
@@ -740,6 +948,26 @@ impl Connection {
             return Ok(self.subscriptions.remove(subscription_id).is_some());
         }
         let existed = self.sending_subscriptions.remove(subscription_id).is_some();
+        let identities = self
+            .relay_identities
+            .iter()
+            .filter(|(_, (id, _))| id == subscription_id)
+            .map(|(session, _)| session.clone())
+            .collect::<Vec<_>>();
+        for session in identities {
+            if let Some((_, bytes)) = self.relay_identities.remove(&session) {
+                self.release(bytes)?;
+            }
+        }
+        let tickets = self.queues[1].iter().filter(|record| matches!(&record.frame.body, Some(v5::frame::Body::EventBatch(batch)) if batch.subscription_id == subscription_id)).filter_map(|record| record.ticket).chain(self.prepared.as_ref().filter(|record| record.subscription_id.as_deref() == Some(subscription_id)).and_then(|record| record.ticket)).collect::<Vec<_>>();
+        for ticket in tickets {
+            if self.forwarded_tickets.remove(&ticket) {
+                self.notifications.push(Decision::EventBatchReleased {
+                    ticket,
+                    consumed: false,
+                });
+            }
+        }
         let mut released = self.queues[1]
             .iter()
             .filter(|record| match &record.frame.body {
@@ -784,7 +1012,7 @@ impl Connection {
                 .remove(transfer_id)
                 .ok_or(ProtocolError::Unknown)?;
             if self.config.local_role != v5::PeerRole::Relay {
-                self.release(transfer.start.byte_count)?;
+                self.release(transfer.start.byte_count + transfer.asset_charge)?;
             }
             self.requests.remove(&request_id);
             let mut decisions = if self.tiny_room() {
@@ -809,6 +1037,38 @@ impl Connection {
             });
         }
         Ok(Vec::new())
+    }
+    pub fn forward_event_batch(
+        &mut self,
+        batch: v5::EventBatch,
+        now_ms: u64,
+    ) -> Result<u64, ProtocolError> {
+        self.time(now_ms)?;
+        if self.phase != Phase::Established
+            || self.config.local_role != v5::PeerRole::Relay
+            || self.config.peer_role != v5::PeerRole::RemoteClient
+        {
+            return Err(ProtocolError::Direction);
+        }
+        let subscription = self
+            .sending_subscriptions
+            .get(&batch.subscription_id)
+            .ok_or(ProtocolError::Malformed)?;
+        if subscription.scope != batch.scope
+            || subscription.source_epoch.as_deref() != Some(batch.source_epoch.as_str())
+            || !self.authorized(&batch.scope)
+        {
+            return Err(ProtocolError::Direction);
+        }
+        self.valid_events(&batch, Direction::Send)?;
+        let bytes = event_reservation_bytes(&batch, &self.epoch)?;
+        self.queue_reserved(v5::frame::Body::EventBatch(batch), bytes, self.now)?;
+        let ticket = self.queues[1]
+            .back()
+            .and_then(|record| record.ticket)
+            .ok_or(ProtocolError::Unknown)?;
+        self.forwarded_tickets.insert(ticket);
+        Ok(ticket)
     }
     pub fn enqueue_event(
         &mut self,
@@ -1019,6 +1279,9 @@ impl Connection {
             subscriptions: BTreeMap::new(),
             awaiting_subscription: BTreeMap::new(),
             sending_subscriptions: BTreeMap::new(),
+            relay_clients: BTreeMap::new(),
+            relay_identities: BTreeMap::new(),
+            forwarded_tickets: BTreeSet::new(),
             resync_fences: BTreeMap::new(),
             event_ticket: 0,
             handed_events: BTreeMap::new(),
@@ -1316,6 +1579,7 @@ impl Connection {
             pending.sent = true;
         }
         if let Some(v5::frame::Body::Result(result)) = &frame.body
+            && !matches!(result.outcome, Some(v5::result::Outcome::AssetMetadata(_)))
             && let Some(pending) = self.incoming.remove(&result.request_id)
             && self.descriptor(pending.operation_id)?.streaming == v5::Streaming::Events as i32
             && matches!(result.outcome, Some(v5::result::Outcome::Success(_)))
@@ -1394,6 +1658,7 @@ impl Connection {
                         operation_id: request.operation_id,
                         scope: request.scope.clone(),
                         sent: true,
+                        ..Default::default()
                     },
                 );
                 if forwarded {
@@ -1419,13 +1684,52 @@ impl Connection {
                 let descriptor = self.descriptor(pending.operation_id)?;
                 let settlement = v5::Settlement::try_from(descriptor.settlement)
                     .map_err(|_| ProtocolError::Malformed)?;
+                if let Some(v5::result::Outcome::AssetMetadata(metadata)) = &result.outcome {
+                    if pending.asset_count.is_some() {
+                        return Err(ProtocolError::Malformed);
+                    }
+                    let count = metadata.byte_count;
+                    if forwarded {
+                        self.requests
+                            .get_mut(&result.request_id)
+                            .ok_or(ProtocolError::Unknown)?
+                            .asset_count = Some(count);
+                        frame.body = Some(v5::frame::Body::Result(result));
+                        return Ok(vec![Decision::Forward(frame)]);
+                    }
+                    if !self.reserve(encoded_bytes) {
+                        return Err(ProtocolError::Limit);
+                    }
+                    let Some(v5::result::Outcome::AssetMetadata(metadata)) = result.outcome else {
+                        return Err(ProtocolError::Malformed);
+                    };
+                    let metadata = Rc::new(metadata);
+                    let pending = self
+                        .requests
+                        .get_mut(&result.request_id)
+                        .ok_or(ProtocolError::Unknown)?;
+                    pending.asset_count = Some(count);
+                    pending.asset_charge = encoded_bytes;
+                    pending.asset_metadata = Some(metadata.clone());
+                    self.consume(
+                        v5::LedgerClass::Normal,
+                        frame.delivery_ordinal.ok_or(ProtocolError::Malformed)?,
+                        self.now,
+                    )?;
+                    return Ok(vec![Decision::AssetMetadata {
+                        request_id: result.request_id,
+                        metadata,
+                    }]);
+                }
                 if descriptor.streaming == v5::Streaming::Events as i32
                     && matches!(&result.outcome, Some(v5::result::Outcome::Success(_)))
                 {
                     self.awaiting_subscription
                         .insert(result.request_id.clone(), pending.clone());
                 }
-                self.requests.remove(&result.request_id);
+                if let Some(pending) = self.requests.remove(&result.request_id) {
+                    self.release(pending.asset_charge)?;
+                }
                 if forwarded {
                     frame.body = Some(v5::frame::Body::Result(result));
                     return Ok(vec![Decision::Forward(frame)]);
@@ -1436,6 +1740,7 @@ impl Connection {
                         payload,
                     },
                     v5::result::Outcome::Error(payload) => Outcome::Rejected(payload),
+                    v5::result::Outcome::AssetMetadata(_) => return Err(ProtocolError::Malformed),
                 };
                 Ok(vec![Decision::Settled {
                     request_id: result.request_id,
@@ -1540,8 +1845,20 @@ impl Connection {
                         complete: false,
                         started: true,
                         handed_pieces: 0,
+                        asset_metadata: self
+                            .requests
+                            .get(&start.request_id)
+                            .and_then(|pending| pending.asset_metadata.clone()),
+                        asset_charge: self
+                            .requests
+                            .get(&start.request_id)
+                            .map_or(0, |pending| pending.asset_charge),
                     },
                 );
+                self.requests
+                    .get_mut(&start.request_id)
+                    .ok_or(ProtocolError::Unknown)?
+                    .asset_charge = 0;
                 if forwarded {
                     frame.body = Some(v5::frame::Body::BulkStart(start));
                     return Ok(vec![Decision::Forward(frame)]);
@@ -1611,10 +1928,22 @@ impl Connection {
                             crate::validate_binary(&transfer.start.type_name, &transfer.bytes)
                                 .map_err(wire_error)?;
                         }
-                        Outcome::BulkSuccess {
-                            settlement,
-                            start: transfer.start.clone(),
-                            bytes: transfer.bytes.clone(),
+                        if transfer.start.content_kind == v5::ContentKind::Asset as i32 {
+                            Outcome::AssetSuccess {
+                                settlement,
+                                metadata: transfer
+                                    .asset_metadata
+                                    .clone()
+                                    .ok_or(ProtocolError::Malformed)?,
+                                start: transfer.start.clone(),
+                                bytes: transfer.bytes.clone(),
+                            }
+                        } else {
+                            Outcome::BulkSuccess {
+                                settlement,
+                                start: transfer.start.clone(),
+                                bytes: transfer.bytes.clone(),
+                            }
                         }
                     }
                 };
@@ -1623,7 +1952,7 @@ impl Connection {
                         .transfers
                         .remove(&end.transfer_id)
                         .ok_or(ProtocolError::Unknown)?;
-                    self.release(transfer.start.byte_count)?;
+                    self.release(transfer.start.byte_count + transfer.asset_charge)?;
                 } else {
                     self.transfers
                         .get_mut(&end.transfer_id)
@@ -1652,6 +1981,19 @@ impl Connection {
                                 .retain(|ordinal, _| *ordinal > credit.consumed_through);
                         }
                         if class == 1 {
+                            let tickets = self
+                                .handed_events
+                                .range(..=credit.consumed_through)
+                                .map(|(_, (ticket, _))| *ticket)
+                                .filter(|ticket| self.forwarded_tickets.contains(ticket))
+                                .collect::<Vec<_>>();
+                            for ticket in tickets {
+                                self.forwarded_tickets.remove(&ticket);
+                                self.notifications.push(Decision::EventBatchReleased {
+                                    ticket,
+                                    consumed: true,
+                                });
+                            }
                             self.handed_events
                                 .retain(|ordinal, _| *ordinal > credit.consumed_through);
                         }
@@ -1777,7 +2119,7 @@ impl Connection {
             .transfers
             .remove(transfer_id)
             .ok_or(ProtocolError::Unknown)?;
-        self.release(transfer.start.byte_count)
+        self.release(transfer.start.byte_count + transfer.asset_charge)
     }
 
     fn clear_hydration(&mut self, subscription_id: &str) -> Result<(), ProtocolError> {
@@ -1915,6 +2257,9 @@ impl Connection {
                         v5::result::Outcome::Success(payload)
                         | v5::result::Outcome::Error(payload) => {
                             payload.payload.len() as u64 > limits::INLINE_BODY_BYTES
+                        }
+                        v5::result::Outcome::AssetMetadata(metadata) => {
+                            metadata.metadata.payload.len() as u64 > limits::INLINE_BODY_BYTES
                         }
                     }) =>
             {
@@ -2310,6 +2655,7 @@ impl Connection {
             v5::scope::Target::Form(_) => v5::ScopeKind::Form,
             v5::scope::Target::Workspace(_) => v5::ScopeKind::Workspace,
             v5::scope::Target::Global(_) => v5::ScopeKind::Global,
+            v5::scope::Target::GlobalForm(_) => v5::ScopeKind::GlobalForm,
         };
         let scopes = descriptor
             .role_scopes
@@ -2349,6 +2695,9 @@ impl Connection {
         }
         let payload = match result.outcome.as_ref().ok_or(ProtocolError::Malformed)? {
             v5::result::Outcome::Success(payload) => {
+                if descriptor.streaming == v5::Streaming::AssetBulk as i32 {
+                    return Err(ProtocolError::Malformed);
+                }
                 if payload.type_name != descriptor.result_type {
                     return Err(ProtocolError::Malformed);
                 }
@@ -2359,6 +2708,17 @@ impl Connection {
                     return Err(ProtocolError::Malformed);
                 }
                 payload
+            }
+            v5::result::Outcome::AssetMetadata(metadata) => {
+                if descriptor.streaming != v5::Streaming::AssetBulk as i32 {
+                    return Err(ProtocolError::Malformed);
+                }
+                return crate::asset::validate_metadata(
+                    metadata,
+                    &descriptor.result_type,
+                    self.config.local_role == v5::PeerRole::Relay,
+                )
+                .map_err(wire_error);
             }
         };
         if payload.payload.len() as u64 > limits::INLINE_BODY_BYTES {
@@ -2406,6 +2766,13 @@ impl Connection {
         {
             return Err(ProtocolError::Malformed);
         }
+        if kind == v5::ContentKind::Asset
+            && (pending.asset_count != Some(start.byte_count)
+                || u64::from(start.chunk_count)
+                    != start.byte_count.div_ceil(limits::BULK_PIECE_BYTES))
+        {
+            return Err(ProtocolError::Malformed);
+        }
         let transfers = if incoming {
             &self.transfers
         } else {
@@ -2420,7 +2787,8 @@ impl Connection {
             return Err(ProtocolError::Limit);
         }
         if start.byte_count > limits::BULK_MESSAGE_BYTES
-            || start.chunk_count == 0
+            || (start.chunk_count == 0
+                && !(kind == v5::ContentKind::Asset && start.byte_count == 0))
             || u64::from(start.chunk_count) > limits::BULK_PIECES
             || start.byte_count > u64::from(start.chunk_count) * limits::BULK_PIECE_BYTES
         {
@@ -2449,6 +2817,10 @@ impl Connection {
         .get(&piece.transfer_id)
         .ok_or(ProtocolError::Malformed)?;
         if piece.index != transfer.index
+            || (transfer.start.content_kind == v5::ContentKind::Asset as i32
+                && piece.data.len() as u64
+                    != (transfer.start.byte_count - transfer.received)
+                        .min(limits::BULK_PIECE_BYTES))
             || piece.offset != transfer.received
             || piece.index >= transfer.start.chunk_count
             || piece.data.len() as u64 > limits::BULK_PIECE_BYTES
@@ -2576,16 +2948,23 @@ impl Connection {
         decisions
     }
 
-    fn close(&mut self, error: ProtocolError) -> Vec<Decision> {
+    pub fn close(&mut self, error: ProtocolError) -> Vec<Decision> {
         if self.phase == Phase::Closed {
             return Vec::new();
         }
-        let code = if !self.ready_handed && self.phase != Phase::Established {
+        let code = if self.phase != Phase::Established {
             1008
         } else {
             1002
         };
         self.phase = Phase::Closed;
+        let forwarded = std::mem::take(&mut self.forwarded_tickets)
+            .into_iter()
+            .map(|ticket| Decision::EventBatchReleased {
+                ticket,
+                consumed: false,
+            })
+            .collect::<Vec<_>>();
         let charge = std::mem::take(&mut self.owned_charge);
         let released = self.reservation.borrow_mut().release(charge);
         debug_assert!(released.is_ok());
@@ -2603,6 +2982,7 @@ impl Connection {
                     },
                 });
         let mut decisions = decisions.collect::<Vec<_>>();
+        decisions.extend(forwarded);
         decisions.extend(self.incoming.iter().map(|(id, pending)| {
             Decision::CancelWork {
                 target: v5::cancel::Target::RequestId(id.clone()),
@@ -2620,6 +3000,8 @@ impl Connection {
         self.outgoing_transfers.clear();
         self.subscriptions.clear();
         self.sending_subscriptions.clear();
+        self.relay_clients.clear();
+        self.relay_identities.clear();
         self.resync_fences.clear();
         self.handed_events.clear();
         self.awaiting_subscription.clear();

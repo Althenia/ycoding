@@ -693,14 +693,21 @@ impl Client {
                     outcome,
                 } => {
                     let ordinal = ordinal.unwrap_or(0);
-                    if !self.hold && ordinal > 0 && !matches!(outcome, Outcome::BulkSuccess { .. })
+                    if !self.hold
+                        && ordinal > 0
+                        && !matches!(
+                            outcome,
+                            Outcome::BulkSuccess { .. } | Outcome::AssetSuccess { .. }
+                        )
                     {
                         let now = self.now();
                         self.connection
                             .consume(v5::LedgerClass::Normal, ordinal, now)
                             .unwrap();
                     }
-                    if let Outcome::BulkSuccess { start, .. } = &outcome {
+                    if let Outcome::BulkSuccess { start, .. }
+                    | Outcome::AssetSuccess { start, .. } = &outcome
+                    {
                         self.connection.release_bulk(&start.transfer_id).unwrap();
                     }
                     self.events

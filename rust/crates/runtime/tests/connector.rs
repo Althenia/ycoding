@@ -225,6 +225,146 @@ fn relay_origin_and_authenticated_principal_fail_closed_before_transport() {
     }
 }
 
+#[tokio::test]
+async fn remote_global_form_selection_is_rejected_before_backend_resolution() {
+    let mut settings = services(LocalAuth::disabled(), false);
+    settings.core = None;
+    let environment = Arc::new(Environment {
+        services: settings,
+        urls: vec![],
+        subscriptions: Subscriptions::default(),
+    });
+    let error = failure(
+        standard()
+            .unwrap()
+            .invoke_remote(
+                environment,
+                "remote-global-form".into(),
+                &peer(),
+                request(
+                    "session.form.list",
+                    v5::Scope {
+                        target: Some(v5::scope::Target::GlobalForm(v5::GlobalFormScope {
+                            directory: text("/unadvertised"),
+                            workspace_id: None,
+                        })),
+                    },
+                    v5::SessionFormListRequest {
+                        params: v5::SessionFormListRequestParams {
+                            session_id: text("global"),
+                        },
+                    }
+                    .encode_to_vec(),
+                ),
+            )
+            .await,
+    );
+    assert_eq!(error.type_name, v5::InvalidRequestError::full_name());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connector_assets_deliver_metadata_then_exact_raw_bytes_and_empty_body() {
+    let directory = std::env::temp_dir().join(format!("connector-assets-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    support::insert_project("prj_connector_assets", directory.to_str().unwrap()).await;
+    support::insert_session_of(
+        "prj_connector_assets",
+        "ses_connector_assets",
+        directory.to_str().unwrap(),
+        None,
+    )
+    .await;
+    let mut dispatcher = Dispatcher::new(OPERATIONS.clone());
+    dispatcher
+        .handle_asset(
+            "session.attachment.read",
+            |_, request: v5::SessionAttachmentReadRequest| async move {
+                let bytes = if units(&request.params.digest) == "0".repeat(64) {
+                    vec![]
+                } else {
+                    vec![255; 65537]
+                };
+                ycoding_protocol::Asset::new(
+                    v5::SessionAttachmentReadResult {
+                        data: v5::SessionAssetMetadata {
+                            mime: text("application/octet-stream"),
+                            bytes: bytes.len() as u64,
+                        },
+                    },
+                    bytes,
+                )
+                .map_err(|error| ycoding_runtime::Failure::Invalid(error.to_string()))
+            },
+        )
+        .unwrap();
+    let mut relay = Relay::start(5, false, Budgets::default()).await;
+    let (control, connector, _) = setup(&relay, dispatcher, access("owner-a", None)).await;
+    let opening = relay.opening().await;
+    wait_state(&control, State::On).await;
+    for (digest, length) in [("0".repeat(64), 0), ("1".repeat(64), 65537)] {
+        let id = opening
+            .request(
+                operation("session.attachment.read").operation_id,
+                session_scope("ses_connector_assets"),
+                v5::SessionAttachmentReadRequest {
+                    params: v5::SessionAttachmentReadRequestParams {
+                        session_id: text("ses_connector_assets"),
+                        digest: text(&digest),
+                    },
+                }
+                .encode_to_vec(),
+            )
+            .await;
+        let metadata = relay.matching(opening.generation, |frame| matches!(&frame.body, Some(v5::frame::Body::Result(result)) if result.request_id == id)).await;
+        let Some(v5::frame::Body::Result(result)) = metadata.body else {
+            unreachable!()
+        };
+        let Some(v5::result::Outcome::AssetMetadata(metadata)) = result.outcome else {
+            panic!("asset metadata expected")
+        };
+        assert_eq!(metadata.byte_count, length as u64);
+        assert_eq!(units(&metadata.mime), "application/octet-stream");
+        let started = relay.matching(opening.generation, |frame| matches!(&frame.body, Some(v5::frame::Body::BulkStart(start)) if start.request_id == id)).await;
+        let Some(v5::frame::Body::BulkStart(start)) = started.body else {
+            unreachable!()
+        };
+        assert_eq!(start.content_kind, v5::ContentKind::Asset as i32);
+        assert_eq!(start.byte_count, length as u64);
+        let mut bytes = vec![];
+        loop {
+            let frame = relay
+                .matching(opening.generation, |frame| {
+                    matches!(
+                        &frame.body,
+                        Some(v5::frame::Body::BulkPiece(_) | v5::frame::Body::BulkEnd(_))
+                    )
+                })
+                .await;
+            match frame.body.unwrap() {
+                v5::frame::Body::BulkPiece(piece) => {
+                    assert_eq!(piece.transfer_id, start.transfer_id);
+                    assert_eq!(piece.offset as usize, bytes.len());
+                    bytes.extend(piece.data);
+                }
+                v5::frame::Body::BulkEnd(end) => {
+                    assert_eq!(end.transfer_id, start.transfer_id);
+                    assert_eq!(end.byte_count, length as u64);
+                    assert!(matches!(
+                        end.outcome,
+                        Some(v5::bulk_end::Outcome::Success(_))
+                    ));
+                    break;
+                }
+                _ => unreachable!(),
+            }
+        }
+        assert_eq!(bytes, vec![255; length]);
+    }
+    connector.shutdown().await.unwrap();
+    relay.shutdown().await;
+    std::fs::remove_dir(directory).unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn descriptor_roles_close_local_and_remote_dispatch_in_both_directions() {
     let dispatcher = test_dispatcher();

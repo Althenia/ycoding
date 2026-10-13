@@ -6,6 +6,8 @@ TypeScript exports `operationIDsByRole`; Rust exports `OPERATION_IDS_BY_ROLE`. R
 
 Request direction follows `packages/remote/src/index.ts:478–480,645–673`, `infra/cloudflare/src/relay/core.ts:554–613,754–827` and `packages/cli/src/remote-bridge.ts:305–328`. Claimed role never substitutes for authenticated ownership. The local, client and agent routes use the foundation PeerRole vocabulary. Generated allowlists do not authenticate an upgrade or authorize a Session.
 
+Application-protocol failures and timeouts close with 1008 before connection establishment, including a Ready producer waiting for receipt confirmation after Ready handoff. Established failures close with 1002. Bindings use the connection's lifecycle state for adapter-detected failures as well as wire failures. Authentication/authorization revocation retains 4401/4403; reconstruction retains 1012. A transmitted unresolved request settles unknown, without automatic replay.
+
 ## Allocation and source authority
 
 The source membership is `packages/remote/src/index.ts:40–104,447` and `packages/remote/src/provider-auth.ts:1`. Mutation classes are exactly `remoteOperationAccess` at `packages/remote/src/index.ts:163–232`, including MUTATION for provider authentication status. Notice listing is READ; subscription, read and readAll mutate relay-owned state (`infra/cloudflare/src/relay/core.ts:806–826`). Notice requests share a connection lane regardless of descriptor mutation class (`infra/cloudflare/src/relay/core.ts:601–605`).
@@ -142,6 +144,12 @@ Remote peers use each shared descriptor's canonical params/query/payload and res
 | telemetry.list                            | Preserve canonical page, cursor, limit 1–200/default 60 and consent. Do not rewrite TUI-capable samples into web samples.                                                                                                                                                    | `packages/core/src/web-latency.ts:57–89`; `specs/wire-platform.md`                                |
 
 Typed messages use bounded binary bulk delivery; attachments use raw asset bytes. Relay forwarding retains transfer ownership without reassembling content. HTTP body enqueue is not consumption: the connection-owned browser reader acknowledges consumed-through virtual 64 KiB pieces. Preserve exact content length, transfer identity, final-short-piece validation, shared bulk windows, no-consumption deadline, abort/revocation and object-URL release. These delivery contracts do not substitute for Session/content authorization.
+
+ASSET_BULK retains one pending request across nonterminal `Result.asset_metadata` (tag 6) and the correlated raw body. Metadata's MIME, exact byte count and canonical Result type must match the body declaration; exact successful BulkEnd alone settles success. Empty bodies declare zero bytes and pieces. Relay metadata remains opaque, and raw pieces forward without endpoint reassembly. The [connection ownership contract](../packages/protocol/src/v5/connection/README.md) defines reservation and downstream-consumption lifetimes.
+
+The AGENT connection accepts each authenticated client's complete `SubscriptionSnapshot` through `updateRelayInterests` and derives a bounded, reservation-charged Session union. Register a backend identity with `registerRelayInterest` only after local subscription acceptance. Stale registration reports `relayInterestRejected` without revoking other clients; dispose that local observer. `releaseRelayClient` releases an identity only when its last client leaves. Accepted subscription IDs, source epochs and snapshot ownership clear on reconstruction.
+
+The RELAY connection forwards an accepted whole EventBatch with `forwardEventBatch`, preserving its scope, subscription, epoch, IDs, payloads and order. Retain the upstream EVENT receipt and aggregate owner through downstream enqueue and handoff. Release them only after every returned forwarding ticket reports `eventBatchReleased` for consumption or teardown. One client's cancellation releases its queued output without changing another client's interests, handed consumption fences or transfers. Each downstream connection retains independent fair scheduling, credit and no-consumption deadlines.
 
 ## Composite workflows and notices
 

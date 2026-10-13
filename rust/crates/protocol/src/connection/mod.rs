@@ -9,5 +9,5 @@ pub use ledger::{Ledger, LedgerError};
 pub use reservation::{ReservationBudget, SharedReservation};
 pub use state::{
     Close, Config, Connection, Decision, Direction, EventMetadata, Incoming, Outcome, Prepared,
-    ProtocolError, Stats,
+    ProtocolError, RelayInterestDelta, Stats,
 };

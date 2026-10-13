@@ -34,6 +34,26 @@ Session list, active, outstanding and completion reads use Machine scope. Sessio
 
 These are local default scopes. Generated `role_scopes` overrides remote event registration/release to Session scope and remote Session creation to an advertised workspace scope. Remote event request Scope and payload scope identify the same verified Session. Form scopes name verified real Sessions remotely, not the local global sentinel. Every shared descriptor's request/result and ID are canonical for both local and remote callers; remote admission restrictions remain role-specific.
 
+Local Session form operations also accept `Scope.global_form` at branch tag 7 and ScopeKind GLOBAL_FORM (7). Its required directory and optional workspace identity select the Location-owned `global` Form namespace; params.sessionID must equal `global`. Create, list, get, state, reply and cancel share this selector and verify Form ownership at that Location. Real Session form selectors retain Form scope and backend-derived placement. Remote roles cannot use GLOBAL_FORM or choose a Location for a global Form. Existing Scope tags and operation IDs are unchanged.
+
+Construct the TypeScript selector with the generated camel-case oneof and lossless Location fields:
+
+```ts
+import { create, ScopeSchema, encodeLossless } from "@ycoding-ai/protocol/v5"
+
+const scope = create(ScopeSchema, {
+  target: {
+    case: "globalForm",
+    value: {
+      directory: encodeLossless(directory),
+      workspaceId: workspaceID === undefined ? undefined : encodeLossless(workspaceID),
+    },
+  },
+})
+```
+
+Encode each operation's `params.sessionID` with `encodeLossless("global")`. The runtime's existing Form owner helper resolves this selector at the recorded Location, without loading a Session row. Only exact `form.replied` and `form.cancelled` events owned by `global` publish as sessionless ephemerals; other Session owners retain Session-ID validation.
+
 ## Event and asset delivery
 
 `event.subscribe` carries foundation `Scope` and preserves any live endpoint params/query. Its Result returns the server-assigned `subscription_id`. It registers an EVENTS stream whose payloads arrive as foundation EventBatch frames, not in the Result. It is unbounded and does not emit StreamEnd. `event.unsubscribe` releases the accepted identity and returns explicit Empty success. Its source contract is the inventory's explicit subscription-release requirement rather than an HttpApi endpoint.
@@ -46,7 +66,7 @@ The log descriptor's `event_types` contains only `ycoding.v5.SessionLogItem`. Ac
 
 A finite log stream (`follow=false`) sends foundation `StreamEnd { subscription_id }` after its last EventBatch. Frame body tag 19 carries StreamEnd on the EVENT ledger, server to client only. There is no mid-stream error branch. A close before StreamEnd is incomplete, not successful completion. Structural validators require a nonempty identity and reject duplicate bodies, wrong direction and wrong ledger. The current WireConnection validators track handshake and epoch, not active subscriptions or cross-frame stream lifetime; active-identity matching, exactly-once terminal delivery and rejection of events after termination belong to the subscription owner.
 
-`session.messages` and `session.message` preserve typed projected-message results and use TYPED_BULK above the inline limit. Full copy/export reads retain their canonical full-history contract separately from snapshot paging and loaded-window navigation. `session.attachment.read` uses ASSET_BULK: typed metadata contains MIME and byte length, while raw file content travels through BulkStart/BulkPiece/BulkEnd. Params retain Session ID and attachment digest. Base64 content is not carried in the typed Result.
+`session.messages` and `session.message` preserve typed projected-message results and use TYPED_BULK above the inline limit. Full copy/export reads retain their canonical full-history contract separately from snapshot paging and loaded-window navigation. `session.attachment.read` uses ASSET_BULK: nonterminal `Result.asset_metadata` (tag 6) declares MIME, exact byte count and the canonical typed metadata Result; raw file content travels through BulkStart/BulkPiece/BulkEnd correlated to the same pending request. Metadata and body declarations must match. Pieces are 64 KiB except the last; zero-byte assets declare zero pieces. Only exact successful BulkEnd settles success, exposing both metadata Result and raw bytes. Params retain Session ID and attachment digest. Base64 content is not carried on the wire. See the [connection ownership contract](../packages/protocol/src/v5/connection/README.md) for credit, cancellation and forwarding lifetimes.
 
 ## Shapes, shared declarations and validation
 

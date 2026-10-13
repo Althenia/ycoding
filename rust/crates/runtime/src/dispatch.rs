@@ -2,11 +2,11 @@ use crate::{convert, locations::LocationServices, services::Environment};
 use prost::{Message, Name};
 use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc};
 use ycoding_core::ycoding_schema::{DomainDecode, JsonValue, LosslessString, session};
-use ycoding_protocol::{decode_strict, limits, v5};
+use ycoding_protocol::{Asset, AssetMetadata, decode_strict, limits, v5};
 
 pub type Boxed<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 type Authorizer = Arc<dyn Fn(&Environment, &v5::Request) -> Result<(), Failure> + Send + Sync>;
-type Handler = Arc<dyn Fn(Invocation, Vec<u8>) -> Boxed<Result<Vec<u8>, Failure>> + Send + Sync>;
+type Handler = Arc<dyn Fn(Invocation, Vec<u8>) -> Boxed<Result<Body, Failure>> + Send + Sync>;
 
 pub struct Invocation {
     pub environment: Arc<Environment>,
@@ -80,6 +80,7 @@ impl Invocation {
 pub enum Settled {
     Result(v5::Result),
     Bulk(Bulk),
+    Asset { metadata: v5::Result, bulk: Bulk },
 }
 
 pub struct Bulk {
@@ -87,11 +88,13 @@ pub struct Bulk {
     pub operation_id: u32,
     pub type_name: String,
     pub body: Vec<u8>,
+    pub content_kind: v5::ContentKind,
 }
 
 enum Body {
     Inline(Vec<u8>),
     Bulk(Vec<u8>),
+    Asset(v5::AssetMetadataResult, Vec<u8>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -263,7 +266,44 @@ impl Dispatcher {
                     .map_err(|_| Failure::Invalid("malformed request payload".into()))?;
                 handler(invocation, query)
                     .await
-                    .map(|result| result.encode_to_vec())
+                    .map(|result| Body::Inline(result.encode_to_vec()))
+            })
+        }));
+        Ok(())
+    }
+
+    pub fn handle_asset<Q, R, F, Fut>(
+        &mut self,
+        name: &str,
+        handler: F,
+    ) -> Result<(), RegistrationError>
+    where
+        Q: Message + Name + Default + 'static,
+        R: AssetMetadata + 'static,
+        F: Fn(Invocation, Q) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Asset<R>, Failure>> + Send + 'static,
+    {
+        let entry = self.entry(name)?;
+        if entry.descriptor.request_type != Q::full_name()
+            || entry.descriptor.result_type != R::full_name()
+            || entry.descriptor.streaming != v5::Streaming::AssetBulk as i32
+        {
+            return Err(RegistrationError::TypeMismatch(name.into()));
+        }
+        if entry.handler.is_some() {
+            return Err(RegistrationError::Duplicate(name.into()));
+        }
+        let handler = Arc::new(handler);
+        entry.handler = Some(Arc::new(move |invocation, payload| {
+            let handler = handler.clone();
+            Box::pin(async move {
+                let query = decode_strict::<Q>(&payload)
+                    .map_err(|_| Failure::Invalid("malformed request payload".into()))?;
+                let asset = handler(invocation, query).await?;
+                let (metadata, bytes) = asset
+                    .into_wire()
+                    .map_err(|error| Failure::Invalid(error.to_string()))?;
+                Ok(Body::Asset(metadata, bytes))
             })
         }));
         Ok(())
@@ -364,6 +404,10 @@ async fn run(
         request.payload,
     )
     .await?;
+    let body = match body {
+        Body::Inline(body) | Body::Bulk(body) => body,
+        Body::Asset(metadata, bytes) => return Ok(Body::Asset(metadata, bytes)),
+    };
     if body.len() as u64 <= limits::INLINE_BODY_BYTES {
         return Ok(Body::Inline(body));
     }
@@ -383,12 +427,30 @@ fn settle(
     outcome: Result<Body, Failure>,
 ) -> Settled {
     let outcome = match outcome {
+        Ok(Body::Asset(metadata, body)) => {
+            return Settled::Asset {
+                metadata: v5::Result {
+                    request_id: request_id.clone(),
+                    operation_id: descriptor.operation_id,
+                    settlement: descriptor.settlement,
+                    outcome: Some(v5::result::Outcome::AssetMetadata(metadata)),
+                },
+                bulk: Bulk {
+                    request_id,
+                    operation_id: descriptor.operation_id,
+                    type_name: descriptor.result_type.clone(),
+                    body,
+                    content_kind: v5::ContentKind::Asset,
+                },
+            };
+        }
         Ok(Body::Bulk(body)) => {
             return Settled::Bulk(Bulk {
                 request_id,
                 operation_id: descriptor.operation_id,
                 type_name: descriptor.result_type.clone(),
                 body,
+                content_kind: v5::ContentKind::TypedMessage,
             });
         }
         Ok(Body::Inline(payload)) => v5::result::Outcome::Success(v5::TypedPayload {

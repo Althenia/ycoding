@@ -111,7 +111,7 @@ export function readOperations(bytes: Uint8Array) {
               !options.roles.includes(rule.role) ||
               roles.has(rule.role) ||
               !rule.scopes.length ||
-              rule.scopes.some((scope) => scope < 1 || scope > 6) ||
+              rule.scopes.some((scope) => scope < 1 || scope > 7) ||
               new Set(rule.scopes).size !== rule.scopes.length
             )
               throw new Error("invalid operation role scopes")

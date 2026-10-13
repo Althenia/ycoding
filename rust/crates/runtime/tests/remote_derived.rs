@@ -306,6 +306,9 @@ impl Harness {
                     value
                 }
                 v5::result::Outcome::Error(value) => value,
+                v5::result::Outcome::AssetMetadata(_) => {
+                    panic!("remote-derived operation must return typed data")
+                }
             },
             v5::frame::Body::BulkStart(start) => {
                 let mut body = Vec::new();

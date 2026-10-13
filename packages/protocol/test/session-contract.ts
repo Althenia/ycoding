@@ -323,7 +323,7 @@ export function sessionProto(endpoints = sessionRpcEndpoints()) {
               .filter((operation) => operation.group === group)
               .map((operation) => {
                 const policy = sessionPolicy(operation.name, operation.method)
-                return `  rpc ${operation.rpc}(${operation.request}) returns (${operation.result}) {\n    option (ycoding.v5.operation) = {\n      operation_id: ${operation.id}\n      diagnostic_name: ${JSON.stringify(operation.name)}\n${operation.errors.map((name) => `      error_types: "ycoding.v5.${name}"`).join("\n")}\n      roles: LOCAL_CLIENT\n${connectorRoles(operation.name)}      scope: ${policy.scope}\n      mutation: ${policy.mutation}\n      settlement: ${policy.settlement}\n      paging: ${policy.paging}\n      streaming: ${policy.streaming}\n      sensitivity: ${policy.sensitivity}\n    };\n  }`
+                return `  rpc ${operation.rpc}(${operation.request}) returns (${operation.result}) {\n    option (ycoding.v5.operation) = {\n      operation_id: ${operation.id}\n      diagnostic_name: ${JSON.stringify(operation.name)}\n${operation.errors.map((name) => `      error_types: "ycoding.v5.${name}"`).join("\n")}\n      roles: LOCAL_CLIENT\n${operation.name.startsWith("session.form.") ? "      role_scopes: { role: LOCAL_CLIENT scopes: FORM scopes: GLOBAL_FORM }\n" : ""}${connectorRoles(operation.name)}      scope: ${policy.scope}\n      mutation: ${policy.mutation}\n      settlement: ${policy.settlement}\n      paging: ${policy.paging}\n      streaming: ${policy.streaming}\n      sensitivity: ${policy.sensitivity}\n    };\n  }`
               })
               .join("\n")}\n}`,
         )

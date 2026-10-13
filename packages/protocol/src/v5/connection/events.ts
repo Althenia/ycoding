@@ -10,10 +10,18 @@ import {
   WireLimit,
   ResyncRequiredSchema,
   ControlSchema,
+  SubscriptionSnapshotSchema,
 } from "../../generated/v5/index.js"
 import type { EventBatch, EventRecord, Scope } from "../../generated/v5/index.js"
+import type { SubscriptionSnapshot } from "../../generated/v5/index.js"
 
 const maximum = (1n << 64n) - 1n
+export function subscriptionSnapshotBytes(snapshot: SubscriptionSnapshot) {
+  return (
+    field(SubscriptionSnapshotSchema, "clientId", utf8Bytes(snapshot.clientId)) +
+    snapshot.sessionIds.reduce((bytes, id) => bytes + field(SubscriptionSnapshotSchema, "sessionIds", utf8Bytes(id)), 0)
+  )
+}
 
 export const lateHeaderReservation =
   scalar(FrameSchema, "deliveryOrdinal", maximum) +
@@ -105,7 +113,7 @@ function varint(value: bigint) {
   return Math.ceil(BigInt.asUintN(64, value).toString(2).length / 7)
 }
 
-function utf8Bytes(value: string) {
+export function utf8Bytes(value: string) {
   let bytes = 0
   for (const character of value) {
     const point = character.codePointAt(0)!

@@ -10,6 +10,7 @@ export type Delivery = {
   consumed: boolean
   key?: string
   ticket?: bigint
+  forwarded?: boolean
   resyncScope?: Scope
 }
 
@@ -58,7 +59,8 @@ export class Ledger {
     record.bytes = 0
     const count = this.received.findIndex((record) => !record.consumed)
     const consumed = this.received.splice(0, count < 0 ? this.received.length : count)
-    if (consumed.length) this.consumed = consumed[consumed.length - 1].ordinal
+    const latest = consumed[consumed.length - 1]
+    if (latest) this.consumed = latest.ordinal
     if (bytes && this.kind !== LedgerClass.TINY) {
       this.grantBytes += bytes
       this.grantTime ??= now
@@ -67,6 +69,7 @@ export class Ledger {
   }
 
   stalled(now: number, budgets: Budgets) {
-    return !!this.sent.length && now - this.sent[0].time >= budgets.deliveryTimeoutMs
+    const oldest = this.sent[0]
+    return oldest !== undefined && now - oldest.time >= budgets.deliveryTimeoutMs
   }
 }

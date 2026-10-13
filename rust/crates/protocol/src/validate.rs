@@ -299,6 +299,16 @@ fn scan<'a>(
             .map_err(WireError)?;
         }
     }
+    if name == "ycoding.v5.AssetMetadataResult" {
+        let mime =
+            String::from_utf16(&units(node.child(2)?)?).map_err(|_| WireError("asset MIME"))?;
+        if !crate::asset::valid_mime(&mime) {
+            return Err(WireError("asset MIME"));
+        }
+        if node.integer(3)? > limits::BULK_MESSAGE_BYTES {
+            return Err(WireError("asset length"));
+        }
+    }
     if name == "ycoding.v5.Credit"
         && (node.integer(1)? == v5::LedgerClass::Tiny as u64 || node.integer(2)? == 0)
     {
@@ -495,7 +505,11 @@ fn frame_rules<'a, 'b>(
         return Err(WireError("request bounds"));
     }
     if tag == 13 {
-        let payload = body.child(if body.fields.contains_key(&4) { 4 } else { 5 })?;
+        let payload = if body.fields.contains_key(&6) {
+            body.child(6)?.child(1)?
+        } else {
+            body.child(if body.fields.contains_key(&4) { 4 } else { 5 })?
+        };
         if body.text(1)?.is_empty()
             || body.integer(2)? == 0
             || payload.text(1)?.is_empty()
@@ -518,9 +532,16 @@ fn frame_rules<'a, 'b>(
     }
     if tag == 16
         && (body.integer(6)? > limits::BULK_MESSAGE_BYTES
-            || !(1..=limits::BULK_PIECES).contains(&body.integer(7)?))
+            || body.integer(7)? > limits::BULK_PIECES
+            || (body.integer(7)? == 0 && !(body.integer(5)? == 2 && body.integer(6)? == 0)))
     {
         return Err(WireError("bulk announcement bounds"));
+    }
+    if tag == 16
+        && body.integer(5)? == 2
+        && body.integer(7)? != body.integer(6)?.div_ceil(limits::BULK_PIECE_BYTES)
+    {
+        return Err(WireError("asset piece count"));
     }
     if tag == 17
         && (body.raw(4)?.len() > limits::BULK_PIECE_BYTES as usize

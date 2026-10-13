@@ -1,4 +1,4 @@
-export const CONTRACT_DIGEST = "30f39f25dcd01272be85e0b080c43d00fd3bbe17cc09649ac03ada609737e450"
+export const CONTRACT_DIGEST = "3c027255a4a15212e3d6f79ad83523d500882db59090ac505e40cce0fbc5115b"
 export const messages = {
   "ycoding.v5.Empty": {
     oneofs: 0,
@@ -283,6 +283,27 @@ export const messages = {
       },
     ],
   },
+  "ycoding.v5.GlobalFormScope": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "directory",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+      },
+      {
+        tag: 2,
+        name: "workspace_id",
+        type: 11,
+        required: false,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+      },
+    ],
+  },
   "ycoding.v5.Scope": {
     oneofs: 1,
     fields: [
@@ -338,6 +359,15 @@ export const messages = {
         required: false,
         repeated: false,
         target: "ycoding.v5.Empty",
+        group: 0,
+      },
+      {
+        tag: 7,
+        name: "global_form",
+        type: 11,
+        required: false,
+        repeated: false,
+        target: "ycoding.v5.GlobalFormScope",
         group: 0,
       },
     ],
@@ -730,6 +760,44 @@ export const messages = {
         repeated: false,
         target: "ycoding.v5.TypedPayload",
         group: 0,
+      },
+      {
+        tag: 6,
+        name: "asset_metadata",
+        type: 11,
+        required: false,
+        repeated: false,
+        target: "ycoding.v5.AssetMetadataResult",
+        group: 0,
+      },
+    ],
+  },
+  "ycoding.v5.AssetMetadataResult": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "metadata",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.TypedPayload",
+      },
+      {
+        tag: 2,
+        name: "mime",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+      },
+      {
+        tag: 3,
+        name: "byte_count",
+        type: 4,
+        required: true,
+        repeated: false,
+        target: "",
       },
     ],
   },
@@ -56171,7 +56239,7 @@ export const enums = {
   "ycoding.v5.FieldTextPolicy": [7, 7, 7, 7],
   "ycoding.v5.PeerRole": [1, 2, 3, 4, 5],
   "ycoding.v5.SenderMask": [11, 20, 7, 28, 28, 16, 31, 31, 31, 31, 4, 7, 28, 28, 24, 24, 4, 28, 31, 31, 31, 31],
-  "ycoding.v5.ScopeKind": [1, 2, 3, 4, 5, 6],
+  "ycoding.v5.ScopeKind": [1, 2, 3, 4, 5, 6, 7],
   "ycoding.v5.MutationClass": [1, 2],
   "ycoding.v5.Settlement": [1, 2],
   "ycoding.v5.Paging": [1, 2, 3],

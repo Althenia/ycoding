@@ -5,9 +5,7 @@ use crate::{
     locations::LocationServices,
 };
 use ycoding_core::tools::policy::forms::Error;
-use ycoding_core::ycoding_schema::{
-    DomainDecode, JsonObject, JsonValue, LosslessString, form, session,
-};
+use ycoding_core::ycoding_schema::{DomainDecode, JsonObject, JsonValue, LosslessString, form};
 use ycoding_protocol::v5;
 
 pub async fn create(
@@ -23,10 +21,7 @@ pub async fn create(
     };
     let mut object = JsonObject::new();
     object.insert("id".into(), JsonValue::String(id));
-    object.insert(
-        "sessionID".into(),
-        JsonValue::String(session.as_lossless().clone()),
-    );
+    object.insert("sessionID".into(), JsonValue::String(session.clone()));
     object.insert(
         "title".into(),
         JsonValue::String(convert::domain(&payload.title)?),
@@ -74,7 +69,7 @@ pub async fn list(
         data: v5::SessionFormListResultData {
             items: services
                 .forms
-                .list(Some(session.as_lossless()))
+                .list(Some(&session))
                 .iter()
                 .map(info_wire)
                 .collect::<Result<_, _>>()?,
@@ -159,15 +154,33 @@ pub async fn cancel(
 fn owner(
     invocation: &Invocation,
     id: &v5::LosslessString,
-) -> Result<(session::Id, std::sync::Arc<LocationServices>), Failure> {
+) -> Result<(LosslessString, std::sync::Arc<LocationServices>), Failure> {
+    if let Some(v5::scope::Target::GlobalForm(scope)) = &invocation.scope.target {
+        let requested = convert::domain(id)?;
+        if requested != LosslessString::from("global") {
+            return Err(Failure::Invalid(
+                "Global Form scope requires the global owner".into(),
+            ));
+        }
+        let workspace = scope
+            .workspace_id
+            .as_ref()
+            .map(convert::domain)
+            .transpose()?;
+        let services = invocation
+            .core()?
+            .locations
+            .location(&convert::domain(&scope.directory)?, workspace.as_ref())?;
+        return Ok((requested, services));
+    }
     let session = invocation.form_session(id)?;
     let (_, services) = invocation.core()?.locations.session(&session)?;
-    Ok((session, services))
+    Ok((session.as_lossless().clone(), services))
 }
 
 fn owned(
     services: &LocationServices,
-    session: &session::Id,
+    session: &LosslessString,
     requested: &v5::LosslessString,
 ) -> Result<(form::Id, form::Info), Failure> {
     let id = convert::identifier::<form::Id>(requested)?;
@@ -175,7 +188,7 @@ fn owned(
         .forms
         .get(&id)
         .ok()
-        .filter(|info| &info.session_id == session.as_lossless())
+        .filter(|info| &info.session_id == session)
         .map(|info| (id, info))
         .ok_or_else(|| missing(requested))
 }

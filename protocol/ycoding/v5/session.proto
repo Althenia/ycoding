@@ -6087,6 +6087,7 @@ service server_form {
       error_types: "ycoding.v5.UnauthorizedError"
       error_types: "ycoding.v5.InvalidRequestError"
       roles: LOCAL_CLIENT
+      role_scopes: { role: LOCAL_CLIENT scopes: FORM scopes: GLOBAL_FORM }
       roles: REMOTE_CLIENT
       roles: RELAY
       scope: FORM
@@ -6106,6 +6107,7 @@ service server_form {
       error_types: "ycoding.v5.InvalidRequestError"
       error_types: "ycoding.v5.UnauthorizedError"
       roles: LOCAL_CLIENT
+      role_scopes: { role: LOCAL_CLIENT scopes: FORM scopes: GLOBAL_FORM }
       scope: FORM
       mutation: MUTATION
       settlement: COMPLETED
@@ -6123,6 +6125,7 @@ service server_form {
       error_types: "ycoding.v5.UnauthorizedError"
       error_types: "ycoding.v5.InvalidRequestError"
       roles: LOCAL_CLIENT
+      role_scopes: { role: LOCAL_CLIENT scopes: FORM scopes: GLOBAL_FORM }
       scope: FORM
       mutation: READ
       settlement: COMPLETED
@@ -6139,6 +6142,7 @@ service server_form {
       error_types: "ycoding.v5.UnauthorizedError"
       error_types: "ycoding.v5.InvalidRequestError"
       roles: LOCAL_CLIENT
+      role_scopes: { role: LOCAL_CLIENT scopes: FORM scopes: GLOBAL_FORM }
       roles: REMOTE_CLIENT
       roles: RELAY
       scope: FORM
@@ -6160,6 +6164,7 @@ service server_form {
       error_types: "ycoding.v5.UnauthorizedError"
       error_types: "ycoding.v5.InvalidRequestError"
       roles: LOCAL_CLIENT
+      role_scopes: { role: LOCAL_CLIENT scopes: FORM scopes: GLOBAL_FORM }
       roles: REMOTE_CLIENT
       roles: RELAY
       scope: FORM
@@ -6179,6 +6184,7 @@ service server_form {
       error_types: "ycoding.v5.UnauthorizedError"
       error_types: "ycoding.v5.InvalidRequestError"
       roles: LOCAL_CLIENT
+      role_scopes: { role: LOCAL_CLIENT scopes: FORM scopes: GLOBAL_FORM }
       scope: FORM
       mutation: READ
       settlement: COMPLETED

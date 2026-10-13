@@ -4,6 +4,364 @@ use ycoding_protocol::connection::{
     Budgets, Config, Connection, Decision, Direction, EventMetadata, Outcome, ProtocolError,
 };
 use ycoding_protocol::{OPERATIONS, v5};
+fn asset_pair(length: usize) -> (Binding, Binding, v5::Result, v5::BulkStart) {
+    let (mut client, mut server) = pair();
+    let operation = OPERATIONS
+        .iter()
+        .find(|operation| operation.diagnostic_name == "fs.read")
+        .unwrap();
+    let request_id = client
+        .request(
+            operation.operation_id,
+            v5::Scope {
+                target: Some(v5::scope::Target::Location(
+                    ycoding_protocol::encode_lossless(
+                        &"/project".encode_utf16().collect::<Vec<_>>(),
+                    ),
+                )),
+            },
+            v5::FsReadRequest {
+                params: v5::PlatformAssetPath {
+                    path: ycoding_protocol::encode_lossless(
+                        &"asset.bin".encode_utf16().collect::<Vec<_>>(),
+                    ),
+                },
+                query: Default::default(),
+            }
+            .encode_to_vec(),
+            4,
+        )
+        .unwrap();
+    let request = send(client.poll(4));
+    server.receive(request.clone(), request.encoded_len() as u64, 4);
+    let mime = ycoding_protocol::encode_lossless(
+        &"application/octet-stream"
+            .encode_utf16()
+            .collect::<Vec<_>>(),
+    );
+    let (metadata, _) = ycoding_protocol::Asset::new(
+        v5::FsReadResult {
+            data: v5::PlatformAssetMetadata {
+                mime,
+                byte_count: length as u64,
+            },
+        },
+        vec![255; length],
+    )
+    .unwrap()
+    .into_wire()
+    .unwrap();
+    let result = v5::Result {
+        request_id: request_id.clone(),
+        operation_id: operation.operation_id,
+        settlement: operation.settlement,
+        outcome: Some(v5::result::Outcome::AssetMetadata(metadata)),
+    };
+    let start = v5::BulkStart {
+        request_id,
+        transfer_id: "asset-1".into(),
+        operation_id: operation.operation_id,
+        type_name: operation.result_type.clone(),
+        content_kind: v5::ContentKind::Asset as i32,
+        byte_count: length as u64,
+        chunk_count: length.div_ceil(65536) as u32,
+    };
+    (client, server, result, start)
+}
+
+#[test]
+fn ac_wire_012_asset_metadata_exact_body_and_empty_asset_settle_once() {
+    for length in [0, 1, 65536, 65537] {
+        let (mut client, mut server, result, start) = asset_pair(length);
+        let Some(v5::result::Outcome::AssetMetadata(metadata)) = result.outcome.clone() else {
+            panic!("asset metadata")
+        };
+        server.respond(result, 5).unwrap();
+        let header = send(server.poll(5));
+        let decisions = client.receive(header.clone(), header.encoded_len() as u64, 5);
+        assert!(matches!(
+            decisions.as_slice(),
+            [Decision::AssetMetadata { .. }]
+        ));
+        server
+            .queue_frame(v5::frame::Body::BulkStart(start), 6)
+            .unwrap();
+        let frame = send(server.poll(6));
+        client.receive(frame.clone(), frame.encoded_len() as u64, 6);
+        for (index, bytes) in vec![255; length].chunks(65536).enumerate() {
+            server
+                .queue_frame(
+                    v5::frame::Body::BulkPiece(v5::BulkPiece {
+                        transfer_id: "asset-1".into(),
+                        index: index as u32,
+                        offset: (index * 65536) as u64,
+                        data: bytes.to_vec(),
+                    }),
+                    7,
+                )
+                .unwrap();
+            let frame = send(server.poll(7));
+            assert!(
+                !client
+                    .receive(frame.clone(), frame.encoded_len() as u64, 7)
+                    .iter()
+                    .any(|decision| matches!(decision, Decision::Settled { .. }))
+            );
+        }
+        server
+            .queue_frame(
+                v5::frame::Body::BulkEnd(v5::BulkEnd {
+                    transfer_id: "asset-1".into(),
+                    byte_count: length as u64,
+                    outcome: Some(v5::bulk_end::Outcome::Success(v5::Empty {})),
+                }),
+                8,
+            )
+            .unwrap();
+        let frame = send(server.poll(8));
+        let terminal = client.receive(frame.clone(), frame.encoded_len() as u64, 8);
+        assert!(
+            matches!(terminal.as_slice(), [Decision::Settled { outcome: Outcome::AssetSuccess { metadata: delivered, bytes, .. }, .. }] if delivered.as_ref() == &metadata && bytes.as_slice() == vec![255; length])
+        );
+        client.release_bulk("asset-1").unwrap();
+        assert_eq!(client.stats().reassembly_reserved_bytes, 0);
+    }
+}
+#[test]
+fn ac_wire_002_confirm_timeout_after_ready_handoff_is_1008_for_unestablished_producer() {
+    let mut client = Binding::new(
+        config(v5::PeerRole::LocalClient, v5::PeerRole::Server),
+        OPERATIONS.clone(),
+        0,
+    )
+    .unwrap();
+    let mut server = Binding::new(
+        config(v5::PeerRole::Server, v5::PeerRole::LocalClient),
+        OPERATIONS.clone(),
+        0,
+    )
+    .unwrap();
+    let hello = send(client.start(0).unwrap());
+    let ready = send(server.receive(hello.clone(), hello.encoded_len() as u64, 1));
+    client.receive(ready.clone(), ready.encoded_len() as u64, 2);
+    assert!(
+        server
+            .poll(5002)
+            .iter()
+            .any(|decision| matches!(decision, Decision::Closed(close) if close.code == 1008))
+    );
+}
+
+#[test]
+fn ac_wire_009_012_cancel_metadata_only_or_active_asset_is_unknown_and_releases_ownership() {
+    for begun in [false, true] {
+        let (mut client, mut server, result, start) = asset_pair(65537);
+        let id = result.request_id.clone();
+        server.respond(result, 5).unwrap();
+        let frame = send(server.poll(5));
+        client.receive(frame.clone(), frame.encoded_len() as u64, 5);
+        if begun {
+            server
+                .queue_frame(v5::frame::Body::BulkStart(start), 6)
+                .unwrap();
+            let frame = send(server.poll(6));
+            client.receive(frame.clone(), frame.encoded_len() as u64, 6);
+        }
+        assert!(matches!(
+            client.cancel_request(&id, 7).unwrap().as_slice(),
+            [Decision::Settled {
+                outcome: Outcome::Unknown,
+                ..
+            }]
+        ));
+        assert_eq!(client.stats().reassembly_reserved_bytes, 0);
+        client.disconnect(true);
+        assert_eq!(client.reservation().borrow().used(), 0);
+    }
+}
+
+#[test]
+fn ac_wire_011_relay_union_owns_shared_backend_identity_until_last_client_release() {
+    let mut agent = Binding::new(
+        config(v5::PeerRole::Agent, v5::PeerRole::Relay),
+        OPERATIONS.clone(),
+        0,
+    )
+    .unwrap();
+    let mut relay = Binding::new(
+        config(v5::PeerRole::Relay, v5::PeerRole::Agent),
+        OPERATIONS.clone(),
+        0,
+    )
+    .unwrap();
+    let hello = send(agent.start(0).unwrap());
+    let ready = send(relay.receive(hello.clone(), hello.encoded_len() as u64, 1));
+    let ping = send(agent.receive(ready.clone(), ready.encoded_len() as u64, 2));
+    relay.receive(ping.clone(), ping.encoded_len() as u64, 3);
+    let pong = send(relay.poll(3));
+    agent.receive(pong.clone(), pong.encoded_len() as u64, 3);
+    assert_eq!(
+        agent
+            .update_relay_interests(
+                v5::SubscriptionSnapshot {
+                    client_id: "one".into(),
+                    session_ids: vec!["ses_a".into()]
+                },
+                4
+            )
+            .unwrap()
+            .added,
+        ["ses_a"]
+    );
+    assert_eq!(
+        agent
+            .update_relay_interests(
+                v5::SubscriptionSnapshot {
+                    client_id: "two".into(),
+                    session_ids: vec!["ses_a".into()]
+                },
+                4
+            )
+            .unwrap()
+            .added
+            .len(),
+        0
+    );
+    agent
+        .register_relay_interest(
+            "ses_a".into(),
+            "accepted-a".into(),
+            "backend-source".into(),
+            4,
+        )
+        .unwrap();
+    assert_eq!(agent.relay_subscription_id("ses_a"), Some("accepted-a"));
+    assert!(
+        agent
+            .release_relay_client("one", 5)
+            .unwrap()
+            .removed
+            .is_empty()
+    );
+    assert_eq!(agent.relay_subscription_id("ses_a"), Some("accepted-a"));
+    assert_eq!(
+        agent.release_relay_client("two", 5).unwrap().removed,
+        ["ses_a"]
+    );
+    assert_eq!(agent.relay_subscription_id("ses_a"), None);
+    assert_eq!(agent.relay_interest_retained_bytes(), 0);
+}
+#[test]
+fn ac_wire_011_forwarded_batch_preserves_identity_and_releases_only_on_credit_or_teardown() {
+    for handed in [false, true] {
+        let mut remote_config = config(v5::PeerRole::RemoteClient, v5::PeerRole::Relay);
+        remote_config.authorized_sessions.insert("session".into());
+        let mut relay_config = config(v5::PeerRole::Relay, v5::PeerRole::RemoteClient);
+        relay_config.authorized_sessions.insert("session".into());
+        let mut client = Binding::new(remote_config, OPERATIONS.clone(), 0).unwrap();
+        let mut relay = Binding::new(relay_config, OPERATIONS.clone(), 0).unwrap();
+        let hello = send(client.start(0).unwrap());
+        let ready = send(relay.receive(hello.clone(), hello.encoded_len() as u64, 1));
+        let ping = send(client.receive(ready.clone(), ready.encoded_len() as u64, 2));
+        relay.receive(ping.clone(), ping.encoded_len() as u64, 3);
+        let pong = send(relay.poll(3));
+        client.receive(pong.clone(), pong.encoded_len() as u64, 3);
+        let scope = batch("one").scope;
+        let id = client
+            .request(
+                4000,
+                scope.clone(),
+                v5::EventSubscribeRequest {
+                    scope: scope.clone(),
+                    ..Default::default()
+                }
+                .encode_to_vec(),
+                4,
+            )
+            .unwrap();
+        let frame = send(client.poll(4));
+        relay.receive(frame.clone(), frame.encoded_len() as u64, 4);
+        relay
+            .respond(
+                v5::Result {
+                    request_id: id.clone(),
+                    operation_id: 4000,
+                    settlement: v5::Settlement::Completed as i32,
+                    outcome: Some(v5::result::Outcome::Success(v5::TypedPayload {
+                        type_name: v5::EventSubscribeResult::full_name(),
+                        payload: v5::EventSubscribeResult {
+                            subscription_id: ycoding_protocol::encode_lossless(
+                                &"sub".encode_utf16().collect::<Vec<_>>(),
+                            ),
+                        }
+                        .encode_to_vec(),
+                    })),
+                },
+                5,
+            )
+            .unwrap();
+        let frame = send(relay.poll(5));
+        client.receive(frame.clone(), frame.encoded_len() as u64, 5);
+        relay
+            .machine
+            .accept_subscription(&id, "sub".into(), scope.clone(), 6, Direction::Send)
+            .unwrap();
+        client
+            .machine
+            .accept_subscription(&id, "sub".into(), scope, 6, Direction::Receive)
+            .unwrap();
+        client.begin_hydration("sub").unwrap();
+        client
+            .complete_hydration("sub", "source".into(), 6)
+            .unwrap();
+        let batch = batch("forwarded");
+        let mut wrong = batch.clone();
+        wrong.scope.target = Some(v5::scope::Target::Session("another-session".into()));
+        assert_eq!(
+            relay.forward_event_batch(wrong, 6),
+            Err(ProtocolError::Direction)
+        );
+        let mut unknown = batch.clone();
+        unknown.subscription_id = "unaccepted".into();
+        assert_eq!(
+            relay.forward_event_batch(unknown, 6),
+            Err(ProtocolError::Malformed)
+        );
+        let ticket = relay.forward_event_batch(batch.clone(), 6).unwrap();
+        if !handed {
+            assert!(
+                relay
+                    .disconnect(true)
+                    .contains(&Decision::EventBatchReleased {
+                        ticket,
+                        consumed: false
+                    })
+            );
+            assert_eq!(relay.reservation().borrow().used(), 0);
+            continue;
+        }
+        let frame = send(relay.poll(6));
+        assert!(
+            matches!(&frame.body, Some(v5::frame::Body::EventBatch(delivered)) if delivered == &batch)
+        );
+        client.receive(frame.clone(), frame.encoded_len() as u64, 6);
+        assert!(relay.stats().handed_bytes[1] > 0);
+        client
+            .consume(v5::LedgerClass::Event, frame.delivery_ordinal.unwrap(), 6)
+            .unwrap();
+        let receipt = send(client.poll(31));
+        relay.receive(receipt.clone(), receipt.encoded_len() as u64, 31);
+        assert!(
+            relay
+                .take_decisions()
+                .contains(&Decision::EventBatchReleased {
+                    ticket,
+                    consumed: true
+                })
+        );
+        assert_eq!(relay.stats().handed_bytes[1], 0);
+    }
+}
 
 struct Binding {
     machine: Connection,

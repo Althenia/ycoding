@@ -24,7 +24,15 @@ IDs are explicit, permanent allocations from the platform range 3000–3999. No 
 
 `browser.connect` and `pty.connect` have EXTERNAL disposition and no application operation ID. Their Chrome-origin first-frame authentication and single-use ticketed PTY WebSocket contracts remain native external boundaries. `pty.connectToken` is a typed issuance operation; its request retains the source's `x-ycoding-ticket: "1"` marker as a closed `headers.x_ycoding_ticket` field, alongside Location, ownership, generation, access and fence inputs.
 
-`fs.read` has STREAM disposition with ASSET_BULK delivery. Its explicit `params.path` comes from the `/api/fs/read/*` wildcard and names the Protocol source owner as a domain obligation. The Location query remains explicit. Its typed result contains `mime` and `byteCount` metadata, corresponding to the existing raw handler's content type and byte length. The content is absent from the Result and travels through the foundation's BulkStart/BulkPiece/BulkEnd asset body. The additional authenticated browser HTTP asset surface is backend-owned; it does not replace this typed operation.
+`fs.read` has STREAM disposition with `ASSET_BULK` delivery. Its explicit `params.path` comes from the `/api/fs/read/*` wildcard and names the Protocol source owner as a domain obligation. The Location query remains explicit. Its canonical typed result contains `mime` and `byteCount`. Nonterminal `Result.asset_metadata` declares that metadata Result plus matching MIME and exact length before a correlated raw BulkStart/BulkPiece/BulkEnd body. Only exact BulkEnd settles success, including zero bytes with zero pieces.
+
+`ycoding-protocol::Asset<FsReadResult>` owns the validated metadata and bounded exact bytes. The runtime's typed asset registration is:
+
+```rust
+dispatcher.handle_asset::<FsReadRequest, FsReadResult, _, _>("fs.read", handler)
+```
+
+The asynchronous handler returns `Result<Asset<FsReadResult>, Failure>` and owns read/aggregate reservations before materialization. The additional authenticated browser HTTP asset surface is backend-owned; it does not replace this typed operation.
 
 `health.get`, `health.stop` and `server.get` preserve their live Protocol shapes. The authenticated `GET /health` bootstrap/readiness contract is a separate backend-owned HTTP surface, not an additional operation in this manifest slice. Shutdown retains the exact target instance identity from `ServiceStatus.StopRequest`.
 

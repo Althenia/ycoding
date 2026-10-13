@@ -2916,7 +2916,13 @@ export const operations: readonly OperationDescriptor[] = [
     ],
     roles: [1, 2, 3],
     sensitiveFields: [],
-    roleScopes: [],
+    roleScopes: [
+      {
+        $typeName: "ycoding.v5.RoleScopes",
+        scopes: [4, 7],
+        role: 1,
+      },
+    ],
     eventTypes: [],
     operationId: 4023,
     diagnosticName: "session.form.cancel",
@@ -2939,7 +2945,13 @@ export const operations: readonly OperationDescriptor[] = [
     ],
     roles: [1],
     sensitiveFields: [],
-    roleScopes: [],
+    roleScopes: [
+      {
+        $typeName: "ycoding.v5.RoleScopes",
+        scopes: [4, 7],
+        role: 1,
+      },
+    ],
     eventTypes: [],
     operationId: 4024,
     diagnosticName: "session.form.create",
@@ -2962,7 +2974,13 @@ export const operations: readonly OperationDescriptor[] = [
     ],
     roles: [1],
     sensitiveFields: [],
-    roleScopes: [],
+    roleScopes: [
+      {
+        $typeName: "ycoding.v5.RoleScopes",
+        scopes: [4, 7],
+        role: 1,
+      },
+    ],
     eventTypes: [],
     operationId: 4025,
     diagnosticName: "session.form.get",
@@ -2980,7 +2998,13 @@ export const operations: readonly OperationDescriptor[] = [
     errorTypes: ["ycoding.v5.SessionNotFoundError", "ycoding.v5.UnauthorizedError", "ycoding.v5.InvalidRequestError"],
     roles: [1, 2, 3],
     sensitiveFields: [],
-    roleScopes: [],
+    roleScopes: [
+      {
+        $typeName: "ycoding.v5.RoleScopes",
+        scopes: [4, 7],
+        role: 1,
+      },
+    ],
     eventTypes: [],
     operationId: 4026,
     diagnosticName: "session.form.list",
@@ -3005,7 +3029,13 @@ export const operations: readonly OperationDescriptor[] = [
     ],
     roles: [1, 2, 3],
     sensitiveFields: [],
-    roleScopes: [],
+    roleScopes: [
+      {
+        $typeName: "ycoding.v5.RoleScopes",
+        scopes: [4, 7],
+        role: 1,
+      },
+    ],
     eventTypes: [],
     operationId: 4027,
     diagnosticName: "session.form.reply",
@@ -3028,7 +3058,13 @@ export const operations: readonly OperationDescriptor[] = [
     ],
     roles: [1],
     sensitiveFields: [],
-    roleScopes: [],
+    roleScopes: [
+      {
+        $typeName: "ycoding.v5.RoleScopes",
+        scopes: [4, 7],
+        role: 1,
+      },
+    ],
     eventTypes: [],
     operationId: 4028,
     diagnosticName: "session.form.state",

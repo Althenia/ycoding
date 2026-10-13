@@ -407,7 +407,7 @@ pub fn read_operations(
                     if !roles.contains(&role)
                         || !scoped_roles.insert(role)
                         || scopes.is_empty()
-                        || scopes.iter().any(|scope| !(1..=6).contains(scope))
+                        || scopes.iter().any(|scope| !(1..=7).contains(scope))
                         || scopes.iter().collect::<HashSet<_>>().len() != scopes.len()
                     {
                         return Err("invalid operation role scopes".into());

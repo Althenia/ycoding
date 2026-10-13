@@ -48,6 +48,9 @@ cases = [
     ("public-text-delta", "PublicEvent", 'session_text_delta { id { utf8: "evt_delta" } created: 0 type: PUBLICEVENT_SESSION_TEXT_DELTA_TYPE_SESSION_TEXT_DELTA data { sessionID { utf8: "ses_a" } assistantMessageID { utf8: "msg_a" } ordinal: 0 delta { utf16_le_units: "\\000\\330" } } }', 0),
     ("public-durable", "PublicEvent", 'session_revert_cleared { id { utf8: "evt_clear" } created: 0 sourceEpoch { utf8: "source" } type: SESSIONLOGITEMVALUE50_TYPE_SESSION_REVERT_CLEARED durable { aggregateID { utf8: "ses_a" } seq: 1 version: 1 } data { sessionID { utf8: "ses_a" } } }', 0),
     ("upload-raw", "session_attachment_upload_Request_payload", 'uploadID { utf8: "00000000-0000-4000-8000-000000000001" } index: 0 last: true data: "\\000\\377" offset: 0', 0),
+    ("global-form-scope", "Scope", 'global_form { directory { utf8: "/project" } workspace_id { utf8: "workspace" } }', 0),
+    ("fs-asset-metadata", "fs_read_Result", 'data { mime { utf8: "text/plain" } byteCount: 0 }', 0),
+    ("asset-empty-start", "Frame", f'{header} ledger: NORMAL bulk_start {{ request_id: "r" transfer_id: "t" operation_id: 1007 type_name: "ycoding.v5.fs_read_Result" content_kind: ASSET byte_count: 0 chunk_count: 0 }}', 5),
 ]
 controls = [
     ("ping", "id: 0", 1), ("pong", "id: 0", 5), ("cancel", 'request_id: "r"', 1),
@@ -65,10 +68,15 @@ for name, body, sender in controls:
     cases.append((name, "Frame", f"{header} ledger: {ledger} control {{ {name} {{ {body} }} }}", sender))
 rows = []
 encoded = {}
+def encode(message, text):
+    return subprocess.run([os.environ.get("PROTOC", "/opt/homebrew/bin/protoc"), f"--proto_path={source}", f"--encode=ycoding.v5.{message}", *[file.relative_to(source).as_posix() for file in sorted((source / "ycoding/v5").glob("*.proto"))]], input=text.encode(), capture_output=True, check=True).stdout
 for name, message, text, sender in cases:
-    result = subprocess.run([os.environ.get("PROTOC", "/opt/homebrew/bin/protoc"), f"--proto_path={source}", f"--encode=ycoding.v5.{message}", *[file.relative_to(source).as_posix() for file in sorted((source / "ycoding/v5").glob("*.proto"))]], input=text.encode(), capture_output=True, check=True)
-    encoded[name] = result.stdout
-    rows.append(f"{name}\tycoding.v5.{message}\tvalid\t{sender}\t{result.stdout.hex()}")
+    encoded[name] = encode(message, text)
+    rows.append(f"{name}\tycoding.v5.{message}\tvalid\t{sender}\t{encoded[name].hex()}")
+metadata_payload = "".join(f"\\{byte:03o}" for byte in encoded["fs-asset-metadata"])
+asset_metadata = f'metadata {{ type_name: "ycoding.v5.fs_read_Result" payload: "{metadata_payload}" }} mime {{ utf8: "text/plain" }} byte_count: 0'
+encoded["asset-metadata-empty"] = encode("Frame", f'{header} ledger: NORMAL result {{ request_id: "r" operation_id: 1007 settlement: COMPLETED asset_metadata {{ {asset_metadata} }} }}')
+rows.append(f'asset-metadata-empty\tycoding.v5.Frame\tvalid\t5\t{encoded["asset-metadata-empty"].hex()}')
 
 def varint(value):
     result = bytearray()
@@ -85,6 +93,10 @@ deep = b"\x0a\x00"
 for _ in range(64):
     deep = blob(6, blob(1, deep))
 negatives = [
+    ("asset-metadata-client", "Frame", encoded["asset-metadata-empty"], 1),
+    ("asset-bad-mime", "AssetMetadataResult", encode("AssetMetadataResult", asset_metadata.replace("text/plain", "invalid")), 0),
+    ("asset-oversize", "AssetMetadataResult", encode("AssetMetadataResult", asset_metadata.replace("byte_count: 0", "byte_count: 67108865")), 0),
+    ("asset-empty-extra-piece", "Frame", encode("Frame", f'{header} ledger: NORMAL bulk_start {{ request_id: "r" transfer_id: "t" operation_id: 1007 type_name: "ycoding.v5.fs_read_Result" content_kind: ASSET byte_count: 0 chunk_count: 1 }}'), 5),
     ("bad-utf8", "LosslessString", b"\x0a\x02\xc0\x80", 0),
     ("surrogate-utf8", "LosslessString", b"\x0a\x03\xed\xa0\x80", 0),
     ("odd-utf16", "LosslessString", b"\x12\x01\x00", 0),
@@ -125,4 +137,4 @@ negatives = [
 for name, message, data, sender in negatives:
     rows.append(f"{name}\tycoding.v5.{message}\tinvalid\t{sender}\t{data.hex()}")
 (target / "manifest.tsv").write_text("\n".join(rows) + "\n")
-print(f"golden vectors: {len(cases)}, negative vectors: {len(negatives)}, digest: {digest.hexdigest()}")
+print(f"golden vectors: {len(cases) + 1}, negative vectors: {len(negatives)}, digest: {digest.hexdigest()}")

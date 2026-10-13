@@ -176,6 +176,160 @@ fn status(state: &v5::FormState) -> &'static str {
         v5::form_state::Kind::Value3(_) => "cancelled",
     }
 }
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn global_forms_are_created_listed_and_settled_in_the_selected_location_only() {
+    bounded(async {
+        insert_project("prj_global_one", "/global/forms/one").await;
+        insert_project("prj_global_two", "/global/forms/two").await;
+        let (server, mut client) = open().await;
+        let published = world()
+            .core
+            .events
+            .subscribe(ycoding_core::event_feed::Scope::Global, None, || {})
+            .unwrap();
+        let scope = |directory: &str| v5::Scope {
+            target: Some(v5::scope::Target::GlobalForm(v5::GlobalFormScope {
+                directory: text(directory),
+                workspace_id: None,
+            })),
+        };
+        let created: v5::SessionFormCreateResult = ask(
+            &mut client,
+            "session.form.create",
+            scope("/global/forms/one"),
+            create("global", payload(Some("frm_global_scope"), fields())),
+        )
+        .await;
+        assert_eq!(units(&created.data.session_id), "global");
+        for (directory, count) in [("/global/forms/one", 1), ("/global/forms/two", 0)] {
+            let list: v5::SessionFormListResult = ask(
+                &mut client,
+                "session.form.list",
+                scope(directory),
+                v5::SessionFormListRequest {
+                    params: v5::SessionFormListRequestParams {
+                        session_id: text("global"),
+                    },
+                },
+            )
+            .await;
+            assert_eq!(list.data.items.len(), count);
+        }
+        let invalid: v5::InvalidRequestError = refuse(
+            &mut client,
+            "session.form.list",
+            scope("/global/forms/one"),
+            v5::SessionFormListRequest {
+                params: v5::SessionFormListRequestParams {
+                    session_id: text("ses_form_a"),
+                },
+            },
+        )
+        .await;
+        assert!(units(&invalid.message).contains("global"));
+        let id = units(&created.data.id);
+        let fetched: v5::SessionFormGetResult = ask(
+            &mut client,
+            "session.form.get",
+            scope("/global/forms/one"),
+            v5::SessionFormGetRequest {
+                params: target("global", &id),
+            },
+        )
+        .await;
+        assert_eq!(fetched.data, created.data);
+        let _: v5::FormNotFoundError = refuse(
+            &mut client,
+            "session.form.get",
+            scope("/global/forms/two"),
+            v5::SessionFormGetRequest {
+                params: target("global", &id),
+            },
+        )
+        .await;
+        let pending: v5::SessionFormStateResult = ask(
+            &mut client,
+            "session.form.state",
+            scope("/global/forms/one"),
+            v5::SessionFormStateRequest {
+                params: state_target("global", &id),
+            },
+        )
+        .await;
+        assert_eq!(status(&pending.data), "pending");
+        let _: v5::SessionFormReplyResult = ask(
+            &mut client,
+            "session.form.reply",
+            scope("/global/forms/one"),
+            v5::SessionFormReplyRequest {
+                params: reply_target("global", &id),
+                payload: v5::FormReply {
+                    answer: answer(vec![
+                        (
+                            "name",
+                            v5::form_value::Kind::Value1(text("ada@example.test")),
+                        ),
+                        ("docs", v5::form_value::Kind::Value3(true)),
+                    ]),
+                },
+            },
+        )
+        .await;
+        let answered: v5::SessionFormStateResult = ask(
+            &mut client,
+            "session.form.state",
+            scope("/global/forms/one"),
+            v5::SessionFormStateRequest {
+                params: state_target("global", &id),
+            },
+        )
+        .await;
+        assert_eq!(status(&answered.data), "answered");
+        let cancelled: v5::SessionFormCreateResult = ask(
+            &mut client,
+            "session.form.create",
+            scope("/global/forms/one"),
+            create("global", payload(Some("frm_global_cancel_scope"), fields())),
+        )
+        .await;
+        let _: v5::SessionFormCancelResult = ask(
+            &mut client,
+            "session.form.cancel",
+            scope("/global/forms/one"),
+            v5::SessionFormCancelRequest {
+                params: v5::SessionFormCancelRequestParams {
+                    session_id: text("global"),
+                    form_id: cancelled.data.id.clone(),
+                },
+            },
+        )
+        .await;
+        let list: v5::SessionFormListResult = ask(
+            &mut client,
+            "session.form.list",
+            scope("/global/forms/one"),
+            v5::SessionFormListRequest {
+                params: v5::SessionFormListRequestParams {
+                    session_id: text("global"),
+                },
+            },
+        )
+        .await;
+        assert!(list.data.items.is_empty());
+        let mut settlements = Vec::new();
+        while let Some(item) = published.next().unwrap() {
+            if let ycoding_core::event_feed::Payload::Ephemeral(event) = &item.payload
+                && event.session.is_none()
+                && matches!(event.event_type.as_str(), "form.replied" | "form.cancelled")
+            {
+                settlements.push(event.event_type.clone());
+            }
+        }
+        assert_eq!(settlements, ["form.replied", "form.cancelled"]);
+        server.shutdown().await.unwrap();
+    })
+    .await;
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn forms_round_trip_through_their_session_and_settle_once() {

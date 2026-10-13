@@ -421,7 +421,10 @@ async fn handshake_mismatches_close_before_ready_without_dispatch() {
             .send_binary(&frame(None, hello(5, digest(), v5::PeerRole::LocalClient)))
             .await;
         let (code, _) = valid.expect_end().await.unwrap();
-        assert_eq!(code, 1002, "repeated Hello after Ready");
+        assert_eq!(
+            code, 1008,
+            "repeated Hello before Ready receipt confirmation"
+        );
         assert_eq!(count.load(Ordering::SeqCst), 0);
         server.shutdown().await.unwrap();
     })
@@ -907,6 +910,9 @@ async fn every_local_operation_answers_with_a_declared_typed_outcome() {
                 v5::result::Outcome::Success(payload) => {
                     assert!(wired.contains(&descriptor.diagnostic_name));
                     assert_eq!(payload.type_name, descriptor.result_type);
+                }
+                v5::result::Outcome::AssetMetadata(_) => {
+                    panic!("{} must settle inline", descriptor.diagnostic_name);
                 }
             }
             local += usize::from(local_operation);

@@ -24,6 +24,7 @@ pub(crate) fn authorize(
         Some(v5::scope::Target::Form(_)) => v5::ScopeKind::Form,
         Some(v5::scope::Target::Workspace(_)) => v5::ScopeKind::Workspace,
         Some(v5::scope::Target::Global(_)) => v5::ScopeKind::Global,
+        Some(v5::scope::Target::GlobalForm(_)) => v5::ScopeKind::GlobalForm,
         None => return Err(Failure::Invalid("Missing remote scope".into())),
     };
     if ![v5::PeerRole::RemoteClient, v5::PeerRole::Relay]

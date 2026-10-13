@@ -22,6 +22,8 @@ import {
   TypedPayloadSchema,
   EventBatchSchema,
   ResyncRequiredSchema,
+  ScopeSchema,
+  WireLimit,
 } from "../../generated/v5/index.js"
 import type {
   Frame,
@@ -34,15 +36,18 @@ import type {
   BulkStart,
   EventBatch,
   EventRecord,
+  AssetMetadataResult,
+  SubscriptionSnapshot,
 } from "../../generated/v5/index.js"
 import { validateBinary } from "../validate.js"
+import { validateAssetMetadata } from "../asset.js"
 import { defaultBudgets, ReservationBudget } from "./budgets.js"
 import type { Budgets, ConfigurableBudgets } from "./budgets.js"
 import { Ledger } from "./ledger.js"
 import type { Transfer } from "./bulk.js"
 import { sameScope } from "./subscription.js"
 import type { Subscription } from "./subscription.js"
-import { eventReservationBytes, resyncReservationBytes } from "./events.js"
+import { eventReservationBytes, resyncReservationBytes, subscriptionSnapshotBytes, utf8Bytes } from "./events.js"
 export { eventFrameBytes, eventReservationBytes, lateHeaderReservation } from "./events.js"
 
 export { defaultBudgets, ReservationBudget } from "./budgets.js"
@@ -74,7 +79,25 @@ export type Decision =
       payload?: TypedPayload
     }
   | { type: "cancelled"; requestID: string; mutation: boolean }
-  | { type: "bulkComplete"; transferID: string; data: Uint8Array; start: BulkStart }
+  | { type: "assetMetadata"; requestID: string; metadata: AssetMetadataResult; frame: Frame; ordinal: bigint }
+  | { type: "eventBatchReleased"; ticket: bigint; consumed: boolean }
+  | { type: "relayInterestRejected"; sessionID: string }
+  | {
+      type: "bulkComplete"
+      transferID: string
+      data: Uint8Array
+      start: BulkStart
+      metadata?: undefined
+      result?: undefined
+    }
+  | {
+      type: "bulkComplete"
+      transferID: string
+      data: Uint8Array
+      start: BulkStart
+      metadata: AssetMetadataResult
+      result: TypedPayload
+    }
   | { type: "bulkForward"; frame: Frame }
   | { type: "transferCancelled"; transferID: string }
   | { type: "events"; subscriptionID: string; batch: EventBatch; ordinal?: bigint }
@@ -89,10 +112,18 @@ type Queued = {
   count: number
   open?: boolean
   ticket?: bigint
+  forwarded?: boolean
   eventFence?: bigint
   eventKey?: string
 }
-type Pending = { operation: OperationDescriptor; scope: Scope; transmitted: boolean }
+type Pending = {
+  operation: OperationDescriptor
+  scope: Scope
+  transmitted: boolean
+  asset?: AssetMetadataResult
+  assetCount?: bigint
+  assetCharge?: number
+}
 export type Prepared = { frame: Frame; reservedBytes: number }
 export type Incoming = { readonly byteLength: number; readonly authority: number }
 export type EventMetadata = {
@@ -139,15 +170,18 @@ export class Connection {
   private sendingSubscriptions = new Map<string, Subscription>()
   private dropped = { results: 0, transfers: 0, events: 0, oversizedInvalidations: 0 }
   private eventTicket = 0n
+  private relayClients = new Map<string, { snapshot: SubscriptionSnapshot; bytes: number }>()
+  private relayIdentities = new Map<string, { id: string; bytes: number }>()
 
   constructor(readonly options: Options) {
     if (!Number.isFinite(options.now)) throw new Error("time")
     const client = [PeerRole.LOCAL_CLIENT, PeerRole.REMOTE_CLIENT, PeerRole.AGENT].includes(options.role)
-    const pair = client ? [options.role, options.peer] : [options.peer, options.role]
+    const clientRole = client ? options.role : options.peer
+    const serverRole = client ? options.peer : options.role
     if (
       !(
-        (pair[0] === PeerRole.LOCAL_CLIENT && pair[1] === PeerRole.SERVER) ||
-        ([PeerRole.REMOTE_CLIENT, PeerRole.AGENT].includes(pair[0]) && pair[1] === PeerRole.RELAY)
+        (clientRole === PeerRole.LOCAL_CLIENT && serverRole === PeerRole.SERVER) ||
+        ([PeerRole.REMOTE_CLIENT, PeerRole.AGENT].includes(clientRole) && serverRole === PeerRole.RELAY)
       )
     )
       throw new Error("peer roles")
@@ -199,6 +233,8 @@ export class Connection {
   }
   get retainedBytes() {
     return (
+      this.assetMetadataRetainedBytes +
+      this.relayInterestRetainedBytes +
       [...this.incoming].reduce((total, token) => total + token.byteLength, 0) +
       this.queue.reduce((total, record) => total + record.bytes, 0) +
       (this.prepared?.record.bytes ?? 0) +
@@ -294,6 +330,12 @@ export class Connection {
     this.clearHydration(subscription)
     subscriptions.delete(subscriptionID)
     if (direction === "send")
+      for (const [sessionID, identity] of this.relayIdentities) {
+        if (identity.id !== subscriptionID) continue
+        this.reservation.release(identity.bytes)
+        this.relayIdentities.delete(sessionID)
+      }
+    if (direction === "send")
       this.removeQueued(
         (frame) =>
           (frame.body.case === "eventBatch" || frame.body.case === "streamEnd") &&
@@ -304,11 +346,125 @@ export class Connection {
   get bulkRetainedBytes() {
     return [...this.transfers.values()].reduce((total, transfer) => total + (transfer.data?.length ?? 0), 0)
   }
+  forwardEventBatch(batch: EventBatch, now: number) {
+    const decisions = this.check(now)
+    if (this.phase === "closed") return { ticket: undefined, decisions }
+    if (
+      this.options.role !== PeerRole.RELAY ||
+      this.options.peer !== PeerRole.REMOTE_CLIENT ||
+      this.phase !== "established"
+    )
+      return { ticket: undefined, decisions: this.close(FailureCategory.DIRECTION) }
+    const queued = this.queueFrame({ case: "eventBatch", value: batch }, eventReservationBytes(batch, this.epoch), now)
+    if (this.state === "closed") return { ticket: undefined, decisions: queued }
+    const record = this.queue[this.queue.length - 1]
+    if (!record) return { ticket: undefined, decisions: this.close(FailureCategory.MALFORMED) }
+    this.eventTicket++
+    record.ticket = this.eventTicket
+    record.forwarded = true
+    record.open = false
+    record.available = now
+    return { ticket: record.ticket, decisions: [...decisions, ...queued] }
+  }
+  get assetMetadataRetainedBytes() {
+    return (
+      [...this.pending.values()].reduce((bytes, pending) => bytes + (pending.assetCharge ?? 0), 0) +
+      [...this.transfers.values()].reduce((bytes, transfer) => bytes + (transfer.assetCharge ?? 0), 0)
+    )
+  }
+  get relayInterestRetainedBytes() {
+    return (
+      [...this.relayClients.values()].reduce((bytes, entry) => bytes + entry.bytes, 0) +
+      [...this.relayIdentities.values()].reduce((bytes, entry) => bytes + entry.bytes, 0)
+    )
+  }
+  relaySubscriptionID(sessionID: string) {
+    return this.relayIdentities.get(sessionID)?.id
+  }
+  updateRelayInterests(snapshot: SubscriptionSnapshot, now: number) {
+    const decisions = this.check(now)
+    const empty = { added: [] as string[], removed: [] as string[], decisions }
+    if (this.state === "closed") return empty
+    if (
+      this.options.role !== PeerRole.AGENT ||
+      this.options.peer !== PeerRole.RELAY ||
+      !snapshot.clientId ||
+      snapshot.sessionIds.some((id) => !id) ||
+      new Set(snapshot.sessionIds).size !== snapshot.sessionIds.length
+    )
+      return { ...empty, decisions: this.close(FailureCategory.DIRECTION) }
+    const before = new Set([...this.relayClients.values()].flatMap((entry) => entry.snapshot.sessionIds))
+    const after = new Set(
+      [...this.relayClients]
+        .filter(([id]) => id !== snapshot.clientId)
+        .flatMap(([, entry]) => entry.snapshot.sessionIds)
+        .concat(snapshot.sessionIds),
+    )
+    const previous = this.relayClients.get(snapshot.clientId)
+    const bytes = subscriptionSnapshotBytes(snapshot)
+    if (
+      snapshot.sessionIds.length > this.budgets.subscriptions ||
+      after.size > this.budgets.subscriptions ||
+      (!previous && snapshot.sessionIds.length && this.relayClients.size >= WireLimit.RELAY_PEERS) ||
+      bytes > this.budgets.serverFrameBytes ||
+      (snapshot.sessionIds.length && !this.reservation.reserve(bytes))
+    )
+      return { ...empty, decisions: this.close(FailureCategory.LIMIT) }
+    if (snapshot.sessionIds.length) this.relayClients.set(snapshot.clientId, { snapshot, bytes })
+    if (!snapshot.sessionIds.length) this.relayClients.delete(snapshot.clientId)
+    if (previous) this.reservation.release(previous.bytes)
+    const removed = [...before].filter((id) => !after.has(id)).sort()
+    for (const id of removed) {
+      const identity = this.relayIdentities.get(id)
+      if (identity) decisions.push(...this.releaseSubscription(identity.id, now, "send"))
+      this.relayIdentities.delete(id)
+    }
+    return { added: [...after].filter((id) => !before.has(id)).sort(), removed, decisions }
+  }
+  releaseRelayClient(clientID: string, now: number) {
+    return this.updateRelayInterests(
+      { $typeName: "ycoding.v5.SubscriptionSnapshot", clientId: clientID, sessionIds: [] },
+      now,
+    )
+  }
+  registerRelayInterest(sessionID: string, subscriptionID: string, sourceEpoch: string, now: number): Decision[] {
+    const decisions = this.check(now)
+    if (this.state === "closed") return decisions
+    if (
+      this.options.role !== PeerRole.AGENT ||
+      this.options.peer !== PeerRole.RELAY ||
+      this.state !== "established" ||
+      !sourceEpoch ||
+      !subscriptionID ||
+      ![...this.relayClients.values()].some((entry) => entry.snapshot.sessionIds.includes(sessionID)) ||
+      this.relayIdentities.has(sessionID) ||
+      this.sendingSubscriptions.has(subscriptionID)
+    )
+      return [...decisions, { type: "relayInterestRejected", sessionID }]
+    if (this.sendingSubscriptions.size >= this.budgets.subscriptions) return this.close(FailureCategory.LIMIT)
+    const operation = this.options.operations.find((operation) => operation.diagnosticName === "event.subscribe")
+    if (!operation) return [...decisions, { type: "relayInterestRejected", sessionID }]
+    const bytes = utf8Bytes(sessionID) + utf8Bytes(subscriptionID) + utf8Bytes(sourceEpoch)
+    if (bytes > this.budgets.serverFrameBytes || !this.reservation.reserve(bytes))
+      return this.close(FailureCategory.LIMIT)
+    this.sendingSubscriptions.set(subscriptionID, {
+      scope: create(ScopeSchema, { target: { case: "session", value: sessionID } }),
+      eventTypes: operation.eventTypes,
+      sourceEpoch,
+      hydrating: false,
+      invalidated: false,
+      ending: false,
+      resyncRequired: false,
+      buffered: [],
+    })
+    this.relayIdentities.set(sessionID, { id: subscriptionID, bytes })
+    return decisions
+  }
 
   releaseBulk(transferID: string) {
     const transfer = this.transfers.get(transferID)
     if (!transfer?.complete) throw new Error("bulk owner")
-    this.reservation.release(transfer.data?.length ?? 0)
+    this.reservation.release((transfer.data?.length ?? 0) + (transfer.assetCharge ?? 0))
     this.transfers.delete(transferID)
   }
 
@@ -476,6 +632,7 @@ export class Connection {
       )
       if (this.state === "closed") return queued
       const marker = this.queue[this.queue.length - 1]
+      if (!marker) return this.close(FailureCategory.MALFORMED)
       marker.eventFence = this.eventTicket
       marker.eventKey = this.subscriptionKey(metadata.subscriptionID)
       this.dropped.oversizedInvalidations++
@@ -594,6 +751,16 @@ export class Connection {
     if (body.case === "result") {
       const pending = this.inbound.get(body.value.requestId)
       if (!pending || !this.validResult(body.value, pending.operation)) return this.close(FailureCategory.MALFORMED)
+      if (
+        (body.value.outcome.case === "assetMetadata" && pending.assetCount !== undefined) ||
+        this.queue.some(
+          (record) => record.frame.body.case === "result" && record.frame.body.value.requestId === body.value.requestId,
+        ) ||
+        (this.prepared?.record.frame.body.case === "result" &&
+          this.prepared.record.frame.body.value.requestId === body.value.requestId) ||
+        [...this.outgoingTransfers.values()].some((transfer) => transfer.start.requestId === body.value.requestId)
+      )
+        return this.close(FailureCategory.MALFORMED)
     }
     if (body.case === "bulkStart" || body.case === "bulkPiece" || body.case === "bulkEnd") {
       const failure = this.validateOutgoingBulk(frame)
@@ -645,6 +812,8 @@ export class Connection {
       key: ending ? this.subscriptionKey(ending) : streamKey(frame),
     })
     if (body.case === "streamEnd") this.sendingSubscriptions.get(body.value.subscriptionId)!.ending = true
+    if (body.case === "result" && body.value.outcome.case === "assetMetadata")
+      this.inbound.get(body.value.requestId)!.assetCount = body.value.outcome.value.byteCount
     return decisions
   }
 
@@ -690,10 +859,11 @@ export class Connection {
     const pending = this.pending.get(requestID)
     if (!pending) return []
     this.pending.delete(requestID)
+    this.reservation.release(pending.assetCharge ?? 0)
     this.removeQueued((frame) => frame.body.case === "request" && frame.body.value.requestId === requestID)
     this.transfers.forEach((transfer) => {
       if (transfer.start.requestId !== requestID) return
-      this.reservation.release(transfer.data?.length ?? 0)
+      this.reservation.release((transfer.data?.length ?? 0) + (transfer.assetCharge ?? 0))
       this.transfers.delete(transfer.start.transferId)
     })
     if (pending.transmitted)
@@ -730,7 +900,7 @@ export class Connection {
       return [...decisions, { type: "transferCancelled", transferID }]
     }
     if (incoming) {
-      this.reservation.release(incoming.data?.length ?? 0)
+      this.reservation.release((incoming.data?.length ?? 0) + (incoming.assetCharge ?? 0))
       this.transfers.delete(transferID)
       this.pending.delete(incoming.start.requestId)
       decisions.push(
@@ -819,6 +989,7 @@ export class Connection {
         consumed: false,
         key: this.prepared.record.key,
         ticket: this.prepared.record.ticket,
+        forwarded: this.prepared.record.forwarded,
         resyncScope:
           token.frame.body.case === "control" && token.frame.body.value.kind.case === "resyncRequired"
             ? token.frame.body.value.kind.value.scope
@@ -845,7 +1016,7 @@ export class Connection {
       const pending = this.inbound.get(token.frame.body.value.requestId)!
       if (pending.operation.streaming === Streaming.EVENTS && token.frame.body.value.outcome.case === "success")
         this.awaitingSubscription.set(`sent:${token.frame.body.value.requestId}`, pending)
-      this.inbound.delete(token.frame.body.value.requestId)
+      if (token.frame.body.value.outcome.case !== "assetMetadata") this.inbound.delete(token.frame.body.value.requestId)
     }
     if (token.frame.body.case === "bulkEnd") {
       const transfer = this.outgoingTransfers.get(token.frame.body.value.transferId)!
@@ -881,7 +1052,15 @@ export class Connection {
 
   close(category: FailureCategory = FailureCategory.EPOCH, closeCode?: number): Decision[] {
     if (this.phase === "closed") return []
-    const code = closeCode ?? (this.readyHanded || this.phase === "established" ? 1002 : 1008)
+    const code = closeCode ?? (this.phase === "established" ? 1002 : 1008)
+    const forwarded = [
+      ...this.queue,
+      ...(this.prepared ? [this.prepared.record] : []),
+      ...[...this.ledgers.values()].flatMap((ledger) => ledger.sent),
+    ]
+      .filter((record) => record.forwarded)
+      .map((record): Decision => ({ type: "eventBatchReleased", ticket: record.ticket!, consumed: false }))
+    this.reservation.release(this.assetMetadataRetainedBytes + this.relayInterestRetainedBytes)
     this.phase = "closed"
     this.incoming.forEach((token) => this.reservation.release(token.byteLength))
     this.incoming.clear()
@@ -906,11 +1085,13 @@ export class Connection {
     this.awaitingSubscription.clear()
     this.reservation.release(this.bulkRetainedBytes)
     this.transfers.clear()
+    this.relayClients.clear()
+    this.relayIdentities.clear()
     this.outgoingTransfers.clear()
     this.subscriptions.forEach((subscription) => this.clearHydration(subscription))
     this.subscriptions.clear()
     this.sendingSubscriptions.clear()
-    return [...settled, { type: "closed", code, category }]
+    return [...forwarded, ...settled, { type: "closed", code, category }]
   }
 
   takeDecisions() {
@@ -1044,6 +1225,25 @@ export class Connection {
         return this.close(FailureCategory.MALFORMED)
       if ([...this.transfers.values()].some((transfer) => transfer.start.requestId === result.requestId))
         return this.close(FailureCategory.MALFORMED)
+      if (result.outcome.case === "assetMetadata") {
+        if (pending.assetCount !== undefined) return this.close(FailureCategory.MALFORMED)
+        const charge = this.options.role === PeerRole.RELAY ? 0 : token.byteLength
+        if (charge && !this.reservation.reserve(charge)) return this.close(FailureCategory.LIMIT)
+        pending.assetCount = result.outcome.value.byteCount
+        pending.asset = this.options.role === PeerRole.RELAY ? undefined : result.outcome.value
+        pending.assetCharge = charge
+        return [
+          ...(charge ? this.consume(LedgerClass.NORMAL, frame.deliveryOrdinal, now) : []),
+          {
+            type: "assetMetadata",
+            requestID: result.requestId,
+            metadata: result.outcome.value,
+            frame,
+            ordinal: frame.deliveryOrdinal,
+          },
+        ]
+      }
+      this.reservation.release(pending.assetCharge ?? 0)
       this.pending.delete(result.requestId)
       if (pending.operation.streaming === Streaming.EVENTS && result.outcome.case === "success")
         this.awaitingSubscription.set(result.requestId, pending)
@@ -1081,12 +1281,18 @@ export class Connection {
         },
       ]
     }
+    const forwarded: Decision[] = []
     if (control.case === "credit") {
       if (control.value.ledger === LedgerClass.TINY || !this.ledgers.has(control.value.ledger))
         return this.close(FailureCategory.MALFORMED)
-      const freed = this.ledgers.get(control.value.ledger)!.credit(control.value.consumedThrough, false)
+      const ledger = this.ledgers.get(control.value.ledger)!
+      const tickets = ledger.sent
+        .filter((record) => record.forwarded && record.ordinal <= control.value.consumedThrough && !record.consumed)
+        .map((record) => record.ticket!)
+      const freed = ledger.credit(control.value.consumedThrough, false)
       if (freed === undefined) return this.close(FailureCategory.MALFORMED)
       this.reservation.release(freed)
+      forwarded.push(...tickets.map((ticket): Decision => ({ type: "eventBatchReleased", ticket, consumed: true })))
     }
     if (control.case === "ping" && control.value.id > this.peerPing) {
       this.peerPing = control.value.id
@@ -1137,13 +1343,13 @@ export class Connection {
     if (kind === LedgerClass.TINY) {
       const bytes = ledger.consume(frame.deliveryOrdinal, now)!
       this.reservation.release(bytes)
-      return cancellations
+      return [...cancellations, ...forwarded]
     }
-    return [{ type: "control", frame }]
+    return [...forwarded, { type: "control", frame }]
   }
 
   private validRequest(operation: OperationDescriptor, scope: Scope | undefined, payload: Uint8Array, role: PeerRole) {
-    const expected = scope?.target.case?.toUpperCase()
+    const expected = scope?.target.case?.replace(/[A-Z]/g, (letter) => `_${letter}`).toUpperCase()
     if (
       !scope ||
       !operation.roles.includes(role) ||
@@ -1232,7 +1438,7 @@ export class Connection {
     )
   }
 
-  private validStart(start: BulkStart, operation: OperationDescriptor) {
+  private validStart(start: BulkStart, operation: OperationDescriptor, assetCount?: bigint) {
     return (
       !!start.transferId &&
       start.operationId === operation.operationId &&
@@ -1241,9 +1447,11 @@ export class Connection {
         (operation.streaming === Streaming.ASSET_BULK && start.contentKind === ContentKind.ASSET)) &&
       start.byteCount >= 0n &&
       start.byteCount <= BigInt(this.budgets.messageBytes) &&
-      start.chunkCount >= 1 &&
+      (start.chunkCount >= 1 || (start.contentKind === ContentKind.ASSET && start.byteCount === 0n)) &&
       start.chunkCount <= this.budgets.pieces &&
-      start.byteCount <= BigInt(start.chunkCount * this.budgets.pieceBytes)
+      start.byteCount <= BigInt(start.chunkCount * this.budgets.pieceBytes) &&
+      (start.contentKind !== ContentKind.ASSET ||
+        (assetCount === start.byteCount && start.chunkCount === Number((start.byteCount + 65535n) / 65536n)))
     )
   }
 
@@ -1251,7 +1459,12 @@ export class Connection {
     if (frame.body.case === "bulkStart") {
       const start = frame.body.value
       const pending = this.inbound.get(start.requestId)
-      if (!pending || !this.validStart(start, pending.operation) || this.outgoingTransfers.has(start.transferId))
+      if (
+        !pending ||
+        !this.validStart(start, pending.operation, pending.assetCount) ||
+        this.outgoingTransfers.has(start.transferId) ||
+        [...this.outgoingTransfers.values()].some((transfer) => transfer.start.requestId === start.requestId)
+      )
         return FailureCategory.MALFORMED
       if (this.outgoingTransfers.size >= this.budgets.transfers) return FailureCategory.LIMIT
       this.outgoingTransfers.set(start.transferId, { start, index: 0, offset: 0n, complete: false })
@@ -1267,7 +1480,12 @@ export class Connection {
         piece.offset !== transfer.offset ||
         piece.data.length > this.budgets.pieceBytes ||
         transfer.index >= transfer.start.chunkCount ||
-        transfer.offset + BigInt(piece.data.length) > transfer.start.byteCount
+        transfer.offset + BigInt(piece.data.length) > transfer.start.byteCount ||
+        (transfer.start.contentKind === ContentKind.ASSET &&
+          piece.data.length !==
+            Number(
+              transfer.start.byteCount - transfer.offset < 65536n ? transfer.start.byteCount - transfer.offset : 65536n,
+            ))
       )
         return FailureCategory.MALFORMED
       transfer.index++
@@ -1290,7 +1508,7 @@ export class Connection {
       const pending = this.pending.get(start.requestId)
       if (
         !pending?.transmitted ||
-        !this.validStart(start, pending.operation) ||
+        !this.validStart(start, pending.operation, pending.assetCount) ||
         this.transfers.has(start.transferId) ||
         [...this.transfers.values()].some((transfer) => transfer.start.requestId === start.requestId)
       )
@@ -1308,7 +1526,10 @@ export class Connection {
         offset: 0n,
         complete: false,
         data: assemble ? new Uint8Array(Number(start.byteCount)) : undefined,
+        metadata: pending.asset,
+        assetCharge: pending.assetCharge,
       })
+      pending.assetCharge = 0
       if (!assemble) return [{ type: "bulkForward", frame }]
       return this.consume(LedgerClass.NORMAL, frame.deliveryOrdinal, now)
     }
@@ -1328,7 +1549,12 @@ export class Connection {
         piece.offset !== transfer.offset ||
         piece.data.length > this.budgets.pieceBytes ||
         transfer.index >= transfer.start.chunkCount ||
-        transfer.offset + BigInt(piece.data.length) > transfer.start.byteCount
+        transfer.offset + BigInt(piece.data.length) > transfer.start.byteCount ||
+        (transfer.start.contentKind === ContentKind.ASSET &&
+          piece.data.length !==
+            Number(
+              transfer.start.byteCount - transfer.offset < 65536n ? transfer.start.byteCount - transfer.offset : 65536n,
+            ))
       )
         return this.close(FailureCategory.MALFORMED)
       transfer.index++
@@ -1359,6 +1585,8 @@ export class Connection {
       !validPayload(transfer.start.typeName, transfer.data)
     )
       return this.close(FailureCategory.MALFORMED)
+    if (transfer.data && transfer.start.contentKind === ContentKind.ASSET && !transfer.metadata?.metadata)
+      return this.close(FailureCategory.MALFORMED)
     transfer.complete = true
     this.pending.delete(transfer.start.requestId)
     const decisions: Decision[] = [
@@ -1372,7 +1600,7 @@ export class Connection {
             ? end.outcome.value
             : transfer.data && transfer.start.contentKind === ContentKind.TYPED_MESSAGE
               ? create(TypedPayloadSchema, { typeName: transfer.start.typeName, payload: transfer.data })
-              : undefined,
+              : transfer.metadata?.metadata,
       },
     ]
     if (!transfer.data) {
@@ -1384,10 +1612,33 @@ export class Connection {
       this.releaseBulk(transferID)
       return decisions
     }
-    return [...decisions, { type: "bulkComplete", transferID, data: transfer.data, start: transfer.start }]
+    if (!transfer.metadata?.metadata)
+      return [...decisions, { type: "bulkComplete", transferID, data: transfer.data, start: transfer.start }]
+    return [
+      ...decisions,
+      {
+        type: "bulkComplete",
+        transferID,
+        data: transfer.data,
+        start: transfer.start,
+        metadata: transfer.metadata,
+        result: transfer.metadata.metadata,
+      },
+    ]
   }
 
   private validResult(result: Result, operation: OperationDescriptor) {
+    if (result.operationId !== operation.operationId || result.settlement !== operation.settlement) return false
+    if (result.outcome.case === "assetMetadata") {
+      if (operation.streaming !== Streaming.ASSET_BULK) return false
+      try {
+        validateAssetMetadata(result.outcome.value, operation.resultType, this.options.role === PeerRole.RELAY)
+        return true
+      } catch {
+        return false
+      }
+    }
+    if (operation.streaming === Streaming.ASSET_BULK && result.outcome.case === "success") return false
     const payload = result.outcome.value
     if (
       result.operationId !== operation.operationId ||
@@ -1405,10 +1656,14 @@ export class Connection {
   private removeQueued(predicate: (frame: Frame) => boolean) {
     this.queue = this.queue.filter((record) => {
       if (!predicate(record.frame)) return true
+      if (record.forwarded)
+        this.notifications.push({ type: "eventBatchReleased", ticket: record.ticket!, consumed: false })
       this.reservation.release(record.bytes)
       return false
     })
     if (!this.prepared || !predicate(this.prepared.record.frame)) return
+    if (this.prepared.record.forwarded)
+      this.notifications.push({ type: "eventBatchReleased", ticket: this.prepared.record.ticket!, consumed: false })
     this.reservation.release(this.prepared.record.bytes)
     this.prepared = undefined
   }
@@ -1538,7 +1793,8 @@ export class Connection {
     for (const offset of keys.keys()) {
       const key = keys[(start + offset) % keys.length]
       const index = this.queue.findIndex((record) => this.classify(record.frame) === kind && record.key === key)
-      if (index >= 0 && eligible(this.queue[index])) return index
+      const record = this.queue[index]
+      if (record && eligible(record)) return index
     }
     return -1
   }

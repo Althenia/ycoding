@@ -128,7 +128,8 @@ enum SenderMask {
   BULK_PIECE_SENDERS = 31;
   BULK_END_SENDERS = 31;
 }
-enum ScopeKind { MACHINE = 1; LOCATION = 2; SESSION = 3; FORM = 4; WORKSPACE = 5; GLOBAL = 6; }
+enum ScopeKind { MACHINE = 1; LOCATION = 2; SESSION = 3; FORM = 4; WORKSPACE = 5; GLOBAL = 6; GLOBAL_FORM = 7; }
+message GlobalFormScope { required LosslessString directory = 1; optional LosslessString workspace_id = 2; }
 message Scope {
   oneof target {
     Empty machine = 1;
@@ -137,6 +138,7 @@ message Scope {
     string form = 4;
     string workspace = 5;
     Empty global = 6;
+    GlobalFormScope global_form = 7;
   }
 }
 enum MutationClass { READ = 1; MUTATION = 2; }
@@ -193,7 +195,12 @@ message Result {
   required string request_id = 1;
   required uint32 operation_id = 2;
   required Settlement settlement = 3;
-  oneof outcome { TypedPayload success = 4; TypedPayload error = 5; }
+  oneof outcome { TypedPayload success = 4; TypedPayload error = 5; AssetMetadataResult asset_metadata = 6; }
+}
+message AssetMetadataResult {
+  required TypedPayload metadata = 1;
+  required LosslessString mime = 2;
+  required uint64 byte_count = 3;
 }
 message DurablePosition {
   required string aggregate_id = 1;

@@ -14,6 +14,7 @@ import {
 import type { Frame, LosslessString } from "../generated/v5/index.js"
 import { validateConstraints } from "./constraints.js"
 import type { Constraints } from "./constraints.js"
+import { validAssetMime } from "./mime.js"
 
 type Field = { integer?: bigint; bytes?: Uint8Array; message?: Node }
 type Node = { name: string; fields: Map<number, Field[]> }
@@ -159,6 +160,10 @@ function scan(
   if (name === "ycoding.v5.Credit" && (integer(node, 1) === BigInt(LedgerClass.TINY) || integer(node, 2) === 0n))
     throw new Error("credit grant")
   if (name === "ycoding.v5.LosslessString") units(node)
+  if (name === "ycoding.v5.AssetMetadataResult") {
+    if (!validAssetMime(stringFromUnits(units(requiredField(node, 2).message!)))) throw new Error("asset MIME")
+    if (integer(node, 3) > BigInt(WireLimit.BULK_MESSAGE_BYTES)) throw new Error("asset length")
+  }
   if (name === "ycoding.v5.ValueObject") {
     const keys = new Set<string>()
     for (const entry of fields.get(1) ?? []) {
@@ -313,7 +318,7 @@ function frameRules(node: Node, bytes: number, sender: PeerRole) {
   if (tag === 12 && (!text(body, 1) || integer(body, 2) === 0n || raw(body, 4).length > WireLimit.INLINE_BODY_BYTES))
     throw new Error("request bounds")
   if (tag === 13) {
-    const payload = child(body, body.fields.has(4) ? 4 : 5)
+    const payload = body.fields.has(6) ? child(child(body, 6), 1) : child(body, body.fields.has(4) ? 4 : 5)
     if (
       !text(body, 1) ||
       integer(body, 2) === 0n ||
@@ -332,10 +337,12 @@ function frameRules(node: Node, bytes: number, sender: PeerRole) {
   if (
     tag === 16 &&
     (integer(body, 6) > BigInt(WireLimit.BULK_MESSAGE_BYTES) ||
-      integer(body, 7) < 1n ||
+      (integer(body, 7) < 1n && !(integer(body, 5) === 2n && integer(body, 6) === 0n)) ||
       integer(body, 7) > BigInt(WireLimit.BULK_PIECES))
   )
     throw new Error("bulk announcement bounds")
+  if (tag === 16 && integer(body, 5) === 2n && integer(body, 7) !== (integer(body, 6) + 65535n) / 65536n)
+    throw new Error("asset piece count")
   if (
     tag === 17 &&
     (raw(body, 4).length > WireLimit.BULK_PIECE_BYTES ||

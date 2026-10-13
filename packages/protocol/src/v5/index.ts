@@ -1,4 +1,5 @@
 export * from "../generated/v5/index.js"
+export { encodeAssetMetadata } from "./asset.js"
 export { create, toBinary, clearField } from "@bufbuild/protobuf"
 export {
   decodeLossless,

@@ -398,6 +398,28 @@ impl Driver {
         }
         match settled {
             None => self.fail(ProtocolError::Direction),
+            Some(Settled::Asset { metadata, bulk }) => {
+                let reserved = self.reserve(
+                    v5::LedgerClass::Normal,
+                    v5::frame::Body::Result(metadata.clone()),
+                );
+                let now = self.now();
+                match self.connection.respond(metadata, reserved, now) {
+                    Ok(()) => {
+                        let transfer_id = format!("t{}", self.next_transfer);
+                        self.next_transfer += 1;
+                        self.transfers.push_back(Transfer {
+                            bulk,
+                            transfer_id,
+                            started: false,
+                            offset: 0,
+                            index: 0,
+                        });
+                    }
+                    Err(ProtocolError::Unknown) => {}
+                    Err(error) => self.fail(error),
+                }
+            }
             Some(Settled::Bulk(bulk)) => {
                 let transfer_id = format!("t{}", self.next_transfer);
                 self.next_transfer += 1;
@@ -463,7 +485,7 @@ impl Driver {
                         transfer_id: transfer.transfer_id.clone(),
                         operation_id: transfer.bulk.operation_id,
                         type_name: transfer.bulk.type_name.clone(),
-                        content_kind: v5::ContentKind::TypedMessage as i32,
+                        content_kind: transfer.bulk.content_kind as i32,
                         byte_count: length as u64,
                         chunk_count: length.div_ceil(piece_bytes) as u32,
                     }),
@@ -792,10 +814,8 @@ impl Driver {
     }
 
     fn fail(&mut self, error: ProtocolError) {
-        self.fail_with(Close {
-            code: 1008,
-            category: error,
-        });
+        let decisions = self.connection.close(error);
+        self.apply(decisions, None);
     }
 
     fn fail_with(&mut self, close: Close) {

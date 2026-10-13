@@ -518,39 +518,49 @@ impl Driver {
     }
 
     fn complete(&mut self, settled: Option<Settled>) -> Result<(), Error> {
-        match settled.ok_or(Error::Incompatible)? {
+        let (bulk, metadata) = match settled.ok_or(Error::Incompatible)? {
             Settled::Result(result) => {
                 let reserved = self.reserve(
                     v5::LedgerClass::Normal,
                     v5::frame::Body::Result(result.clone()),
                 );
-                self.machine
+                return self
+                    .machine
                     .respond(result, reserved, self.now())
-                    .map_err(protocol_error)
+                    .map_err(protocol_error);
             }
-            Settled::Bulk(bulk) => {
-                if self
-                    .transfers
-                    .iter()
-                    .map(|transfer| transfer.bulk.body.len())
-                    .sum::<usize>()
-                    + bulk.body.len()
-                    > limits::BULK_MESSAGE_BYTES as usize
-                {
-                    return Err(Error::Transport);
-                }
-                let id = format!("connector-{}", self.next_transfer);
-                self.next_transfer = self.next_transfer.checked_add(1).ok_or(Error::Transport)?;
-                self.transfers.push_back(Transfer {
-                    bulk,
-                    id,
-                    started: false,
-                    offset: 0,
-                    index: 0,
-                });
-                Ok(())
-            }
+            Settled::Bulk(bulk) => (bulk, None),
+            Settled::Asset { metadata, bulk } => (bulk, Some(metadata)),
+        };
+        if self
+            .transfers
+            .iter()
+            .map(|transfer| transfer.bulk.body.len())
+            .sum::<usize>()
+            + bulk.body.len()
+            > limits::BULK_MESSAGE_BYTES as usize
+        {
+            return Err(Error::Transport);
         }
+        let id = format!("connector-{}", self.next_transfer);
+        self.next_transfer = self.next_transfer.checked_add(1).ok_or(Error::Transport)?;
+        if let Some(metadata) = metadata {
+            let reserved = self.reserve(
+                v5::LedgerClass::Normal,
+                v5::frame::Body::Result(metadata.clone()),
+            );
+            self.machine
+                .respond(metadata, reserved, self.now())
+                .map_err(protocol_error)?;
+        }
+        self.transfers.push_back(Transfer {
+            bulk,
+            id,
+            started: false,
+            offset: 0,
+            index: 0,
+        });
+        Ok(())
     }
 
     fn cancel(&mut self, target: &v5::cancel::Target) {
@@ -582,7 +592,7 @@ impl Driver {
                         transfer_id: transfer.id.clone(),
                         operation_id: transfer.bulk.operation_id,
                         type_name: transfer.bulk.type_name.clone(),
-                        content_kind: v5::ContentKind::TypedMessage as i32,
+                        content_kind: transfer.bulk.content_kind as i32,
                         byte_count: transfer.bulk.body.len() as u64,
                         chunk_count: transfer
                             .bulk
