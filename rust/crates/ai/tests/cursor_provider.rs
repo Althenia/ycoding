@@ -256,6 +256,8 @@ async fn cursor_catalog_model_uses_common_executor_and_preserves_absent_usage() 
             let (request, mut response) = connection.accept().await.unwrap().unwrap();
             assert_eq!(request.headers()["content-type"], "application/connect+proto");
             assert_eq!(request.headers()["authorization"], "Bearer fixture-token");
+            assert_eq!(request.headers()["x-request-id"], "request-1");
+            assert_eq!(request.headers()["x-session-id"], "ses-fixture");
             let mut body = request.into_body();
             let exchange = async move {
                 let mut decoder = framing::Decoder::default();

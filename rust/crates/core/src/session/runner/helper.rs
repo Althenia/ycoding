@@ -7,8 +7,9 @@ use crate::{
     },
     tools::{code_mode::Cancellation, policy::helper::CompactionScope},
 };
+use std::collections::BTreeMap;
 use ycoding_ai::llm;
-use ycoding_schema::{permission, session};
+use ycoding_schema::{DomainEncode, JsonValue, permission, session};
 
 static LEDGER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -38,6 +39,14 @@ impl Local {
         let session = input.session;
         let info = services.store.get(session).ok()??;
         let mut request = llm::Request::new(helper.model.clone());
+        let request_id = provider_request::new_id().ok()?;
+        request.id = Some(request_id.as_lossless().clone());
+        request.http.headers = cursor_session_headers(
+            session,
+            &info.project_id,
+            info.parent_id.as_ref(),
+            helper.account_identity.as_deref(),
+        );
         request.system = vec![input.system.into()];
         request.messages = vec![llm::Message::user(input.prompt)];
         request.generation.max_tokens = request.model.defaults.output_limit;
@@ -141,7 +150,10 @@ impl Local {
             },
         }
         let _ordinal = LEDGER.lock().await;
-        let pending = services.store.begin_provider_request(&begin).ok()?;
+        let pending = services
+            .store
+            .begin_provider_request_with_id(&begin, request_id)
+            .ok()?;
         let settled_usage = finish.as_ref().and_then(|settled| settled.usage.as_ref());
         let tokens = usage::tokens(settled_usage);
         let reported = cache_diagnostics::reported(
@@ -268,5 +280,81 @@ impl Generate for Local {
                 && !request.cancellation.is_cancelled())
             .then_some(streamed.text)
         })
+    }
+}
+
+fn cursor_session_headers(
+    session: &session::Id,
+    project: &ycoding_schema::project::Id,
+    parent: Option<&session::Id>,
+    account_identity: Option<&str>,
+) -> BTreeMap<String, String> {
+    let affinity = account_identity.map_or_else(
+        || session.as_lossless().to_utf8().unwrap_or_default(),
+        |account| {
+            prompt_cache::sha256(&prompt_cache::canonical_json(&JsonValue::Array(vec![
+                session.encode(),
+                JsonValue::String(account.into()),
+            ])))
+        },
+    );
+    let mut headers = BTreeMap::from([
+        ("x-session-affinity".into(), affinity.clone()),
+        ("x-session-id".into(), affinity),
+        ("x-ycoding-client".into(), "cli".into()),
+        (
+            "x-ycoding-project".into(),
+            project.as_lossless().to_utf8().unwrap_or_default(),
+        ),
+        (
+            "x-ycoding-session".into(),
+            session.as_lossless().to_utf8().unwrap_or_default(),
+        ),
+    ]);
+    if let Some(parent) = parent {
+        headers.insert(
+            "x-parent-session-id".into(),
+            parent.as_lossless().to_utf8().unwrap_or_default(),
+        );
+    }
+    headers
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cursor_session_headers;
+    use crate::session::prompt_cache;
+
+    #[test]
+    fn helper_cursor_session_headers_match_the_typescript_helper_contract() {
+        let session = ycoding_schema::session::Id::new("ses_helper").unwrap();
+        let parent = ycoding_schema::session::Id::new("ses_parent").unwrap();
+        let project = ycoding_schema::project::Id::new("prj_project").unwrap();
+        let affinity = prompt_cache::sha256("[\"ses_helper\",\"account-digest\"]");
+
+        assert_eq!(
+            cursor_session_headers(&session, &project, None, Some("account-digest")),
+            std::collections::BTreeMap::from([
+                ("x-session-affinity".into(), affinity.clone()),
+                ("x-session-id".into(), affinity),
+                ("x-ycoding-client".into(), "cli".into()),
+                (
+                    "x-ycoding-project".into(),
+                    project.as_lossless().to_utf8().unwrap()
+                ),
+                (
+                    "x-ycoding-session".into(),
+                    session.as_lossless().to_utf8().unwrap()
+                ),
+            ])
+        );
+        assert_eq!(
+            cursor_session_headers(&session, &project, Some(&parent), None)["x-session-affinity"],
+            "ses_helper"
+        );
+        assert_eq!(
+            cursor_session_headers(&session, &project, Some(&parent), None)["x-parent-session-id"],
+            "ses_parent"
+        );
     }
 }

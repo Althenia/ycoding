@@ -42,6 +42,14 @@ pub struct Completion<'a> {
 }
 
 impl Service {
+    pub(crate) fn begin_provider_request_with_id(
+        &self,
+        begin: &Begin,
+        id: provider_request::Id,
+    ) -> Result<Pending, Error> {
+        self.begin_provider_request_with_pending_id(begin, id)
+    }
+
     pub fn telemetry_enabled(&self) -> Result<bool, Error> {
         Ok(self
             .client
@@ -84,6 +92,29 @@ impl Service {
     }
 
     pub fn begin_provider_request(&self, begin: &Begin) -> Result<Pending, Error> {
+        self.begin_provider_request_with_pending_id(begin, new_id()?)
+    }
+}
+
+pub(crate) fn new_id() -> Result<provider_request::Id, Error> {
+    let entropy = super::projector::random_event_id()?;
+    provider_request::Id::new(format!(
+        "prq_{}",
+        entropy
+            .as_lossless()
+            .to_utf8()
+            .unwrap_or_default()
+            .trim_start_matches("evt_")
+    ))
+    .map_err(record_error)
+}
+
+impl Service {
+    fn begin_provider_request_with_pending_id(
+        &self,
+        begin: &Begin,
+        id: provider_request::Id,
+    ) -> Result<Pending, Error> {
         let snapshot = self.client.snapshot()?;
         let previous = ycoding_store::resources::requests(
             &snapshot,
@@ -95,17 +126,8 @@ impl Service {
         .into_iter()
         .next()
         .map(|entry| entry.record);
-        let entropy = super::projector::random_event_id()?;
         Ok(Pending {
-            id: provider_request::Id::new(format!(
-                "prq_{}",
-                entropy
-                    .as_lossless()
-                    .to_utf8()
-                    .unwrap_or_default()
-                    .trim_start_matches("evt_")
-            ))
-            .map_err(record_error)?,
+            id,
             request: previous.as_ref().map_or(0, |row| row.request) + 1,
             default_invalidation: default_invalidation(previous.as_ref(), begin),
         })
