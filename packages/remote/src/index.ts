@@ -12,6 +12,69 @@ export {
 } from "./binary"
 export { isProviderAuthorizationURL } from "./provider-auth"
 export { takeAsset } from "./asset"
+export * from "./payloads"
+export {
+  createRemoteConnection,
+  remotePayloadCodecs,
+  encodeRemoteRequest,
+  decodeRemoteResult,
+  decodeRemoteEvent,
+  encodeRemoteScope,
+  decodeRemoteScope,
+} from "./client"
+export type { RemoteConnectionOptions, RemotePayload } from "./client"
+export { Connection, ReservationBudget, FailureCategory, PeerRole, WireLimit } from "./binary"
+export type { Decision, Options, EventMetadata, Prepared, Incoming } from "@ycoding-ai/protocol/v5/connection"
+export {
+  create,
+  encodeStrict,
+  decodeStrict,
+  encodeLossless,
+  decodeLossless,
+  FrameSchema,
+  ScopeSchema,
+  LosslessStringSchema,
+  ControlSchema,
+  TypedPayloadSchema,
+  ResultSchema,
+  PublicEventSchema,
+  SessionLogItemSchema,
+  EventRecordSchema,
+  EventBatchSchema,
+  StreamEndSchema,
+  BulkStartSchema,
+  BulkPieceSchema,
+  BulkEndSchema,
+  LedgerClass,
+  ContentKind,
+  Streaming,
+  MutationClass,
+  Settlement,
+  ScopeKind,
+  PriorityMode,
+  AttentionNeed,
+  NoticeCategory,
+} from "@ycoding-ai/protocol/v5"
+export type {
+  Frame,
+  Scope,
+  LosslessString,
+  Control,
+  TypedPayload,
+  PublicEvent,
+  SessionLogItem,
+  EventRecord,
+  EventBatch,
+  BulkStart,
+  BulkPiece,
+  BulkEnd,
+  AssetMetadataResult,
+  OperationDescriptor,
+  Notice,
+  Presentation,
+  Status,
+  Completion,
+} from "@ycoding-ai/protocol/v5"
 
 export const RemoteLimits = {
   noticePageSize: 50,

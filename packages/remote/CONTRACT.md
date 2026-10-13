@@ -17,6 +17,16 @@ The HTTP router strips all supplied `x-ycoding-*` routing headers and selects on
 
 ## Requests, results and settlement
 
+### Browser connection binding
+
+Browser clients import the binary boundary from `@ycoding-ai/remote`, not Protocol or backend packages. `createRemoteConnection({ now, budgets?, reservation? })` constructs a sans-IO REMOTE_CLIENT-to-RELAY connection with the closed remote operation table and the public-event and Session-log payload types. Its `acceptSubscription`, hydration, `consume`, cancellation and `releaseBulk` methods retain the generated connection's ownership and settlement rules. The browser binding owns socket handoff, monotonic advancement and applying delivery decisions; socket receipt alone does not consume a normal frame or live event.
+
+`remotePayloadCodecs` maps canonical operation names to compiled generated request, result and declared error codecs. Each codec exposes its generated `schema`, `encode(message)` and strict `decode(bytes)`. Remote also exports each remote operation's generated root request/result schema and message type, and its declared typed errors. Create protobuf-shaped messages with `create(codec.request.schema, fields)` or a named schema, encode them with `encodeRemoteRequest`, and decode associated typed successes or errors with `decodeRemoteResult`. Pass the named generated schema as its optional third argument for a statically typed result. Unknown operations, unrelated payload types and malformed bytes fail before successful decode. These codecs return generated protobuf shapes, not domain projections or JSON-protocol messages.
+
+Scope and LosslessString schemas and codecs are exported by Remote. `encodeRemoteScope` and `decodeRemoteScope` preserve the canonical scope; `encodeLossless` and `decodeLossless` preserve lone UTF-16 units. `decodeRemoteEvent` strictly decodes only PublicEvent and SessionLogItem payloads. The connection still validates operation roles, authorized outer scopes, event associations and source epochs.
+
+On successful socket ASSET_BULK completion, pass the owned `bulkComplete` decision to `takeAsset(connection, decision, consumerReservation)`. It returns the exact raw bytes, canonical typed Result and metadata only after reserving consumer ownership, then releases the connection bulk lease. Failed consumer admission leaves the connection owner intact. Call the returned `release` exactly when the consumer is finished; repeated release is idempotent. Metadata alone, cancelled delivery and connection loss are not completed assets.
+
 Only generated remote-role operations are admitted. Notice operations are relay-local; all other supported RPCs go to the same authenticated device's agent. Request IDs are connection-local monotonic decimal strings. The relay maps them in bounded state while retaining the original browser ID. Scope and encoded domain payload bytes pass unchanged; only the small request/result/transfer routing wrappers are re-encoded.
 
 `event.unsubscribe` is relay-local after validating that the authenticated client owns the supplied accepted identity at the outer Session scope. It removes only that client's interest; the connector releases a shared observer when its last client leaves.

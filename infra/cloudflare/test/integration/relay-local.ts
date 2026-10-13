@@ -34,7 +34,12 @@ import {
   session_attachment_read_ResultSchema,
 } from "../../../../packages/protocol/src/v5"
 import { TestPeer } from "../../../../packages/remote/test/peer"
-import { RemoteWebSocketPath, takeAsset } from "../../../../packages/remote/src/index"
+import {
+  RemoteWebSocketPath,
+  takeAsset,
+  decodeRemoteResult,
+  decodeRemoteEvent,
+} from "../../../../packages/remote/src/index"
 import { ReservationBudget } from "../../../../packages/protocol/src/v5/connection"
 import { sha256Hex, randomToken } from "../../src/auth/crypto"
 
@@ -281,9 +286,17 @@ try {
     "Relay re-encoded the domain request",
   )
   for (const dispatch of dispatches) agent.result(dispatch, todoResult)
+  const results = await Promise.all([first.next("settled", a), second.next("settled", b)])
   expect(
-    (await first.next("settled", a)).status === "success" && (await second.next("settled", b)).status === "success",
+    results.every((result) => result.status === "success"),
     "Result forwarding failed",
+  )
+  expect(
+    results.every(
+      (result) =>
+        decodeRemoteResult("session.todo.list", result.payload!).$typeName === session_todo_list_ResultSchema.typeName,
+    ),
+    "Remote client result codec did not decode the real forwarded settlement",
   )
   checks.push("real Connection peers handshake and forward opaque RPCs with per-browser correlation")
 
@@ -426,12 +439,13 @@ try {
           0,
         "Backend-accepted observer registration failed",
       )
-    if (interests.added.includes("ses_remote")) agent.send({
-      case: "control",
-      value: create(ControlSchema, {
-        kind: { case: "resyncRequired", value: { scope: session, sourceEpoch: backendEpoch } },
-      }),
-    })
+    if (interests.added.includes("ses_remote"))
+      agent.send({
+        case: "control",
+        value: create(ControlSchema, {
+          kind: { case: "resyncRequired", value: { scope: session, sourceEpoch: backendEpoch } },
+        }),
+      })
     agent.result(
       dispatch,
       encodeStrict(
@@ -496,7 +510,12 @@ try {
     },
   })
   agent.connection.enqueueEvent(event, { subscriptionID, scope: session, sourceEpoch: backendEpoch }, performance.now())
-  const deliveries = await Promise.all([first.next("events"), subscriber.next("events")]).catch((cause) => { throw new Error(`Fanout: agent=${JSON.stringify(agent.connection.counters)}, first=${JSON.stringify(first.connection.counters)}, second=${JSON.stringify(subscriber.connection.counters)}, agent-event-bytes=${agent.connection.ledger(LedgerClass.EVENT).handedBytes}, first-frames=${first.raw.slice(-6).map((frame) => frame.body.case)}, second-frames=${subscriber.raw.slice(-6).map((frame) => frame.body.case)}`, { cause }) })
+  const deliveries = await Promise.all([first.next("events"), subscriber.next("events")]).catch((cause) => {
+    throw new Error(
+      `Fanout: agent=${JSON.stringify(agent.connection.counters)}, first=${JSON.stringify(first.connection.counters)}, second=${JSON.stringify(subscriber.connection.counters)}, agent-event-bytes=${agent.connection.ledger(LedgerClass.EVENT).handedBytes}, first-frames=${first.raw.slice(-6).map((frame) => frame.body.case)}, second-frames=${subscriber.raw.slice(-6).map((frame) => frame.body.case)}`,
+      { cause },
+    )
+  })
   expect(
     deliveries.every(
       (item) =>
@@ -512,6 +531,10 @@ try {
     first.raw.some((frame) => frame.body.case === "ready" && frame.body.value.sourceEpoch !== backendEpoch),
     "Fixture collapsed relay and backend epochs",
   )
+  expect(
+    deliveries.every((delivery) => decodeRemoteEvent(delivery.batch.events[0]!.event!).kind.case === "sessionStatus"),
+    "Remote client event decoder did not preserve the real subscribed event",
+  )
   const retained = agent.connection.ledger(LedgerClass.EVENT).handedBytes
   expect(retained > 0, "Upstream event was consumed on native handoff")
   first.connection.consume(LedgerClass.EVENT, deliveries[0]!.ordinal!, performance.now())
@@ -520,6 +543,9 @@ try {
   subscriber.flush()
   await agent.wait(() => agent.connection.ledger(LedgerClass.EVENT).handedBytes === 0)
   checks.push("whole EventBatch identity and bytes survive fanout; upstream credit waits for every downstream ticket")
+  checks.push(
+    "Remote-owned REMOTE_CLIENT binding encodes generated requests and decodes real results and subscribed events",
+  )
   subscriber.stop()
   await agent.wait(() =>
     agent.queue.some(
@@ -556,10 +582,15 @@ try {
   registeredClients.delete(firstClientID)
   await backendSubscribe(first)
   agent.send({ case: "streamEnd", value: { $typeName: "ycoding.v5.StreamEnd", subscriptionId: subscriptionID } })
-  expect((await first.next("streamEnded")).subscriptionID === subscriptionID, "Finite StreamEnd did not reach its accepted browser subscription")
+  expect(
+    (await first.next("streamEnded")).subscriptionID === subscriptionID,
+    "Finite StreamEnd did not reach its accepted browser subscription",
+  )
   await agent.wait(() => agent.connection.ledger(LedgerClass.EVENT).handedBytes === 0)
   agent.connection.releaseRelayClient(firstClientID, performance.now())
-  checks.push("AGENT and RELAY carry finite StreamEnd on the event ledger after prior responsibility and return upstream credit")
+  checks.push(
+    "AGENT and RELAY carry finite StreamEnd on the event ledger after prior responsibility and return upstream credit",
+  )
 
   for (const length of [0, 65537]) {
     const requestID = second.request(
@@ -592,7 +623,7 @@ try {
     expect(
       declaration.metadata.byteCount === BigInt(length) &&
         !second.queue.some((item) => item.decision.type === "settled" && item.decision.requestID === requestID),
-      `Metadata settled the asset before its raw body: expected=${length}, declared=${declaration.metadata.byteCount}, id=${requestID}, settlements=${JSON.stringify(second.queue.flatMap((item) => item.decision.type === "settled" ? [{ id: item.decision.requestID, status: item.decision.status }] : []))}`,
+      `Metadata settled the asset before its raw body: expected=${length}, declared=${declaration.metadata.byteCount}, id=${requestID}, settlements=${JSON.stringify(second.queue.flatMap((item) => (item.decision.type === "settled" ? [{ id: item.decision.requestID, status: item.decision.status }] : [])))}`,
     )
     const transferId = `asset-${length}`
     agent.send({

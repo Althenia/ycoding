@@ -11,7 +11,15 @@ import {
   LedgerClass,
 } from "@ycoding-ai/protocol/v5"
 import type { Frame, Scope } from "@ycoding-ai/protocol/v5"
-import { frameReservation, handoffBinary, receiveBinary, remoteEventTypes } from "../src/index"
+import {
+  frameReservation,
+  handoffBinary,
+  receiveBinary,
+  remoteEventTypes,
+  createRemoteConnection,
+  remotePayloadCodecs,
+  encodeRemoteRequest,
+} from "../src/index"
 
 export class TestPeer {
   readonly connection: Connection
@@ -32,14 +40,17 @@ export class TestPeer {
     budgets?: Options["budgets"],
     hello?: (frame: Frame) => Frame,
   ) {
-    this.connection = new Connection({
-      role,
-      peer: PeerRole.RELAY,
-      operations,
-      eventTypes: remoteEventTypes,
-      now: performance.now(),
-      budgets,
-    })
+    this.connection =
+      role === PeerRole.REMOTE_CLIENT
+        ? createRemoteConnection({ now: performance.now(), budgets })
+        : new Connection({
+            role,
+            peer: PeerRole.RELAY,
+            operations,
+            eventTypes: remoteEventTypes,
+            now: performance.now(),
+            budgets,
+          })
     this.socket = new WebSocket(url, { headers })
     this.socket.binaryType = "arraybuffer"
     this.ready = new Promise((resolve, reject) => {
@@ -119,11 +130,15 @@ export class TestPeer {
   }
   request(name: string, scope: Scope, payload: Uint8Array) {
     const operation = operations.find((item) => item.diagnosticName === name)!
+    const encoded =
+      this.connection.options.role === PeerRole.REMOTE_CLIENT
+        ? encodeRemoteRequest(name, remotePayloadCodecs.get(name)!.request.decode(payload))
+        : payload
     const request = this.connection.request(
       operation.operationId,
       scope,
-      payload,
-      payload.length + 512,
+      encoded,
+      encoded.length + 512,
       performance.now(),
     )
     this.collect(request.decisions)
