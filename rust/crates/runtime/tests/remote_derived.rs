@@ -15,6 +15,7 @@ use std::{
 };
 use support::{machine, operation, session_scope, text, units};
 use ycoding_core::{
+    remote::Device,
     resources::auth::integration,
     ycoding_schema::{DomainEncode, JsonValue, ObjectEncoder, parse_json, session},
     ycoding_store::session as tables,
@@ -22,7 +23,7 @@ use ycoding_core::{
 use ycoding_protocol::{connection::Budgets, decode_strict, v5};
 use ycoding_runtime::{
     Dispatcher, Environment, Settled,
-    connector::{Connector, Control, Enrolled, Settings},
+    connector::{Connector, Control, Settings},
     standard,
 };
 
@@ -254,13 +255,12 @@ struct Harness {
 impl Harness {
     async fn new(environment: Arc<Environment>) -> Self {
         let mut relay = Relay::start(5, false, Budgets::default()).await;
-        let control = Control::load(Arc::new(Saved(AtomicBool::new(false)))).await;
-        let settings = Settings::new(
-            Enrolled::new(&relay.origin(), "owner-a".into(), "device-a".into()).unwrap(),
-            relay.origin(),
-            Arc::new(Access),
+        let control = Control::load(
+            Arc::new(Saved(AtomicBool::new(false))),
+            Device::new(&std::env::temp_dir().join("ycoding-remote-derived-unenrolled")).unwrap(),
         )
-        .unwrap();
+        .await;
+        let settings = Settings::new(Arc::new(Access(relay.origin())));
         let dispatcher = Arc::new(standard().unwrap());
         let connector = Connector::start(
             control.clone(),

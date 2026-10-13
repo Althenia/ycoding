@@ -12,6 +12,7 @@ use std::{
 };
 use support::{machine, operation, services, session_scope, text, units, world};
 use tokio::sync::Notify;
+use ycoding_core::remote::Device;
 use ycoding_protocol::{OPERATIONS, connection::Budgets, decode_strict, v5};
 use ycoding_runtime::{
     Dispatcher, Environment, LocalAuth, Settled, Subscriptions,
@@ -43,7 +44,8 @@ impl Preference for Saved {
 }
 
 struct Access {
-    owner: String,
+    enrolled: String,
+    origin: String,
     device: String,
     calls: Arc<AtomicUsize>,
     entered: Arc<Notify>,
@@ -51,10 +53,14 @@ struct Access {
 }
 
 impl Credentials for Access {
+    fn enrolled(&self) -> ycoding_runtime::Boxed<Result<Enrolled, Error>> {
+        let enrolled = Enrolled::new(&self.enrolled, "device-a".into());
+        Box::pin(async move { enrolled })
+    }
     fn access(&self) -> ycoding_runtime::Boxed<Result<Credential, Error>> {
         self.calls.fetch_add(1, Ordering::AcqRel);
         self.entered.notify_one();
-        let owner = self.owner.clone();
+        let origin = self.origin.clone();
         let device = self.device.clone();
         let held = self.held.clone();
         Box::pin(async move {
@@ -64,21 +70,30 @@ impl Credentials for Access {
             Ok(Credential::new(
                 "stand-in-token".into(),
                 now() + 60_000,
-                owner,
+                origin,
                 device,
             ))
         })
     }
 }
 
-fn access(owner: &str, held: Option<Arc<Notify>>) -> Arc<Access> {
+fn access(relay: &Relay, held: Option<Arc<Notify>>) -> Arc<Access> {
+    minted(relay, &relay.origin(), "device-a", held)
+}
+
+fn minted(relay: &Relay, origin: &str, device: &str, held: Option<Arc<Notify>>) -> Arc<Access> {
     Arc::new(Access {
-        owner: owner.into(),
-        device: "device-a".into(),
+        enrolled: relay.origin(),
+        origin: origin.into(),
+        device: device.into(),
         calls: Arc::new(AtomicUsize::new(0)),
         entered: Arc::new(Notify::new()),
         held,
     })
+}
+
+fn unenrolled() -> Device {
+    Device::new(&std::env::temp_dir().join("ycoding-connector-unenrolled")).unwrap()
 }
 
 fn environment(control: Option<Control>) -> Arc<Environment> {
@@ -93,11 +108,11 @@ fn environment(control: Option<Control>) -> Arc<Environment> {
 
 fn peer() -> Peer {
     Peer::authenticate(
-        &Enrolled::new("https://relay.invalid", "owner-a".into(), "device-a".into()).unwrap(),
+        &Enrolled::new("https://relay.invalid", "device-a".into()).unwrap(),
         &Credential::new(
             "stand-in-token".into(),
             now() + 60_000,
-            "owner-a".into(),
+            "https://relay.invalid".into(),
             "device-a".into(),
         ),
         now(),
@@ -152,18 +167,12 @@ fn test_dispatcher() -> Dispatcher {
 }
 
 async fn setup(
-    relay: &Relay,
     dispatcher: Dispatcher,
     access: Arc<Access>,
 ) -> (Control, Connector, Arc<AtomicBool>) {
     let saved = Arc::new(AtomicBool::new(false));
-    let control = Control::load(Arc::new(Saved(saved.clone()))).await;
-    let mut settings = Settings::new(
-        Enrolled::new(&relay.origin(), "owner-a".into(), "device-a".into()).unwrap(),
-        relay.origin(),
-        access,
-    )
-    .unwrap();
+    let control = Control::load(Arc::new(Saved(saved.clone())), unenrolled()).await;
+    let mut settings = Settings::new(access);
     settings.reconnect_initial = Duration::from_millis(30);
     settings.reconnect_max = Duration::from_millis(100);
     settings.conflict_delay = Duration::from_millis(100);
@@ -190,21 +199,16 @@ async fn wait_state(control: &Control, state: State) {
 }
 
 #[test]
-fn relay_origin_and_authenticated_principal_fail_closed_before_transport() {
-    let enrolled = Enrolled::new(
-        "https://RELAY.invalid:443/",
-        "owner-a".into(),
-        "device-a".into(),
-    )
-    .unwrap();
+fn relay_origin_and_authenticated_device_fail_closed_before_transport() {
+    let enrolled = Enrolled::new("https://RELAY.invalid:443/", "device-a".into()).unwrap();
+    assert_eq!(enrolled.url(), "wss://relay.invalid/ws/v5/agent");
     assert_eq!(
-        enrolled.bind("https://relay.invalid").unwrap(),
-        "wss://relay.invalid/ws/v5/agent"
+        Enrolled::new("http://127.0.0.1:8787", "device-a".into())
+            .unwrap()
+            .url(),
+        "ws://127.0.0.1:8787/ws/v5/agent"
     );
-    assert_eq!(
-        enrolled.bind("https://other.invalid"),
-        Err(Error::Forbidden)
-    );
+    assert!(Enrolled::new("https://relay.invalid", String::new()).is_err());
     for origin in [
         "http://relay.invalid",
         "https://user:pass@relay.invalid",
@@ -212,17 +216,51 @@ fn relay_origin_and_authenticated_principal_fail_closed_before_transport() {
         "https://relay.invalid/?token=x",
         "https://relay.invalid/#token",
     ] {
-        assert!(Enrolled::new(origin, "owner-a".into(), "device-a".into()).is_err());
+        assert!(Enrolled::new(origin, "device-a".into()).is_err());
     }
-    for (owner, device, expires, expected) in [
-        ("owner-b", "device-a", now() + 60_000, Error::Forbidden),
-        ("owner-a", "device-b", now() + 60_000, Error::Forbidden),
-        ("owner-a", "device-a", now() - 1, Error::Unauthorized),
+    for (origin, device, expires, expected) in [
+        (
+            "https://other.invalid",
+            "device-a",
+            now() + 60_000,
+            Error::Forbidden,
+        ),
+        (
+            "http://relay.invalid",
+            "device-a",
+            now() + 60_000,
+            Error::Forbidden,
+        ),
+        (
+            "https://relay.invalid",
+            "device-b",
+            now() + 60_000,
+            Error::Forbidden,
+        ),
+        (
+            "https://relay.invalid",
+            "device-a",
+            now() - 1,
+            Error::Unauthorized,
+        ),
     ] {
         assert!(
-            matches!(Peer::authenticate(&enrolled, &Credential::new("synthetic".into(), expires, owner.into(), device.into()), now()), Err(error) if error == expected)
+            matches!(Peer::authenticate(&enrolled, &Credential::new("synthetic".into(), expires, origin.into(), device.into()), now()), Err(error) if error == expected)
         );
     }
+    assert!(
+        Peer::authenticate(
+            &enrolled,
+            &Credential::new(
+                "synthetic".into(),
+                now() + 60_000,
+                "https://relay.invalid:443".into(),
+                "device-a".into()
+            ),
+            now()
+        )
+        .is_ok()
+    );
 }
 
 #[tokio::test]
@@ -298,7 +336,7 @@ async fn connector_assets_deliver_metadata_then_exact_raw_bytes_and_empty_body()
         )
         .unwrap();
     let mut relay = Relay::start(5, false, Budgets::default()).await;
-    let (control, connector, _) = setup(&relay, dispatcher, access("owner-a", None)).await;
+    let (control, connector, _) = setup(dispatcher, access(&relay, None)).await;
     let opening = relay.opening().await;
     wait_state(&control, State::On).await;
     for (digest, length) in [("0".repeat(64), 0), ("1".repeat(64), 65537)] {
@@ -504,7 +542,7 @@ async fn scoped_shared_reads_follow_backend_movement_and_reject_unknown_or_delet
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn local_remote_controls_validate_boolean_and_persist_last_intent() {
     let saved = Arc::new(AtomicBool::new(false));
-    let control = Control::load(Arc::new(Saved(saved.clone()))).await;
+    let control = Control::load(Arc::new(Saved(saved.clone())), unenrolled()).await;
     let environment = environment(Some(control.clone()));
     let dispatcher = standard().unwrap();
     let off: v5::RemoteGetResult = result(
@@ -568,7 +606,10 @@ async fn local_remote_controls_validate_boolean_and_persist_last_intent() {
     );
     assert_eq!(disabled.data.state, 1);
     assert_eq!(
-        Control::load(Arc::new(Saved(saved))).await.status().state,
+        Control::load(Arc::new(Saved(saved)), unenrolled())
+            .await
+            .status()
+            .state,
         State::Off
     );
 }
@@ -593,7 +634,7 @@ async fn preference_file_is_atomic_private_and_preserves_malformed_data() {
         );
     }
     std::fs::write(&path, "not JSON").unwrap();
-    let control = Control::load(Arc::new(preference)).await;
+    let control = Control::load(Arc::new(preference), unenrolled()).await;
     assert_eq!(control.status().state, State::Error);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "not JSON");
     control.set(false).await.unwrap();
@@ -607,8 +648,8 @@ async fn preference_file_is_atomic_private_and_preserves_malformed_data() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn outbound_connector_authenticates_negotiates_and_dispatches_without_a_local_socket() {
     let mut relay = Relay::start(5, false, Budgets::default()).await;
-    let access = access("owner-a", None);
-    let (control, connector, saved) = setup(&relay, test_dispatcher(), access.clone()).await;
+    let access = access(&relay, None);
+    let (control, connector, saved) = setup(test_dispatcher(), access.clone()).await;
     let opening = relay.opening().await;
     wait_state(&control, State::On).await;
     let id = opening
@@ -647,8 +688,8 @@ async fn outbound_connector_authenticates_negotiates_and_dispatches_without_a_lo
 async fn revision_and_digest_rejections_are_terminal_without_a_legacy_fallback() {
     for (revision, corrupt) in [(4, false), (5, true)] {
         let mut relay = Relay::start(revision, corrupt, Budgets::default()).await;
-        let access = access("owner-a", None);
-        let (control, connector, saved) = setup(&relay, test_dispatcher(), access.clone()).await;
+        let access = access(&relay, None);
+        let (control, connector, saved) = setup(test_dispatcher(), access.clone()).await;
         let opening = relay.opening().await;
         wait_state(&control, State::Error).await;
         relay.closed(opening.generation).await;
@@ -660,16 +701,21 @@ async fn revision_and_digest_rejections_are_terminal_without_a_legacy_fallback()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn wrong_owner_never_reaches_the_relay_and_late_credentials_cannot_reenable() {
+async fn mismatched_device_or_origin_never_reaches_the_relay_and_late_credentials_cannot_reenable()
+{
     let relay = Relay::start(5, false, Budgets::default()).await;
-    let wrong = access("owner-b", None);
-    let (control, connector, _) = setup(&relay, test_dispatcher(), wrong).await;
-    wait_state(&control, State::Error).await;
-    assert_eq!(relay.upgrades(), 0);
-    connector.shutdown().await.unwrap();
+    for wrong in [
+        minted(&relay, &relay.origin(), "device-b", None),
+        minted(&relay, "https://other.invalid", "device-a", None),
+    ] {
+        let (control, connector, _) = setup(test_dispatcher(), wrong).await;
+        wait_state(&control, State::Error).await;
+        assert_eq!(relay.upgrades(), 0);
+        connector.shutdown().await.unwrap();
+    }
     let held = Arc::new(Notify::new());
-    let late = access("owner-a", Some(held.clone()));
-    let (control, connector, saved) = setup(&relay, test_dispatcher(), late.clone()).await;
+    let late = access(&relay, Some(held.clone()));
+    let (control, connector, saved) = setup(test_dispatcher(), late.clone()).await;
     tokio::time::timeout(connector_support::WAIT, late.entered.notified())
         .await
         .unwrap();
@@ -714,7 +760,7 @@ async fn established_disconnect_reconnects_and_unknown_mutations_are_never_repla
             }
         })
         .unwrap();
-    let (control, connector, _) = setup(&relay, dispatcher, access("owner-a", None)).await;
+    let (control, connector, _) = setup(dispatcher, access(&relay, None)).await;
     let first = relay.opening().await;
     wait_state(&control, State::On).await;
     let id = first
@@ -824,7 +870,7 @@ async fn queued_cancel_does_not_start_a_mutation_or_block_independent_reads() {
             }
         })
         .unwrap();
-    let (control, connector, _) = setup(&relay, dispatcher, access("owner-a", None)).await;
+    let (control, connector, _) = setup(dispatcher, access(&relay, None)).await;
     let opening = relay.opening().await;
     wait_state(&control, State::On).await;
     let payload = v5::KeepAwakeSetRequest {
@@ -903,7 +949,7 @@ async fn bulk_bytes_cross_credit_windows_without_truncation_and_small_results_ma
             },
         )
         .unwrap();
-    let (control, connector, _) = setup(&relay, dispatcher, access("owner-a", None)).await;
+    let (control, connector, _) = setup(dispatcher, access(&relay, None)).await;
     let opening = relay.opening().await;
     wait_state(&control, State::On).await;
     let large = opening
@@ -984,8 +1030,7 @@ async fn bulk_bytes_cross_credit_windows_without_truncation_and_small_results_ma
 async fn connection_epoch_and_input_byte_limits_reject_before_domain_dispatch() {
     for oversized in [false, true] {
         let mut relay = Relay::start(5, false, Budgets::default()).await;
-        let (control, connector, _) =
-            setup(&relay, test_dispatcher(), access("owner-a", None)).await;
+        let (control, connector, _) = setup(test_dispatcher(), access(&relay, None)).await;
         let opening = relay.opening().await;
         wait_state(&control, State::On).await;
         let frame = v5::Frame {
@@ -1024,7 +1069,7 @@ async fn connection_epoch_and_input_byte_limits_reject_before_domain_dispatch() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn connector_conflict_has_its_own_backoff_and_disable_cancels_recovery() {
     let mut relay = Relay::start(5, false, Budgets::default()).await;
-    let (control, connector, _) = setup(&relay, test_dispatcher(), access("owner-a", None)).await;
+    let (control, connector, _) = setup(test_dispatcher(), access(&relay, None)).await;
     let opening = relay.opening().await;
     wait_state(&control, State::On).await;
     let closed_at = Instant::now();
@@ -1162,17 +1207,12 @@ async fn managed_child_admission_rejects_input_but_preserves_btw_and_owning_scop
 async fn local_control_socket_owns_enable_disable_and_server_lifetime_cleanup() {
     let mut relay = Relay::start(5, false, Budgets::default()).await;
     let saved = Arc::new(AtomicBool::new(false));
-    let control = Control::load(Arc::new(Saved(saved.clone()))).await;
+    let control = Control::load(Arc::new(Saved(saved.clone())), unenrolled()).await;
     let environment = environment(Some(control.clone()));
     let server = support::start(environment.services.clone(), standard().unwrap()).await;
     let connector = Connector::start(
         control.clone(),
-        Settings::new(
-            Enrolled::new(&relay.origin(), "owner-a".into(), "device-a".into()).unwrap(),
-            relay.origin(),
-            access("owner-a", None),
-        )
-        .unwrap(),
+        Settings::new(access(&relay, None)),
         environment,
         Arc::new(test_dispatcher()),
     )

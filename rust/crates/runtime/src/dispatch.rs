@@ -126,6 +126,7 @@ pub enum Failure {
     },
     TelemetryDisabled,
     Artifact(ycoding_core::ycoding_schema::project_artifact::ErrorCode),
+    RemoteEnrollment(v5::TypedPayload),
     Connector {
         code: i32,
         message: &'static str,
@@ -612,6 +613,7 @@ impl Failure {
             }
             Failure::TelemetryDisabled => invalid("Telemetry disabled", "disabled"),
             Failure::Artifact(code) => crate::artifact::error_payload(&code),
+            Failure::RemoteEnrollment(payload) => payload,
             Failure::Connector { code, message } => invalid(
                 message,
                 if code == 6 {

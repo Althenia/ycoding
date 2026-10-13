@@ -1,4 +1,4 @@
-use super::{Control, Credentials, Enrolled, Error, Intent, Peer, State};
+use super::{Control, Credentials, Error, Intent, Peer, State};
 use crate::{Bulk, Dispatcher, Environment, Settled, ids};
 use axum::http::header::AUTHORIZATION;
 use futures_util::{SinkExt, StreamExt};
@@ -27,8 +27,6 @@ use ycoding_protocol::{
 };
 
 pub struct Settings {
-    pub enrolled: Enrolled,
-    pub relay_origin: String,
     pub credentials: Arc<dyn Credentials>,
     pub reconnect_initial: Duration,
     pub reconnect_max: Duration,
@@ -36,20 +34,13 @@ pub struct Settings {
 }
 
 impl Settings {
-    pub fn new(
-        enrolled: Enrolled,
-        relay_origin: String,
-        credentials: Arc<dyn Credentials>,
-    ) -> Result<Self, Error> {
-        enrolled.bind(&relay_origin)?;
-        Ok(Self {
-            enrolled,
-            relay_origin,
+    pub fn new(credentials: Arc<dyn Credentials>) -> Self {
+        Self {
             credentials,
             reconnect_initial: Duration::from_secs(1),
             reconnect_max: Duration::from_secs(30),
             conflict_delay: Duration::from_secs(60),
-        })
+        }
     }
 }
 
@@ -73,7 +64,6 @@ impl Connector {
         {
             return Err(Error::Setup);
         }
-        settings.enrolled.bind(&settings.relay_origin)?;
         let (stop, stopped) = watch::channel(false);
         let state = control.clone();
         let task = std::thread::Builder::new()
@@ -265,7 +255,6 @@ async fn connect(
         urls: environment.urls.clone(),
         subscriptions: crate::Subscriptions::default(),
     });
-    let url = settings.enrolled.bind(&settings.relay_origin)?;
     let core = environment.services.core.as_ref().ok_or(Error::Setup)?;
     core.sessions
         .list(&ycoding_core::session::list::Query::default())
@@ -273,14 +262,22 @@ async fn connect(
     if !control.current(intent.generation) {
         return Err(Error::Transport);
     }
-    let credential = tokio::time::timeout(Duration::from_secs(30), settings.credentials.access())
-        .await
-        .map_err(|_| Error::Transport)??;
+    let (enrolled, credential) = tokio::time::timeout(Duration::from_secs(30), async {
+        Ok::<_, Error>((
+            settings.credentials.enrolled().await?,
+            settings.credentials.access().await?,
+        ))
+    })
+    .await
+    .map_err(|_| Error::Transport)??;
     if !control.current(intent.generation) {
         return Err(Error::Transport);
     }
-    let peer = credential.authenticate(&settings.enrolled, ids::now_millis())?;
-    let mut request = url.into_client_request().map_err(|_| Error::Setup)?;
+    let peer = credential.authenticate(&enrolled, ids::now_millis())?;
+    let mut request = enrolled
+        .url()
+        .into_client_request()
+        .map_err(|_| Error::Setup)?;
     let mut authorization = format!("Bearer {}", credential.token)
         .parse()
         .map_err(|_| Error::Unauthorized)?;

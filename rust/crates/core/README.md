@@ -2353,6 +2353,16 @@ real memory service. These tests do not script a
 mid-stream usage report, so partial usage before cancellation is not covered
 and no memory search query is observed beyond the returned snippets.
 
+## Remote device identity
+
+`remote::Device::new(state)` owns the backend's remote device identity at `<state>/remote-device.json` (`remote::FILE`), the location and JSON shape the TypeScript CLI uses (`packages/cli/src/remote-credentials.ts:29–49`): `deviceID`, `name`, `relayURL`, `publicKey` and `privateKey` P-256 JWKs, optional `refreshToken` and `refreshExpiresAt`, and `enrolledAt`. Reads ignore unknown fields; writes emit only those fields.
+
+Reads refuse a symbolic link, a non-regular file, a file larger than 64 KiB, and on Unix a file with any group or other mode bit or owned by another user; the file opens with `O_NOFOLLOW` and the opened handle is checked again. Writes refuse a symbolic-link destination, create a `0600` temporary file beside it and rename it into place. First enrollment refuses an existing destination. One writer lock serializes enrollment and credential rotation.
+
+`enroll` validates the `https` origin (`http` only for `localhost`, `127.0.0.1` or `[::1]`) and the `XXXX-XXXX-XXXX-XXXX-XXXX` code, reads the existing identity, uses the trimmed name or the machine host name, generates a P-256 key, and posts `{ enrollmentID, code, name, publicKey }` to `/api/devices/enroll`. Relay 401, 403, 410 and other 4xx responses are `RelayRejected`; transport failures, timeouts, 408, 429, 5xx and malformed success bodies are `RelayUnavailable`. `access` refreshes through `/api/devices/refresh` while the stored refresh credential is unexpired and otherwise signs `ycoding-device-v1\n<challengeID>\n<nonce>` as a raw 64-byte ECDSA P-256 SHA-256 signature for `/api/devices/challenge` and `/api/devices/token`, then stores the rotated refresh credential. Relay 401, 403 or 410 returns `Revoked` and marks that device revoked in memory, so `summary` reports `Revoked` until another device is enrolled. Every relay call disables redirects, never sends credentials in the URL, reads at most 64 KiB and completes within 30 seconds.
+
+`summary` is the redacted view: device ID, name, origin, enrollment time, credential state (`NotAuthenticated` without a refresh credential, `Valid`, `Expired` at or after the refresh expiry, `Revoked`) and the refresh expiry. Results, errors and log events never contain the enrollment code, keys, tokens or relay response bodies.
+
 ## Credentials and authentication
 
 `resources::credential::Service` operates on an explicitly supplied redb Client

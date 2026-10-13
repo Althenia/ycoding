@@ -3,11 +3,16 @@ use crate::{
     convert,
     dispatch::{Dispatcher, Failure, Invocation, RegistrationError},
 };
-use ycoding_core::ycoding_schema::session;
+use prost::{Message, Name};
+use ycoding_core::{
+    remote::{CredentialState, EnrollError, Enrollment, Summary},
+    ycoding_schema::session,
+};
 use ycoding_protocol::{decode_strict, v5};
 
 pub(crate) fn register(dispatcher: &mut Dispatcher) -> Result<(), RegistrationError> {
     dispatcher.handle("remote.get", get)?;
+    dispatcher.handle("remote.enroll", enroll)?;
     dispatcher.handle("remote.set", set)?;
     Ok(())
 }
@@ -151,13 +156,107 @@ async fn get(
         .as_ref()
         .ok_or_else(|| Failure::Unavailable("Remote connector is not composed".into()))?;
     let (state, message) = state(control.status());
+    let device = control
+        .device()
+        .summary(crate::ids::now_millis().max(0) as u64)
+        .await
+        .map_err(|_| Failure::Unavailable("Remote device enrollment could not be read".into()))?;
     Ok(v5::RemoteGetResult {
         data: v5::RemoteGetResultData {
             state,
             message,
-            device: None,
+            device: device.map(remote_device),
         },
     })
+}
+
+async fn enroll(
+    invocation: Invocation,
+    request: v5::RemoteEnrollRequest,
+) -> Result<v5::RemoteEnrollResult, Failure> {
+    let control = invocation
+        .core()?
+        .remote
+        .as_ref()
+        .ok_or_else(|| Failure::Unavailable("Remote connector is not composed".into()))?;
+    let payload = request.payload;
+    let enrollment = Enrollment {
+        relay_origin: utf8(&payload.relay_origin, "payload.relayOrigin")?,
+        enrollment_id: utf8(&payload.enrollment_id, "payload.enrollmentID")?,
+        code: utf8(&payload.code, "payload.code")?,
+        name: payload
+            .name
+            .as_ref()
+            .map(|name| utf8(name, "payload.name"))
+            .transpose()?,
+        replace: payload.replace.unwrap_or(false),
+    };
+    let device = control
+        .device()
+        .enroll(enrollment, crate::ids::now_millis().max(0) as u64)
+        .await
+        .map_err(enrollment_failure)?;
+    Ok(v5::RemoteEnrollResult {
+        data: remote_device(device),
+    })
+}
+
+fn utf8(value: &v5::LosslessString, field: &'static str) -> Result<String, Failure> {
+    convert::domain(value)?
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| Failure::InvalidField {
+            message: "Expected well-formed text".into(),
+            field,
+        })
+}
+
+fn remote_device(summary: Summary) -> v5::RemoteDevice {
+    v5::RemoteDevice {
+        device_id: convert::text(&summary.device_id),
+        name: convert::text(&summary.name),
+        relay_origin: convert::text(&summary.relay_origin),
+        enrolled_at: summary.enrolled_at,
+        credential_state: match summary.credential_state {
+            CredentialState::NotAuthenticated => 1,
+            CredentialState::Valid => 2,
+            CredentialState::Expired => 3,
+            CredentialState::Revoked => 4,
+        },
+        credential_expires_at: summary.credential_expires_at,
+    }
+}
+
+fn enrollment_failure(error: EnrollError) -> Failure {
+    let code = match error {
+        EnrollError::MissingName => {
+            return Failure::InvalidField {
+                message: "A device name is required".into(),
+                field: "payload.name",
+            };
+        }
+        EnrollError::Partial(summary) => {
+            return Failure::RemoteEnrollment(typed(v5::RemoteEnrollmentPartialFailure {
+                tag: 1,
+                device: remote_device(summary),
+            }));
+        }
+        EnrollError::InvalidOrigin => 1,
+        EnrollError::InvalidCode => 2,
+        EnrollError::AlreadyEnrolled => 3,
+        EnrollError::RelayRejected => 4,
+        EnrollError::RelayUnavailable => 5,
+        EnrollError::KeyFailed => 6,
+        EnrollError::StoreFailed => 7,
+    };
+    Failure::RemoteEnrollment(typed(v5::RemoteEnrollmentError { tag: 1, code }))
+}
+
+fn typed<T: Message + Name>(value: T) -> v5::TypedPayload {
+    v5::TypedPayload {
+        type_name: T::full_name(),
+        payload: value.encode_to_vec(),
+    }
 }
 
 async fn set(

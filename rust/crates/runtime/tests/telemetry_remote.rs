@@ -24,11 +24,11 @@ async fn remote_client_append_requires_consent_and_preserves_bounded_web_samples
         .unwrap()
         .as_millis() as i64;
     let peer = Peer::authenticate(
-        &Enrolled::new("https://relay.invalid", "owner-a".into(), "device-a".into()).unwrap(),
+        &Enrolled::new("https://relay.invalid", "device-a".into()).unwrap(),
         &Credential::new(
             "stand-in-token".into(),
             now + 60_000,
-            "owner-a".into(),
+            "https://relay.invalid".into(),
             "device-a".into(),
         ),
         now,

@@ -1,8 +1,14 @@
 use super::Error;
 use crate::{dispatch::Boxed, ids};
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tokio::sync::watch;
-use ycoding_core::ycoding_schema::{JsonValue, parse_json};
+use ycoding_core::{
+    remote::Device,
+    ycoding_schema::{JsonValue, parse_json},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
@@ -99,6 +105,7 @@ fn convert_id() -> Result<String, Error> {
 
 struct Inner {
     preference: Arc<dyn Preference>,
+    device: Device,
     intent: watch::Sender<Intent>,
     status: watch::Sender<(Intent, Status)>,
     transition: tokio::sync::Mutex<()>,
@@ -108,7 +115,15 @@ struct Inner {
 pub struct Control(Arc<Inner>);
 
 impl Control {
-    pub async fn load(preference: Arc<dyn Preference>) -> Self {
+    pub async fn open(state: &Path) -> Result<Self, Error> {
+        Ok(Self::load(
+            Arc::new(PreferenceFile(state.join("remote.json"))),
+            Device::new(state).map_err(|_| Error::Setup)?,
+        )
+        .await)
+    }
+
+    pub async fn load(preference: Arc<dyn Preference>, device: Device) -> Self {
         let loaded = preference.load().await;
         let enabled = loaded.as_ref().copied().unwrap_or(false);
         let (intent, _) = watch::channel(Intent {
@@ -135,10 +150,15 @@ impl Control {
         ));
         Self(Arc::new(Inner {
             preference,
+            device,
             intent,
             status,
             transition: tokio::sync::Mutex::new(()),
         }))
+    }
+
+    pub fn device(&self) -> &Device {
+        &self.0.device
     }
 
     pub fn status(&self) -> Status {

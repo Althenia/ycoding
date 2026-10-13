@@ -774,6 +774,7 @@ async fn every_local_operation_answers_with_a_declared_typed_outcome() {
                 "pty.update",
                 "question.request.list",
                 "reference.list",
+                "remote.enroll",
                 "remote.get",
                 "remote.set",
                 "server.get",

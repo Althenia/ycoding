@@ -1,83 +1,61 @@
 use super::Error;
-use crate::dispatch::Boxed;
+use crate::{dispatch::Boxed, ids};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+use ycoding_core::remote::{self, Device};
 
 #[derive(Clone)]
 pub struct Enrolled {
-    pub(crate) origin: String,
-    owner: String,
+    origin: String,
     device: String,
 }
 
 impl Enrolled {
-    pub fn new(origin: &str, owner: String, device: String) -> Result<Self, Error> {
-        if owner.is_empty() || device.is_empty() {
+    pub fn new(origin: &str, device: String) -> Result<Self, Error> {
+        if device.is_empty() {
             return Err(Error::Setup);
         }
         Ok(Self {
-            origin: normalize(origin)?,
-            owner,
+            origin: remote::normalize_origin(origin).ok_or(Error::Setup)?,
             device,
         })
     }
 
-    pub fn bind(&self, requested: &str) -> Result<String, Error> {
-        let origin = normalize(requested)?;
-        if origin != self.origin {
-            return Err(Error::Forbidden);
-        }
-        let scheme = if origin.starts_with("https:") {
-            "wss:"
-        } else {
-            "ws:"
-        };
-        Ok(format!(
-            "{}{}{}",
-            scheme,
-            origin.split_once(':').ok_or(Error::Setup)?.1,
-            "/ws/v5/agent"
-        ))
+    pub fn url(&self) -> String {
+        let (scheme, rest) = self
+            .origin
+            .split_once(':')
+            .expect("normalized origins carry a scheme");
+        format!(
+            "{}:{rest}/ws/v5/agent",
+            if scheme == "https" { "wss" } else { "ws" }
+        )
     }
-}
-
-fn normalize(origin: &str) -> Result<String, Error> {
-    let uri = url::Url::parse(origin).map_err(|_| Error::Setup)?;
-    if !uri.username().is_empty()
-        || uri.password().is_some()
-        || uri.query().is_some()
-        || uri.fragment().is_some()
-        || uri.path() != "/"
-        || uri.scheme() != "https"
-            && !(uri.scheme() == "http"
-                && matches!(uri.host_str(), Some("localhost" | "127.0.0.1" | "[::1]")))
-    {
-        return Err(Error::Setup);
-    }
-    Ok(uri.origin().ascii_serialization())
 }
 
 pub struct Credential {
     pub(crate) token: String,
     pub(crate) expires_at: i64,
-    owner: String,
+    origin: String,
     device: String,
 }
 
 impl Credential {
-    pub fn new(token: String, expires_at: i64, owner: String, device: String) -> Self {
+    pub fn new(token: String, expires_at: i64, origin: String, device: String) -> Self {
         Self {
             token,
             expires_at,
-            owner,
+            origin,
             device,
         }
     }
 
     pub(crate) fn authenticate(&self, enrolled: &Enrolled, now: i64) -> Result<Peer, Error> {
-        if self.owner != enrolled.owner || self.device != enrolled.device {
+        if remote::normalize_origin(&self.origin).as_deref() != Some(enrolled.origin.as_str())
+            || self.device != enrolled.device
+        {
             return Err(Error::Forbidden);
         }
         if self.token.is_empty() || self.expires_at <= now {
@@ -91,7 +69,42 @@ impl Credential {
 }
 
 pub trait Credentials: Send + Sync {
+    fn enrolled(&self) -> Boxed<Result<Enrolled, Error>>;
     fn access(&self) -> Boxed<Result<Credential, Error>>;
+}
+
+impl Credentials for Device {
+    fn enrolled(&self) -> Boxed<Result<Enrolled, Error>> {
+        let device = self.clone();
+        Box::pin(async move {
+            let (origin, id) = device.enrolled().await.map_err(failure)?;
+            Enrolled::new(&origin, id)
+        })
+    }
+
+    fn access(&self) -> Boxed<Result<Credential, Error>> {
+        let device = self.clone();
+        Box::pin(async move {
+            let access = device
+                .access(ids::now_millis().max(0) as u64)
+                .await
+                .map_err(failure)?;
+            Ok(Credential::new(
+                access.token,
+                i64::try_from(access.expires_at).map_err(|_| Error::Unauthorized)?,
+                access.relay_origin,
+                access.device_id,
+            ))
+        })
+    }
+}
+
+fn failure(error: remote::Error) -> Error {
+    match error {
+        remote::Error::Store | remote::Error::NotEnrolled => Error::Setup,
+        remote::Error::Revoked => Error::Unauthorized,
+        remote::Error::Relay => Error::Transport,
+    }
 }
 
 #[derive(Clone)]

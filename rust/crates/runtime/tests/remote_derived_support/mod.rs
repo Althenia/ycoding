@@ -60,14 +60,19 @@ impl Preference for Saved {
         Box::pin(async { Ok(()) })
     }
 }
-pub struct Access;
+pub struct Access(pub String);
 impl Credentials for Access {
+    fn enrolled(&self) -> Boxed<Result<Enrolled, Error>> {
+        let enrolled = Enrolled::new(&self.0, "device-a".into());
+        Box::pin(async move { enrolled })
+    }
     fn access(&self) -> Boxed<Result<Credential, Error>> {
-        Box::pin(async {
+        let origin = self.0.clone();
+        Box::pin(async move {
             Ok(Credential::new(
                 "stand-in-token".into(),
                 now() + 600_000,
-                "owner-a".into(),
+                origin,
                 "device-a".into(),
             ))
         })
@@ -75,11 +80,11 @@ impl Credentials for Access {
 }
 pub fn expired_peer() -> Peer {
     Peer::authenticate(
-        &Enrolled::new("https://relay.invalid", "owner-a".into(), "device-a".into()).unwrap(),
+        &Enrolled::new("https://relay.invalid", "device-a".into()).unwrap(),
         &Credential::new(
             "stand-in-token".into(),
             1,
-            "owner-a".into(),
+            "https://relay.invalid".into(),
             "device-a".into(),
         ),
         0,

@@ -10,6 +10,7 @@ pub mod observability;
 pub mod platform;
 pub mod process;
 pub mod regexp;
+pub mod remote;
 pub mod resources;
 pub mod session;
 pub mod telemetry;
