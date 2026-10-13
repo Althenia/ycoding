@@ -701,11 +701,14 @@ async fn every_local_operation_answers_with_a_declared_typed_outcome() {
                 "credential.activate",
                 "credential.remove",
                 "credential.update",
+                "debug.location",
+                "debug.location.evict",
                 "event.subscribe",
                 "event.unsubscribe",
                 "form.request.list",
                 "fs.find",
                 "fs.list",
+                "fs.read",
                 "generate.text",
                 "health.get",
                 "health.stop",
@@ -729,6 +732,7 @@ async fn every_local_operation_answers_with_a_declared_typed_outcome() {
                 "isolatedBrowser.tabs",
                 "keepAwake.get",
                 "keepAwake.set",
+                "location.get",
                 "mcp.add",
                 "mcp.connect",
                 "mcp.disconnect",
@@ -775,6 +779,7 @@ async fn every_local_operation_answers_with_a_declared_typed_outcome() {
                 "server.get",
                 "session.active",
                 "session.archive",
+                "session.attachment.read",
                 "session.autonomy.get",
                 "session.autonomy.set",
                 "session.background",
@@ -870,6 +875,7 @@ async fn every_local_operation_answers_with_a_declared_typed_outcome() {
             subscriptions: ycoding_runtime::Subscriptions::default(),
         });
         let mut local = 0;
+        let mut unwired = 0;
         for descriptor in OPERATIONS.iter() {
             let local_operation = descriptor
                 .roles
@@ -916,12 +922,12 @@ async fn every_local_operation_answers_with_a_declared_typed_outcome() {
                     panic!("{} must settle inline", descriptor.diagnostic_name);
                 }
             }
-            local += usize::from(local_operation);
+            local += 1;
+            unwired += usize::from(!wired.contains(&descriptor.diagnostic_name));
         }
         println!(
-            "local operations: {local}; wired: {}; typed-unavailable: {}",
-            wired.len(),
-            local - wired.len()
+            "local operations: {local}; wired: {}; typed-unavailable: {unwired}",
+            wired.len()
         );
     })
     .await;

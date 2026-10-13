@@ -351,14 +351,12 @@ async fn skill_list(
         .list()
         .await
         .map_err(|_| Failure::Unavailable("Skill catalog unavailable".into()))?;
-    let project = std::path::Path::new(
-        location
-            .project
-            .directory
-            .as_lossless()
-            .as_str()
-            .ok_or_else(|| Failure::Unavailable("Project directory is not representable".into()))?,
-    );
+    let project = location
+        .project
+        .directory
+        .as_lossless()
+        .as_str()
+        .map(std::path::Path::new);
     Ok(v5::SkillListResult {
         location: convert::location_info(&location),
         data: v5::SkillListResultData {

@@ -172,6 +172,11 @@ pub fn standard() -> Result<Dispatcher, RegistrationError> {
     dispatcher.handle("session.guardrail.status", guardrail::status)?;
     dispatcher.handle("session.guardrail.request.list", guardrail::request_list)?;
     dispatcher.handle("session.guardrail.request.reply", guardrail::reply)?;
+    dispatcher.handle_asset("fs.read", crate::fs::read)?;
+    dispatcher.handle_asset("session.attachment.read", crate::session_attachment::read)?;
+    dispatcher.handle("location.get", crate::location_ops::get)?;
+    dispatcher.handle("debug.location", crate::location_ops::list)?;
+    dispatcher.handle("debug.location.evict", crate::location_ops::evict)?;
     Ok(dispatcher)
 }
 

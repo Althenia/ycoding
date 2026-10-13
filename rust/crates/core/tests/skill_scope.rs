@@ -113,7 +113,7 @@ async fn skill_scope_follows_project_then_global_root_containment_of_the_skill_l
         .map(|info| {
             (
                 info.id.to_utf8().unwrap(),
-                skill::scope(info, &project, &roots),
+                skill::scope(info, Some(&project), &roots),
             )
         })
         .collect::<BTreeMap<_, _>>();
@@ -165,7 +165,7 @@ fn skill_scope_containment_is_component_wise_and_prefers_the_project() {
         ),
     ] {
         assert_eq!(
-            skill::scope(&info(location), project, &roots),
+            skill::scope(&info(location), Some(project), &roots),
             expected,
             "{location}"
         );
@@ -173,7 +173,42 @@ fn skill_scope_containment_is_component_wise_and_prefers_the_project() {
     assert_eq!(
         skill::scope(
             &info("/fixture/.claude/skills/x/SKILL.md"),
-            Path::new("/fixture"),
+            Some(Path::new("/fixture")),
+            &roots
+        ),
+        Some(Scope::Project)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn skill_scope_treats_a_project_directory_without_utf8_as_a_plain_path() {
+    use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+    let roots = Roots::development(Path::new("/fixture")).unwrap();
+    let info = |location: &str| {
+        Info::decode(
+            &parse_json(&format!(
+                r#"{{"id":"x","name":"x","location":"{location}","content":"x"}}"#
+            ))
+            .unwrap(),
+        )
+        .unwrap()
+    };
+    let project = Path::new(OsStr::from_bytes(b"/fixture/repo-\xff"));
+    for project in [Some(project), None] {
+        assert_eq!(
+            skill::scope(&info("/fixture/repo-\u{ff}/SKILL.md"), project, &roots),
+            None
+        );
+        assert_eq!(
+            skill::scope(&info("/fixture/.claude/skills/x/SKILL.md"), project, &roots),
+            Some(Scope::Global)
+        );
+    }
+    assert_eq!(
+        skill::scope(
+            &info("/fixture/repo/SKILL.md"),
+            Some(Path::new(OsStr::from_bytes(b"/fixture"))),
             &roots
         ),
         Some(Scope::Project)

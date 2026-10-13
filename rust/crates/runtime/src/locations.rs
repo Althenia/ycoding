@@ -409,6 +409,32 @@ impl Locations {
     }
 }
 
+impl Locations {
+    pub fn cached(&self) -> Vec<(LosslessString, Option<LosslessString>)> {
+        self.0
+            .services
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    pub fn evict(
+        &self,
+        directory: &LosslessString,
+        workspace: Option<&LosslessString>,
+    ) -> Result<(), Failure> {
+        let key = (canonical(directory)?, workspace.cloned());
+        self.0
+            .services
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&key);
+        Ok(())
+    }
+}
+
 pub(crate) fn physical_path(path: &Path) -> Result<LosslessString, Failure> {
     std::fs::canonicalize(path)
         .map_err(|_| Failure::Unavailable("Location guardrail directory is unavailable".into()))?

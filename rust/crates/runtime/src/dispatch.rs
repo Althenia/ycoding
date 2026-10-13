@@ -29,6 +29,14 @@ impl Invocation {
         requested: Option<&v5::LocationQueryLocation>,
     ) -> Result<Arc<LocationServices>, Failure> {
         let core = self.core()?;
+        let (directory, workspace) = self.location_key(requested)?;
+        core.locations.location(&directory, workspace.as_ref())
+    }
+
+    pub fn location_key(
+        &self,
+        requested: Option<&v5::LocationQueryLocation>,
+    ) -> Result<(LosslessString, Option<LosslessString>), Failure> {
         let Some(v5::scope::Target::Location(scoped)) = &self.scope.target else {
             return Err(Failure::Invalid("request has no Location scope".into()));
         };
@@ -44,7 +52,7 @@ impl Invocation {
             .and_then(|requested| requested.workspace.as_ref())
             .map(convert::domain)
             .transpose()?;
-        core.locations.location(&directory, workspace.as_ref())
+        Ok((directory, workspace))
     }
 
     pub fn form_session(&self, id: &v5::LosslessString) -> Result<session::Id, Failure> {
@@ -144,6 +152,8 @@ pub enum Failure {
         session: String,
         message: String,
     },
+    AttachmentNotFound,
+    AttachmentTooLarge,
     InvalidCursor(String),
     Conflict(String),
     InstructionEntryValueTooLarge {
@@ -712,6 +722,20 @@ impl Failure {
                 })
             }
             Failure::MessageNotFound { .. } => invalid("Message not found", "not_found"),
+            Failure::AttachmentNotFound if declared(v5::AttachmentNotFoundError::full_name()) => {
+                encoded(v5::AttachmentNotFoundError {
+                    tag: 1,
+                    message: convert::text("Attachment not found in this Session"),
+                })
+            }
+            Failure::AttachmentNotFound => invalid("Attachment not found", "not_found"),
+            Failure::AttachmentTooLarge if declared(v5::AttachmentTooLargeError::full_name()) => {
+                encoded(v5::AttachmentTooLargeError {
+                    tag: 1,
+                    message: convert::text("Attachment exceeds the read size limit"),
+                })
+            }
+            Failure::AttachmentTooLarge => invalid("Attachment is too large", "too_large"),
             Failure::InvalidCursor(message) if declared(v5::InvalidCursorError::full_name()) => {
                 encoded(v5::InvalidCursorError {
                     tag: 1,

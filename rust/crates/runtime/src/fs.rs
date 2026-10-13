@@ -7,7 +7,7 @@ use ycoding_core::ycoding_schema::{
     filesystem::{Entry, EntryType, FindInput},
     schema::{PositiveInt, RelativePath},
 };
-use ycoding_protocol::v5;
+use ycoding_protocol::{Asset, v5};
 
 fn entry(entry: &Entry) -> v5::FileSystemEntry {
     v5::FileSystemEntry {
@@ -94,4 +94,38 @@ pub async fn find(
             items: entries.iter().map(entry).collect(),
         },
     })
+}
+
+pub async fn read(
+    invocation: Invocation,
+    request: v5::FsReadRequest,
+) -> Result<Asset<v5::FsReadResult>, Failure> {
+    let q = request.query.location.as_ref();
+    let (_, services) = platform_services::resolve(
+        &invocation,
+        q.and_then(|q| q.directory.as_ref()),
+        q.and_then(|q| q.workspace.as_ref()),
+    )?;
+    let path = convert::identifier::<RelativePath>(&request.params.path)?;
+    let file = tokio::task::spawn_blocking(move || {
+        services.filesystem.read(
+            &path
+                .as_lossless()
+                .to_utf8()
+                .map_err(std::io::Error::other)?,
+        )
+    })
+    .await
+    .map_err(|error| Failure::Unavailable(error.to_string()))?
+    .map_err(platform_services::io)?;
+    Asset::new(
+        v5::FsReadResult {
+            data: v5::PlatformAssetMetadata {
+                mime: convert::text(file.mime),
+                byte_count: file.content.len() as u64,
+            },
+        },
+        file.content,
+    )
+    .map_err(|error| Failure::Invalid(error.to_string()))
 }

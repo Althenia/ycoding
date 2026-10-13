@@ -277,9 +277,9 @@ pub enum Scope {
     Global,
     Project,
 }
-pub fn scope(info: &Info, project: &Path, roots: &Roots) -> Option<Scope> {
+pub fn scope(info: &Info, project: Option<&Path>, roots: &Roots) -> Option<Scope> {
     let location = Path::new(info.location.as_lossless().as_str()?);
-    if contains(project, location) {
+    if project.is_some_and(|project| contains(project, location)) {
         return Some(Scope::Project);
     }
     [

@@ -1,4 +1,5 @@
 pub mod analysis;
+pub mod attachment_read;
 pub mod autonomy;
 pub mod cache_diagnostics;
 pub mod captured_changes;

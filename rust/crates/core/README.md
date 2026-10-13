@@ -1679,6 +1679,13 @@ operation validates and imports durable attachment payloads before atomically
 updating existing event, pending-input, and message Store records and publishing
 the completion marker. It does not run migrations at construction.
 
+`session::attachment_read` serves `Service::attachment_read`. It accepts only a
+64-character lowercase hexadecimal digest, requires the Session, and finds the
+first managed file with that digest in the Session's user messages, then in its
+pending user inputs. References above 10 MiB fail as too large before any read.
+Integrity, path, and missing-blob failures read as not found and log a warning;
+other Sessions' references are never consulted.
+
 `resources::image` normalizes base64 content with native Photon 0.3.3, with its
 Wasm features disabled. In-limit input remains unchanged. Resizing uses Lanczos3,
 PNG first, then JPEG qualities 80, 85, 70, 55, and 40, followed by progressively

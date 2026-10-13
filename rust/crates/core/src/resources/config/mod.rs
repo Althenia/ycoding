@@ -82,6 +82,9 @@ impl Configuration {
     pub fn latest<'a>(&'a self, key: &'a str) -> Option<&'a JsonValue> {
         self.values(key).next_back()
     }
+    pub fn roots(&self) -> &Roots {
+        &self.options.roots
+    }
 }
 
 #[derive(Clone, Copy)]
