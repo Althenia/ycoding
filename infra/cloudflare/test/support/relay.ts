@@ -25,6 +25,8 @@ export async function harness(
     notifyPush?: RelayDeps["notifyPush"]
     ownerID?: string
     deviceID?: string
+    monotonic?: RelayDeps["monotonic"]
+    send?: RelayDeps["send"]
   } = {},
 ) {
   let now = 0
@@ -36,12 +38,13 @@ export async function harness(
   const notices = createNoticeStore(createNoticeStorage(new Database(":memory:")))
   const relay = createRelay({
     now: () => now,
-    monotonic: () => now,
+    monotonic: options.monotonic ?? (() => now),
     newID: () => `epoch-${++id}`,
     send: (id, bytes) => {
       const queue = output.get(id) ?? []
       queue.push(bytes)
       output.set(id, queue)
+      options.send?.(id, bytes)
     },
     close: (id, code, reason) => close.push({ id, code, reason }),
     notices,

@@ -52,7 +52,6 @@ import {
   createRelayConnection,
   receiveBinary,
   frameReservation,
-  handoffBinary,
 } from "../../../../packages/remote/src/index"
 import type { RemoteNotice, RemoteAlertDetail } from "../../../../packages/remote/src/index"
 import type { NoticeEvent, NoticeStore } from "./notice-store"
@@ -201,40 +200,50 @@ export function createRelay(deps: RelayDeps) {
   }
   function flush(peer: Peer) {
     if (!alive(peer)) return
-    decisions(
-      peer,
-      handoffBinary(
-        peer.connection,
-        (bytes, frame) => {
-          const key = frameKey(frame)
-          const forward = [...forwards].find(
-            (item) => item.to === peer && item.key === key && item.handed === undefined,
-          )
-          if (forward) {
-            forward.handed = frame.deliveryOrdinal
-            forward.handedLedger = frame.ledger
-          }
-          if (frame.body.case === "result" && frame.body.value.outcome.case === "success") {
-            const requestID = frame.body.value.requestId
-            const subscription = [...peer.subscriptions].find(([, item]) => item.requestID === requestID)
-            if (subscription)
-              decisions(
-                peer,
-                peer.connection.acceptSubscription(
-                  frame.body.value.requestId,
-                  subscription[0],
-                  subscription[1].scope,
-                  deps.monotonic(),
-                  "send",
-                  subscription[1].epoch,
-                ),
-              )
-          }
-          deps.send(peer.identity.connectionID, bytes)
-        },
-        deps.monotonic(),
-      ),
-    )
+    const entries: Decision[] = []
+    while (alive(peer)) {
+      const now = deps.monotonic()
+      const prepared = peer.connection.prepareHandoff(now)
+      entries.push(...peer.connection.takeDecisions())
+      if (!prepared) break
+      if (!peer.connection.reservation.reserve(prepared.reservedBytes)) {
+        peer.connection.abortPrepared(prepared)
+        entries.push(...peer.connection.close(FailureCategory.LIMIT))
+        break
+      }
+      try {
+        const frame = prepared.frame
+        const bytes = encodeStrict(FrameSchema, frame)
+        entries.push(...peer.connection.handoff(prepared, bytes.byteLength, now))
+        if (peer.connection.state === "closed") break
+        const key = frameKey(frame)
+        const forward = [...forwards].find((item) => item.to === peer && item.key === key && item.handed === undefined)
+        if (forward) {
+          forward.handed = frame.deliveryOrdinal
+          forward.handedLedger = frame.ledger
+        }
+        if (frame.body.case === "result" && frame.body.value.outcome.case === "success") {
+          const requestID = frame.body.value.requestId
+          const subscription = [...peer.subscriptions].find(([, item]) => item.requestID === requestID)
+          if (subscription)
+            decisions(
+              peer,
+              peer.connection.acceptSubscription(
+                frame.body.value.requestId,
+                subscription[0],
+                subscription[1].scope,
+                deps.monotonic(),
+                "send",
+                subscription[1].epoch,
+              ),
+            )
+        }
+        deps.send(peer.identity.connectionID, bytes)
+      } finally {
+        peer.connection.reservation.release(prepared.reservedBytes)
+      }
+    }
+    decisions(peer, entries)
   }
   function flushAll() {
     receipts()
