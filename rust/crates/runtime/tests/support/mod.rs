@@ -125,17 +125,48 @@ const PREDICTABLE: &[&str] = &[
     "ses_prompt_unwired",
 ];
 
-struct NoLocations;
+struct TestLocations(Arc<ActiveChildren>);
 
-impl Locations for NoLocations {
-    fn get(&self, _: &location::Ref) -> Result<Arc<dyn Runner>, run_coordinator::Error> {
+impl Locations for TestLocations {
+    fn get(&self, location: &location::Ref) -> Result<Arc<dyn Runner>, run_coordinator::Error> {
+        if location.directory.as_lossless().as_str() == Some("/project/team") {
+            return Ok(self.0.clone());
+        }
         Err(run_coordinator::Error::Closed)
+    }
+}
+
+pub struct ActiveChildren(
+    tokio::sync::watch::Sender<BTreeSet<ycoding_core::ycoding_schema::session::Id>>,
+);
+
+impl Runner for ActiveChildren {
+    fn drain(&self, mut request: run_coordinator::DrainRequest) -> run_coordinator::RunFuture {
+        self.0.send_modify(|started| {
+            started.insert(request.session_id);
+        });
+        Box::pin(async move {
+            Err(run_coordinator::Error::Interrupted(
+                request.cancellation.cancelled().await,
+            ))
+        })
+    }
+}
+
+impl ActiveChildren {
+    pub async fn started(&self, id: &ycoding_core::ycoding_schema::session::Id) {
+        let mut started = self.0.subscribe();
+        started
+            .wait_for(|started| started.contains(id))
+            .await
+            .unwrap();
     }
 }
 
 pub struct World {
     pub core: Core,
     pub store: ycoding_core::ycoding_store::Client,
+    pub active_children: Arc<ActiveChildren>,
 }
 
 pub fn world() -> &'static World {
@@ -171,6 +202,9 @@ pub fn world() -> &'static World {
                     let mut row = record(id);
                     if *id == "ses_predict_child" {
                         row.parent_id = Some("ses_rich".into());
+                    }
+                    if *id == "ses_team" || *id == "ses_team_two" {
+                        row.directory = "/project/team".into();
                     }
                     if *id == "ses_predict_unwired" || *id == "ses_prompt_unwired" {
                         row.directory = UNWIRED.into();
@@ -226,9 +260,10 @@ pub fn world() -> &'static World {
             .unwrap();
         let client = store.client();
         std::mem::forget(store);
+        let active_children = Arc::new(ActiveChildren(tokio::sync::watch::channel(BTreeSet::new()).0));
         let execution = Execution::install(
             SessionStore::new(client.clone()),
-            Arc::new(NoLocations),
+            Arc::new(TestLocations(active_children.clone())),
             ycoding_core::job::Jobs::new(),
             None,
         )
@@ -236,6 +271,7 @@ pub fn world() -> &'static World {
         World {
             core: Core::new(client.clone(), execution, configuration()),
             store: client,
+            active_children,
         }
     })
 }

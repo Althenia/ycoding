@@ -279,16 +279,8 @@ async fn launched(parent: &str, call: &str) -> String {
         .await
         .unwrap()
         .session_id;
-    world().core.execution.await_idle(&child).await;
+    world().active_children.started(&child).await;
     child.as_lossless().to_utf8().unwrap()
-}
-
-async fn idle(child: &str) {
-    world()
-        .core
-        .execution
-        .await_idle(&session::Id::new(child).unwrap())
-        .await;
 }
 
 fn list_request(parent: &str, limit: Option<u64>, cursor: Option<&str>) -> Vec<u8> {
@@ -482,6 +474,17 @@ async fn subagent_list_pages_owned_children_with_a_summary_and_parent_bound_curs
                 .await,
         );
         assert_eq!(missing.type_name, v5::SessionNotFoundError::full_name());
+        for child in [first, second] {
+            world()
+                .core
+                .orchestration
+                .cancel(
+                    &session::Id::new("ses_team").unwrap(),
+                    &session::Id::new(child).unwrap(),
+                )
+                .await
+                .unwrap();
+        }
         server.shutdown().await.unwrap();
     })
     .await;
@@ -507,7 +510,7 @@ async fn subagent_controls_act_on_owned_children_and_reject_foreign_or_unknown_o
                 .await,
         );
         assert_eq!(units(&sent.data.session_id), child);
-        idle(&child).await;
+        assert!(world().core.execution.active().contains(&child_id));
         assert_eq!(
             world().core.sessions.pending_list(&child_id).unwrap().len(),
             pending_before + 1
@@ -568,7 +571,7 @@ async fn subagent_controls_act_on_owned_children_and_reject_foreign_or_unknown_o
             state(&resumed.data),
             v5::SessionOrchestrationTaskState::SessionorchestrationTaskStateRunning
         );
-        idle(&child).await;
+        assert!(world().core.execution.active().contains(&child_id));
 
         let cancelled: v5::SessionSubagentCancelResult = success(
             client
