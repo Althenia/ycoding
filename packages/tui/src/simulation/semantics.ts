@@ -1,5 +1,5 @@
 import type { Renderable } from "@opentui/core"
-import type { SimulationProtocol } from "@ycoding-ai/simulation/protocol"
+import type { SimulationProtocol } from "@ycoding-ai/simulation/tui"
 
 type Definition = Omit<SimulationProtocol.Frontend.SemanticNode, "id" | "element" | "parent">
 

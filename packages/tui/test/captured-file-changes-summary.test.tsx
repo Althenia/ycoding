@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import type { ModelInfo, SessionMessageInfo } from "@ycoding-ai/client"
-import { SessionOrchestrationIdentity } from "@ycoding-ai/core/session/orchestration-identity"
+import { capturedChangeSendID } from "@ycoding-ai/client/captured-change-correlation"
 import { json, sessionSnapshot } from "./fixture/tui-client"
 import { DESIGN_VIEWPORT } from "./viewport"
 import { renderScreen } from "./screen/harness"
@@ -108,7 +108,7 @@ const childTranscript = [
   { id: "msg_manual_child", type: "user", text: "Manual nudge", time: { created: 3 } },
   assistant("msg_child_manual", [editPart("call_edit_manual", "src/manual.ts", "true")]),
   {
-    id: SessionOrchestrationIdentity.send(sessionID, "msg_reply_2", "call_send"),
+    id: capturedChangeSendID(sessionID, "msg_reply_2", "call_send"),
     type: "synthetic",
     text: "Follow up",
     description: "Parent subagent message",

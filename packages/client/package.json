@@ -16,6 +16,7 @@
     "./promise/api": "./src/promise/api.ts",
     "./service": "./src/promise/service.ts",
     "./file-change-summary": "./src/file-change-summary.ts",
+    "./captured-change-correlation": "./src/captured-change-correlation.ts",
     "./v5": "./src/v5/index.ts",
     "./effect": "./src/effect/index.ts",
     "./effect/api": "./src/effect/api.ts",

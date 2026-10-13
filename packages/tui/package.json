@@ -78,7 +78,6 @@
   },
   "dependencies": {
     "@ycoding-ai/client": "workspace:*",
-    "@ycoding-ai/core": "workspace:*",
     "@ycoding-ai/plugin": "workspace:*",
     "@ycoding-ai/schema": "workspace:*",
     "@ycoding-ai/simulation": "workspace:*",

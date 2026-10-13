@@ -6,7 +6,7 @@ import { createEffect, createMemo, createSignal, on, onCleanup, onMount, Show } 
 import { Keymap } from "../context/keymap"
 import { useClient } from "../context/client"
 import { useTheme } from "../context/theme"
-import { BrowserExtension } from "@ycoding-ai/core/browser/extension"
+import { BrowserExtension } from "../install-layout"
 import { DialogHeader, DialogTitle, useDialog } from "../ui/dialog"
 import { DialogPrompt } from "../ui/dialog-prompt"
 
@@ -202,7 +202,7 @@ export function DialogChromeConnection(props: { sessionID: string }) {
                 ? "Loading"
                 : status() === "paired"
                   ? "Paired; waiting for Chrome to reconnect"
-                : "Not connected"}
+                  : "Not connected"}
         </text>
         <Show when={secret()}>
           {(code) => <text wrapMode="word">Pairing code (expires in two minutes): {code()}</text>}

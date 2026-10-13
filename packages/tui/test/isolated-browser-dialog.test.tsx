@@ -6,7 +6,7 @@ import { IsolatedBrowser } from "@ycoding-ai/schema/isolated-browser"
 import { Schema } from "effect"
 import { createSignal, onMount, type Accessor, type JSX } from "solid-js"
 import { DialogSessionBrowser, SessionIsolatedBrowserCommand } from "../src/component/dialog-session-browser"
-import { BrowserExtension } from "@ycoding-ai/core/browser/extension"
+import { BrowserExtension } from "../src/install-layout"
 import { CommandPaletteDialog } from "../src/component/command-palette"
 import { ConfigProvider } from "../src/config"
 import { ClientProvider } from "../src/context/client"
@@ -150,7 +150,9 @@ test("Chrome pairing code survives status polls and paired disconnects never off
   })
   try {
     await result.app.waitFor(() => commands().some((command) => command.id === "session.browser.chrome"))
-    void commands().find((command) => command.id === "session.browser.chrome")!.run()
+    void commands()
+      .find((command) => command.id === "session.browser.chrome")!
+      .run()
     await result.app.waitForFrame((frame) => frame.includes("Chrome connection"))
     result.app.mockInput.pressKey("p")
     await result.app.waitForFrame((frame) => frame.includes("p".repeat(43)))
@@ -188,7 +190,9 @@ test("paired Chrome status offers explicit forget instead of another pairing cod
   })
   try {
     await result.app.waitFor(() => commands().some((command) => command.id === "session.browser.chrome"))
-    void commands().find((command) => command.id === "session.browser.chrome")!.run()
+    void commands()
+      .find((command) => command.id === "session.browser.chrome")!
+      .run()
     await result.app.waitForFrame((frame) => frame.includes("Paired; waiting for Chrome to reconnect"))
     expect(result.app.captureCharFrame()).not.toContain("create pairing code")
     const posts = requests.filter((method) => method === "POST")

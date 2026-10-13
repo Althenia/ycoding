@@ -35,11 +35,14 @@ export function usePromptMove(input: { projectID: () => string | undefined; sess
     setCreating(true)
     setProgress("Creating copy")
     try {
+      const worktree = data.location.info()?.backendPaths?.worktree
+      if (!worktree)
+        throw new Error("Backend worktree path is unavailable; refresh the Location before creating a copy")
       const result = await client.api.projectCopy.create({
         projectID,
         location: { directory: data.location.info()?.directory || paths.cwd },
         strategy: "git_worktree",
-        directory: path.join(paths.worktree, projectID.slice(0, 6)),
+        directory: path.join(worktree, projectID.slice(0, 6)),
         name,
       })
       const directory = result.directory

@@ -8,8 +8,19 @@ import { renderScreen } from "./harness"
 
 for (const example of [
   { title: "Configuration file ignored", reason: "invalid-json", message: "Invalid JSON" },
-  { title: "Configuration item dropped", reason: "invalid-values", jsonPath: "$.agents.god.steps", message: "Invalid value" },
-  { title: "Configuration fails closed", reason: "invalid-values", jsonPath: "$.permissions[0]", failClosed: true, message: "Invalid rule; fails closed" },
+  {
+    title: "Configuration item dropped",
+    reason: "invalid-values",
+    jsonPath: "$.agents.god.steps",
+    message: "Invalid value",
+  },
+  {
+    title: "Configuration fails closed",
+    reason: "invalid-values",
+    jsonPath: "$.permissions[0]",
+    failClosed: true,
+    message: "Invalid rule; fails closed",
+  },
 ] as const) {
   for (const width of [80, 100]) {
     test(`${example.title} shows diagnostic details in toast and Status at ${width} columns`, async () => {
@@ -30,9 +41,21 @@ for (const example of [
         route: (url) => {
           const location = { directory, project: { id: "proj_config_diagnostics", directory } }
           if (url.pathname === "/api/location") return json(location)
+          if (url.pathname === "/api/health")
+            return json({ healthy: true, version: "backend-fixture", pid: 42, sourceEpoch: "fixture" })
           if (url.pathname === "/api/config/diagnostics") return json({ location, data: [diagnostic] })
           if (url.pathname === "/api/vcs/branch") return json({ location, data: { current: "main" } })
-          if (["/api/agent", "/api/model", "/api/provider", "/api/integration", "/api/command", "/api/skill", "/api/reference"].includes(url.pathname))
+          if (
+            [
+              "/api/agent",
+              "/api/model",
+              "/api/provider",
+              "/api/integration",
+              "/api/command",
+              "/api/skill",
+              "/api/reference",
+            ].includes(url.pathname)
+          )
             return json({ location, data: [] })
           return undefined
         },
@@ -52,6 +75,9 @@ for (const example of [
         await screen.input.typeText("View status")
         screen.input.pressEnter()
         await until("   Status")
+        await until("backend-fixture")
+        expect(screen.frame()).toContain("Frontend")
+        expect(screen.frame()).toContain("Backend")
         await screen.input.typeText("Configuration")
         await until(example.reason)
         const status = screen.frame().slice(screen.frame().indexOf("   Status"))

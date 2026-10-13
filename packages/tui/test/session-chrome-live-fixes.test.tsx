@@ -2,7 +2,7 @@
 import { RGBA } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import { describe, expect, test } from "bun:test"
-import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import { InstallationVersion } from "../src/build-version"
 import type { JSX } from "solid-js"
 import { ConfigProvider } from "../src/config"
 import { ClientProvider } from "../src/context/client"
@@ -65,7 +65,11 @@ describe("session footer identity", () => {
                 <ClientProvider api={createApi(calls.fetch)}>
                   <DataProvider>
                     <RouteProvider initialRoute={{ type: "session", sessionID: "ses_0085fc701234567" }}>
-                      <Footer branch="main" sessionID="ses_0085fc701234567" autonomy={{ mode: "normal", yolo: false }} />
+                      <Footer
+                        branch="main"
+                        sessionID="ses_0085fc701234567"
+                        autonomy={{ mode: "normal", yolo: false }}
+                      />
                     </RouteProvider>
                   </DataProvider>
                 </ClientProvider>

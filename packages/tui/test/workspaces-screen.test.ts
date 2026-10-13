@@ -1,8 +1,7 @@
 import { expect, test } from "bun:test"
 import { createTestRenderer } from "@opentui/core/testing"
 import { Effect, FileSystem } from "effect"
-import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "../src/frontend-paths"
 import type { ProjectInventoryEntry } from "@ycoding-ai/client"
 import { createEventStream, createFetch, directory, json, worktree, type FetchHandler } from "./fixture/tui-client"
 
@@ -95,7 +94,7 @@ async function launch(input: { width: number; handler?: FetchHandler }) {
       args: {},
       terminalHandoff: async () => ({ renderer: setup.renderer, mode: null, complete: () => {} }),
       log: () => {},
-    }).pipe(Effect.provide(AppNodeBuilder.build(Global.node)), Effect.provide(FileSystem.layerNoop({}))),
+    }).pipe(Effect.provide(FrontendPaths.layer), Effect.provide(FileSystem.layerNoop({}))),
   )
   await ready
   await Bun.sleep(100)

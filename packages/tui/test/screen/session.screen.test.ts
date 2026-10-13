@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import { InstallationVersion } from "../../src/build-version"
 import { directory as defaultDirectory, json, sessionSnapshot } from "../fixture/tui-client"
 import { DESIGN_VIEWPORT } from "../viewport"
 import { renderScreen } from "./harness"
@@ -31,7 +31,9 @@ describe("active session screen", () => {
         if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
         if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
         if (url.pathname === `/api/session/${sessionID}/snapshot`)
-          return sessionSnapshot(sessionID, [
+          return sessionSnapshot(
+            sessionID,
+            [
               {
                 id: "msg_user",
                 type: "user",
@@ -47,7 +49,9 @@ describe("active session screen", () => {
                 finish: "stop",
                 time: { created: 2, completed: 3 },
               },
-            ], { session })
+            ],
+            { session },
+          )
         if (url.pathname === `/api/session/${sessionID}/file-change`) return json({ data: [] })
         if (url.pathname === `/api/session/${sessionID}/pending`) return json({ data: [] })
         if (url.pathname === `/api/session/${sessionID}/permission`) return json({ data: [] })
@@ -104,8 +108,7 @@ describe("active session screen", () => {
               tokens: session.tokens,
             },
           })
-        if (url.pathname === "/api/vcs/branch")
-          return json({ location, data: { current: "main", default: "main" } })
+        if (url.pathname === "/api/vcs/branch") return json({ location, data: { current: "main", default: "main" } })
         if (url.pathname === "/api/model")
           return json({
             location,
@@ -162,7 +165,9 @@ describe("active session screen", () => {
     const userLine = screen.lines().find((line) => line.includes("Where is provider cache telemetry recorded?"))
     const assistantLine = screen.lines().findIndex((line) => line.includes("Two places record it."))
     const assistantIdentityLine = screen.lines().findIndex((line) => line.includes("YCODING"))
-    const userLineIndex = screen.lines().findIndex((line) => line.includes("Where is provider cache telemetry recorded?"))
+    const userLineIndex = screen
+      .lines()
+      .findIndex((line) => line.includes("Where is provider cache telemetry recorded?"))
     const sessionHeader = screen.lines().find((line) => line.includes("SESSION"))
     const composerFooter = screen.lines().findLast((line) => line.includes("commands"))
     const headerRow = screen.lines().findIndex((line) => line.includes("▌▐") && line.includes("main"))
@@ -190,7 +195,18 @@ describe("active session screen", () => {
     expect(userLine).not.toContain("┃")
     expect(sessionHeader).not.toContain("Provider cache audit")
     // CONTEXT distinguishes provider identity from model ID before the aggregate spend/cache sections.
-    for (const label of ["CONTEXT", "Provider", "Model", "Context", "Cache", "SPEND", "Total", "CACHE", "Reads", "Writes"])
+    for (const label of [
+      "CONTEXT",
+      "Provider",
+      "Model",
+      "Context",
+      "Cache",
+      "SPEND",
+      "Total",
+      "CACHE",
+      "Reads",
+      "Writes",
+    ])
       expect(frame).toContain(label)
     expect(frame).not.toContain("Prefix")
     expect(frame).not.toContain("prefix stable")

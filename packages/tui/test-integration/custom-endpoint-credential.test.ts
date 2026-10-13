@@ -63,7 +63,6 @@ test("a saved custom endpoint uses its named credential for discovery and Chat/R
       const key = `key-${api}`
       let listed = [] as Awaited<ReturnType<typeof client.integration.list>>["data"]
       const saved = await saveCustomEndpoint(
-        configDir,
         {
           provider,
           baseURL: `http://127.0.0.1:${endpoint.port}/v1`,
@@ -74,11 +73,7 @@ test("a saved custom endpoint uses its named credential for discovery and Chat/R
           models: [{ id: "fixture-model" }],
         },
         {
-          async syncRegistration() {
-            listed = (await client.integration.list({ location })).data
-          },
-          registered: (id) =>
-            listed.some((item) => item.id === id && item.methods.some((method) => method.type === "key")),
+          configure: (input) => client.provider.configure({ ...input, location }),
           connectKey: ({ integrationID, key, label }) =>
             client.integration.connect.key({ integrationID, key, label, location }),
           activate: (credentialID) => client.credential.activate({ credentialID, location }),

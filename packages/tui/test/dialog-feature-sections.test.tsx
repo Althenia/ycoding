@@ -59,7 +59,7 @@ test("renders all artifact kind sections at once", async () => {
   expect(result.frame).toContain("Plugins")
 })
 
-test("renders project and global skill scopes from registered skill locations", async () => {
+test("renders backend-projected skill scopes independently of frontend roots", async () => {
   const result = await renderDialog(
     () => <DialogSessionSkills sessionID="ses_1" />,
     sessionSkillsClient(
@@ -71,12 +71,14 @@ test("renders project and global skill scopes from registered skill locations", 
         skillInfo({
           id: "project-skill",
           name: "Project skill",
-          location: "/repo/.ycoding/skills/project-skill/SKILL.md",
+          location: "/backend/project/resources/project-skill/SKILL.md",
+          scope: "project",
         }),
         skillInfo({
           id: "global-skill",
           name: "Global skill",
-          location: "/tmp/ycoding/home/.agents/skills/global-skill/SKILL.md",
+          location: "/backend/home/resources/global-skill/SKILL.md",
+          scope: "global",
         }),
       ],
     ),
@@ -203,7 +205,7 @@ function skill(input: {
   }
 }
 
-function skillInfo(input: { id: string; name: string; location: string }) {
+function skillInfo(input: { id: string; name: string; location: string; scope?: "project" | "global" }) {
   return {
     ...input,
     content: "",

@@ -1,8 +1,8 @@
 import { render, TimeToFirstDraw, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { registerYCodingSpinner } from "./component/register-spinner"
-import { Deferred, Effect } from "effect"
+import { Deferred, Effect, Option } from "effect"
 import { YCoding, type Discovery } from "@ycoding-ai/client/v5"
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "./frontend-paths"
 import { ClipboardProvider, useClipboard } from "./context/clipboard"
 import { LogProvider, useLog, type LogSink } from "./context/log"
 import { ExitProvider, useExit } from "./context/exit"
@@ -174,7 +174,7 @@ export type TuiInput = {
 
 export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
   const log = input.log ?? (() => {})
-  const global = yield* Global.Service
+  const frontend = Option.getOrElse(yield* Effect.serviceOption(FrontendPaths.Service), () => FrontendPaths.make())
   const config = Config.resolve(yield* Effect.tryPromise(() => input.config.get()), {
     terminalSuspend: process.platform !== "win32",
   })
@@ -187,6 +187,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
     Effect.catch(() => Effect.tryPromise(() => api.location.get()).pipe(Effect.map((response) => response.directory))),
   )
   const handoff = input.terminalHandoff ? yield* Effect.promise(input.terminalHandoff) : undefined
+  const backend = yield* Effect.tryPromise(() => api.location.get({ location: { directory } }))
   const managed = input.server.service
   const service = managed
     ? {
@@ -224,7 +225,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
           )
         }
         if (process.env.YCODING_DRIVE) {
-          const { Drive } = yield* Effect.promise(() => import("@ycoding-ai/simulation/frontend"))
+          const { Drive } = yield* Effect.promise(() => import("@ycoding-ai/simulation/tui"))
           return yield* Drive.create(options)
         }
         return yield* Effect.acquireRelease(
@@ -291,9 +292,9 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                     <TuiPathsProvider
                       value={{
                         cwd: process.cwd(),
-                        home: global.home,
-                        state: global.state,
-                        worktree: global.data + "/worktree",
+                        home: backend.backendPaths?.home ?? "",
+                        state: frontend.state,
+                        worktree: backend.backendPaths?.worktree ?? "",
                       }}
                     >
                       <TuiLifecycleProvider
@@ -856,17 +857,12 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
         suggested: !connected(),
         slash: { name: "connect" },
         run: () => {
-          const saveEndpoint = (result: Parameters<typeof saveCustomEndpoint>[1]) => {
+          const saveEndpoint = (result: Parameters<typeof saveCustomEndpoint>[0]) => {
             dialog.clear()
             const current = data.location.default()
             const locationRef = { directory: current.directory, workspace: current.workspaceID }
-            void saveCustomEndpoint(Global.Path.config, result, {
-              syncRegistration: () => data.location.integration.sync(),
-              registered: (providerID) =>
-                (data.location.integration.list() ?? []).some(
-                  (integration) =>
-                    integration.id === providerID && integration.methods.some((method) => method.type === "key"),
-                ),
+            void saveCustomEndpoint(result, {
+              configure: (input) => client.api.provider.configure({ ...input, location: locationRef }),
               connectKey: ({ integrationID, key, label }) =>
                 client.api.integration.connect.key({ integrationID, location: locationRef, key, label }),
               activate: (credentialID) => client.api.credential.activate({ credentialID, location: locationRef }),

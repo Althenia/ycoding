@@ -1,4 +1,4 @@
-import { PtyProtocol } from "@ycoding-ai/core/pty/protocol"
+import { PtyProtocol } from "../pty-protocol"
 import type { Pty } from "@ycoding-ai/schema/pty"
 
 export type TerminalEmulator = {

@@ -3,7 +3,7 @@ import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { createSignal, ErrorBoundary, For, Show, type ParentProps } from "solid-js"
 import { getScrollAcceleration } from "../util/scroll"
 import { useClipboard } from "../context/clipboard"
-import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import { InstallationVersion } from "../build-version"
 import { useExit } from "../context/exit"
 import { describeOS, describeTerminal } from "../util/system"
 export function errorSelectionColors(mode?: "dark" | "light") {
@@ -202,9 +202,7 @@ export function ErrorComponent(props: { error: Error; reset: () => void; mode?: 
         <Show when={showFooter()}>
           <box flexDirection="column" alignItems="center" flexShrink={0}>
             <text fg={colors.muted}>
-              {copied()
-                ? "Report copied."
-                : "Copy the report and attach it to a private security advisory or issue."}
+              {copied() ? "Report copied." : "Copy the report and attach it to a private security advisory or issue."}
             </text>
             <text fg={colors.muted}>YCoding {InstallationVersion}</text>
           </box>

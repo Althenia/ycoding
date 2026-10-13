@@ -10,6 +10,16 @@ Mini accepts `sdk: V5Client`, `directory: string`, optional `reconnect(signal: A
 
 Specialized PTY connections and authorized editor connections retain their separate protocols; their control and discovery operations use canonical client methods.
 
+## Frontend ownership
+
+The TUI production graph contains no Core or Server module. Schema, Protocol, Client, the pure TUI Plugin API, and the Core-free Simulation TUI entry own its workspace imports. `bun packages/tui/script/check-boundary.ts` resolves every production entry's static and literal dynamic workspace import transitively and rejects Core or Server reachability.
+
+Frontend version and channel come from the executable's build constants. Status reports the backend version separately from `health.get`. Frontend preference, theme, and UI-history paths use the frontend's XDG roots without initializing backend directories. Backend path labels, project-copy worktree destinations, and Skill scopes use backend projections. The installed Chrome extension directory is derived from the same executable used to launch the frontend.
+
+Custom endpoint saving invokes `provider.configure` for the backend's global configuration target before connecting or activating a credential profile and refreshing provider read models. The TUI never writes provider configuration documents or embeds credential material in that configuration request.
+
+Family economics, activity, and captured changes are local presentation folds over loaded history and resident Session information. Captured changes retain T10's known/incomplete labelling, available root and authorized child patches, and failed-child-only retry. The shared Client correlation codec identifies dispatched inputs without importing runtime orchestration. The canonical captured-change list is all-or-error and cannot provide per-child retry. The three family projections admit Remote Client and Relay roles; the local TUI connection cannot invoke them.
+
 ## Protocol limitations
 
 Global Form reply/cancel and attachment/asset reads require the client/protocol phase-B contract. The TUI calls canonical methods and displays their explicit failures; it does not use another transport. The Rust runtime must serve `location.get` and the Session command, compact, switchAgent, switchModel, skill, skills, resolveSkillConflict, shell, subagent.launch, generate, and move methods before those reads/actions can succeed. File-bearing prompt admission requires runtime attachment resolution. `generate.text` has a registered Location-scoped runtime handler.

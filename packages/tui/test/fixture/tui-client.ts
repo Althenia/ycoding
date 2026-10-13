@@ -177,7 +177,17 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
     if (url.pathname === "/experimental/console") return json({ consoleManagedProviders: [], switchableOrgCount: 0 })
     if (url.pathname === "/experimental/capabilities") return json({ backgroundSubagents: true })
     if (url.pathname === "/path") return json({ home: "", state: "", config: "", worktree, directory })
-    if (url.pathname === "/api/location") return json({ directory, project: { id: "proj_test", directory: worktree } })
+    if (url.pathname === "/api/location")
+      return json({
+        directory,
+        project: { id: "proj_test", directory: worktree },
+        backendPaths: {
+          home: "/tmp/ycoding/home",
+          state: "/tmp/ycoding/backend-state",
+          config: "/tmp/ycoding/backend-config",
+          worktree: "/tmp/ycoding/worktrees",
+        },
+      })
     if (url.pathname === "/api/vcs/branch")
       return json({
         location: { directory, project: { id: "proj_test", directory: worktree } },

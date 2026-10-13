@@ -1,13 +1,11 @@
 import { TextAttributes, type ScrollBoxRenderable } from "@opentui/core"
 import { useRenderer, useTerminalDimensions } from "@opentui/solid"
-import { Global } from "@ycoding-ai/core/global"
 import { createMemo, createResource, createSignal, For, Match, onMount, Show, Switch } from "solid-js"
 import { useClient } from "../context/client"
 import { useDialog } from "../ui/dialog"
 import { DialogSelect, type DialogSelectOption } from "../ui/dialog-select"
 import { useTheme } from "../context/theme"
 import { useConfig } from "../config"
-import { useTuiPaths } from "../context/runtime"
 import { errorMessage } from "../util/error"
 import { getScrollAcceleration } from "../util/scroll"
 import {
@@ -15,7 +13,6 @@ import {
   groupSessionSkills,
   sessionSkillContent,
   sessionSkillLabel,
-  sessionSkillScope,
   type SessionSkill,
 } from "../util/session-skills"
 
@@ -28,7 +25,6 @@ export function DialogSessionSkills(props: DialogSessionSkillsProps) {
   const client = useClient()
   const dialog = useDialog()
   const { theme } = useTheme()
-  const paths = useTuiPaths()
   const [filter, setFilter] = createSignal("")
   const [selected, setSelected] = createSignal<SessionSkill>()
   const [loadError, setLoadError] = createSignal<unknown>()
@@ -53,17 +49,10 @@ export function DialogSessionSkills(props: DialogSessionSkillsProps) {
   })
 
   const scoped = createMemo(() => {
-    const locations = new Map((skillInfo()?.data ?? []).map((skill) => [skill.id, skill.location]))
-    const projectDirectory = skillInfo()?.location.project.directory
-    const globalConfigDirectory = process.env.YCODING_CONFIG_DIR ?? Global.Path.config
+    const scopes = new Map((skillInfo()?.data ?? []).map((skill) => [skill.id, skill.scope]))
     return (skills() ?? []).map((skill) => ({
       ...skill,
-      scope: sessionSkillScope({
-        location: locations.get(skill.id),
-        projectDirectory,
-        home: paths.home,
-        globalConfigDirectory,
-      }),
+      scope: scopes.get(skill.id),
     }))
   })
   const grouped = createMemo(() => groupSessionSkills(filterSessionSkills(scoped(), filter())))
@@ -75,21 +64,19 @@ export function DialogSessionSkills(props: DialogSessionSkillsProps) {
     ].map((skill) => {
       return {
         title: skill.name,
-        titleView:
-          skill.conflicts.length ? (
-            <span style={{ fg: theme.text.feedback.warning.default }}>{skill.name}</span>
-          ) : skill.state === "inactive" ? (
-            <span style={{ fg: theme.text.subdued }}>{skill.name}</span>
-          ) : undefined,
+        titleView: skill.conflicts.length ? (
+          <span style={{ fg: theme.text.feedback.warning.default }}>{skill.name}</span>
+        ) : skill.state === "inactive" ? (
+          <span style={{ fg: theme.text.subdued }}>{skill.name}</span>
+        ) : undefined,
         description: skill.conflicts.length ? `${skill.conflicts.length + 1} sources` : skill.scope,
-        footer:
-          skill.conflicts.length ? (
-            <span style={{ fg: theme.text.feedback.warning.default }}>Needs choice</span>
-          ) : skill.state === "active" ? (
-            <span style={{ fg: theme.text.action.primary.focused }}>Active</span>
-          ) : (
-            <span style={{ fg: theme.text.subdued }}>Inactive</span>
-          ),
+        footer: skill.conflicts.length ? (
+          <span style={{ fg: theme.text.feedback.warning.default }}>Needs choice</span>
+        ) : skill.state === "active" ? (
+          <span style={{ fg: theme.text.action.primary.focused }}>Active</span>
+        ) : (
+          <span style={{ fg: theme.text.subdued }}>Inactive</span>
+        ),
         category: skill.conflicts.length ? "Conflict" : skill.state === "active" ? "Active" : "Available",
         state: skill.conflicts.length ? "failed" : skill.state === "inactive" ? "disabled" : "connected",
         value: skill,
@@ -222,7 +209,12 @@ function SessionSkillDetails(props: { skill: SessionSkill; onBack: () => void })
             <Show when={props.skill.conflicts.length}>
               <text fg={theme.text.subdued}>Conflicts</text>
               <For each={props.skill.conflicts}>
-                {(conflict) => <text fg={theme.text.subdued}>  {conflict.type}: {conflict.name}</text>}
+                {(conflict) => (
+                  <text fg={theme.text.subdued}>
+                    {" "}
+                    {conflict.type}: {conflict.name}
+                  </text>
+                )}
               </For>
             </Show>
             <text fg={theme.text.subdued}>Declarations: {JSON.stringify(props.skill.declarations)}</text>

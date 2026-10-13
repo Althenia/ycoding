@@ -478,6 +478,7 @@ export function scriptedTransport(run: Scenario, events: EventSource) {
             })
           }
           const body = (() => {
+            if (name === "health.get") return { data: value }
             if (name === "session.list") {
               const page = value as { data: Record<string, unknown>[]; cursor: unknown }
               return { data: { ...page, data: page.data.map((session) => sessionInfo(session, String(session.id))) } }

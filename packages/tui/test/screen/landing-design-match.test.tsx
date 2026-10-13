@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test"
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "../../src/frontend-paths"
 import { rm } from "node:fs/promises"
 import path from "path"
 import { json } from "../fixture/tui-client"
@@ -27,9 +27,22 @@ function landingRoute(url: URL) {
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/vcs/branch") return json({ location, data: { current: "main" } })
   if (url.pathname === "/api/agent")
-    return json({ location, data: [{ id: "build", name: "Build", mode: "primary", hidden: false, permissions: [], request: { headers: {}, body: {} } }] })
+    return json({
+      location,
+      data: [
+        {
+          id: "build",
+          name: "Build",
+          mode: "primary",
+          hidden: false,
+          permissions: [],
+          request: { headers: {}, body: {} },
+        },
+      ],
+    })
   if (url.pathname === "/api/model") return json({ location, data: [model] })
-  if (url.pathname === "/api/model/default") return json({ location, data: { selection: { providerID: model.providerID, id: model.id, variant: "max" } } })
+  if (url.pathname === "/api/model/default")
+    return json({ location, data: { selection: { providerID: model.providerID, id: model.id, variant: "max" } } })
   if (url.pathname === "/api/provider") return json({ location, data: [] })
   if (["/api/integration", "/api/command", "/api/skill", "/api/reference"].includes(url.pathname))
     return json({ location, data: [] })
@@ -37,7 +50,7 @@ function landingRoute(url: URL) {
 }
 
 async function selectModelVariant() {
-  const file = path.join(Global.make().state, "model.json")
+  const file = path.join(FrontendPaths.make().state, "model.json")
   const previous = Bun.file(file)
   const content = (await previous.exists()) ? await previous.text() : undefined
   await Bun.write(file, JSON.stringify({ recent: [], favorite: [], variant: { "provider/ling-3.0-flash": "max" } }))
@@ -50,7 +63,7 @@ async function selectModelVariant() {
 async function expectLandingDesign(viewport: typeof DESIGN_VIEWPORT) {
   const restoreModelPreference = await selectModelVariant()
   try {
-      const screen = await renderScreen({ ...viewport, route: landingRoute, settle: "Ling-3.0-flash" })
+    const screen = await renderScreen({ ...viewport, route: landingRoute, settle: "Ling-3.0-flash" })
     try {
       for (let attempt = 0; attempt < 100; attempt++) {
         if (screen.frame().includes("Ling-3.0-flash") && screen.frame().includes("max")) break
@@ -78,7 +91,8 @@ async function expectLandingDesign(viewport: typeof DESIGN_VIEWPORT) {
       for (let attempt = 0; attempt < 100 && !screen.frame().includes("landing draft"); attempt++) await Bun.sleep(20)
       expect(screen.lines().findIndex((line) => line.includes("landing draft"))).toBe(62)
       screen.input.pressKey("u", { ctrl: true })
-      for (let attempt = 0; attempt < 100 && !screen.frame().includes("Message YCoding…"); attempt++) await Bun.sleep(20)
+      for (let attempt = 0; attempt < 100 && !screen.frame().includes("Message YCoding…"); attempt++)
+        await Bun.sleep(20)
       expect(screen.lines().findIndex((line) => line.includes("Message YCoding…"))).toBe(62)
     } finally {
       await screen.dispose()

@@ -22,7 +22,7 @@ import { createEffect, createMemo, onCleanup, onMount, type Accessor } from "sol
 import { createStore, produce } from "solid-js/store"
 import { createSimpleContext } from "./helper"
 import { useConfig } from "../config"
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "../frontend-paths"
 import { DevTools } from "../devtools"
 
 const themePerformance = DevTools.register({ id: "theme-performance", title: "Theme performance" })
@@ -34,7 +34,7 @@ export type ThemeSource = Readonly<{
 
 const themeSource: ThemeSource = {
   async discover() {
-    return discoverThemes(themeDirectories(Global.Path.config, process.cwd()))
+    return discoverThemes(themeDirectories(FrontendPaths.Path.config, process.cwd()))
   },
   subscribeRefresh(refresh) {
     process.on("SIGUSR2", refresh)

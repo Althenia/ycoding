@@ -1,7 +1,8 @@
 import { useData } from "../context/data"
-import { createMemo } from "solid-js"
+import { createMemo, createSignal, onCleanup, onMount } from "solid-js"
+import { useClient } from "../context/client"
 import { DialogSelect } from "../ui/dialog-select"
-import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import { InstallationVersion } from "../build-version"
 import { useKeepAwake } from "../keep-awake"
 import { useRemote } from "../remote-connector"
 import { useTelemetry } from "../context/telemetry"
@@ -20,6 +21,25 @@ export type DialogStatusProps = {
 
 export function DialogStatus(props: DialogStatusProps = {}) {
   const data = useData()
+  const client = useClient()
+  const [backendVersion, setBackendVersion] = createSignal<string>()
+  const [backendState, setBackendState] = createSignal("Loading")
+  let active = true
+  onCleanup(() => {
+    active = false
+  })
+  onMount(() => {
+    void client.api.health
+      .get()
+      .then((health) => {
+        if (!active) return
+        setBackendVersion(health.version)
+        setBackendState("Connected")
+      })
+      .catch(() => {
+        if (active) setBackendState("Unavailable")
+      })
+  })
   const remote = useRemote()
   const keepAwake = useKeepAwake()
   const telemetry = useTelemetry()
@@ -39,9 +59,16 @@ export function DialogStatus(props: DialogStatusProps = {}) {
         {
           title: "YCoding",
           description: props.version ?? InstallationVersion,
-          footer: "Connected",
+          footer: "Frontend",
           category: "Runtime",
           value: "ycoding",
+        },
+        {
+          title: "Backend",
+          description: backendVersion() ?? "unreported",
+          footer: backendState(),
+          category: "Runtime",
+          value: "backend",
         },
         {
           title: "Bun",

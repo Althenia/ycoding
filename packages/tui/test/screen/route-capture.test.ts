@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "../../src/frontend-paths"
 import { mkdir, rm } from "node:fs/promises"
 import path from "node:path"
 import { json, type FetchHandler, sessionSnapshot } from "../fixture/tui-client"
@@ -369,7 +369,7 @@ test("captures composed routes at reference terminal dimensions", async () => {
 }, 120_000)
 
 async function selectModelVariant() {
-  const file = path.join(Global.make().state, "model.json")
+  const file = path.join(FrontendPaths.make().state, "model.json")
   const previous = Bun.file(file)
   const content = (await previous.exists()) ? await previous.text() : undefined
   await Bun.write(file, JSON.stringify({ recent: [], favorite: [], variant: { "anthropic/claude-opus-5": "max" } }))

@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { MouseEvent, TextRenderable, type Renderable } from "@opentui/core"
-import { PtyProtocol } from "@ycoding-ai/core/pty/protocol"
+import { PtyProtocol } from "../src/pty-protocol"
 import { Pty } from "@ycoding-ai/schema/pty"
 import { testRender } from "@opentui/solid"
 import { Schema } from "effect"

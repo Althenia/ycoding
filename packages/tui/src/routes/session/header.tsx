@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, Show, useContext } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
-import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import { InstallationVersion } from "../../build-version"
 import type { ModelDaybreak, SessionMessageAssistant } from "@ycoding-ai/client"
 import { useData } from "../../context/data"
 import { Keymap } from "../../context/keymap"
@@ -61,11 +61,7 @@ const SEGMENT_HINT: Partial<Record<SessionHeaderSegmentKey, { command: string; v
   variant: { command: "variant.cycle", verb: "cycle" },
 }
 
-export function headerModelLabel(input: {
-  providerID?: string
-  modelID?: string
-  name?: string
-}) {
+export function headerModelLabel(input: { providerID?: string; modelID?: string; name?: string }) {
   const id = input.modelID ?? input.name ?? ""
   const resolvedName = input.name ?? Locale.titlecase(id.replaceAll("-", " "))
   return input.providerID ? `${input.providerID}/${resolvedName}` : resolvedName
@@ -102,9 +98,12 @@ export function headerSegments(input: SessionHeaderIdentity & { width: number })
     ["agent", input.agent],
     ["profile", profile],
     ["model", model],
-    ["daybreak", model && input.daybreak
-      ? `Daybreak ${input.daybreak.program === "daybreak_blue" ? "Blue" : "Red"}${input.daybreak.active ? "" : " (inactive)"}`
-      : undefined],
+    [
+      "daybreak",
+      model && input.daybreak
+        ? `Daybreak ${input.daybreak.program === "daybreak_blue" ? "Blue" : "Red"}${input.daybreak.active ? "" : " (inactive)"}`
+        : undefined,
+    ],
     ["variant", input.variant],
   ]
   return ordered.flatMap(([key, label]) => (label ? [{ key, label }] : []))
@@ -133,7 +132,12 @@ function headerYoloLevel(yolo: unknown): number {
   return 0
 }
 
-export function headerStatusLabel(state: SessionHeaderState, width: number, runningShells?: number, now = Date.now()): string {
+export function headerStatusLabel(
+  state: SessionHeaderState,
+  width: number,
+  runningShells?: number,
+  now = Date.now(),
+): string {
   if (state.type === "autonomy") {
     const level = headerYoloLevel(state.yolo)
     let autonomy: string
@@ -146,11 +150,21 @@ export function headerStatusLabel(state: SessionHeaderState, width: number, runn
   if (state.type === "retry-scheduled")
     return `${state.attempt - 1} failed · retry ${state.attempt} · in ${Math.max(0, Math.ceil((state.at - now) / 1_000))}s`
   if (state.type === "retrying") return `retrying · attempt ${state.attempt}`
-  if (state.type === "working" || state.type === "thinking" || state.type === "tool-running" || state.type === "awaiting-input") {
+  if (
+    state.type === "working" ||
+    state.type === "thinking" ||
+    state.type === "tool-running" ||
+    state.type === "awaiting-input"
+  ) {
     // One rule for every surface: the design writes sub-minute working time with a decimal
     // ("4.1s", "8.4s") and anything longer as "2m14s". formatDuration floors to whole seconds, so
     // it alone cannot express the decimal form.
-    const elapsed = state.elapsed === undefined ? undefined : state.elapsed < 60 ? `${state.elapsed.toFixed(1)}s` : formatDuration(state.elapsed)
+    const elapsed =
+      state.elapsed === undefined
+        ? undefined
+        : state.elapsed < 60
+          ? `${state.elapsed.toFixed(1)}s`
+          : formatDuration(state.elapsed)
     if (state.type === "working") return elapsed ? (width < 120 ? elapsed : `cooking ${elapsed}`) : "cooking"
     if (state.type === "thinking") return elapsed ? `thinking · ${elapsed}` : "thinking"
     if (state.type === "tool-running") return elapsed ? `tool running · ${elapsed}` : "tool running"
@@ -178,7 +192,13 @@ export function sessionRetryHeaderState(
 }
 
 export function Header(
-  props: SessionHeaderIdentity & { state: SessionHeaderState; connection?: string; focused?: SessionHeaderSegmentKey; subagent?: boolean; sideChat?: boolean },
+  props: SessionHeaderIdentity & {
+    state: SessionHeaderState
+    connection?: string
+    focused?: SessionHeaderSegmentKey
+    subagent?: boolean
+    sideChat?: boolean
+  },
 ) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
@@ -249,11 +269,10 @@ export function Header(
   const statusColor = createMemo(() => {
     const current = state()
     const active = current.type === "autonomy" ? current.state : current
-    if (current.type === "autonomy") return headerYoloLevel(current.yolo) > 0 ? theme.text.feedback.error.default : theme.text.feedback.success.default
-    if (active.type === "provider-error")
-      return theme.text.feedback.error.default
-    if (active.type === "retrying" || active.type === "retry-scheduled")
-      return theme.text.feedback.warning.default
+    if (current.type === "autonomy")
+      return headerYoloLevel(current.yolo) > 0 ? theme.text.feedback.error.default : theme.text.feedback.success.default
+    if (active.type === "provider-error") return theme.text.feedback.error.default
+    if (active.type === "retrying" || active.type === "retry-scheduled") return theme.text.feedback.warning.default
     if (active.type === "awaiting-input") return theme.text.feedback.warning.default
     if (active.type === "tool-running" || active.type === "waiting") return theme.text.feedback.info.default
     if (active.type === "working" || active.type === "thinking")
@@ -277,7 +296,9 @@ export function Header(
     if (key === "agent") {
       const agent = local?.agent
         .list()
-        .find((item) => item.id === props.agent || item.name === props.agent || Locale.titlecase(item.id) === props.agent)
+        .find(
+          (item) => item.id === props.agent || item.name === props.agent || Locale.titlecase(item.id) === props.agent,
+        )
       if (agent) return local!.agent.color(agent.id)
     }
     // The branch is info by default, so focused segments retain their roles instead of impersonating it.
@@ -309,7 +330,9 @@ export function Header(
           fallback={
             <box flexDirection="row" alignItems="center" gap={1} flexShrink={0}>
               <BrandMark width={2} height={1} />
-              <text fg={theme.text.subdued} wrapMode="none">v{InstallationVersion}</text>
+              <text fg={theme.text.subdued} wrapMode="none">
+                v{InstallationVersion}
+              </text>
             </box>
           }
         >
@@ -338,10 +361,23 @@ export function Header(
               </>
             )}
           </For>
-          <For each={pending()}>{(value) => <span style={{ fg: theme.text.subdued }}> {"·"} {value}</span>}</For>
+          <For each={pending()}>
+            {(value) => (
+              <span style={{ fg: theme.text.subdued }}>
+                {" "}
+                {"·"} {value}
+              </span>
+            )}
+          </For>
         </text>
         <box flexDirection="row" alignItems="center" gap={1} flexShrink={0}>
-          <Show when={!props.connection && ((effectiveOperational().type === "working" && !props.subagent) || effectiveOperational().type === "retrying")}>
+          <Show
+            when={
+              !props.connection &&
+              ((effectiveOperational().type === "working" && !props.subagent) ||
+                effectiveOperational().type === "retrying")
+            }
+          >
             <Spinner color={statusColor()} frames={DOT_TRAIL_FRAMES} interval={160} />
           </Show>
           <text fg={props.connection ? theme.text.subdued : statusColor()} wrapMode="none">
@@ -361,8 +397,7 @@ function resolveIdentity(props: SessionHeaderIdentity): ResolvedSessionHeaderIde
   const session = data.session.get(route.sessionID)
   const sessionModel = session?.model
   if (!session || !sessionModel) return props
-  const model = data.location
-    .model
+  const model = data.location.model
     .list(session.location)
     ?.find((item) => item.providerID === sessionModel.providerID && item.id === sessionModel.id)
   const modelLabel = headerModelLabel({

@@ -909,6 +909,8 @@ YCoding reads the `ycoding` configuration namespace only. Copy required MCP defi
 
 ## Providers and models
 
+The TUI's custom-endpoint dialog sends `provider.configure` to the backend's global configuration target and waits for its registered result before connecting or activating a credential profile. Credential material is excluded from that configuration request. Provider and model read models refresh after configuration and credential settlement; partial failure remains visible instead of being reported as a completed save. The frontend writes its own preferences and UI history under its frontend XDG state root and does not initialize backend data or cache directories to resolve those paths.
+
 Provider entries support:
 
 - `name`;

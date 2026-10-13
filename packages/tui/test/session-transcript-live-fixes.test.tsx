@@ -9,8 +9,7 @@ import type {
   SessionTodoInfo,
   YCodingEvent,
 } from "@ycoding-ai/client"
-import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "../src/frontend-paths"
 import { Effect, FileSystem } from "effect"
 import { createEffect } from "solid-js"
 import type { useData } from "../src/context/data"
@@ -2345,7 +2344,7 @@ async function renderMeasuredScreen(input: {
       args: { sessionID },
       terminalHandoff: async () => ({ renderer: setup.renderer, mode: null, complete: () => {} }),
       log: () => {},
-    }).pipe(Effect.provide(AppNodeBuilder.build(Global.node)), Effect.provide(FileSystem.layerNoop({}))),
+    }).pipe(Effect.provide(FrontendPaths.layer), Effect.provide(FileSystem.layerNoop({}))),
   )
 
   setup.renderer.start()

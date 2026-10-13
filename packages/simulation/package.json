@@ -6,6 +6,7 @@
   "type": "module",
   "license": "AGPL-3.0-only",
   "exports": {
+    "./tui": "./src/frontend/tui.ts",
     "./backend": "./src/backend/index.ts",
     "./backend/*": "./src/backend/*.ts",
     "./frontend": "./src/frontend/simulation.ts",

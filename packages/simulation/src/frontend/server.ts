@@ -1,4 +1,4 @@
-import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import { frontendVersion } from "./build-version"
 import { Effect } from "effect"
 import { SimulationControlServer } from "../control-server"
 import { SimulationProtocol } from "../protocol"
@@ -11,7 +11,7 @@ function handle(harness: Harness, request: SimulationProtocol.Frontend.Request) 
       return SimulationProtocol.Handshake.dispatch(
         {
           role: "ui",
-          server: { name: "ycoding", version: InstallationVersion },
+          server: { name: "ycoding", version: frontendVersion },
           capabilities: SimulationProtocol.Frontend.Capabilities,
         },
         request.params,

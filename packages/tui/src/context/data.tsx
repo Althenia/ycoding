@@ -10,7 +10,6 @@ import type {
   GuardrailRequestListOutput,
   IntegrationInfo,
   LocationRef,
-  LocationGetOutput,
   ModelRef,
   McpResource,
   McpServer,
@@ -37,6 +36,7 @@ import type {
   YCodingEvent,
 } from "@ycoding-ai/client"
 import type { Plugin } from "@ycoding-ai/plugin/tui"
+import type { BackendLocationOutput } from "@ycoding-ai/client/v5"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { createSimpleContext } from "./helper"
 import { useClient } from "./client"
@@ -159,7 +159,7 @@ type SubagentPage = SessionOrchestrationPage & {
 }
 
 type LocationData = {
-  info?: LocationGetOutput
+  info?: BackendLocationOutput
   agent?: AgentInfo[]
   command?: CommandInfo[]
   integration?: IntegrationInfo[]

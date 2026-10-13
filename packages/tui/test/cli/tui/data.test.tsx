@@ -7,8 +7,7 @@ import type {
   YCodingEvent,
   SessionOrchestrationTask,
 } from "@ycoding-ai/client"
-import { SessionMessage } from "@ycoding-ai/core/session/message"
-import { EventRuntime } from "@ycoding-ai/core/event"
+import { Event } from "@ycoding-ai/schema/event"
 import { createEffect, onMount, type ParentProps } from "solid-js"
 import { ClientProvider, useClient } from "../../../src/context/client"
 import { DataProvider as DataProviderBase, useData } from "../../../src/context/data"
@@ -1160,7 +1159,7 @@ test("removes committed revert messages from local state", async () => {
     await data.session.message.sync(sessionID)
     for (const [seq, inputID] of ["msg_001", "msg_002", "msg_003"].entries()) {
       emitEvent(events, {
-        id: EventRuntime.ID.create(),
+        id: Event.ID.make(`evt_${crypto.randomUUID()}`),
         created: seq,
         type: "session.input.admitted",
         durable: durable(sessionID, seq),
@@ -1174,7 +1173,7 @@ test("removes committed revert messages from local state", async () => {
     await wait(() => data.session.message.list(sessionID).length === 3)
 
     emitEvent(events, {
-      id: EventRuntime.ID.create(),
+      id: Event.ID.make(`evt_${crypto.randomUUID()}`),
       created: 3,
       type: "session.revert.committed",
       durable: durable(sessionID, 3),
@@ -3211,7 +3210,7 @@ test("skips initial instruction state and projects later updates with their mess
     await wait(() => sync.session.message.list("session-1")?.some((message) => message.time.created === 1))
     expect(sync.session.message.list("session-1")).toHaveLength(1)
     expect(sync.session.message.list("session-1")?.[0]).toMatchObject({
-      id: SessionMessage.ID.fromEvent(EventRuntime.ID.make("evt_instructions_2")),
+      id: "msg_instructions_2",
       type: "system",
       text: "Instructions updated: core/date",
       time: { created: 1 },
@@ -3232,7 +3231,7 @@ test("places an instruction notice before a resident assistant and keeps it ther
     time: { created: 8 },
   }
   const notice = {
-    id: SessionMessage.ID.fromEvent(EventRuntime.ID.make("evt_instruction_date")),
+    id: "msg_instruction_date",
     type: "system" as const,
     text: "Instructions updated: core/date",
     time: { created: 3 },

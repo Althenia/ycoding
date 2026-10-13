@@ -1,5 +1,5 @@
 import { InputRenderable } from "@opentui/core"
-import { Slug } from "@ycoding-ai/core/util/slug"
+import { Slug } from "../util/slug"
 import { createSignal, onMount } from "solid-js"
 import { Keymap } from "../context/keymap"
 import { useTheme } from "../context/theme"
@@ -63,7 +63,9 @@ export function DialogProjectCopyName(props: { value?: string; onConfirm: (name:
         />
       </box>
       <box paddingTop={2} paddingLeft={6} paddingRight={4}>
-        <text fg={theme.text.default}>Enter <span style={{ fg: theme.text.subdued }}>create</span></text>
+        <text fg={theme.text.default}>
+          Enter <span style={{ fg: theme.text.subdued }}>create</span>
+        </text>
       </box>
     </box>
   )

@@ -10,11 +10,13 @@ import { formatCacheDiagnostics, formatDiagnosticsModel } from "../../util/cache
 import { Keymap } from "../../context/keymap"
 
 type SubagentPagination = {
-  page(parentID: string): {
-    readonly data: ReadonlyArray<SessionOrchestrationTask>
-    readonly offset: number
-    readonly position: "top" | "older"
-  } | undefined
+  page(parentID: string):
+    | {
+        readonly data: ReadonlyArray<SessionOrchestrationTask>
+        readonly offset: number
+        readonly position: "top" | "older"
+      }
+    | undefined
   navigation(parentID: string): { readonly older: boolean; readonly newer: boolean }
   sync(parentID: string): Promise<void>
   loadOlder(parentID: string): Promise<void>
@@ -26,7 +28,8 @@ export async function hydrateSubagentPage(input: {
   parentID: string
   currentSessionID: string
 }) {
-  const containsCurrent = () => input.pagination.page(input.parentID)?.data.some((task) => task.sessionID === input.currentSessionID)
+  const containsCurrent = () =>
+    input.pagination.page(input.parentID)?.data.some((task) => task.sessionID === input.currentSessionID)
   if (containsCurrent()) return input.pagination.page(input.parentID)
   await input.pagination.sync(input.parentID)
   // The bounded API has no child-ID cursor. Walk only while opening or navigating this one child;
@@ -91,7 +94,13 @@ export type SubagentEconomics = {
 }
 
 function totalTokens(session: Pick<SessionInfo, "tokens">) {
-  return session.tokens.input + session.tokens.output + session.tokens.reasoning + session.tokens.cache.read + session.tokens.cache.write
+  return (
+    session.tokens.input +
+    session.tokens.output +
+    session.tokens.reasoning +
+    session.tokens.cache.read +
+    session.tokens.cache.write
+  )
 }
 
 export function subagentEconomics(
@@ -101,7 +110,8 @@ export function subagentEconomics(
 ): SubagentEconomics | undefined {
   if (!session) return undefined
   const tokens = totalTokens(session)
-  const cacheHit = diagnostics?.cache.hitRatio === undefined ? undefined : `${Math.round(diagnostics.cache.hitRatio * 100)}%`
+  const cacheHit =
+    diagnostics?.cache.hitRatio === undefined ? undefined : `${Math.round(diagnostics.cache.hitRatio * 100)}%`
   const hit = cacheHit === undefined ? undefined : `${cacheHit} hit`
   const context = diagnostics
     ? `${compactNumber(diagnostics.context.total)} / ${diagnostics.context.limit === undefined ? "unreported" : compactNumber(diagnostics.context.limit)}${diagnostics.context.percent === undefined ? "" : ` · ${diagnostics.context.percent}%`}`
@@ -110,7 +120,9 @@ export function subagentEconomics(
   const writes = diagnostics?.cache.writeReported ? number(diagnostics.tokens.cacheWrite) : undefined
   const spent = money.format(session.cost)
   const summary = [
-    tokens > 0 ? `${Locale.number(tokens)}${diagnostics?.context.percent === undefined ? "" : ` (${diagnostics.context.percent}%)`}` : undefined,
+    tokens > 0
+      ? `${Locale.number(tokens)}${diagnostics?.context.percent === undefined ? "" : ` (${diagnostics.context.percent}%)`}`
+      : undefined,
     hit,
     spent,
   ]
@@ -191,7 +203,7 @@ export function SubagentFooterContent(props: {
   const compact = createMemo(() => dimensions().width < 60)
   const siblings = createMemo(() => props.siblings ?? [])
   const currentTask = createMemo(() => siblings().find((task) => task.sessionID === props.currentSessionID))
-  const borderColor = createMemo(() => props.blocked ? theme.text.feedback.warning.default : theme.border.default)
+  const borderColor = createMemo(() => (props.blocked ? theme.text.feedback.warning.default : theme.border.default))
 
   return (
     <box flexShrink={0}>
@@ -221,12 +233,22 @@ export function SubagentFooterContent(props: {
               )}
             </Show>
             <Show when={props.economics?.summary}>
-              {(summary) => <text fg={theme.text.default} wrapMode="none">{summary()}</text>}
+              {(summary) => (
+                <text fg={theme.text.default} wrapMode="none">
+                  {summary()}
+                </text>
+              )}
             </Show>
           </box>
           <Show when={props.economics?.strip.length}>
             <box flexDirection="row" flexWrap="wrap" gap={1} flexShrink={1} minWidth={0}>
-              <For each={props.economics?.strip}>{(item) => <text fg={theme.text.subdued} wrapMode="none">{item}</text>}</For>
+              <For each={props.economics?.strip}>
+                {(item) => (
+                  <text fg={theme.text.subdued} wrapMode="none">
+                    {item}
+                  </text>
+                )}
+              </For>
             </box>
           </Show>
           <Show when={currentTask()?.question?.text}>
@@ -238,10 +260,7 @@ export function SubagentFooterContent(props: {
           </Show>
           <Show when={siblings().length > 0}>
             <box flexDirection="row" flexWrap="wrap" gap={1}>
-              <box
-                onMouseUp={() => keymap.dispatch("session.parent")}
-                backgroundColor={theme.background.default}
-              >
+              <box onMouseUp={() => keymap.dispatch("session.parent")} backgroundColor={theme.background.default}>
                 <text fg={theme.text.action.primary.default} wrapMode="none">
                   ↑ {props.parentTitle ?? "Parent"}
                 </text>
@@ -252,9 +271,7 @@ export function SubagentFooterContent(props: {
                   return (
                     <box
                       onMouseUp={() => props.onNavigate?.(task.sessionID)}
-                      backgroundColor={
-                        attached() ? theme.background.action.primary.focused : theme.background.default
-                      }
+                      backgroundColor={attached() ? theme.background.action.primary.focused : theme.background.default}
                     >
                       <text
                         fg={attached() ? theme.text.action.primary.focused : theme.text.feedback.info.default}
@@ -295,12 +312,12 @@ export function SubagentFooterContent(props: {
               onMouseOver={() => setHover("prev")}
               onMouseOut={() => setHover(null)}
               onMouseUp={() => keymap.dispatch("session.child.previous")}
-              backgroundColor={
-                hover() === "prev" ? theme.background.action.primary.hovered : theme.background.default
-              }
+              backgroundColor={hover() === "prev" ? theme.background.action.primary.hovered : theme.background.default}
             >
               <text fg={theme.text.default}>
-                {compact() ? "←" : `${siblings().findIndex((task) => task.sessionID === props.currentSessionID) + 1}/${siblings().length} ←`}{" "}
+                {compact()
+                  ? "←"
+                  : `${siblings().findIndex((task) => task.sessionID === props.currentSessionID) + 1}/${siblings().length} ←`}{" "}
                 <span style={{ fg: theme.text.subdued }}>{shortcuts.get("session.child.previous")}</span>
               </text>
             </box>
@@ -308,9 +325,7 @@ export function SubagentFooterContent(props: {
               onMouseOver={() => setHover("next")}
               onMouseOut={() => setHover(null)}
               onMouseUp={() => keymap.dispatch("session.child.next")}
-              backgroundColor={
-                hover() === "next" ? theme.background.action.primary.hovered : theme.background.default
-              }
+              backgroundColor={hover() === "next" ? theme.background.action.primary.hovered : theme.background.default}
             >
               <text fg={theme.text.default}>
                 {compact() ? "→" : "→"}{" "}
@@ -350,9 +365,13 @@ export function SubagentFooter(props: { reviewing?: boolean }) {
     })
   })
 
-  const economics = createMemo(() => subagentEconomics(session(), data.session.diagnostics.get(route.sessionID), parent()?.title))
+  const economics = createMemo(() =>
+    subagentEconomics(session(), data.session.diagnostics.get(route.sessionID), parent()?.title),
+  )
   const currentTask = createMemo(() => siblings().find((task) => task.sessionID === route.sessionID))
-  const current = createMemo(() => (page()?.offset ?? 0) + siblings().findIndex((task) => task.sessionID === route.sessionID) + 1)
+  const current = createMemo(
+    () => (page()?.offset ?? 0) + siblings().findIndex((task) => task.sessionID === route.sessionID) + 1,
+  )
   const total = createMemo(() => page()?.summary.total ?? siblings().length)
   const agent = createMemo(() => currentTask()?.agent ?? "subagent")
   const context = createMemo(() => {
@@ -370,16 +389,24 @@ export function SubagentFooter(props: { reviewing?: boolean }) {
         fallback={
           <>
             <box width={21} flexShrink={0}>
-              <text fg={theme.text.default} wrapMode="none">{agent()} ({current()} of {total()})</text>
+              <text fg={theme.text.default} wrapMode="none">
+                {agent()} ({current()} of {total()})
+              </text>
             </box>
             <box width={13} flexShrink={0}>
-              <text fg={theme.text.subdued} wrapMode="none">{context()}</text>
+              <text fg={theme.text.subdued} wrapMode="none">
+                {context()}
+              </text>
             </box>
             <box width={10} flexShrink={0}>
-              <text fg={theme.text.subdued} wrapMode="none">{economics()?.cacheHit} hit</text>
+              <text fg={theme.text.subdued} wrapMode="none">
+                {economics()?.cacheHit} hit
+              </text>
             </box>
             <box flexShrink={0}>
-              <text fg={theme.text.subdued} wrapMode="none">{economics()?.spent} · durable · resumable</text>
+              <text fg={theme.text.subdued} wrapMode="none">
+                {economics()?.spent} · durable · resumable
+              </text>
             </box>
             <box flexGrow={1} />
             <text
@@ -407,18 +434,28 @@ export function SubagentFooter(props: { reviewing?: boolean }) {
       >
         <>
           <box width={23} flexShrink={0}>
-            <text fg={theme.text.default} wrapMode="none">{agent()} ({current()} of {total()})</text>
+            <text fg={theme.text.default} wrapMode="none">
+              {agent()} ({current()} of {total()})
+            </text>
           </box>
           <box width={14} flexShrink={0}>
-            <text fg={theme.text.subdued} wrapMode="none">{context()}</text>
+            <text fg={theme.text.subdued} wrapMode="none">
+              {context()}
+            </text>
           </box>
           <box width={10} flexShrink={0}>
-            <text fg={theme.text.subdued} wrapMode="none">{economics()?.cacheHit} hit</text>
+            <text fg={theme.text.subdued} wrapMode="none">
+              {economics()?.cacheHit} hit
+            </text>
           </box>
           <box width={8} flexShrink={0}>
-            <text fg={theme.text.subdued} wrapMode="none">{economics()?.spent}</text>
+            <text fg={theme.text.subdued} wrapMode="none">
+              {economics()?.spent}
+            </text>
           </box>
-          <text fg={theme.text.feedback.warning.default} wrapMode="none">awaiting input</text>
+          <text fg={theme.text.feedback.warning.default} wrapMode="none">
+            awaiting input
+          </text>
           <box flexGrow={1} />
           <text fg={theme.text.action.primary.default} wrapMode="none">
             {props.reviewing ? "Review pending" : "Enter answer"}
