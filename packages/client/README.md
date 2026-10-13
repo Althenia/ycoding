@@ -18,6 +18,8 @@ Location operations use an explicit request selector, directory/workspace header
 
 `event.subscribe()` delivers a client-local `server.connected` notification derived from Ready before decoded `PublicEvent` values. The wire carries no `server.connected` event. `session.log()` delivers decoded `SessionLogItem` values and succeeds only after StreamEnd; disconnect is incomplete. Iterator return releases local interest and sends `event.unsubscribe`. Queue exhaustion and source-epoch changes fail explicitly, requiring canonical reconciliation. Snapshot watermark, paging, and projection reconciliation remain consumer-owned.
 
+Result decoding preserves HTTP JSON absence: an `UndefinedOr` wire `none` branch is `undefined` and its containing object field is omitted; a `NullOr` `clear` branch is `null`. Missing optional fields and unwrapped missing result-path fields remain absent or `undefined`; present empty strings, collections and objects, `false`, zero, and explicit null values retain their values.
+
 Raw asset methods require terminal typed metadata from the connection API; missing metadata rejects as unsupported rather than fabricating MIME or content. Attachments convert completed bytes into the existing client result, while file reads return raw bytes. Specialized PTY and browser bridge protocols remain outside the application socket.
 
 Run `bun run generate:v5` to derive method bindings, result-envelope selection, and lossless enum associations from the operation manifest and current Promise types. The binary runtime imports neither the HTTP implementation nor Core/Server. Both transports remain independently selected entrypoints during the coordinated client cutover; the binary entrypoint has no HTTP/SSE fallback.

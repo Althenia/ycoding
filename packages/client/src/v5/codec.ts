@@ -202,17 +202,18 @@ function fromMessage(schema: Schema, value: unknown): unknown {
   }
   if (schema.oneofs.length === 1 && schema.fields.every((field) => field.oneof)) {
     const selected = record(input[schema.oneofs[0].localName])
+    if (selected.case === "none") return undefined
     if (selected.case === "clear") return null
     const field = schema.fields.find((field) => field.localName === selected.case)
     if (!field) throw new Error("Missing domain union branch")
     return fromField(field, selected.value)
   }
   return Object.fromEntries(
-    schema.fields.flatMap((field) =>
-      Object.hasOwn(input, field.localName) && input[field.localName] !== undefined
-        ? [[field.name, fromField(field, input[field.localName])]]
-        : [],
-    ),
+    schema.fields.flatMap((field) => {
+      if (!Object.hasOwn(input, field.localName) || input[field.localName] === undefined) return []
+      const decoded = fromField(field, input[field.localName])
+      return decoded === undefined ? [] : [[field.name, decoded]]
+    }),
   )
 }
 
