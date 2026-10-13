@@ -309,10 +309,14 @@ fn scan<'a>(
             return Err(WireError("asset length"));
         }
     }
-    if name == "ycoding.v5.Credit"
-        && (node.integer(1)? == v5::LedgerClass::Tiny as u64 || node.integer(2)? == 0)
-    {
-        return Err(WireError("credit grant"));
+    if name == "ycoding.v5.Credit" {
+        if node.fields.contains_key(&3) {
+            if node.integer(1)? != v5::LedgerClass::Bulk as u64 || node.text(3)?.is_empty() {
+                return Err(WireError("HTTP credit grant"));
+            }
+        } else if node.integer(1)? == v5::LedgerClass::Tiny as u64 || node.integer(2)? == 0 {
+            return Err(WireError("credit grant"));
+        }
     }
     if name == "ycoding.v5.LosslessString" {
         units(&node)?;

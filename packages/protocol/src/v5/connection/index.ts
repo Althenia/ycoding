@@ -34,6 +34,7 @@ import type {
   Result,
   Settlement,
   BulkStart,
+  BulkPiece,
   EventBatch,
   EventRecord,
   AssetMetadataResult,
@@ -82,6 +83,8 @@ export type Decision =
   | { type: "assetMetadata"; requestID: string; metadata: AssetMetadataResult; frame: Frame; ordinal: bigint }
   | { type: "eventBatchReleased"; ticket: bigint; consumed: boolean }
   | { type: "relayInterestRejected"; sessionID: string }
+  | { type: "httpBulkStart"; start: BulkStart; metadata?: AssetMetadataResult }
+  | { type: "httpBulkReleased"; transferID: string; through: bigint; consumed: boolean }
   | {
       type: "bulkComplete"
       transferID: string
@@ -123,6 +126,7 @@ type Pending = {
   asset?: AssetMetadataResult
   assetCount?: bigint
   assetCharge?: number
+  http?: boolean
 }
 export type Prepared = { frame: Frame; reservedBytes: number }
 export type Incoming = { readonly byteLength: number; readonly authority: number }
@@ -166,6 +170,7 @@ export class Connection {
   private authority = 0
   private transfers = new Map<string, Transfer>()
   private outgoingTransfers = new Map<string, Transfer>()
+  private httpSending = new Map<string, { through: bigint; handed: { index: bigint; bytes: number; time: number }[] }>()
   private subscriptions = new Map<string, Subscription>()
   private sendingSubscriptions = new Map<string, Subscription>()
   private dropped = { results: 0, transfers: 0, events: 0, oversizedInvalidations: 0 }
@@ -228,12 +233,22 @@ export class Connection {
   get state() {
     return this.phase
   }
+  get connectionEpoch() {
+    return this.epoch
+  }
+  get httpHandedBytes() {
+    return [...this.httpSending.values()]
+      .flatMap((owner) => owner.handed)
+      .reduce((total, piece) => total + piece.bytes, 0)
+  }
   get counters() {
     return { ...this.dropped, retainedBytes: this.retainedBytes }
   }
   get retainedBytes() {
     return (
       this.assetMetadataRetainedBytes +
+      this.httpHandedBytes +
+      this.httpSending.size * 256 +
       this.relayInterestRetainedBytes +
       [...this.incoming].reduce((total, token) => total + token.byteLength, 0) +
       this.queue.reduce((total, record) => total + record.bytes, 0) +
@@ -482,6 +497,171 @@ export class Connection {
     if (!transfer?.complete) throw new Error("bulk owner")
     this.reservation.release((transfer.data?.length ?? 0) + (transfer.assetCharge ?? 0))
     this.transfers.delete(transferID)
+  }
+
+  expectHttpBulk(requestID: string) {
+    const pending = this.pending.get(requestID)
+    if (
+      this.options.role !== PeerRole.REMOTE_CLIENT ||
+      !pending ||
+      pending.http ||
+      ![Streaming.TYPED_BULK, Streaming.ASSET_BULK].includes(pending.operation.streaming) ||
+      [...this.transfers.values()].some((transfer) => transfer.start.requestId === requestID)
+    )
+      throw new Error("HTTP request owner")
+    pending.http = true
+  }
+
+  beginHttpBody(transferID: string, epoch: string, now: number): Decision[] {
+    const decisions = this.check(now)
+    if (this.phase === "closed") return decisions
+    const transfer = this.transfers.get(transferID)
+    if (!transfer?.http || transfer.http.bound || epoch !== this.epoch) throw new Error("HTTP body owner")
+    transfer.http.bound = true
+    return transfer.start.byteCount === 0n
+      ? decisions
+      : [...decisions, ...this.consume(LedgerClass.NORMAL, transfer.http.ordinal, now)]
+  }
+
+  receiveHttpPiece(transferID: string, data: Uint8Array, now: number): Decision[] {
+    const decisions = this.check(now)
+    if (this.phase === "closed") return decisions
+    const transfer = this.transfers.get(transferID)
+    if (
+      !transfer?.http?.bound ||
+      !transfer.data ||
+      transfer.complete ||
+      transfer.index >= transfer.start.chunkCount ||
+      data.length !==
+        Number(
+          transfer.start.byteCount - transfer.offset < 65536n ? transfer.start.byteCount - transfer.offset : 65536n,
+        )
+    )
+      return this.close(FailureCategory.MALFORMED)
+    transfer.data.set(data, Number(transfer.offset))
+    transfer.offset += BigInt(data.length)
+    transfer.index++
+    if (transfer.offset === transfer.start.byteCount) return decisions
+    return [...decisions, ...this.httpCredit(transfer, now)]
+  }
+
+  completeHttpBody(transferID: string, now: number): Decision[] {
+    const decisions = this.check(now)
+    if (this.phase === "closed") return decisions
+    const transfer = this.transfers.get(transferID)
+    if (!transfer?.http?.bound || transfer.http.finished || transfer.offset !== transfer.start.byteCount)
+      throw new Error("HTTP completion owner")
+    transfer.http.finished = true
+    return [
+      ...decisions,
+      ...(transfer.start.byteCount === 0n
+        ? this.consume(LedgerClass.NORMAL, transfer.http.ordinal, now)
+        : this.httpCredit(transfer, now)),
+    ]
+  }
+
+  private httpCredit(transfer: Transfer, now: number) {
+    return this.queueFrame(
+      {
+        case: "control",
+        value: create(ControlSchema, {
+          kind: {
+            case: "credit",
+            value: create(CreditSchema, {
+              ledger: LedgerClass.BULK,
+              transferId: transfer.start.transferId,
+              consumedThrough: BigInt(transfer.index),
+            }),
+          },
+        }),
+      },
+      this.budgets.tinyFrameBytes,
+      now,
+      false,
+      true,
+    )
+  }
+
+  attachHttpBulk(transferID: string, now: number): Decision[] {
+    const decisions = this.check(now)
+    if (this.phase === "closed") return decisions
+    const transfer = this.outgoingTransfers.get(transferID)
+    if (
+      this.options.role !== PeerRole.RELAY ||
+      this.options.peer !== PeerRole.REMOTE_CLIENT ||
+      !transfer ||
+      transfer.startHanded === undefined ||
+      !this.ledgers.get(LedgerClass.NORMAL)!.sent.some((record) => record.ordinal === transfer.startHanded) ||
+      transfer.complete ||
+      transfer.index !== 0 ||
+      this.httpSending.has(transferID) ||
+      transfer.start.chunkCount !== Number((transfer.start.byteCount + 65535n) / 65536n)
+    )
+      throw new Error("HTTP sender owner")
+    if (!this.reservation.reserve(256)) return this.close(FailureCategory.LIMIT)
+    this.httpSending.set(transferID, { through: 0n, handed: [] })
+    return decisions
+  }
+
+  get httpWindowAvailable() {
+    return Math.min(
+      this.sendWindows.get(LedgerClass.BULK)! - this.ledgers.get(LedgerClass.BULK)!.handedBytes - this.httpHandedBytes,
+      this.options.peer === PeerRole.REMOTE_CLIENT ? this.budgets.relayPeerBytes - this.eventBulkBytes() : Infinity,
+    )
+  }
+
+  handoffHttpPiece(piece: BulkPiece, now: number) {
+    const decisions = this.check(now)
+    if (this.phase === "closed") return { accepted: false, decisions }
+    const transfer = this.outgoingTransfers.get(piece.transferId)
+    const owner = this.httpSending.get(piece.transferId)
+    if (
+      !transfer ||
+      !owner ||
+      transfer.complete ||
+      piece.index !== transfer.index ||
+      piece.offset !== transfer.offset ||
+      piece.index >= transfer.start.chunkCount ||
+      piece.data.length !==
+        Number(
+          transfer.start.byteCount - transfer.offset < 65536n ? transfer.start.byteCount - transfer.offset : 65536n,
+        )
+    )
+      return { accepted: false, decisions: this.close(FailureCategory.MALFORMED) }
+    if (
+      piece.data.length > this.httpWindowAvailable ||
+      (this.prepared && this.classify(this.prepared.record.frame) === LedgerClass.BULK)
+    )
+      return { accepted: false, decisions }
+    if (!this.reservation.reserve(piece.data.length))
+      return { accepted: false, decisions: this.close(FailureCategory.LIMIT) }
+    transfer.index++
+    transfer.offset += BigInt(piece.data.length)
+    owner.handed.push({ index: BigInt(transfer.index), bytes: piece.data.length, time: now })
+    return { accepted: true, decisions }
+  }
+
+  httpBulkConsumed(transferID: string) {
+    const owner = this.httpSending.get(transferID)
+    const transfer = this.outgoingTransfers.get(transferID)
+    return (
+      !!owner &&
+      !!transfer &&
+      transfer.startHanded !== undefined &&
+      !this.ledgers.get(LedgerClass.NORMAL)!.sent.some((record) => record.ordinal === transfer.startHanded) &&
+      owner.handed.length === 0 &&
+      owner.through === BigInt(transfer.index)
+    )
+  }
+
+  private releaseHttpBulk(transferID: string): Decision[] {
+    const owner = this.httpSending.get(transferID)
+    if (!owner) return []
+    this.reservation.release(256 + owner.handed.reduce((total, piece) => total + piece.bytes, 0))
+    this.httpSending.delete(transferID)
+    return [
+      { type: "httpBulkReleased", transferID, through: owner.handed.at(-1)?.index ?? owner.through, consumed: false },
+    ]
   }
 
   start(now: number): Decision[] {
@@ -947,7 +1127,7 @@ export class Connection {
     this.removeQueued((frame) => streamKey(frame) === transferID)
     this.outgoingTransfers.delete(transferID)
     this.inbound.delete(outgoing.start.requestId)
-    return [...decisions, { type: "transferCancelled", transferID }]
+    return [...decisions, ...this.releaseHttpBulk(transferID), { type: "transferCancelled", transferID }]
   }
 
   prepareHandoff(now = this.now): Prepared | undefined {
@@ -1034,10 +1214,13 @@ export class Connection {
         this.awaitingSubscription.set(`sent:${token.frame.body.value.requestId}`, pending)
       if (token.frame.body.value.outcome.case !== "assetMetadata") this.inbound.delete(token.frame.body.value.requestId)
     }
+    if (token.frame.body.case === "bulkStart")
+      this.outgoingTransfers.get(token.frame.body.value.transferId)!.startHanded = token.frame.deliveryOrdinal
     if (token.frame.body.case === "bulkEnd") {
       const transfer = this.outgoingTransfers.get(token.frame.body.value.transferId)!
       this.inbound.delete(transfer.start.requestId)
       this.outgoingTransfers.delete(transfer.start.transferId)
+      this.releaseHttpBulk(transfer.start.transferId)
     }
     if (token.frame.body.case === "streamEnd") this.sendingSubscriptions.delete(token.frame.body.value.subscriptionId)
     this.prepared = undefined
@@ -1063,6 +1246,12 @@ export class Connection {
     if (now >= this.deadline) return this.close(FailureCategory.INCOMPATIBLE)
     if ([...this.ledgers.values()].some((ledger) => ledger.stalled(now, this.budgets)))
       return this.close(FailureCategory.LIMIT)
+    if (
+      [...this.httpSending.values()].some(
+        (owner) => owner.handed[0] && now - owner.handed[0].time >= this.budgets.deliveryTimeoutMs,
+      )
+    )
+      return this.close(FailureCategory.LIMIT)
     return []
   }
 
@@ -1076,6 +1265,7 @@ export class Connection {
     ]
       .filter((record) => record.forwarded)
       .map((record): Decision => ({ type: "eventBatchReleased", ticket: record.ticket!, consumed: false }))
+    const httpReleased = [...this.httpSending.keys()].flatMap((id) => this.releaseHttpBulk(id))
     this.reservation.release(this.assetMetadataRetainedBytes + this.relayInterestRetainedBytes)
     this.phase = "closed"
     this.incoming.forEach((token) => this.reservation.release(token.byteLength))
@@ -1107,7 +1297,7 @@ export class Connection {
     this.subscriptions.forEach((subscription) => this.clearHydration(subscription))
     this.subscriptions.clear()
     this.sendingSubscriptions.clear()
-    return [...forwarded, ...settled, { type: "closed", code, category }]
+    return [...httpReleased, ...forwarded, ...settled, { type: "closed", code, category }]
   }
 
   takeDecisions() {
@@ -1301,14 +1491,37 @@ export class Connection {
     if (control.case === "credit") {
       if (control.value.ledger === LedgerClass.TINY || !this.ledgers.has(control.value.ledger))
         return this.close(FailureCategory.MALFORMED)
-      const ledger = this.ledgers.get(control.value.ledger)!
-      const tickets = ledger.sent
-        .filter((record) => record.forwarded && record.ordinal <= control.value.consumedThrough && !record.consumed)
-        .map((record) => record.ticket!)
-      const freed = ledger.credit(control.value.consumedThrough, false)
-      if (freed === undefined) return this.close(FailureCategory.MALFORMED)
-      this.reservation.release(freed)
-      forwarded.push(...tickets.map((ticket): Decision => ({ type: "eventBatchReleased", ticket, consumed: true })))
+      if (isFieldSet(control.value, CreditSchema.fields.find((field) => field.localName === "transferId")!)) {
+        const owner = this.httpSending.get(control.value.transferId)
+        if (
+          control.value.ledger !== LedgerClass.BULK ||
+          !owner ||
+          control.value.consumedThrough <= owner.through ||
+          !owner.handed.some((piece) => piece.index === control.value.consumedThrough)
+        )
+          return this.close(FailureCategory.MALFORMED)
+        const released = owner.handed
+          .filter((piece) => piece.index <= control.value.consumedThrough)
+          .reduce((total, piece) => total + piece.bytes, 0)
+        owner.handed = owner.handed.filter((piece) => piece.index > control.value.consumedThrough)
+        owner.through = control.value.consumedThrough
+        this.reservation.release(released)
+        forwarded.push({
+          type: "httpBulkReleased",
+          transferID: control.value.transferId,
+          through: owner.through,
+          consumed: true,
+        })
+      } else {
+        const ledger = this.ledgers.get(control.value.ledger)!
+        const tickets = ledger.sent
+          .filter((record) => record.forwarded && record.ordinal <= control.value.consumedThrough && !record.consumed)
+          .map((record) => record.ticket!)
+        const freed = ledger.credit(control.value.consumedThrough, false)
+        if (freed === undefined) return this.close(FailureCategory.MALFORMED)
+        this.reservation.release(freed)
+        forwarded.push(...tickets.map((ticket): Decision => ({ type: "eventBatchReleased", ticket, consumed: true })))
+      }
     }
     if (control.case === "ping" && control.value.id > this.peerPing) {
       this.peerPing = control.value.id
@@ -1338,6 +1551,7 @@ export class Connection {
           if (transfer.start.requestId !== requestID) return
           this.removeQueued((frame) => streamKey(frame) === transferID)
           this.outgoingTransfers.delete(transferID)
+          cancellations.push(...this.releaseHttpBulk(transferID))
         })
         cancellations.push({
           type: "cancelled",
@@ -1352,6 +1566,7 @@ export class Connection {
       if (transfer) {
         this.removeQueued((frame) => streamKey(frame) === transferID)
         this.outgoingTransfers.delete(transferID)
+        cancellations.push(...this.releaseHttpBulk(transferID))
         this.inbound.delete(transfer.start.requestId)
         cancellations.push({ type: "transferCancelled", transferID })
       }
@@ -1490,6 +1705,7 @@ export class Connection {
     const transfer = this.outgoingTransfers.get(frame.body.value.transferId)
     if (!transfer || transfer.complete) return FailureCategory.MALFORMED
     if (frame.body.case === "bulkPiece") {
+      if (this.httpSending.has(frame.body.value.transferId)) return FailureCategory.DIRECTION
       const piece = frame.body.value
       if (
         piece.index !== transfer.index ||
@@ -1510,6 +1726,7 @@ export class Connection {
     }
     if (
       frame.body.value.byteCount !== transfer.offset ||
+      (this.httpSending.has(frame.body.value.transferId) && !this.httpBulkConsumed(frame.body.value.transferId)) ||
       (frame.body.value.outcome.case === "success" &&
         (transfer.index !== transfer.start.chunkCount || transfer.offset !== transfer.start.byteCount))
     )
@@ -1544,8 +1761,14 @@ export class Connection {
         data: assemble ? new Uint8Array(Number(start.byteCount)) : undefined,
         metadata: pending.asset,
         assetCharge: pending.assetCharge,
+        http: pending.http ? { ordinal: frame.deliveryOrdinal, bound: false, finished: false } : undefined,
       })
       pending.assetCharge = 0
+      if (pending.http) {
+        if (start.chunkCount !== Number((start.byteCount + 65535n) / 65536n))
+          return this.close(FailureCategory.MALFORMED)
+        return [{ type: "httpBulkStart", start, metadata: pending.asset }]
+      }
       if (!assemble) return [{ type: "bulkForward", frame }]
       return this.consume(LedgerClass.NORMAL, frame.deliveryOrdinal, now)
     }
@@ -1559,6 +1782,7 @@ export class Connection {
     }
     if (transfer.complete) return this.close(FailureCategory.MALFORMED)
     if (frame.body.case === "bulkPiece") {
+      if (transfer.http) return this.close(FailureCategory.DIRECTION)
       const piece = frame.body.value
       if (
         piece.index !== transfer.index ||
@@ -1583,6 +1807,7 @@ export class Connection {
     const end = frame.body.value
     if (
       end.byteCount !== transfer.offset ||
+      (transfer.http && end.outcome.case === "success" && !transfer.http.finished) ||
       (end.outcome.case === "success" &&
         (transfer.offset !== transfer.start.byteCount || transfer.index !== transfer.start.chunkCount))
     )
@@ -1786,7 +2011,11 @@ export class Connection {
       )
         return false
       return (
-        record.available <= now && record.bytes <= this.sendWindows.get(kind)! - this.ledgers.get(kind)!.handedBytes
+        record.available <= now &&
+        record.bytes <=
+          this.sendWindows.get(kind)! -
+            this.ledgers.get(kind)!.handedBytes -
+            (kind === LedgerClass.BULK ? this.httpHandedBytes : 0)
       )
     }
     const tiny = this.queue.findIndex((record) => this.classify(record.frame) === LedgerClass.TINY && eligible(record))
@@ -1840,7 +2069,8 @@ export class Connection {
         ? this.prepared.record.bytes
         : 0) +
       this.ledgers.get(LedgerClass.EVENT)!.handedBytes +
-      this.ledgers.get(LedgerClass.BULK)!.handedBytes
+      this.ledgers.get(LedgerClass.BULK)!.handedBytes +
+      this.httpHandedBytes
     )
   }
 

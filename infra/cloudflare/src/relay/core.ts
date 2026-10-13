@@ -32,8 +32,17 @@ import {
   event_unsubscribe_RequestSchema,
   event_unsubscribe_ResultSchema,
   session_log_ResultSchema,
+  session_message_RequestSchema,
+  session_attachment_read_RequestSchema,
 } from "../../../../packages/protocol/src/v5"
-import type { Frame, Notice, Presentation, Scope, OperationDescriptor } from "../../../../packages/protocol/src/v5"
+import type {
+  Frame,
+  Notice,
+  Presentation,
+  Scope,
+  OperationDescriptor,
+  BulkStart,
+} from "../../../../packages/protocol/src/v5"
 import type { Connection, Decision } from "../../../../packages/protocol/src/v5/connection"
 import { ReservationBudget } from "../../../../packages/protocol/src/v5/connection"
 import {
@@ -93,6 +102,8 @@ type Admission = {
   clientTransferID?: string
   interest?: boolean
   subscription?: { id: string; scope: Scope; epoch: string }
+  start?: BulkStart
+  mime?: string
 }
 type Forward = {
   from: Peer
@@ -104,6 +115,15 @@ type Forward = {
   handed?: bigint
   handedLedger?: LedgerClass
   ticket?: bigint
+  httpIndex?: bigint
+}
+type HttpRead = {
+  admission: Admission
+  controller: ReadableStreamDefaultController<Uint8Array>
+  signal: AbortSignal
+  abort: () => void
+  closed: boolean
+  bodyEnded: boolean
 }
 
 export function createRelay(deps: RelayDeps) {
@@ -117,6 +137,8 @@ export function createRelay(deps: RelayDeps) {
   const deliveries = new Set<Promise<void>>()
   const backendEpochs = new Map<string, { epoch: string; bytes: number }>()
   const acceptedInterests = new Map<string, Scope>()
+  const httpReads = new Map<Admission, HttpRead>()
+  const bulkWaiters = new Set<() => void>()
   let agent: Peer | undefined
   let identity: { ownerID: string; deviceID: string } | undefined
   let statusBytes: Uint8Array | undefined
@@ -137,6 +159,17 @@ export function createRelay(deps: RelayDeps) {
           if (forward.to === peer && forward.ticket === entry.ticket) releaseForward(forward)
       }
       if (entry.type === "closed") drop(peer, entry.code, FailureCategory[entry.category])
+      if (entry.type === "httpBulkReleased") {
+        for (const forward of forwards)
+          if (
+            forward.to === peer &&
+            forward.key.startsWith(`http:${entry.transferID}:`) &&
+            forward.httpIndex !== undefined &&
+            forward.httpIndex <= entry.through
+          )
+            releaseForward(forward)
+        notifyBulk()
+      }
     }
   }
   function consume(peer: Peer, ledger: LedgerClass, ordinal: bigint) {
@@ -152,6 +185,7 @@ export function createRelay(deps: RelayDeps) {
       )
     )
       consume(forward.from, forward.ledger, forward.ordinal)
+    notifyBulk()
   }
   function receipts() {
     for (const forward of forwards) {
@@ -182,9 +216,7 @@ export function createRelay(deps: RelayDeps) {
           }
           if (frame.body.case === "result" && frame.body.value.outcome.case === "success") {
             const requestID = frame.body.value.requestId
-            const subscription = [...peer.subscriptions].find(
-              ([, item]) => item.requestID === requestID,
-            )
+            const subscription = [...peer.subscriptions].find(([, item]) => item.requestID === requestID)
             if (subscription)
               decisions(
                 peer,
@@ -212,6 +244,58 @@ export function createRelay(deps: RelayDeps) {
     if (!admission.peer.requests.delete(admission.dispatch.requestID)) return
     if (admission.agentID !== undefined) agentRequests.delete(admission.agentID)
     budget.release(RelayLimits.forwardingMetadataBytes)
+  }
+  function notifyBulk() {
+    for (const waiter of bulkWaiters) waiter()
+  }
+  function waitBulk(predicate: () => boolean) {
+    if (predicate()) return Promise.resolve()
+    return new Promise<void>((resolve) => {
+      const check = () => {
+        if (!predicate()) return
+        bulkWaiters.delete(check)
+        resolve()
+      }
+      bulkWaiters.add(check)
+    })
+  }
+  function startConsumed(admission: Admission) {
+    return (
+      !!admission.clientTransferID &&
+      ![...forwards].some(
+        (forward) => forward.to === admission.peer && forward.key === `bulkStart:${admission.clientTransferID}`,
+      )
+    )
+  }
+  function stopHttp(admission: Admission, error?: Error) {
+    const read = httpReads.get(admission)
+    if (!read || read.closed) return
+    read.closed = true
+    httpReads.delete(admission)
+    read.signal.removeEventListener("abort", read.abort)
+    budget.release(RelayLimits.peerMetadataBytes)
+    sealHttp(read, error)
+    notifyBulk()
+  }
+  function sealHttp(read: HttpRead, error?: Error) {
+    if (read.bodyEnded) return
+    read.bodyEnded = true
+    if (error) read.controller.error(error)
+    else read.controller.close()
+  }
+  function cancelHttp(admission: Admission) {
+    if (admission.cancelled) return
+    admission.cancelled = true
+    stopHttp(admission, new Error("HTTP transfer cancelled"))
+    if (admission.clientTransferID)
+      decisions(admission.peer, admission.peer.connection.cancelTransfer(admission.clientTransferID, deps.monotonic()))
+    if (admission.agent && admission.agentID)
+      decisions(admission.agent, admission.agent.connection.cancel(admission.agentID, deps.monotonic()))
+    for (const forward of forwards)
+      if (forward.to === admission.peer && forward.requestID === admission.dispatch.requestID) releaseForward(forward)
+    finish(admission)
+    notifyBulk()
+    flushAll()
   }
   function interestSessions(peer: Peer) {
     return [
@@ -272,6 +356,7 @@ export function createRelay(deps: RelayDeps) {
     budget.release(RelayLimits.peerMetadataBytes)
     for (const admission of peer.requests.values()) {
       admission.cancelled = true
+      stopHttp(admission, new Error("HTTP owning connection closed"))
       if (admission.agent && alive(admission.agent) && admission.agentID !== undefined)
         decisions(admission.agent, admission.agent.connection.cancel(admission.agentID, deps.monotonic()))
       finish(admission)
@@ -287,6 +372,7 @@ export function createRelay(deps: RelayDeps) {
       budget.release(acceptedInterests.size * RelayLimits.forwardingMetadataBytes)
       acceptedInterests.clear()
     }
+    notifyBulk()
   }
   async function authorize(peer: Peer, fresh = true) {
     if (!alive(peer)) return false
@@ -802,6 +888,16 @@ export function createRelay(deps: RelayDeps) {
       consume(peer, frame.ledger, frame.deliveryOrdinal)
   }
   async function forwardBulk(peer: Peer, frame: Frame, admission: Admission) {
+    if (frame.body.case !== "bulkStart") {
+      await waitBulk(
+        () =>
+          admission.cancelled ||
+          !alive(peer) ||
+          !alive(admission.peer) ||
+          startConsumed(admission) ||
+          httpReads.has(admission),
+      )
+    }
     if (
       admission.cancelled ||
       admission.agent !== peer ||
@@ -829,14 +925,82 @@ export function createRelay(deps: RelayDeps) {
       )
     }
     if (frame.body.case === "bulkPiece")
-      forward(
-        peer,
-        frame,
-        admission.peer,
-        { case: "bulkPiece", value: { ...frame.body.value, transferId: admission.clientTransferID! } },
-        admission.dispatch.requestID,
-      )
+      if (httpReads.has(admission)) {
+        const piece = frame.body.value
+        for (;;) {
+          await waitBulk(
+            () =>
+              admission.cancelled ||
+              !alive(peer) ||
+              !alive(admission.peer) ||
+              admission.peer.connection.httpWindowAvailable >= piece.data.length,
+          )
+          if (admission.cancelled || !(await authorize(peer)) || !(await authorize(admission.peer))) {
+            consume(peer, frame.ledger, frame.deliveryOrdinal)
+            return
+          }
+          const read = httpReads.get(admission)
+          if (!read || read.closed || admission.cancelled) {
+            consume(peer, frame.ledger, frame.deliveryOrdinal)
+            return
+          }
+          if (!budget.reserve(RelayLimits.forwardingMetadataBytes)) {
+            drop(admission.peer, 1009, "LIMIT")
+            consume(peer, frame.ledger, frame.deliveryOrdinal)
+            return
+          }
+          const handed = admission.peer.connection.handoffHttpPiece(
+            { ...piece, transferId: admission.clientTransferID! },
+            deps.monotonic(),
+          )
+          decisions(admission.peer, handed.decisions)
+          if (!handed.accepted) {
+            budget.release(RelayLimits.forwardingMetadataBytes)
+            if (!alive(admission.peer)) {
+              consume(peer, frame.ledger, frame.deliveryOrdinal)
+              return
+            }
+            continue
+          }
+          forwards.add({
+            from: peer,
+            to: admission.peer,
+            ledger: frame.ledger,
+            ordinal: frame.deliveryOrdinal,
+            key: `http:${admission.clientTransferID}:${piece.index}`,
+            httpIndex: BigInt(piece.index + 1),
+            requestID: admission.dispatch.requestID,
+          })
+          read.controller.enqueue(piece.data.slice())
+          return
+        }
+      } else
+        forward(
+          peer,
+          frame,
+          admission.peer,
+          { case: "bulkPiece", value: { ...frame.body.value, transferId: admission.clientTransferID! } },
+          admission.dispatch.requestID,
+        )
     if (frame.body.case === "bulkEnd") {
+      if (httpReads.has(admission)) {
+        sealHttp(
+          httpReads.get(admission)!,
+          frame.body.value.outcome.case === "error" ? new Error("HTTP transfer failed") : undefined,
+        )
+        await waitBulk(
+          () =>
+            admission.cancelled ||
+            !alive(peer) ||
+            !alive(admission.peer) ||
+            admission.peer.connection.httpBulkConsumed(admission.clientTransferID!),
+        )
+        if (admission.cancelled || !(await authorize(peer)) || !(await authorize(admission.peer))) {
+          consume(peer, frame.ledger, frame.deliveryOrdinal)
+          return
+        }
+        stopHttp(admission, frame.body.value.outcome.case === "error" ? new Error("HTTP transfer failed") : undefined)
+      }
       forward(
         peer,
         frame,
@@ -931,7 +1095,13 @@ export function createRelay(deps: RelayDeps) {
       return
     }
     const previous = backendEpochs.get(scope.target.value)
-    if (previous && (previous.epoch !== epoch || [...acceptedInterests.values()].some((accepted) => accepted.target.case === "session" && accepted.target.value === sessionID))) {
+    if (
+      previous &&
+      (previous.epoch !== epoch ||
+        [...acceptedInterests.values()].some(
+          (accepted) => accepted.target.case === "session" && accepted.target.value === sessionID,
+        ))
+    ) {
       for (const client of [...peers.values()])
         if (client.identity.role === "client" && interestSessions(client).includes(scope.target.value))
           drop(client, 1012, "EPOCH")
@@ -1011,6 +1181,7 @@ export function createRelay(deps: RelayDeps) {
         const admission = peer.requests.get(entry.requestID)
         if (!admission) continue
         admission.cancelled = true
+        stopHttp(admission, new Error("HTTP request cancelled"))
         if (admission.agent && admission.agentID !== undefined && (await authorize(peer)))
           decisions(admission.agent, admission.agent.connection.cancel(admission.agentID, deps.monotonic()))
         const forwarded = [...forwards].filter(
@@ -1021,6 +1192,11 @@ export function createRelay(deps: RelayDeps) {
         for (const item of forwarded) if (item.handed === undefined) releaseForward(item)
         finish(admission)
         sendInterestSnapshot(peer)
+        notifyBulk()
+      }
+      if (entry.type === "transferCancelled" && peer.identity.role === "client") {
+        const admission = [...peer.requests.values()].find((item) => item.clientTransferID === entry.transferID)
+        if (admission) cancelHttp(admission)
       }
       if (entry.type === "settled" && peer.identity.role === "agent" && received.frame?.body.case === "result") {
         const admission = agentRequests.get(entry.requestID)
@@ -1058,10 +1234,13 @@ export function createRelay(deps: RelayDeps) {
               return
             }
             if (entry.frame.body.case === "result")
-              forward(peer, entry.frame, admission.peer, {
-                case: "result",
-                value: { ...entry.frame.body.value, requestId: admission.dispatch.requestID },
-              })
+              if (entry.frame.body.value.outcome.case === "assetMetadata") {
+                admission.mime = decodeLossless(entry.frame.body.value.outcome.value.mime!)
+                forward(peer, entry.frame, admission.peer, {
+                  case: "result",
+                  value: { ...entry.frame.body.value, requestId: admission.dispatch.requestID },
+                })
+              }
             flushAll()
           }),
         )
@@ -1092,21 +1271,30 @@ export function createRelay(deps: RelayDeps) {
         const frame = received.frame
         const scope = acceptedInterests.get(entry.subscriptionID)
         const target = scope?.target
-        if (target?.case === "session") tasks.push(inLane(`${connectionID}:events:${target.value}`, async () => {
-          if (!await authorize(peer)) return
-          const key = inputKey(peer, LedgerClass.EVENT, frame.deliveryOrdinal)
-          heldInputs.add(key)
-          for (const client of peers.values()) {
-            if (!client.subscriptions.has(entry.subscriptionID) || !await authorize(client, false)) continue
-            forward(peer, frame, client, frame.body)
-            client.subscriptions.delete(entry.subscriptionID)
-            budget.release(RelayLimits.forwardingMetadataBytes)
-            sendInterestSnapshot(client)
-          }
-          heldInputs.delete(key)
-          if (![...forwards].some((item) => item.from === peer && item.ledger === LedgerClass.EVENT && item.ordinal === frame.deliveryOrdinal)) consume(peer, LedgerClass.EVENT, frame.deliveryOrdinal)
-          flushAll()
-        }))
+        if (target?.case === "session")
+          tasks.push(
+            inLane(`${connectionID}:events:${target.value}`, async () => {
+              if (!(await authorize(peer))) return
+              const key = inputKey(peer, LedgerClass.EVENT, frame.deliveryOrdinal)
+              heldInputs.add(key)
+              for (const client of peers.values()) {
+                if (!client.subscriptions.has(entry.subscriptionID) || !(await authorize(client, false))) continue
+                forward(peer, frame, client, frame.body)
+                client.subscriptions.delete(entry.subscriptionID)
+                budget.release(RelayLimits.forwardingMetadataBytes)
+                sendInterestSnapshot(client)
+              }
+              heldInputs.delete(key)
+              if (
+                ![...forwards].some(
+                  (item) =>
+                    item.from === peer && item.ledger === LedgerClass.EVENT && item.ordinal === frame.deliveryOrdinal,
+                )
+              )
+                consume(peer, LedgerClass.EVENT, frame.deliveryOrdinal)
+              flushAll()
+            }),
+          )
       }
       if (entry.type === "bulkForward") {
         const frame = entry.frame
@@ -1127,6 +1315,7 @@ export function createRelay(deps: RelayDeps) {
         if (frame.body.case === "bulkStart") {
           admission.transferID = frame.body.value.transferId
           admission.clientTransferID = deps.newID()
+          admission.start = frame.body.value
         }
         tasks.push(inLane(`${connectionID}:asset:${admission.agentID}`, () => forwardBulk(peer, frame, admission)))
       }
@@ -1156,6 +1345,99 @@ export function createRelay(deps: RelayDeps) {
   return {
     reservation: budget,
     connection: (connectionID: string) => peers.get(connectionID)?.connection,
+    async readContent(request: Request, message: boolean) {
+      const epoch = request.headers.get("x-ycoding-connection-epoch")
+      const requestID = request.headers.get("x-ycoding-request-id")
+      const transferID = request.headers.get("x-ycoding-transfer-id")
+      const peer = [...peers.values()].find(
+        (peer) =>
+          peer.identity.role === "client" &&
+          peer.identity.ownerID === request.headers.get("x-ycoding-owner") &&
+          peer.identity.deviceID === request.headers.get("x-ycoding-device") &&
+          peer.identity.browserSessionID === request.headers.get("x-ycoding-browser-session") &&
+          peer.connection.connectionEpoch === epoch,
+      )
+      const admission = requestID ? peer?.requests.get(requestID) : undefined
+      const start = admission?.start
+      if (
+        !peer ||
+        !admission ||
+        !start ||
+        admission.cancelled ||
+        admission.clientTransferID !== transferID ||
+        httpReads.has(admission) ||
+        startConsumed(admission) ||
+        !(await authorize(peer))
+      )
+        return new Response("HTTP transfer is not owned by this connection", { status: 409 })
+      const scope = admission.dispatch.request.scope?.target
+      const operation = admission.dispatch.operation.diagnosticName
+      if (
+        scope?.case !== "session" ||
+        scope.value !== request.headers.get("x-ycoding-target-session") ||
+        operation !== (message ? "session.message" : "session.attachment.read")
+      )
+        return new Response("Invalid HTTP transfer target", { status: 400 })
+      const messageParams = message
+        ? decodeStrict(session_message_RequestSchema, admission.dispatch.request.payload).params
+        : undefined
+      const attachmentParams = message
+        ? undefined
+        : decodeStrict(session_attachment_read_RequestSchema, admission.dispatch.request.payload).params
+      const target = decodeLossless(messageParams ? messageParams.messageID! : attachmentParams!.digest!)
+      if (
+        decodeLossless((messageParams ?? attachmentParams)!.sessionID!) !== scope.value ||
+        target !== request.headers.get(message ? "x-ycoding-target-message" : "x-ycoding-target-digest")
+      )
+        return new Response("Invalid HTTP transfer target", { status: 400 })
+      if (
+        !alive(peer) ||
+        admission.cancelled ||
+        request.signal.aborted ||
+        httpReads.has(admission) ||
+        startConsumed(admission)
+      )
+        return new Response("HTTP transfer is unavailable", { status: 409 })
+      if (start.chunkCount !== Number((start.byteCount + 65535n) / 65536n))
+        return new Response("Invalid HTTP piece declaration", { status: 400 })
+      if (!budget.reserve(RelayLimits.peerMetadataBytes))
+        return new Response("HTTP reservation exceeded", { status: 503 })
+      decisions(peer, peer.connection.attachHttpBulk(transferID!, deps.monotonic()))
+      if (!alive(peer)) {
+        budget.release(RelayLimits.peerMetadataBytes)
+        return new Response(null, { status: 503 })
+      }
+      let controller!: ReadableStreamDefaultController<Uint8Array>
+      const body = new ReadableStream<Uint8Array>({
+        start(value) {
+          controller = value
+        },
+        cancel() {
+          cancelHttp(admission)
+        },
+      })
+      const abort = () => cancelHttp(admission)
+      httpReads.set(admission, {
+        admission,
+        controller,
+        signal: request.signal,
+        abort,
+        closed: false,
+        bodyEnded: false,
+      })
+      request.signal.addEventListener("abort", abort, { once: true })
+      notifyBulk()
+      return new Response(body, {
+        headers: {
+          "content-type": admission.mime ?? "application/x-protobuf",
+          "content-length": String(start.byteCount),
+          "cache-control": "no-store, no-transform",
+          "content-encoding": "identity",
+          "x-ycoding-connection-epoch": epoch!,
+          "x-ycoding-transfer-id": transferID!,
+        },
+      })
+    },
     agentConnected: () => agent?.connection.state === "established",
     async attach(connection: RelayConnection) {
       if (identity && (identity.ownerID !== connection.ownerID || identity.deviceID !== connection.deviceID)) {

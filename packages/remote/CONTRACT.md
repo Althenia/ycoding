@@ -69,7 +69,13 @@ HTTP auth/device/push bodies remain JSON. Google OIDC, invite/key sign-in, brows
 
 Static public assets remain under the existing `ASSETS` binding. Worker-first `/api`, `/ws` and `/health` prefixes cannot fall through to the SPA shell.
 
-Authenticated message/attachment HTTP reads require a separate live-connection scoped HTTP bulk-credit owner and return 503 while that adapter boundary is unavailable. Binary attachment reads use the asset contract above. Neither boundary uses a JSON stream or alternate socket protocol.
+Authenticated message/attachment HTTP reads attach to a live browser connection's admitted `session.message` or `session.attachment.read` bulk transfer. Supply `connectionEpoch`, `requestID` and `transferID` from `httpBulkQuery(connection, declaration)` on the existing GET route. A read must match the authenticated browser session, device, Session and content ID. Duplicate or unavailable ownership returns 409; invalid selectors or content association returns 400. Body admission uses fresh authority and rechecks the live owner after awaiting it.
+
+Before BulkStart arrives, call `connection.expectHttpBulk(requestID)`. On `httpBulkStart`, fetch the authenticated GET and pass its Response to `readHttpBulk(connection, declaration, response, { now, apply, signal? })`. The `apply` port must apply returned decisions and flush the owning socket; it is called whenever a receipt is queued. The reader verifies exact length, MIME, epoch and transfer headers, reserves its 64 KiB scratch space, folds native fragments into fixed virtual pieces and copies them into the connection's bounded assembly. Transfer-scoped Credits travel on that same socket. The final prefix is withheld until EOF and exact length are verified; empty reads release their retained BulkStart receipt at EOF. Abort interrupts a pending native read and cancels the transfer.
+
+The relay retains exact HTTP handoff charges and upstream delivery responsibility through the shared socket/HTTP BULK window and 30-second consumption deadline. Backend terminal validation closes the HTTP body so EOF can be observed; the final acknowledged prefix permits the canonical socket BulkEnd. Completion of `readHttpBulk` reports body consumption, not RPC success. Await the connection's terminal settlement and owned `bulkComplete`; socket assets and HTTP assets use the same `takeAsset` consumer handoff. Neither boundary uses a JSON stream or alternate socket protocol.
+
+HTTP bulk uses identity content encoding and `Cache-Control: no-store, no-transform`; the reader rejects transformed responses. The workerd adapter wraps delivery in a native FixedLengthStream to retain Content-Length. Registered HTTP delivery can start before the browser's BulkStart receipt, while retaining all byte charges until actual consumption.
 
 ## Verification
 

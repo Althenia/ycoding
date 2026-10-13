@@ -224,7 +224,7 @@ enum LedgerClass { NORMAL = 1; EVENT = 2; BULK = 3; TINY = 4; }
 message Ping { required uint64 id = 1; }
 message Pong { required uint64 id = 1; }
 message Cancel { oneof target { string request_id = 1; string transfer_id = 2; } }
-message Credit { required LedgerClass ledger = 1; required uint64 consumed_through = 2; }
+message Credit { required LedgerClass ledger = 1; required uint64 consumed_through = 2; optional string transfer_id = 3; }
 message SubscriptionSnapshot { required string client_id = 1; repeated string session_ids = 2; }
 enum PriorityMode { INTERACTIVE = 1; BACKGROUND = 2; }
 message Priority { optional string client_id = 1; required PriorityMode mode = 2; }

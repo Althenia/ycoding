@@ -12,6 +12,7 @@ export {
 } from "./binary"
 export { isProviderAuthorizationURL } from "./provider-auth"
 export { takeAsset } from "./asset"
+export { httpBulkQuery, readHttpBulk } from "./http"
 export * from "./payloads"
 export {
   createRemoteConnection,

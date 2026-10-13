@@ -74,7 +74,12 @@ export type RouterDeps = {
   readonly cleanupEveryMs?: number
   /** Static asset binding for landing, docs, and SPA routes owned by the web lane. */
   readonly assets?: { readonly fetch: (request: Request) => Promise<Response> }
-  readonly push?: { readonly store: PushStore; readonly publicKey?: string; readonly privateKey?: string; readonly subject?: string }
+  readonly push?: {
+    readonly store: PushStore
+    readonly publicKey?: string
+    readonly privateKey?: string
+    readonly subject?: string
+  }
 }
 
 /** Expired authentication metadata is swept at most once per hour per isolate. */
@@ -85,7 +90,8 @@ export const maxCleanupIntervalMs = 24 * 60 * 60 * 1000
 
 export function boundedCleanupInterval(value: string | undefined): number {
   const parsed = Number(value)
-  if (!Number.isFinite(parsed) || parsed < minCleanupIntervalMs || parsed > maxCleanupIntervalMs) return cleanupIntervalMs
+  if (!Number.isFinite(parsed) || parsed < minCleanupIntervalMs || parsed > maxCleanupIntervalMs)
+    return cleanupIntervalMs
   return Math.floor(parsed)
 }
 
@@ -137,7 +143,8 @@ export function createRouter(deps: RouterDeps) {
     }
     if (url.pathname === "/api/auth/google/callback") {
       if (request.method !== "GET") return methodNotAllowed()
-      if (!rateLimit(`oauth-callback:${clientAddress(request)}`)) return apiError(429, "rate_limited", "Too many requests")
+      if (!rateLimit(`oauth-callback:${clientAddress(request)}`))
+        return apiError(429, "rate_limited", "Too many requests")
       return completeGoogleSignIn(deps, request, url, keysFor(deps.endpoints))
     }
     if (url.pathname === "/api/auth/session/refresh") {
@@ -199,10 +206,20 @@ export function createRouter(deps: RouterDeps) {
       if (request.method !== "DELETE") return methodNotAllowed()
       return deleteRevokedDevices(deps, request, remove[1])
     }
-    const contentStream = /^\/api\/remote\/devices\/([A-Za-z0-9_-]{1,64})\/sessions\/([^/]+)\/(messages|attachments)\/([^/]+)$/.exec(url.pathname)
+    const contentStream =
+      /^\/api\/remote\/devices\/([A-Za-z0-9_-]{1,64})\/sessions\/([^/]+)\/(messages|attachments)\/([^/]+)$/.exec(
+        url.pathname,
+      )
     if (contentStream) {
       if (request.method !== "GET") return methodNotAllowed()
-      return streamSessionContent(deps, request, contentStream[1] ?? "", contentStream[2] ?? "", contentStream[4] ?? "", contentStream[3] === "messages")
+      return streamSessionContent(
+        deps,
+        request,
+        contentStream[1] ?? "",
+        contentStream[2] ?? "",
+        contentStream[4] ?? "",
+        contentStream[3] === "messages",
+      )
     }
     if (url.pathname === RemoteWebSocketPath.client) {
       if (request.method !== "GET") return methodNotAllowed()
@@ -237,11 +254,20 @@ export function createRouter(deps: RouterDeps) {
   }
 }
 
-async function adminRoute(deps: RouterDeps, request: Request, url: URL, rateLimit: (key: string) => boolean, now: number): Promise<Response> {
+async function adminRoute(
+  deps: RouterDeps,
+  request: Request,
+  url: URL,
+  rateLimit: (key: string) => boolean,
+  now: number,
+): Promise<Response> {
   if (!deps.adminKey || deps.adminKey.length < 32) return apiError(404, "not_found", "Not found")
   const supplied = request.headers.get("authorization")
   const expectedHash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(deps.adminKey))
-  const actualHash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(supplied?.startsWith("Bearer ") ? supplied.slice(7) : ""))
+  const actualHash = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(supplied?.startsWith("Bearer ") ? supplied.slice(7) : ""),
+  )
   if (!crypto.subtle.timingSafeEqual(expectedHash, actualHash)) {
     if (!rateLimit(`admin:${clientAddress(request)}`)) return apiError(429, "rate_limited", "Too many attempts")
     return apiError(401, "unauthorized", "Admin authentication failed")
@@ -254,14 +280,28 @@ async function adminRoute(deps: RouterDeps, request: Request, url: URL, rateLimi
   if (url.pathname === "/api/admin/invites") {
     if (request.method === "GET") {
       const invites = await deps.invite.list()
-      return jsonResponse({ invites: invites.map((row) => ({ id: row.id, label: row.label, createdAt: row.createdAt, redeemedAt: row.redeemedAt })) })
+      return jsonResponse({
+        invites: invites.map((row) => ({
+          id: row.id,
+          label: row.label,
+          createdAt: row.createdAt,
+          redeemedAt: row.redeemedAt,
+        })),
+      })
     }
     if (request.method !== "POST") return methodNotAllowed()
     const value = await readJsonBody(request)
-    if (!isRecord(value) || Object.keys(value).some((key) => key !== "label") || ("label" in value &&
-      (typeof value.label !== "string" || value.label.trim().length < 1 || value.label.trim().length > 64)))
+    if (
+      !isRecord(value) ||
+      Object.keys(value).some((key) => key !== "label") ||
+      ("label" in value &&
+        (typeof value.label !== "string" || value.label.trim().length < 1 || value.label.trim().length > 64))
+    )
       return apiError(400, "invalid_message", "Invalid invite label")
-    return jsonResponse(await deps.invite.create(typeof value.label === "string" ? value.label.trim() : null, url.origin), { status: 201 })
+    return jsonResponse(
+      await deps.invite.create(typeof value.label === "string" ? value.label.trim() : null, url.origin),
+      { status: 201 },
+    )
   }
   const id = /^\/api\/admin\/invites\/(inv_[A-Za-z0-9_-]+)$/.exec(url.pathname)?.[1]
   if (!id) return apiError(404, "not_found", "Not found")
@@ -271,14 +311,17 @@ async function adminRoute(deps: RouterDeps, request: Request, url: URL, rateLimi
   if (invite.userID !== null) {
     const devices = await deps.service.listDevices(invite.userID)
     for (const device of devices) {
-      const response = await deps.relay.getByName(`${invite.userID}:${device.id}`).fetch(new Request("https://relay.internal/_ycoding/close-device", {
-        method: "POST", headers: { "x-ycoding-internal": "1" },
-      }))
+      const response = await deps.relay.getByName(`${invite.userID}:${device.id}`).fetch(
+        new Request("https://relay.internal/_ycoding/close-device", {
+          method: "POST",
+          headers: { "x-ycoding-internal": "1" },
+        }),
+      )
       if (!response.ok) return apiError(503, "internal_error", "Device could not be closed")
       await response.text()
     }
   }
-  if (!await deps.invite.delete(id, invite.userID)) return apiError(404, "not_found", "Not found")
+  if (!(await deps.invite.delete(id, invite.userID))) return apiError(404, "not_found", "Not found")
   return withSecurityHeaders(new Response(null, { status: 204, headers: { "cache-control": "no-store" } }))
 }
 
@@ -287,21 +330,41 @@ async function signInWithInvite(deps: RouterDeps, request: Request, redeem: bool
   if (guarded) return guarded
   if (!deps.invite) return apiError(503, "internal_error", "Invite sign-in is unavailable")
   const body = await readJsonBody(request)
-  if (!isRecord(body)) return apiError(redeem ? 404 : 401, redeem ? "not_found" : "unauthorized", redeem ? "Invite is not available" : "Access key is not valid")
+  if (!isRecord(body))
+    return apiError(
+      redeem ? 404 : 401,
+      redeem ? "not_found" : "unauthorized",
+      redeem ? "Invite is not available" : "Access key is not valid",
+    )
   if (redeem) {
     const token = body.token
-    if (typeof token !== "string" || base64UrlDecode(token)?.length !== 32) return apiError(404, "not_found", "Invite is not available")
+    if (typeof token !== "string" || base64UrlDecode(token)?.length !== 32)
+      return apiError(404, "not_found", "Invite is not available")
     const created = await deps.invite.redeem(token)
     if (!created) return apiError(404, "not_found", "Invite is not available")
     await replaceBrowserSession(deps, request)
-    return jsonResponse({ accessKey: created.accessKey }, { status: 201, cookies: [setCookie(sessionCookieName, created.cookieToken,
-      { maxAgeSeconds: browserSessionTtlMs / 1000, path: "/" })] })
+    return jsonResponse(
+      { accessKey: created.accessKey },
+      {
+        status: 201,
+        cookies: [
+          setCookie(sessionCookieName, created.cookieToken, { maxAgeSeconds: browserSessionTtlMs / 1000, path: "/" }),
+        ],
+      },
+    )
   }
   const token = await deps.invite.signIn(body.accessKey)
   if (!token) return apiError(401, "unauthorized", "Access key is not valid")
   await replaceBrowserSession(deps, request)
-  return withSecurityHeaders(new Response(null, { status: 204, headers: { "cache-control": "no-store", "set-cookie": setCookie(sessionCookieName, token,
-    { maxAgeSeconds: browserSessionTtlMs / 1000, path: "/" }) } }))
+  return withSecurityHeaders(
+    new Response(null, {
+      status: 204,
+      headers: {
+        "cache-control": "no-store",
+        "set-cookie": setCookie(sessionCookieName, token, { maxAgeSeconds: browserSessionTtlMs / 1000, path: "/" }),
+      },
+    }),
+  )
 }
 
 async function replaceBrowserSession(deps: RouterDeps, request: Request): Promise<void> {
@@ -367,7 +430,8 @@ async function completeGoogleSignIn(deps: RouterDeps, request: Request, url: URL
   if (!identity.ok) return redirectResponse(authErrorRedirect, [clearedCookie])
   // Fail closed: an unlisted or unverified account cannot sign in. The redirect
   // stays generic and never echoes the configured addresses.
-  if (!isIdentityAllowed(deps.allowedEmails, identity.value)) return redirectResponse(authErrorRedirect, [clearedCookie])
+  if (!isIdentityAllowed(deps.allowedEmails, identity.value))
+    return redirectResponse(authErrorRedirect, [clearedCookie])
 
   const signedIn = await deps.service.signIn({ provider: "google", subject: identity.value.subject })
   return redirectResponse(consumed.value.redirectAfter, [
@@ -400,7 +464,10 @@ async function refreshBrowserSession(deps: RouterDeps, request: Request): Promis
             path: "/",
           }),
         ]
-  return jsonResponse({ session: { expiresAt: rotated.value.rotatedExpiresAt ?? rotated.value.expiresAt } }, { cookies })
+  return jsonResponse(
+    { session: { expiresAt: rotated.value.rotatedExpiresAt ?? rotated.value.expiresAt } },
+    { cookies },
+  )
 }
 
 async function signOut(deps: RouterDeps, request: Request): Promise<Response> {
@@ -435,12 +502,24 @@ async function listDevices(deps: RouterDeps, request: Request): Promise<Response
   return jsonResponse(body)
 }
 
-function pushAvailable(push: RouterDeps["push"]): push is NonNullable<RouterDeps["push"]> & { publicKey: string; privateKey: string; subject: string } {
-  if (push === undefined || typeof push.publicKey !== "string" || typeof push.privateKey !== "string" || typeof push.subject !== "string") return false
+function pushAvailable(
+  push: RouterDeps["push"],
+): push is NonNullable<RouterDeps["push"]> & { publicKey: string; privateKey: string; subject: string } {
+  if (
+    push === undefined ||
+    typeof push.publicKey !== "string" ||
+    typeof push.privateKey !== "string" ||
+    typeof push.subject !== "string"
+  )
+    return false
   const point = base64UrlDecode(push.publicKey)
   const scalar = base64UrlDecode(push.privateKey)
-  return point?.length === 65 && point[0] === 4 && scalar?.length === 32 &&
+  return (
+    point?.length === 65 &&
+    point[0] === 4 &&
+    scalar?.length === 32 &&
     (push.subject.startsWith("mailto:") || push.subject.startsWith("https:"))
+  )
 }
 
 async function pushKey(deps: RouterDeps, request: Request): Promise<Response> {
@@ -460,37 +539,67 @@ async function subscribePush(deps: RouterDeps, request: Request): Promise<Respon
   const parsed = parsePushSubscription(await readJsonBody(request))
   if (!parsed.ok) return apiError(400, parsed.error.code, parsed.error.message)
   try {
-    await crypto.subtle.importKey("raw", Uint8Array.from(atob(parsed.value.keys.p256dh.replaceAll("-", "+").replaceAll("_", "/")), (character) => character.charCodeAt(0)),
-      { name: "ECDH", namedCurve: "P-256" }, false, [])
+    await crypto.subtle.importKey(
+      "raw",
+      Uint8Array.from(atob(parsed.value.keys.p256dh.replaceAll("-", "+").replaceAll("_", "/")), (character) =>
+        character.charCodeAt(0),
+      ),
+      { name: "ECDH", namedCurve: "P-256" },
+      false,
+      [],
+    )
   } catch {
     return apiError(400, "invalid_message", "Push subscription key is invalid")
   }
   if ("categories" in parsed.value) {
-    if (!await deps.push.store.upsert(authenticated.session.userID, authenticated.session.sessionID, parsed.value, (deps.now ?? Date.now)()))
+    if (
+      !(await deps.push.store.upsert(
+        authenticated.session.userID,
+        authenticated.session.sessionID,
+        parsed.value,
+        (deps.now ?? Date.now)(),
+      ))
+    )
       return apiError(401, "unauthorized", "Browser session is not authenticated")
     return jsonResponse({ subscribed: true })
   }
-  const renewed = await deps.push.store.renew(authenticated.session.userID, authenticated.session.sessionID, parsed.value, (deps.now ?? Date.now)())
+  const renewed = await deps.push.store.renew(
+    authenticated.session.userID,
+    authenticated.session.sessionID,
+    parsed.value,
+    (deps.now ?? Date.now)(),
+  )
   if (renewed === "unauthorized") return apiError(401, "unauthorized", "Browser session is not authenticated")
-  if (renewed === "missing")
-    return apiError(404, "not_found", "The replaced push subscription is not registered")
+  if (renewed === "missing") return apiError(404, "not_found", "The replaced push subscription is not registered")
   return jsonResponse({ subscribed: true })
 }
 
 async function testPush(deps: RouterDeps, request: Request, now: number): Promise<Response> {
   if (!pushAvailable(deps.push)) return apiError(503, "internal_error", "Web Push is unavailable")
   const value = await readJsonBody(request)
-  if (!isRecord(value) || Object.keys(value).some((key) => key !== "accountID" && key !== "endpoint") ||
-    typeof value.accountID !== "string" || !/^usr_[A-Za-z0-9_-]{1,124}$/.test(value.accountID))
+  if (
+    !isRecord(value) ||
+    Object.keys(value).some((key) => key !== "accountID" && key !== "endpoint") ||
+    typeof value.accountID !== "string" ||
+    !/^usr_[A-Za-z0-9_-]{1,124}$/.test(value.accountID)
+  )
     return apiError(400, "invalid_message", "Expected an account ID and its registered push endpoint")
   const parsed = parsePushEndpoint({ endpoint: value.endpoint })
   if (!parsed.ok) return apiError(400, parsed.error.code, parsed.error.message)
   const claim = await deps.push.store.claimTest(value.accountID, parsed.value.endpoint, now)
   if (claim.status === "missing") return apiError(404, "not_found", "This device has no registered push subscription")
-  if (claim.status === "limited") return apiError(429, "rate_limited", "Wait a minute before sending another test alert")
+  if (claim.status === "limited")
+    return apiError(429, "rate_limited", "Wait a minute before sending another test alert")
   const send = deps.fetch
-  const body: PushTestResponse = await sendTestPush({ store: deps.push.store, subscription: claim.subscription, publicKey: deps.push.publicKey,
-    privateKey: deps.push.privateKey, subject: deps.push.subject, now: () => now, fetch: (input, init) => send(input, init) })
+  const body: PushTestResponse = await sendTestPush({
+    store: deps.push.store,
+    subscription: claim.subscription,
+    publicKey: deps.push.publicKey,
+    privateKey: deps.push.privateKey,
+    subject: deps.push.subject,
+    now: () => now,
+    fetch: (input, init) => send(input, init),
+  })
   return jsonResponse(body)
 }
 
@@ -514,7 +623,11 @@ async function createEnrollment(deps: RouterDeps, request: Request): Promise<Res
   return jsonResponse(created)
 }
 
-async function enrollDevice(deps: RouterDeps, request: Request, rateLimit: (key: string) => boolean): Promise<Response> {
+async function enrollDevice(
+  deps: RouterDeps,
+  request: Request,
+  rateLimit: (key: string) => boolean,
+): Promise<Response> {
   if (!rateLimit(`enroll:${clientAddress(request)}`)) return apiError(429, "rate_limited", "Too many requests")
   const parsed = parseEnrollRequest(await readJsonBody(request))
   if (!parsed.ok) return apiError(400, parsed.error.code, parsed.error.message)
@@ -524,7 +637,11 @@ async function enrollDevice(deps: RouterDeps, request: Request, rateLimit: (key:
   return jsonResponse(body)
 }
 
-async function createDeviceChallenge(deps: RouterDeps, request: Request, rateLimit: (key: string) => boolean): Promise<Response> {
+async function createDeviceChallenge(
+  deps: RouterDeps,
+  request: Request,
+  rateLimit: (key: string) => boolean,
+): Promise<Response> {
   if (!rateLimit(`challenge:${clientAddress(request)}`)) return apiError(429, "rate_limited", "Too many requests")
   const parsed = parseChallengeRequest(await readJsonBody(request))
   if (!parsed.ok) return apiError(400, parsed.error.code, parsed.error.message)
@@ -534,7 +651,11 @@ async function createDeviceChallenge(deps: RouterDeps, request: Request, rateLim
   return jsonResponse(body)
 }
 
-async function issueDeviceToken(deps: RouterDeps, request: Request, rateLimit: (key: string) => boolean): Promise<Response> {
+async function issueDeviceToken(
+  deps: RouterDeps,
+  request: Request,
+  rateLimit: (key: string) => boolean,
+): Promise<Response> {
   if (!rateLimit(`token:${clientAddress(request)}`)) return apiError(429, "rate_limited", "Too many requests")
   const parsed = parseDeviceTokenRequest(await readJsonBody(request))
   if (!parsed.ok) return apiError(400, parsed.error.code, parsed.error.message)
@@ -544,7 +665,11 @@ async function issueDeviceToken(deps: RouterDeps, request: Request, rateLimit: (
   return jsonResponse(body)
 }
 
-async function refreshDeviceCredentials(deps: RouterDeps, request: Request, rateLimit: (key: string) => boolean): Promise<Response> {
+async function refreshDeviceCredentials(
+  deps: RouterDeps,
+  request: Request,
+  rateLimit: (key: string) => boolean,
+): Promise<Response> {
   if (!rateLimit(`refresh:${clientAddress(request)}`)) return apiError(429, "rate_limited", "Too many requests")
   const parsed = parseDeviceRefreshRequest(await readJsonBody(request))
   if (!parsed.ok) return apiError(400, parsed.error.code, parsed.error.message)
@@ -605,13 +730,26 @@ async function connectClient(deps: RouterDeps, request: Request, url: URL): Prom
   })
 }
 
-async function streamSessionContent(deps: RouterDeps, request: Request, deviceID: string, sessionID: string, item: string, message: boolean): Promise<Response> {
-  if (isCrossSiteRequest(request) || (request.headers.has("origin") ? !isSameOrigin(request) : request.headers.get("sec-fetch-site") !== "same-origin"))
+async function streamSessionContent(
+  deps: RouterDeps,
+  request: Request,
+  deviceID: string,
+  sessionID: string,
+  item: string,
+  message: boolean,
+): Promise<Response> {
+  if (
+    isCrossSiteRequest(request) ||
+    (request.headers.has("origin") ? !isSameOrigin(request) : request.headers.get("sec-fetch-site") !== "same-origin")
+  )
     return apiError(403, "forbidden", "Message reads require a same-origin request")
   const authenticated = await requireSession(deps, request)
   if (!authenticated.ok) return authenticated.response
-  if (!isSessionID(sessionID) || sessionID.length > 128 ||
-    (message ? !/^msg_[A-Za-z0-9_-]+$/.test(item) || item.length > 128 : !/^[0-9a-f]{64}$/.test(item)))
+  if (
+    !isSessionID(sessionID) ||
+    sessionID.length > 128 ||
+    (message ? !/^msg_[A-Za-z0-9_-]+$/.test(item) || item.length > 128 : !/^[0-9a-f]{64}$/.test(item))
+  )
     return apiError(400, "invalid_message", "Invalid Session content ID")
   const authorized = await deps.service.authorizeClientCommand(authenticated.session.sessionID, deviceID)
   if (!authorized.ok) {
@@ -619,18 +757,36 @@ async function streamSessionContent(deps: RouterDeps, request: Request, deviceID
     if (authorized.reason === "unknown_device") return apiError(404, "not_found", "Unknown device")
     return apiError(401, "unauthorized", "Browser session or device is no longer authorized")
   }
-  return withSecurityHeaders(await deps.relay.getByName(`${authorized.value.userID}:${deviceID}`).fetch(new Request(
-    `https://relay.internal/_ycoding/stream-${message ? "message" : "attachment"}`,
-    { method: "POST", signal: request.signal, headers: {
-      "x-ycoding-internal": "1",
-      "x-ycoding-owner": authorized.value.userID,
-      "x-ycoding-device": deviceID,
-      "x-ycoding-browser-session": authenticated.session.sessionID,
-      "x-ycoding-credential-expires-at": String(authenticated.session.expiresAt),
-      "x-ycoding-target-session": sessionID,
-      [message ? "x-ycoding-target-message" : "x-ycoding-target-digest"]: item,
-    } },
-  )))
+  const selectors = new URL(request.url).searchParams
+  const epoch = selectors.get("connectionEpoch") ?? ""
+  const requestID = selectors.get("requestID") ?? ""
+  const transferID = selectors.get("transferID") ?? ""
+  if (
+    !/^[A-Za-z0-9_-]{1,64}$/.test(epoch) ||
+    !/^[1-9][0-9]{0,19}$/.test(requestID) ||
+    !/^[A-Za-z0-9_-]{1,64}$/.test(transferID)
+  )
+    return apiError(400, "invalid_message", "HTTP reads require a live connection and transfer")
+  return withSecurityHeaders(
+    await deps.relay.getByName(`${authorized.value.userID}:${deviceID}`).fetch(
+      new Request(`https://relay.internal/_ycoding/stream-${message ? "message" : "attachment"}`, {
+        method: "POST",
+        signal: request.signal,
+        headers: {
+          "x-ycoding-internal": "1",
+          "x-ycoding-owner": authorized.value.userID,
+          "x-ycoding-device": deviceID,
+          "x-ycoding-browser-session": authenticated.session.sessionID,
+          "x-ycoding-credential-expires-at": String(authenticated.session.expiresAt),
+          "x-ycoding-target-session": sessionID,
+          "x-ycoding-connection-epoch": epoch,
+          "x-ycoding-request-id": requestID,
+          "x-ycoding-transfer-id": transferID,
+          [message ? "x-ycoding-target-message" : "x-ycoding-target-digest"]: item,
+        },
+      }),
+    ),
+  )
 }
 
 async function connectAgent(deps: RouterDeps, request: Request): Promise<Response> {
@@ -717,11 +873,11 @@ async function withPresence(
 
 async function readPresence(deps: RouterDeps, ownerID: string, deviceID: string): Promise<boolean> {
   try {
-    const response = await deps.relay
-      .getByName(`${ownerID}:${deviceID}`)
-      .fetch(new Request("https://relay.internal/_ycoding/presence", {
+    const response = await deps.relay.getByName(`${ownerID}:${deviceID}`).fetch(
+      new Request("https://relay.internal/_ycoding/presence", {
         headers: { "x-ycoding-internal": "1" },
-      }))
+      }),
+    )
     if (!response.ok) return false
     const value: unknown = await response.json()
     return typeof value === "object" && value !== null && Reflect.get(value, "online") === true
@@ -733,16 +889,22 @@ async function readPresence(deps: RouterDeps, ownerID: string, deviceID: string)
 async function requireSession(
   deps: RouterDeps,
   request: Request,
-): Promise<{ readonly ok: true; readonly session: { readonly sessionID: string; readonly userID: string; readonly expiresAt: number } } | { readonly ok: false; readonly response: Response }> {
+): Promise<
+  | {
+      readonly ok: true
+      readonly session: { readonly sessionID: string; readonly userID: string; readonly expiresAt: number }
+    }
+  | { readonly ok: false; readonly response: Response }
+> {
   const token = readCookie(request.headers.get("cookie"), sessionCookieName)
-  if (token === undefined) return { ok: false, response: apiError(401, "unauthorized", "Browser session is not authenticated") }
+  if (token === undefined)
+    return { ok: false, response: apiError(401, "unauthorized", "Browser session is not authenticated") }
   const session = await deps.service.resolveBrowserSession(token)
   // An invalid cookie stays non-authoritative instead of being deleted here: the same
   // cookie can be an older generation that an in-flight request still carries while a
   // concurrent rotation already installed its replacement, so deleting it would
   // discard a newer, valid session. Only explicit sign-out clears the cookie.
-  if (!session.ok)
-    return { ok: false, response: apiError(401, "unauthorized", "Browser session is not authenticated") }
+  if (!session.ok) return { ok: false, response: apiError(401, "unauthorized", "Browser session is not authenticated") }
   return { ok: true, session: session.value }
 }
 
@@ -808,5 +970,8 @@ function isRelayPath(pathname: string): boolean {
 }
 
 function methodNotAllowed(): Response {
-  return new Response("Method not allowed", { status: 405, headers: { allow: "GET, POST", "cache-control": "no-store" } })
+  return new Response("Method not allowed", {
+    status: 405,
+    headers: { allow: "GET, POST", "cache-control": "no-store" },
+  })
 }

@@ -1,4 +1,4 @@
-export const CONTRACT_DIGEST = "26b6041e6d89ee3033ca8d7df0e72fd15eb521785142b4ddc60642c37a58ae4f"
+export const CONTRACT_DIGEST = "e8f661938895b43a5ac119ec534eacf99793f14cf7304e1e06612316b7fa89c0"
 export const messages = {
   "ycoding.v5.Empty": {
     oneofs: 0,
@@ -982,6 +982,14 @@ export const messages = {
         name: "consumed_through",
         type: 4,
         required: true,
+        repeated: false,
+        target: "",
+      },
+      {
+        tag: 3,
+        name: "transfer_id",
+        type: 9,
+        required: false,
         repeated: false,
         target: "",
       },

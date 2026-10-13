@@ -66,6 +66,7 @@ controls = [
 for name, body, sender in controls:
     ledger = "TINY" if name in {"ping", "pong", "cancel", "credit"} else "NORMAL"
     cases.append((name, "Frame", f"{header} ledger: {ledger} control {{ {name} {{ {body} }} }}", sender))
+cases.append(("http-credit", "Credit", 'ledger: BULK consumed_through: 1 transfer_id: "http-transfer"', 0))
 rows = []
 encoded = {}
 def encode(message, text):
@@ -127,6 +128,8 @@ negatives = [
     ("unknown-enum", "Credit", b"\x08\x09\x10\x01", 0),
     ("tiny-credit", "Credit", b"\x08\x04\x10\x01", 0),
     ("zero-credit", "Credit", b"\x08\x01\x10\x00", 0),
+    ("http-credit-normal", "Credit", encode("Credit", 'ledger: NORMAL consumed_through: 1 transfer_id: "http-transfer"'), 0),
+    ("http-credit-empty-id", "Credit", encode("Credit", 'ledger: BULK consumed_through: 1 transfer_id: ""'), 0),
     ("stream-end-client", "Frame", encoded["stream-end"], 1),
     ("stream-end-duplicate", "Frame", encoded["stream-end"] + blob(19, b"\x0a\x01s"), 5),
     ("public-event-empty", "PublicEvent", b"", 0),

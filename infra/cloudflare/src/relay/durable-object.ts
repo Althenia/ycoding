@@ -90,11 +90,16 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
       if (request.headers.get("x-ycoding-internal") !== "1") return new Response("Not found", { status: 404 })
       if (url.pathname === "/_ycoding/presence")
         return Response.json({ online: this.#relay.agentConnected() }, { headers: { "cache-control": "no-store" } })
-      if (url.pathname === "/_ycoding/stream-message" || url.pathname === "/_ycoding/stream-attachment")
-        return new Response("Binary asset connection contract unavailable", {
-          status: 503,
-          headers: { "cache-control": "no-store" },
-        })
+      if (url.pathname === "/_ycoding/stream-message" || url.pathname === "/_ycoding/stream-attachment") {
+        const response = await this.#relay.readContent(request, url.pathname === "/_ycoding/stream-message")
+        await this.#armAlarm()
+        if (response.status !== 200) return response
+        const length = response.headers.get("content-length")
+        if (!response.body || length === null) throw new Error("HTTP bulk declaration is missing")
+        const fixed = new FixedLengthStream(BigInt(length))
+        this.ctx.waitUntil(response.body.pipeTo(fixed.writable))
+        return new Response(fixed.readable, { status: response.status, headers: response.headers })
+      }
       if (url.pathname === "/_ycoding/close-device") {
         this.#relay.closeDevice()
         this.#notices.clear()

@@ -32,6 +32,8 @@ import {
   encodeAssetMetadata,
   session_attachment_read_RequestSchema,
   session_attachment_read_ResultSchema,
+  session_message_RequestSchema,
+  session_message_ResultSchema,
 } from "../../../../packages/protocol/src/v5"
 import { TestPeer } from "../../../../packages/remote/test/peer"
 import {
@@ -39,6 +41,8 @@ import {
   takeAsset,
   decodeRemoteResult,
   decodeRemoteEvent,
+  httpBulkQuery,
+  readHttpBulk,
 } from "../../../../packages/remote/src/index"
 import { ReservationBudget } from "../../../../packages/protocol/src/v5/connection"
 import { sha256Hex, randomToken } from "../../src/auth/crypto"
@@ -272,6 +276,9 @@ try {
   const first = peer(PeerRole.REMOTE_CLIENT)
   const second = peer(PeerRole.REMOTE_CLIENT)
   await Promise.all([agent.ready, first.ready, second.ready])
+  await agent.wait(() =>
+    agent.raw.some((frame) => frame.body.case === "control" && frame.body.value.kind.case === "pong"),
+  )
   expect(
     first.connection.state === "established" && agent.connection.state === "established",
     "Role handshake did not establish",
@@ -279,7 +286,14 @@ try {
   const a = first.request("session.todo.list", session, todo)
   const b = second.request("session.todo.list", session, todo)
   expect(a === "1" && b === "1", "Peer request IDs are not connection-local")
-  const dispatches = [await agent.next("dispatch"), await agent.next("dispatch")]
+  const dispatches = await (async () => [await agent.next("dispatch"), await agent.next("dispatch")])().catch(
+    (cause) => {
+      throw new Error(
+        `RPC admission: agent=${agent.connection.state}, first=${first.connection.state}, second=${second.connection.state}; agent-frames=${agent.raw.slice(-8).map((frame) => frame.body.case)}; first-frames=${first.raw.slice(-8).map((frame) => frame.body.case)}; second-frames=${second.raw.slice(-8).map((frame) => frame.body.case)}; first-errors=${first.failures.map((error) => error.message)}; second-errors=${second.failures.map((error) => error.message)}`,
+        { cause },
+      )
+    },
+  )
   expect(dispatches[0].requestID !== dispatches[1].requestID, "Relay correlation IDs collided")
   expect(
     dispatches.every((item) => Buffer.from(item.request.payload).equals(Buffer.from(todo))),
@@ -715,6 +729,187 @@ try {
     "Cancellation retained metadata or failed to stop delivery",
   )
   checks.push("cancelling a declared but incomplete asset releases endpoint metadata and forwards cancellation")
+
+  for (const length of [0, 65536, 65537]) {
+    const requestID = second.request(
+      "session.attachment.read",
+      session,
+      encodeStrict(
+        session_attachment_read_RequestSchema,
+        create(session_attachment_read_RequestSchema, {
+          params: { sessionID: encodeLossless("ses_remote"), digest: encodeLossless("a".repeat(64)) },
+        }),
+      ),
+    )
+    second.connection.expectHttpBulk(requestID)
+    const dispatch = await agent.next("dispatch")
+    agent.send({
+      case: "result",
+      value: create(ResultSchema, {
+        requestId: dispatch.requestID,
+        operationId: dispatch.operation.operationId,
+        settlement: dispatch.operation.settlement,
+        outcome: {
+          case: "assetMetadata",
+          value: encodeAssetMetadata(
+            session_attachment_read_ResultSchema,
+            create(session_attachment_read_ResultSchema, {
+              data: { mime: encodeLossless("image/png"), bytes: BigInt(length) },
+            }),
+          ),
+        },
+      }),
+    })
+    agent.send({
+      case: "bulkStart",
+      value: create(BulkStartSchema, {
+        requestId: dispatch.requestID,
+        transferId: `http-${length}`,
+        operationId: dispatch.operation.operationId,
+        typeName: dispatch.operation.resultType,
+        contentKind: ContentKind.ASSET,
+        byteCount: BigInt(length),
+        chunkCount: Math.ceil(length / 65536),
+      }),
+    })
+    const declaration = await second.next("httpBulkStart")
+    const httpEnd = {
+      case: "bulkEnd" as const,
+      value: create(BulkEndSchema, {
+        transferId: `http-${length}`,
+        byteCount: BigInt(length),
+        outcome: { case: "success", value: {} },
+      }),
+    }
+    const data = new Uint8Array(length).fill(192)
+    for (let offset = 0, index = 0; offset < length; offset += 65536, index++)
+      agent.send({
+        case: "bulkPiece",
+        value: create(BulkPieceSchema, {
+          transferId: `http-${length}`,
+          index,
+          offset: BigInt(offset),
+          data: data.subarray(offset, offset + 65536),
+        }),
+      })
+    agent.send(httpEnd)
+    const url = `${origin}/api/remote/devices/dev_relay/sessions/ses_remote/attachments/${"a".repeat(64)}?${httpBulkQuery(second.connection, declaration)}`
+    expect(
+      (
+        await fetch(url.replace(declaration.start.transferId, "unowned-transfer"), {
+          headers: { cookie: `yc_session=${cookie}`, origin },
+        })
+      ).status === 409,
+      "Unknown HTTP transfer adopted a reader",
+    )
+    const response = await fetch(url, { headers: { cookie: `yc_session=${cookie}`, origin } })
+    expect(
+      response.status === 200 && response.headers.get("content-length") === String(length),
+      "HTTP response lost its exact declaration",
+    )
+    const reading = readHttpBulk(second.connection, declaration, response, {
+      now: () => performance.now(),
+      apply: () => second.flush(),
+    })
+    await reading
+    expect((await second.next("settled", requestID)).status === "success", "HTTP read did not reach canonical BulkEnd")
+    const complete = await second.next("bulkComplete")
+    if (!complete.metadata) throw new Error("Missing HTTP asset metadata")
+    const owner = new ReservationBudget(2 * 1024 * 1024)
+    const asset = takeAsset(second.connection, complete, owner)!
+    expect(Buffer.from(asset.data).equals(Buffer.from(data)), "HTTP delivery changed raw asset bytes")
+    asset.release()
+    expect(owner.used === 0, "HTTP asset consumer retained an owner after release")
+  }
+  checks.push(
+    "authenticated HTTP assets bind to a live connection, preserve zero/full/final-short bodies and settle through transfer Credits",
+  )
+
+  const messagePayload = encodeStrict(
+    session_message_ResultSchema,
+    create(session_message_ResultSchema, {
+      data: {
+        kind: {
+          case: "value5",
+          value: {
+            id: encodeLossless("msg_http"),
+            time: { created: 0 },
+            type: 1,
+            text: encodeLossless("http\ud800".repeat(14000)),
+          },
+        },
+      },
+    }),
+  )
+  const messageRead = second.request(
+    "session.message",
+    session,
+    encodeStrict(
+      session_message_RequestSchema,
+      create(session_message_RequestSchema, {
+        params: { sessionID: encodeLossless("ses_remote"), messageID: encodeLossless("msg_http") },
+      }),
+    ),
+  )
+  second.connection.expectHttpBulk(messageRead)
+  const messageDispatch = await agent.next("dispatch")
+  agent.send({
+    case: "bulkStart",
+    value: create(BulkStartSchema, {
+      requestId: messageDispatch.requestID,
+      transferId: "http-message",
+      operationId: messageDispatch.operation.operationId,
+      typeName: messageDispatch.operation.resultType,
+      contentKind: ContentKind.TYPED_MESSAGE,
+      byteCount: BigInt(messagePayload.length),
+      chunkCount: Math.ceil(messagePayload.length / 65536),
+    }),
+  })
+  const messageDeclaration = await second.next("httpBulkStart")
+  for (let offset = 0, index = 0; offset < messagePayload.length; offset += 65536, index++)
+    agent.send({
+      case: "bulkPiece",
+      value: create(BulkPieceSchema, {
+        transferId: "http-message",
+        index,
+        offset: BigInt(offset),
+        data: messagePayload.subarray(offset, offset + 65536),
+      }),
+    })
+  agent.send({
+    case: "bulkEnd",
+    value: create(BulkEndSchema, {
+      transferId: "http-message",
+      byteCount: BigInt(messagePayload.length),
+      outcome: { case: "success", value: {} },
+    }),
+  })
+  const messageResponse = await fetch(
+    `${origin}/api/remote/devices/dev_relay/sessions/ses_remote/messages/msg_http?${httpBulkQuery(second.connection, messageDeclaration)}`,
+    { headers: { cookie: `yc_session=${cookie}`, origin } },
+  )
+  const readingMessage = readHttpBulk(second.connection, messageDeclaration, messageResponse, {
+    now: () => performance.now(),
+    apply: () => second.flush(),
+  })
+  await readingMessage.catch((cause) => {
+    throw new Error(
+      `HTTP message headers: ${JSON.stringify({ status: messageResponse.status, length: messageResponse.headers.get("content-length"), expectedLength: String(messageDeclaration.start.byteCount), mime: messageResponse.headers.get("content-type"), encoding: messageResponse.headers.get("content-encoding"), epochMatches: messageResponse.headers.get("x-ycoding-connection-epoch") === second.connection.connectionEpoch, transferMatches: messageResponse.headers.get("x-ycoding-transfer-id") === messageDeclaration.start.transferId })}`,
+      { cause },
+    )
+  })
+  const messageSettlement = await second.next("settled", messageRead)
+  expect(
+    messageSettlement.status === "success" &&
+      messageSettlement.payload?.typeName === session_message_ResultSchema.typeName,
+    "HTTP message did not retain its canonical typed Result",
+  )
+  const messageComplete = await second.next("bulkComplete")
+  expect(Buffer.from(messageComplete.data).equals(Buffer.from(messagePayload)), "HTTP message bytes changed")
+  second.connection.releaseBulk(messageComplete.transferID)
+  checks.push(
+    "HTTP message delivery retains application/x-protobuf, validates the typed body and preserves lone UTF-16 content",
+  )
 
   const cancelID = first.request(
     "session.interrupt",

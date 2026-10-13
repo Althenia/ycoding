@@ -269,7 +269,11 @@ describe("router: browser session routes", () => {
     h.advance(16 * 24 * 60 * 60 * 1000)
 
     expect(
-      (await h.router(new Request(`${origin}/api/auth/session/refresh`, { method: "POST", headers: sessionCookie(session.token) }))).status,
+      (
+        await h.router(
+          new Request(`${origin}/api/auth/session/refresh`, { method: "POST", headers: sessionCookie(session.token) }),
+        )
+      ).status,
     ).toBe(403)
     expect(
       (
@@ -302,7 +306,10 @@ describe("router: browser session routes", () => {
     const second = await enrollDevice(h, session.userID, "Second Mac")
 
     const response = await h.router(
-      new Request(`${origin}/api/auth/logout`, { method: "POST", headers: { ...sessionCookie(session.token), ...sameOrigin } }),
+      new Request(`${origin}/api/auth/logout`, {
+        method: "POST",
+        headers: { ...sessionCookie(session.token), ...sameOrigin },
+      }),
     )
     expect(response.status).toBe(200)
     expect(response.headers.get("set-cookie")).toContain("Max-Age=0")
@@ -322,7 +329,12 @@ describe("router: browser session routes", () => {
     const other = await signIn(h, "other")
     await enrollDevice(h, other.userID)
 
-    await h.router(new Request(`${origin}/api/auth/logout`, { method: "POST", headers: { ...sessionCookie(owner.token), ...sameOrigin } }))
+    await h.router(
+      new Request(`${origin}/api/auth/logout`, {
+        method: "POST",
+        headers: { ...sessionCookie(owner.token), ...sameOrigin },
+      }),
+    )
     expect(h.relayCalls).toEqual([])
   })
 
@@ -402,7 +414,11 @@ describe("router: device enrollment and credentials", () => {
     const h = await harness()
     const session = await signIn(h)
     expect(
-      (await h.router(new Request(`${origin}/api/devices/enrollments`, { method: "POST", headers: sessionCookie(session.token) }))).status,
+      (
+        await h.router(
+          new Request(`${origin}/api/devices/enrollments`, { method: "POST", headers: sessionCookie(session.token) }),
+        )
+      ).status,
     ).toBe(403)
 
     const created = await h.router(
@@ -499,14 +515,20 @@ describe("router: device enrollment and credentials", () => {
     expect(
       (
         await h.router(
-          jsonRequest(`${origin}/api/devices/refresh`, { deviceID: device.deviceID, refreshToken: tokens.refreshToken }),
+          jsonRequest(`${origin}/api/devices/refresh`, {
+            deviceID: device.deviceID,
+            refreshToken: tokens.refreshToken,
+          }),
         )
       ).status,
     ).toBe(401)
     expect(
       (
         await h.router(
-          jsonRequest(`${origin}/api/devices/refresh`, { deviceID: device.deviceID, refreshToken: rotated.refreshToken }),
+          jsonRequest(`${origin}/api/devices/refresh`, {
+            deviceID: device.deviceID,
+            refreshToken: rotated.refreshToken,
+          }),
         )
       ).status,
     ).toBe(200)
@@ -516,7 +538,9 @@ describe("router: device enrollment and credentials", () => {
     const h = await harness()
     const response = await h.router(jsonRequest(`${origin}/api/devices/challenge`, { deviceID: "dev_unknown" }))
     expect(response.status).toBe(401)
-    expect(await response.json()).toEqual({ error: { code: "unauthorized", message: "Device is not available for authentication" } })
+    expect(await response.json()).toEqual({
+      error: { code: "unauthorized", message: "Device is not available for authentication" },
+    })
   })
 
   test("rate limits device credential routes by client address", async () => {
@@ -570,7 +594,8 @@ describe("router: device enrollment and credentials", () => {
     const remainder = await enrollDevice(h, owner.userID, "Old desktop")
     const enrolled = await enrollDevice(h, owner.userID, "Current machine")
     const foreign = await enrollDevice(h, other.userID, "Another account")
-    for (const device of [single, remainder]) await h.service.revokeDevice({ deviceID: device.deviceID, userID: owner.userID })
+    for (const device of [single, remainder])
+      await h.service.revokeDevice({ deviceID: device.deviceID, userID: owner.userID })
     await h.service.revokeDevice({ deviceID: foreign.deviceID, userID: other.userID })
     const singleURL = `${origin}/api/devices/${single.deviceID}`
     const activeURL = `${origin}/api/devices/${enrolled.deviceID}`
@@ -607,7 +632,12 @@ describe("router: websocket upgrades", () => {
       (
         await h.router(
           new Request(url, {
-            headers: { ...upgrade, ...sessionCookie(session.token), "sec-fetch-site": "cross-site", origin: "https://evil.example" },
+            headers: {
+              ...upgrade,
+              ...sessionCookie(session.token),
+              "sec-fetch-site": "cross-site",
+              origin: "https://evil.example",
+            },
           }),
         )
       ).status,
@@ -663,12 +693,20 @@ describe("router: websocket upgrades", () => {
     expect(
       (
         await h.router(
-          new Request(`${origin}${RemoteWebSocketPath.client}?device=dev_unknown`, { headers: { ...upgrade, ...sessionCookie(owner.token) } }),
+          new Request(`${origin}${RemoteWebSocketPath.client}?device=dev_unknown`, {
+            headers: { ...upgrade, ...sessionCookie(owner.token) },
+          }),
         )
       ).status,
     ).toBe(404)
     expect(
-      (await h.router(new Request(`${origin}${RemoteWebSocketPath.client}`, { headers: { ...upgrade, ...sessionCookie(owner.token) } }))).status,
+      (
+        await h.router(
+          new Request(`${origin}${RemoteWebSocketPath.client}`, {
+            headers: { ...upgrade, ...sessionCookie(owner.token) },
+          }),
+        )
+      ).status,
     ).toBe(400)
   })
 
@@ -682,7 +720,9 @@ describe("router: websocket upgrades", () => {
     const upgrade = { upgrade: "websocket" }
 
     expect((await h.router(new Request(url))).status).toBe(426)
-    expect((await h.router(new Request(url, { headers: { ...upgrade, authorization: "Bearer short" } }))).status).toBe(401)
+    expect((await h.router(new Request(url, { headers: { ...upgrade, authorization: "Bearer short" } }))).status).toBe(
+      401,
+    )
     expect(
       (
         await h.router(
@@ -694,7 +734,9 @@ describe("router: websocket upgrades", () => {
       (await h.router(new Request(url, { headers: { ...upgrade, cookie: `yc_session=${owner.token}` } }))).status,
     ).toBe(401)
 
-    const accepted = await h.router(new Request(url, { headers: { ...upgrade, authorization: `Bearer ${issued.value.accessToken}` } }))
+    const accepted = await h.router(
+      new Request(url, { headers: { ...upgrade, authorization: `Bearer ${issued.value.accessToken}` } }),
+    )
     expect(accepted.status).toBe(200)
     const called = h.relayCalls.at(-1)!
     expect(called.name).toBe(`${owner.userID}:${device.deviceID}`)
@@ -720,7 +762,16 @@ describe("router: websocket upgrades", () => {
 
   test("rejects missing and unknown WebSocket protocol routes before upgrade", async () => {
     const h = await harness()
-    for (const path of ["/ws/client", "/ws/agent", "/ws/v1/client", "/ws/v1/agent", "/ws/v2/client", "/ws/v2/agent", "/ws/v6/client", "/ws/v6/agent"])
+    for (const path of [
+      "/ws/client",
+      "/ws/agent",
+      "/ws/v1/client",
+      "/ws/v1/agent",
+      "/ws/v2/client",
+      "/ws/v2/agent",
+      "/ws/v6/client",
+      "/ws/v6/agent",
+    ])
       expect((await h.router(new Request(`${origin}${path}`, { headers: { upgrade: "websocket" } }))).status).toBe(404)
     expect(h.relayCalls).toEqual([])
   })
@@ -735,18 +786,23 @@ describe("router: websocket upgrades", () => {
     const agentHeaders = { upgrade: "websocket", authorization: `Bearer ${issued.value.accessToken}` }
 
     const statuses = [
-      (await h.router(new Request(`${origin}/ws/v3/client?device=${device.deviceID}`, { headers: clientHeaders }))).status,
+      (await h.router(new Request(`${origin}/ws/v3/client?device=${device.deviceID}`, { headers: clientHeaders })))
+        .status,
       (await h.router(new Request(`${origin}/ws/v3/agent`, { headers: agentHeaders }))).status,
-      (await h.router(new Request(`${origin}/ws/v4/client?device=${device.deviceID}`, { headers: clientHeaders }))).status,
+      (await h.router(new Request(`${origin}/ws/v4/client?device=${device.deviceID}`, { headers: clientHeaders })))
+        .status,
       (await h.router(new Request(`${origin}/ws/v4/agent`, { headers: agentHeaders }))).status,
-      (await h.router(new Request(`${origin}/ws/v5/client?device=${device.deviceID}`, { headers: clientHeaders }))).status,
+      (await h.router(new Request(`${origin}/ws/v5/client?device=${device.deviceID}`, { headers: clientHeaders })))
+        .status,
       (await h.router(new Request(`${origin}/ws/v5/agent`, { headers: agentHeaders }))).status,
     ]
     expect(statuses).toEqual([404, 404, 404, 404, 200, 200])
-    expect(h.relayCalls.map((call) => ({ name: call.name, role: call.request.headers.get("x-ycoding-role") }))).toEqual([
-      { name: `${owner.userID}:${device.deviceID}`, role: "client" },
-      { name: `${owner.userID}:${device.deviceID}`, role: "agent" },
-    ])
+    expect(h.relayCalls.map((call) => ({ name: call.name, role: call.request.headers.get("x-ycoding-role") }))).toEqual(
+      [
+        { name: `${owner.userID}:${device.deviceID}`, role: "client" },
+        { name: `${owner.userID}:${device.deviceID}`, role: "agent" },
+      ],
+    )
   })
 })
 
@@ -755,25 +811,57 @@ test("cookie-authenticated same-origin message stream forwards only an owned dev
   const owner = await signIn(h, "stream-owner")
   const intruder = await signIn(h, "stream-intruder")
   const device = await enrollDevice(h, owner.userID)
-  const url = `${origin}/api/remote/devices/${device.deviceID}/sessions/ses_stream/messages/msg_large`
+  const url = `${origin}/api/remote/devices/${device.deviceID}/sessions/ses_stream/messages/msg_large?connectionEpoch=live-epoch&requestID=1&transferID=live-transfer`
   const cancelled = new AbortController()
-  expect((await h.router(new Request(url, { headers: { ...sessionCookie(owner.token), origin }, signal: cancelled.signal }))).status).toBe(200)
+  expect(
+    (await h.router(new Request(url, { headers: { ...sessionCookie(owner.token), origin }, signal: cancelled.signal })))
+      .status,
+  ).toBe(200)
   const forwarded = h.relayCalls.at(-1)
   expect(forwarded?.name).toBe(`${owner.userID}:${device.deviceID}`)
   expect(forwarded?.request.headers.get("x-ycoding-target-session")).toBe("ses_stream")
   expect(forwarded?.request.headers.get("x-ycoding-target-message")).toBe("msg_large")
+  expect(forwarded?.request.headers.get("x-ycoding-connection-epoch")).toBe("live-epoch")
+  expect(forwarded?.request.headers.get("x-ycoding-request-id")).toBe("1")
+  expect(forwarded?.request.headers.get("x-ycoding-transfer-id")).toBe("live-transfer")
+  expect(
+    (await h.router(new Request(url.split("?")[0]!, { headers: { ...sessionCookie(owner.token), origin } }))).status,
+  ).toBe(400)
   expect(forwarded?.request.signal.aborted).toBe(false)
   cancelled.abort()
   expect(forwarded?.request.signal.aborted).toBe(true)
-  const attachment = await h.router(new Request(url.replace("messages/msg_large", `attachments/${"a".repeat(64)}`), { headers: { ...sessionCookie(owner.token), origin } }))
+  const attachment = await h.router(
+    new Request(url.replace("messages/msg_large", `attachments/${"a".repeat(64)}`), {
+      headers: { ...sessionCookie(owner.token), origin },
+    }),
+  )
   expect(attachment.status).toBe(200)
   expect(h.relayCalls.at(-1)?.request.headers.get("x-ycoding-target-digest")).toBe("a".repeat(64))
   expect((await h.router(new Request(url, { headers: { ...sessionCookie(intruder.token), origin } }))).status).toBe(403)
-  expect((await h.router(new Request(url, { headers: { ...sessionCookie(owner.token), ...crossSite } }))).status).toBe(403)
-  expect((await h.router(new Request(url, { headers: { ...sessionCookie(owner.token), origin: "https://evil.example", "sec-fetch-site": "same-origin" } }))).status).toBe(403)
+  expect((await h.router(new Request(url, { headers: { ...sessionCookie(owner.token), ...crossSite } }))).status).toBe(
+    403,
+  )
+  expect(
+    (
+      await h.router(
+        new Request(url, {
+          headers: { ...sessionCookie(owner.token), origin: "https://evil.example", "sec-fetch-site": "same-origin" },
+        }),
+      )
+    ).status,
+  ).toBe(403)
   expect((await h.router(new Request(url, { headers: sessionCookie(owner.token) }))).status).toBe(403)
-  expect((await h.router(new Request(url, { headers: { ...sessionCookie(owner.token), "sec-fetch-site": "same-origin" } }))).status).toBe(200)
-  expect((await h.router(new Request(url.replace("msg_large", "../private"), { headers: { ...sessionCookie(owner.token), origin } }))).status).toBe(404)
+  expect(
+    (await h.router(new Request(url, { headers: { ...sessionCookie(owner.token), "sec-fetch-site": "same-origin" } })))
+      .status,
+  ).toBe(200)
+  expect(
+    (
+      await h.router(
+        new Request(url.replace("msg_large", "../private"), { headers: { ...sessionCookie(owner.token), origin } }),
+      )
+    ).status,
+  ).toBe(404)
   expect((await h.router(new Request(url, { headers: { origin } }))).status).toBe(401)
 })
 
@@ -847,7 +935,9 @@ describe("router: sign-in allowlist", () => {
   })
 
   test("normalizes configured addresses and the presented claim", async () => {
-    const h = await harness({ allowedEmails: parseAllowedEmails({ GOOGLE_ALLOWED_EMAILS: " Owner@Example.INVALID ,second@example.invalid\n" }) })
+    const h = await harness({
+      allowedEmails: parseAllowedEmails({ GOOGLE_ALLOWED_EMAILS: " Owner@Example.INVALID ,second@example.invalid\n" }),
+    })
     expect((await completeSignIn(h)).headers.get("location")).toBe("/remote/")
   })
 
@@ -918,7 +1008,9 @@ describe("router: expired metadata cleanup", () => {
     const h = await harness({ service: createAuthService(failing, { now: () => Date.now() }) })
     expect((await h.router(new Request(`${origin}/health`))).status).toBe(200)
     const session = await h.service.signIn({ provider: "google", subject: "s" })
-    expect((await h.router(new Request(`${origin}/api/me`, { headers: sessionCookie(session.token) }))).status).toBe(200)
+    expect((await h.router(new Request(`${origin}/api/me`, { headers: sessionCookie(session.token) }))).status).toBe(
+      200,
+    )
   })
 })
 

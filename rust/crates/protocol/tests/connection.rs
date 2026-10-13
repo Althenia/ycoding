@@ -2095,6 +2095,7 @@ fn ac_wire_008_credit_and_tiny_receipt_forgery_matrix() {
                     Some(through) => v5::control::Kind::Credit(v5::Credit {
                         ledger: v5::LedgerClass::Normal as i32,
                         consumed_through: through,
+                        transfer_id: None,
                     }),
                     None => v5::control::Kind::Pong(v5::Pong { id: 999 }),
                 }),

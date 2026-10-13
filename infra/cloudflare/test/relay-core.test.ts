@@ -241,16 +241,22 @@ test("typed bulk is forwarded without endpoint reassembly and stays charged thro
       }),
     },
   ] as Frame["body"][]) {
-    agent.enqueue(body, frameReservation(body), 0)
+    agent.enqueue(body, frameReservation(body), h.now())
     await h.send("agent")
+    if (body.case === "bulkStart") {
+      h.receive("browser")
+      h.at(25)
+      browser.advance(25)
+      await h.send("browser")
+    }
   }
   expect(h.relay.connection("agent")!.bulkRetainedBytes).toBe(0)
   const received = h.receive("browser").flatMap((entry) => entry.decisions)
   expect(received).toContainEqual(expect.objectContaining({ type: "bulkComplete", data: payload }))
   expect(h.relay.connection("browser")!.ledger(LedgerClass.BULK).handedBytes).toBeGreaterThan(0)
   expect(h.relay.connection("agent")!.ledger(LedgerClass.BULK).receivedBytes).toBeGreaterThan(0)
-  h.at(25)
-  browser.advance(25)
+  h.at(50)
+  browser.advance(50)
   await h.send("browser")
   expect(h.relay.connection("agent")!.ledger(LedgerClass.BULK).receivedBytes).toBe(0)
 })

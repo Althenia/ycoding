@@ -157,8 +157,12 @@ function scan(
     if (field.repeated && field.constraints)
       validateConstraints(field.constraints, undefined, undefined, fields.get(field.tag)?.length ?? 0)
   }
-  if (name === "ycoding.v5.Credit" && (integer(node, 1) === BigInt(LedgerClass.TINY) || integer(node, 2) === 0n))
-    throw new Error("credit grant")
+  if (name === "ycoding.v5.Credit") {
+    if (fields.has(3)) {
+      if (integer(node, 1) !== BigInt(LedgerClass.BULK) || !requiredField(node, 3).bytes?.length)
+        throw new Error("HTTP credit grant")
+    } else if (integer(node, 1) === BigInt(LedgerClass.TINY) || integer(node, 2) === 0n) throw new Error("credit grant")
+  }
   if (name === "ycoding.v5.LosslessString") units(node)
   if (name === "ycoding.v5.AssetMetadataResult") {
     if (!validAssetMime(stringFromUnits(units(requiredField(node, 2).message!)))) throw new Error("asset MIME")

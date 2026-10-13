@@ -8,4 +8,6 @@ export type Transfer = {
   complete: boolean
   metadata?: AssetMetadataResult
   assetCharge?: number
+  http?: { ordinal: bigint; bound: boolean; finished: boolean }
+  startHanded?: bigint
 }

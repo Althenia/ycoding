@@ -1532,6 +1532,7 @@ impl Connection {
                     self.enqueue_control(v5::control::Kind::Credit(v5::Credit {
                         ledger: (index + 1) as i32,
                         consumed_through: consumed,
+                        transfer_id: None,
                     }))?;
                     self.receive[index].pending_bytes = 0;
                     self.receive[index].pending_since = None;
@@ -1595,6 +1596,7 @@ impl Connection {
         if let Some(v5::frame::Body::Control(v5::Control {
             kind: Some(v5::control::Kind::Credit(credit)),
         })) = &frame.body
+            && credit.transfer_id.is_none()
         {
             self.receive[class_index(credit.ledger)?]
                 .bytes
@@ -1997,6 +1999,9 @@ impl Connection {
             v5::frame::Body::Control(control) => {
                 match control.kind.as_ref().ok_or(ProtocolError::Malformed)? {
                     v5::control::Kind::Credit(credit) => {
+                        if credit.transfer_id.is_some() {
+                            return Err(ProtocolError::Malformed);
+                        }
                         let class = class_index(credit.ledger)?;
                         if class == 3 {
                             return Err(ProtocolError::Malformed);
