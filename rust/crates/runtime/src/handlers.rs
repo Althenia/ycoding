@@ -1,5 +1,5 @@
 use crate::{
-    browser, convert, credential,
+    artifact, browser, convert, credential,
     dispatch::{Dispatcher, Failure, Invocation, RegistrationError},
     event_subscribe, form, guardrail, health, ids, isolated_browser, message, permission, project,
     question, session_autonomy, session_create, session_helpers, session_list, session_outstanding,
@@ -21,6 +21,7 @@ pub fn standard() -> Result<Dispatcher, RegistrationError> {
     dispatcher.handle("telemetry.consent.set", crate::telemetry::consent_set)?;
     dispatcher.handle("keepAwake.get", crate::keep_awake::get)?;
     dispatcher.handle("keepAwake.set", crate::keep_awake::set)?;
+    artifact::register(&mut dispatcher)?;
     dispatcher.handle("health.get", health_get)?;
     dispatcher.handle("health.stop", health::stop)?;
     dispatcher.handle("server.get", server)?;

@@ -889,12 +889,131 @@ fn manual<'a>(definition: &'a project_artifact::Definition) -> store::ManualWrit
 }
 
 #[test]
-fn write_results_report_retained_artifact_version_and_owned_byte_capacity() {
+fn manual_write_results_report_default_capacity_and_reconcile_identical_content_without_new_versions()
+ {
     let fixture = Fixture::new();
     let written = fixture.service.write_manual(manual(&definition())).unwrap();
-    assert_eq!(written.remaining.project_artifacts, 31.0);
-    assert_eq!(written.remaining.versions, 15.0);
-    assert!(written.remaining.bytes < 8.0 * 1024.0 * 1024.0);
+    assert_eq!(written.remaining.session, 3.0);
+    assert_eq!(written.remaining.project_daily, 10.0);
+    assert_eq!(written.remaining.project_artifacts, 32.0);
+    assert_eq!(written.remaining.versions, 16.0);
+    assert_eq!(written.remaining.bytes, 8.0 * 1024.0 * 1024.0);
+    let before = fixture
+        .service
+        .get(&written.scope_id, &written.kind, &written.id)
+        .unwrap();
+    let reconciled = fixture
+        .service
+        .write_manual(store::ManualWriteInput {
+            expected: Some(project_artifact::MutationExpectation {
+                expected_revision: before.artifact.revision,
+                expected_version_id: before.current_version.id.clone(),
+                expected_digest: before.current_version.content_digest.clone(),
+            }),
+            now: 2000,
+            ..manual(&definition())
+        })
+        .unwrap();
+    assert_eq!(
+        reconciled.result.encode(),
+        JsonValue::String("reconciled".into())
+    );
+    assert_eq!(reconciled.version_id, written.version_id);
+    assert_eq!(
+        fixture
+            .service
+            .get(&written.scope_id, &written.kind, &written.id)
+            .unwrap(),
+        before
+    );
+}
+
+#[test]
+fn trash_lists_project_and_global_scopes_filters_prior_stage_kind_and_orders_newest_first() {
+    let fixture = Fixture::new();
+    let global = global(&fixture);
+    let deletion = pending_remove(&fixture, &global, 2000);
+    fixture.service.reconcile(&global.scope_id).unwrap();
+    let first = fixture
+        .service
+        .write_manual(store::ManualWriteInput {
+            id: "alpha",
+            ..manual(&definition())
+        })
+        .unwrap();
+    let second = fixture
+        .service
+        .write_manual(store::ManualWriteInput {
+            id: "beta",
+            ..manual(&definition())
+        })
+        .unwrap();
+    for (written, now) in [(&first, 3000), (&second, 4000)] {
+        fixture
+            .service
+            .remove(store::LifecycleInput {
+                scope_id: &written.scope_id,
+                kind: &written.kind,
+                id: &written.id,
+                expected: &project_artifact::MutationExpectation {
+                    expected_revision: project_artifact::Revision::decode(&JsonValue::Number(0.0))
+                        .unwrap(),
+                    expected_version_id: written.version_id.clone(),
+                    expected_digest: written.content_digest.clone(),
+                },
+                now,
+            })
+            .unwrap();
+    }
+    let project = fixture
+        .service
+        .list_trash(&first.scope_id, None, None)
+        .unwrap();
+    assert_eq!(
+        project
+            .iter()
+            .map(|item| item.trash.id.as_lossless().as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["beta", "alpha"]
+    );
+    assert_eq!(project[0].definition, definition());
+    let globals = fixture
+        .service
+        .list_trash(
+            &global.scope_id,
+            Some(&global.kind),
+            Some(&project_artifact::Stage::decode(&JsonValue::String("trial".into())).unwrap()),
+        )
+        .unwrap();
+    assert_eq!(globals.len(), 1);
+    assert_eq!(globals[0].trash.deletion_id, deletion);
+    assert!(
+        fixture
+            .service
+            .list_trash(
+                &global.scope_id,
+                Some(
+                    &project_artifact::Kind::decode(&JsonValue::String("command".into())).unwrap()
+                ),
+                None
+            )
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        fixture
+            .service
+            .list_trash(
+                &first.scope_id,
+                None,
+                Some(
+                    &project_artifact::Stage::decode(&JsonValue::String("disabled".into()))
+                        .unwrap()
+                )
+            )
+            .unwrap()
+            .is_empty()
+    );
 }
 
 fn automatic<'a>(

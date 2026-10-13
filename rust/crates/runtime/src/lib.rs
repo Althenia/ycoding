@@ -1,3 +1,4 @@
+mod artifact;
 mod auth;
 mod browser;
 mod browser_convert;
@@ -41,4 +42,7 @@ pub use locations::{
     Configuration, HelperEnvironment, HelperProvider, LocationServices, Locations, SnapshotSettings,
 };
 pub use server::{Server, serve, serve_with};
-pub use services::{Core, Environment, Identity, IsolatedBrowserResolver, Services, Subscriptions};
+pub use services::{
+    ArtifactProvider, ArtifactServices, Core, Environment, Identity, IsolatedBrowserResolver, Services,
+    Subscriptions,
+};

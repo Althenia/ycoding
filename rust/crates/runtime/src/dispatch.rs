@@ -96,6 +96,7 @@ enum Body {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Failure {
     TelemetryDisabled,
+    Artifact(ycoding_core::ycoding_schema::project_artifact::ErrorCode),
     Invalid(String),
     InvalidField {
         message: String,
@@ -354,6 +355,7 @@ impl Failure {
                 encoded(v5::TelemetryDisabled { tag: 1 })
             }
             Failure::TelemetryDisabled => invalid("Telemetry disabled", "disabled"),
+            Failure::Artifact(code) => crate::artifact::error_payload(&code),
             Failure::Unauthorized(message) => encoded(v5::UnauthorizedError {
                 tag: 1,
                 message: convert::text(&message),

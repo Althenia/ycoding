@@ -12,6 +12,36 @@ pub struct TrashDetails {
     pub versions: Vec<project_artifact::Version>,
 }
 impl Service {
+    pub fn list_trash(
+        &self,
+        scope_id: &project_artifact::ScopeId,
+        kind: Option<&project_artifact::Kind>,
+        stage: Option<&project_artifact::Stage>,
+    ) -> Result<Vec<TrashDetails>, Error> {
+        let mut rows = scan_all::<artifacts::TrashTable>(&self.client.snapshot()?)?
+            .into_iter()
+            .filter(|row| {
+                &row.scope_id == scope_id.as_lossless()
+                    && kind.is_none_or(|kind| &row.kind == kind.as_lossless())
+                    && stage.is_none_or(|stage| row.prior_stage.encode() == stage.encode())
+            })
+            .collect::<Vec<_>>();
+        rows.sort_by(|left, right| {
+            right
+                .deleted_at
+                .cmp(&left.deleted_at)
+                .then_with(|| left.kind.cmp(&right.kind))
+                .then_with(|| left.artifact_id.cmp(&right.artifact_id))
+        });
+        rows.into_iter()
+            .take(128)
+            .map(|row| {
+                let deletion = project_artifact::DeletionId::decode(&row.deletion_id.encode())
+                    .map_err(|_| error("ReconciliationRequired"))?;
+                self.get_trash(&deletion)
+            })
+            .collect()
+    }
     pub fn remove(&self, input: LifecycleInput<'_>) -> Result<project_artifact::Trash, Error> {
         let scope = self.scope_from_snapshot(&self.client.snapshot()?, input.scope_id)?;
         if !matches!(scope, project_artifact::Scope::Project(_)) {

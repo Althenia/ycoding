@@ -529,6 +529,13 @@ impl Service {
         }
         Ok(output)
     }
+    pub fn metrics(
+        &self,
+        version: &project_artifact::VersionId,
+    ) -> Result<project_artifact::Metrics, Error> {
+        super::accounting::Service::read_metrics(&self.client, version)
+            .map_err(|_| error("StorageUnavailable"))
+    }
     fn scope_from_snapshot(
         &self,
         snapshot: &Snapshot,
@@ -674,6 +681,33 @@ impl Service {
             if other && !global && context.automatic.is_none() && context.snapshot.is_none() {
                 return Err(error("ArtifactCollision"));
             }
+        }
+        if context.automatic.is_none()
+            && let Some(previous) = &previous
+            && previous.content_digest == *package::sha256(&content).as_lossless()
+        {
+            return Ok(WriteResult {
+                result: project_artifact::AutomaticWriteResult::decode(&JsonValue::String(
+                    "reconciled".into(),
+                ))
+                .expect("write result"),
+                scope_id: scope_id.clone(),
+                kind,
+                id: id.clone(),
+                version_id: project_artifact::VersionId::decode(&previous.id.encode())
+                    .map_err(|_| error("ReconciliationRequired"))?,
+                content_digest: project_artifact::Digest::decode(&previous.content_digest.encode())
+                    .map_err(|_| error("ReconciliationRequired"))?,
+                stage: project_artifact::Stage::decode(&JsonValue::String("trial".into()))
+                    .expect("stage"),
+                remaining: Remaining {
+                    session: 3.0,
+                    project_daily: 10.0,
+                    project_artifacts: 32.0,
+                    versions: 16.0,
+                    bytes: 8.0 * 1024.0 * 1024.0,
+                },
+            });
         }
         drop(snapshot);
         let version_id = if let Some(automatic) = &context.automatic {
@@ -1045,10 +1079,14 @@ impl Service {
             package::TransactionError::Hook(error) => error,
             package::TransactionError::Interrupted => self::error("ReconciliationRequired"),
         })?;
-        let remaining = if context.snapshot.is_some() {
+        let remaining = if context.automatic.is_none() {
+            let promotion = context
+                .snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.operation == SnapshotOperation::Promotion);
             Remaining {
-                session: 0.0,
-                project_daily: 0.0,
+                session: if promotion { 0.0 } else { 3.0 },
+                project_daily: if promotion { 0.0 } else { 10.0 },
                 project_artifacts: 32.0,
                 versions: 16.0,
                 bytes: 8.0 * 1024.0 * 1024.0,
