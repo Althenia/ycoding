@@ -45,7 +45,6 @@ function route(url: URL) {
     [
       `/api/session/${sessionID}/pending`,
       `/api/session/${sessionID}/permission`,
-      `/api/session/${sessionID}/subagent`,
       `/api/session/${sessionID}/todo`,
       `/api/session/${sessionID}/skills`,
       `/api/session/${sessionID}/guardrail/request`,
@@ -60,6 +59,8 @@ function route(url: URL) {
     ].includes(url.pathname)
   )
     return json({ location, data: [] })
+  if (url.pathname === `/api/session/${sessionID}/subagent`)
+    return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
   if (url.pathname === "/api/mcp/resource") return json({ location, data: { resources: [], templates: [] } })
   if (url.pathname === `/api/session/${sessionID}/guardrail`)
     return json({
@@ -221,7 +222,7 @@ function profileRoute(url: URL) {
  * The GSD built-in agent carries an explicit `#e67e22` colour. This fixture uses the shared location
  * and only changes the agent catalogue and Session agent so the header must paint that loaded colour.
  */
-const gsdSession = { ...session, agent: "GSD", title: "Chrome GSD colour" }
+const gsdSession = { ...session, agent: "GSD", title: "Chrome agent colour" }
 
 function gsdRoute(url: URL) {
   if (url.pathname === "/api/agent")
@@ -247,16 +248,11 @@ async function expectProfilePlacement(viewport: typeof DESIGN_VIEWPORT) {
     ...viewport,
     args: { sessionID },
     route: profileRoute,
-    settle: "Message YCoding…",
+    settle: (screen) => screen.captureCharFrame().split("\n").some((line) =>
+      line.includes(`v${InstallationVersion}`) && line.includes("ready") &&
+      line.includes("Build · Personal · anthropic/Claude Opus 5 · max")),
   })
   try {
-    // The header reads the provider and integration caches after their own fetches land, which can
-    // happen after the composer settles. Wait for the profile to paint before measuring placement.
-    const deadline = Date.now() + 10_000
-    while (Date.now() < deadline) {
-      if (screen.frame().includes("Personal")) break
-      await Bun.sleep(50)
-    }
     const lines = screen.lines()
     const railStart = viewport.width - railWidth(viewport.width)
     const header = lines.find((line) => line.includes(`v${InstallationVersion}`) && line.includes("ready"))
@@ -273,7 +269,9 @@ async function expectProfilePlacement(viewport: typeof DESIGN_VIEWPORT) {
       height: 24,
       args: { sessionID },
       route: profileRoute,
-      settle: "Message YCoding…",
+      settle: (screen) => screen.captureCharFrame().split("\n").some((line) =>
+        line.includes(`v${InstallationVersion}`) && line.includes("ready") &&
+        line.includes("Build · anthropic/Claude Opus 5 · max")),
     })
     try {
       const narrowHeader = narrow
@@ -306,7 +304,10 @@ describe("active-session chrome Penpot design match", () => {
       ...DESIGN_VIEWPORT,
       args: { sessionID },
       route: gsdRoute,
-      settle: "Message YCoding…",
+      settle: (screen) => screen.captureSpans().lines
+        .flatMap((line) => line.spans)
+        .find((span) => span.text.includes("GSD"))
+        ?.fg.toInts().join() === RGBA.fromHex("#e67e22").toInts().join(),
     })
     try {
       expect(screen.lines().some((line) => line.includes("GSD · anthropic/Claude Opus 5"))).toBe(true)

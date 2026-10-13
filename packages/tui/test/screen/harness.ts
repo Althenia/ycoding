@@ -34,7 +34,7 @@ export async function renderScreen(input: {
   /** The real renderer enables the kitty keyboard protocol; modifier sequences need it. */
   kittyKeyboard?: boolean
   /** Frame is stable once this appears; avoids asserting a half-painted screen. */
-  settle: string
+  settle: string | ((screen: Pick<Awaited<ReturnType<typeof createTestRenderer>>, "captureCharFrame" | "captureSpans">) => boolean)
   config?: Record<string, unknown>
   remote?: { get: () => Promise<RemoteStatus>; set: (enabled: boolean) => Promise<RemoteStatus> }
   keepAwake?: { get: () => Promise<KeepAwakeStatus>; set: (enabled: boolean) => Promise<KeepAwakeStatus> }
@@ -127,14 +127,17 @@ export async function renderScreen(input: {
     ),
   )
 
+  const settled = () => typeof input.settle === "string"
+    ? setup.captureCharFrame().includes(input.settle)
+    : input.settle(setup)
   const deadline = Date.now() + 25_000
   while (Date.now() < deadline) {
     await Bun.sleep(50)
     if (setup.renderer.isDestroyed) break
-    if (!setup.captureCharFrame().includes(input.settle)) continue
+    if (!settled()) continue
     // Commit pending layout and hit-grid work before callers inspect or click the frame.
     await setup.renderOnce()
-    if (setup.captureCharFrame().includes(input.settle)) break
+    if (settled()) break
   }
 
   return {
