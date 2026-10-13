@@ -21,11 +21,14 @@ pub(super) struct Globals {
     pub repositories: Arc<repository_cache::Service>,
     pub ripgrep: Arc<ripgrep_binary::Service>,
     pub artifacts: project_artifact::store::Service,
+    pub accounting: project_artifact::accounting::Service,
+    pub sources: Arc<Mutex<project_artifact::source_registry::Registry>>,
     pub browser: Arc<browser::service::Service>,
     pub isolated_executor: Arc<dyn browser::isolated::Executor>,
     pub admission: Arc<browser::admission::Admission>,
     pub sessions: browser::bridge::SessionCheck,
     pub meetings: Meetings,
+    pub watcher: Arc<ycoding_core::platform::filesystem::watcher::Service>,
     worker: Mutex<Option<catalog::models_dev::RefreshWorker>>,
 }
 
@@ -85,13 +88,21 @@ impl Globals {
                 .map_err(|_| unavailable("wellknown source"))?,
         ));
         let roots = &production.configuration.roots;
+        // Like the TypeScript accounting layer, cohort buckets use a fresh secret per process.
+        let secret = (0..2)
+            .map(|_| ycoding_core::meeting::store::uuid().map(|uuid| uuid.replace('-', "")))
+            .collect::<Result<String, _>>()
+            .map_err(|_| unavailable("artifact accounting secret"))?;
+        let accounting = project_artifact::accounting::Service::new(client.clone(), secret);
+        let sources = Arc::new(Mutex::new(project_artifact::source_registry::Registry::default()));
         let artifacts = project_artifact::store::Service::new(
             client.clone(),
             project_artifact::store::Paths {
                 data: roots.data.clone(), home: roots.home.clone(), config: roots.config.clone(),
             },
-            Arc::new(Mutex::new(project_artifact::source_registry::Registry::default())),
-        );
+            sources.clone(),
+        )
+        .with_accounting(accounting.clone());
         let admission = Arc::new(browser::admission::Admission::default());
         let store = Service::new(client);
         let sessions: browser::bridge::SessionCheck = Arc::new(move |id| {
@@ -117,8 +128,9 @@ impl Globals {
             composition, catalog, providers, preparation,
             accounts: tokio::sync::Mutex::new(account_catalog),
             claude, wellknown, auth, repositories, ripgrep,
-            artifacts, browser, isolated_executor, admission, sessions,
+            artifacts, accounting, sources, browser, isolated_executor, admission, sessions,
             meetings: Meetings::new(production.meeting),
+            watcher: Arc::new(ycoding_core::platform::filesystem::watcher::Service::new(true)),
             worker: Mutex::new(worker),
         }))
     }

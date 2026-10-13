@@ -84,7 +84,7 @@ async fn start(
         },
         registry,
         fixture.policy.clone(),
-        &fixture.context(),
+        &ycoding_core::extension::Launch::default(),
         host,
     )
     .await

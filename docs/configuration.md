@@ -46,12 +46,12 @@ The beta channel keeps its own data directory and imports a copy of existing dat
 
 Stable YCoding uses the `ycoding` namespace. The Rust runtime's `beta` channel uses `ycoding-beta` for configuration, state, data, cache, and temporary files. XDG bases must be absolute; unset or relative bases use the home-directory fallbacks below. `ycoding-runtime --paths` emits the resolved `namespace`, `config`, `state`, `data`, `cache`, and `serviceFilename` as JSON without creating directories or starting a server; the beta TypeScript CLI can consume this same namespace authority.
 
-| Purpose                        | Base                                                     |
-| ------------------------------ | -------------------------------------------------------- |
-| Configuration                  | `$XDG_CONFIG_HOME/<namespace>`, or `~/.config/<namespace>` |
+| Purpose                        | Base                                                           |
+| ------------------------------ | -------------------------------------------------------------- |
+| Configuration                  | `$XDG_CONFIG_HOME/<namespace>`, or `~/.config/<namespace>`     |
 | State and service registration | `$XDG_STATE_HOME/<namespace>`, or `~/.local/state/<namespace>` |
-| Data and logs                  | `$XDG_DATA_HOME/<namespace>`, or `~/.local/share/<namespace>` |
-| Cache                          | `$XDG_CACHE_HOME/<namespace>`, or `~/.cache/<namespace>` |
+| Data and logs                  | `$XDG_DATA_HOME/<namespace>`, or `~/.local/share/<namespace>`  |
+| Cache                          | `$XDG_CACHE_HOME/<namespace>`, or `~/.cache/<namespace>`       |
 
 `YCODING_CONFIG_DIR` overrides the global configuration directory used by the process.
 
@@ -1396,7 +1396,7 @@ Managed-service startup checks readiness more frequently during its initial wait
 
 ### Rust runtime executable
 
-The Rust workspace builds a `ycoding-runtime` executable from `rust/crates/runtime`. It runs from an arbitrary extracted path with no adjacent runtime files. It accepts an optional leading `serve` followed by `--hostname <host>`, `--port <port>`, `--service`, `--stdio`, and repeatable `--cors <origin>` flags; `--service` and `--stdio` cannot be combined. `--hostname` defaults to `127.0.0.1`. An explicit `--port` is a single bind in `0` to `65535` (`0` selects an ephemeral port); with no port, a non-service process binds the first free port from `4096`, and a service process uses the channel default port above. In service mode the channel file in the global config directory supplies `hostname`, `port`, and `password`, with arguments taking precedence, and the channel comes from `YCODING_CHANNEL` (default `local`). The version comes from `YCODING_VERSION` (default: the crate version).
+The Rust workspace builds a `ycoding-runtime` executable from `rust/crates/runtime`. It runs from an arbitrary extracted path with no adjacent runtime files. It accepts an optional leading `serve` followed by `--hostname <host>`, `--port <port>`, `--service`, `--stdio`, repeatable `--cors <origin>`, and `--meeting` flags; `--service` and `--stdio` cannot be combined. `--meeting` is off by default and starts one Meeting runtime for each Location the server composes. `--hostname` defaults to `127.0.0.1`. An explicit `--port` is a single bind in `0` to `65535` (`0` selects an ephemeral port); with no port, a non-service process binds the first free port from `4096`, and a service process uses the channel default port above. In service mode the channel file in the global config directory supplies `hostname`, `port`, and `password`, with arguments taking precedence, and the channel comes from `YCODING_CHANNEL` (default `local`). The version comes from `YCODING_VERSION` (default: the crate version).
 
 The password resolves from the service file in service mode, otherwise from `YCODING_PASSWORD` then `YCODING_SERVER_PASSWORD`; when no source supplies one the process generates one, persists it into the service file in service mode, and prints it as `server password <password>` only in default mode. HTTP and WebSocket requests authenticate with Basic auth as user `ycoding`. A generated password is never printed in service or stdio mode. In stdio mode the binary captures the lease password while single-threaded, removes both password variables from its process environment, then creates the Tokio runtime; tool subprocesses cannot inherit those lease variables.
 

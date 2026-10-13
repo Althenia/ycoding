@@ -58,7 +58,7 @@ async fn summary(fixture: &ToolFixture, scopes: &[&str], host: Host) -> Value {
         },
         &registry,
         fixture.policy.clone(),
-        &fixture.context(),
+        &ycoding_core::extension::Launch::default(),
         host,
     )
     .await

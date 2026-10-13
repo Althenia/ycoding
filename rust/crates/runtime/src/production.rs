@@ -74,6 +74,14 @@ pub struct Composed {
     pub references: Arc<reference::Service>,
     pub skills: Arc<tokio::sync::Mutex<skill::Service>>,
     pub generate: Arc<generate::Service>,
+    pub activation: Arc<ycoding_core::extension::Activation>,
+    pub extension_diagnostics: Vec<ycoding_core::ycoding_schema::config::Diagnostic>,
+    pub plugins: Vec<ycoding_core::ycoding_schema::plugin::Info>,
+    launch: ycoding_core::extension::Launch,
+    pub(crate) generation: u64,
+    tasks: Mutex<Vec<JoinHandle<()>>>,
+    governor: tokio::sync::Mutex<Option<ycoding_core::resources::project_artifact::source::Governor>>,
+    mcp_tools: tokio::sync::Mutex<Option<ycoding_core::tools::builtin::mcp::McpTools>>,
     _auth_registration: auth::integration::Registration,
     _registration: Registration,
     _meeting: Option<Registration>,
@@ -83,6 +91,9 @@ pub(crate) struct Prepared {
     pub configuration: Configuration,
     disk: Arc<config::Configuration>,
     models: Arc<model::Resolver>,
+    source: ycoding_core::resources::project_artifact::source::Service,
+    commands: Arc<command::Service>,
+    skills: Arc<tokio::sync::Mutex<skill::Service>>,
 }
 
 pub(crate) struct Factory {
@@ -98,6 +109,8 @@ pub(crate) struct Factory {
     pub steer: Option<Arc<dyn autonomy::Steer>>,
     ripgrep: std::path::PathBuf,
     globals: Arc<globals::Globals>,
+    locations: std::sync::OnceLock<crate::locations::WeakLocations>,
+    generations: std::sync::atomic::AtomicU64,
 }
 
 #[derive(Default)]
@@ -168,6 +181,8 @@ impl Core {
             steer: production.steer,
             ripgrep: production.ripgrep,
             globals,
+            locations: Default::default(),
+            generations: Default::default(),
         });
         let mut global = factory.options.clone();
         global.directory = global.roots.config.clone();
@@ -187,6 +202,7 @@ impl Core {
         )
         .with_factory(factory.clone());
         started.locations = Some(locations.clone());
+        let _ = factory.locations.set(locations.downgrade());
         let goal_locations = locations.clone();
         let steer = factory.steer.clone().unwrap_or_else(|| {
             Arc::new(goal::Service::new(
@@ -248,8 +264,8 @@ impl Core {
                 models: composed.models.clone(), agents: services.agents.clone(),
                 commands: composed.commands.clone(), references: composed.references.clone(), skills: composed.skills.clone(),
                 roots: catalog_roots.clone(),
-                diagnostics: composed.configuration.diagnostics.clone(),
-                plugins: ycoding_core::extension::capabilities::PRE.iter().chain(ycoding_core::extension::capabilities::POST.iter()).map(|id| ycoding_core::ycoding_schema::plugin::Info { id: (*id).into() }).collect(),
+                diagnostics: composed.configuration.diagnostics.iter().chain(&composed.extension_diagnostics).cloned().collect(),
+                plugins: composed.plugins.clone(),
                 ready, refresh, generate: composed.generate.clone(),
             })
         });
@@ -379,7 +395,13 @@ impl Factory {
             Ok(())
         })
     }
-    pub(crate) fn prepare(&self, directory: &LosslessString) -> Result<Prepared, Failure> {
+    pub(crate) fn prepare(
+        &self,
+        directory: &LosslessString,
+        workspace: Option<&LosslessString>,
+        project_id: &LosslessString,
+        project_directory: &LosslessString,
+    ) -> Result<Prepared, Failure> {
         let mut options = self.options.clone();
         options.directory = directory
             .to_utf8()
@@ -424,10 +446,42 @@ impl Factory {
                     .insert("apiKey".into(), JsonValue::String(key.as_str().into()));
             }
         }
+        let mut configuration = self.configuration(&disk)?;
+        let path = |text: &LosslessString| text.to_utf8().map(std::path::PathBuf::from).map_err(|_| unavailable("Location directory"));
+        let location_directory = path(directory)?;
+        let roots = &self.options.roots;
+        let source = ycoding_core::resources::project_artifact::source::Service::new(
+            ycoding_core::resources::project_artifact::source::Options {
+                client: self.client.clone(),
+                store: self.globals.artifacts.clone(),
+                accounting: self.globals.accounting.clone(),
+                registry: self.globals.sources.clone(),
+                location: location::Ref::decode(&ycoding_core::ycoding_schema::ObjectEncoder::new()
+                    .field("directory", directory)
+                    .optional("workspaceID", &workspace.cloned())
+                    .finish()).map_err(|_| unavailable("Location identity"))?,
+                project_id: ycoding_core::ycoding_schema::project::Id::new(project_id.clone()).map_err(|_| unavailable("Project identity"))?,
+                project_directory: path(project_directory)?,
+                data_root: roots.data.clone(),
+            },
+            ycoding_core::resources::project_artifact::source::Catalogs {
+                agents: (*configuration.agents).clone(),
+                commands: command::Service::from_entries(&disk.entries, &mut vec![]).map_err(|_| unavailable("command catalog"))?,
+                skills: skill::Service::from_entries(&disk.entries, &location_directory, &roots.home, &roots.cache).map_err(|_| unavailable("skill catalog"))?,
+            },
+        );
+        let catalogs = self.globals.composition.run(async {
+            source.refresh().await;
+            Ok(source.catalogs().await)
+        })?;
+        configuration.agents = Arc::new(catalogs.agents);
         Ok(Prepared {
-            configuration: self.configuration(&disk)?,
+            configuration,
             disk,
             models: Arc::new(model::Resolver::new(catalog)),
+            source,
+            commands: Arc::new(catalogs.commands),
+            skills: Arc::new(tokio::sync::Mutex::new(catalogs.skills)),
         })
     }
 
@@ -498,11 +552,13 @@ impl Factory {
         &self,
         services: &crate::locations::ServiceSet,
         prepared: Prepared,
+        boot: bool,
     ) -> Result<Composed, Failure> {
-        self.globals.composition.run(self.compose_started(services, prepared))
+        self.globals.composition.run(self.compose_started(services, prepared, boot))
     }
 
-    async fn compose_started(&self, services: &crate::locations::ServiceSet, prepared: Prepared) -> Result<Composed, Failure> {
+    async fn compose_started(&self, services: &crate::locations::ServiceSet, prepared: Prepared, boot: bool) -> Result<Composed, Failure> {
+        let generation = self.generations.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         let roots = &self.options.roots;
         let directory = std::path::PathBuf::from(
             services
@@ -566,7 +622,6 @@ impl Factory {
         let pty = Arc::new(ycoding_core::platform::pty::Pty::new(directory.clone()));
         pty.event_source.bind(self.events.clone(), Some(location::Ref { directory: services.info.directory.clone(), workspace_id: services.info.workspace_id.clone() })).map_err(|_| unavailable("PTY events"))?;
         let copies = Arc::new(ycoding_core::platform::project_copy::Copies::new(&directory, self.git.clone(), self.client.clone(), self.publisher.clone()).map_err(|_| unavailable("project copies"))?);
-        copies.refresh(services.info.project.id.as_lossless().clone()).await.map_err(|_| unavailable("project copy refresh"))?;
         let search_globals = self.globals.clone();
         let vcs = repository.is_some();
         let platform = Arc::new(crate::services::PlatformServices {
@@ -578,7 +633,7 @@ impl Factory {
             })).map_err(|_| unavailable("Location search"))?),
             git: self.git.clone(), copies,
         });
-        let commands = Arc::new(command::Service::from_entries(&prepared.disk.entries, &mut vec![]).map_err(|_| unavailable("command catalog"))?);
+        let commands = prepared.commands.clone();
         let references = Arc::new(reference::Service::from_entries(&prepared.disk.entries, &directory, roots, &mut vec![]).map_err(|_| unavailable("reference catalog"))?);
         for reference in references.list() {
             if let ycoding_core::ycoding_schema::reference::Source::Git(source) = &reference.source {
@@ -590,7 +645,7 @@ impl Factory {
                 }).await.map_err(|_| unavailable("reference acquisition worker"))??;
             }
         }
-        let skills = Arc::new(tokio::sync::Mutex::new(skill::Service::from_entries(&prepared.disk.entries, &directory, &roots.home, &roots.cache).map_err(|_| unavailable("skill catalog"))?));
+        let skills = prepared.skills.clone();
         let isolated = ycoding_core::platform::browser::isolated::Service::new(self.globals.isolated_executor.clone(), self.globals.admission.clone(), self.globals.sessions.clone(), Default::default());
         let (registry, registration) = tools::compose(self, services, prepared.disk.clone(), memory.clone(), &platform)?;
         let clock: Arc<dyn runner::Clock> = Arc::new(runner::WallClock);
@@ -607,13 +662,13 @@ impl Factory {
         instructions.push(instruction_sources::ambient(
             ycoding_core::resources::instruction_discovery::Options {
                 directory: directory.clone(),
-                project_root: project,
+                project_root: project.clone(),
                 global_config: roots.config.clone(),
                 project: self.options.project,
                 max_bytes: None,
             },
         ));
-        let cursor = self
+        let cursor_host = || self
             .cursor
             .as_ref()
             .map(|cursor| {
@@ -640,7 +695,8 @@ impl Factory {
                     extensions: Default::default(),
                 })
             })
-            .transpose()?;
+            .transpose();
+        let cursor = cursor_host()?;
         let compaction = prepared
             .disk
             .values("compaction")
@@ -664,9 +720,91 @@ impl Factory {
             .map(|meeting| ycoding_core::meeting::history::register(&registry, meeting.database.clone()))
             .transpose()
             .map_err(|_| unavailable("meeting history tool"))?;
+        let image_analyzer = ycoding_core::session::image_analyzer::Service::new(
+            prepared.disk.clone(),
+            Arc::new(policy::helper::Models {
+                models: prepared.models.clone(),
+                credentials: self.credentials.clone(),
+                auth: self.globals.preparation.clone(),
+                cursor: cursor_host()?,
+                claude: Some(self.globals.claude.clone()),
+                store: Service::new(self.client.clone()),
+                settings: helpers.clone(),
+            }),
+            self.executor.clone(),
+        );
+        let snapshots: Arc<dyn ycoding_core::session::revert::Snapshots + Send + Sync> = Arc::new(ycoding_core::session::snapshot::GitSnapshots::new(
+            self.git.clone(),
+            roots.data.clone(),
+            services.info.project.id.as_lossless().to_utf8().map_err(|_| unavailable("Project identity"))?,
+            project.clone(),
+            directory.clone(),
+            prepared.configuration.snapshots.enabled,
+        ));
+        let reference = location::Ref { directory: services.info.directory.clone(), workspace_id: services.info.workspace_id.clone() };
+        let launch = ycoding_core::extension::Launch {
+            rules: configured_rules(&prepared.disk, &roots.home)?,
+            cancellation: Default::default(),
+        };
+        // The governor, extensions, MCP tool watcher and generation tasks start after every
+        // fallible step, so a failed compose cannot leave them running.
+        let governor = prepared.source.start(&self.events).map_err(|_| unavailable("project artifact governor"))?;
+        let leaf = Arc::new(ycoding_core::tools::context::policy::LeafPolicy {
+            permissions: services.permissions.clone(),
+            guardrails: services.guardrails.clone(),
+        });
+        let mcp_tools = ycoding_core::tools::builtin::mcp::McpTools::start(
+            Arc::new(mcp.as_ref().clone()),
+            registry.clone(),
+            leaf.clone(),
+            execution::Execution::global().map(|execution| ycoding_core::tools::builtin::mcp::Background {
+                jobs: execution.jobs().clone(),
+                notifier: runner::mcp_notifier(
+                    Service::new(self.client.clone()),
+                    Arc::new(runner::WallClock),
+                    Arc::new(move |id| execution.wake(id)),
+                ),
+            }),
+        );
+        let activation = Arc::new(ycoding_core::extension::Activation::new(
+            directory.clone(),
+            ycoding_core::extension::Options::default(),
+            registry.clone(),
+            leaf,
+            launch.clone(),
+            ycoding_core::extension::Host {
+                mcp: Some(Arc::new(mcp.as_ref().clone())),
+                integrations: Some(integrations.clone()),
+                sessions: Some(ycoding_core::extension::SessionHost { store: Service::new(self.client.clone()), location: reference.clone() }),
+            },
+        ));
+        if activation.event_source.bind(self.events.clone(), Some(reference)).is_err() {
+            if governor.close().await.is_err() {
+                tracing::error!("project artifact governor close after a failed compose failed");
+            }
+            return Err(unavailable("plugin events"));
+        }
+        let mut extension_diagnostics = Vec::new();
+        if let Err(error) = activation.reload(&prepared.disk).await {
+            tracing::error!(%error, "process extension configuration rejected");
+            extension_diagnostics.push(extension_diagnostic(None, error));
+        }
+        extension_diagnostics.extend(activation.failures().await.into_iter().map(|(identity, error)| extension_diagnostic(Some(&identity), error)));
+        let plugins = activation.plugin_list().await;
+        let extensions = activation.extensions().await;
+        let mut tasks = vec![self.watch(&prepared.disk, generation, services.info.clone())];
+        if boot {
+            let copies = platform.copies.clone();
+            let project = services.info.project.id.as_lossless().clone();
+            tasks.push(tokio::spawn(async move {
+                if copies.refresh(project).await.is_err() {
+                    tracing::warn!("project copy refresh failed");
+                }
+            }));
+        }
         let runner = runner::Local::new(runner::Services {
-            snapshots: None,
-            store: Service::new(self.client.clone()),
+            snapshots: Some(snapshots),
+            store: Service::new(self.client.clone()).with_artifact_source(prepared.source.clone()),
             events: self.events.clone(),
             location: location::Ref {
                 directory: services.info.directory.clone(),
@@ -679,9 +817,9 @@ impl Factory {
             attachments,
             instructions,
             analysis: meeting.map(|meeting| meeting.analysis),
-            configuration: None,
-            image_analyzer: None,
-            extensions: Vec::new(),
+            configuration: Some(prepared.disk.clone()),
+            image_analyzer: Some(image_analyzer),
+            extensions,
             clock,
             executor: self.executor.clone(),
             compaction: compaction_policy::resolve(&compaction),
@@ -705,9 +843,67 @@ impl Factory {
             runner,
             steer: self.steer.clone(),
             platform, integrations, mcp, isolated, commands, references, skills, generate,
+            activation, extension_diagnostics, plugins, launch, generation,
+            tasks: Mutex::new(tasks),
+            governor: tokio::sync::Mutex::new(Some(governor)),
+            mcp_tools: tokio::sync::Mutex::new(Some(mcp_tools)),
             _auth_registration: auth_registration,
             _registration: registration,
             _meeting: meeting_history,
+        })
+    }
+}
+
+impl Factory {
+    // Watches this generation's configuration sources. A debounced change rebuilds the
+    // Location while this generation is current; a failed rebuild keeps it and keeps watching.
+    fn watch(&self, disk: &config::Configuration, generation: u64, info: location::Info) -> JoinHandle<()> {
+        use ycoding_core::platform::filesystem::watcher::{Input, Kind};
+        let directories = disk.entries.iter().filter_map(|entry| match entry {
+            config::Entry::Directory(path) | config::Entry::AgentsDirectory(path) | config::Entry::ClaudeDirectory(path) => Some(path.clone()),
+            _ => None,
+        }).collect::<Vec<_>>();
+        let files = disk.entries.iter().filter_map(|entry| match entry {
+            config::Entry::File(path) | config::Entry::Document { path: Some(path), .. } => Some(path.clone()),
+            _ => None,
+        }).filter(|file| !directories.iter().any(|directory| file.starts_with(directory))).collect::<Vec<_>>();
+        let subscriptions = directories.into_iter().map(|path| (path, Kind::Directory))
+            .chain(files.into_iter().map(|path| (path, Kind::File)))
+            .filter_map(|(path, kind)| self.globals.watcher.subscribe(Input { path, kind, ignore: vec![] })
+                .map_err(|error| tracing::warn!(%error, "configuration source cannot be watched")).ok())
+            .collect::<Vec<_>>();
+        let locations = self.locations.get().cloned();
+        tokio::spawn(async move {
+            let Some(locations) = locations else { return };
+            let (sender, mut updates) = tokio::sync::mpsc::unbounded_channel();
+            let mut forwarders = tokio::task::JoinSet::new();
+            for mut subscription in subscriptions {
+                let sender = sender.clone();
+                forwarders.spawn(async move {
+                    while subscription.recv().await.is_ok() {
+                        if sender.send(()).is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+            drop(sender);
+            while updates.recv().await.is_some() {
+                loop {
+                    match tokio::time::timeout(Duration::from_millis(100), updates.recv()).await {
+                        Ok(Some(())) => {}
+                        Ok(None) => return,
+                        Err(_) => break,
+                    }
+                }
+                let Some(locations) = locations.upgrade() else { return };
+                let info = info.clone();
+                match tokio::task::spawn_blocking(move || locations.reload_generation(&info, generation)).await {
+                    Ok(Ok(_)) => return,
+                    Ok(Err(_)) => tracing::error!("configuration reload failed; the current Location generation stays active"),
+                    Err(_) => tracing::error!("configuration reload worker failed"),
+                }
+            }
         })
     }
 }
@@ -958,12 +1154,32 @@ impl Composed {
         Arc::strong_count(&self.platform) > 1 || Arc::strong_count(&self.mcp) > 1 || Arc::strong_count(&self.isolated) > 1
     }
     pub(crate) async fn close(&self) -> Result<(), Failure> {
+        let tasks = std::mem::take(&mut *self.tasks.lock().unwrap_or_else(PoisonError::into_inner));
+        for task in &tasks {
+            task.abort();
+        }
+        for task in tasks {
+            let _ = task.await;
+        }
+        self.launch.cancellation.cancel();
+        self.activation.close().await;
+        // A watcher that ended on a registration failure kept the previous tool batch; it is
+        // reported here instead of failing the Location close.
+        if let Some(tools) = self.mcp_tools.lock().await.take()
+            && let Err(error) = tools.stop().await
+        {
+            tracing::error!(?error, "MCP tool watcher ended with an error");
+        }
+        let governor = match self.governor.lock().await.take() {
+            Some(governor) => governor.close().await.map_err(|_| unavailable("project artifact governor")),
+            None => Ok(()),
+        };
         let isolated = self.isolated.shutdown().await.map_err(|_| unavailable("isolated browser shutdown"));
         let mcp = self.mcp.shutdown().await.map_err(|_| unavailable("MCP shutdown"));
         let shell = self.platform.shell.shutdown().await.map_err(|_| unavailable("shell shutdown"));
         let pty = self.platform.pty.shutdown().await.map_err(|_| unavailable("PTY shutdown"));
         let integrations = self.integrations.shutdown().await.map_err(|_| unavailable("integration shutdown"));
-        isolated.and(mcp).and(shell).and(pty).and(integrations)
+        governor.and(isolated).and(mcp).and(shell).and(pty).and(integrations)
     }
 }
 
@@ -1010,6 +1226,43 @@ impl ycoding_core::session::skill::Resolver for SkillResolver {
                 &[],
             ))
         })
+    }
+}
+
+fn configured_rules(
+    disk: &config::Configuration,
+    home: &std::path::Path,
+) -> Result<Vec<ycoding_core::ycoding_schema::permission::Rule>, Failure> {
+    let home = home.to_str().ok_or_else(|| unavailable("home directory"))?.into();
+    disk.entries
+        .iter()
+        .filter_map(|entry| match entry {
+            config::Entry::Document { info: JsonValue::Object(document), .. } => document.get(&"permissions".into()),
+            _ => None,
+        })
+        .map(|value| {
+            Vec::<ycoding_core::ycoding_schema::permission::Rule>::decode(value)
+                .map(|rules| ycoding_core::tools::policy::expand_permissions(&rules, &home))
+                .map_err(|_| unavailable("permission configuration"))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(|groups| groups.into_iter().flatten().collect())
+}
+
+fn extension_diagnostic(
+    identity: Option<&str>,
+    error: ycoding_core::extension::Error,
+) -> ycoding_core::ycoding_schema::config::Diagnostic {
+    ycoding_core::ycoding_schema::config::Diagnostic {
+        path: "extensions".into(),
+        reason: ycoding_core::ycoding_schema::config::DiagnosticReason("invalid-values".into()),
+        json_path: None,
+        fail_closed: Some(true),
+        message: match identity {
+            Some(identity) => format!("Process extension {identity} did not start: {error}"),
+            None => error.to_string(),
+        }
+        .into(),
     }
 }
 

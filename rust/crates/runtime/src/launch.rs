@@ -454,6 +454,16 @@ pub async fn run(config: LaunchConfig) -> Result<(), LaunchError> {
     };
     let core = services.core.clone();
     let (result, registration) = serve_until_stopped(&config, services).await;
+    // The managed service marks Sessions still running at a graceful stop as suspended before
+    // their drains are interrupted; startup never resumes them.
+    let suspended = match (&core, config.mode) {
+        (Some(core), Mode::Service) => core
+            .execution
+            .suspend_active(crate::ids::now_millis())
+            .await
+            .map_err(|_| LaunchError::Message("active Session suspension failed".into())),
+        _ => Ok(()),
+    };
     let core_result = match core {
         Some(core) => core
             .shutdown()
@@ -466,7 +476,11 @@ pub async fn run(config: LaunchConfig) -> Result<(), LaunchError> {
     }
     let diagnostics_result = diagnostics.close().map_err(message);
     let store_result = store.shutdown().map_err(message);
-    result.and(core_result).and(diagnostics_result).and(store_result)
+    result
+        .and(suspended)
+        .and(core_result)
+        .and(diagnostics_result)
+        .and(store_result)
 }
 
 async fn serve_until_stopped(
@@ -862,7 +876,7 @@ fn open_store(config: &LaunchConfig) -> Result<Store, LaunchError> {
         import_beta(config, &file)?;
     }
     if file.try_exists()? {
-        return Store::open(file, Options::core(), catalog).map_err(message);
+        return Store::open(file, Options::core(), catalog).map_err(|_| unsupported_store());
     }
     let store = Store::initialize(&file, Options::core(), catalog, metadata()?).map_err(message)?;
     #[cfg(unix)]
@@ -871,6 +885,14 @@ fn open_store(config: &LaunchConfig) -> Result<Store, LaunchError> {
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600))?;
     }
     Ok(store)
+}
+
+// Store errors can carry internal detail, so startup reports a fixed diagnostic and never
+// replaces or migrates the existing file.
+fn unsupported_store() -> LaunchError {
+    LaunchError::Message(
+        "The YCoding data store is unreadable or uses an unsupported format. It was left unchanged; restore a supported store or move it aside before starting.".into(),
+    )
 }
 
 fn import_beta(config: &LaunchConfig, file: &std::path::Path) -> Result<(), LaunchError> {
@@ -890,7 +912,7 @@ fn import_beta(config: &LaunchConfig, file: &std::path::Path) -> Result<(), Laun
             Options::core(),
             import::catalog(import::DatabaseKind::Core),
         )
-        .map_err(message)?;
+        .map_err(|_| unsupported_store())?;
         let verified = store
             .snapshot()
             .map_err(message)?

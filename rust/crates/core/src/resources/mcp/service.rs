@@ -79,6 +79,7 @@ struct Inner {
     tasks: Mutex<JoinSet<()>>,
     closed: AtomicBool,
 }
+#[derive(Clone)]
 pub struct Service(Arc<Inner>);
 
 impl Service {

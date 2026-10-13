@@ -1,10 +1,7 @@
-use super::{Configuration, Error, Extension, Host, Options, capabilities};
+use super::{Configuration, Error, Extension, Host, Launch, Options, capabilities};
 use crate::{
     event_feed::{Data, EventSource},
-    tools::{
-        context::{Context, policy::LeafPolicy},
-        registry::Registry,
-    },
+    tools::{context::policy::LeafPolicy, registry::Registry},
 };
 use std::{collections::BTreeSet, path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;
@@ -16,7 +13,7 @@ pub struct Activation {
     options: Options,
     registry: Arc<Registry>,
     policy: Arc<LeafPolicy>,
-    launch: Context,
+    launch: Launch,
     host: Host,
     state: Mutex<State>,
 }
@@ -24,6 +21,7 @@ pub struct Activation {
 #[derive(Default)]
 struct State {
     active: Vec<(Configuration, Arc<Extension>)>,
+    failures: Vec<(String, Error)>,
     closed: bool,
 }
 
@@ -33,7 +31,7 @@ impl Activation {
         options: Options,
         registry: Arc<Registry>,
         policy: Arc<LeafPolicy>,
-        launch: Context,
+        launch: Launch,
         host: Host,
     ) -> Self {
         Self {
@@ -69,6 +67,7 @@ impl Activation {
         {
             return Ok(());
         }
+        state.failures.clear();
         for configuration in &configurations {
             let previous = state
                 .active
@@ -78,16 +77,25 @@ impl Activation {
                 state.active[previous].1.shutdown().await;
             }
             let previous = previous.map(|position| state.active.remove(position));
-            if let Some(extension) = self.load(configuration.clone()).await {
-                state.active.push((configuration.clone(), extension));
-                continue;
-            }
+            let failure = match self.load(configuration.clone()).await {
+                Ok(extension) => {
+                    state.active.push((configuration.clone(), extension));
+                    continue;
+                }
+                Err(error) => error,
+            };
+            state
+                .failures
+                .push((configuration.identity.clone(), failure));
             if let Some((configuration, _)) = previous {
-                if let Some(extension) = self.load(configuration.clone()).await {
+                if let Ok(extension) = self.load(configuration.clone()).await {
                     state.active.push((configuration, extension));
                     continue;
                 }
-                eprintln!("Process extension restoration failed; deactivated");
+                tracing::error!(
+                    identity = configuration.identity,
+                    "process extension restoration failed; deactivated"
+                );
             }
         }
         for position in (0..state.active.len()).rev() {
@@ -127,6 +135,10 @@ impl Activation {
             .collect()
     }
 
+    pub async fn failures(&self) -> Vec<(String, Error)> {
+        self.state.lock().await.failures.clone()
+    }
+
     pub async fn extensions(&self) -> Vec<Arc<Extension>> {
         self.state
             .lock()
@@ -164,7 +176,7 @@ impl Activation {
         }
     }
 
-    async fn load(&self, configuration: Configuration) -> Option<Arc<Extension>> {
+    async fn load(&self, configuration: Configuration) -> Result<Arc<Extension>, Error> {
         let id = configuration.identity.clone();
         match Extension::start(
             configuration,
@@ -186,11 +198,11 @@ impl Activation {
                 {
                     eprintln!("Plugin added event publication failed");
                 }
-                Some(Arc::new(extension))
+                Ok(Arc::new(extension))
             }
             Err(error) => {
-                eprintln!("Process extension activation failed for {id}: {error}");
-                None
+                tracing::error!(identity = id, %error, "process extension activation failed");
+                Err(error)
             }
         }
     }

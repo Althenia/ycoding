@@ -654,3 +654,179 @@ fn beta_absent_source_decision_survives_retry_before_store_creation() {
     drop(source.stdin.take());
     assert!(source.wait().unwrap().success());
 }
+
+#[test]
+fn unreadable_store_is_refused_with_a_sanitized_diagnostic_and_left_unchanged() {
+    let directory = Directory::new();
+    let data = directory.0.join("data/ycoding");
+    std::fs::create_dir_all(&data).unwrap();
+    let store = data.join("ycoding.redb");
+    std::fs::write(&store, b"not a ycoding store").unwrap();
+    let errors = directory.0.join("startup-error");
+    let output = directory
+        .command("test-v1", "local")
+        .env("YCODING_SERVICE_STARTUP_ERROR_FILE", &errors)
+        .args(["serve", "--service", "--port", "0"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let diagnostic = std::fs::read_to_string(&errors).unwrap();
+    assert!(diagnostic.contains("unreadable or uses an unsupported format"), "{diagnostic}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("unreadable or uses an unsupported format"), "{stderr}");
+    for text in [&diagnostic, &stderr.to_string()] {
+        assert!(!text.contains(store.to_str().unwrap()), "{text}");
+    }
+    assert_eq!(std::fs::read(&store).unwrap(), b"not a ycoding store");
+    let stores = std::fs::read_dir(&data)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .filter(|name| name.starts_with("ycoding"))
+        .collect::<Vec<_>>();
+    assert_eq!(stores, ["ycoding.redb"], "no fresh or migrated store may appear");
+    assert!(!directory.registration("local").exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn managed_service_shutdown_suspends_sessions_still_running() {
+    use prost::Message;
+    use ycoding_core::ycoding_store::{
+        KeyPart, Metadata, Options, Store, import, project, session::SessionTable, tuple_key,
+    };
+    use ycoding_protocol::v5;
+    let directory = Directory::new();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let (started, mut attempts) = tokio::sync::mpsc::unbounded_channel::<()>();
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            axum::Router::new().route(
+                "/chat/completions",
+                axum::routing::post(move || {
+                    let started = started.clone();
+                    async move {
+                        started.send(()).unwrap();
+                        std::future::pending::<String>().await
+                    }
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    let config = directory.0.join("config/ycoding");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("ycoding.json"),
+        format!(r#"{{"model":{{"providerID":"openai","model":"gpt-runtime"}},"providers":{{"openai":{{"settings":{{"baseURL":"{endpoint}"}}}}}}}}"#),
+    )
+    .unwrap();
+    let catalog = directory.0.join("models.json");
+    std::fs::write(&catalog, r#"{"openai":{"id":"openai","name":"OpenAI","env":["OPENAI_API_KEY"],"npm":"@ai-sdk/openai-compatible","models":{"gpt-runtime":{"id":"gpt-runtime","name":"Runtime","release_date":"2026-01-01","attachment":false,"reasoning":false,"tool_call":true,"limit":{"context":128000,"output":8192}}}}}"#).unwrap();
+    let workspace = directory.0.join("project");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let data = directory.0.join("data/ycoding");
+    std::fs::create_dir_all(&data).unwrap();
+    let file = data.join("ycoding.redb");
+    let seeded = Store::initialize(
+        &file,
+        Options::core(),
+        import::catalog(import::DatabaseKind::Core),
+        Metadata::new([9; 16], 1),
+    )
+    .unwrap();
+    let placement = workspace.to_str().unwrap().to_owned();
+    seeded
+        .submit(move |tx| {
+            project::ProjectTable::insert(
+                tx,
+                &project::Project {
+                    id: "prj_one".into(),
+                    worktree: placement.clone().into(),
+                    vcs: None,
+                    name: None,
+                    icon_url: None,
+                    icon_url_override: None,
+                    icon_color: None,
+                    time_created: 1,
+                    time_updated: 1,
+                    time_initialized: None,
+                    sandboxes: vec![],
+                    commands: None,
+                },
+            )?;
+            let mut row = support::record("ses_suspend");
+            row.directory = placement.into();
+            row.time_updated = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as i64;
+            SessionTable::insert(tx, &row)
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    seeded.shutdown().unwrap();
+    let mut command = directory.command("test-v1", "local");
+    command
+        .env("OPENAI_API_KEY", "synthetic-key")
+        .env("YCODING_MODELS_PATH", &catalog);
+    let mut runtime = Runtime::spawn(command, &["serve", "--service", "--port", "0"]);
+    runtime.ready();
+    let registration = read(&directory.registration("local"));
+    let url = string(&registration, "url");
+    let password = string(&registration, "password");
+    let address = url.strip_prefix("http://").unwrap().parse().unwrap();
+    let auth = format!("Basic {}", base64(format!("ycoding:{password}").as_bytes()));
+    let mut client = support::Client::open(address, &[("Authorization", auth)])
+        .await
+        .unwrap();
+    let _: v5::SessionPromptResult = support::success(
+        client
+            .call(
+                "session.prompt",
+                support::session_scope("ses_suspend"),
+                v5::SessionPromptRequest {
+                    params: v5::SessionPromptRequestParams {
+                        session_id: support::text("ses_suspend"),
+                    },
+                    payload: v5::SessionPromptRequestPayload {
+                        id: Some(support::text("msg_suspend")),
+                        text: support::text("Keep working"),
+                        files: None,
+                        agents: None,
+                        metadata: None,
+                        delivery: Some(v5::SessionPromptRequestPayloadDelivery::Steer as i32),
+                        resume: Some(true),
+                    },
+                }
+                .encode_to_vec(),
+            )
+            .await,
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(30), attempts.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    runtime.signal("-TERM");
+    assert!(runtime.wait().success());
+    let store = Store::open(
+        &file,
+        Options::core(),
+        import::catalog(import::DatabaseKind::Core),
+    )
+    .unwrap();
+    let row = store
+        .client()
+        .snapshot()
+        .unwrap()
+        .get::<SessionTable>(&tuple_key(&[KeyPart::String(&"ses_suspend".into())]))
+        .unwrap()
+        .unwrap();
+    assert!(
+        row.time_suspended.is_some(),
+        "a graceful managed-service stop must suspend Sessions still running"
+    );
+    store.shutdown().unwrap();
+}

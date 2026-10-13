@@ -80,6 +80,15 @@ struct Cached {
 #[derive(Clone)]
 pub struct Locations(Arc<Inner>);
 
+#[derive(Clone)]
+pub(crate) struct WeakLocations(std::sync::Weak<Inner>);
+
+impl WeakLocations {
+    pub(crate) fn upgrade(&self) -> Option<Locations> {
+        self.0.upgrade().map(Locations)
+    }
+}
+
 pub struct LocationServices {
     inner: Arc<ServiceSet>,
     released: Arc<Mutex<Instant>>,
@@ -212,7 +221,21 @@ impl Locations {
         Ok(count)
     }
 
+    pub(crate) fn downgrade(&self) -> WeakLocations {
+        WeakLocations(Arc::downgrade(&self.0))
+    }
+
     pub fn reload(&self, info: &location::Info) -> Result<(), Failure> {
+        self.replace(info, None).map(drop)
+    }
+
+    // Replaces the generation only while `generation` is still current, so a retired
+    // generation's watcher cannot rebuild a Location it no longer owns.
+    pub(crate) fn reload_generation(&self, info: &location::Info, generation: u64) -> Result<bool, Failure> {
+        self.replace(info, Some(generation))
+    }
+
+    fn replace(&self, info: &location::Info, generation: Option<u64>) -> Result<bool, Failure> {
         if self.0.closed.load(std::sync::atomic::Ordering::Acquire) {
             return Err(Failure::Unavailable("Location map is closed".into()));
         }
@@ -222,16 +245,22 @@ impl Locations {
         let Some(current) = cache.get_mut(&key) else {
             return Err(Failure::Unavailable("Location is not acquired".into()));
         };
+        if generation.is_some_and(|generation| {
+            current.services.production.as_ref().map(|composed| composed.generation) != Some(generation)
+        }) {
+            return Ok(false);
+        }
         let built = Arc::new(self.build(&directory, key.1.as_ref(), Project {
             id: current.services.info.project.id.clone(),
             directory: current.services.info.project.directory.as_lossless().clone(),
-        })?);
+        }, false)?);
         let old = std::mem::replace(&mut current.services, built);
         self.0.retired.lock().unwrap_or_else(PoisonError::into_inner).push(old);
         drop(cache);
         self.0.feed.emit(ycoding_core::event_feed::Data::ConfigUpdated(Box::new(ycoding_core::ycoding_schema::config::Empty)), Some(location::Ref {
             directory: info.directory.clone(), workspace_id: info.workspace_id.clone(),
-        })).map_err(|_| Failure::Unavailable("configuration update publication failed".into()))
+        })).map_err(|_| Failure::Unavailable("configuration update publication failed".into()))?;
+        Ok(true)
     }
 
     pub(crate) fn close(&self) -> Result<(), Failure> {
@@ -334,7 +363,7 @@ impl Locations {
             }));
         }
         let project = project(&directory)?;
-        let built = Arc::new(self.build(&directory, workspace, project)?);
+        let built = Arc::new(self.build(&directory, workspace, project, true)?);
         let released = Arc::new(Mutex::new(Instant::now()));
         cache.insert(
             key,
@@ -354,12 +383,13 @@ impl Locations {
         directory: &LosslessString,
         workspace: Option<&LosslessString>,
         project: Project,
+        boot: bool,
     ) -> Result<ServiceSet, Failure> {
         let prepared = self
             .0
             .factory
             .as_ref()
-            .map(|factory| factory.prepare(directory))
+            .map(|factory| factory.prepare(directory, workspace, project.id.as_lossless(), &project.directory))
             .transpose()?;
         let mut configuration = prepared
             .as_ref()
@@ -447,7 +477,7 @@ impl Locations {
                 .factory
                 .as_ref()
                 .expect("prepared by factory")
-                .compose(&services, prepared)?;
+                .compose(&services, prepared, boot)?;
             let helpers = HelperEnvironment {
                 generate: Arc::new(composed.runner.clone()),
                 memory: composed.memory.clone(),

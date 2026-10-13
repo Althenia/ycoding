@@ -1,6 +1,8 @@
 include!("tool_fixture.rs");
 use std::{sync::Arc, time::Duration};
-use ycoding_core::extension::{Configuration, Error, Extension, Host, Options, ToolGrant, v5};
+use ycoding_core::extension::{
+    Configuration, Error, Extension, Host, Launch, Options, ToolGrant, v5,
+};
 use ycoding_schema::{JsonObject, JsonValue};
 
 fn configuration(fixture: &ToolFixture, mode: &str) -> Configuration {
@@ -41,7 +43,7 @@ async fn start(
         options(),
         registry,
         fixture.policy.clone(),
-        &fixture.context(),
+        &ycoding_core::extension::Launch::default(),
         Host::default(),
     )
     .await
@@ -321,7 +323,7 @@ async fn cancellation_settles_after_cleanup_or_forced_reaping_and_replacement_re
             options(),
             &registry,
             fixture.policy.clone(),
-            &fixture.context(),
+            &ycoding_core::extension::Launch::default(),
             Host::default(),
         )
         .await
@@ -386,11 +388,56 @@ async fn captured_leaf_authority_diagnostics_and_bounded_stop() {
     let diagnostics = extension.diagnostics();
     assert!(diagnostics.contains(&v5::DiagnosticCode::StderrDiscarded));
     assert!(!format!("{diagnostics:?}").contains("SYNTHETIC_SECRET"));
-    fixture.deny("extension.launch", "*");
+    let launch = |action: &str, effect: &str| Launch {
+        rules: vec![ycoding_schema::permission::Rule {
+            action: action.into(),
+            resource: "*".into(),
+            effect: ycoding_schema::permission::Effect(effect.into()),
+        }],
+        ..Default::default()
+    };
+    for (effect, expected) in [("deny", Error::Permission), ("ask", Error::ApprovalUnavailable)] {
+        assert_eq!(
+            Extension::start(
+                configuration(&fixture, "ok"),
+                options(),
+                &registry,
+                fixture.policy.clone(),
+                &launch("extension.launch", effect),
+                Host::default(),
+            )
+            .await
+            .err(),
+            Some(expected),
+            "a configured {effect} rule fails closed at Location launch"
+        );
+    }
+    let cancelled = Launch::default();
+    cancelled.cancellation.cancel();
     assert_eq!(
-        start(&fixture, "ok", &registry).await.err(),
-        Some(Error::Permission)
+        Extension::start(
+            configuration(&fixture, "ok"),
+            options(),
+            &registry,
+            fixture.policy.clone(),
+            &cancelled,
+            Host::default(),
+        )
+        .await
+        .err(),
+        Some(Error::Cancelled)
     );
+    let unmatched = Extension::start(
+        configuration(&fixture, "ok"),
+        options(),
+        &registry,
+        fixture.policy.clone(),
+        &launch("extension.other", "deny"),
+        Host::default(),
+    )
+    .await
+    .expect("configuration trust launches when no rule matches");
+    unmatched.shutdown().await;
     fixture.cleanup();
     let fixture = ToolFixture::new();
     let registry = fixture.registry();

@@ -43,6 +43,37 @@ pub struct SessionHost {
     pub store: crate::session::store::Service,
     pub location: ycoding_schema::location::Ref,
 }
+// Configured extensions launch while a Location starts, before any Session exists. Explicit
+// configured rules matching a launch or family grant still apply: deny and ask fail closed
+// because no Session can answer an ask; when no rule matches, configuration trust admits it.
+#[derive(Clone, Default)]
+pub struct Launch {
+    pub rules: Vec<ycoding_schema::permission::Rule>,
+    pub cancellation: crate::tools::code_mode::Cancellation,
+}
+impl Launch {
+    fn admit(&self, action: &str, resources: &[String]) -> Result<(), Error> {
+        let action = action.into();
+        for resource in resources {
+            let resource = resource.as_str().into();
+            let effect = self
+                .rules
+                .iter()
+                .rev()
+                .find(|rule| {
+                    crate::tools::policy::wildcard(&action, &rule.action)
+                        && crate::tools::policy::wildcard(&resource, &rule.resource)
+                })
+                .map(|rule| rule.effect.0.clone());
+            match effect.as_ref().and_then(|effect| effect.as_str()) {
+                Some("deny") => return Err(Error::Permission),
+                Some("ask") => return Err(Error::ApprovalUnavailable),
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+}
 #[derive(Clone, Default)]
 pub struct Host {
     pub mcp: Option<Arc<crate::resources::mcp::Service>>,
@@ -357,7 +388,6 @@ impl Default for Options {
 }
 pub(super) struct Shared {
     sender: mpsc::Sender<Request>,
-    pub(super) launch: Context,
     pub(super) accepting: AtomicBool,
     next: AtomicU64,
     diagnostics: Mutex<VecDeque<v5::DiagnosticCode>>,
@@ -524,7 +554,7 @@ impl Extension {
         options: Options,
         registry: &Registry,
         policy: Arc<LeafPolicy>,
-        launch: &Context,
+        launch: &Launch,
         host: Host,
     ) -> Result<Self, Error> {
         configuration.validate()?;
@@ -545,35 +575,12 @@ impl Extension {
             .executable
             .to_str()
             .ok_or(Error::InvalidConfiguration)?;
-        policy
-            .assert(
-                launch,
-                "extension.launch",
-                vec![executable.into()],
-                vec![],
-                None,
-            )
-            .await
-            .map_err(|_| Error::Permission)?;
-        let _reservation = policy
-            .reserve(launch, "extension.launch", vec![executable.into()], None)
-            .await
-            .map_err(|_| Error::Permission)?;
+        launch.admit("extension.launch", &[executable.into()])?;
         for grant in &configuration.families {
-            policy
-                .assert(
-                    launch,
-                    &grant.action,
-                    grant
-                        .resources
-                        .iter()
-                        .map(|resource| resource.as_str().into())
-                        .collect(),
-                    vec![],
-                    None,
-                )
-                .await
-                .map_err(|_| Error::Permission)?;
+            launch.admit(&grant.action, &grant.resources)?;
+        }
+        if launch.cancellation.is_cancelled() {
+            return Err(Error::Cancelled);
         }
         let generation = crate::platform::identifier("ext_").map_err(|_| Error::Spawn)?;
         let mut command = process::Command::new(executable, configuration.args.clone());
@@ -592,7 +599,6 @@ impl Extension {
             families: configuration.families.clone(),
             host,
             policy: policy.clone(),
-            launch: launch.clone(),
             subscriptions: Mutex::new(BTreeMap::new()),
             pending_events: Mutex::new(BTreeSet::new()),
         });
@@ -616,9 +622,10 @@ impl Extension {
             providers: BTreeMap::new(),
             auth_registration: None,
         };
-        let negotiated = timeout(owner.options.startup, owner.negotiate(&configuration))
-            .await
-            .unwrap_or(Err(Error::Timeout));
+        let negotiated = tokio::select! {
+            negotiated = timeout(owner.options.startup, owner.negotiate(&configuration)) => negotiated.unwrap_or(Err(Error::Timeout)),
+            () = launch.cancellation.cancelled() => Err(Error::Cancelled),
+        };
         let declarations = match negotiated {
             Ok(tools) => tools,
             Err(error) => {
@@ -824,7 +831,7 @@ impl Extension {
         options: Options,
         registry: &Registry,
         policy: Arc<LeafPolicy>,
-        launch: &Context,
+        launch: &Launch,
         host: Host,
     ) -> Result<Self, Error> {
         configuration.validate()?;

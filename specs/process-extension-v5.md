@@ -34,11 +34,19 @@ shell. JS/TS executable files and Node/Bun/npm/npx launchers reject. Obsolete
 `plugins`, `plugin`, `npm`, and executable provider-package declarations produce
 actionable fail-closed diagnostics, not configuration mappings.
 
-`Extension::start` receives the existing registry, captured `LeafPolicy`,
-launch `Context`, and `Host` services. It requests `extension.launch` permission and a guardrail
-reservation for the executable before using `platform::process`. Tool calls
-independently check their host-granted action/resources through that captured
-policy, including inherited ceilings. Catalog visibility grants no authority.
+`Extension::start` receives the existing registry, captured `LeafPolicy`, a
+Location `Launch`, and `Host` services. Configured extensions are trusted by
+configuration and launch while their Location starts, before any Session exists.
+`Launch` carries the Location's configured permission rules and a cancellation
+token owned by the Location lifetime. Before using `platform::process`, start
+evaluates `extension.launch` for the executable and each family grant's action
+and resources against those rules: the last matching rule decides, `deny` and
+`ask` fail closed because no Session can answer an ask, and no matching rule
+admits the launch. A cancelled launch fails before spawning or during
+negotiation. Launch takes no guardrail reservation. Tool calls independently
+check their host-granted action/resources through the captured policy with the
+calling Session's context, including inherited ceilings. Catalog visibility
+grants no authority.
 
 ## Framing and negotiation
 
@@ -277,8 +285,10 @@ identical.
 The host sends `ProviderRequest` frames with a host-allocated `request`
 identity, at most eight outstanding per generation, bounded by the execution
 deadline. Each attempt checks the live providers-scope grant, then the captured
-permission and guardrail policy with the extension launch Session context,
-before dispatch; oversized attempt bodies are rejected without sending. The
+permission and guardrail policy with the calling Session's context, before
+dispatch. The Session runner supplies that context as the request `Caller`
+(Session, agent, and assistant message); an attempt without a caller is
+rejected; oversized attempt bodies are rejected without sending. The
 child replies with one `ProviderResult`: a `frames` array of protocol wire
 values or a categorical `Failure`. Malformed frames or invalid failure codes
 close the generation; results too large for one frame fail the attempt without

@@ -90,7 +90,7 @@ async fn start_with(
         },
         &fixture.registry(),
         fixture.policy.clone(),
-        &fixture.context(),
+        &ycoding_core::extension::Launch::default(),
         host,
     )
     .await

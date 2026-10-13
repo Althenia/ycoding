@@ -200,7 +200,7 @@ async fn start(
         options(),
         registry,
         fixture.policy.clone(),
-        &fixture.context(),
+        &ycoding_core::extension::Launch::default(),
         Host::default(),
     )
     .await

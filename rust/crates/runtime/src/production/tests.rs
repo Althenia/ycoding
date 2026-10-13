@@ -159,6 +159,8 @@ fn fixture_with(global: &str, project_configuration: &str, env: BTreeMap<String,
             steer: None,
             ripgrep: "rg".into(),
             globals,
+            locations: Default::default(),
+            generations: Default::default(),
         }),
         store,
         roots,
@@ -240,7 +242,7 @@ fn configuration_precedence_and_project_disable_feed_the_agent_catalog() {
     let description = |f: &Fixture| {
         let prepared = f
             .factory
-            .prepare(&f.directory().to_str().unwrap().into())
+            .prepare(&f.directory().to_str().unwrap().into(), None, &"prj_one".into(), &f.directory().to_str().unwrap().into())
             .unwrap();
         prepared
             .configuration
@@ -683,7 +685,7 @@ async fn native_memory_guardrail_limits_forms_questions_and_saved_permissions_ar
     );
     let prepared = f
         .factory
-        .prepare(&f.directory().to_str().unwrap().into())
+        .prepare(&f.directory().to_str().unwrap().into(), None, &"prj_one".into(), &f.directory().to_str().unwrap().into())
         .unwrap();
     assert!(!prepared.configuration.guardrails.enabled);
     assert_eq!(prepared.configuration.guardrails.limits.shells, 2);
@@ -794,7 +796,7 @@ fn custom_guardrails_deny_and_unreadable_rules_stay_fail_closed() {
     .unwrap();
     let prepared = f
         .factory
-        .prepare(&f.directory().to_str().unwrap().into())
+        .prepare(&f.directory().to_str().unwrap().into(), None, &"prj_one".into(), &f.directory().to_str().unwrap().into())
         .unwrap();
     let layers = (prepared.configuration.guardrails.custom)();
     assert!(layers.iter().any(|layer| !layer.invalid_files.is_empty()));
@@ -1461,4 +1463,258 @@ async fn retention_configuration_failure_preserves_data_and_recovers_on_the_next
             .is_none()
     );
     release(&maintenance.globals, &maintenance.credentials, None, None, Some(&maintenance)).await.unwrap();
+}
+
+fn extension_configuration(journal: &std::path::Path, permissions: &str) -> String {
+    format!(
+        r#"{{"permissions":{permissions},"extensions":[{{"identity":"trusted","executable":"/usr/bin/python3","args":["{child}","lifecycle","{journal}"],"grants":[{{"family":"tools","namespace":"trusted","tools":["echo"],"action":"extension.echo","resources":["demo"]}}]}}]}}"#,
+        child = concat!(env!("CARGO_MANIFEST_DIR"), "/../core/tests/extension_child.py"),
+        journal = journal.display()
+    )
+}
+
+fn extension_journal() -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "composition-extension-{}-{}",
+        std::process::id(),
+        FIXTURE.fetch_add(1, Ordering::Relaxed)
+    ))
+}
+
+fn started(journal: &std::path::Path) -> Vec<u32> {
+    std::fs::read_to_string(journal)
+        .unwrap_or_default()
+        .lines()
+        .map(|line| parse_json(line).unwrap())
+        .filter_map(|entry| match entry {
+            JsonValue::Object(entry)
+                if entry.get(&"event".into()) == Some(&JsonValue::String("start".into())) =>
+            {
+                match entry.get(&"pid".into()) {
+                    Some(JsonValue::Number(pid)) => Some(*pid as u32),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn alive(pid: u32) -> bool {
+    ycoding_core::platform::process::is_alive(pid).unwrap()
+}
+
+#[test]
+fn configured_extensions_launch_by_trust_and_fail_closed_on_configured_deny_or_ask() {
+    for (permissions, reason) in [
+        ("[]", None),
+        (
+            r#"[{"action":"extension.launch","resource":"*","effect":"deny"}]"#,
+            Some("authority rejected"),
+        ),
+        (
+            r#"[{"action":"extension.*","resource":"*","effect":"ask"}]"#,
+            Some("requires approval, which no Session can give"),
+        ),
+    ] {
+        let journal = extension_journal();
+        let f = fixture("{}", &extension_configuration(&journal, permissions));
+        let locations = f.locations();
+        let services = f.services(&locations);
+        let composed = services.production.as_ref().unwrap();
+        let launched = reason.is_none();
+        assert_eq!(
+            composed
+                .plugins
+                .iter()
+                .any(|plugin| plugin.id.as_str() == Some("trusted")),
+            launched,
+            "{permissions}"
+        );
+        assert_eq!(
+            composed
+                .tools
+                .materialize(&services.agents.default().unwrap().permissions)
+                .definitions
+                .iter()
+                .any(|tool| tool.name.as_str() == Some("trusted_echo")),
+            launched
+        );
+        match reason {
+            Some(reason) => assert!(
+                composed.extension_diagnostics.iter().any(|diagnostic| {
+                    diagnostic.fail_closed == Some(true)
+                        && diagnostic.message.to_utf8().unwrap().contains("trusted")
+                        && diagnostic.message.to_utf8().unwrap().contains(reason)
+                }),
+                "{:?}",
+                composed.extension_diagnostics
+            ),
+            None => assert!(composed.extension_diagnostics.is_empty()),
+        }
+        assert_eq!(started(&journal).len(), usize::from(launched));
+        drop(services);
+        locations.close().unwrap();
+        assert!(started(&journal).into_iter().all(|pid| !alive(pid)));
+        let _ = std::fs::remove_file(&journal);
+    }
+}
+
+#[test]
+fn location_reload_and_close_reap_extension_processes() {
+    let journal = extension_journal();
+    let f = fixture("{}", &extension_configuration(&journal, "[]"));
+    let locations = f.locations();
+    let services = f.services(&locations);
+    let info = services.info.clone();
+    let first = started(&journal);
+    assert_eq!(first.len(), 1);
+    assert!(alive(first[0]));
+    drop(services);
+    locations.reload(&info).unwrap();
+    locations.evict_idle(Instant::now()).unwrap();
+    let both = started(&journal);
+    assert_eq!(both.len(), 2, "reload starts a fresh generation");
+    assert!(!alive(both[0]), "the replaced generation's process must be reaped");
+    assert!(alive(both[1]));
+    locations.close().unwrap();
+    assert!(!alive(both[1]), "Location close must reap the process");
+    let _ = std::fs::remove_file(&journal);
+}
+
+#[test]
+fn configured_mcp_tools_register_through_the_location_watcher() {
+    let state = extension_journal();
+    std::fs::write(
+        &state,
+        format!(
+            r#"{{"capabilities":{{"tools":{{"listChanged":true}}}},"responses":{{"tools/list":{{"":{{"tools":[{{"name":"lookup","description":"Lookup","inputSchema":{{"type":"object","properties":{{}}}}}}]}}}}}},"calls":{{}},"log":"{}.log"}}"#,
+            state.display()
+        ),
+    )
+    .unwrap();
+    let f = fixture(
+        "{}",
+        &format!(
+            r#"{{"mcp":{{"servers":{{"table":{{"type":"local","codemode":false,"command":["python3","{}","{}"]}}}}}}}}"#,
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../core/tests/mcp_table.py"),
+            state.display()
+        ),
+    );
+    let locations = f.locations();
+    let services = f.services(&locations);
+    let composed = services.production.as_ref().unwrap();
+    let permissions = &services.agents.default().unwrap().permissions;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !composed
+        .tools
+        .materialize(permissions)
+        .definitions
+        .iter()
+        .any(|tool| tool.name.as_str() == Some("table_lookup"))
+    {
+        assert!(Instant::now() < deadline, "the MCP watcher never registered the tool");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    drop(services);
+    locations.close().unwrap();
+    let _ = std::fs::remove_file(&state);
+    let _ = std::fs::remove_file(state.with_extension("log"));
+}
+
+fn description(services: &LocationServices) -> Option<String> {
+    services
+        .agents
+        .get(&"god".into())
+        .and_then(|agent| agent.description.as_ref())
+        .and_then(|description| description.to_utf8().ok())
+}
+
+fn next_generation(f: &Fixture, locations: &Locations, after: u64) -> Arc<LocationServices> {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let current = f.services(locations);
+        if current.production.as_ref().unwrap().generation != after {
+            return current;
+        }
+        drop(current);
+        assert!(Instant::now() < deadline, "configuration change was not reloaded");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn configuration_changes_replace_the_location_generation_and_failures_keep_the_current_one() {
+    let f = fixture("{}", r#"{"agents":{"god":{"description":"first"}}}"#);
+    let locations = f.locations();
+    let _ = f.factory.locations.set(locations.downgrade());
+    let held = f.services(&locations);
+    let first = held.production.as_ref().unwrap().generation;
+    assert_eq!(description(&held).as_deref(), Some("first"));
+    std::fs::write(
+        f.directory().join("ycoding.json"),
+        r#"{"agents":{"god":{"description":"second"}}}"#,
+    )
+    .unwrap();
+    let second = next_generation(&f, &locations, first);
+    assert_eq!(description(&second).as_deref(), Some("second"));
+    assert_eq!(
+        description(&held).as_deref(),
+        Some("first"),
+        "a held lease keeps its generation's snapshot"
+    );
+    let generation = second.production.as_ref().unwrap().generation;
+    drop(second);
+    std::fs::remove_file(f.directory().join("ycoding.json")).unwrap();
+    std::fs::create_dir(f.directory().join("ycoding.json")).unwrap();
+    std::thread::sleep(Duration::from_millis(600));
+    let kept = f.services(&locations);
+    assert_eq!(kept.production.as_ref().unwrap().generation, generation);
+    assert_eq!(description(&kept).as_deref(), Some("second"));
+    drop(kept);
+    std::fs::remove_dir(f.directory().join("ycoding.json")).unwrap();
+    std::fs::write(
+        f.directory().join("ycoding.json"),
+        r#"{"agents":{"god":{"description":"third"}}}"#,
+    )
+    .unwrap();
+    let third = next_generation(&f, &locations, generation);
+    assert_eq!(description(&third).as_deref(), Some("third"));
+    drop((held, third));
+    locations.close().unwrap();
+}
+
+#[test]
+fn managed_project_artifacts_overlay_the_location_catalogs() {
+    let f = fixture("{}", "{}");
+    let definition = ycoding_core::ycoding_schema::project_artifact::Definition::decode(
+        &parse_json(r#"{"kind":"agent","name":"Reviewer","description":"Reviews changes","system":"Review without modifying files.","mode":"subagent","permissions":[]}"#)
+            .unwrap(),
+    )
+    .unwrap();
+    f.factory
+        .globals
+        .artifacts
+        .write_manual(ycoding_core::resources::project_artifact::store::ManualWriteInput {
+            scope: ycoding_core::ycoding_schema::project_artifact::ScopeSelector::Project,
+            project_id: Some(ycoding_core::ycoding_schema::project::Id::new("prj_one").unwrap()),
+            id: "review",
+            definition: &definition,
+            expected: None,
+            now: crate::ids::now_millis(),
+        })
+        .unwrap();
+    let locations = f.locations();
+    let services = f.services(&locations);
+    assert_eq!(
+        services
+            .agents
+            .get(&"review".into())
+            .and_then(|agent| agent.description.as_ref())
+            .and_then(|description| description.as_str()),
+        Some("Reviews changes"),
+        "the managed overlay must reach the Location agent catalog"
+    );
+    drop(services);
+    locations.close().unwrap();
 }

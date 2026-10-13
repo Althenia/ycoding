@@ -82,21 +82,25 @@ impl ProcessAttempt for ProcessProvider {
                 .iter()
                 .map(|resource| resource.as_str().into())
                 .collect::<Vec<_>>();
+            let caller = input.caller.as_ref().ok_or_else(|| {
+                AiError::invalid("Process provider attempts require the calling Session")
+            })?;
+            let context = crate::tools::context::Context::new(
+                caller.session_id.as_str().unwrap_or_default(),
+                caller.agent.as_str().unwrap_or_default(),
+                caller.message_id.as_str().unwrap_or_default(),
+                &format!("provider:{}", self.package),
+            )
+            .map_err(|_| AiError::invalid("Process provider caller identity is invalid"))?;
             self.shared
                 .policy
-                .assert(
-                    &self.shared.launch,
-                    &grant.action,
-                    resources.clone(),
-                    vec![],
-                    None,
-                )
+                .assert(&context, &grant.action, resources.clone(), vec![], None)
                 .await
                 .map_err(|_| AiError::invalid("Process provider authority rejected"))?;
             let _reservation = self
                 .shared
                 .policy
-                .reserve(&self.shared.launch, &grant.action, resources, None)
+                .reserve(&context, &grant.action, resources, None)
                 .await
                 .map_err(|_| AiError::invalid("Process provider authority rejected"))?;
             let attempt = v5::ProviderAttempt {

@@ -5,7 +5,7 @@ use ycoding_ai::{
     route::{Executor, ProcessAttempt, ProcessInput, Transport},
 };
 use ycoding_core::{
-    extension::{Configuration, Extension, FamilyGrant, Host, Options, ToolGrant, provider},
+    extension::{Configuration, Extension, FamilyGrant, Host, Launch, Options, ToolGrant, provider},
     resources::{catalog::models_dev, model::from_catalog_model},
 };
 use ycoding_schema::{DomainDecode, parse_json, provider as provider_schema, stringify_json};
@@ -67,7 +67,14 @@ fn options() -> Options {
     }
 }
 
-async fn response(package: &str) -> ycoding_ai::llm::Response {
+fn caller(session: &str) -> ycoding_ai::llm::Caller {
+    ycoding_ai::llm::Caller {
+        session_id: session.into(),
+        agent: "test".into(),
+        message_id: "msg_tool".into(),
+    }
+}
+fn request(package: &str, session: &str) -> Request {
     let model = from_catalog_model(&info(package), None).unwrap();
     assert!(
         matches!(model.route.transport, Transport::Process(_)),
@@ -75,8 +82,12 @@ async fn response(package: &str) -> ycoding_ai::llm::Response {
     );
     let mut request = Request::new(model);
     request.messages = vec![ycoding_ai::llm::Message::user("hi")];
+    request.caller = Some(caller(session));
+    request
+}
+async fn response(package: &str) -> ycoding_ai::llm::Response {
     Executor::new(Executor::http_client().unwrap())
-        .generate(&request)
+        .generate(&request(package, "ses_tool"))
         .await
         .unwrap()
 }
@@ -120,7 +131,7 @@ async fn process_provider_round_trips_text_tool_call_and_usage() {
         options(),
         &registry,
         fixture.policy.clone(),
-        &fixture.context(),
+        &Launch::default(),
         Host::default(),
     )
     .await
@@ -131,15 +142,34 @@ async fn process_provider_round_trips_text_tool_call_and_usage() {
         provider::find("aisdk:@ai-sdk/openai").is_none(),
         "packages outside the grant stay on their built-in route"
     );
-    fixture.deny("extension.provider", "providers");
-    let denied = from_catalog_model(&info(package), None).unwrap();
-    let mut denied_request = Request::new(denied);
-    denied_request.messages = vec![ycoding_ai::llm::Message::user("hi")];
+    fixture.authority.session(
+        "ses_denied",
+        None,
+        1,
+        false,
+        Some(
+            ycoding_schema::permission::Ruleset::decode(
+                &parse_json(r#"[{"action":"extension.provider","resource":"*","effect":"deny"}]"#)
+                    .unwrap(),
+            )
+            .unwrap(),
+        ),
+    );
+    let executor = Executor::new(Executor::http_client().unwrap());
     assert!(
-        Executor::new(Executor::http_client().unwrap())
-            .generate(&denied_request)
-            .await
-            .is_err(),
+        executor.generate(&request(package, "ses_denied")).await.is_err(),
+        "the calling Session's denial rejects the attempt"
+    );
+    assert_fake_output(&executor.generate(&request(package, "ses_tool")).await.unwrap());
+    let mut anonymous = request(package, "ses_tool");
+    anonymous.caller = None;
+    assert!(
+        executor.generate(&anonymous).await.is_err(),
+        "attempts without a calling Session are rejected"
+    );
+    fixture.deny("extension.provider", "providers");
+    assert!(
+        executor.generate(&request(package, "ses_tool")).await.is_err(),
         "denied provider authority rejects the attempt"
     );
     extension.shutdown().await;
@@ -160,7 +190,7 @@ async fn dropped_attempts_cancel_and_the_generation_stays_usable() {
         options(),
         &registry,
         fixture.policy.clone(),
-        &fixture.context(),
+        &Launch::default(),
         Host::default(),
     )
     .await
@@ -172,6 +202,7 @@ async fn dropped_attempts_cancel_and_the_generation_stays_usable() {
                 model: "fake".into(),
                 options: None,
                 body: parse_json("{}").unwrap(),
+                caller: Some(caller("ses_tool")),
             })
             .await;
     });

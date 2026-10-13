@@ -12,7 +12,7 @@ pub mod v5 {
     include!(concat!(env!("OUT_DIR"), "/ycoding.extension.v5.rs"));
 }
 pub use supervisor::{
-    Configuration, Extension, FamilyGrant, Host, Options, SessionHost, ToolGrant,
+    Configuration, Extension, FamilyGrant, Host, Launch, Options, SessionHost, ToolGrant,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,6 +20,7 @@ pub enum Error {
     ObsoleteConfiguration,
     InvalidConfiguration,
     Permission,
+    ApprovalUnavailable,
     Spawn,
     Protocol,
     Negotiation,
@@ -39,6 +40,7 @@ impl std::fmt::Display for Error {
             Self::ObsoleteConfiguration => "Executable plugins/npm configuration is unsupported; configure an explicit trusted process extension with executable, identity, and host grants",
             Self::InvalidConfiguration => "Invalid process-extension configuration",
             Self::Permission => "Process-extension authority rejected",
+            Self::ApprovalUnavailable => "Process-extension launch requires approval, which no Session can give while its Location starts",
             Self::Spawn => "Process-extension launch failed",
             Self::Protocol => "Invalid process-extension channel frame",
             Self::Negotiation => "Process extension requires exact revision 5 and the assigned identity/generation",

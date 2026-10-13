@@ -95,6 +95,7 @@ pub struct ProcessInput {
     pub model: LosslessString,
     pub options: Option<JsonValue>,
     pub body: JsonValue,
+    pub caller: Option<crate::llm::Caller>,
 }
 pub type AttemptFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Vec<JsonValue>, Error>> + Send + 'a>>;
@@ -661,6 +662,7 @@ impl Executor {
                     model: prepared.request.model.id.clone(),
                     options: prepared.request.model.defaults.provider_options.clone(),
                     body: prepared.body.clone(),
+                    caller: prepared.request.caller.clone(),
                 };
                 let frames = attempt.attempt(input).await.map_err(|mut error| {
                     error.message = redact(&error.message, &prepared);

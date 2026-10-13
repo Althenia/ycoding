@@ -1079,6 +1079,11 @@ impl Local {
                 Some((assistant, ..)) => assistant.clone(),
                 None => session_message::Id::from_event(&projector::random_event_id()?),
             };
+            prepared.caller = Some(llm::Caller {
+                session_id: session.id.as_lossless().clone(),
+                agent: agent.id.clone(),
+                message_id: assistant.as_lossless().clone(),
+            });
             let tracked = Tracked {
                 pending: match &resumed {
                     Some((_, _, pending)) => pending.clone(),

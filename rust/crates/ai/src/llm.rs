@@ -308,6 +308,15 @@ pub struct Request {
     pub cache: Policy,
     pub response_format: Option<ResponseFormat>,
     pub metadata: Option<JsonValue>,
+    pub caller: Option<Caller>,
+}
+/// Session identity of the Step that issues a request; process-provided routes authorize each
+/// attempt against it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Caller {
+    pub session_id: LosslessString,
+    pub agent: LosslessString,
+    pub message_id: LosslessString,
 }
 impl Request {
     pub fn new(model: Model) -> Self {
@@ -324,6 +333,7 @@ impl Request {
             cache: Policy::Auto,
             response_format: None,
             metadata: None,
+            caller: None,
         }
     }
     pub fn resolved(&self) -> Self {
