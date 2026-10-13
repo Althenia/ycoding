@@ -1,150 +1,11 @@
 mod support;
+mod telemetry_support;
 use prost::{Message, Name};
 use std::sync::Arc;
 use support::*;
+use telemetry_support::{batch, consent, query};
 use ycoding_protocol::{decode_strict, v5};
 use ycoding_runtime::{LocalAuth, standard};
-
-#[tokio::test]
-async fn remote_client_append_requires_consent_and_preserves_bounded_web_samples() {
-    use ycoding_core::{
-        telemetry,
-        ycoding_store::{Metadata, Options, Store},
-    };
-    use ycoding_runtime::{
-        Environment, Settled, Subscriptions,
-        connector::{Credential, Enrolled, Peer},
-    };
-
-    let path = std::env::temp_dir().join(format!("remote-telemetry-{}.redb", std::process::id()));
-    let store =
-        Store::initialize(&path, Options::core(), CATALOG, Metadata::new([9; 16], 1)).unwrap();
-    let mut settings = services(LocalAuth::disabled(), true);
-    settings.core.as_mut().unwrap().telemetry = telemetry::Service::new(store.client());
-    let environment = Arc::new(Environment {
-        services: settings,
-        urls: vec![],
-        subscriptions: Subscriptions::default(),
-    });
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as i64;
-    let peer = Peer::authenticate(
-        &Enrolled::new("https://relay.invalid", "owner-a".into(), "device-a".into()).unwrap(),
-        &Credential::new(
-            "stand-in-token".into(),
-            now + 60_000,
-            "owner-a".into(),
-            "device-a".into(),
-        ),
-        now,
-    )
-    .unwrap();
-    let dispatcher = standard().unwrap();
-    let call = async |name: &str, payload: Vec<u8>| {
-        let Some(Settled::Result(result)) = dispatcher
-            .invoke_remote(
-                environment.clone(),
-                "remote-telemetry".into(),
-                &peer,
-                v5::Request {
-                    request_id: name.into(),
-                    operation_id: operation(name).operation_id,
-                    scope: machine(),
-                    payload,
-                },
-            )
-            .await
-        else {
-            panic!("remote operation was not admitted")
-        };
-        result.outcome.unwrap()
-    };
-    let web = v5::TelemetrySample {
-        kind: Some(v5::telemetry_sample::Kind::Value3(
-            v5::TelemetryClientSample {
-                kind: 1,
-                at: text("2026-10-04T12:00:00.000Z"),
-                surface: 2,
-                metric: 3,
-                duration_ms: 70,
-            },
-        )),
-    };
-    let v5::result::Outcome::Error(disabled) =
-        call("telemetry.append", batch(vec![web.clone()])).await
-    else {
-        panic!("consent was required")
-    };
-    assert_eq!(disabled.type_name, v5::TelemetryDisabled::full_name());
-    let v5::result::Outcome::Success(enabled) =
-        call("telemetry.consent.set", consent(true, 1.0)).await
-    else {
-        panic!("consent was rejected")
-    };
-    assert!(
-        v5::TelemetryConsentSetResult::decode(enabled.payload.as_slice())
-            .unwrap()
-            .data
-            .enabled
-    );
-    let v5::result::Outcome::Success(appended) =
-        call("telemetry.append", batch(vec![web.clone(); 20])).await
-    else {
-        panic!("web samples were rejected")
-    };
-    assert_eq!(
-        v5::TelemetryAppendResult::decode(appended.payload.as_slice())
-            .unwrap()
-            .accepted,
-        20
-    );
-    let v5::result::Outcome::Success(page) = call("telemetry.list", query(Some(200), None)).await
-    else {
-        panic!("remote telemetry list was rejected")
-    };
-    let page = v5::TelemetryListResult::decode(page.payload.as_slice()).unwrap();
-    assert_eq!(page.data.data.items.len(), 20);
-    assert!(page.data.data.items.iter().all(|entry| entry.sample == web));
-    for samples in [vec![], vec![web.clone(); 21]] {
-        let v5::result::Outcome::Error(invalid) = call("telemetry.append", batch(samples)).await
-        else {
-            panic!("unbounded batch was admitted")
-        };
-        assert_eq!(invalid.type_name, v5::InvalidRequestError::full_name());
-    }
-    let v5::result::Outcome::Success(disabled) =
-        call("telemetry.consent.set", consent(false, 1.0)).await
-    else {
-        panic!("opt-out was rejected")
-    };
-    assert!(
-        !v5::TelemetryConsentSetResult::decode(disabled.payload.as_slice())
-            .unwrap()
-            .data
-            .enabled
-    );
-    let v5::result::Outcome::Error(disabled) = call("telemetry.append", batch(vec![web])).await
-    else {
-        panic!("opt-out was ignored")
-    };
-    assert_eq!(disabled.type_name, v5::TelemetryDisabled::full_name());
-    let v5::result::Outcome::Success(page) = call("telemetry.list", query(None, None)).await else {
-        panic!("remote telemetry list was rejected")
-    };
-    assert!(
-        v5::TelemetryListResult::decode(page.payload.as_slice())
-            .unwrap()
-            .data
-            .data
-            .items
-            .is_empty()
-    );
-    drop(environment);
-    drop(store);
-    std::fs::remove_file(path).unwrap();
-}
 
 fn sample() -> v5::TelemetrySample {
     v5::TelemetrySample {
@@ -162,30 +23,6 @@ fn sample() -> v5::TelemetrySample {
         )),
     }
 }
-fn batch(samples: Vec<v5::TelemetrySample>) -> Vec<u8> {
-    v5::TelemetryAppendRequest {
-        payload: v5::TelemetryBatch {
-            samples: v5::TelemetryBatchSamples { items: samples },
-        },
-    }
-    .encode_to_vec()
-}
-fn query(limit: Option<u64>, before: Option<v5::LosslessString>) -> Vec<u8> {
-    v5::TelemetryListRequest {
-        query: v5::TelemetryListRequestQuery { limit, before },
-    }
-    .encode_to_vec()
-}
-fn consent(enabled: bool, notice_version: f64) -> Vec<u8> {
-    v5::TelemetryConsentSetRequest {
-        payload: v5::TelemetryConsentInput {
-            enabled,
-            notice_version,
-        },
-    }
-    .encode_to_vec()
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn authenticated_global_consent_append_page_opt_out_and_keep_awake_wire() {
     tokio::time::timeout(std::time::Duration::from_secs(20), async {

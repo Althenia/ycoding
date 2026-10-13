@@ -37,7 +37,7 @@ use ycoding_runtime::{
 
 pub mod catalog;
 #[path = "../../../core/tests/report_support/mod.rs"]
-mod report_support;
+pub mod report_support;
 pub mod wire;
 pub use catalog::{CATALOG, record};
 

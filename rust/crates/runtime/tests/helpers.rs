@@ -169,7 +169,9 @@ async fn prediction_returns_the_suggestion_and_publishes_the_ephemeral_event() {
                     else {
                         return None;
                     };
-                    Some(event)
+                    (subscription != &subscriptions[0]
+                        || units(&event.data.session_id) == "ses_predict_hint")
+                        .then_some(event)
                 })
         };
         while subscriptions

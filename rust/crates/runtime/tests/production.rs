@@ -257,6 +257,7 @@ async fn production_flow() {
         .unwrap()
         .await
         .unwrap();
+    let _reports = support::report_support::start(store.client());
     let retention = Feed::attach(&store.client());
     let notified = Arc::new(Notify::new());
     let wake = notified.clone();

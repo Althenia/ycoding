@@ -458,6 +458,7 @@ pub async fn run(config: LaunchConfig) -> Result<(), LaunchError> {
     let stop = Arc::new(Notify::new());
     let control =
         crate::health::Control::install(config.mode == Mode::Service, &identity, stop.clone())?;
+    let signals = shutdown_signals()?;
     let server = server::serve(listener, services).await?;
     let address = server.address();
     let url = format!("http://{address}");
@@ -487,7 +488,7 @@ pub async fn run(config: LaunchConfig) -> Result<(), LaunchError> {
     let watcher = registration
         .as_ref()
         .map(|registration| spawn_registration_watch(registration.clone(), stop.clone()));
-    wait_for_shutdown(config.mode, stop).await;
+    wait_for_shutdown(config.mode, stop, signals).await;
     if let Some(watcher) = watcher {
         watcher.abort();
         let _ = watcher.await;
@@ -526,7 +527,28 @@ async fn bind(config: &LaunchConfig) -> io::Result<TcpListener> {
     }
 }
 
-async fn wait_for_shutdown(mode: Mode, stop: Arc<Notify>) {
+#[cfg(unix)]
+type Signals = [tokio::signal::unix::Signal; 2];
+#[cfg(not(unix))]
+type Signals = ();
+
+// Install before the listener serves or registration is published: until then SIGTERM and SIGINT
+// keep their default disposition and end a discoverable process without graceful shutdown.
+#[cfg(unix)]
+fn shutdown_signals() -> io::Result<Signals> {
+    use tokio::signal::unix::{SignalKind, signal};
+    Ok([
+        signal(SignalKind::terminate())?,
+        signal(SignalKind::interrupt())?,
+    ])
+}
+
+#[cfg(not(unix))]
+fn shutdown_signals() -> io::Result<Signals> {
+    Ok(())
+}
+
+async fn wait_for_shutdown(mode: Mode, stop: Arc<Notify>, signals: Signals) {
     let stdin_closed = async {
         if mode != Mode::Stdio {
             std::future::pending::<()>().await;
@@ -549,11 +571,9 @@ async fn wait_for_shutdown(mode: Mode, stop: Arc<Notify>) {
     };
     #[cfg(unix)]
     {
-        let mut terminate =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("install SIGTERM handler");
+        let [mut terminate, mut interrupt] = signals;
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => {}
+            _ = interrupt.recv() => {}
             _ = terminate.recv() => {}
             _ = stop.notified() => {}
             _ = stdin_closed => {}
@@ -561,6 +581,7 @@ async fn wait_for_shutdown(mode: Mode, stop: Arc<Notify>) {
     }
     #[cfg(not(unix))]
     {
+        let () = signals;
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {}
             _ = stop.notified() => {}
