@@ -1,9 +1,9 @@
 use crate::{
     convert,
     dispatch::{Dispatcher, Failure, Invocation, RegistrationError},
-    event_subscribe, form, guardrail, ids, message, permission, question, session_autonomy,
-    session_create, session_helpers, session_list, session_outstanding, session_read_models,
-    session_revert, session_services, session_state, session_subagent,
+    event_subscribe, form, guardrail, health, ids, message, permission, project, question,
+    session_autonomy, session_create, session_helpers, session_list, session_outstanding,
+    session_read_models, session_revert, session_services, session_state, session_subagent,
 };
 use ycoding_core::session::{pending, run_coordinator};
 use ycoding_core::ycoding_schema::{
@@ -15,8 +15,14 @@ use ycoding_protocol::{OPERATIONS, v5};
 
 pub fn standard() -> Result<Dispatcher, RegistrationError> {
     let mut dispatcher = Dispatcher::new(OPERATIONS.clone());
-    dispatcher.handle("health.get", health)?;
+    dispatcher.handle("health.get", health_get)?;
+    dispatcher.handle("health.stop", health::stop)?;
     dispatcher.handle("server.get", server)?;
+    dispatcher.handle("project.current", project::current)?;
+    dispatcher.handle("project.directories", project::directories)?;
+    dispatcher.handle("project.forget", project::forget)?;
+    dispatcher.handle("project.inventory", project::inventory)?;
+    dispatcher.handle("project.list", project::list)?;
     dispatcher.handle("session.create", session_create::create)?;
     dispatcher.handle("session.get", session_get)?;
     dispatcher.handle("session.list", session_list::list)?;
@@ -102,7 +108,7 @@ pub fn standard() -> Result<Dispatcher, RegistrationError> {
     Ok(dispatcher)
 }
 
-async fn health(
+async fn health_get(
     invocation: Invocation,
     _request: v5::HealthGetRequest,
 ) -> Result<v5::HealthGetResult, Failure> {

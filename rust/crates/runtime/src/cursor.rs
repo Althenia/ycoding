@@ -21,6 +21,43 @@ pub fn encode_subagent(parent: &session::Id, anchor: &ListAnchor) -> String {
     )
 }
 
+pub fn encode_project_inventory(
+    search: Option<&LosslessString>,
+    anchor: &ycoding_core::ycoding_schema::project::InventoryAnchor,
+) -> String {
+    let search = search.cloned();
+    base64url(
+        stringify_json(
+            &ObjectEncoder::new()
+                .optional("search", &search)
+                .field("anchor", anchor)
+                .finish(),
+        )
+        .as_bytes(),
+    )
+}
+
+pub fn decode_project_inventory(
+    cursor: &str,
+) -> Result<
+    (
+        Option<LosslessString>,
+        ycoding_core::ycoding_schema::project::InventoryAnchor,
+    ),
+    Failure,
+> {
+    let invalid = || Failure::InvalidCursor("Invalid cursor".into());
+    let bytes = unbase64url(cursor, MAX_CURSOR_BYTES).ok_or_else(invalid)?;
+    let value =
+        parse_json(std::str::from_utf8(&bytes).map_err(|_| invalid())?).map_err(|_| invalid())?;
+    let path = JsonPath::default();
+    let object = ObjectDecoder::new(&value, &path).map_err(|_| invalid())?;
+    Ok((
+        object.optional("search").map_err(|_| invalid())?,
+        object.field("anchor").map_err(|_| invalid())?,
+    ))
+}
+
 pub fn decode_subagent(parent: &session::Id, cursor: &str) -> Result<ListAnchor, Failure> {
     let invalid = || Failure::InvalidCursor("Invalid cursor".into());
     let bytes = unbase64url(cursor, MAX_CURSOR_BYTES).ok_or_else(invalid)?;

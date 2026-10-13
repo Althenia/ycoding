@@ -35,6 +35,7 @@ pub mod orchestration;
 pub mod outstanding;
 pub mod pending;
 pub mod prediction;
+pub mod project;
 pub mod projector;
 pub mod prompt_cache;
 pub mod prompt_generator;
