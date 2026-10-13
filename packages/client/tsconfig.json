@@ -7,5 +7,11 @@
     "allowJs": false,
     "noUncheckedIndexedAccess": false
   },
-  "include": ["src"]
+  "include": [
+    "src",
+    "script/generate-v5.ts",
+    "test/v5-*.test.ts",
+    "test/fixture/v5-peer.ts",
+    "test-integration/v5-*.integration.test.ts"
+  ]
 }

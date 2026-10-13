@@ -20,6 +20,11 @@ describe("public import boundaries", () => {
     expect(within(root, core)).toEqual([])
     expect(within(root, server)).toEqual([])
 
+    const wire = await bundleInputs("@ycoding-ai/client/v5", "bun")
+    expect(within(wire, effect)).toEqual([])
+    expect(within(wire, core)).toEqual([])
+    expect(within(wire, server)).toEqual([])
+
     const network = await bundleInputs("@ycoding-ai/client/effect", "browser")
 
     expect(within(network, effect).length).toBeGreaterThan(0)
