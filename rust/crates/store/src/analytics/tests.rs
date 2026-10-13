@@ -1,4 +1,4 @@
-use super::{Worker, apply, checkpoint, schema};
+use super::{Worker, apply, checkpoint, cleanup, schema};
 use crate::analytics::{
     BATCH_SIZE, Cancellation, Change, Column, ColumnType, DeliveryTable, Error, IntentTable,
     Operation, Query, REPORT_DEADLINE, Source, SourceRow, privacy_changed, record,
@@ -289,6 +289,55 @@ fn native_rows_and_checkpoint_rollback_together_then_lost_ack_reconciles_on_reop
             .unwrap(),
         (2, 50)
     );
+}
+
+#[test]
+fn cleanup_removes_only_owned_non_kept_generations_and_never_foreign_entries() {
+    let (root, _store, _worker) = setup();
+    let derived = root.0.join("derived");
+    std::fs::create_dir_all(derived.join("spill")).unwrap();
+    std::fs::write(derived.join("spill/block"), "spill").unwrap();
+    let kept = "generation-53-1-2.duckdb";
+    for name in [
+        kept,
+        "generation-53-1-2.duckdb.wal",
+        "generation-53-1-1.duckdb",
+        "generation-53-1-1.duckdb.wal",
+    ] {
+        std::fs::write(derived.join(name), name).unwrap();
+    }
+    cleanup(&derived, Some(kept)).unwrap();
+    let mut entries = std::fs::read_dir(&derived)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect::<Vec<_>>();
+    entries.sort();
+    assert_eq!(
+        entries,
+        [kept, "generation-53-1-2.duckdb.wal", "spill"].map(String::from)
+    );
+    assert_eq!(
+        std::fs::read_to_string(derived.join("spill/block")).unwrap(),
+        "spill"
+    );
+
+    std::fs::write(derived.join("generation-53-1-1.duckdb"), "stale").unwrap();
+    std::fs::write(derived.join("foreign.log"), "foreign").unwrap();
+    assert!(matches!(
+        cleanup(&derived, Some(kept)),
+        Err(Error::Configuration)
+    ));
+    assert_eq!(
+        std::fs::read_to_string(derived.join("foreign.log")).unwrap(),
+        "foreign"
+    );
+    for name in [
+        kept,
+        "generation-53-1-2.duckdb.wal",
+        "generation-53-1-1.duckdb",
+    ] {
+        assert!(derived.join(name).is_file(), "{name}");
+    }
 }
 
 #[test]

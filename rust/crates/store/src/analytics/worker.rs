@@ -749,10 +749,9 @@ fn cleanup(root: &Path, keep: Option<&str>) -> Result<(), Error> {
             .file_name()
             .into_string()
             .map_err(|_| Error::Configuration)?;
-        if name == "spill" {
-            continue;
-        }
-        if keep.is_some_and(|keep| name == keep || name == format!("{keep}.wal")) {
+        if !owned_file(&name)
+            || keep.is_some_and(|keep| name == keep || name == format!("{keep}.wal"))
+        {
             continue;
         }
         std::fs::remove_file(entry.path())?;
