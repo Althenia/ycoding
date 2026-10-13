@@ -1,5 +1,10 @@
 # YCoding Core
 
+Successful local read-tool calls load nearby `AGENTS.md` files into Session
+history as durable synthetic instructions. The Location-scoped loader deduplicates
+concurrent and repeated reads, respects the current `instruction_max_bytes`
+limit, and skips missing files, external reads, and the Location-root file.
+
 ## Process extensions
 
 `extension::{Configuration, Extension}` resolves explicit trusted executable

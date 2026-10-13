@@ -783,7 +783,7 @@ fn custom_guardrails_deny_and_unreadable_rules_stay_fail_closed() {
 }
 
 #[tokio::test]
-async fn filesystem_tools_share_location_paths_policy_and_read_instruction_storage() {
+async fn filesystem_tools_share_location_paths_policy_and_synthetic_instruction_history() {
     let f = fixture("{}", "{}");
     let locations = f.locations();
     let services = f.services(&locations);
@@ -862,12 +862,28 @@ async fn filesystem_tools_share_location_paths_policy_and_read_instruction_stora
             .trim(),
         "patched value"
     );
+    let messages = f
+        .sessions()
+        .context(&session::Id::new("ses_one").unwrap())
+        .unwrap();
+    let [ycoding_core::ycoding_schema::session_message::Info::Synthetic(message)] =
+        messages.as_slice()
+    else {
+        panic!("one durable synthetic instruction message expected")
+    };
     assert_eq!(
-        f.sessions()
-            .instruction_entries(&session::Id::new("ses_one").unwrap())
+        message
+            .description
+            .as_ref()
+            .and_then(|description| description.as_str()),
+        Some("Loaded nested/AGENTS.md")
+    );
+    assert!(
+        message
+            .text
+            .as_str()
             .unwrap()
-            .len(),
-        1
+            .contains("Nested instructions.")
     );
     let glob = tools
         .invoke(

@@ -13,6 +13,7 @@ use ycoding_core::tools::{
     registry::Options,
 };
 use ycoding_schema::{JsonValue, parse_json};
+use ycoding_store::{KeyPart, session::InstructionEntryTable, tuple_key};
 
 #[derive(Default)]
 struct Instructions(Mutex<Vec<PathBuf>>);
@@ -161,5 +162,236 @@ async fn external_reads_require_external_authority_and_never_load_local_instruct
         ycoding_ai::llm::ToolResultValue::Error(_)
     ));
     fs::remove_dir_all(outside).unwrap();
+    fixture.cleanup();
+}
+
+#[tokio::test]
+async fn real_read_tool_injects_only_nested_agents_as_durable_synthetic_history() {
+    let fixture = ToolFixture::new();
+    fs::create_dir_all(fixture.root.join("src")).unwrap();
+    fs::write(fixture.root.join("AGENTS.md"), "root instructions").unwrap();
+    fs::write(fixture.root.join("src/AGENTS.md"), "nested instructions").unwrap();
+    fs::write(fixture.root.join("src/file.txt"), "local").unwrap();
+    fs::write(fixture.root.join("root.txt"), "root").unwrap();
+    let outside = fixture.root.parent().unwrap().join(format!(
+        "tool_read_outside_{}_{}",
+        std::process::id(),
+        fixture.root.file_name().unwrap().to_string_lossy()
+    ));
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("external.txt"), "external").unwrap();
+    let configuration = Arc::new(
+        ycoding_core::resources::config::Configuration::load(
+            ycoding_core::resources::config::LoadOptions {
+                directory: fixture.root.clone(),
+                roots: ycoding_core::resources::config::Roots::development(&fixture.root).unwrap(),
+                project: true,
+                file: None,
+                content: Some("{}".into()),
+                env: Default::default(),
+            },
+        )
+        .unwrap(),
+    );
+    let store = fixture.authority.store.client();
+    let registry = fixture.registry();
+    let _scope = registry
+        .register(
+            vec![(
+                "read".into(),
+                Arc::new(Read {
+                    paths: fixture.paths(),
+                    policy: fixture.policy.clone(),
+                    instructions: Arc::new(ycoding_core::session::read_instructions::Service::new(
+                        ycoding_core::session::store::Service::new(store.clone()),
+                        fixture.root.clone(),
+                        configuration,
+                    )),
+                    collator: Arc::new(|left, right| left.cmp(right)),
+                }),
+            )],
+            Options::direct(),
+        )
+        .unwrap();
+    for _ in 0..2 {
+        registry
+            .materialize(&[])
+            .invoke(
+                "read",
+                parse_json(r#"{"path":"src/file.txt"}"#).unwrap(),
+                fixture.context(),
+            )
+            .await
+            .unwrap();
+    }
+    let sessions = ycoding_core::session::store::Service::new(store.clone());
+    let messages = sessions
+        .context(&ycoding_schema::session::Id::new("ses_tool").unwrap())
+        .unwrap();
+    let synthetic = messages
+        .iter()
+        .filter_map(|message| match message {
+            ycoding_schema::session_message::Info::Synthetic(message) => Some(message),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(synthetic.len(), 1);
+    let nested = fixture.root.join("src/AGENTS.md");
+    let expected_text = format!(
+        "Instructions from: {}\nnested instructions",
+        nested.display()
+    );
+    assert_eq!(synthetic[0].text.as_str(), Some(expected_text.as_str()));
+    assert_eq!(
+        synthetic[0].description.as_ref().unwrap().as_str(),
+        Some("Loaded src/AGENTS.md")
+    );
+    let expected_paths = parse_json(&format!(
+        r#"{{"instruction":{{"paths":[{}]}}}}"#,
+        ycoding_schema::stringify_json(&JsonValue::String(
+            nested.to_string_lossy().into_owned().into()
+        ))
+    ))
+    .unwrap();
+    let JsonValue::Object(expected_paths) = expected_paths else {
+        panic!()
+    };
+    assert_eq!(synthetic[0].metadata, Some(expected_paths));
+    registry
+        .materialize(&[])
+        .invoke(
+            "read",
+            parse_json(r#"{"path":"root.txt"}"#).unwrap(),
+            fixture.context(),
+        )
+        .await
+        .unwrap();
+    registry
+        .materialize(&[])
+        .invoke(
+            "read",
+            parse_json(&format!(
+                r#"{{"path":{}}}"#,
+                ycoding_schema::stringify_json(&JsonValue::String(
+                    outside
+                        .join("external.txt")
+                        .to_string_lossy()
+                        .into_owned()
+                        .into()
+                ))
+            ))
+            .unwrap(),
+            fixture.context(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        sessions
+            .context(&ycoding_schema::session::Id::new("ses_tool").unwrap())
+            .unwrap()
+            .iter()
+            .filter(|message| matches!(
+                message,
+                ycoding_schema::session_message::Info::Synthetic(_)
+            ))
+            .count(),
+        1
+    );
+    let key = format!(
+        "read.{}",
+        ycoding_core::session::prompt_cache::sha256(&nested.to_string_lossy())
+    );
+    assert!(
+        store
+            .snapshot()
+            .unwrap()
+            .get::<InstructionEntryTable>(&tuple_key(&[
+                KeyPart::String(&"ses_tool".into()),
+                KeyPart::String(&key.into()),
+            ]))
+            .unwrap()
+            .is_none()
+    );
+    fs::remove_dir_all(outside).unwrap();
+    fixture.cleanup();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn real_read_tool_resolves_symlinked_agents_candidates_before_injection() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = ToolFixture::new();
+    fs::create_dir_all(fixture.root.join("docs")).unwrap();
+    fs::create_dir_all(fixture.root.join("linked")).unwrap();
+    fs::write(fixture.root.join("docs/AGENTS.md"), "resolved instructions").unwrap();
+    fs::write(fixture.root.join("linked/file.txt"), "local").unwrap();
+    symlink(
+        fixture.root.join("docs/AGENTS.md"),
+        fixture.root.join("linked/AGENTS.md"),
+    )
+    .unwrap();
+    let configuration = Arc::new(
+        ycoding_core::resources::config::Configuration::load(
+            ycoding_core::resources::config::LoadOptions {
+                directory: fixture.root.clone(),
+                roots: ycoding_core::resources::config::Roots::development(&fixture.root).unwrap(),
+                project: true,
+                file: None,
+                content: Some("{}".into()),
+                env: Default::default(),
+            },
+        )
+        .unwrap(),
+    );
+    let store = fixture.authority.store.client();
+    let registry = fixture.registry();
+    let _scope = registry
+        .register(
+            vec![(
+                "read".into(),
+                Arc::new(Read {
+                    paths: fixture.paths(),
+                    policy: fixture.policy.clone(),
+                    instructions: Arc::new(ycoding_core::session::read_instructions::Service::new(
+                        ycoding_core::session::store::Service::new(store.clone()),
+                        fixture.root.clone(),
+                        configuration,
+                    )),
+                    collator: Arc::new(|left, right| left.cmp(right)),
+                }),
+            )],
+            Options::direct(),
+        )
+        .unwrap();
+    registry
+        .materialize(&[])
+        .invoke(
+            "read",
+            parse_json(r#"{"path":"linked/file.txt"}"#).unwrap(),
+            fixture.context(),
+        )
+        .await
+        .unwrap();
+    let messages = ycoding_core::session::store::Service::new(store)
+        .context(&ycoding_schema::session::Id::new("ses_tool").unwrap())
+        .unwrap();
+    let synthetic = messages
+        .iter()
+        .find_map(|message| match message {
+            ycoding_schema::session_message::Info::Synthetic(message) => Some(message),
+            _ => None,
+        })
+        .unwrap();
+    let source = fixture.root.join("docs/AGENTS.md");
+    let expected_text = format!(
+        "Instructions from: {}\nresolved instructions",
+        source.display()
+    );
+    assert_eq!(synthetic.text.as_str(), Some(expected_text.as_str()));
+    assert_eq!(
+        synthetic.description.as_ref().unwrap().as_str(),
+        Some("Loaded docs/AGENTS.md")
+    );
     fixture.cleanup();
 }

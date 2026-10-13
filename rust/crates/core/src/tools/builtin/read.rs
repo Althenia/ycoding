@@ -99,8 +99,19 @@ impl Tool for Read {
                 {
                     let paths = paths
                         .into_iter()
-                        .filter(|path| path.parent() != Some(self.paths.directory.as_path()))
-                        .collect::<Vec<_>>();
+                        .map(fs::canonicalize)
+                        .collect::<Result<Vec<_>, _>>();
+                    let paths = paths
+                        .ok()
+                        .map(|paths| {
+                            paths
+                                .into_iter()
+                                .filter(|path| {
+                                    path.parent() != Some(self.paths.directory.as_path())
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
                     if !paths.is_empty() {
                         let _ = self.instructions.load(context.clone(), paths).await;
                     }

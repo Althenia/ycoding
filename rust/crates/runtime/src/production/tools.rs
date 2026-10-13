@@ -11,7 +11,6 @@ use ycoding_core::{
     },
     process::guardrails::{CustomLayer, CustomLayers},
     resources::{config, discovery::markdown, image, memory, project_artifact, tool_output_store},
-    session::store::Service,
     tools::{
         builtin::{
             edit::Edit,
@@ -27,15 +26,11 @@ use ycoding_core::{
             worktree::Worktree,
             write::Write,
         },
-        context::{
-            Context,
-            consumers::{ConsumerFuture, ReadInstructions},
-            policy::LeafPolicy,
-        },
+        context::{Context, policy::LeafPolicy},
         registry::{self, Registration, Registry, Tool, ToolFuture},
     },
     ycoding_ai::llm::ToolDefinition,
-    ycoding_schema::{DomainDecode, JsonValue, ObjectEncoder, guardrail, instruction_entry},
+    ycoding_schema::{DomainDecode, JsonValue, guardrail},
 };
 
 pub(super) fn compose(
@@ -98,7 +93,7 @@ pub(super) fn compose(
                     .to_utf8()
                     .map_err(|_| unavailable("Project identity"))?,
                 client: factory.client.clone(),
-                configuration,
+                configuration: configuration.clone(),
                 paths: paths.clone(),
                 policy: policy.clone(),
                 tool: tokio::sync::OnceCell::new(),
@@ -109,7 +104,20 @@ pub(super) fn compose(
             Arc::new(Read {
                 paths: paths.clone(),
                 policy: policy.clone(),
-                instructions: Arc::new(Instructions(Service::new(factory.client.clone()))),
+                instructions: Arc::new(ycoding_core::session::read_instructions::Service::new(
+                    ycoding_core::session::store::Service::new(factory.client.clone()),
+                    std::fs::canonicalize(PathBuf::from(
+                        services
+                            .info
+                            .project
+                            .directory
+                            .as_lossless()
+                            .to_utf8()
+                            .map_err(|_| unavailable("Project directory"))?,
+                    ))
+                    .map_err(|_| unavailable("Project directory"))?,
+                    configuration.clone(),
+                )),
                 collator,
             }),
         ),
@@ -267,52 +275,6 @@ impl Tool for Shell {
                 })
                 .await?;
             tool.settle(input, context).await
-        })
-    }
-}
-
-struct Instructions(Service);
-impl ReadInstructions for Instructions {
-    fn load(&self, context: Context, paths: Vec<PathBuf>) -> ConsumerFuture<'_, ()> {
-        Box::pin(async move {
-            for path in paths {
-                let content = ycoding_core::resources::discovery::read_text(&path)
-                    .map_err(|_| registry::Failure::message("Read instructions unavailable"))?
-                    .ok_or_else(|| registry::Failure::message("Read instructions unavailable"))?;
-                let rendered = ycoding_core::resources::instruction_discovery::render_content(
-                    &path.to_string_lossy(),
-                    &content,
-                    None,
-                    "read",
-                );
-                let entry = instruction_entry::Info::decode(
-                    &ObjectEncoder::new()
-                        .field(
-                            "key",
-                            format!(
-                                "read.{}",
-                                ycoding_core::session::prompt_cache::sha256(
-                                    &path.to_string_lossy()
-                                )
-                            )
-                            .as_str(),
-                        )
-                        .field(
-                            "value",
-                            &ObjectEncoder::new()
-                                .field("path", path.to_string_lossy().as_ref())
-                                .field("content", rendered.content.as_str())
-                                .finish(),
-                        )
-                        .finish(),
-                )
-                .map_err(|_| registry::Failure::message("Read instructions unavailable"))?;
-                self.0
-                    .put_instruction_entry(&context.session_id, entry, crate::ids::now_millis())
-                    .await
-                    .map_err(|_| registry::Failure::message("Read instructions unavailable"))?;
-            }
-            Ok(())
         })
     }
 }

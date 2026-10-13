@@ -45,6 +45,7 @@ pub mod prompt_cache;
 pub mod prompt_generator;
 pub mod provider_request;
 pub mod provider_state;
+pub mod read_instructions;
 mod read_json;
 pub mod removal;
 pub mod retention;
