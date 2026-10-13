@@ -274,6 +274,9 @@ impl AccountCatalog {
                     diagnostics.push(DiscoveryDiagnostic {
                         provider_id: provider::Id(integration.into()),
                     });
+                    if integration == "cursor" {
+                        tracing::warn!(provider = "cursor", "failed to sync Cursor models");
+                    }
                     if integration != "github-copilot"
                         && let Some(previous) = self.accounts.iter().find(|account| {
                             account.selected.id() == selected.id()
@@ -330,7 +333,10 @@ impl AccountCatalog {
             }
         }
         self.accounts = next;
-        self.source = Some(source);
+        self.source = (!diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.provider_id.0 == "cursor".into()))
+        .then_some(source);
         self.next_reconcile = now.saturating_add(60_000);
         self.seed(catalog, credentials)?;
         let identities = saved
@@ -390,19 +396,36 @@ impl AccountCatalog {
             .any(|selected| selected.integration_id().as_str() == Some("cursor"))
             && let Some(key) = self.environment.get("CURSOR_API_KEY")
         {
-            let bearer = self
-                .preparation
-                .cursor
-                .as_ref()
-                .ok_or(models_dev::Error::Request)?
-                .resolve(None, Some(key), now)
-                .await
-                .map_err(|_| models_dev::Error::Request)?;
-            let response = self.cursor_models(&bearer).await?;
-            let models = cursor::models::from_cursor(
-                &ycoding_ai::cursor::models::available_models(&response)
-                    .map_err(|_| models_dev::Error::InvalidSource)?,
-            );
+            let discovered = async {
+                let bearer = self
+                    .preparation
+                    .cursor
+                    .as_ref()
+                    .ok_or(models_dev::Error::Request)?
+                    .resolve(None, Some(key), now)
+                    .await
+                    .map_err(|_| models_dev::Error::Request)?;
+                let response = self.cursor_models(&bearer).await?;
+                Ok::<_, models_dev::Error>(cursor::models::from_cursor(
+                    &ycoding_ai::cursor::models::available_models(&response)
+                        .map_err(|_| models_dev::Error::InvalidSource)?,
+                ))
+            }
+            .await;
+            let models = match discovered {
+                Ok(models) => models,
+                Err(_) => {
+                    tracing::warn!(provider = "cursor", "failed to sync Cursor models");
+                    diagnostics.push(DiscoveryDiagnostic {
+                        provider_id: provider::Id("cursor".into()),
+                    });
+                    self.source = None;
+                    self.cursor_env
+                        .as_ref()
+                        .map(|(_, models)| models.clone())
+                        .unwrap_or_default()
+                }
+            };
             self.cursor_env = Some((key.clone(), models.clone()));
             cursor::catalog::sync(catalog, models);
         }

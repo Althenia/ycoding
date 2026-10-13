@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test"
 import { NodeFileSystem } from "@effect/platform-node"
 import { Effect } from "effect"
-import { Service } from "../../../../../packages/client/src/promise/service"
-import { discover, ensure, stop } from "../../../../../packages/client/src/effect/service"
-import { fixture } from "./launcher-client"
+import { Service } from "../src/promise/service"
+import { discover, ensure, stop } from "../src/effect/service"
+import { fixture } from "../../../rust/crates/runtime/tests/support/launcher-client"
 
 test("Promise and Effect TS clients discover, ensure, contend, replace and stop the real Rust runtime", async () => {
   const binary = process.env.YCODING_TEST_RUST_RUNTIME

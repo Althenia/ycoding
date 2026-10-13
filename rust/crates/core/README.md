@@ -141,6 +141,16 @@ uncertain effects never replay. Await `shutdown` to join cleanup, or `closed` to
 observe an exited generation. Diagnostics retain enum categories, not stderr or
 payloads. Processes are trusted and have ambient OS authority, not a sandbox.
 
+Failed Session context hooks emit a Core warning with extension, hook, Session
+and route identities, without request payloads. Preparation appends the bounded
+failure notice and continues through subsequent hooks.
+
+Cursor model-discovery failures emit a warning and a provider diagnostic without
+blocking Location preparation. Each account retains its last inventory, or an
+empty inventory when none was loaded. Failed discovery remains eligible for
+the next reconciliation; credential-backed inventories retain account-generation
+fences.
+
 `extension::Activation` owns one Location's configured processes. Construct it
 with the Location directory, deadlines, `Arc<Registry>`, captured leaf policy,
 the Location `Launch`, and `Host`. Bind `activation.event_source` to the backend feed

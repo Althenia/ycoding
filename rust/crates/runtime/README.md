@@ -29,7 +29,7 @@ Production catalogs include the Location runner and transient Session generator.
 
 ```sh
 CARGO_BUILD_JOBS=3 ~/.cache/ycoding/cargo-gate.sh cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-runtime --test launcher
-YCODING_TEST_RUST_RUNTIME="$PWD/rust/target/debug/ycoding-runtime" bun test --cwd packages/client ../../rust/crates/runtime/tests/support/launcher-client.integration.test.ts
+YCODING_TEST_RUST_RUNTIME="$PWD/rust/target/debug/ycoding-runtime" bun test --cwd packages/client ./test-integration/launcher-rust.integration.test.ts
 bun run rust/crates/runtime/tests/support/ready-runtime.ts "$PWD/rust/target/debug/ycoding-runtime" bun run --cwd packages/client test:integration:rust
 ```
 
@@ -48,6 +48,9 @@ Supply `ready` from Location initialization and `refresh` from its configuration
 Wire conversion preserves complete model/default selection metadata, optional values, ordered permissions, and lossless strings. Secret-bearing configuration keys are excluded recursively from provider/model/agent request overlays; provider execution errors expose a fixed message and provider identity, not raw payloads or headers.
 
 The replacement extension contract exposes loaded IDs through `plugin.list`; do not execute npm plugin entrypoints to populate it.
+
+`session.status` omits Sessions deleted between inventory listing and lifecycle
+reads. Store and lifecycle decoding failures still fail the read.
 
 ```sh
 cargo test --locked -p ycoding-runtime --test catalog_ops

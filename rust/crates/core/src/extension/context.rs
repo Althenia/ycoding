@@ -98,6 +98,13 @@ pub async fn prepare(
                         | Error::Stopped
                         | Error::ExecutionFailed,
                     ) => {
+                        tracing::warn!(
+                            extension = extension.identity,
+                            hook = registration.id,
+                            session_id = context.session_id.as_lossless().as_str(),
+                            route_id = route_id,
+                            "Session context hook failed"
+                        );
                         output.messages.push(llm::Message::user(
                             "Session context hook failed; its changes may be incomplete.",
                         ));

@@ -1,5 +1,10 @@
 include!("tool_fixture.rs");
-use std::time::Duration;
+use std::{
+    io::Write,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+use tracing::instrument::WithSubscriber;
 use ycoding_core::extension::{
     Configuration, Error, Extension, FamilyGrant, Host, Options, Resources, ToolGrant, context, v5,
 };
@@ -820,4 +825,76 @@ async fn after_hooks_keep_output_and_visible_result_independent_and_bounded() {
         extension.shutdown().await;
         fixture.cleanup();
     }
+}
+
+#[derive(Clone, Default)]
+struct Logs(Arc<Mutex<Vec<u8>>>);
+
+impl Write for Logs {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn failed_context_hook_logs_a_warning_with_identity_and_continues() {
+    let logs = Logs::default();
+    let writer = logs.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(move || writer.clone())
+        .with_max_level(tracing::Level::WARN)
+        .with_ansi(false)
+        .finish();
+    let fixture = ToolFixture::new();
+    let registry = fixture.registry();
+    let failed = start(&fixture, "family_fail_context", 0, &[], &registry)
+        .await
+        .unwrap();
+    let following = start(&fixture, "familyA", 1, &[], &registry).await.unwrap();
+    let route = ycoding_ai::route::Route::openai_chat();
+    let mut request = ycoding_ai::llm::Request::new(route.model("fixture"));
+    request
+        .messages
+        .push(ycoding_ai::llm::Message::user("secret-payload"));
+    let model = ycoding_schema::model::Ref {
+        id: "fixture".into(),
+        provider_id: ycoding_schema::provider::Id("openai".into()),
+        variant: None,
+        profile: None,
+    };
+    let prepared = context::prepare(
+        &request,
+        &model,
+        Some("owned-route"),
+        &fixture.context(),
+        &[&failed, &following],
+    )
+    .with_subscriber(subscriber)
+    .await
+    .unwrap();
+    failed.shutdown().await;
+    following.shutdown().await;
+    fixture.cleanup();
+    assert_eq!(prepared.system.len(), 1);
+    assert_eq!(prepared.system[0].text.as_str(), Some("system-A"));
+    assert_eq!(prepared.messages.len(), 2);
+    assert!(matches!(
+        prepared.messages[1].content.as_slice(),
+        [ycoding_ai::llm::Part::Text(text)] if text.text.as_str() == Some("Session context hook failed; its changes may be incomplete.")
+    ));
+    let logged = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+    let line = logged
+        .lines()
+        .find(|line| line.contains("Session context hook failed"))
+        .unwrap();
+    assert!(line.contains("WARN"), "{line}");
+    assert!(line.contains("extension=\"fixture-0\""), "{line}");
+    assert!(line.contains("hook=\"stage-6\""), "{line}");
+    assert!(line.contains("route_id=\"owned-route\""), "{line}");
+    assert!(!line.contains("secret-payload"), "{line}");
+    assert_eq!(logged.matches("Session context hook failed").count(), 1);
 }

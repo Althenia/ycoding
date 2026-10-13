@@ -1,7 +1,12 @@
 #[path = "support/muse.rs"]
 mod fixture;
 use fixture::{Fixture, header, row, secret, store};
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    io::Write,
+    sync::{Arc, Mutex},
+};
+use tracing::instrument::WithSubscriber;
 use ycoding_core::resources::{
     auth::Preparation,
     catalog::{AccountCatalog, Catalog},
@@ -280,6 +285,105 @@ async fn configured_models_discovery_is_retained_and_uses_prepared_selected_cred
         );
     }
     assert_eq!(fixture.finish().await.len(), 2);
+    credentials.shutdown().await.unwrap();
+    store.shutdown().unwrap();
+}
+
+#[derive(Clone, Default)]
+struct Logs(Arc<Mutex<Vec<u8>>>);
+
+impl Write for Logs {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn cursor_env_discovery_failure_preserves_a_usable_location_catalog_and_retries() {
+    let logs = Logs::default();
+    let writer = logs.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(move || writer.clone())
+        .with_max_level(tracing::Level::WARN)
+        .with_ansi(false)
+        .finish();
+    let dispatch = tracing::Dispatch::new(subscriber);
+    let fixture = Fixture::new(vec![
+        (503, "private upstream payload".into()),
+        (
+            200,
+            r#"{"models":[{"name":"cursor-fixture","supportsAgent":true}]}"#.into(),
+        ),
+        (503, "private upstream payload".into()),
+        (
+            200,
+            r#"{"models":[{"name":"cursor-recovered","supportsAgent":true}]}"#.into(),
+        ),
+    ])
+    .await;
+    let (store, credentials) = store();
+    let cursor = ycoding_core::resources::auth::cursor::Store::new(
+        ycoding_core::resources::auth::Client::new(&fixture.base, "fixture").unwrap(),
+    );
+    let mut accounts = AccountCatalog::new(
+        Preparation {
+            cursor: Some(cursor.clone()),
+            ..Default::default()
+        },
+        BTreeMap::from([("CURSOR_API_KEY".into(), "fixture-key".into())]),
+    )
+    .unwrap();
+    accounts
+        .endpoints
+        .insert("cursor".into(), fixture.base.clone());
+    let documents = vec![parse_json(r#"{"providers":{"local":{"package":"aisdk:@ai-sdk/openai-compatible","settings":{"apiKey":"local-key"},"models":{"local-model":{}}}}}"#).unwrap()];
+    for (now, expected, failed) in [
+        (100, None, true),
+        (101, Some("cursor-fixture"), false),
+        (60101, Some("cursor-fixture"), true),
+        (60102, Some("cursor-recovered"), false),
+    ] {
+        let composition = Catalog::compose_with_accounts(
+            Vec::new(),
+            &documents,
+            &credentials,
+            &mut accounts,
+            now,
+            false,
+        )
+        .with_subscriber(dispatch.clone())
+        .await
+        .unwrap();
+        assert_eq!(composition.diagnostics.len(), usize::from(failed));
+        if failed {
+            assert_eq!(
+                composition.diagnostics[0].provider_id,
+                provider::Id("cursor".into())
+            );
+        }
+        let models = composition.catalog.all(&[]);
+        assert!(models.iter().any(|model| model.id == "local-model".into()));
+        let cursor_models = models
+            .iter()
+            .filter(|model| model.provider_id.0 == "cursor".into())
+            .collect::<Vec<_>>();
+        assert_eq!(cursor_models.len(), usize::from(expected.is_some()));
+        if let Some(id) = expected {
+            assert_eq!(cursor_models[0].model_id, id.into());
+        }
+    }
+    assert_eq!(fixture.finish().await.len(), 4);
+    let logged = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+    assert_eq!(logged.matches("failed to sync Cursor models").count(), 2);
+    assert!(logged.contains("WARN"), "{logged}");
+    assert!(logged.contains("provider=\"cursor\""), "{logged}");
+    assert!(!logged.contains("fixture-key"), "{logged}");
+    assert!(!logged.contains("private upstream payload"), "{logged}");
+    cursor.shutdown().await.unwrap();
     credentials.shutdown().await.unwrap();
     store.shutdown().unwrap();
 }

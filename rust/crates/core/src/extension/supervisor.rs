@@ -403,6 +403,7 @@ pub(super) struct Shared {
 pub struct Extension {
     pub(super) shared: Arc<Shared>,
     pub generation: String,
+    pub(super) identity: String,
     pub(super) order: u32,
     pub(super) declarations: Vec<v5::TransformRegistration>,
     pub(super) domains: Vec<v5::DomainRegistration>,
@@ -719,6 +720,7 @@ impl Extension {
         Ok(Self {
             shared,
             generation,
+            identity: configuration.identity.clone(),
             order: configuration.registration_order,
             declarations: declarations.transforms,
             domains: declarations.domains,
