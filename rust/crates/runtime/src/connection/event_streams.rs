@@ -50,7 +50,10 @@ impl Driver {
         else {
             return;
         };
-        self.shared.environment.subscriptions.arm(sub_id.clone());
+        self.shared
+            .environment
+            .subscriptions
+            .arm(&self.epoch, sub_id.clone());
         self.streams.push(Stream {
             request_id,
             sub_id,
@@ -116,7 +119,10 @@ impl Driver {
         let now = self.now();
         match self.connection.enqueue(body, reserved, now) {
             Ok(()) => {
-                self.shared.environment.subscriptions.remove(sub_id);
+                self.shared
+                    .environment
+                    .subscriptions
+                    .remove(&self.epoch, sub_id);
                 Progress::Done
             }
             Err(ProtocolError::Limit) => Progress::Blocked,
@@ -133,7 +139,13 @@ impl Driver {
                 stream.scope.clone(),
             )
         };
-        if self.shared.environment.subscriptions.ended(&sub_id) {
+        if self
+            .shared
+            .environment
+            .subscriptions
+            .ended(&self.epoch, &sub_id)
+            == Some(true)
+        {
             return self.end_stream(&sub_id);
         }
         if !self.streams[position].accepted {

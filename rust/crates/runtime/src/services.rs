@@ -170,38 +170,59 @@ pub struct Environment {
 
 #[derive(Debug, Default)]
 pub struct Subscriptions {
-    inner: Mutex<HashMap<String, bool>>,
+    inner: Mutex<HashMap<String, Subscription>>,
+}
+
+#[derive(Debug)]
+struct Subscription {
+    owner: String,
+    ended: bool,
 }
 
 impl Subscriptions {
-    pub fn arm(&self, id: String) {
+    pub fn arm(&self, owner: &str, id: String) {
         self.inner
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(id, false);
+            .insert(
+                id,
+                Subscription {
+                    owner: owner.into(),
+                    ended: false,
+                },
+            );
     }
 
-    pub fn end(&self, id: &str) -> bool {
+    pub fn end(&self, owner: &str, id: &str) -> bool {
         self.inner
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get_mut(id)
-            .map(|end| *end = true)
+            .filter(|sub| sub.owner == owner && !sub.ended)
+            .map(|sub| sub.ended = true)
             .is_some()
     }
 
-    pub fn ended(&self, id: &str) -> bool {
+    pub fn ended(&self, owner: &str, id: &str) -> Option<bool> {
         self.inner
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(id)
-            .is_some_and(|end| *end)
+            .filter(|sub| sub.owner == owner)
+            .map(|sub| sub.ended)
     }
 
-    pub fn remove(&self, id: &str) {
+    pub fn remove(&self, owner: &str, id: &str) {
+        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        if inner.get(id).is_some_and(|sub| sub.owner == owner) {
+            inner.remove(id);
+        }
+    }
+
+    pub fn release(&self, owner: &str) {
         self.inner
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .remove(id);
+            .retain(|_, sub| sub.owner != owner);
     }
 }

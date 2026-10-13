@@ -10,6 +10,7 @@ type Handler = Arc<dyn Fn(Invocation, Vec<u8>) -> Boxed<Result<Vec<u8>, Failure>
 
 pub struct Invocation {
     pub environment: Arc<Environment>,
+    pub connection_id: String,
     pub scope: v5::Scope,
     pub request_id: String,
 }
@@ -246,6 +247,7 @@ impl Dispatcher {
     pub async fn invoke(
         &self,
         environment: Arc<Environment>,
+        connection_id: String,
         request: v5::Request,
     ) -> Option<Settled> {
         let entry = self.entries.get(&request.operation_id)?;
@@ -257,7 +259,7 @@ impl Dispatcher {
             return None;
         }
         let request_id = request.request_id.clone();
-        let outcome = run(entry, environment, request).await;
+        let outcome = run(entry, environment, connection_id, request).await;
         Some(settle(&entry.descriptor, request_id, outcome))
     }
 
@@ -272,6 +274,7 @@ impl Dispatcher {
 async fn run(
     entry: &Entry,
     environment: Arc<Environment>,
+    connection_id: String,
     request: v5::Request,
 ) -> Result<Body, Failure> {
     (entry.authorize)(&environment, &request)?;
@@ -284,6 +287,7 @@ async fn run(
     let body = handler(
         Invocation {
             environment,
+            connection_id,
             scope: request.scope,
             request_id: request.request_id,
         },

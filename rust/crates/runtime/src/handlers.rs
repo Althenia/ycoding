@@ -407,7 +407,11 @@ async fn session_log(
         .log(&id, after, 1)
         .map_err(|error| store_failure(error, &id))?;
     Ok(v5::SessionLogResult {
-        subscription_id: convert::text(&ids::subscription_id()),
+        subscription_id: convert::text(&format!(
+            "{}_{}",
+            invocation.connection_id,
+            ids::subscription_id()
+        )),
     })
 }
 
@@ -421,7 +425,7 @@ async fn event_unsubscribe(
     if !invocation
         .environment
         .subscriptions
-        .end(&request.subscription_id)
+        .end(&invocation.connection_id, &request.subscription_id)
     {
         return Err(Failure::Invalid("unknown subscription".into()));
     }

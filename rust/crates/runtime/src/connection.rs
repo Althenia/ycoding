@@ -179,7 +179,6 @@ pub(crate) async fn run(
             )
             .await
             {
-                driver.finish();
                 return;
             }
         }
@@ -213,7 +212,6 @@ pub(crate) async fn run(
             _ = shutdown.changed() => driver.fail_with(Close { code: 1012, category: ProtocolError::Closed }),
         }
     }
-    driver.finish();
 }
 
 async fn send(socket: &mut WebSocket, message: ws::Message, bound: Duration) -> bool {
@@ -345,13 +343,17 @@ impl Driver {
         let job = {
             let completions = self.completions.clone();
             let cancelled = cancelled.clone();
+            let connection_id = self.epoch.clone();
             async move {
                 if cancelled.load(Ordering::Acquire) {
                     return;
                 }
                 let environment = shared.environment.clone();
                 let request_id = request.request_id.clone();
-                let result = shared.dispatcher.invoke(environment, request).await;
+                let result = shared
+                    .dispatcher
+                    .invoke(environment, connection_id, request)
+                    .await;
                 let _ = completions.send((request_id, result)).await;
             }
         };
@@ -525,7 +527,10 @@ impl Driver {
         let Some(params) = params else {
             return;
         };
-        self.shared.environment.subscriptions.arm(sub.clone());
+        self.shared
+            .environment
+            .subscriptions
+            .arm(&self.epoch, sub.clone());
         if params.follow {
             self.ensure_follow_feed();
         }
@@ -583,7 +588,8 @@ impl Driver {
             .shared
             .environment
             .subscriptions
-            .ended(&self.subs[position].sub_id)
+            .ended(&self.epoch, &self.subs[position].sub_id)
+            == Some(true)
         {
             return self.end_sub(position);
         }
@@ -802,13 +808,16 @@ impl Driver {
         }
         self.pending_logs.clear();
         self.pending_events.clear();
-        for sub in std::mem::take(&mut self.subs) {
-            self.shared.environment.subscriptions.remove(&sub.sub_id);
-        }
-        for stream in std::mem::take(&mut self.streams) {
-            self.shared.environment.subscriptions.remove(&stream.sub_id);
-        }
+        self.shared.environment.subscriptions.release(&self.epoch);
+        self.subs.clear();
+        self.streams.clear();
         self.follow = None;
+    }
+}
+
+impl Drop for Driver {
+    fn drop(&mut self) {
+        self.finish();
     }
 }
 

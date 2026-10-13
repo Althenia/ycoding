@@ -24,7 +24,11 @@ pub async fn subscribe(
         }
     }
     Ok(v5::EventSubscribeResult {
-        subscription_id: convert::text(&ids::subscription_id()),
+        subscription_id: convert::text(&format!(
+            "{}_{}",
+            invocation.connection_id,
+            ids::subscription_id()
+        )),
     })
 }
 

@@ -699,6 +699,7 @@ async fn every_local_operation_answers_with_a_declared_typed_outcome() {
             let result = dispatcher
                 .invoke(
                     environment.clone(),
+                    "test-connection".into(),
                     v5::Request {
                         request_id: "1".into(),
                         operation_id: descriptor.operation_id,

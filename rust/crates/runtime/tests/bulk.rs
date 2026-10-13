@@ -103,6 +103,7 @@ async fn results_over_the_typed_message_bound_are_refused_with_a_typed_error() {
         let settled = dispatcher
             .invoke(
                 environment,
+                "test-connection".into(),
                 v5::Request {
                     request_id: "1".into(),
                     operation_id: descriptor.operation_id,
