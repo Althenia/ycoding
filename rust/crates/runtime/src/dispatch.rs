@@ -107,6 +107,14 @@ enum Body {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Failure {
+    CommandNotFound(ycoding_core::ycoding_schema::LosslessString),
+    CommandEvaluation {
+        command: ycoding_core::ycoding_schema::LosslessString,
+        message: String,
+    },
+    SkillNotFound(ycoding_core::ycoding_schema::LosslessString),
+    SkillConflictNotFound,
+    ModelSwitchBlocked(ycoding_core::ycoding_schema::session::ModelSwitchBlocked),
     ShellNotFound(String),
     PtyNotFound(String),
     PtyConflict(String),
@@ -520,6 +528,68 @@ impl Failure {
         }
         let declared = |name: String| descriptor.error_types.contains(&name);
         match self {
+            Failure::CommandNotFound(command) if declared(v5::CommandNotFoundError::full_name()) => {
+                encoded(v5::CommandNotFoundError {
+                    tag: 1,
+                    command: convert::wire(&command),
+                    message: convert::text("Command not found"),
+                })
+            }
+            Failure::CommandEvaluation { command, message }
+                if declared(v5::CommandEvaluationError::full_name()) =>
+            {
+                encoded(v5::CommandEvaluationError {
+                    tag: 1,
+                    command: convert::wire(&command),
+                    message: convert::text(&message),
+                })
+            }
+            Failure::SkillNotFound(skill) if declared(v5::SkillNotFoundError::full_name()) => {
+                encoded(v5::SkillNotFoundError {
+                    tag: 1,
+                    skill: convert::wire(&skill),
+                    message: convert::text("Skill not found"),
+                })
+            }
+            Failure::SkillConflictNotFound
+                if declared(v5::SkillConflictNotFoundError::full_name()) =>
+            {
+                encoded(v5::SkillConflictNotFoundError {
+                    tag: 1,
+                    message: convert::text("Active skill conflict not found"),
+                })
+            }
+            Failure::ModelSwitchBlocked(blocked)
+                if declared(v5::ModelSwitchBlockedError::full_name()) =>
+            {
+                encoded(v5::ModelSwitchBlockedError {
+                    tag: 1,
+                    status: 1,
+                    current_model: convert::model_ref(
+                        &ycoding_core::ycoding_schema::DomainEncode::encode(&blocked.current_model),
+                    )
+                    .expect("typed model"),
+                    target_model: convert::model_ref(
+                        &ycoding_core::ycoding_schema::DomainEncode::encode(&blocked.target_model),
+                    )
+                    .expect("typed model"),
+                    current_context_tokens: blocked.current_context_tokens.get() as u64,
+                    target_safe_input_tokens: blocked.target_safe_input_tokens.get() as u64,
+                    required_reduction_tokens: blocked.required_reduction_tokens.get() as u64,
+                    maximum_safe_summary_boundary: blocked
+                        .maximum_safe_summary_boundary
+                        .as_ref()
+                        .map(|id| convert::wire(id.as_lossless())),
+                    reason: 1,
+                })
+            }
+            Failure::CommandNotFound(_)
+            | Failure::SkillNotFound(_)
+            | Failure::SkillConflictNotFound => invalid("Resource not found", "not_found"),
+            Failure::CommandEvaluation { message, .. } => invalid(&message, "evaluation"),
+            Failure::ModelSwitchBlocked(_) => {
+                invalid("Model switch context window exceeded", "model-switch")
+            }
             Failure::ShellNotFound(id) if declared(v5::ShellNotFoundError::full_name()) => {
                 encoded(v5::ShellNotFoundError {
                     tag: 1,

@@ -122,6 +122,7 @@ pub fn world() -> &'static World {
             .iter()
             .chain(project::TABLES)
             .chain(resources::TABLES)
+            .chain(ycoding_store::artifacts::TABLES)
             .copied()
             .chain([
                 TableDeclaration::of::<ycoding_store::analytics::DeliveryTable>(),
@@ -227,8 +228,9 @@ pub struct Fixture {
 impl Fixture {
     pub async fn new() -> Self {
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join(format!(".remote-derived-{}-{n}", std::process::id()));
+        // Workspace discovery hides system temporary directories, so the fixture lives in Cargo's target scratch area.
+        let path = Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("remote-derived-{}-{n}", std::process::id()));
         std::fs::create_dir(&path).unwrap();
         std::fs::create_dir(path.join("child")).unwrap();
         let path = std::fs::canonicalize(path).unwrap();
@@ -293,6 +295,7 @@ impl Fixture {
         let models = Arc::new(model::Resolver::new(catalog));
         let roots = Roots::development(&path).unwrap();
         let catalogs = CatalogServices {
+            session: None,
             models: models.clone(),
             agents: Arc::new(agent::Service::new(vec![
                 agent::empty("build".into()),
@@ -332,8 +335,9 @@ impl Fixture {
             )
             .unwrap(),
         );
-        let platform = make_platform(&path, &project, &roots).await;
-        let child_platform = make_platform(&path.join("child"), &project, &roots).await;
+        let platform = make_platform(&path, &project, &roots, PLATFORM_CONFIG).await;
+        let child_platform =
+            make_platform(&path.join("child"), &project, &roots, PLATFORM_CONFIG).await;
         let mut fixture = Self {
             path,
             directory,
@@ -453,6 +457,17 @@ impl Fixture {
             subscriptions: Subscriptions::default(),
         })
     }
+    pub async fn configure_platform(&mut self, config: &str) {
+        self.platform.shell.shutdown().await.unwrap();
+        self.platform.pty.shutdown().await.unwrap();
+        self.platform = make_platform(
+            &self.path,
+            &self.project,
+            &Roots::development(&self.path).unwrap(),
+            config,
+        )
+        .await;
+    }
     pub async fn close(self) {
         self.platform.shell.shutdown().await.unwrap();
         self.child_platform.shell.shutdown().await.unwrap();
@@ -519,7 +534,14 @@ pub async fn message(id: &str, suffix: &str, kind: &str, seq: i64, data: &str) {
         .unwrap();
 }
 
-async fn make_platform(path: &Path, project: &str, roots: &Roots) -> Arc<PlatformServices> {
+const PLATFORM_CONFIG: &str = "{\"shell\":\"/bin/sh\"}";
+
+async fn make_platform(
+    path: &Path,
+    project: &str,
+    roots: &Roots,
+    config: &str,
+) -> Arc<PlatformServices> {
     let git = Arc::new(git::Service::new(1_048_576));
     Arc::new(PlatformServices {
         shell: Arc::new(
@@ -535,7 +557,7 @@ async fn make_platform(path: &Path, project: &str, roots: &Roots) -> Arc<Platfor
                 roots: roots.clone(),
                 project: false,
                 file: None,
-                content: Some("{\"shell\":\"/bin/sh\"}".into()),
+                content: Some(config.into()),
                 env: Default::default(),
             })
             .unwrap(),

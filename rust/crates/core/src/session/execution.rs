@@ -127,6 +127,10 @@ impl Execution {
         self.coordinator.active()
     }
 
+    pub fn coordinator(&self) -> &Coordinator {
+        &self.coordinator
+    }
+
     pub fn wake(&self, id: &session::Id) -> Outcome {
         self.require(id)?;
         self.coordinator.wake(id)

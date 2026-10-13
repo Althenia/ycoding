@@ -18,6 +18,7 @@ use ycoding_protocol::{OPERATIONS, v5};
 pub fn standard() -> Result<Dispatcher, RegistrationError> {
     let mut dispatcher = Dispatcher::new(OPERATIONS.clone());
     crate::remote_derived::register(&mut dispatcher)?;
+    crate::session_ingress::register(&mut dispatcher)?;
     dispatcher.handle("pty.connectToken", crate::pty::connect_token)?;
     dispatcher.handle("pty.control", crate::pty::control)?;
     dispatcher.handle("pty.create", crate::pty::create)?;

@@ -78,6 +78,7 @@ fn fixture(catalog: Catalog, refresh: CatalogTask) -> CatalogServices {
         skills.source(Source::Embedded(ycoding_core::ycoding_schema::skill::EmbeddedSource { skill: ycoding_core::ycoding_schema::skill::Info::decode(&parse_json(&format!(r#"{{"id":"{name}","name":"{name}","description":"fixture","slash":true,"autoinvoke":false,"conflicts":{{"skills":["other"],"instructions":["core/instructions"]}},"location":"{location}","content":"{content}"}}"#)).unwrap()).unwrap() }));
     }
     CatalogServices {
+        session: None,
         generate: Arc::new(generate::Service {
             models: models.clone(),
             credentials: credentials.clone(),

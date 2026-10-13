@@ -2948,35 +2948,30 @@ conflicting repeated terminal observations cannot insert a second record.
   source, and finally the shared Store/feed. Do not abort or discard the Governor
   handle as a substitute for close.
 
-### Session operation handoff
+### Session operation attribution
 
-The runtime does not serve `session.command`, `switchAgent`, or `session.skill`.
-Their artifact attribution uses these existing Core entrypoints:
+`session::runner::Local` attributes managed artifacts through the source bound
+to its `runner::Services.store` with `with_artifact_source`:
 
-- Command: capture `source.provenance(command_kind, command_id)` before admission,
-  attach `provenance.message()` as user metadata `projectArtifact`, admit the
-  input durably, then call `source.activate(ActivationInput)` with
-  `ActivationSource::Command { message_id: input_id, call_id: None }`. Retain the
-  captured provenance in the admitted input; promotion is not the invocation
-  boundary.
-- Agent selection: create `session.agent.selected.1` with the selected agent and
-  call `source.publish_activation(NewEvent).await`. It attaches provenance and
-  commits the event, projection, and activation in one Store transaction. For a
-  larger owning transaction, call `ycoding_store::session::append`,
-  `session::projector::fold`, `source.activation_at(&provenance, &session_id,
-Some(agent_id), "agent-selected", event.seq, activated_at)`, and
-  `source.activate_in_transaction(tx, &activation)` inside that same transaction.
-  Include `provenance.message()` in event data and reject the transaction on any
-  failure; never call ordinary `activate` after publishing an AgentSelected fact.
-- Session Skill: resolve permission, catalog membership, instructions, and active
-  Skill status under the Session's activation serialization, then use
-  `session::skill::activate(&bound_store, &session_id, fields, now).await` for
-  runner-style activation. It publishes `session.skill.activated.1` with artifact
-  provenance and a `session-skill` accounting row atomically. A handler supplying
-  an explicit message ID uses its `msg_` to `evt_` event identity and the larger
-  transaction form above with source `"session-skill"`, setting
-  `activation.message_id` to that ID before accounting. Decide resume/admit-only
-  behavior outside artifact accounting.
+- `command` captures `provenance("command", name)` after evaluation and any
+  agent or model switch, admits the input with user metadata `projectArtifact`,
+  then calls `activate` with `ActivationSource::Command { message_id, call_id:
+None }` and the Session's agent before the command switch. A failed activation
+  is recorded through `record_activation_failure`; the admitted input stands.
+  A reused message ID returns the admitted input without attribution.
+- `switch_agent` publishes `session.agent.selected.1` through
+  `publish_activation`, committing provenance and the `agent-selected` row with
+  the event.
+- `load_skill` without a message ID publishes through `publish_activation`. With
+  a message ID it uses that `msg_` to `evt_` event identity and, for a managed
+  Skill, appends the event, projection and `session-skill` row with
+  `activation.message_id` in one Store transaction.
+- `session.subagent.launch` records no activation; the `subagent` tool's launch
+  remains the attributed invocation.
+
+`move_to` publishes `session.project-artifacts-ended.1` across Projects without
+the accounting service's project deactivation, prior-Project artifact
+adoption, or project-agent reselection.
 
 `instructions::KEY` and `CONTENT` supply artifact-authoring guidance without a
 second persistence authority.

@@ -1,0 +1,877 @@
+mod remote_derived_support;
+mod support;
+mod connector_support {
+    pub const WAIT: std::time::Duration = super::support::WAIT;
+}
+
+use remote_derived_support::{Fixture, world};
+use std::sync::Arc;
+use support::wire::{ask, refuse};
+use support::{Client, text, units};
+use ycoding_core::{
+    resources::{
+        agent, attachment_store,
+        catalog::{Catalog, ProviderRecord},
+        command, model,
+        project_artifact::{accounting, source, source_registry, store as artifact_store},
+    },
+    session::{compaction_policy, generate, runner, skill, store::Service},
+    tools::{policy::helper, registry::Registry},
+    ycoding_schema::{
+        DomainDecode, LosslessString, ObjectEncoder, parse_json, session, session_skill_status,
+        skill as skill_schema,
+    },
+};
+use ycoding_protocol::v5;
+
+fn scope(id: &str) -> v5::Scope {
+    support::session_scope(id)
+}
+fn sid(id: &str) -> session::Id {
+    session::Id::new(id).unwrap()
+}
+
+struct Skills(Vec<skill_schema::Info>);
+impl skill::Resolver for Skills {
+    fn list(&self) -> skill::SkillsFuture<'_> {
+        Box::pin(async move { Ok(self.0.clone()) })
+    }
+    fn instructions<'a>(&'a self, info: &'a skill_schema::Info) -> skill::InstructionsFuture<'a> {
+        Box::pin(async move { Ok(info.content.clone()) })
+    }
+}
+
+struct Artifacts {
+    store: artifact_store::Service,
+    source: source::Service,
+}
+
+async fn fixture(endpoint: &str) -> (Fixture, Artifacts) {
+    let mut fixture = Fixture::new().await;
+    let mut provider = ycoding_core::ycoding_schema::provider::Info::decode(&parse_json(&format!(r#"{{"id":"fixture","name":"Fixture","package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}"#)).unwrap()).unwrap();
+    provider.integration_id = None;
+    let info = |name: &str, context| {
+        ycoding_core::ycoding_schema::model::Info::decode(&parse_json(&format!(r#"{{"id":"{name}","modelID":"{name}","providerID":"fixture","name":"Fixture","package":"@ycoding-ai/ai/providers/openai-compatible","capabilities":{{"tools":true,"input":["text"],"output":["text"]}},"variants":[],"time":{{"released":1}},"cost":[],"status":"active","enabled":true,"limit":{{"context":{context},"output":96}}}}"#)).unwrap()).unwrap()
+    };
+    let mut catalog = Catalog::default();
+    catalog.providers = vec![ProviderRecord {
+        provider,
+        models: vec![info("code", 4096), info("large", 32000), info("tiny", 64)],
+        environment: vec![],
+    }];
+    let models = Arc::new(model::Resolver::new(catalog));
+    let mut reviewer = agent::empty("reviewer".into());
+    reviewer.mode = "subagent".into();
+    let agents = Arc::new(agent::Service::new(vec![
+        agent::empty("build".into()),
+        reviewer,
+    ]));
+    let services = world()
+        .core
+        .locations
+        .session(&sid(&fixture.root))
+        .unwrap()
+        .1;
+    let attachments =
+        Arc::new(attachment_store::Store::new(fixture.path.join("attachments")).unwrap());
+    let roots = ycoding_core::resources::config::Roots::development(&fixture.path).unwrap();
+    let policy = compaction_policy::resolve(&[compaction_policy::Info {
+        context_safety_margin_tokens: Some(64),
+        ..Default::default()
+    }]);
+    let registry = Arc::new(std::sync::Mutex::new(source_registry::Registry::default()));
+    let accounting = accounting::Service::new(world().store.clone(), "test-bucket-secret".into());
+    let artifacts = artifact_store::Service::new(
+        world().store.clone(),
+        artifact_store::Paths {
+            data: fixture.path.join("artifact-data"),
+            home: fixture.path.join("artifact-home"),
+            config: fixture.path.join("artifact-config"),
+        },
+        registry.clone(),
+    )
+    .with_accounting(accounting.clone());
+    let artifact_source = source::Service::new(
+        source::Options {
+            client: world().store.clone(),
+            store: artifacts.clone(),
+            accounting,
+            registry,
+            location: ycoding_core::ycoding_schema::location::Ref {
+                directory: services.info.directory.clone(),
+                workspace_id: None,
+            },
+            project_id: ycoding_core::ycoding_schema::project::Id::new(fixture.project.as_str())
+                .unwrap(),
+            project_directory: fixture.path.clone(),
+            data_root: fixture.path.join("artifact-data"),
+        },
+        source::Catalogs {
+            agents: (*agents).clone(),
+            commands: command::Service::default(),
+            skills: ycoding_core::resources::skill::Service::new(&fixture.path.join("cache")),
+        },
+    );
+    let runner = runner::Local::new(runner::Services {
+        snapshots: None,
+        configuration: None,
+        image_analyzer: None,
+        extensions: Vec::new(),
+        store: Service::new(world().store.clone()).with_artifact_source(artifact_source.clone()),
+        events: world().core.events.clone(),
+        location: ycoding_core::ycoding_schema::location::Ref {
+            directory: services.info.directory.clone(),
+            workspace_id: None,
+        },
+        models: models.clone(),
+        agents: agents.clone(),
+        credentials: world().core.credentials.clone(),
+        tools: Arc::new(Registry::new(
+            Arc::new(ycoding_core::resources::tool_output_store::Store::new(
+                &roots,
+            )),
+            None,
+            Default::default(),
+            Arc::new(|left, right| left.cmp(right)),
+        )),
+        attachments: attachments.clone(),
+        instructions: vec![],
+        analysis: None,
+        clock: Arc::new(runner::WallClock),
+        executor: Arc::new(ycoding_core::ycoding_ai::route::Executor::new(
+            ycoding_core::ycoding_ai::route::Executor::http_client().unwrap(),
+        )),
+        compaction: policy,
+        guardrails: services.guardrails.clone(),
+        helpers: helper::Settings::default(),
+        cursor: None,
+        claude: None,
+        auth: None,
+        skill_resolver: Some(Arc::new(Skills(
+            [("audit", vec!["review"]), ("review", vec![])]
+                .into_iter()
+                .map(|(id, conflicts)| {
+                    skill_schema::Info::decode(
+                        &ObjectEncoder::new()
+                            .field("id", id)
+                            .field("name", id)
+                            .field("content", id)
+                            .field(
+                                "location",
+                                format!("{}/skills/{id}/SKILL.md", fixture.directory).as_str(),
+                            )
+                            .field(
+                                "conflicts",
+                                &ObjectEncoder::new()
+                                    .field(
+                                        "skills",
+                                        &conflicts
+                                            .into_iter()
+                                            .map(LosslessString::from)
+                                            .collect::<Vec<_>>(),
+                                    )
+                                    .field("instructions", &Vec::<LosslessString>::new())
+                                    .finish(),
+                            )
+                            .finish(),
+                    )
+                    .unwrap()
+                })
+                .collect(),
+        ))),
+    });
+    let generate_models = Arc::new(helper::Models {
+        models: models.clone(),
+        credentials: world().core.credentials.clone(),
+        auth: Default::default(),
+        cursor: None,
+        claude: None,
+        store: Service::new(world().store.clone()),
+        settings: helper::Settings::default(),
+    });
+    let generation = Arc::new(generate::Service {
+        store: Service::new(world().store.clone()),
+        location: runner.location().clone(),
+        agents: agents.clone(),
+        models: generate_models,
+        executor: Arc::new(ycoding_core::ycoding_ai::route::Executor::new(
+            ycoding_core::ycoding_ai::route::Executor::http_client().unwrap(),
+        )),
+        attachments,
+        instructions: vec![],
+        extensions: vec![],
+    });
+    let locations = world().core.locations.clone();
+    fixture.catalogs.session = Some(ycoding_runtime::SessionServices {
+        runner,
+        generate: generation,
+        destination: Some(ycoding_runtime::DestinationServices {
+            resolve: Arc::new(move |target| {
+                let locations = locations.clone();
+                Box::pin(async move {
+                    locations
+                        .location(
+                            target.directory.as_lossless(),
+                            target.workspace_id.as_ref().map(|id| id.as_lossless()),
+                        )
+                        .map(|location| location.info.clone())
+                        .map_err(|error| format!("{error:?}"))
+                })
+            }),
+            invalidate: Arc::new(|_| Box::pin(async { Ok(()) })),
+        }),
+    });
+    fixture.catalogs.models = models.clone();
+    fixture.catalogs.agents = agents;
+    fixture.catalogs.generate = Arc::new(ycoding_core::resources::generate::Service {
+        models,
+        credentials: world().core.credentials.clone(),
+        integrations: fixture.registry.clone(),
+        executor: Arc::new(ycoding_core::resources::generate::Executor::new(
+            ycoding_core::resources::generate::Executor::http_client().unwrap(),
+        )),
+        cursor: None,
+    });
+    let mut commands = command::Service::default();
+    commands.update("review".into(), |command| {
+        command.template = "Review $1".into();
+    });
+    fixture.catalogs.commands = Arc::new(commands);
+    (
+        fixture,
+        Artifacts {
+            store: artifacts,
+            source: artifact_source,
+        },
+    )
+}
+
+async fn open(fixture: &Fixture) -> (ycoding_runtime::Server, Client) {
+    let server = support::start(
+        fixture.environment(true).services.clone(),
+        ycoding_runtime::standard().unwrap(),
+    )
+    .await;
+    let client = Client::open(server.address(), &[]).await.unwrap();
+    (server, client)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn command_shell_skills_conflict_and_agent_switch_are_typed_and_durable_over_socket() {
+    let (fixture, _) = fixture("http://127.0.0.1:1").await;
+    let (server, mut client) = open(&fixture).await;
+    let id = fixture.root.clone();
+    let command = |name: &str, arguments: &str| v5::SessionCommandRequest {
+        params: v5::SessionCommandRequestParams {
+            session_id: text(&id),
+        },
+        payload: v5::SessionCommandRequestPayload {
+            id: Some(text("msg_ingress_command")),
+            command: text(name),
+            arguments: Some(text(arguments)),
+            agent: None,
+            model: None,
+            files: None,
+            agents: None,
+            delivery: Some(2),
+            resume: Some(false),
+        },
+    };
+    let admitted: v5::SessionCommandResult = ask(
+        &mut client,
+        "session.command",
+        scope(&id),
+        command("review", "first second"),
+    )
+    .await;
+    assert_eq!(units(&admitted.data.data.text), "Review first second");
+    assert_eq!(admitted.data.delivery, 2);
+    let retried: v5::SessionCommandResult = ask(
+        &mut client,
+        "session.command",
+        scope(&id),
+        command("missing", "ignored"),
+    )
+    .await;
+    assert_eq!(admitted, retried);
+    let pending = world().core.sessions.pending_list(&sid(&id)).unwrap();
+    assert_eq!(pending.len(), 1);
+    let _: v5::SessionShellResult = ask(
+        &mut client,
+        "session.shell",
+        scope(&id),
+        v5::SessionShellRequest {
+            params: v5::SessionShellRequestParams {
+                session_id: text(&id),
+            },
+            payload: v5::SessionShellRequestPayload {
+                id: Some(text("msg_ingress_shell")),
+                command: text("printf ingress-shell"),
+            },
+        },
+    )
+    .await;
+    let transcript = world().core.sessions.transcript(&sid(&id)).unwrap();
+    let shell = transcript
+        .iter()
+        .find(|message| {
+            matches!(
+                message,
+                ycoding_core::ycoding_schema::session_message::Info::Shell(_)
+            )
+        })
+        .unwrap();
+    let json = ycoding_core::ycoding_schema::DomainEncode::encode(shell);
+    assert!(ycoding_core::ycoding_schema::stringify_json(&json).contains("ingress-shell"));
+    let ycoding_core::ycoding_schema::session_message::Info::Shell(shell) = shell else {
+        panic!("expected Shell transcript")
+    };
+    assert_eq!(
+        fixture
+            .platform
+            .shell
+            .get(&shell.shell_id)
+            .await
+            .unwrap()
+            .command,
+        "printf ingress-shell".into()
+    );
+    for name in ["audit", "review", "audit"] {
+        let _: v5::SessionSkillResult = ask(
+            &mut client,
+            "session.skill",
+            scope(&id),
+            v5::SessionSkillRequest {
+                params: v5::SessionSkillRequestParams {
+                    session_id: text(&id),
+                },
+                payload: v5::SessionSkillRequestPayload {
+                    id: None,
+                    skill: text(name),
+                    resume: Some(false),
+                },
+            },
+        )
+        .await;
+    }
+    let statuses: v5::SessionSkillsResult = ask(
+        &mut client,
+        "session.skills",
+        scope(&id),
+        v5::SessionSkillsRequest {
+            params: v5::SessionSkillsRequestParams {
+                session_id: text(&id),
+            },
+        },
+    )
+    .await;
+    assert_eq!(statuses.data.items.len(), 2);
+    let _: v5::SessionResolveSkillConflictResult = ask(
+        &mut client,
+        "session.resolveSkillConflict",
+        scope(&id),
+        v5::SessionResolveSkillConflictRequest {
+            params: v5::SessionResolveSkillConflictRequestParams {
+                session_id: text(&id),
+            },
+            payload: v5::SessionResolveSkillConflictRequestPayload {
+                winner: text("audit"),
+                loser: text("review"),
+            },
+        },
+    )
+    .await;
+    assert_eq!(
+        world().core.sessions.skills(&sid(&id), &[]).unwrap()[1].state,
+        session_skill_status::State::Inactive {
+            inactive_reason: "conflict_resolved".into()
+        }
+    );
+    let _: v5::SkillConflictNotFoundError = refuse(
+        &mut client,
+        "session.resolveSkillConflict",
+        scope(&id),
+        v5::SessionResolveSkillConflictRequest {
+            params: v5::SessionResolveSkillConflictRequestParams {
+                session_id: text(&id),
+            },
+            payload: v5::SessionResolveSkillConflictRequestPayload {
+                winner: text("audit"),
+                loser: text("review"),
+            },
+        },
+    )
+    .await;
+    let _: v5::SessionSwitchAgentResult = ask(
+        &mut client,
+        "session.switchAgent",
+        scope(&id),
+        v5::SessionSwitchAgentRequest {
+            params: v5::SessionSwitchAgentRequestParams {
+                session_id: text(&id),
+            },
+            payload: v5::SessionSwitchAgentRequestPayload {
+                agent: text("reviewer"),
+            },
+        },
+    )
+    .await;
+    assert_eq!(
+        world().core.sessions.get(&sid(&id)).unwrap().unwrap().agent,
+        Some("reviewer".into())
+    );
+    assert_eq!(
+        world().core.sessions.skills(&sid(&id), &[]).unwrap()[0].state,
+        session_skill_status::State::Inactive {
+            inactive_reason: "agent_switched".into()
+        }
+    );
+    world().core.execution.interrupt(&sid(&id)).await.unwrap();
+    drop(client);
+    server.shutdown().await.unwrap();
+    fixture.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn compact_switch_move_and_subagent_launch_use_backend_owners_over_socket() {
+    let (fixture, _) = fixture("http://127.0.0.1:1").await;
+    let (server, mut client) = open(&fixture).await;
+    let id = fixture.root.clone();
+    let model = |name| v5::ModelRef {
+        provider_id: text("fixture"),
+        id: text(name),
+        variant: None,
+        profile: None,
+    };
+    let _: v5::SessionSwitchModelResult = ask(
+        &mut client,
+        "session.switchModel",
+        scope(&id),
+        v5::SessionSwitchModelRequest {
+            params: v5::SessionSwitchModelRequestParams {
+                session_id: text(&id),
+            },
+            payload: v5::SessionSwitchModelRequestPayload {
+                model: model("code"),
+            },
+        },
+    )
+    .await;
+    assert_eq!(
+        world()
+            .core
+            .sessions
+            .get(&sid(&id))
+            .unwrap()
+            .unwrap()
+            .model
+            .unwrap()
+            .id,
+        "code".into()
+    );
+    let refused: v5::UnknownError = refuse(
+        &mut client,
+        "session.switchModel",
+        scope(&id),
+        v5::SessionSwitchModelRequest {
+            params: v5::SessionSwitchModelRequestParams {
+                session_id: text(&id),
+            },
+            payload: v5::SessionSwitchModelRequestPayload {
+                model: model("tiny"),
+            },
+        },
+    )
+    .await;
+    assert_eq!(
+        units(&refused.message),
+        "Context compaction could not complete the model switch. The prior model remains selected; inspect compaction status before retrying."
+    );
+    assert!(units(refused.r#ref.as_ref().unwrap()).starts_with("err_"));
+    let _: v5::UnknownError = refuse(
+        &mut client,
+        "session.switchModel",
+        scope(&id),
+        v5::SessionSwitchModelRequest {
+            params: v5::SessionSwitchModelRequestParams {
+                session_id: text(&id),
+            },
+            payload: v5::SessionSwitchModelRequestPayload {
+                model: model("missing"),
+            },
+        },
+    )
+    .await;
+    assert_eq!(
+        world()
+            .core
+            .sessions
+            .get(&sid(&id))
+            .unwrap()
+            .unwrap()
+            .model
+            .unwrap()
+            .id,
+        "code".into()
+    );
+    remote_derived_support::message(
+        &id,
+        "user",
+        "user",
+        10,
+        r#"{"text":"question","time":{"created":10,"consumed":10}}"#,
+    )
+    .await;
+    let compacted: v5::SessionCompactResult = ask(
+        &mut client,
+        "session.compact",
+        scope(&id),
+        v5::SessionCompactRequest {
+            params: v5::SessionCompactRequestParams {
+                session_id: text(&id),
+            },
+            payload: v5::SessionCompactRequestPayload {
+                id: Some(text("cmp_ingress_manual")),
+            },
+        },
+    )
+    .await;
+    assert_eq!(compacted.data.trigger, 4);
+    assert!([1, 2].contains(&compacted.data.status));
+    assert!(
+        world()
+            .core
+            .sessions
+            .compaction_job(
+                &ycoding_core::session::compaction_execution::job_id(&"cmp_ingress_manual".into())
+                    .unwrap()
+            )
+            .unwrap()
+            .is_some()
+    );
+    let launched: v5::SessionSubagentLaunchResult = ask(
+        &mut client,
+        "session.subagent.launch",
+        scope(&id),
+        v5::SessionSubagentLaunchRequest {
+            params: v5::SessionSubagentLaunchRequestParams {
+                parent_id: text(&id),
+            },
+            payload: v5::SessionSubagentLaunch {
+                parent_assistant_message_id: text("msg_ingress_parent"),
+                tool_call_id: text("ingress-launch"),
+                agent: text("reviewer"),
+                description: text("Review"),
+                prompt: text("Review the change"),
+                model: None,
+                background: Some(false),
+            },
+        },
+    )
+    .await;
+    assert_eq!(units(&launched.data.parent_id), id);
+    let child = session::Id::new(units(&launched.data.session_id)).unwrap();
+    assert_eq!(
+        world()
+            .core
+            .sessions
+            .get(&child)
+            .unwrap()
+            .unwrap()
+            .parent_id,
+        Some(sid(&id))
+    );
+    world().core.execution.interrupt(&child).await.unwrap();
+    let _: v5::SessionMoveResult = ask(
+        &mut client,
+        "session.move",
+        scope(&id),
+        v5::SessionMoveRequest {
+            params: v5::SessionMoveRequestParams {
+                session_id: text(&id),
+            },
+            payload: v5::LocationRef {
+                directory: text("child"),
+                workspace_id: None,
+            },
+        },
+    )
+    .await;
+    assert_eq!(
+        world()
+            .core
+            .sessions
+            .get(&sid(&id))
+            .unwrap()
+            .unwrap()
+            .location
+            .directory
+            .as_lossless()
+            .as_str(),
+        Some(fixture.child_directory.as_str())
+    );
+    assert!(
+        !world()
+            .core
+            .sessions
+            .transcript(&sid(&id))
+            .unwrap()
+            .is_empty()
+    );
+    drop(client);
+    server.shutdown().await.unwrap();
+    fixture.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generate_returns_typed_text_without_admitting_or_mutating_transcript() {
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let provider = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut bytes = Vec::new();
+        let mut buffer = [0; 4096];
+        loop {
+            let count = stream.read(&mut buffer).await.unwrap();
+            assert!(count > 0);
+            bytes.extend_from_slice(&buffer[..count]);
+            if let Some(start) = bytes.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                let header = String::from_utf8_lossy(&bytes[..start]);
+                let length = header
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|length| length.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap();
+                if bytes.len() >= start + 4 + length {
+                    break;
+                }
+            }
+        }
+        let response = "data: {\"id\":\"generated\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Generated text\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"generated\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n";
+        stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).as_bytes()).await.unwrap();
+        String::from_utf8_lossy(&bytes).into_owned()
+    });
+    let (fixture, _) = fixture(&endpoint).await;
+    let (server, mut client) = open(&fixture).await;
+    let id = fixture.root.clone();
+    let before = world().core.sessions.transcript(&sid(&id)).unwrap();
+    let result: v5::SessionGenerateResult = ask(
+        &mut client,
+        "session.generate",
+        scope(&id),
+        v5::SessionGenerateRequest {
+            params: v5::SessionGenerateRequestParams {
+                session_id: text(&id),
+            },
+            payload: v5::SessionGenerateRequestPayload {
+                prompt: text("Generate a note"),
+            },
+        },
+    )
+    .await;
+    assert_eq!(units(&result.data.data.text), "Generated text");
+    let request = provider.await.unwrap();
+    assert!(request.contains("Generate a note"));
+    assert_eq!(world().core.sessions.transcript(&sid(&id)).unwrap(), before);
+    assert!(
+        world()
+            .core
+            .sessions
+            .pending_list(&sid(&id))
+            .unwrap()
+            .is_empty()
+    );
+    drop(client);
+    server.shutdown().await.unwrap();
+    fixture.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_projects_optional_sandbox_warnings_and_required_sandbox_refuses_before_any_message()
+{
+    let (mut fixture, _) = fixture("http://127.0.0.1:1").await;
+    fixture
+        .configure_platform(r#"{"shell":"/bin/sh","shell_sandbox":"optional"}"#)
+        .await;
+    let id = fixture.root.clone();
+    let shell = |command: &str| v5::SessionShellRequest {
+        params: v5::SessionShellRequestParams {
+            session_id: text(&id),
+        },
+        payload: v5::SessionShellRequestPayload {
+            id: None,
+            command: text(command),
+        },
+    };
+    let shells = || {
+        world()
+            .core
+            .sessions
+            .transcript(&sid(&id))
+            .unwrap()
+            .into_iter()
+            .filter_map(|message| match message {
+                ycoding_core::ycoding_schema::session_message::Info::Shell(shell) => Some(shell),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let (server, mut client) = open(&fixture).await;
+    let _: v5::SessionShellResult = ask(
+        &mut client,
+        "session.shell",
+        scope(&id),
+        shell("echo optional"),
+    )
+    .await;
+    let [projected] = shells()
+        .try_into()
+        .unwrap_or_else(|_| panic!("expected one Shell message"));
+    assert_eq!(
+        ycoding_core::ycoding_schema::stringify_json(
+            &ycoding_core::ycoding_schema::JsonValue::Object(projected.metadata.unwrap())
+        ),
+        r#"{"sandboxWarnings":["No enforceable shell sandbox backend was available; command ran with host-user filesystem, process, and network authority."]}"#
+    );
+    drop(client);
+    server.shutdown().await.unwrap();
+    fixture
+        .configure_platform(r#"{"shell":"/bin/sh","shell_sandbox":"required"}"#)
+        .await;
+    let (server, mut client) = open(&fixture).await;
+    let _: v5::ServiceUnavailableError = refuse(
+        &mut client,
+        "session.shell",
+        scope(&id),
+        shell("echo required"),
+    )
+    .await;
+    assert_eq!(shells().len(), 1);
+    drop(client);
+    server.shutdown().await.unwrap();
+    fixture.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn managed_command_admits_artifact_provenance_and_records_its_activation() {
+    use ycoding_core::ycoding_schema::{JsonValue, project, project_artifact};
+    let (mut fixture, artifacts) = fixture("http://127.0.0.1:1").await;
+    let definition = project_artifact::Definition::decode(
+        &ObjectEncoder::new()
+            .field("kind", "command")
+            .field("name", "Managed")
+            .field("description", "Managed command")
+            .field("subtask", &false)
+            .field("mode", "subagent")
+            .field("permissions", &JsonValue::Array(vec![]))
+            .field("template", "Managed $1")
+            .finish(),
+    )
+    .unwrap();
+    let written = artifacts
+        .store
+        .write_manual(artifact_store::ManualWriteInput {
+            scope: project_artifact::ScopeSelector::Project,
+            project_id: Some(project::Id::new(fixture.project.as_str()).unwrap()),
+            id: "managed",
+            definition: &definition,
+            expected: None,
+            now: 100,
+        })
+        .unwrap();
+    artifacts.source.refresh().await;
+    fixture.catalogs.commands = Arc::new(artifacts.source.catalogs().await.commands);
+    let (server, mut client) = open(&fixture).await;
+    let id = fixture.root.clone();
+    let admitted: v5::SessionCommandResult = ask(
+        &mut client,
+        "session.command",
+        scope(&id),
+        v5::SessionCommandRequest {
+            params: v5::SessionCommandRequestParams {
+                session_id: text(&id),
+            },
+            payload: v5::SessionCommandRequestPayload {
+                id: Some(text("msg_managed_command")),
+                command: text("managed"),
+                arguments: Some(text("change")),
+                agent: None,
+                model: None,
+                files: None,
+                agents: None,
+                delivery: None,
+                resume: Some(false),
+            },
+        },
+    )
+    .await;
+    assert_eq!(units(&admitted.data.data.text), "Managed change");
+    let pending = world().core.sessions.pending_list(&sid(&id)).unwrap();
+    let metadata = ycoding_core::ycoding_schema::stringify_json(&pending[0].data);
+    assert!(metadata.contains(&format!(r#""projectArtifact":{{"scopeID":"{}","versionID":"{}","kind":"command","id":"managed","sourceScope":"project"}}"#, written.scope_id.as_lossless().as_str().unwrap(), written.version_id.as_lossless().as_str().unwrap())), "{metadata}");
+    let rows = world()
+        .store
+        .snapshot()
+        .unwrap()
+        .scan::<ycoding_core::ycoding_store::artifacts::ActivationTable>(
+            std::ops::Bound::Unbounded,
+            std::ops::Bound::Unbounded,
+            1000,
+        )
+        .unwrap();
+    let rows = rows
+        .iter()
+        .filter(|row| {
+            row.message_id.as_ref().and_then(|message| message.as_str())
+                == Some("msg_managed_command")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].source.as_str(), Some("command"));
+    assert_eq!(rows[0].version_id, *written.version_id.as_lossless());
+    assert_eq!(
+        rows[0]
+            .session_id
+            .as_ref()
+            .and_then(|session| session.as_str()),
+        Some(id.as_str())
+    );
+    assert!(
+        artifacts.source.diagnostics().is_empty(),
+        "{:?}",
+        artifacts.source.diagnostics()
+    );
+    drop(client);
+    server.shutdown().await.unwrap();
+    fixture.close().await;
+}
+
+#[test]
+fn every_session_ingress_descriptor_has_a_handler() {
+    let dispatcher = ycoding_runtime::standard().unwrap();
+    for operation in [
+        "session.command",
+        "session.shell",
+        "session.skill",
+        "session.skills",
+        "session.resolveSkillConflict",
+        "session.compact",
+        "session.generate",
+        "session.move",
+        "session.switchAgent",
+        "session.switchModel",
+        "session.subagent.launch",
+    ] {
+        assert!(
+            dispatcher.wired().contains(&operation),
+            "{operation} is unregistered"
+        );
+    }
+}

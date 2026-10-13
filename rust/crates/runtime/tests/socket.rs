@@ -786,6 +786,8 @@ async fn every_local_operation_answers_with_a_declared_typed_outcome() {
                 "session.background",
                 "session.capturedChanges.list",
                 "session.capturedInputs",
+                "session.command",
+                "session.compact",
                 "session.compaction.list",
                 "session.completions",
                 "session.context",
@@ -801,6 +803,7 @@ async fn every_local_operation_answers_with_a_declared_typed_outcome() {
                 "session.form.list",
                 "session.form.reply",
                 "session.form.state",
+                "session.generate",
                 "session.get",
                 "session.guardrail.request.list",
                 "session.guardrail.request.reply",
@@ -813,6 +816,7 @@ async fn every_local_operation_answers_with_a_declared_typed_outcome() {
                 "session.log",
                 "session.message",
                 "session.messages",
+                "session.move",
                 "session.outstanding",
                 "session.pending.list",
                 "session.permission.create",
@@ -828,18 +832,25 @@ async fn every_local_operation_answers_with_a_declared_typed_outcome() {
                 "session.question.reply",
                 "session.remove",
                 "session.rename",
+                "session.resolveSkillConflict",
                 "session.revert.clear",
                 "session.revert.commit",
                 "session.revert.stage",
+                "session.shell",
                 "session.side-chat.create",
                 "session.side-chat.list",
+                "session.skill",
+                "session.skills",
                 "session.snapshot",
                 "session.status",
                 "session.subagent.answer",
                 "session.subagent.cancel",
+                "session.subagent.launch",
                 "session.subagent.list",
                 "session.subagent.message",
                 "session.subagent.resume",
+                "session.switchAgent",
+                "session.switchModel",
                 "session.synthetic",
                 "session.team.economics",
                 "session.team.shell.kill",
@@ -876,7 +887,7 @@ async fn every_local_operation_answers_with_a_declared_typed_outcome() {
             subscriptions: ycoding_runtime::Subscriptions::default(),
         });
         let mut local = 0;
-        let mut unwired = 0;
+        let mut unavailable = 0;
         for descriptor in OPERATIONS.iter() {
             let local_operation = descriptor
                 .roles
@@ -923,11 +934,11 @@ async fn every_local_operation_answers_with_a_declared_typed_outcome() {
                     panic!("{} must settle inline", descriptor.diagnostic_name);
                 }
             }
-            local += 1;
-            unwired += usize::from(!wired.contains(&descriptor.diagnostic_name));
+            local += usize::from(local_operation);
+            unavailable += usize::from(!wired.contains(&descriptor.diagnostic_name));
         }
         println!(
-            "local operations: {local}; wired: {}; typed-unavailable: {unwired}",
+            "local operations: {local}; wired: {}; typed-unavailable: {unavailable}",
             wired.len()
         );
     })

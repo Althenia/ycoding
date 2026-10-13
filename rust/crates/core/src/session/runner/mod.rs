@@ -1,11 +1,13 @@
 mod compaction;
 mod diagnostics;
 mod helper;
+mod ingress;
 mod max_steps;
 mod messages;
 mod notifier;
 mod publisher;
 
+pub use ingress::{IngressError, ShellInput};
 pub use notifier::{Wake, mcp_notifier};
 pub use ycoding_ai::route::Executor;
 
@@ -138,6 +140,7 @@ struct Inner {
     services: Services,
     providers: Result<model::ProviderContext, model::Error>,
     active: Mutex<BTreeMap<session::Id, Arc<Work>>>,
+    ingress: Mutex<BTreeMap<ycoding_schema::LosslessString, Arc<tokio::sync::Mutex<()>>>>,
 }
 #[derive(Clone)]
 pub struct Local(Arc<Inner>);
@@ -185,6 +188,7 @@ impl Local {
             services,
             providers,
             active: Mutex::new(BTreeMap::new()),
+            ingress: Mutex::new(BTreeMap::new()),
         }))
     }
 
@@ -439,6 +443,11 @@ impl Local {
         skills: Vec<(skill_schema::Info, ycoding_schema::LosslessString)>,
     ) -> Outcome {
         let services = &self.0.services;
+        let lock = self.ingress_lock(crate::instructions::join(
+            &["skill:".into(), session.id.as_lossless().clone()],
+            "",
+        ));
+        let _guard = lock.lock().await;
         let instruction_keys = assembly
             .current
             .iter()

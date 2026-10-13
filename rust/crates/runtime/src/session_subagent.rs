@@ -165,7 +165,7 @@ pub async fn resume(
     })
 }
 
-fn failure(error: Error) -> Failure {
+pub(crate) fn failure(error: Error) -> Failure {
     match error {
         Error::SessionNotFound(id) | Error::TaskNotFound(id) => {
             Failure::SessionNotFound(convert::readable(id.as_lossless()))

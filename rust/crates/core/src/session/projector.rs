@@ -72,8 +72,31 @@ pub(crate) fn append(tx: &mut Write<'_>, event: &NewEvent) -> Result<Event, Erro
     Ok(event)
 }
 
+// Publication metadata is projected into read models but never stored with the event row.
+pub(crate) fn append_with_metadata(
+    tx: &mut Write<'_>,
+    event: &NewEvent,
+    metadata: JsonObject,
+) -> Result<Event, Error> {
+    let appended = tables::append(tx, event, None)?;
+    let tables::Append::Appended(event) = appended else {
+        return Err(tx.reject(Error::Rejected("new publication did not append")));
+    };
+    let mut decoded = decode(&event).map_err(|error| tx.reject(error))?;
+    decoded.0.metadata = Some(metadata);
+    fold_decoded(tx, &event, decoded).map_err(|error| tx.reject(error))?;
+    Ok(event)
+}
+
 pub fn fold(tx: &mut Write<'_>, event: &Event) -> Result<(), Error> {
-    let decoded = decode(event)?;
+    fold_decoded(tx, event, decode(event)?)
+}
+
+fn fold_decoded(
+    tx: &mut Write<'_>,
+    event: &Event,
+    decoded: session_event::DurableEvent,
+) -> Result<(), Error> {
     let data = decoded.0.data.encode();
     let path = JsonPath::default();
     let object = ObjectDecoder::new(&data, &path).map_err(record_error)?;
@@ -356,6 +379,49 @@ pub fn fold(tx: &mut Write<'_>, event: &Event) -> Result<(), Error> {
         Some("session.skill.activated.1" | "session.skill.deactivated.1") => {
             super::skill_status::apply(tx, event, &decoded.0)?
         }
+        Some("session.shell.started.1" | "session.shell.ended.1") => {
+            super::shell::apply(tx, event, &decoded.0)?
+        }
+        Some("session.project-artifacts-ended.1") => insert_message(
+            tx,
+            event,
+            &session_message::Info::Synthetic(session_message::Synthetic {
+                id: session_message::Id::from_event(&decoded.0.id),
+                metadata: Some(
+                    match ObjectEncoder::new()
+                        .field(
+                            "projectArtifactsEnded",
+                            &ObjectEncoder::new()
+                                .field(
+                                    "oldProjectID",
+                                    &object
+                                        .field::<LosslessString>("oldProjectID")
+                                        .map_err(record_error)?,
+                                )
+                                .field(
+                                    "newProjectID",
+                                    &object
+                                        .field::<LosslessString>("newProjectID")
+                                        .map_err(record_error)?,
+                                )
+                                .finish(),
+                        )
+                        .finish()
+                    {
+                        JsonValue::Object(metadata) => metadata,
+                        _ => unreachable!("object encoder"),
+                    },
+                ),
+                text: "".into(),
+                description: None,
+                time: session_message::BaseTime {
+                    created: ycoding_schema::schema::DateTimeUtcFromMillis::new(
+                        event.created as f64,
+                    )
+                    .map_err(record_error)?,
+                },
+            }),
+        )?,
         Some("session.provider.request.recorded.1") => {
             super::provider_request::apply(tx, &object, &event.aggregate_id)?
         }

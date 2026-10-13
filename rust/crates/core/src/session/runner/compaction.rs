@@ -49,6 +49,11 @@ pub(super) struct GateInput<'a> {
 
 impl Local {
     pub(super) async fn ensure_within_limit(&self, input: GateInput<'_>) -> Result<Gate, Error> {
+        let lock = self.ingress_lock(crate::instructions::join(
+            &["compact:".into(), input.session.id.as_lossless().clone()],
+            "",
+        ));
+        let _guard = lock.lock().await;
         let services = &self.0.services;
         let policy = &services.compaction;
         let capabilities = Capabilities {
@@ -322,7 +327,7 @@ impl Local {
         (!streamed.failed && !streamed.text.trim().is_empty()).then_some(streamed.text)
     }
 
-    fn latest_complete_boundary(
+    pub(super) fn latest_complete_boundary(
         &self,
         id: &session::Id,
     ) -> Result<Option<(session_message::Id, i64)>, Error> {

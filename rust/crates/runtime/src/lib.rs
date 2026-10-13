@@ -45,6 +45,7 @@ mod session_attachment;
 mod session_autonomy;
 mod session_create;
 mod session_helpers;
+mod session_ingress;
 mod session_list;
 mod session_outstanding;
 mod session_read_models;
@@ -68,7 +69,8 @@ pub use production::{Composed, Cursor, Production};
 pub use server::{Server, serve, serve_with};
 pub use services::{
     ArtifactProvider, ArtifactServices, CatalogProvider, CatalogServices, CatalogTask, Core,
-    Environment, Identity, IsolatedBrowserResolver, PlatformResolver, PlatformServices,
-    ProviderUsageResolver, ProviderUsageServices, Services, Subscriptions, UsagePricer,
+    DestinationServices, Environment, Identity, IsolatedBrowserResolver, PlatformResolver,
+    PlatformServices, ProviderUsageResolver, ProviderUsageServices, Services, SessionServices,
+    Subscriptions, UsagePricer,
 };
 pub use services::{IntegrationResolver, IntegrationServices, McpResolver};

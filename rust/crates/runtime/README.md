@@ -60,3 +60,26 @@ cargo test --locked -p ycoding-core --test generate_text
 `Enrolled` binds the relay-assigned device ID and the pinned relay origin. `Credential::authenticate` rejects a credential for another device or minted at another origin as `Forbidden` and an expired credential as `Unauthorized`; the agent socket URL derives from the enrolled origin. The device holds no account identity: the relay's enroll response carries only `deviceID` (`packages/remote/src/index.ts:1263`) and its token and refresh responses carry only tokens and expiries (`:1281`). The relay enforces account ownership by taking `ownerID` from the authenticated device credential and routing to the `${ownerID}:${deviceID}` relay instance (`infra/cloudflare/src/router.ts:601`, `:644`, `:663–667`).
 
 Relay refusal of a credential (401, 403 or 410) maps to `Unauthorized`, which stops the connector until the next enable; `remote.get` reports `credentialState` revoked for that device until a new enrollment. Store and enrollment-state failures map to `Setup`; other relay failures map to `Transport` and back off.
+
+## Session ingress
+
+The standard dispatcher registers `session.command`, `session.shell`, `session.skill`, `session.skills`, `session.resolveSkillConflict`, `session.compact`, `session.generate`, `session.move`, `session.switchAgent`, `session.switchModel`, and `session.subagent.launch`. Each resolves the Session's backend Location, then `CatalogServices.session`:
+
+- `runner`: the Location's `session::runner::Local`. Its Location and `models` Arc must equal the catalog's.
+- `generate`: the Location's `session::generate::Service`, with the same Location.
+- `destination`: optional `DestinationServices` for `session.move`, `resolve: Fn(location::Ref) -> Boxed<Result<location::Info, String>>` and `invalidate: Fn(location::Ref) -> Boxed<Result<(), String>>`. Production composition supplies both.
+
+Absent or disagreeing owners return a declared typed unavailable failure.
+
+- `session.command` admits one prompt per message ID under a per-ID lock. A reused ID returns the admitted record without evaluating again. The command agent wins over the requested agent; the model is the command model, then the command agent's model, then the requested model. Agent and model switches complete before admission; a failed model switch is a `CommandEvaluationError`. Commands absent from the catalog evaluate a matching sanitized `server:prompt` MCP prompt through the Location MCP service. Attachments are refused, like `session.prompt`. Managed commands, agent selections, and Skill loads record project-artifact provenance and activations through the runner store's artifact source (Core README, "Session operation attribution").
+- `session.shell` reserves the Session transition, waits for the drain to go idle, asserts the `shell` guardrail, runs the command in the Session directory, and publishes `session.shell.started.1` and `session.shell.ended.1` with up to 1 MiB of output. Optional-sandbox warnings are projected as `metadata.sandboxWarnings` on the Shell message; they are not stored on the event row. A required sandbox without a backend fails before any message. Execution wakes afterwards.
+- `session.skill` refuses denied or unknown skills as `SkillNotFoundError`, publishes one activation per active skill, and resumes the Session in the background unless `resume` is `false`. `session.resolveSkillConflict` deactivates the loser of an active skill conflict with reason `conflict_resolved`.
+- `session.compact` never interrupts the drain. Under the Session compaction gate it joins a pending job or admits a manual one, then runs it to settlement. Conflicts, including a missing completed boundary or an unresolvable model, return `ConflictError`.
+- `session.switchModel` runs inside the Session transition. It resolves the target with a fresh profile binding and refuses a nonpositive input budget before interrupting work. It then interrupts, checks the fit against the target lowering, and compacts at most once with a mandatory job. It returns `ModelSwitchBlockedError` with the pre-compaction metrics when the history still does not fit. Selection publishes `session.model.selected.1` plus `session.profile.bound.1` when a profile is bound or cleared. Resolution and compaction failures return `UnknownError` with a reference; an unavailable profile returns `InvalidRequestError` on `model.profile`. Variant and provider-package failures share the `model-unavailable` category.
+- `session.move` resolves the requested directory against the current Location, resolves the destination, interrupts work, invalidates a destination in another Project, publishes `session.project-artifacts-ended.1` across Projects, and publishes `session.moved.1`.
+- `session.switchAgent` refuses the `decision` agent. `session.generate` makes one stateless generation. `session.subagent.launch` preflights and launches a background child with the configured `subagent_depth`.
+
+```sh
+cargo test --locked -p ycoding-runtime --test session_ingress
+cargo test --locked -p ycoding-core --test session_ingress --test session_compaction_runner
+```

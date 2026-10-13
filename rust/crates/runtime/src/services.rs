@@ -180,6 +180,7 @@ pub type CatalogTask = Arc<dyn Fn() -> crate::dispatch::Boxed<Result<(), String>
 
 #[derive(Clone)]
 pub struct CatalogServices {
+    pub session: Option<SessionServices>,
     pub models: Arc<ycoding_core::resources::model::Resolver>,
     pub agents: Arc<ycoding_core::resources::agent::Service>,
     pub commands: Arc<ycoding_core::resources::command::Service>,
@@ -191,6 +192,56 @@ pub struct CatalogServices {
     pub ready: CatalogTask,
     pub refresh: CatalogTask,
     pub generate: Arc<ycoding_core::resources::generate::Service>,
+}
+
+#[derive(Clone)]
+pub struct SessionServices {
+    pub runner: ycoding_core::session::runner::Local,
+    pub generate: Arc<ycoding_core::session::generate::Service>,
+    pub destination: Option<DestinationServices>,
+}
+
+#[derive(Clone)]
+pub struct DestinationServices {
+    pub resolve: Arc<
+        dyn Fn(location::Ref) -> crate::dispatch::Boxed<Result<location::Info, String>>
+            + Send
+            + Sync,
+    >,
+    pub invalidate:
+        Arc<dyn Fn(location::Ref) -> crate::dispatch::Boxed<Result<(), String>> + Send + Sync>,
+}
+
+impl Core {
+    pub fn session_services(
+        &self,
+        location: &crate::LocationServices,
+    ) -> Result<(CatalogServices, SessionServices), crate::dispatch::Failure> {
+        let catalogs = self.catalogs.as_ref().ok_or_else(|| {
+            crate::dispatch::Failure::Unavailable(
+                "Location catalog services are not composed".into(),
+            )
+        })?(&location.info)
+        .map_err(crate::dispatch::Failure::Unavailable)?;
+        let services = catalogs.session.clone().ok_or_else(|| {
+            crate::dispatch::Failure::Unavailable(
+                "Location Session ingress services are not composed".into(),
+            )
+        })?;
+        let reference = location::Ref {
+            directory: location.info.directory.clone(),
+            workspace_id: location.info.workspace_id.clone(),
+        };
+        if services.runner.location() != &reference
+            || services.generate.location != reference
+            || !Arc::ptr_eq(services.runner.models(), &catalogs.models)
+        {
+            return Err(crate::dispatch::Failure::Unavailable(
+                "Location Session owners disagree".into(),
+            ));
+        }
+        Ok((catalogs, services))
+    }
 }
 
 pub type CatalogProvider =

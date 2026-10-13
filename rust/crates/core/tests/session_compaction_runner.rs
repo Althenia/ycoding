@@ -11,11 +11,13 @@ use ycoding_core::{
         credential, model,
     },
     session::{
+        compaction_execution,
         compaction_job::AdmitInput,
         compaction_policy::{Info, resolve},
         context_manifest,
-        run_coordinator::Coordinator,
-        runner::{Local, Services, WallClock},
+        model_switch::Outcome,
+        run_coordinator::{Coordinator, Drain, DrainRequest, RunFuture},
+        runner::{IngressError, Local, Services, WallClock},
         skill::{InstructionsFuture, Resolver, SkillsFuture},
         store::Service,
         summary_toon::{self, Memory},
@@ -136,6 +138,577 @@ fn local(store: &ycoding_store::Store, endpoint: &str) -> Local {
     local_with(store, endpoint, Default::default())
 }
 
+async fn select_current(service: &Service, name: &str) {
+    service
+        .publish(ycoding_store::session::NewEvent {
+            id: "evt_current_model".into(),
+            aggregate_id: "ses_one".into(),
+            created: 3,
+            type_: "session.model.selected.1".into(),
+            data: parse_json(&format!(
+                r#"{{"sessionID":"ses_one","model":{{"providerID":"openai","id":"{name}"}}}}"#
+            ))
+            .unwrap(),
+        })
+        .await
+        .unwrap();
+}
+
+struct Busy(tokio::sync::watch::Sender<bool>);
+impl Drain for Busy {
+    fn drain(&self, mut request: DrainRequest) -> RunFuture {
+        self.0.send_replace(true);
+        Box::pin(async move {
+            Err(ycoding_core::session::run_coordinator::Error::Interrupted(
+                request.cancellation.cancelled().await,
+            ))
+        })
+    }
+}
+
+async fn busy() -> (Coordinator, session::Id) {
+    let started = tokio::sync::watch::channel(false).0;
+    let coordinator = Coordinator::new(Arc::new(Busy(started.clone())));
+    let id = session::Id::new("ses_one").unwrap();
+    coordinator.wake(&id).unwrap();
+    within(started.subscribe().wait_for(|started| *started))
+        .await
+        .unwrap();
+    (coordinator, id)
+}
+
+fn selection(model: &str) -> ycoding_schema::model::Ref {
+    ycoding_schema::model::Ref::decode(&parse_json(model).unwrap()).unwrap()
+}
+
+#[tokio::test]
+async fn ingress_switch_validates_before_interrupt_and_serializes_successful_selections() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    select_current(&service, "gpt-reasoning").await;
+    let runner = local(&store, "http://127.0.0.1:1");
+    let (coordinator, id) = busy().await;
+    assert!(
+        runner
+            .switch_model(
+                &coordinator,
+                &id,
+                &selection(r#"{"providerID":"openai","id":"missing"}"#)
+            )
+            .await
+            .is_err()
+    );
+    assert!(coordinator.active().contains(&id));
+    assert_eq!(
+        service.get(&id).unwrap().unwrap().model.unwrap().id,
+        "gpt-reasoning".into()
+    );
+    let first = selection(r#"{"providerID":"openai","id":"gpt-helper"}"#);
+    let second = selection(r#"{"providerID":"openai","id":"gpt-reasoning"}"#);
+    let (a, b) = tokio::join!(
+        runner.switch_model(&coordinator, &id, &first),
+        runner.switch_model(&coordinator, &id, &second)
+    );
+    assert_eq!(a.unwrap(), Outcome::Switched);
+    assert_eq!(b.unwrap(), Outcome::Switched);
+    assert_eq!(
+        service.get(&id).unwrap().unwrap().model.unwrap().id,
+        "gpt-reasoning".into()
+    );
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn ingress_switch_compacts_once_then_refits_before_publishing_the_model() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    seed_context(&store);
+    seed_history(&store, "older answer. ".repeat(3000));
+    select_current(&service, "gpt-helper").await;
+    let (endpoint, mut requests, server) = server(vec![helper_reply(2)]).await;
+    let runner = local(&store, &endpoint);
+    let coordinator = Coordinator::new(Arc::new(runner.clone()));
+    let target = ycoding_schema::model::Ref::decode(
+        &parse_json(r#"{"providerID":"openai","id":"gpt-reasoning"}"#).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        within(runner.switch_model(&coordinator, &session::Id::new("ses_one").unwrap(), &target))
+            .await
+            .unwrap(),
+        Outcome::Switched
+    );
+    within(server).await.unwrap();
+    assert!(requests.recv().await.is_some());
+    let events = events(&store);
+    let compacted = events
+        .iter()
+        .position(|(kind, _)| kind == "session.compaction.ended.2")
+        .unwrap();
+    let selected = events
+        .iter()
+        .rposition(|(kind, _)| kind == "session.model.selected.1")
+        .unwrap();
+    assert!(compacted < selected);
+    assert_eq!(count(&events, "session.compaction.admitted.2"), 1);
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn ingress_switch_refuses_a_nonpositive_target_budget_without_interrupting_and_cancels_work_for_a_valid_target()
+ {
+    let store = support::store();
+    let service = Service::new(store.client());
+    select_current(&service, "gpt-reasoning").await;
+    let runner = local(&store, "http://127.0.0.1:1");
+    let (coordinator, id) = busy().await;
+    let refused = runner
+        .switch_model(
+            &coordinator,
+            &id,
+            &selection(r#"{"providerID":"openai","id":"gpt-tiny"}"#),
+        )
+        .await;
+    assert!(
+        matches!(refused, Err(IngressError::Compaction(_))),
+        "{refused:?}"
+    );
+    assert!(coordinator.active().contains(&id));
+    assert_eq!(count(&events(&store), "session.model.selected.1"), 1);
+    assert_eq!(
+        within(runner.switch_model(
+            &coordinator,
+            &id,
+            &selection(r#"{"providerID":"openai","id":"gpt-helper"}"#)
+        ))
+        .await
+        .unwrap(),
+        Outcome::Switched
+    );
+    assert!(!coordinator.active().contains(&id));
+    assert_eq!(
+        service.get(&id).unwrap().unwrap().model.unwrap().id,
+        "gpt-helper".into()
+    );
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn ingress_switch_refuses_a_target_whose_compaction_fails_and_keeps_the_prior_model() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    seed_context(&store);
+    seed_history(&store, "older answer. ".repeat(3000));
+    select_current(&service, "gpt-tiny").await;
+    let runner = local(&store, "http://127.0.0.1:1");
+    let coordinator = Coordinator::new(Arc::new(runner.clone()));
+    let id = session::Id::new("ses_one").unwrap();
+    let outcome = within(runner.switch_model(
+        &coordinator,
+        &id,
+        &selection(r#"{"providerID":"openai","id":"gpt-reasoning"}"#),
+    ))
+    .await
+    .unwrap();
+    let Outcome::Blocked(blocked) = outcome else {
+        panic!("an unfit target must be refused: {outcome:?}")
+    };
+    assert_eq!(blocked.current_model.id, "gpt-tiny".into());
+    assert_eq!(blocked.target_model.id, "gpt-reasoning".into());
+    assert_eq!(blocked.target_safe_input_tokens.get(), 5_000);
+    assert_eq!(
+        blocked.required_reduction_tokens.get(),
+        blocked.current_context_tokens.get() - 5_000
+    );
+    let recorded = events(&store);
+    assert_eq!(count(&recorded, "session.compaction.admitted.2"), 1);
+    assert_eq!(count(&recorded, "session.compaction.failed.2"), 1);
+    assert_eq!(count(&recorded, "session.model.selected.1"), 1);
+    assert_eq!(
+        service.get(&id).unwrap().unwrap().model.unwrap().id,
+        "gpt-tiny".into()
+    );
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn ingress_switch_rebinds_a_profile_for_the_same_model_and_clears_it_when_the_profile_is_dropped()
+ {
+    let store = support::store();
+    let service = Service::new(store.client());
+    let credentials = credential::Service::new(store.client());
+    let key = |value: &str| {
+        ycoding_store::resources::Secret::new(
+            ycoding_schema::ObjectEncoder::new()
+                .field("type", "key")
+                .field("key", value)
+                .finish(),
+        )
+        .unwrap()
+    };
+    let work = credentials
+        .create(
+            "cred_work".into(),
+            "openai".into(),
+            Some("Work".into()),
+            key("fixture-work-key"),
+            1,
+        )
+        .await
+        .unwrap();
+    let personal = credentials
+        .create(
+            "cred_personal".into(),
+            "openai".into(),
+            Some("Personal".into()),
+            key("fixture-personal-key"),
+            2,
+        )
+        .await
+        .unwrap();
+    let runner = local(&store, "http://127.0.0.1:1");
+    let coordinator = Coordinator::new(Arc::new(runner.clone()));
+    let id = session::Id::new("ses_one").unwrap();
+    for (profile, credential) in [
+        ("Work", work.id()),
+        ("Personal", personal.id()),
+        ("Personal", personal.id()),
+    ] {
+        let target = selection(&format!(
+            r#"{{"providerID":"openai","id":"gpt-reasoning","profile":"{profile}"}}"#
+        ));
+        assert_eq!(
+            within(runner.switch_model(&coordinator, &id, &target))
+                .await
+                .unwrap(),
+            Outcome::Switched
+        );
+        assert_eq!(
+            service
+                .profile_binding(&id)
+                .unwrap()
+                .unwrap()
+                .credential_id
+                .0,
+            *credential
+        );
+        assert_eq!(service.get(&id).unwrap().unwrap().model.unwrap(), target);
+    }
+    assert_eq!(count(&events(&store), "session.profile.bound.1"), 3);
+    assert_eq!(
+        within(runner.switch_model(
+            &coordinator,
+            &id,
+            &selection(r#"{"providerID":"openai","id":"gpt-reasoning"}"#)
+        ))
+        .await
+        .unwrap(),
+        Outcome::Switched
+    );
+    assert!(service.profile_binding(&id).unwrap().is_none());
+    assert_eq!(
+        service.get(&id).unwrap().unwrap().model.unwrap().profile,
+        None
+    );
+    assert_eq!(count(&events(&store), "session.profile.bound.1"), 4);
+    coordinator.shutdown().await.unwrap();
+    credentials.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn ingress_compact_while_busy_joins_the_pending_job_without_interrupting_the_drain() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    seed_context(&store);
+    seed_history(&store, "older answer. ".repeat(3000));
+    select_current(&service, "gpt-reasoning").await;
+    let existing = service
+        .compaction_admit(
+            AdmitInput {
+                id: None,
+                session: session::Id::new("ses_one").unwrap(),
+                trigger: session_compaction::Trigger::Mandatory,
+                requested_through_message: session_message::Id::new("msg_old_assistant").unwrap(),
+                requested_through_seq: 2,
+                base_context_revision: 0,
+                target_max_input_tokens: 4_200,
+                config_digest: "c".repeat(64),
+                pressure: None,
+            },
+            1,
+        )
+        .await
+        .unwrap();
+    let (endpoint, mut requests, server) = server(vec![helper_reply(2)]).await;
+    let runner = local(&store, &endpoint);
+    let (coordinator, id) = busy().await;
+    let job = within(runner.compact(
+        &id,
+        Some(compaction_execution::job_id(&"cmp_manual".into()).unwrap()),
+    ))
+    .await
+    .unwrap();
+    within(server).await.unwrap();
+    assert!(requests.recv().await.is_some());
+    assert_eq!(job.id, existing.id);
+    assert_eq!(job.status.as_str(), Some("ended"));
+    assert!(coordinator.active().contains(&id));
+    let recorded = events(&store);
+    assert_eq!(count(&recorded, "session.compaction.admitted.2"), 1);
+    assert_eq!(count(&recorded, "session.compaction.ended.2"), 1);
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn ingress_compact_refuses_a_session_without_a_completed_boundary() {
+    let store = support::store();
+    let refused = local(&store, "http://127.0.0.1:1")
+        .compact(&session::Id::new("ses_one").unwrap(), None)
+        .await;
+    assert!(
+        matches!(&refused, Err(IngressError::Compaction(error)) if error.to_string() == "Session has no completed message boundary to compact"),
+        "{refused:?}"
+    );
+    assert_eq!(count(&events(&store), "session.compaction.admitted.2"), 0);
+}
+
+#[tokio::test]
+async fn ingress_agent_selection_and_explicit_skill_load_record_managed_artifact_activations() {
+    use ycoding_core::resources::{
+        command,
+        project_artifact::{accounting, source, source_registry, store},
+    };
+    use ycoding_schema::{ObjectEncoder, project, project_artifact};
+    let db = ycoding_store::Store::disposable(
+        ycoding_store::Options::core(),
+        ycoding_store::import::catalog(ycoding_store::import::DatabaseKind::Core),
+        ycoding_store::Metadata::new([9; 16], 1),
+    )
+    .unwrap();
+    db.submit(|tx| {
+        ycoding_store::project::ProjectTable::insert(
+            tx,
+            &ycoding_store::project::Project {
+                id: "prj_one".into(),
+                worktree: "/project".into(),
+                vcs: None,
+                name: None,
+                icon_url: None,
+                icon_url_override: None,
+                icon_color: None,
+                time_created: 1,
+                time_updated: 1,
+                time_initialized: None,
+                sandboxes: vec![],
+                commands: None,
+            },
+        )?;
+        ycoding_store::session::SessionTable::insert(tx, &support::record("ses_one"))
+    })
+    .unwrap()
+    .wait()
+    .unwrap();
+    let root =
+        std::env::temp_dir().join(format!("ycoding-ingress-artifacts-{}", std::process::id()));
+    let client = db.client();
+    let registry = Arc::new(std::sync::Mutex::new(source_registry::Registry::default()));
+    let accounting = accounting::Service::new(client.clone(), "test-bucket-secret".into());
+    let artifacts = store::Service::new(
+        client.clone(),
+        store::Paths {
+            data: root.join("data"),
+            home: root.join("home"),
+            config: root.join("config"),
+        },
+        registry.clone(),
+    )
+    .with_accounting(accounting.clone());
+    let project_id = project::Id::new("prj_one").unwrap();
+    let write = |kind: &str, id: &str, field: &str| {
+        let definition = project_artifact::Definition::decode(
+            &ObjectEncoder::new()
+                .field("kind", kind)
+                .field("name", id)
+                .field("description", "Managed")
+                .field("subtask", &false)
+                .field("mode", "subagent")
+                .field("permissions", &JsonValue::Array(vec![]))
+                .field(field, "Managed body")
+                .finish(),
+        )
+        .unwrap();
+        artifacts
+            .write_manual(store::ManualWriteInput {
+                scope: project_artifact::ScopeSelector::Project,
+                project_id: Some(project_id.clone()),
+                id,
+                definition: &definition,
+                expected: None,
+                now: 100,
+            })
+            .unwrap()
+    };
+    let agent_version = write("agent", "explore", "system");
+    let skill_version = write("skill", "audit", "content");
+    let source = source::Service::new(
+        source::Options {
+            client: client.clone(),
+            store: artifacts.clone(),
+            accounting,
+            registry,
+            location: ycoding_schema::location::Ref::decode(
+                &parse_json(r#"{"directory":"/project"}"#).unwrap(),
+            )
+            .unwrap(),
+            project_id,
+            project_directory: "/project".into(),
+            data_root: root.join("data"),
+        },
+        source::Catalogs {
+            agents: agent::Service::new(vec![agent::empty("build".into())]),
+            commands: command::Service::default(),
+            skills: ycoding_core::resources::skill::Service::new(&root.join("cache")),
+        },
+    );
+    source.refresh().await;
+    let skill = skill::Info::decode(&parse_json(r#"{"id":"audit","name":"Audit","location":"/project/audit/SKILL.md","content":"Audit guidance"}"#).unwrap()).unwrap();
+    let mut services = services(
+        &db,
+        "http://127.0.0.1:1",
+        Default::default(),
+        Some(Arc::new(SkillFixture(skill))),
+    );
+    services.store = services.store.with_artifact_source(source.clone());
+    let runner = Local::new(services);
+    let id = session::Id::new("ses_one").unwrap();
+    assert!(
+        runner
+            .load_skill(
+                &id,
+                Some(session_message::Id::new("msg_skill_explicit").unwrap()),
+                &"audit".into()
+            )
+            .await
+            .unwrap()
+    );
+    runner.switch_agent(&id, &"explore".into()).await.unwrap();
+    let recorded = events(&db);
+    let selected = recorded
+        .iter()
+        .position(|(kind, _)| kind == "session.agent.selected.1")
+        .unwrap();
+    let activated = recorded
+        .iter()
+        .position(|(kind, _)| kind == "session.skill.activated.1")
+        .unwrap();
+    for index in [selected, activated] {
+        assert!(
+            text_of(recorded[index].1.clone()).contains("\"artifact\":{"),
+            "{:?}",
+            recorded[index]
+        );
+    }
+    let prefix = ycoding_store::tuple_key(&[ycoding_store::KeyPart::String(&"ses_one".into())]);
+    let stored = db
+        .snapshot()
+        .unwrap()
+        .index_range::<ycoding_store::session::EventTable>(
+            "event_aggregate_seq_idx",
+            ycoding_store::IndexQuery {
+                lower: std::ops::Bound::Unbounded,
+                upper: std::ops::Bound::Unbounded,
+                prefix: Some(&prefix),
+                order: ycoding_store::IndexOrder::Ascending,
+                after: None,
+                limit: 1000,
+            },
+        )
+        .unwrap();
+    let seq_of = |kind: &str| {
+        stored
+            .iter()
+            .find(|event| event.record.type_.as_str() == Some(kind))
+            .unwrap()
+            .record
+            .clone()
+    };
+    let skill_event = seq_of("session.skill.activated.1");
+    assert_eq!(skill_event.id.as_str(), Some("evt_skill_explicit"));
+    let rows = db
+        .snapshot()
+        .unwrap()
+        .scan::<ycoding_store::artifacts::ActivationTable>(
+            std::ops::Bound::Unbounded,
+            std::ops::Bound::Unbounded,
+            10,
+        )
+        .unwrap();
+    let row = |source: &str| {
+        rows.iter()
+            .find(|row| row.source.as_str() == Some(source))
+            .unwrap_or_else(|| panic!("missing {source} activation in {rows:?}"))
+    };
+    assert_eq!(rows.len(), 2);
+    let agent_row = row("agent-selected");
+    assert_eq!(
+        agent_row.version_id,
+        *agent_version.version_id.as_lossless()
+    );
+    assert_eq!(
+        agent_row.agent_id.as_ref().and_then(|agent| agent.as_str()),
+        Some("explore")
+    );
+    assert_eq!(
+        agent_row.boundary_seq,
+        seq_of("session.agent.selected.1").seq
+    );
+    let skill_row = row("session-skill");
+    assert_eq!(
+        skill_row.version_id,
+        *skill_version.version_id.as_lossless()
+    );
+    assert_eq!(
+        skill_row
+            .message_id
+            .as_ref()
+            .and_then(|message| message.as_str()),
+        Some("msg_skill_explicit")
+    );
+    assert_eq!(skill_row.boundary_seq, skill_event.seq);
+    assert!(
+        source.diagnostics().is_empty(),
+        "{:?}",
+        source.diagnostics()
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn ingress_skill_duplicate_load_and_agent_switch_preserve_one_activation_and_reason() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    let skill = skill::Info::decode(&parse_json(r#"{"id":"audit","name":"Audit","location":"/project/audit/SKILL.md","content":"Audit guidance"}"#).unwrap()).unwrap();
+    let runner =
+        local_with_skill_resolver(&store, "http://127.0.0.1:1", Arc::new(SkillFixture(skill)));
+    let id = session::Id::new("ses_one").unwrap();
+    let skill_id = "audit".into();
+    let (first, second) = tokio::join!(
+        runner.load_skill(&id, None, &skill_id),
+        runner.load_skill(&id, None, &skill_id)
+    );
+    assert_ne!(first.unwrap(), second.unwrap());
+    assert_eq!(service.skills(&id, &[]).unwrap().len(), 1);
+    assert_eq!(count(&events(&store), "session.skill.activated.1"), 1);
+    assert!(runner.switch_agent(&id, &"decision".into()).await.is_err());
+    runner.switch_agent(&id, &"build".into()).await.unwrap();
+    assert_eq!(
+        service.skills(&id, &[]).unwrap()[0].state,
+        ycoding_schema::session_skill_status::State::Inactive {
+            inactive_reason: "agent_switched".into()
+        }
+    );
+}
+
 fn local_with_skill_resolver(
     store: &ycoding_store::Store,
     endpoint: &str,
@@ -166,17 +739,26 @@ fn local_with_resolver(
     helpers: helper::Settings,
     skill_resolver: Option<Arc<dyn Resolver>>,
 ) -> Local {
+    Local::new(services(store, endpoint, helpers, skill_resolver))
+}
+
+fn services(
+    store: &ycoding_store::Store,
+    endpoint: &str,
+    helpers: helper::Settings,
+    skill_resolver: Option<Arc<dyn Resolver>>,
+) -> Services {
     let models =
         include_str!("../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json")
             .replacen("\"context\": 128000", "\"context\": 6000", 1)
             .replacen(
                 "\"models\": {\n      \"gpt-reasoning\": {",
-                "\"models\": {\n      \"gpt-helper\": {\"id\":\"gpt-helper\",\"name\":\"GPT Helper\",\"release_date\":\"2026-01-01\",\"attachment\":false,\"reasoning\":false,\"temperature\":true,\"tool_call\":true,\"limit\":{\"context\":20000,\"output\":2000}},\n      \"gpt-reasoning\": {",
+                "\"models\": {\n      \"gpt-tiny\": {\"id\":\"gpt-tiny\",\"name\":\"GPT Tiny\",\"release_date\":\"2026-01-01\",\"attachment\":false,\"reasoning\":false,\"temperature\":true,\"tool_call\":true,\"limit\":{\"context\":900,\"output\":100}},\n      \"gpt-helper\": {\"id\":\"gpt-helper\",\"name\":\"GPT Helper\",\"release_date\":\"2026-01-01\",\"attachment\":false,\"reasoning\":false,\"temperature\":true,\"tool_call\":true,\"limit\":{\"context\":20000,\"output\":2000}},\n      \"gpt-reasoning\": {",
                 1,
             );
     let mut catalog = Catalog::new(models_dev::normalize(&parse_json(&models).unwrap()).unwrap());
     catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"openai","model":"gpt-reasoning"}},"providers":{{"openai":{{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
-    Local::new(Services {
+    Services {
         snapshots: None,
         store: Service::new(store.client()),
         events: ycoding_core::event_feed::Feed::attach(&store.client()),
@@ -223,7 +805,7 @@ fn local_with_resolver(
         extensions: Vec::new(),
         claude: None,
         auth: None,
-    })
+    }
 }
 
 fn seed_context(store: &ycoding_store::Store) {
