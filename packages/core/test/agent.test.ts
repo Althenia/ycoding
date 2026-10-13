@@ -278,6 +278,7 @@ describe("Agent", () => {
         "For requests to answer, explain, review, diagnose, or plan, inspect the relevant material and report. Do not make changes unless the request also asks for them.",
         "Require confirmation before external writes, purchases, destructive or irreversible actions, dependency changes, data or schema migrations, CI/CD changes, public-contract breaks, or material scope expansion.",
         "If your permission ceiling prevents asking for confirmation, do not act; report the blocker.",
+        "Before building, design comprehensive test cases from the accepted requirements and contracts, and reproduce a reported failure at its boundary. Build the complete working feature or milestone together with those tests; do not alternate test and code for each small step, and add no mutation probes unless requested. At each feature checkpoint, run the focused tests once, fix failures, and rerun only the failing scope; run full suites and every affected required check at the integration or merge checkpoint.",
       ]
       for (const id of ["zeus", "GSD", "architech", "god", "yangi", "occam", "omoikane", "wittgenstein"]) {
         const item = yield* agent.get(Agent.ID.make(id))
@@ -295,7 +296,9 @@ describe("Agent", () => {
       const goal = yield* agent.get(Agent.ID.make("goal"))
       const summary = yield* agent.get(Agent.ID.make("summary"))
       const btw = yield* agent.get(Agent.ID.make("btw"))
+      const gsd = yield* agent.get(Agent.ID.make("GSD"))
       if (
+        !gsd?.system ||
         !god?.system ||
         !zeus?.system ||
         !title?.system ||
@@ -315,6 +318,10 @@ describe("Agent", () => {
       expect(god.system).toContain("never leave the variant blank")
       expect(god.system).toContain("Use the decision tool")
       expect(god.system).toContain("Default to parallel execution to maximize development speed.")
+      expect(god.system).toContain(
+        "merge them through one dedicated integration lane that resolves conflicts and runs the full checks",
+      )
+      expect(gsd.system).not.toContain("prove RED")
       expect(zeus.system).toContain("Issue independent tool calls together in one step")
       expect(god.system).toContain("After a worktree's branch is merged into main, remove that worktree with `git worktree remove <path>`")
       expect(god.system).not.toContain("Use durable subagents only for isolated work.")
