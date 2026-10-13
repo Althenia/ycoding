@@ -229,7 +229,7 @@ export function resourceFieldConstraints(field: ResourceField): Constraints {
       bounds.utf16Min = min ?? bounds.utf16Min
       bounds.utf16Max = max ?? bounds.utf16Max
     }
-    if (field.presence === "repeated") {
+    if (field.presence === "repeated" || field.type === "bytes") {
       bounds.countMin = min ?? bounds.countMin
       bounds.countMax = max ?? bounds.countMax
     }

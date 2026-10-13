@@ -201,7 +201,7 @@ pub async fn output(
         .await
         .map_err(|error| failure(&request.params.id, error))?;
     Ok(v5::ShellOutputResult {
-        location: convert::location_info(&location),
+        location: Some(convert::location_info(&location)),
         data: v5::ShellOutputResultData {
             output: convert::text(&page.output),
             cursor: page.cursor as u64,

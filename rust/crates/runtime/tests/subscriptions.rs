@@ -101,6 +101,7 @@ fn received(client: &Client, sub: &str, input: &str) -> bool {
         .filter(|batch| batch.subscription_id == sub)
         .flat_map(|batch| &batch.events)
         .any(|record| {
+            let record = support::session_log_record(record);
             let item = v5::SessionLogItem::decode(record.event.payload.as_slice()).unwrap();
             matches!(item.kind, Some(v5::session_log_item::Kind::Value15(event)) if units(&event.data.input_id) == input)
         })

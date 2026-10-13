@@ -2,6 +2,7 @@ import type { Scope, EventBatch } from "../../generated/v5/index.js"
 
 export type Subscription = {
   scope: Scope
+  eventTypes: readonly string[]
   sourceEpoch: string
   hydrating: boolean
   invalidated: boolean

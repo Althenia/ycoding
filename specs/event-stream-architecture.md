@@ -1,4 +1,18 @@
-# V2 Event Stream Architecture
+# Public event stream architecture
+
+## Revision 5 wire contract
+
+The generated v5 public feed uses `event.subscribe` (4000), a typed subscription-id Result and EventBatch payloads of `ycoding.v5.PublicEvent`. Its 101 branches match exactly `EventManifest.ServerDefinitions`: 51 public durable Session envelopes reuse the existing SessionLogItem types; 50 ephemerals, including seven Session ephemerals, have no durable field. Every branch retains typed data, envelope metadata and lossless strings. TS `publicEvents` and Rust `PUBLIC_EVENTS` are generated from annotated Protobuf fields, not a second handwritten event inventory.
+
+`session.log` (4039) uses its unchanged 51 public durable Session branches plus log.synced. It has a distinct descriptor event type and finite StreamEnd semantics. Public subscriptions reject log payloads; log subscriptions reject public ephemerals. Internal/historical durable facts and broader runtime-only event families are not public wire branches. Ready/source epoch replaces server.connected on this wire.
+
+Local event requests retain Global outer scope and may select global or Session targets. Remote event subscribe/unsubscribe requests use verified Session outer scope and accepted subscription identity; remote peers cannot open a global feed. Register interest only after backend acceptance, subscribe before snapshot, fence by source epoch/aggregate/watermark and release the accepted identity explicitly. Preserve volatile deltas, canonical gap recovery, independent bounded delivery, EventBatch order, explicit ResyncRequired and downstream-consumption ownership.
+
+The contract owners are `protocol/ycoding/v5/events.proto`, the protocol generator, TS/Rust subscription machines and the contract tests named in [wire-session.md](./wire-session.md). Generated membership and conformance tests prove contract shape and transport acceptance, not that the runtime converts and emits every domain event.
+
+## TypeScript HTTP reference boundary
+
+The remaining sections specify the inspected TypeScript HTTP feed used as the behavior reference. SSE framing and its connection announcement belong to that boundary, not the generated v5 wire vocabulary.
 
 ## Decision
 

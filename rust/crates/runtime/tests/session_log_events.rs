@@ -219,6 +219,7 @@ fn records(client: &Client, sub: &str) -> Vec<v5::EventRecord> {
 fn durable_records(client: &Client, sub: &str) -> Vec<v5::EventRecord> {
     records(client, sub)
         .into_iter()
+        .map(|record| support::session_log_record(&record))
         .filter(|record| {
             !matches!(
                 v5::SessionLogItem::decode(record.event.payload.as_slice())

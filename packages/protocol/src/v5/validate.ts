@@ -142,6 +142,7 @@ function scan(
             : field.target === "ycoding.v5.LosslessString" && value.message
               ? stringFromUnits(units(value.message))
               : undefined,
+          field.type === 12 ? value.bytes.length : undefined,
         )
     }
     const existing = fields.get(tag)

@@ -685,7 +685,7 @@ message fs_find_Request {
 }
 
 message fs_find_Result {
-  required Location_Info location = 1;
+  optional Location_Info location = 1;
   required fs_find_Result_data data = 2;
 }
 
@@ -696,6 +696,7 @@ message fs_find_Result_data {
 message FileSystem_Entry {
   required LosslessString path = 1;
   required FileSystem_Entry_type type = 2;
+  optional LosslessString uri = 3;
 }
 
 message fs_list_Request_query {
@@ -1377,7 +1378,7 @@ message shell_output_Request {
 }
 
 message shell_output_Result {
-  required Location_Info location = 1;
+  optional Location_Info location = 1;
   required shell_output_Result_data data = 2;
 }
 
@@ -1841,6 +1842,10 @@ service server_fs {
       error_types: "ycoding.v5.UnauthorizedError"
       error_types: "ycoding.v5.InvalidRequestError"
       roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      role_scopes: { role: REMOTE_CLIENT scopes: SESSION scopes: WORKSPACE }
+      role_scopes: { role: RELAY scopes: SESSION scopes: WORKSPACE }
       scope: LOCATION
       mutation: READ
       settlement: COMPLETED
@@ -2312,6 +2317,8 @@ service server_server {
       error_types: "ycoding.v5.TelemetryDisabled"
       error_types: "ycoding.v5.UnauthorizedError"
       roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
       scope: MACHINE
       mutation: MUTATION
       settlement: COMPLETED
@@ -2362,6 +2369,8 @@ service server_server {
       error_types: "ycoding.v5.UnauthorizedError"
       error_types: "ycoding.v5.InvalidRequestError"
       roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
       scope: MACHINE
       mutation: READ
       settlement: COMPLETED
@@ -2428,6 +2437,10 @@ service server_shell {
       error_types: "ycoding.v5.UnauthorizedError"
       error_types: "ycoding.v5.InvalidRequestError"
       roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      role_scopes: { role: REMOTE_CLIENT scopes: SESSION }
+      role_scopes: { role: RELAY scopes: SESSION }
       scope: LOCATION
       mutation: READ
       settlement: COMPLETED

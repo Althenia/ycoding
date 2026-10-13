@@ -97,7 +97,7 @@ fn query(query: &v5::SessionsQuery) -> Result<Query, Failure> {
     let order = match query.order.map(v5::SessionsQueryOrder::try_from) {
         Some(Ok(v5::SessionsQueryOrder::SessionsqueryOrderAsc)) => Order::Ascending,
         Some(Ok(v5::SessionsQueryOrder::SessionsqueryOrderDesc)) | None => Order::Descending,
-        Some(Err(_)) => return Err(Failure::Invalid("invalid order".into())),
+        Some(_) => return Err(Failure::Invalid("invalid order".into())),
     };
     Ok(Query {
         scope,

@@ -12,6 +12,7 @@ use ycoding_protocol::v5;
 fn entry(entry: &Entry) -> v5::FileSystemEntry {
     v5::FileSystemEntry {
         path: convert::wire(entry.path.as_lossless()),
+        uri: None,
         r#type: match entry.r#type {
             EntryType::File => v5::FileSystemEntryType::FilesystemEntryTypeFile,
             EntryType::Directory => v5::FileSystemEntryType::FilesystemEntryTypeDirectory,
@@ -88,7 +89,7 @@ pub async fn find(
         .map_err(|error| Failure::Unavailable(error.to_string()))?
         .map_err(platform_services::io)?;
     Ok(v5::FsFindResult {
-        location: convert::location_info(&location),
+        location: Some(convert::location_info(&location)),
         data: v5::FsFindResultData {
             items: entries.iter().map(entry).collect(),
         },

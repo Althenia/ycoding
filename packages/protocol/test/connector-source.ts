@@ -1,38 +1,38 @@
 export const connectorOperations = {
   "provider.auth.list": [5000, "provider.auth.list", "C", "READ"],
-  "provider.auth.key": [5001, "remote.provider.auth.key", "B-distinct", "MUTATION"],
+  "provider.auth.key": [5001, "provider.auth.key", "C", "MUTATION"],
   "provider.auth.begin": [5002, "provider.auth.begin", "C", "MUTATION"],
   "provider.auth.status": [5003, "provider.auth.status", "C", "MUTATION"],
-  "provider.auth.complete": [5004, "remote.provider.auth.complete", "B-distinct", "MUTATION"],
+  "provider.auth.complete": [5004, "provider.auth.complete", "C", "MUTATION"],
   "provider.auth.cancel": [5005, "provider.auth.cancel", "C", "MUTATION"],
   "workspace.list": [5006, "workspace.list", "C", "READ"],
-  "session.list": [5007, "remote.session.list", "B-distinct", "READ"],
+  "session.list": [4038, "session.list", "B-reuse", "READ"],
   "session.active": [4008, "session.active", "B-reuse", "READ"],
   "session.get": [4030, "session.get", "A", "READ"],
   "session.messages": [4041, "session.messages", "A", "READ"],
   "session.capturedChanges.list": [5008, "session.capturedChanges.list", "C", "READ"],
-  "session.compaction.list": [5009, "remote.session.compaction.list", "B-distinct", "READ"],
+  "session.compaction.list": [4081, "session.compaction.list", "B-reuse", "READ"],
   "session.compact": [4015, "session.compact", "B-reuse", "MUTATION"],
   "session.snapshot": [4063, "session.snapshot", "B-reuse", "READ"],
   "session.pending.list": [4044, "session.pending.list", "B-reuse", "READ"],
-  "session.attachment.read": [5010, "remote.session.attachment.read", "B-distinct", "READ"],
-  "session.message.stream": [5011, "remote.session.message.read", "B-distinct", "READ"],
+  "session.attachment.read": [4010, "session.attachment.read", "B-reuse", "READ"],
+  "session.message.stream": [4040, "session.message", "B-reuse", "READ"],
   "session.todo.list": [4073, "session.todo.list", "A", "READ"],
   "session.subagent.list": [4067, "session.subagent.list", "B-reuse", "READ"],
   "session.pin": [4049, "session.pin", "B-reuse", "MUTATION"],
   "session.unpin": [4076, "session.unpin", "B-reuse", "MUTATION"],
   "session.subagent.cancel": [4065, "session.subagent.cancel", "B-reuse", "MUTATION"],
-  "session.subagent.answer": [5012, "remote.session.subagent.answer", "B-distinct", "MUTATION"],
+  "session.subagent.answer": [4064, "session.subagent.answer", "B-reuse", "MUTATION"],
   "session.team.economics": [5013, "session.team.economics", "C", "READ"],
   "session.team.shell.list": [5014, "session.team.shell.list", "C", "READ"],
   "session.team.shell.kill": [5015, "session.team.shell.kill", "B-distinct", "MUTATION"],
   "session.side-chat.list": [5016, "session.side-chat.list", "C", "READ"],
   "session.side-chat.create": [5017, "session.side-chat.create", "C", "MUTATION"],
   "session.family.activity": [5018, "session.family.activity", "C", "READ"],
-  "session.log": [5019, "remote.session.log", "B-distinct", "READ"],
-  "session.subscribe": [5020, "remote.session.subscribe", "B-distinct", "MUTATION"],
-  "session.unsubscribe": [5021, "remote.session.unsubscribe", "B-distinct", "MUTATION"],
-  "session.prompt": [5022, "remote.session.prompt", "B-distinct", "MUTATION"],
+  "session.log": [4039, "session.log", "B-reuse", "READ"],
+  "session.subscribe": [4000, "event.subscribe", "B-reuse", "MUTATION"],
+  "session.unsubscribe": [4001, "event.unsubscribe", "B-reuse", "MUTATION"],
+  "session.prompt": [4050, "session.prompt", "B-reuse", "MUTATION"],
   "session.attachment.upload": [5023, "session.attachment.upload", "C", "MUTATION"],
   "session.interrupt": [4037, "session.interrupt", "A", "MUTATION"],
   "session.prediction": [4082, "session.prediction", "B-reuse", "MUTATION"],
@@ -42,33 +42,33 @@ export const connectorOperations = {
   "session.guardrail.status": [4033, "session.guardrail.status", "A", "READ"],
   "session.guardrail.request.list": [4031, "session.guardrail.request.list", "A", "READ"],
   "session.guardrail.reply": [4032, "session.guardrail.request.reply", "B-reuse", "MUTATION"],
-  "session.form.list": [5024, "remote.session.form.list", "B-distinct", "READ"],
+  "session.form.list": [4026, "session.form.list", "B-reuse", "READ"],
   "session.form.reply": [4027, "session.form.reply", "B-reuse", "MUTATION"],
   "session.form.cancel": [4023, "session.form.cancel", "B-reuse", "MUTATION"],
-  "session.shell.output": [5025, "remote.session.shell.output", "B-distinct", "READ"],
+  "session.shell.output": [3043, "shell.output", "B-reuse", "READ"],
   "session.autonomy.get": [4011, "session.autonomy.get", "A", "READ"],
-  "session.autonomy.set": [5026, "remote.session.autonomy.set", "B-distinct", "MUTATION"],
-  "session.goal.set": [5027, "remote.session.goal.set", "B-distinct", "MUTATION"],
-  "session.goal.stop": [5028, "remote.session.goal.stop", "B-distinct", "MUTATION"],
-  "session.create": [5029, "remote.session.create", "B-distinct", "MUTATION"],
+  "session.autonomy.set": [4012, "session.autonomy.set", "B-reuse", "MUTATION"],
+  "session.goal.set": [4012, "session.autonomy.set", "B-reuse", "MUTATION"],
+  "session.goal.stop": [4012, "session.autonomy.set", "B-reuse", "MUTATION"],
+  "session.create": [4018, "session.create", "B-reuse", "MUTATION"],
   "session.status": [5030, "session.status", "C", "READ"],
-  "session.catalog": [5031, "remote.session.catalog", "C", "READ"],
-  "workspace.catalog": [5032, "remote.workspace.catalog", "C", "READ"],
-  "session.file.find": [5033, "remote.session.fs.find", "B-distinct", "READ"],
-  "workspace.file.find": [5034, "remote.workspace.fs.find", "B-distinct", "READ"],
+  "session.catalog": [5043, "catalog.get", "C", "READ"],
+  "workspace.catalog": [5043, "catalog.get", "C", "READ"],
+  "session.file.find": [3013, "fs.find", "B-reuse", "READ"],
+  "workspace.file.find": [3013, "fs.find", "B-reuse", "READ"],
   "session.switchModel": [4071, "session.switchModel", "B-reuse", "MUTATION"],
   "session.switchAgent": [4070, "session.switchAgent", "B-reuse", "MUTATION"],
-  "session.command": [5035, "remote.session.command", "B-distinct", "MUTATION"],
+  "session.command": [4014, "session.command", "B-reuse", "MUTATION"],
   "session.skill": [4061, "session.skill", "B-reuse", "MUTATION"],
-  "usage.providers": [5036, "remote.providerUsage.list", "B-distinct", "READ"],
+  "usage.providers": [2055, "providerUsage.list", "B-reuse", "READ"],
   "usage.summary": [2058, "usage.get", "A", "READ"],
   "usage.report": [2059, "usage.report", "A", "READ"],
   "machine.keepAwake.get": [3025, "keepAwake.get", "A", "READ"],
   "machine.keepAwake.set": [3026, "keepAwake.set", "A", "MUTATION"],
   "machine.telemetry.consent.get": [3047, "telemetry.consent.get", "A", "READ"],
   "machine.telemetry.consent.set": [3048, "telemetry.consent.set", "A", "MUTATION"],
-  "machine.latency.append": [5037, "remote.telemetry.append", "B-distinct", "MUTATION"],
-  "machine.latency.list": [5038, "remote.telemetry.list", "B-distinct", "READ"],
+  "machine.latency.append": [3046, "telemetry.append", "B-reuse", "MUTATION"],
+  "machine.latency.list": [3049, "telemetry.list", "B-reuse", "READ"],
 } as const
 
 export const noticeOperations = {
@@ -80,5 +80,28 @@ export const noticeOperations = {
 
 export const connectorRoles = (name: string) =>
   Object.values(connectorOperations).some(([id, target]) => id < 5000 && target === name)
-    ? "      roles: REMOTE_CLIENT\n      roles: RELAY\n"
+    ? "      roles: REMOTE_CLIENT\n      roles: RELAY\n" +
+      connectorScopeOptions(name) +
+      (name === "event.subscribe"
+        ? '      event_types: "ycoding.v5.PublicEvent"\n'
+        : name === "session.log"
+          ? '      event_types: "ycoding.v5.SessionLogItem"\n'
+          : "")
     : ""
+
+export function connectorScopeOptions(name: string) {
+  const scopes = {
+    "event.subscribe": ["SESSION"],
+    "event.unsubscribe": ["SESSION"],
+    "fs.find": ["SESSION", "WORKSPACE"],
+    "catalog.get": ["SESSION", "WORKSPACE"],
+    "shell.output": ["SESSION"],
+    "session.create": ["WORKSPACE"],
+    "providerUsage.list": ["MACHINE"],
+  }[name]
+  return scopes
+    ? ["REMOTE_CLIENT", "RELAY"]
+        .map((role) => `      role_scopes: { role: ${role} ${scopes.map((scope) => `scopes: ${scope}`).join(" ")} }\n`)
+        .join("")
+    : ""
+}

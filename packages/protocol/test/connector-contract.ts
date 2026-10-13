@@ -3,17 +3,10 @@ import { readFileSync } from "node:fs"
 import { Schema, SchemaAST } from "effect"
 import { HttpApiEndpoint } from "effect/unstable/httpapi"
 import { Session } from "@ycoding-ai/schema/session"
-import { SessionMessage } from "@ycoding-ai/schema/session-message"
-import { SessionPending } from "@ycoding-ai/schema/session-pending"
-import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
 import { Model } from "@ycoding-ai/schema/model"
-import { Form } from "@ycoding-ai/schema/form"
-import { Telemetry } from "@ycoding-ai/schema/telemetry"
-import { ProviderUsage } from "@ycoding-ai/schema/provider-usage"
-import { SessionAutonomyState, SessionLogItem } from "../src/groups/session.js"
 import { wireContract } from "./wire-contract.js"
 import { resourceFieldConstraints } from "./resources-contract.js"
-import { connectorOperations, noticeOperations } from "./connector-source.js"
+import { connectorOperations, noticeOperations, connectorScopeOptions } from "./connector-source.js"
 import type { WireField } from "./wire-contract.js"
 
 const text = (min = 0, max = Number.MAX_SAFE_INTEGER) =>
@@ -26,8 +19,6 @@ const target = named(
   "AuthTarget",
   Schema.Union([Schema.Struct({ sessionID: text(1, 128) }), Schema.Struct({ workspace: text(1, 256) })]),
 )
-const maxNoProgress = optional(Schema.Union([integer(0, 1000), Schema.Null]))
-const yolo = named("Yolo", Schema.Union([integer(0, 3), Schema.Boolean]))
 const authTime = named("AuthTime", Schema.Struct({ created: Schema.Finite, expires: Schema.Finite }))
 const authWhen = Schema.Struct({ key: text(), op: Schema.Literals(["eq", "neq"]), value: text() })
 const authPrompt = named(
@@ -91,15 +82,6 @@ const workspace = named(
   }),
 )
 const cursor = named("Cursor", Schema.Struct({ previous: optional(text()), next: optional(text()) }))
-const compactionMetrics = named(
-  "CompactionMetrics",
-  Schema.Struct({
-    excludedMessages: integer(),
-    excludedParts: integer(),
-    inputTokens: integer(),
-    retainedTokens: integer(),
-  }),
-)
 const capturedFile = named(
   "CapturedFile",
   Schema.Struct({
@@ -159,30 +141,6 @@ const catalog = named(
     resources: Schema.Array(Schema.Struct({ name: text(), uri: text(), description: optional(text()) })),
   }),
 )
-const files = optional(
-  Schema.Array(
-    Schema.Struct({
-      uri: text(1, 2048),
-      name: optional(text(1, 256)),
-      description: optional(text(0, 1024)),
-      mention: optional(Schema.Struct({ start: integer(0, 1000000), end: integer(0, 1000000), text: text(0, 1024) })),
-    }),
-  ).check(Schema.isMaxLength(64)),
-)
-const agents = optional(
-  Schema.Array(
-    Schema.Struct({
-      name: text(1, 256),
-      mention: optional(Schema.Struct({ start: integer(0, 1000000), end: integer(0, 1000000), text: text(0, 1024) })),
-    }),
-  ).check(Schema.isMaxLength(64)),
-)
-const fileFind = named(
-  "FileFind",
-  Schema.Struct({
-    files: Schema.Array(Schema.Struct({ path: text(), uri: text(), kind: Schema.Literals(["file", "directory"]) })),
-  }),
-)
 const memberIDs = Schema.Array(text(1, 128)).check(Schema.isMaxLength(15))
 const body = <S extends Schema.Top>(data: S) => Schema.Struct({ data })
 const empty = Schema.Void
@@ -221,50 +179,9 @@ const schemas = {
     body(Schema.Struct({ status: Schema.Literal("cancelled") })),
   ],
   "workspace.list": [Schema.Struct({ sessionsOnly: optional(Schema.Literal(true)) }), body(Schema.Array(workspace))],
-  "session.list": [
-    Schema.Struct({
-      limit: optional(integer(1, 200)),
-      order: optional(Schema.Literals(["asc", "desc", "pinned", "active"])),
-      search: optional(text(0, 200)),
-      searchFields: optional(Schema.Literal("summary")),
-      parentID: optional(Schema.Union([text(1, 128), Schema.Null])),
-      cursor: optional(text(1, 1024)),
-      workspace: optional(text(1, 128)),
-      status: optional(Schema.Literals(["running", "idle"])),
-    }),
-    Schema.Struct({ data: Schema.Array(Session.Info), cursor }),
-  ],
   "session.capturedChanges.list": [
     Schema.Struct({ cursor: optional(text(1, 256)) }),
     Schema.Struct({ data: Schema.Array(capturedGroup), cursor: optional(Schema.Struct({ next: optional(text()) })) }),
-  ],
-  "session.compaction.list": [
-    empty,
-    Schema.Struct({
-      data: Schema.Array(
-        Schema.Struct({
-          jobID: text(),
-          trigger: text(),
-          status: Schema.Literals(["pending", "running", "completed", "failed"]),
-          created: Schema.Finite,
-          metrics: optional(compactionMetrics),
-          code: optional(text()),
-        }),
-      ),
-      truncated: Schema.Boolean,
-      completedBefore: integer(),
-      completedCount: integer(),
-      totalSavedTokens: Schema.Int,
-    }),
-  ],
-  "session.attachment.read": [
-    Schema.Struct({ digest: text(64, 64) }),
-    Schema.Struct({ mime: text(), bytes: integer(), data: text() }),
-  ],
-  "session.message.stream": [Schema.Struct({ messageID: text(1, 128) }), SessionMessage.Info],
-  "session.subagent.answer": [
-    Schema.Struct({ childID: text(1, 128), questionID: text(1, 128), text: text(1, 8192) }),
-    body(SessionOrchestration.Task),
   ],
   "session.team.economics": [
     Schema.Struct({ sessionIDs: memberIDs.check(Schema.isMinLength(1)) }),
@@ -329,41 +246,9 @@ const schemas = {
       ),
     ),
   ],
-  "session.log": [Schema.Struct({ after: optional(integer()) }), body(Schema.Array(SessionLogItem))],
-  "session.subscribe": [empty, empty],
-  "session.unsubscribe": [empty, empty],
-  "session.prompt": [
-    Schema.Struct({
-      id: optional(text(1, 128)),
-      text: text(0, 32768),
-      files,
-      agents,
-      delivery: optional(Schema.Literals(["steer", "queue"])),
-      resume: optional(Schema.Boolean),
-      skills: optional(Schema.Array(text(1, 128)).check(Schema.isMaxLength(200))),
-    }),
-    body(SessionPending.User),
-  ],
   "session.attachment.upload": [
     Schema.Struct({ uploadID: text(), index: integer(0, 1023), last: Schema.Boolean, data: text(1, 28000) }),
     Schema.Union([Schema.Struct({ uri: text() }), Schema.Struct({ received: integer() })]),
-  ],
-  "session.form.list": [empty, Schema.Array(Form.Info)],
-  "session.shell.output": [
-    Schema.Struct({ shellID: text(1, 128), cursor: optional(integer()), limit: optional(integer(1, 65536)) }),
-    body(Schema.Struct({ output: text(), cursor: integer(), size: integer(), truncated: Schema.Boolean })),
-  ],
-  "session.autonomy.set": [Schema.Struct({ yolo, maxNoProgress }), body(SessionAutonomyState)],
-  "session.goal.set": [Schema.Struct({ goal: text(1, 8192), maxNoProgress }), body(SessionAutonomyState)],
-  "session.goal.stop": [Schema.Struct({ goal: optional(Schema.Null) }), body(SessionAutonomyState)],
-  "session.create": [
-    Schema.Struct({
-      id: text(1, 128),
-      workspace: text(1, 128),
-      agent: optional(text(1, 128)),
-      model: optional(Model.Ref),
-    }),
-    body(Session.Info),
   ],
   "session.status": [
     empty,
@@ -375,52 +260,6 @@ const schemas = {
     }),
   ],
   "session.catalog": [empty, catalog],
-  "workspace.catalog": [Schema.Struct({ workspace: text(1, 128) }), catalog],
-  "session.file.find": [Schema.Struct({ query: text(1, 200), limit: optional(integer(1, 50)) }), fileFind],
-  "workspace.file.find": [
-    Schema.Struct({ workspace: text(1, 128), query: text(1, 200), limit: optional(integer(1, 50)) }),
-    fileFind,
-  ],
-  "session.command": [
-    Schema.Struct({
-      id: optional(text(1, 128)),
-      command: text(1, 256),
-      arguments: optional(text(0, 8192)),
-      files,
-      agents,
-      delivery: optional(Schema.Literals(["steer", "queue"])),
-    }),
-    body(SessionPending.User),
-  ],
-  "usage.providers": [Schema.Struct({ refresh: optional(Schema.Boolean) }), body(Schema.Array(ProviderUsage.Snapshot))],
-  "machine.latency.append": [
-    named(
-      "LatencyBatch",
-      Schema.Struct({
-        samples: Schema.Array(
-          Schema.Union([
-            Telemetry.RequestSample,
-            Telemetry.LongTaskSample,
-            named(
-              "WebSample",
-              Schema.Struct({
-                kind: Schema.Literal("client"),
-                at: text(),
-                surface: Schema.Literal("web"),
-                metric: Schema.Literals(["prompt.admit", "stream.delay", "transcript.load"]),
-                durationMs: integer(0, 600000),
-              }),
-            ),
-          ]),
-        ).check(Schema.isMinLength(1), Schema.isMaxLength(20)),
-      }),
-    ),
-    Schema.Struct({ accepted: integer() }),
-  ],
-  "machine.latency.list": [
-    Schema.Struct({ limit: optional(integer(1, 200)), before: optional(text(1, 256)) }),
-    Telemetry.Page,
-  ],
 } satisfies Record<string, readonly [Schema.Top, Schema.Top]>
 
 export const connectorError = named(
@@ -488,6 +327,21 @@ export function connectorContract() {
     connectorSourceIdentity,
     [],
   )
+  const upload = contract.messages.get("session_attachment_upload_Request_payload")!
+  upload.fields.find((field) => field.name === "data")!.type = "bytes"
+  upload.fields.find((field) => field.name === "data")!.constraints = [
+    { "~structural": true, meta: { _tag: "isMinLength", minLength: 1 } },
+    { "~structural": true, meta: { _tag: "isMaxLength", maxLength: 21000 } },
+  ]
+  upload.fields.find((field) => field.name === "data")!.source = undefined
+  upload.fields.find((field) => field.name === "data")!.ast = undefined
+  upload.fields.push({
+    name: "offset",
+    type: "uint64",
+    presence: "required",
+    constraints: [],
+    ast: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(20971520)).ast,
+  })
   return contract
 }
 
@@ -540,7 +394,7 @@ export function connectorProto() {
             `message ${name} {\n${message.oneof ? "  oneof kind {\n" : ""}${message.fields.map((field, index) => `  ${message.oneof ? "  " : ""}${field.presence === "oneof" ? "" : field.presence + " "}${field.type} ${field.name} = ${index + 1}${fieldOption(field)};`).join("\n")}\n${message.oneof ? "  }\n" : ""}}`,
         ),
     )
-  return `syntax = "proto2";\npackage ycoding.v5;\n\n${["foundation", "operations", "shared", "resources", "platform", "session"].map((file) => `import "ycoding/v5/${file}.proto";`).join("\n")}\n\noption (ycoding.v5.operation_range) = { first: 5000 last: 5099 };\n\n${declarations.join("\n\n")}\n\n${connectorServices(contract)}\n`
+  return `syntax = "proto2";\npackage ycoding.v5;\n\n${["foundation", "operations", "shared", "session"].map((file) => `import "ycoding/v5/${file}.proto";`).join("\n")}\n\noption (ycoding.v5.operation_range) = { first: 5000 last: 5099 };\n\n${declarations.join("\n\n")}\n\n${connectorServices(contract)}\n`
 }
 
 function connectorServices(contract: ReturnType<typeof connectorContract>) {
@@ -578,7 +432,7 @@ function connectorServices(contract: ReturnType<typeof connectorContract>) {
     scope: string,
     notice = false,
   ) =>
-    `  rpc ${name.replace(/[^a-zA-Z0-9]/g, "_")}(${request}) returns (${result}) {\n    option (ycoding.v5.operation) = {\n      operation_id: ${id}\n      diagnostic_name: "${name}"\n      error_types: "ycoding.v5.Connector_Error"\n      roles: REMOTE_CLIENT\n${notice ? "" : "      roles: RELAY\n"}      scope: ${scope}\n      mutation: ${mutation}\n      settlement: ${["remote.session.prompt", "remote.session.command"].includes(name) ? "DURABLY_ADMITTED" : "COMPLETED"}\n      paging: ${["remote.session.list", "session.capturedChanges.list", "session.side-chat.list", "remote.telemetry.list", "notice.subscribe", "notice.list"].includes(name) ? "CURSOR" : name === "remote.session.shell.output" ? "OFFSET" : "UNPAGED"}\n      streaming: TYPED_BULK\n      sensitivity: ${name.startsWith("provider.auth.") || name.startsWith("remote.provider.auth.") || ["remote.session.prompt", "remote.session.command", "session.attachment.upload"].includes(name) ? "SECRET" : "PRIVATE"}\n    };\n  }`
+    `  rpc ${name.replace(/[^a-zA-Z0-9]/g, "_")}(${request}) returns (${result}) {\n    option (ycoding.v5.operation) = {\n      operation_id: ${id}\n      diagnostic_name: "${name}"\n      error_types: "ycoding.v5.Connector_Error"\n      roles: REMOTE_CLIENT\n${notice ? "" : "      roles: RELAY\n"}${connectorScopeOptions(name)}      scope: ${scope}\n      mutation: ${mutation}\n      settlement: COMPLETED\n      paging: ${["session.capturedChanges.list", "session.side-chat.list", "notice.subscribe", "notice.list"].includes(name) ? "CURSOR" : "UNPAGED"}\n      streaming: TYPED_BULK\n      sensitivity: ${name.startsWith("provider.auth.") || name === "session.attachment.upload" ? "SECRET" : "PRIVATE"}\n    };\n  }`
   const operations = contract.operations.map((item) => {
     const source = Object.entries(connectorOperations).find(([, value]) => value[0] === item.id)![0]
     return rpc(

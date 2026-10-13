@@ -292,12 +292,16 @@ fn independent_golden_and_negative_vectors() {
             "ycoding.v5.ClearableUint64" => reencode::<v5::ClearableUint64>(&bytes),
             "ycoding.v5.StringList" => reencode::<v5::StringList>(&bytes),
             "ycoding.v5.OperationDescriptor" => reencode::<v5::OperationDescriptor>(&bytes),
+            "ycoding.v5.PublicEvent" => reencode::<v5::PublicEvent>(&bytes),
+            "ycoding.v5.session_attachment_upload_Request_payload" => {
+                reencode::<v5::SessionAttachmentUploadRequestPayload>(&bytes)
+            }
             name => panic!("unhandled golden type {name}"),
         };
         assert_eq!(encoded, bytes, "{}", row[0]);
         counts.0 += 1;
     }
-    assert_eq!(counts, (44, 32));
+    assert_eq!(counts, (48, 36));
 }
 
 #[test]

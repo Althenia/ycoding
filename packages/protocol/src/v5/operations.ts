@@ -5,6 +5,7 @@ import {
   operation_range,
   constraints,
   FieldConstraintsSchema,
+  public_event,
 } from "../generated/v5/ycoding/v5/operations_pb.js"
 
 export function readConstraints(bytes: Uint8Array) {
@@ -58,7 +59,7 @@ export function readConstraints(bytes: Uint8Array) {
               Object.keys(rules).some(
                 (name) => !["integerMin", "integerMax", "countMin", "countMax", "domainObligations"].includes(name),
               )) ||
-            (field.label !== 3 && (rules.countMin !== undefined || rules.countMax !== undefined))
+            (field.label !== 3 && field.type !== 12 && (rules.countMin !== undefined || rules.countMax !== undefined))
           )
             throw new Error("constraint type mismatch")
           if (
@@ -101,8 +102,20 @@ export function readOperations(bytes: Uint8Array) {
           if (method.clientStreaming || method.serverStreaming) throw new Error("gRPC streaming is not a v5 transport")
           const requestType = method.inputType!.slice(1)
           const resultType = method.outputType!.slice(1)
-          for (const type of [requestType, resultType, ...options.errorTypes]) {
+          for (const type of [requestType, resultType, ...options.errorTypes, ...options.eventTypes]) {
             if (!types.has(type)) throw new Error(`unknown operation type: ${type}`)
+          }
+          const roles = new Set<number>()
+          for (const rule of options.roleScopes) {
+            if (
+              !options.roles.includes(rule.role) ||
+              roles.has(rule.role) ||
+              !rule.scopes.length ||
+              rule.scopes.some((scope) => scope < 1 || scope > 6) ||
+              new Set(rule.scopes).size !== rule.scopes.length
+            )
+              throw new Error("invalid operation role scopes")
+            roles.add(rule.role)
           }
           ids.add(options.operationId)
           names.add(options.diagnosticName)
@@ -111,4 +124,19 @@ export function readOperations(bytes: Uint8Array) {
       ),
     )
     .sort((a, b) => a.operationId - b.operationId)
+}
+
+export function readPublicEvents(bytes: Uint8Array) {
+  const set = fromBinary(FileDescriptorSetSchema, bytes)
+  const fields =
+    set.file.flatMap((file) => file.messageType).find((message) => message.name === "PublicEvent")?.field ?? []
+  const names = new Set<string>()
+  return fields.map((field) => {
+    if (!field.options || !hasExtension(field.options, public_event)) throw new Error("missing public event metadata")
+    const options = getExtension(field.options, public_event)
+    if (!options.diagnosticName || names.has(options.diagnosticName) || !field.typeName)
+      throw new Error("invalid public event metadata")
+    names.add(options.diagnosticName)
+    return { name: options.diagnosticName, durable: options.durable, tag: field.number!, type: field.typeName.slice(1) }
+  })
 }

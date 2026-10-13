@@ -4,8 +4,6 @@ package ycoding.v5;
 import "ycoding/v5/foundation.proto";
 import "ycoding/v5/operations.proto";
 import "ycoding/v5/shared.proto";
-import "ycoding/v5/resources.proto";
-import "ycoding/v5/platform.proto";
 import "ycoding/v5/session.proto";
 
 option (ycoding.v5.operation_range) = { first: 5000 last: 5099 };
@@ -52,8 +50,8 @@ enum Connector_Error_code {
   CONNECTOR_ERROR_CODE_INTERNAL_ERROR = 15;
 }
 
-enum remote_provider_auth_key_Result_data_status {
-  REMOTE_PROVIDER_AUTH_KEY_RESULT_DATA_STATUS_COMPLETE = 1;
+enum provider_auth_key_Result_data_status {
+  PROVIDER_AUTH_KEY_RESULT_DATA_STATUS_COMPLETE = 1;
 }
 
 enum Connector_AuthAttempt_type {
@@ -73,28 +71,12 @@ enum provider_auth_status_Result_data_status {
   PROVIDER_AUTH_STATUS_RESULT_DATA_STATUS_EXPIRED = 4;
 }
 
-enum remote_provider_auth_complete_Result_data_status {
-  REMOTE_PROVIDER_AUTH_COMPLETE_RESULT_DATA_STATUS_SUBMITTED = 1;
+enum provider_auth_complete_Result_data_status {
+  PROVIDER_AUTH_COMPLETE_RESULT_DATA_STATUS_SUBMITTED = 1;
 }
 
 enum provider_auth_cancel_Result_data_status {
   PROVIDER_AUTH_CANCEL_RESULT_DATA_STATUS_CANCELLED = 1;
-}
-
-enum remote_session_list_Request_payload_order {
-  REMOTE_SESSION_LIST_REQUEST_PAYLOAD_ORDER_ASC = 1;
-  REMOTE_SESSION_LIST_REQUEST_PAYLOAD_ORDER_DESC = 2;
-  REMOTE_SESSION_LIST_REQUEST_PAYLOAD_ORDER_PINNED = 3;
-  REMOTE_SESSION_LIST_REQUEST_PAYLOAD_ORDER_ACTIVE = 4;
-}
-
-enum remote_session_list_Request_payload_searchFields {
-  REMOTE_SESSION_LIST_REQUEST_PAYLOAD_SEARCHFIELDS_SUMMARY = 1;
-}
-
-enum remote_session_list_Request_payload_status {
-  REMOTE_SESSION_LIST_REQUEST_PAYLOAD_STATUS_RUNNING = 1;
-  REMOTE_SESSION_LIST_REQUEST_PAYLOAD_STATUS_IDLE = 2;
 }
 
 enum Connector_CapturedGroup_status {
@@ -107,13 +89,6 @@ enum Connector_CapturedFile_status {
   CONNECTOR_CAPTUREDFILE_STATUS_CREATED = 1;
   CONNECTOR_CAPTUREDFILE_STATUS_DELETED = 2;
   CONNECTOR_CAPTUREDFILE_STATUS_MODIFIED = 3;
-}
-
-enum remote_session_compaction_list_Result_dataItem_status {
-  REMOTE_SESSION_COMPACTION_LIST_RESULT_DATAITEM_STATUS_PENDING = 1;
-  REMOTE_SESSION_COMPACTION_LIST_RESULT_DATAITEM_STATUS_RUNNING = 2;
-  REMOTE_SESSION_COMPACTION_LIST_RESULT_DATAITEM_STATUS_COMPLETED = 3;
-  REMOTE_SESSION_COMPACTION_LIST_RESULT_DATAITEM_STATUS_FAILED = 4;
 }
 
 enum session_family_activity_Result_dataItem_activity_kind {
@@ -130,39 +105,10 @@ enum session_family_activity_Result_dataItem_activity_room {
   SESSION_FAMILY_ACTIVITY_RESULT_DATAITEM_ACTIVITY_ROOM_HOLD = 5;
 }
 
-enum remote_session_prompt_Request_payload_delivery {
-  REMOTE_SESSION_PROMPT_REQUEST_PAYLOAD_DELIVERY_STEER = 1;
-  REMOTE_SESSION_PROMPT_REQUEST_PAYLOAD_DELIVERY_QUEUE = 2;
-}
-
 enum Connector_Catalog_agentsItem_mode {
   CONNECTOR_CATALOG_AGENTSITEM_MODE_PRIMARY = 1;
   CONNECTOR_CATALOG_AGENTSITEM_MODE_SUBAGENT = 2;
   CONNECTOR_CATALOG_AGENTSITEM_MODE_ALL = 3;
-}
-
-enum Connector_FileFind_filesItem_kind {
-  CONNECTOR_FILEFIND_FILESITEM_KIND_FILE = 1;
-  CONNECTOR_FILEFIND_FILESITEM_KIND_DIRECTORY = 2;
-}
-
-enum remote_session_command_Request_payload_delivery {
-  REMOTE_SESSION_COMMAND_REQUEST_PAYLOAD_DELIVERY_STEER = 1;
-  REMOTE_SESSION_COMMAND_REQUEST_PAYLOAD_DELIVERY_QUEUE = 2;
-}
-
-enum Connector_WebSample_kind {
-  CONNECTOR_WEBSAMPLE_KIND_CLIENT = 1;
-}
-
-enum Connector_WebSample_surface {
-  CONNECTOR_WEBSAMPLE_SURFACE_WEB = 1;
-}
-
-enum Connector_WebSample_metric {
-  CONNECTOR_WEBSAMPLE_METRIC_PROMPT_ADMIT = 1;
-  CONNECTOR_WEBSAMPLE_METRIC_STREAM_DELAY = 2;
-  CONNECTOR_WEBSAMPLE_METRIC_TRANSCRIPT_LOAD = 3;
 }
 
 message provider_auth_list_Request_payload {
@@ -284,23 +230,23 @@ message Connector_Error {
   required LosslessString message = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#parseResponse" utf16_min: 0 utf16_max: 512 }];
 }
 
-message remote_provider_auth_key_Request_payload {
+message provider_auth_key_Request_payload {
   required Connector_AuthTarget target = 1;
   required LosslessString integrationID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 128 }];
   required LosslessString label = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 128 }];
   required LosslessString key = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 8192 }];
 }
 
-message remote_provider_auth_key_Request {
-  required remote_provider_auth_key_Request_payload payload = 1;
+message provider_auth_key_Request {
+  required provider_auth_key_Request_payload payload = 1;
 }
 
-message remote_provider_auth_key_Result {
-  required remote_provider_auth_key_Result_data data = 1;
+message provider_auth_key_Result {
+  required provider_auth_key_Result_data data = 1;
 }
 
-message remote_provider_auth_key_Result_data {
-  required remote_provider_auth_key_Result_data_status status = 1;
+message provider_auth_key_Result_data {
+  required provider_auth_key_Result_data_status status = 1;
 }
 
 message provider_auth_begin_Request_payload {
@@ -363,23 +309,23 @@ message provider_auth_status_Result_data {
   required Connector_AuthTime time = 3;
 }
 
-message remote_provider_auth_complete_Request_payload {
+message provider_auth_complete_Request_payload {
   required Connector_AuthTarget target = 1;
   required LosslessString integrationID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 128 }];
   required LosslessString attemptID = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 128 }];
   required LosslessString code = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 2048 }];
 }
 
-message remote_provider_auth_complete_Request {
-  required remote_provider_auth_complete_Request_payload payload = 1;
+message provider_auth_complete_Request {
+  required provider_auth_complete_Request_payload payload = 1;
 }
 
-message remote_provider_auth_complete_Result {
-  required remote_provider_auth_complete_Result_data data = 1;
+message provider_auth_complete_Result {
+  required provider_auth_complete_Result_data data = 1;
 }
 
-message remote_provider_auth_complete_Result_data {
-  required remote_provider_auth_complete_Result_data_status status = 1;
+message provider_auth_complete_Result_data {
+  required provider_auth_complete_Result_data_status status = 1;
 }
 
 message provider_auth_cancel_Request_payload {
@@ -424,42 +370,6 @@ message Connector_Workspace {
   optional LosslessString name = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 }];
 }
 
-message remote_session_list_Request_payload {
-  optional int64 limit = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" integer_min: "1" integer_max: "200" }];
-  optional remote_session_list_Request_payload_order order = 2;
-  optional LosslessString search = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 0 utf16_max: 200 }];
-  optional remote_session_list_Request_payload_searchFields searchFields = 4;
-  optional remote_session_list_Request_payload_parentID parentID = 5;
-  optional LosslessString cursor = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 1024 }];
-  optional LosslessString workspace = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 128 }];
-  optional remote_session_list_Request_payload_status status = 8;
-}
-
-message remote_session_list_Request_payload_parentID {
-  oneof kind {
-    LosslessString value_1 = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 128 }];
-    Empty clear = 2;
-  }
-}
-
-message remote_session_list_Request {
-  required remote_session_list_Request_payload payload = 1;
-}
-
-message remote_session_list_Result {
-  required remote_session_list_Result_data data = 1;
-  required Connector_Cursor cursor = 2;
-}
-
-message remote_session_list_Result_data {
-  repeated Session_Info items = 1;
-}
-
-message Connector_Cursor {
-  optional LosslessString previous = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 }];
-  optional LosslessString next = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 }];
-}
-
 message session_capturedChanges_list_Request_payload {
   optional LosslessString cursor = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 256 }];
 }
@@ -501,78 +411,6 @@ message Connector_CapturedFile {
 
 message session_capturedChanges_list_Result_cursor {
   optional LosslessString next = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 }];
-}
-
-message remote_session_compaction_list_Request {
-
-}
-
-message remote_session_compaction_list_Result {
-  required remote_session_compaction_list_Result_data data = 1;
-  required bool truncated = 2;
-  required uint64 completedBefore = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" integer_min: "0" integer_max: "9007199254740991" }];
-  required uint64 completedCount = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" integer_min: "0" integer_max: "9007199254740991" }];
-  required int64 totalSavedTokens = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" integer_min: "-9007199254740991" integer_max: "9007199254740991" }];
-}
-
-message remote_session_compaction_list_Result_data {
-  repeated remote_session_compaction_list_Result_dataItem items = 1;
-}
-
-message remote_session_compaction_list_Result_dataItem {
-  required LosslessString jobID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 }];
-  required LosslessString trigger = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 }];
-  required remote_session_compaction_list_Result_dataItem_status status = 3;
-  required double created = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" }];
-  optional Connector_CompactionMetrics metrics = 5;
-  optional LosslessString code = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 }];
-}
-
-message Connector_CompactionMetrics {
-  required uint64 excludedMessages = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" integer_min: "0" integer_max: "9007199254740991" }];
-  required uint64 excludedParts = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" integer_min: "0" integer_max: "9007199254740991" }];
-  required uint64 inputTokens = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" integer_min: "0" integer_max: "9007199254740991" }];
-  required uint64 retainedTokens = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" integer_min: "0" integer_max: "9007199254740991" }];
-}
-
-message remote_session_attachment_read_Request_payload {
-  required LosslessString digest = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 64 utf16_max: 64 }];
-}
-
-message remote_session_attachment_read_Request {
-  required remote_session_attachment_read_Request_payload payload = 1;
-}
-
-message remote_session_attachment_read_Result {
-  required LosslessString mime = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 }];
-  required uint64 bytes = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" integer_min: "0" integer_max: "9007199254740991" }];
-  required LosslessString data = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 }];
-}
-
-message remote_session_message_read_Request_payload {
-  required LosslessString messageID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 128 }];
-}
-
-message remote_session_message_read_Request {
-  required remote_session_message_read_Request_payload payload = 1;
-}
-
-message remote_session_message_read_Result {
-  required Session_Message_Info data = 1;
-}
-
-message remote_session_subagent_answer_Request_payload {
-  required LosslessString childID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 128 }];
-  required LosslessString questionID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 128 }];
-  required LosslessString text = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 8192 }];
-}
-
-message remote_session_subagent_answer_Request {
-  required remote_session_subagent_answer_Request_payload payload = 1;
-}
-
-message remote_session_subagent_answer_Result {
-  required SessionOrchestration_Task data = 1;
 }
 
 message session_team_economics_Request_payload {
@@ -663,6 +501,11 @@ message session_side_chat_list_Result_dataItem {
   required double updatedAt = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" }];
 }
 
+message Connector_Cursor {
+  optional LosslessString previous = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 }];
+  optional LosslessString next = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 }];
+}
+
 message session_side_chat_create_Request_payload {
   required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 128 }];
 }
@@ -707,97 +550,12 @@ message session_family_activity_Result_dataItem_activity {
   required LosslessString text = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#boundedActivity" codepoints_max: 80 }];
 }
 
-message remote_session_log_Request_payload {
-  optional uint64 after = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" integer_min: "0" integer_max: "9007199254740991" }];
-}
-
-message remote_session_log_Request {
-  required remote_session_log_Request_payload payload = 1;
-}
-
-message remote_session_log_Result {
-  required remote_session_log_Result_data data = 1;
-}
-
-message remote_session_log_Result_data {
-  repeated SessionLogItem items = 1;
-}
-
-message remote_session_subscribe_Request {
-
-}
-
-message remote_session_subscribe_Result {
-  required Empty data = 1;
-}
-
-message remote_session_unsubscribe_Request {
-
-}
-
-message remote_session_unsubscribe_Result {
-  required Empty data = 1;
-}
-
-message remote_session_prompt_Request_payload {
-  optional LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 128 }];
-  required LosslessString text = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 0 utf16_max: 32768 }];
-  optional remote_session_prompt_Request_payload_files files = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" }];
-  optional remote_session_prompt_Request_payload_agents agents = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" }];
-  optional remote_session_prompt_Request_payload_delivery delivery = 5;
-  optional bool resume = 6;
-  optional remote_session_prompt_Request_payload_skills skills = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" }];
-}
-
-message remote_session_prompt_Request_payload_files {
-  repeated remote_session_prompt_Request_payload_filesItem items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" count_max: 64 }];
-}
-
-message remote_session_prompt_Request_payload_filesItem {
-  required LosslessString uri = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 2048 }];
-  optional LosslessString name = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 256 }];
-  optional LosslessString description = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 0 utf16_max: 1024 }];
-  optional remote_session_prompt_Request_payload_filesItem_mention mention = 4;
-}
-
-message remote_session_prompt_Request_payload_filesItem_mention {
-  required uint64 start = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" integer_min: "0" integer_max: "1000000" }];
-  required uint64 end = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" integer_min: "0" integer_max: "1000000" }];
-  required LosslessString text = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 0 utf16_max: 1024 }];
-}
-
-message remote_session_prompt_Request_payload_agents {
-  repeated remote_session_prompt_Request_payload_agentsItem items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" count_max: 64 }];
-}
-
-message remote_session_prompt_Request_payload_agentsItem {
-  required LosslessString name = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 256 }];
-  optional remote_session_prompt_Request_payload_agentsItem_mention mention = 2;
-}
-
-message remote_session_prompt_Request_payload_agentsItem_mention {
-  required uint64 start = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" integer_min: "0" integer_max: "1000000" }];
-  required uint64 end = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" integer_min: "0" integer_max: "1000000" }];
-  required LosslessString text = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 0 utf16_max: 1024 }];
-}
-
-message remote_session_prompt_Request_payload_skills {
-  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 128 count_min: 1 count_max: 128 }];
-}
-
-message remote_session_prompt_Request {
-  required remote_session_prompt_Request_payload payload = 1;
-}
-
-message remote_session_prompt_Result {
-  required SessionPending_User data = 1;
-}
-
 message session_attachment_upload_Request_payload {
   required LosslessString uploadID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 0 utf16_max: 9007199254740991 }];
   required uint64 index = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" integer_min: "0" integer_max: "1023" }];
   required bool last = 3;
-  required LosslessString data = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 28000 }];
+  required bytes data = 4 [(ycoding.v5.constraints) = { count_min: 1 count_max: 21000 }];
+  required uint64 offset = 5 [(ycoding.v5.constraints) = { integer_min: "0" integer_max: "20971520" }];
 }
 
 message session_attachment_upload_Request {
@@ -817,109 +575,6 @@ message session_attachment_upload_ResultValue1 {
 
 message session_attachment_upload_ResultValue2 {
   required uint64 received = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" integer_min: "0" integer_max: "9007199254740991" }];
-}
-
-message remote_session_form_list_Request {
-
-}
-
-message remote_session_form_list_Result {
-  repeated Form_Info items = 1;
-}
-
-message remote_session_shell_output_Request_payload {
-  required LosslessString shellID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 128 }];
-  optional uint64 cursor = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" integer_min: "0" integer_max: "9007199254740991" }];
-  optional int64 limit = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" integer_min: "1" integer_max: "65536" }];
-}
-
-message remote_session_shell_output_Request {
-  required remote_session_shell_output_Request_payload payload = 1;
-}
-
-message remote_session_shell_output_Result {
-  required remote_session_shell_output_Result_data data = 1;
-}
-
-message remote_session_shell_output_Result_data {
-  required LosslessString output = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 }];
-  required uint64 cursor = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" integer_min: "0" integer_max: "9007199254740991" }];
-  required uint64 size = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" integer_min: "0" integer_max: "9007199254740991" }];
-  required bool truncated = 4;
-}
-
-message remote_session_autonomy_set_Request_payload {
-  required Connector_Yolo yolo = 1;
-  optional remote_session_autonomy_set_Request_payload_maxNoProgress maxNoProgress = 2;
-}
-
-message Connector_Yolo {
-  oneof kind {
-    uint64 value_1 = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" integer_min: "0" integer_max: "3" }];
-    bool value_2 = 2;
-  }
-}
-
-message remote_session_autonomy_set_Request_payload_maxNoProgress {
-  oneof kind {
-    uint64 value_1 = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" integer_min: "0" integer_max: "1000" }];
-    Empty clear = 2;
-  }
-}
-
-message remote_session_autonomy_set_Request {
-  required remote_session_autonomy_set_Request_payload payload = 1;
-}
-
-message remote_session_autonomy_set_Result {
-  required SessionAutonomyState data = 1;
-}
-
-message remote_session_goal_set_Request_payload {
-  required LosslessString goal = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 8192 }];
-  optional remote_session_goal_set_Request_payload_maxNoProgress maxNoProgress = 2;
-}
-
-message remote_session_goal_set_Request_payload_maxNoProgress {
-  oneof kind {
-    uint64 value_1 = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" integer_min: "0" integer_max: "1000" }];
-    Empty clear = 2;
-  }
-}
-
-message remote_session_goal_set_Request {
-  required remote_session_goal_set_Request_payload payload = 1;
-}
-
-message remote_session_goal_set_Result {
-  required SessionAutonomyState data = 1;
-}
-
-message remote_session_goal_stop_Request_payload {
-  optional Empty goal = 1;
-}
-
-message remote_session_goal_stop_Request {
-  required remote_session_goal_stop_Request_payload payload = 1;
-}
-
-message remote_session_goal_stop_Result {
-  required SessionAutonomyState data = 1;
-}
-
-message remote_session_create_Request_payload {
-  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 128 }];
-  required LosslessString workspace = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 128 }];
-  optional LosslessString agent = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 128 }];
-  optional Model_Ref model = 4;
-}
-
-message remote_session_create_Request {
-  required remote_session_create_Request_payload payload = 1;
-}
-
-message remote_session_create_Result {
-  required Session_Info data = 1;
 }
 
 message session_status_Request {
@@ -949,7 +604,7 @@ message session_status_Result_failed {
   repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 count_min: 0 count_max: 9007199254740991 }];
 }
 
-message remote_session_catalog_Request {
+message catalog_get_Request {
 
 }
 
@@ -1048,171 +703,8 @@ message Connector_Catalog_resourcesItem {
   optional LosslessString description = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 }];
 }
 
-message remote_session_catalog_Result {
+message catalog_get_Result {
   required Connector_Catalog data = 1;
-}
-
-message remote_workspace_catalog_Request_payload {
-  required LosslessString workspace = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 128 }];
-}
-
-message remote_workspace_catalog_Request {
-  required remote_workspace_catalog_Request_payload payload = 1;
-}
-
-message remote_workspace_catalog_Result {
-  required Connector_Catalog data = 1;
-}
-
-message remote_session_fs_find_Request_payload {
-  required LosslessString query = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 200 }];
-  optional int64 limit = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" integer_min: "1" integer_max: "50" }];
-}
-
-message remote_session_fs_find_Request {
-  required remote_session_fs_find_Request_payload payload = 1;
-}
-
-message Connector_FileFind {
-  required Connector_FileFind_files files = 1;
-}
-
-message Connector_FileFind_files {
-  repeated Connector_FileFind_filesItem items = 1;
-}
-
-message Connector_FileFind_filesItem {
-  required LosslessString path = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 }];
-  required LosslessString uri = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 }];
-  required Connector_FileFind_filesItem_kind kind = 3;
-}
-
-message remote_session_fs_find_Result {
-  required Connector_FileFind data = 1;
-}
-
-message remote_workspace_fs_find_Request_payload {
-  required LosslessString workspace = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 128 }];
-  required LosslessString query = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 200 }];
-  optional int64 limit = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" integer_min: "1" integer_max: "50" }];
-}
-
-message remote_workspace_fs_find_Request {
-  required remote_workspace_fs_find_Request_payload payload = 1;
-}
-
-message remote_workspace_fs_find_Result {
-  required Connector_FileFind data = 1;
-}
-
-message remote_session_command_Request_payload {
-  optional LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 128 }];
-  required LosslessString command = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 256 }];
-  optional LosslessString arguments = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 0 utf16_max: 8192 }];
-  optional remote_session_command_Request_payload_files files = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" }];
-  optional remote_session_command_Request_payload_agents agents = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" }];
-  optional remote_session_command_Request_payload_delivery delivery = 6;
-}
-
-message remote_session_command_Request_payload_files {
-  repeated remote_session_command_Request_payload_filesItem items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" count_max: 64 }];
-}
-
-message remote_session_command_Request_payload_filesItem {
-  required LosslessString uri = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 2048 }];
-  optional LosslessString name = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 256 }];
-  optional LosslessString description = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 0 utf16_max: 1024 }];
-  optional remote_session_command_Request_payload_filesItem_mention mention = 4;
-}
-
-message remote_session_command_Request_payload_filesItem_mention {
-  required uint64 start = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" integer_min: "0" integer_max: "1000000" }];
-  required uint64 end = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" integer_min: "0" integer_max: "1000000" }];
-  required LosslessString text = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 0 utf16_max: 1024 }];
-}
-
-message remote_session_command_Request_payload_agents {
-  repeated remote_session_command_Request_payload_agentsItem items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" count_max: 64 }];
-}
-
-message remote_session_command_Request_payload_agentsItem {
-  required LosslessString name = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 256 }];
-  optional remote_session_command_Request_payload_agentsItem_mention mention = 2;
-}
-
-message remote_session_command_Request_payload_agentsItem_mention {
-  required uint64 start = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" integer_min: "0" integer_max: "1000000" }];
-  required uint64 end = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" integer_min: "0" integer_max: "1000000" }];
-  required LosslessString text = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 0 utf16_max: 1024 }];
-}
-
-message remote_session_command_Request {
-  required remote_session_command_Request_payload payload = 1;
-}
-
-message remote_session_command_Result {
-  required SessionPending_User data = 1;
-}
-
-message remote_providerUsage_list_Request_payload {
-  optional bool refresh = 1;
-}
-
-message remote_providerUsage_list_Request {
-  required remote_providerUsage_list_Request_payload payload = 1;
-}
-
-message remote_providerUsage_list_Result {
-  required remote_providerUsage_list_Result_data data = 1;
-}
-
-message remote_providerUsage_list_Result_data {
-  repeated ProviderUsage_Snapshot items = 1;
-}
-
-message Connector_LatencyBatch {
-  required Connector_LatencyBatch_samples samples = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" }];
-}
-
-message Connector_LatencyBatch_samples {
-  repeated Connector_LatencyBatch_samplesItem items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" count_min: 1 count_max: 20 }];
-}
-
-message Connector_LatencyBatch_samplesItem {
-  oneof kind {
-    Telemetry_RequestSample value_1 = 1;
-    Telemetry_LongTaskSample value_2 = 2;
-    Connector_WebSample value_3 = 3;
-  }
-}
-
-message Connector_WebSample {
-  required Connector_WebSample_kind kind = 1;
-  required LosslessString at = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 }];
-  required Connector_WebSample_surface surface = 3;
-  required Connector_WebSample_metric metric = 4;
-  required uint64 durationMs = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" integer_min: "0" integer_max: "600000" }];
-}
-
-message remote_telemetry_append_Request {
-  required Connector_LatencyBatch payload = 1;
-}
-
-message remote_telemetry_append_Result {
-  required uint64 accepted = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" integer_min: "0" integer_max: "9007199254740991" }];
-}
-
-message remote_telemetry_list_Request_payload {
-  optional int64 limit = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" integer_min: "1" integer_max: "200" }];
-  optional LosslessString before = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 256 }];
-}
-
-message remote_telemetry_list_Request {
-  required remote_telemetry_list_Request_payload payload = 1;
-}
-
-message remote_telemetry_list_Result {
-  required Telemetry_Page data = 1;
 }
 
 message ConnectorNoticeBefore { required LosslessString before = 1; }
@@ -1236,10 +728,10 @@ service connector {
       sensitivity: SECRET
     };
   }
-  rpc remote_provider_auth_key(remote_provider_auth_key_Request) returns (remote_provider_auth_key_Result) {
+  rpc provider_auth_key(provider_auth_key_Request) returns (provider_auth_key_Result) {
     option (ycoding.v5.operation) = {
       operation_id: 5001
-      diagnostic_name: "remote.provider.auth.key"
+      diagnostic_name: "provider.auth.key"
       error_types: "ycoding.v5.Connector_Error"
       roles: REMOTE_CLIENT
       roles: RELAY
@@ -1281,10 +773,10 @@ service connector {
       sensitivity: SECRET
     };
   }
-  rpc remote_provider_auth_complete(remote_provider_auth_complete_Request) returns (remote_provider_auth_complete_Result) {
+  rpc provider_auth_complete(provider_auth_complete_Request) returns (provider_auth_complete_Result) {
     option (ycoding.v5.operation) = {
       operation_id: 5004
-      diagnostic_name: "remote.provider.auth.complete"
+      diagnostic_name: "provider.auth.complete"
       error_types: "ycoding.v5.Connector_Error"
       roles: REMOTE_CLIENT
       roles: RELAY
@@ -1326,21 +818,6 @@ service connector {
       sensitivity: PRIVATE
     };
   }
-  rpc remote_session_list(remote_session_list_Request) returns (remote_session_list_Result) {
-    option (ycoding.v5.operation) = {
-      operation_id: 5007
-      diagnostic_name: "remote.session.list"
-      error_types: "ycoding.v5.Connector_Error"
-      roles: REMOTE_CLIENT
-      roles: RELAY
-      scope: MACHINE
-      mutation: READ
-      settlement: COMPLETED
-      paging: CURSOR
-      streaming: TYPED_BULK
-      sensitivity: PRIVATE
-    };
-  }
   rpc session_capturedChanges_list(session_capturedChanges_list_Request) returns (session_capturedChanges_list_Result) {
     option (ycoding.v5.operation) = {
       operation_id: 5008
@@ -1352,66 +829,6 @@ service connector {
       mutation: READ
       settlement: COMPLETED
       paging: CURSOR
-      streaming: TYPED_BULK
-      sensitivity: PRIVATE
-    };
-  }
-  rpc remote_session_compaction_list(remote_session_compaction_list_Request) returns (remote_session_compaction_list_Result) {
-    option (ycoding.v5.operation) = {
-      operation_id: 5009
-      diagnostic_name: "remote.session.compaction.list"
-      error_types: "ycoding.v5.Connector_Error"
-      roles: REMOTE_CLIENT
-      roles: RELAY
-      scope: SESSION
-      mutation: READ
-      settlement: COMPLETED
-      paging: UNPAGED
-      streaming: TYPED_BULK
-      sensitivity: PRIVATE
-    };
-  }
-  rpc remote_session_attachment_read(remote_session_attachment_read_Request) returns (remote_session_attachment_read_Result) {
-    option (ycoding.v5.operation) = {
-      operation_id: 5010
-      diagnostic_name: "remote.session.attachment.read"
-      error_types: "ycoding.v5.Connector_Error"
-      roles: REMOTE_CLIENT
-      roles: RELAY
-      scope: SESSION
-      mutation: READ
-      settlement: COMPLETED
-      paging: UNPAGED
-      streaming: TYPED_BULK
-      sensitivity: PRIVATE
-    };
-  }
-  rpc remote_session_message_read(remote_session_message_read_Request) returns (remote_session_message_read_Result) {
-    option (ycoding.v5.operation) = {
-      operation_id: 5011
-      diagnostic_name: "remote.session.message.read"
-      error_types: "ycoding.v5.Connector_Error"
-      roles: REMOTE_CLIENT
-      roles: RELAY
-      scope: SESSION
-      mutation: READ
-      settlement: COMPLETED
-      paging: UNPAGED
-      streaming: TYPED_BULK
-      sensitivity: PRIVATE
-    };
-  }
-  rpc remote_session_subagent_answer(remote_session_subagent_answer_Request) returns (remote_session_subagent_answer_Result) {
-    option (ycoding.v5.operation) = {
-      operation_id: 5012
-      diagnostic_name: "remote.session.subagent.answer"
-      error_types: "ycoding.v5.Connector_Error"
-      roles: REMOTE_CLIENT
-      roles: RELAY
-      scope: SESSION
-      mutation: MUTATION
-      settlement: COMPLETED
-      paging: UNPAGED
       streaming: TYPED_BULK
       sensitivity: PRIVATE
     };
@@ -1506,66 +923,6 @@ service connector {
       sensitivity: PRIVATE
     };
   }
-  rpc remote_session_log(remote_session_log_Request) returns (remote_session_log_Result) {
-    option (ycoding.v5.operation) = {
-      operation_id: 5019
-      diagnostic_name: "remote.session.log"
-      error_types: "ycoding.v5.Connector_Error"
-      roles: REMOTE_CLIENT
-      roles: RELAY
-      scope: SESSION
-      mutation: READ
-      settlement: COMPLETED
-      paging: UNPAGED
-      streaming: TYPED_BULK
-      sensitivity: PRIVATE
-    };
-  }
-  rpc remote_session_subscribe(remote_session_subscribe_Request) returns (remote_session_subscribe_Result) {
-    option (ycoding.v5.operation) = {
-      operation_id: 5020
-      diagnostic_name: "remote.session.subscribe"
-      error_types: "ycoding.v5.Connector_Error"
-      roles: REMOTE_CLIENT
-      roles: RELAY
-      scope: SESSION
-      mutation: MUTATION
-      settlement: COMPLETED
-      paging: UNPAGED
-      streaming: TYPED_BULK
-      sensitivity: PRIVATE
-    };
-  }
-  rpc remote_session_unsubscribe(remote_session_unsubscribe_Request) returns (remote_session_unsubscribe_Result) {
-    option (ycoding.v5.operation) = {
-      operation_id: 5021
-      diagnostic_name: "remote.session.unsubscribe"
-      error_types: "ycoding.v5.Connector_Error"
-      roles: REMOTE_CLIENT
-      roles: RELAY
-      scope: SESSION
-      mutation: MUTATION
-      settlement: COMPLETED
-      paging: UNPAGED
-      streaming: TYPED_BULK
-      sensitivity: PRIVATE
-    };
-  }
-  rpc remote_session_prompt(remote_session_prompt_Request) returns (remote_session_prompt_Result) {
-    option (ycoding.v5.operation) = {
-      operation_id: 5022
-      diagnostic_name: "remote.session.prompt"
-      error_types: "ycoding.v5.Connector_Error"
-      roles: REMOTE_CLIENT
-      roles: RELAY
-      scope: SESSION
-      mutation: MUTATION
-      settlement: DURABLY_ADMITTED
-      paging: UNPAGED
-      streaming: TYPED_BULK
-      sensitivity: SECRET
-    };
-  }
   rpc session_attachment_upload(session_attachment_upload_Request) returns (session_attachment_upload_Result) {
     option (ycoding.v5.operation) = {
       operation_id: 5023
@@ -1579,96 +936,6 @@ service connector {
       paging: UNPAGED
       streaming: TYPED_BULK
       sensitivity: SECRET
-    };
-  }
-  rpc remote_session_form_list(remote_session_form_list_Request) returns (remote_session_form_list_Result) {
-    option (ycoding.v5.operation) = {
-      operation_id: 5024
-      diagnostic_name: "remote.session.form.list"
-      error_types: "ycoding.v5.Connector_Error"
-      roles: REMOTE_CLIENT
-      roles: RELAY
-      scope: SESSION
-      mutation: READ
-      settlement: COMPLETED
-      paging: UNPAGED
-      streaming: TYPED_BULK
-      sensitivity: PRIVATE
-    };
-  }
-  rpc remote_session_shell_output(remote_session_shell_output_Request) returns (remote_session_shell_output_Result) {
-    option (ycoding.v5.operation) = {
-      operation_id: 5025
-      diagnostic_name: "remote.session.shell.output"
-      error_types: "ycoding.v5.Connector_Error"
-      roles: REMOTE_CLIENT
-      roles: RELAY
-      scope: SESSION
-      mutation: READ
-      settlement: COMPLETED
-      paging: OFFSET
-      streaming: TYPED_BULK
-      sensitivity: PRIVATE
-    };
-  }
-  rpc remote_session_autonomy_set(remote_session_autonomy_set_Request) returns (remote_session_autonomy_set_Result) {
-    option (ycoding.v5.operation) = {
-      operation_id: 5026
-      diagnostic_name: "remote.session.autonomy.set"
-      error_types: "ycoding.v5.Connector_Error"
-      roles: REMOTE_CLIENT
-      roles: RELAY
-      scope: SESSION
-      mutation: MUTATION
-      settlement: COMPLETED
-      paging: UNPAGED
-      streaming: TYPED_BULK
-      sensitivity: PRIVATE
-    };
-  }
-  rpc remote_session_goal_set(remote_session_goal_set_Request) returns (remote_session_goal_set_Result) {
-    option (ycoding.v5.operation) = {
-      operation_id: 5027
-      diagnostic_name: "remote.session.goal.set"
-      error_types: "ycoding.v5.Connector_Error"
-      roles: REMOTE_CLIENT
-      roles: RELAY
-      scope: SESSION
-      mutation: MUTATION
-      settlement: COMPLETED
-      paging: UNPAGED
-      streaming: TYPED_BULK
-      sensitivity: PRIVATE
-    };
-  }
-  rpc remote_session_goal_stop(remote_session_goal_stop_Request) returns (remote_session_goal_stop_Result) {
-    option (ycoding.v5.operation) = {
-      operation_id: 5028
-      diagnostic_name: "remote.session.goal.stop"
-      error_types: "ycoding.v5.Connector_Error"
-      roles: REMOTE_CLIENT
-      roles: RELAY
-      scope: SESSION
-      mutation: MUTATION
-      settlement: COMPLETED
-      paging: UNPAGED
-      streaming: TYPED_BULK
-      sensitivity: PRIVATE
-    };
-  }
-  rpc remote_session_create(remote_session_create_Request) returns (remote_session_create_Result) {
-    option (ycoding.v5.operation) = {
-      operation_id: 5029
-      diagnostic_name: "remote.session.create"
-      error_types: "ycoding.v5.Connector_Error"
-      roles: REMOTE_CLIENT
-      roles: RELAY
-      scope: WORKSPACE
-      mutation: MUTATION
-      settlement: COMPLETED
-      paging: UNPAGED
-      streaming: TYPED_BULK
-      sensitivity: PRIVATE
     };
   }
   rpc session_status(session_status_Request) returns (session_status_Result) {
@@ -1686,122 +953,19 @@ service connector {
       sensitivity: PRIVATE
     };
   }
-  rpc remote_session_catalog(remote_session_catalog_Request) returns (remote_session_catalog_Result) {
+  rpc catalog_get(catalog_get_Request) returns (catalog_get_Result) {
     option (ycoding.v5.operation) = {
-      operation_id: 5031
-      diagnostic_name: "remote.session.catalog"
+      operation_id: 5043
+      diagnostic_name: "catalog.get"
       error_types: "ycoding.v5.Connector_Error"
       roles: REMOTE_CLIENT
       roles: RELAY
+      role_scopes: { role: REMOTE_CLIENT scopes: SESSION scopes: WORKSPACE }
+      role_scopes: { role: RELAY scopes: SESSION scopes: WORKSPACE }
       scope: SESSION
       mutation: READ
       settlement: COMPLETED
       paging: UNPAGED
-      streaming: TYPED_BULK
-      sensitivity: PRIVATE
-    };
-  }
-  rpc remote_workspace_catalog(remote_workspace_catalog_Request) returns (remote_workspace_catalog_Result) {
-    option (ycoding.v5.operation) = {
-      operation_id: 5032
-      diagnostic_name: "remote.workspace.catalog"
-      error_types: "ycoding.v5.Connector_Error"
-      roles: REMOTE_CLIENT
-      roles: RELAY
-      scope: WORKSPACE
-      mutation: READ
-      settlement: COMPLETED
-      paging: UNPAGED
-      streaming: TYPED_BULK
-      sensitivity: PRIVATE
-    };
-  }
-  rpc remote_session_fs_find(remote_session_fs_find_Request) returns (remote_session_fs_find_Result) {
-    option (ycoding.v5.operation) = {
-      operation_id: 5033
-      diagnostic_name: "remote.session.fs.find"
-      error_types: "ycoding.v5.Connector_Error"
-      roles: REMOTE_CLIENT
-      roles: RELAY
-      scope: SESSION
-      mutation: READ
-      settlement: COMPLETED
-      paging: UNPAGED
-      streaming: TYPED_BULK
-      sensitivity: PRIVATE
-    };
-  }
-  rpc remote_workspace_fs_find(remote_workspace_fs_find_Request) returns (remote_workspace_fs_find_Result) {
-    option (ycoding.v5.operation) = {
-      operation_id: 5034
-      diagnostic_name: "remote.workspace.fs.find"
-      error_types: "ycoding.v5.Connector_Error"
-      roles: REMOTE_CLIENT
-      roles: RELAY
-      scope: WORKSPACE
-      mutation: READ
-      settlement: COMPLETED
-      paging: UNPAGED
-      streaming: TYPED_BULK
-      sensitivity: PRIVATE
-    };
-  }
-  rpc remote_session_command(remote_session_command_Request) returns (remote_session_command_Result) {
-    option (ycoding.v5.operation) = {
-      operation_id: 5035
-      diagnostic_name: "remote.session.command"
-      error_types: "ycoding.v5.Connector_Error"
-      roles: REMOTE_CLIENT
-      roles: RELAY
-      scope: SESSION
-      mutation: MUTATION
-      settlement: DURABLY_ADMITTED
-      paging: UNPAGED
-      streaming: TYPED_BULK
-      sensitivity: SECRET
-    };
-  }
-  rpc remote_providerUsage_list(remote_providerUsage_list_Request) returns (remote_providerUsage_list_Result) {
-    option (ycoding.v5.operation) = {
-      operation_id: 5036
-      diagnostic_name: "remote.providerUsage.list"
-      error_types: "ycoding.v5.Connector_Error"
-      roles: REMOTE_CLIENT
-      roles: RELAY
-      scope: MACHINE
-      mutation: READ
-      settlement: COMPLETED
-      paging: UNPAGED
-      streaming: TYPED_BULK
-      sensitivity: PRIVATE
-    };
-  }
-  rpc remote_telemetry_append(remote_telemetry_append_Request) returns (remote_telemetry_append_Result) {
-    option (ycoding.v5.operation) = {
-      operation_id: 5037
-      diagnostic_name: "remote.telemetry.append"
-      error_types: "ycoding.v5.Connector_Error"
-      roles: REMOTE_CLIENT
-      roles: RELAY
-      scope: MACHINE
-      mutation: MUTATION
-      settlement: COMPLETED
-      paging: UNPAGED
-      streaming: TYPED_BULK
-      sensitivity: PRIVATE
-    };
-  }
-  rpc remote_telemetry_list(remote_telemetry_list_Request) returns (remote_telemetry_list_Result) {
-    option (ycoding.v5.operation) = {
-      operation_id: 5038
-      diagnostic_name: "remote.telemetry.list"
-      error_types: "ycoding.v5.Connector_Error"
-      roles: REMOTE_CLIENT
-      roles: RELAY
-      scope: MACHINE
-      mutation: READ
-      settlement: COMPLETED
-      paging: CURSOR
       streaming: TYPED_BULK
       sensitivity: PRIVATE
     };

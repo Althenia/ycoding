@@ -59,8 +59,9 @@ for (const file of files) {
   digest.update(await Bun.file(path.join(source, "ycoding/v5", file)).arrayBuffer())
 }
 validateCodecNames(fromBinary(FileDescriptorSetSchema, bytes))
-const { readOperations, readConstraints } = await import("./operations.js")
+const { readOperations, readConstraints, readPublicEvents } = await import("./operations.js")
 const operations = readOperations(bytes)
+const publicEvents = readPublicEvents(bytes)
 const fieldConstraints = readConstraints(bytes)
 const set = fromBinary(FileDescriptorSetSchema, bytes)
 set.file = set.file.filter((file) => file.package === "ycoding.v5")
@@ -116,6 +117,10 @@ await Bun.write(
   path.join(output, "operations.ts"),
   `import type { OperationDescriptor, PeerRole } from "./ycoding/v5/foundation_pb.js"\nexport const operations: readonly OperationDescriptor[] = ${JSON.stringify(operations, null, 2)}\nexport const operationIDsByRole: Readonly<Record<PeerRole, readonly number[]>> = ${JSON.stringify(Object.fromEntries(set.file.flatMap((file) => file.enumType.filter((item) => item.name === "PeerRole").flatMap((item) => item.value.map((role) => [role.number, operations.filter((item) => item.roles.includes(role.number!)).map((item) => item.operationId)])))), null, 2)}\n`,
 )
+await Bun.write(
+  path.join(output, "events.ts"),
+  `export const publicEvents = ${JSON.stringify(publicEvents, null, 2)} as const\n`,
+)
 const registry = set.file
   .map(
     (file) =>
@@ -127,6 +132,7 @@ await Bun.write(
   files.map((file) => `export * from "./ycoding/v5/${file.replace(".proto", "_pb.js")}"`).join("\n") +
     '\nexport { CONTRACT_DIGEST } from "./contract.js"\n' +
     'export { operations, operationIDsByRole } from "./operations.js"\n' +
+    'export { publicEvents } from "./events.js"\n' +
     'import type { DescMessage } from "@bufbuild/protobuf"\n' +
     registry +
     `\nexport const schemas: DescMessage[] = []\nschemas.push(${set.file.flatMap((file) => file.messageType.map((message) => `${message.name}Schema`)).join(", ")})\n`,
@@ -140,6 +146,7 @@ const format = Bun.spawnSync(
     path.join(output, "contract.ts"),
     path.join(output, "index.ts"),
     path.join(output, "operations.ts"),
+    path.join(output, "events.ts"),
     ...files.map((file) => path.join(output, "ycoding/v5", file.replace(".proto", "_pb.ts"))),
   ],
   { cwd: root, stdout: "inherit", stderr: "inherit" },

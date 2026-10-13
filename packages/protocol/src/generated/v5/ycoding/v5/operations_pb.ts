@@ -11,6 +11,7 @@ import type {
   MutationClass,
   Paging,
   PeerRole,
+  RoleScopes,
   ScopeKind,
   Sensitivity,
   Settlement,
@@ -25,7 +26,7 @@ import type { Message } from "@bufbuild/protobuf"
 export const file_ycoding_v5_operations: GenFile =
   /*@__PURE__*/
   fileDesc(
-    "Cht5Y29kaW5nL3Y1L29wZXJhdGlvbnMucHJvdG8SCnljb2RpbmcudjUiLQoOT3BlcmF0aW9uUmFuZ2USDQoFZmlyc3QYASACKA0SDAoEbGFzdBgCIAIoDSKuAwoQT3BlcmF0aW9uT3B0aW9ucxIUCgxvcGVyYXRpb25faWQYASACKA0SFwoPZGlhZ25vc3RpY19uYW1lGAIgAigJEhMKC2Vycm9yX3R5cGVzGAUgAygJEiMKBXJvbGVzGAYgAygOMhQueWNvZGluZy52NS5QZWVyUm9sZRIkCgVzY29wZRgHIAIoDjIVLnljb2RpbmcudjUuU2NvcGVLaW5kEisKCG11dGF0aW9uGAggAigOMhkueWNvZGluZy52NS5NdXRhdGlvbkNsYXNzEioKCnNldHRsZW1lbnQYCSACKA4yFi55Y29kaW5nLnY1LlNldHRsZW1lbnQSIgoGcGFnaW5nGAogAigOMhIueWNvZGluZy52NS5QYWdpbmcSKAoJc3RyZWFtaW5nGAsgAigOMhUueWNvZGluZy52NS5TdHJlYW1pbmcSLAoLc2Vuc2l0aXZpdHkYDCACKA4yFy55Y29kaW5nLnY1LlNlbnNpdGl2aXR5EjYKEHNlbnNpdGl2ZV9maWVsZHMYDSADKAsyHC55Y29kaW5nLnY1LkZpZWxkU2Vuc2l0aXZpdHkihAIKEEZpZWxkQ29uc3RyYWludHMSEwoLaW50ZWdlcl9taW4YASABKAkSEwoLaW50ZWdlcl9tYXgYAiABKAkSEQoJdXRmMTZfbWluGAMgASgEEhEKCXV0ZjE2X21heBgEIAEoBBIWCg5jb2RlcG9pbnRzX21pbhgFIAEoBBIWCg5jb2RlcG9pbnRzX21heBgGIAEoBBIWCg51dGY4X2J5dGVzX21pbhgHIAEoBBIWCg51dGY4X2J5dGVzX21heBgIIAEoBBIRCgljb3VudF9taW4YCSABKAQSEQoJY291bnRfbWF4GAogASgEEhoKEmRvbWFpbl9vYmxpZ2F0aW9ucxgLIAMoCTpjCg9vcGVyYXRpb25fcmFuZ2USHC5nb29nbGUucHJvdG9idWYuRmlsZU9wdGlvbnMYuI4DIAEoCzIaLnljb2RpbmcudjUuT3BlcmF0aW9uUmFuZ2VSDm9wZXJhdGlvblJhbmdlOlwKCW9wZXJhdGlvbhIeLmdvb2dsZS5wcm90b2J1Zi5NZXRob2RPcHRpb25zGLiOAyABKAsyHC55Y29kaW5nLnY1Lk9wZXJhdGlvbk9wdGlvbnNSCW9wZXJhdGlvbjpfCgtjb25zdHJhaW50cxIdLmdvb2dsZS5wcm90b2J1Zi5GaWVsZE9wdGlvbnMYuI4DIAEoCzIcLnljb2RpbmcudjUuRmllbGRDb25zdHJhaW50c1ILY29uc3RyYWludHM",
+    "Cht5Y29kaW5nL3Y1L29wZXJhdGlvbnMucHJvdG8SCnljb2RpbmcudjUiLQoOT3BlcmF0aW9uUmFuZ2USDQoFZmlyc3QYASACKA0SDAoEbGFzdBgCIAIoDSLwAwoQT3BlcmF0aW9uT3B0aW9ucxIUCgxvcGVyYXRpb25faWQYASACKA0SFwoPZGlhZ25vc3RpY19uYW1lGAIgAigJEhMKC2Vycm9yX3R5cGVzGAUgAygJEiMKBXJvbGVzGAYgAygOMhQueWNvZGluZy52NS5QZWVyUm9sZRIkCgVzY29wZRgHIAIoDjIVLnljb2RpbmcudjUuU2NvcGVLaW5kEisKCG11dGF0aW9uGAggAigOMhkueWNvZGluZy52NS5NdXRhdGlvbkNsYXNzEioKCnNldHRsZW1lbnQYCSACKA4yFi55Y29kaW5nLnY1LlNldHRsZW1lbnQSIgoGcGFnaW5nGAogAigOMhIueWNvZGluZy52NS5QYWdpbmcSKAoJc3RyZWFtaW5nGAsgAigOMhUueWNvZGluZy52NS5TdHJlYW1pbmcSLAoLc2Vuc2l0aXZpdHkYDCACKA4yFy55Y29kaW5nLnY1LlNlbnNpdGl2aXR5EjYKEHNlbnNpdGl2ZV9maWVsZHMYDSADKAsyHC55Y29kaW5nLnY1LkZpZWxkU2Vuc2l0aXZpdHkSKwoLcm9sZV9zY29wZXMYDiADKAsyFi55Y29kaW5nLnY1LlJvbGVTY29wZXMSEwoLZXZlbnRfdHlwZXMYDyADKAkihAIKEEZpZWxkQ29uc3RyYWludHMSEwoLaW50ZWdlcl9taW4YASABKAkSEwoLaW50ZWdlcl9tYXgYAiABKAkSEQoJdXRmMTZfbWluGAMgASgEEhEKCXV0ZjE2X21heBgEIAEoBBIWCg5jb2RlcG9pbnRzX21pbhgFIAEoBBIWCg5jb2RlcG9pbnRzX21heBgGIAEoBBIWCg51dGY4X2J5dGVzX21pbhgHIAEoBBIWCg51dGY4X2J5dGVzX21heBgIIAEoBBIRCgljb3VudF9taW4YCSABKAQSEQoJY291bnRfbWF4GAogASgEEhoKEmRvbWFpbl9vYmxpZ2F0aW9ucxgLIAMoCSI+ChJQdWJsaWNFdmVudE9wdGlvbnMSFwoPZGlhZ25vc3RpY19uYW1lGAEgAigJEg8KB2R1cmFibGUYAiACKAg6YwoPb3BlcmF0aW9uX3JhbmdlEhwuZ29vZ2xlLnByb3RvYnVmLkZpbGVPcHRpb25zGLiOAyABKAsyGi55Y29kaW5nLnY1Lk9wZXJhdGlvblJhbmdlUg5vcGVyYXRpb25SYW5nZTpcCglvcGVyYXRpb24SHi5nb29nbGUucHJvdG9idWYuTWV0aG9kT3B0aW9ucxi4jgMgASgLMhwueWNvZGluZy52NS5PcGVyYXRpb25PcHRpb25zUglvcGVyYXRpb246XwoLY29uc3RyYWludHMSHS5nb29nbGUucHJvdG9idWYuRmllbGRPcHRpb25zGLiOAyABKAsyHC55Y29kaW5nLnY1LkZpZWxkQ29uc3RyYWludHNSC2NvbnN0cmFpbnRzOmIKDHB1YmxpY19ldmVudBIdLmdvb2dsZS5wcm90b2J1Zi5GaWVsZE9wdGlvbnMYuY4DIAEoCzIeLnljb2RpbmcudjUuUHVibGljRXZlbnRPcHRpb25zUgtwdWJsaWNFdmVudA",
     [file_google_protobuf_descriptor, file_ycoding_v5_foundation],
   )
 
@@ -108,6 +109,16 @@ export type OperationOptions = Message<"ycoding.v5.OperationOptions"> & {
    * @generated from field: repeated ycoding.v5.FieldSensitivity sensitive_fields = 13;
    */
   sensitiveFields: FieldSensitivity[]
+
+  /**
+   * @generated from field: repeated ycoding.v5.RoleScopes role_scopes = 14;
+   */
+  roleScopes: RoleScopes[]
+
+  /**
+   * @generated from field: repeated string event_types = 15;
+   */
+  eventTypes: string[]
 }
 
 /**
@@ -187,6 +198,29 @@ export const FieldConstraintsSchema: GenMessage<FieldConstraints> =
   messageDesc(file_ycoding_v5_operations, 2)
 
 /**
+ * @generated from message ycoding.v5.PublicEventOptions
+ */
+export type PublicEventOptions = Message<"ycoding.v5.PublicEventOptions"> & {
+  /**
+   * @generated from field: required string diagnostic_name = 1;
+   */
+  diagnosticName: string
+
+  /**
+   * @generated from field: required bool durable = 2;
+   */
+  durable: boolean
+}
+
+/**
+ * Describes the message ycoding.v5.PublicEventOptions.
+ * Use `create(PublicEventOptionsSchema)` to create a new message.
+ */
+export const PublicEventOptionsSchema: GenMessage<PublicEventOptions> =
+  /*@__PURE__*/
+  messageDesc(file_ycoding_v5_operations, 3)
+
+/**
  * @generated from extension: optional ycoding.v5.OperationRange operation_range = 51000;
  */
 export const operation_range: GenExtension<FileOptions, OperationRange> =
@@ -206,3 +240,10 @@ export const operation: GenExtension<MethodOptions, OperationOptions> =
 export const constraints: GenExtension<FieldOptions, FieldConstraints> =
   /*@__PURE__*/
   extDesc(file_ycoding_v5_operations, 2)
+
+/**
+ * @generated from extension: optional ycoding.v5.PublicEventOptions public_event = 51001;
+ */
+export const public_event: GenExtension<FieldOptions, PublicEventOptions> =
+  /*@__PURE__*/
+  extDesc(file_ycoding_v5_operations, 3)

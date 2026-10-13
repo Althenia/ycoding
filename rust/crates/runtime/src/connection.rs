@@ -136,7 +136,10 @@ pub(crate) async fn run(
         authorized_sessions: BTreeSet::new(),
         authorized_workspaces: BTreeSet::new(),
         reservation: None,
-        event_types: BTreeSet::from(["ycoding.v5.SessionLogItem".into()]),
+        event_types: BTreeSet::from([
+            "ycoding.v5.SessionLogItem".into(),
+            "ycoding.v5.PublicEvent".into(),
+        ]),
     };
     let Ok(connection) = Connection::new(config, shared.dispatcher.descriptors(), 0) else {
         return;

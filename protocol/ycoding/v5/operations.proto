@@ -20,6 +20,8 @@ message OperationOptions {
   required Streaming streaming = 11;
   required Sensitivity sensitivity = 12;
   repeated FieldSensitivity sensitive_fields = 13;
+  repeated RoleScopes role_scopes = 14;
+  repeated string event_types = 15;
 }
 extend google.protobuf.FileOptions {
   optional OperationRange operation_range = 51000;
@@ -42,4 +44,9 @@ message FieldConstraints {
 }
 extend google.protobuf.FieldOptions {
   optional FieldConstraints constraints = 51000;
+  optional PublicEventOptions public_event = 51001;
+}
+message PublicEventOptions {
+  required string diagnostic_name = 1;
+  required bool durable = 2;
 }

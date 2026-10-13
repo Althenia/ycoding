@@ -6,6 +6,7 @@ include!(concat!(env!("OUT_DIR"), "/digest.rs"));
 include!(concat!(env!("OUT_DIR"), "/operations.rs"));
 include!(concat!(env!("OUT_DIR"), "/role_allowlists.rs"));
 include!(concat!(env!("OUT_DIR"), "/domain_obligations.rs"));
+include!(concat!(env!("OUT_DIR"), "/public_events.rs"));
 pub mod connection;
 mod field_constraints;
 mod validate;

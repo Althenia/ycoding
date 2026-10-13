@@ -267,7 +267,13 @@ fn scan<'a>(
                 } else {
                     None
                 };
-                validate_constraints(rule, None, text.as_deref(), None).map_err(WireError)?;
+                validate_constraints(
+                    rule,
+                    None,
+                    text.as_deref(),
+                    (field.kind == 12).then_some(value.bytes.len()),
+                )
+                .map_err(WireError)?;
             }
         }
         node.fields.entry(tag).or_default().push(value);

@@ -42,10 +42,14 @@ export function send(sender: Connection, receiver: Connection, now = 0) {
 }
 
 export function pair(budgets: Options["budgets"] = {}) {
+  const testOperations = operations.map((operation) => ({
+    ...operation,
+    eventTypes: operation.eventTypes.length ? [...testOnlyEventTypes] : [],
+  }))
   const client = new Connection({
     role: PeerRole.LOCAL_CLIENT,
     peer: PeerRole.SERVER,
-    operations,
+    operations: testOperations,
     eventTypes: testOnlyEventTypes,
     now: 0,
     budgets,
@@ -53,7 +57,7 @@ export function pair(budgets: Options["budgets"] = {}) {
   const server = new Connection({
     role: PeerRole.SERVER,
     peer: PeerRole.LOCAL_CLIENT,
-    operations,
+    operations: testOperations,
     now: 0,
     epoch: "connection-1",
     sourceEpoch: "source-1",

@@ -230,7 +230,7 @@ export class Connection {
       !subscriptionID ||
       subscriptions.has(subscriptionID) ||
       !(scope.target.case === "session" || scope.target.case === "global") ||
-      (pending.operation.scope === ScopeKind.SESSION && !sameScope(pending.scope, scope))
+      (pending.scope.target.case === "session" && !sameScope(pending.scope, scope))
     )
       return this.close(FailureCategory.MALFORMED)
     if (
@@ -242,6 +242,7 @@ export class Connection {
     this.awaitingSubscription.delete(key)
     subscriptions.set(subscriptionID, {
       scope,
+      eventTypes: pending.operation.eventTypes,
       sourceEpoch: this.sourceEpoch,
       hydrating: false,
       invalidated: false,
@@ -489,7 +490,7 @@ export class Connection {
         },
       ]
     }
-    if (!this.validEvents(single)) return this.close(FailureCategory.MALFORMED)
+    if (!this.validEvents(single, "send")) return this.close(FailureCategory.MALFORMED)
     const open = this.queue.find(
       (record) =>
         record.open &&
@@ -588,7 +589,7 @@ export class Connection {
         body.value.sourceEpoch !== subscription.sourceEpoch
       )
         return this.close(FailureCategory.DIRECTION)
-      if (!this.validEvents(body.value)) return this.close(FailureCategory.MALFORMED)
+      if (!this.validEvents(body.value, "send")) return this.close(FailureCategory.MALFORMED)
     }
     if (body.case === "result") {
       const pending = this.inbound.get(body.value.requestId)
@@ -1146,7 +1147,9 @@ export class Connection {
     if (
       !scope ||
       !operation.roles.includes(role) ||
-      ScopeKind[operation.scope] !== expected ||
+      !(operation.roleScopes.find((rule) => rule.role === role)?.scopes ?? [operation.scope]).some(
+        (kind) => ScopeKind[kind] === expected,
+      ) ||
       payload.length > this.budgets.inlineBytes
     )
       return false
@@ -1215,12 +1218,16 @@ export class Connection {
     return this.consume(LedgerClass.EVENT, ordinal, now)
   }
 
-  private validEvents(batch: EventBatch) {
+  private validEvents(batch: EventBatch, direction: "receive" | "send" = "receive") {
+    const subscription = (direction === "receive" ? this.subscriptions : this.sendingSubscriptions).get(
+      batch.subscriptionId,
+    )
     return batch.events.every(
       (record) =>
         !!record.eventId &&
         !!record.event &&
         this.options.eventTypes.includes(record.event.typeName) &&
+        (!subscription || subscription.eventTypes.includes(record.event.typeName)) &&
         validPayload(record.event.typeName, record.event.payload),
     )
   }

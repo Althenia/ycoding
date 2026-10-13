@@ -44,6 +44,10 @@ cases = [
     ("bulk-end", "Frame", f'{header} ledger: NORMAL bulk_end {{ transfer_id: "t" byte_count: 0 success {{}} }}', 5),
     ("bulk-error", "Frame", f'{header} ledger: NORMAL bulk_end {{ transfer_id: "t" byte_count: 0 error {{ type_name: "ycoding.v5.ProtocolFailure" payload: "\\010\\001" }} }}', 5),
     ("descriptor", "OperationDescriptor", 'operation_id: 1 diagnostic_name: "foundation.test" request_type: "ycoding.v5.Empty" result_type: "ycoding.v5.Empty" error_types: "ycoding.v5.ProtocolFailure" roles: LOCAL_CLIENT scope: MACHINE mutation: READ settlement: COMPLETED paging: UNPAGED streaming: INLINE sensitivity: PRIVATE sensitive_fields { field_path: "input" sensitivity: SECRET }', 0),
+    ("public-catalog", "PublicEvent", 'catalog_updated { id { utf8: "evt_catalog" } created: 0 type: PUBLICEVENT_CATALOG_UPDATED_TYPE_CATALOG_UPDATED data {} }', 0),
+    ("public-text-delta", "PublicEvent", 'session_text_delta { id { utf8: "evt_delta" } created: 0 type: PUBLICEVENT_SESSION_TEXT_DELTA_TYPE_SESSION_TEXT_DELTA data { sessionID { utf8: "ses_a" } assistantMessageID { utf8: "msg_a" } ordinal: 0 delta { utf16_le_units: "\\000\\330" } } }', 0),
+    ("public-durable", "PublicEvent", 'session_revert_cleared { id { utf8: "evt_clear" } created: 0 sourceEpoch { utf8: "source" } type: SESSIONLOGITEMVALUE50_TYPE_SESSION_REVERT_CLEARED durable { aggregateID { utf8: "ses_a" } seq: 1 version: 1 } data { sessionID { utf8: "ses_a" } } }', 0),
+    ("upload-raw", "session_attachment_upload_Request_payload", 'uploadID { utf8: "00000000-0000-4000-8000-000000000001" } index: 0 last: true data: "\\000\\377" offset: 0', 0),
 ]
 controls = [
     ("ping", "id: 0", 1), ("pong", "id: 0", 5), ("cancel", 'request_id: "r"', 1),
@@ -62,7 +66,7 @@ for name, body, sender in controls:
 rows = []
 encoded = {}
 for name, message, text, sender in cases:
-    result = subprocess.run([os.environ.get("PROTOC", "/opt/homebrew/bin/protoc"), f"--proto_path={source}", f"--encode=ycoding.v5.{message}", "ycoding/v5/foundation.proto"], input=text.encode(), capture_output=True, check=True)
+    result = subprocess.run([os.environ.get("PROTOC", "/opt/homebrew/bin/protoc"), f"--proto_path={source}", f"--encode=ycoding.v5.{message}", *[file.relative_to(source).as_posix() for file in sorted((source / "ycoding/v5").glob("*.proto"))]], input=text.encode(), capture_output=True, check=True)
     encoded[name] = result.stdout
     rows.append(f"{name}\tycoding.v5.{message}\tvalid\t{sender}\t{result.stdout.hex()}")
 
@@ -113,6 +117,10 @@ negatives = [
     ("zero-credit", "Credit", b"\x08\x01\x10\x00", 0),
     ("stream-end-client", "Frame", encoded["stream-end"], 1),
     ("stream-end-duplicate", "Frame", encoded["stream-end"] + blob(19, b"\x0a\x01s"), 5),
+    ("public-event-empty", "PublicEvent", b"", 0),
+    ("public-event-duplicate", "PublicEvent", encoded["public-catalog"] + encoded["public-text-delta"], 0),
+    ("ephemeral-durable", "PublicEvent_catalog_updated", encoded["public-catalog"][2:] + blob(8, b""), 0),
+    ("upload-empty", "session_attachment_upload_Request_payload", encoded["upload-raw"].replace(blob(4, b"\x00\xff"), blob(4, b"")), 0),
 ]
 for name, message, data, sender in negatives:
     rows.append(f"{name}\tycoding.v5.{message}\tinvalid\t{sender}\t{data.hex()}")

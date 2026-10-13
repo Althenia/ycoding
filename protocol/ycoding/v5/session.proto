@@ -435,6 +435,8 @@ enum InstructionEntryValueTooLargeError__tag {
 enum SessionsQuery_order {
   SESSIONSQUERY_ORDER_ASC = 1;
   SESSIONSQUERY_ORDER_DESC = 2;
+  SESSIONSQUERY_ORDER_PINNED = 3;
+  SESSIONSQUERY_ORDER_ACTIVE = 4;
 }
 
 enum SessionPending_Synthetic_type {
@@ -955,6 +957,15 @@ enum SessionLogItemValue51_type {
 
 enum SessionLogItemValue52_type {
   SESSIONLOGITEMVALUE52_TYPE_LOG_SYNCED = 1;
+}
+
+enum SessionsQuery_status {
+  SESSIONSQUERY_STATUS_RUNNING = 1;
+  SESSIONSQUERY_STATUS_IDLE = 2;
+}
+
+enum SessionsQuery_searchFields {
+  SESSIONSQUERY_SEARCHFIELDS_SUMMARY = 1;
 }
 
 message event_subscribe_Request {
@@ -3012,6 +3023,8 @@ message SessionsQuery {
   optional LosslessString project = 7;
   optional LosslessString subpath = 8;
   optional LosslessString cursor = 9;
+  optional SessionsQuery_status status = 10;
+  optional SessionsQuery_searchFields searchFields = 11;
 }
 
 message SessionsQuery_parentID {
@@ -6014,6 +6027,11 @@ service server_event {
       error_types: "ycoding.v5.UnauthorizedError"
       error_types: "ycoding.v5.InvalidRequestError"
       roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      role_scopes: { role: REMOTE_CLIENT scopes: SESSION }
+      role_scopes: { role: RELAY scopes: SESSION }
+      event_types: "ycoding.v5.PublicEvent"
       scope: GLOBAL
       mutation: MUTATION
       settlement: COMPLETED
@@ -6029,6 +6047,10 @@ service server_event {
       error_types: "ycoding.v5.UnauthorizedError"
       error_types: "ycoding.v5.InvalidRequestError"
       roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      role_scopes: { role: REMOTE_CLIENT scopes: SESSION }
+      role_scopes: { role: RELAY scopes: SESSION }
       scope: GLOBAL
       mutation: MUTATION
       settlement: COMPLETED
@@ -6117,6 +6139,8 @@ service server_form {
       error_types: "ycoding.v5.UnauthorizedError"
       error_types: "ycoding.v5.InvalidRequestError"
       roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
       scope: FORM
       mutation: READ
       settlement: COMPLETED
@@ -6414,6 +6438,8 @@ service server_session {
       error_types: "ycoding.v5.InvalidRequestError"
       error_types: "ycoding.v5.UnauthorizedError"
       roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
       scope: SESSION
       mutation: READ
       settlement: COMPLETED
@@ -6450,6 +6476,8 @@ service server_session {
       error_types: "ycoding.v5.UnknownError"
       error_types: "ycoding.v5.UnauthorizedError"
       roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
       scope: SESSION
       mutation: MUTATION
       settlement: COMPLETED
@@ -6485,6 +6513,8 @@ service server_session {
       error_types: "ycoding.v5.CommandEvaluationError"
       error_types: "ycoding.v5.UnauthorizedError"
       roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
       scope: SESSION
       mutation: MUTATION
       settlement: DURABLY_ADMITTED
@@ -6552,6 +6582,10 @@ service server_session {
       error_types: "ycoding.v5.InvalidRequestError"
       error_types: "ycoding.v5.UnauthorizedError"
       roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      role_scopes: { role: REMOTE_CLIENT scopes: WORKSPACE }
+      role_scopes: { role: RELAY scopes: WORKSPACE }
       scope: LOCATION
       mutation: MUTATION
       settlement: COMPLETED
@@ -6736,6 +6770,8 @@ service server_session {
       error_types: "ycoding.v5.InvalidRequestError"
       error_types: "ycoding.v5.UnauthorizedError"
       roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
       scope: MACHINE
       mutation: READ
       settlement: COMPLETED
@@ -6752,6 +6788,9 @@ service server_session {
       error_types: "ycoding.v5.UnauthorizedError"
       error_types: "ycoding.v5.InvalidRequestError"
       roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      event_types: "ycoding.v5.SessionLogItem"
       scope: SESSION
       mutation: READ
       settlement: COMPLETED
@@ -6769,6 +6808,8 @@ service server_session {
       error_types: "ycoding.v5.UnauthorizedError"
       error_types: "ycoding.v5.InvalidRequestError"
       roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
       scope: SESSION
       mutation: READ
       settlement: COMPLETED
@@ -6853,6 +6894,8 @@ service server_session {
       error_types: "ycoding.v5.SessionNotFoundError"
       error_types: "ycoding.v5.UnauthorizedError"
       roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
       scope: SESSION
       mutation: MUTATION
       settlement: DURABLY_ADMITTED
@@ -7046,6 +7089,8 @@ service server_session {
       error_types: "ycoding.v5.InvalidRequestError"
       error_types: "ycoding.v5.UnauthorizedError"
       roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
       scope: SESSION
       mutation: MUTATION
       settlement: COMPLETED
@@ -7327,6 +7372,8 @@ service server_session {
       error_types: "ycoding.v5.UnauthorizedError"
       error_types: "ycoding.v5.InvalidRequestError"
       roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
       scope: SESSION
       mutation: READ
       settlement: COMPLETED

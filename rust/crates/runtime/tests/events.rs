@@ -1,6 +1,6 @@
 mod support;
 
-use prost::{Message, Name};
+use prost::Message;
 use std::time::{Duration, Instant};
 use support::*;
 use tokio::{
@@ -80,7 +80,7 @@ fn seen(client: &Client, prefix: &str) -> Vec<Seen> {
         .iter()
         .flat_map(|batch| batch.events.iter())
         .filter_map(|record| {
-            assert_eq!(record.event.type_name, v5::SessionLogItem::full_name());
+            let record = session_log_record(record);
             let item = v5::SessionLogItem::decode(record.event.payload.as_slice()).unwrap();
             let Some(v5::session_log_item::Kind::Value15(admitted)) = item.kind else {
                 return None;

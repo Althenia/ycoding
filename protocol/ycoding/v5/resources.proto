@@ -3485,6 +3485,10 @@ service server_providerUsage {
       error_types: "ycoding.v5.UnauthorizedError"
       error_types: "ycoding.v5.InvalidRequestError"
       roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      role_scopes: { role: REMOTE_CLIENT scopes: MACHINE }
+      role_scopes: { role: RELAY scopes: MACHINE }
       scope: LOCATION
       mutation: READ
       settlement: COMPLETED

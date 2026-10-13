@@ -1,0 +1,1676 @@
+syntax = "proto2";
+package ycoding.v5;
+import "ycoding/v5/foundation.proto";
+import "ycoding/v5/operations.proto";
+import "ycoding/v5/shared.proto";
+import "ycoding/v5/session.proto";
+
+enum PublicEvent_models_dev_refreshed_type {
+  PUBLICEVENT_MODELS_DEV_REFRESHED_TYPE_MODELS_DEV_REFRESHED = 1;
+}
+
+enum PublicEvent_integration_updated_type {
+  PUBLICEVENT_INTEGRATION_UPDATED_TYPE_INTEGRATION_UPDATED = 1;
+}
+
+enum PublicEvent_integration_connection_updated_type {
+  PUBLICEVENT_INTEGRATION_CONNECTION_UPDATED_TYPE_INTEGRATION_CONNECTION_UPDATED = 1;
+}
+
+enum PublicEvent_catalog_updated_type {
+  PUBLICEVENT_CATALOG_UPDATED_TYPE_CATALOG_UPDATED = 1;
+}
+
+enum PublicEvent_agent_updated_type {
+  PUBLICEVENT_AGENT_UPDATED_TYPE_AGENT_UPDATED = 1;
+}
+
+enum PublicEvent_session_usage_updated_type {
+  PUBLICEVENT_SESSION_USAGE_UPDATED_TYPE_SESSION_USAGE_UPDATED = 1;
+}
+
+enum PublicEvent_session_prediction_updated_type {
+  PUBLICEVENT_SESSION_PREDICTION_UPDATED_TYPE_SESSION_PREDICTION_UPDATED = 1;
+}
+
+enum PublicEvent_session_diagnostics_updated_type {
+  PUBLICEVENT_SESSION_DIAGNOSTICS_UPDATED_TYPE_SESSION_DIAGNOSTICS_UPDATED = 1;
+}
+
+enum PublicEvent_session_text_delta_type {
+  PUBLICEVENT_SESSION_TEXT_DELTA_TYPE_SESSION_TEXT_DELTA = 1;
+}
+
+enum PublicEvent_session_reasoning_delta_type {
+  PUBLICEVENT_SESSION_REASONING_DELTA_TYPE_SESSION_REASONING_DELTA = 1;
+}
+
+enum PublicEvent_session_tool_input_delta_type {
+  PUBLICEVENT_SESSION_TOOL_INPUT_DELTA_TYPE_SESSION_TOOL_INPUT_DELTA = 1;
+}
+
+enum PublicEvent_session_compaction_delta_type {
+  PUBLICEVENT_SESSION_COMPACTION_DELTA_TYPE_SESSION_COMPACTION_DELTA = 1;
+}
+
+enum PublicEvent_filesystem_changed_type {
+  PUBLICEVENT_FILESYSTEM_CHANGED_TYPE_FILESYSTEM_CHANGED = 1;
+}
+
+enum PublicEvent_filesystem_changed_data_event {
+  PUBLICEVENT_FILESYSTEM_CHANGED_DATA_EVENT_ADD = 1;
+  PUBLICEVENT_FILESYSTEM_CHANGED_DATA_EVENT_CHANGE = 2;
+  PUBLICEVENT_FILESYSTEM_CHANGED_DATA_EVENT_UNLINK = 3;
+}
+
+enum PublicEvent_reference_updated_type {
+  PUBLICEVENT_REFERENCE_UPDATED_TYPE_REFERENCE_UPDATED = 1;
+}
+
+enum PublicEvent_permission_asked_type {
+  PUBLICEVENT_PERMISSION_ASKED_TYPE_PERMISSION_ASKED = 1;
+}
+
+enum PublicEvent_permission_replied_type {
+  PUBLICEVENT_PERMISSION_REPLIED_TYPE_PERMISSION_REPLIED = 1;
+}
+
+enum PublicEvent_guardrail_asked_type {
+  PUBLICEVENT_GUARDRAIL_ASKED_TYPE_GUARDRAIL_ASKED = 1;
+}
+
+enum PublicEvent_guardrail_replied_type {
+  PUBLICEVENT_GUARDRAIL_REPLIED_TYPE_GUARDRAIL_REPLIED = 1;
+}
+
+enum PublicEvent_guardrail_decided_type {
+  PUBLICEVENT_GUARDRAIL_DECIDED_TYPE_GUARDRAIL_DECIDED = 1;
+}
+
+enum Guardrail_Decision {
+  GUARDRAIL_DECISION_ALLOW = 1;
+  GUARDRAIL_DECISION_ASK = 2;
+  GUARDRAIL_DECISION_DENY = 3;
+  GUARDRAIL_DECISION_CAP_EXCEEDED = 4;
+}
+
+enum PublicEvent_plugin_added_type {
+  PUBLICEVENT_PLUGIN_ADDED_TYPE_PLUGIN_ADDED = 1;
+}
+
+enum PublicEvent_plugin_updated_type {
+  PUBLICEVENT_PLUGIN_UPDATED_TYPE_PLUGIN_UPDATED = 1;
+}
+
+enum PublicEvent_project_directories_updated_type {
+  PUBLICEVENT_PROJECT_DIRECTORIES_UPDATED_TYPE_PROJECT_DIRECTORIES_UPDATED = 1;
+}
+
+enum PublicEvent_command_updated_type {
+  PUBLICEVENT_COMMAND_UPDATED_TYPE_COMMAND_UPDATED = 1;
+}
+
+enum PublicEvent_config_updated_type {
+  PUBLICEVENT_CONFIG_UPDATED_TYPE_CONFIG_UPDATED = 1;
+}
+
+enum PublicEvent_skill_updated_type {
+  PUBLICEVENT_SKILL_UPDATED_TYPE_SKILL_UPDATED = 1;
+}
+
+enum PublicEvent_pty_created_type {
+  PUBLICEVENT_PTY_CREATED_TYPE_PTY_CREATED = 1;
+}
+
+enum PublicEvent_pty_updated_type {
+  PUBLICEVENT_PTY_UPDATED_TYPE_PTY_UPDATED = 1;
+}
+
+enum PublicEvent_pty_exited_type {
+  PUBLICEVENT_PTY_EXITED_TYPE_PTY_EXITED = 1;
+}
+
+enum PublicEvent_pty_exited_data_reason {
+  PUBLICEVENT_PTY_EXITED_DATA_REASON_EXIT = 1;
+  PUBLICEVENT_PTY_EXITED_DATA_REASON_TIMEOUT = 2;
+}
+
+enum PublicEvent_pty_deleted_type {
+  PUBLICEVENT_PTY_DELETED_TYPE_PTY_DELETED = 1;
+}
+
+enum PublicEvent_shell_created_type {
+  PUBLICEVENT_SHELL_CREATED_TYPE_SHELL_CREATED = 1;
+}
+
+enum PublicEvent_shell_exited_type {
+  PUBLICEVENT_SHELL_EXITED_TYPE_SHELL_EXITED = 1;
+}
+
+enum PublicEvent_shell_exited_data_status {
+  PUBLICEVENT_SHELL_EXITED_DATA_STATUS_RUNNING = 1;
+  PUBLICEVENT_SHELL_EXITED_DATA_STATUS_EXITED = 2;
+  PUBLICEVENT_SHELL_EXITED_DATA_STATUS_TIMEOUT = 3;
+  PUBLICEVENT_SHELL_EXITED_DATA_STATUS_MEMORY_LIMIT = 4;
+  PUBLICEVENT_SHELL_EXITED_DATA_STATUS_KILLED = 5;
+}
+
+enum PublicEvent_shell_deleted_type {
+  PUBLICEVENT_SHELL_DELETED_TYPE_SHELL_DELETED = 1;
+}
+
+enum PublicEvent_question_asked_type {
+  PUBLICEVENT_QUESTION_ASKED_TYPE_QUESTION_ASKED = 1;
+}
+
+enum PublicEvent_question_replied_type {
+  PUBLICEVENT_QUESTION_REPLIED_TYPE_QUESTION_REPLIED = 1;
+}
+
+enum PublicEvent_question_rejected_type {
+  PUBLICEVENT_QUESTION_REJECTED_TYPE_QUESTION_REJECTED = 1;
+}
+
+enum PublicEvent_form_created_type {
+  PUBLICEVENT_FORM_CREATED_TYPE_FORM_CREATED = 1;
+}
+
+enum PublicEvent_form_replied_type {
+  PUBLICEVENT_FORM_REPLIED_TYPE_FORM_REPLIED = 1;
+}
+
+enum PublicEvent_form_cancelled_type {
+  PUBLICEVENT_FORM_CANCELLED_TYPE_FORM_CANCELLED = 1;
+}
+
+enum PublicEvent_todo_updated_type {
+  PUBLICEVENT_TODO_UPDATED_TYPE_TODO_UPDATED = 1;
+}
+
+enum PublicEvent_session_status_type {
+  PUBLICEVENT_SESSION_STATUS_TYPE_SESSION_STATUS = 1;
+}
+
+enum SessionStatusValue1_type {
+  SESSIONSTATUSVALUE1_TYPE_IDLE = 1;
+}
+
+enum SessionStatusValue2_type {
+  SESSIONSTATUSVALUE2_TYPE_RETRY = 1;
+}
+
+enum SessionStatusValue3_type {
+  SESSIONSTATUSVALUE3_TYPE_BUSY = 1;
+}
+
+enum PublicEvent_session_idle_type {
+  PUBLICEVENT_SESSION_IDLE_TYPE_SESSION_IDLE = 1;
+}
+
+enum PublicEvent_tui_prompt_append_type {
+  PUBLICEVENT_TUI_PROMPT_APPEND_TYPE_TUI_PROMPT_APPEND = 1;
+}
+
+enum PublicEvent_tui_command_execute_type {
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_TYPE_TUI_COMMAND_EXECUTE = 1;
+}
+
+enum PublicEvent_tui_command_execute_data_commandValue1 {
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_LIST = 1;
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_NEW = 2;
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_SHARE = 3;
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_INTERRUPT = 4;
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_BACKGROUND = 5;
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_COMPACT = 6;
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_PAGE_UP = 7;
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_PAGE_DOWN = 8;
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_LINE_UP = 9;
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_LINE_DOWN = 10;
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_HALF_PAGE_UP = 11;
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_HALF_PAGE_DOWN = 12;
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_FIRST = 13;
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_LAST = 14;
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_PROMPT_CLEAR = 15;
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_PROMPT_SUBMIT = 16;
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_AGENT_CYCLE = 17;
+}
+
+enum PublicEvent_tui_toast_show_type {
+  PUBLICEVENT_TUI_TOAST_SHOW_TYPE_TUI_TOAST_SHOW = 1;
+}
+
+enum PublicEvent_tui_toast_show_data_variant {
+  PUBLICEVENT_TUI_TOAST_SHOW_DATA_VARIANT_INFO = 1;
+  PUBLICEVENT_TUI_TOAST_SHOW_DATA_VARIANT_SUCCESS = 2;
+  PUBLICEVENT_TUI_TOAST_SHOW_DATA_VARIANT_WARNING = 3;
+  PUBLICEVENT_TUI_TOAST_SHOW_DATA_VARIANT_ERROR = 4;
+}
+
+enum PublicEvent_tui_session_select_type {
+  PUBLICEVENT_TUI_SESSION_SELECT_TYPE_TUI_SESSION_SELECT = 1;
+}
+
+enum PublicEvent_installation_updated_type {
+  PUBLICEVENT_INSTALLATION_UPDATED_TYPE_INSTALLATION_UPDATED = 1;
+}
+
+enum PublicEvent_installation_update_available_type {
+  PUBLICEVENT_INSTALLATION_UPDATE_AVAILABLE_TYPE_INSTALLATION_UPDATE_AVAILABLE = 1;
+}
+
+enum PublicEvent_vcs_branch_updated_type {
+  PUBLICEVENT_VCS_BRANCH_UPDATED_TYPE_VCS_BRANCH_UPDATED = 1;
+}
+
+enum PublicEvent_mcp_status_changed_type {
+  PUBLICEVENT_MCP_STATUS_CHANGED_TYPE_MCP_STATUS_CHANGED = 1;
+}
+
+enum PublicEvent_mcp_resources_changed_type {
+  PUBLICEVENT_MCP_RESOURCES_CHANGED_TYPE_MCP_RESOURCES_CHANGED = 1;
+}
+
+message PublicEvent_models_dev_refreshed {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_models_dev_refreshed_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_models_dev_refreshed_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_models_dev_refreshed_data data = 7;
+}
+
+message PublicEvent_models_dev_refreshed_metadata {
+  repeated PublicEvent_models_dev_refreshed_metadataEntry entries = 1;
+}
+
+message PublicEvent_models_dev_refreshed_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_models_dev_refreshed_data {
+
+}
+
+message PublicEvent_integration_updated {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_integration_updated_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_integration_updated_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_integration_updated_data data = 7;
+}
+
+message PublicEvent_integration_updated_metadata {
+  repeated PublicEvent_integration_updated_metadataEntry entries = 1;
+}
+
+message PublicEvent_integration_updated_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_integration_updated_data {
+
+}
+
+message PublicEvent_integration_connection_updated {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_integration_connection_updated_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_integration_connection_updated_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_integration_connection_updated_data data = 7;
+}
+
+message PublicEvent_integration_connection_updated_metadata {
+  repeated PublicEvent_integration_connection_updated_metadataEntry entries = 1;
+}
+
+message PublicEvent_integration_connection_updated_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_integration_connection_updated_data {
+  required LosslessString integrationID = 1;
+}
+
+message PublicEvent_catalog_updated {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_catalog_updated_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_catalog_updated_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_catalog_updated_data data = 7;
+}
+
+message PublicEvent_catalog_updated_metadata {
+  repeated PublicEvent_catalog_updated_metadataEntry entries = 1;
+}
+
+message PublicEvent_catalog_updated_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_catalog_updated_data {
+
+}
+
+message PublicEvent_agent_updated {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_agent_updated_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_agent_updated_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_agent_updated_data data = 7;
+}
+
+message PublicEvent_agent_updated_metadata {
+  repeated PublicEvent_agent_updated_metadataEntry entries = 1;
+}
+
+message PublicEvent_agent_updated_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_agent_updated_data {
+
+}
+
+message PublicEvent_session_usage_updated {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_session_usage_updated_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_session_usage_updated_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_session_usage_updated_data data = 7;
+}
+
+message PublicEvent_session_usage_updated_metadata {
+  repeated PublicEvent_session_usage_updated_metadataEntry entries = 1;
+}
+
+message PublicEvent_session_usage_updated_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_session_usage_updated_data {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double cost = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required TokenUsage_Info tokens = 3;
+}
+
+message PublicEvent_session_prediction_updated {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_session_prediction_updated_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_session_prediction_updated_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_session_prediction_updated_data data = 7;
+}
+
+message PublicEvent_session_prediction_updated_metadata {
+  repeated PublicEvent_session_prediction_updated_metadataEntry entries = 1;
+}
+
+message PublicEvent_session_prediction_updated_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_session_prediction_updated_data {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required LosslessString sourceMessageID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required LosslessString text = 3;
+}
+
+message PublicEvent_session_diagnostics_updated {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_session_diagnostics_updated_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_session_diagnostics_updated_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_session_diagnostics_updated_data data = 7;
+}
+
+message PublicEvent_session_diagnostics_updated_metadata {
+  repeated PublicEvent_session_diagnostics_updated_metadataEntry entries = 1;
+}
+
+message PublicEvent_session_diagnostics_updated_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_session_diagnostics_updated_data {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required Session_CacheDiagnostics diagnostics = 2;
+}
+
+message PublicEvent_session_text_delta {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_session_text_delta_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_session_text_delta_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_session_text_delta_data data = 7;
+}
+
+message PublicEvent_session_text_delta_metadata {
+  repeated PublicEvent_session_text_delta_metadataEntry entries = 1;
+}
+
+message PublicEvent_session_text_delta_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_session_text_delta_data {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required LosslessString assistantMessageID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required uint64 ordinal = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" integer_min: "0" integer_max: "9007199254740991" }];
+  required LosslessString delta = 4;
+}
+
+message PublicEvent_session_reasoning_delta {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_session_reasoning_delta_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_session_reasoning_delta_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_session_reasoning_delta_data data = 7;
+}
+
+message PublicEvent_session_reasoning_delta_metadata {
+  repeated PublicEvent_session_reasoning_delta_metadataEntry entries = 1;
+}
+
+message PublicEvent_session_reasoning_delta_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_session_reasoning_delta_data {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required LosslessString assistantMessageID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required uint64 ordinal = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" integer_min: "0" integer_max: "9007199254740991" }];
+  required LosslessString delta = 4;
+}
+
+message PublicEvent_session_tool_input_delta {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_session_tool_input_delta_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_session_tool_input_delta_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_session_tool_input_delta_data data = 7;
+}
+
+message PublicEvent_session_tool_input_delta_metadata {
+  repeated PublicEvent_session_tool_input_delta_metadataEntry entries = 1;
+}
+
+message PublicEvent_session_tool_input_delta_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_session_tool_input_delta_data {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required LosslessString assistantMessageID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required LosslessString callID = 3;
+  required LosslessString delta = 4;
+}
+
+message PublicEvent_session_compaction_delta {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_session_compaction_delta_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_session_compaction_delta_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_session_compaction_delta_data data = 7;
+}
+
+message PublicEvent_session_compaction_delta_metadata {
+  repeated PublicEvent_session_compaction_delta_metadataEntry entries = 1;
+}
+
+message PublicEvent_session_compaction_delta_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_session_compaction_delta_data {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required LosslessString text = 2;
+}
+
+message PublicEvent_filesystem_changed {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_filesystem_changed_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_filesystem_changed_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_filesystem_changed_data data = 7;
+}
+
+message PublicEvent_filesystem_changed_metadata {
+  repeated PublicEvent_filesystem_changed_metadataEntry entries = 1;
+}
+
+message PublicEvent_filesystem_changed_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_filesystem_changed_data {
+  required LosslessString file = 1;
+  required PublicEvent_filesystem_changed_data_event event = 2;
+}
+
+message PublicEvent_reference_updated {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_reference_updated_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_reference_updated_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_reference_updated_data data = 7;
+}
+
+message PublicEvent_reference_updated_metadata {
+  repeated PublicEvent_reference_updated_metadataEntry entries = 1;
+}
+
+message PublicEvent_reference_updated_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_reference_updated_data {
+
+}
+
+message PublicEvent_permission_asked {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_permission_asked_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_permission_asked_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_permission_asked_data data = 7;
+}
+
+message PublicEvent_permission_asked_metadata {
+  repeated PublicEvent_permission_asked_metadataEntry entries = 1;
+}
+
+message PublicEvent_permission_asked_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_permission_asked_data {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required LosslessString sessionID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required LosslessString action = 3;
+  required PublicEvent_permission_asked_data_resources resources = 4;
+  optional PublicEvent_permission_asked_data_save save = 5;
+  optional PublicEvent_permission_asked_data_metadata metadata = 6;
+  optional Permission_Source source = 7;
+}
+
+message PublicEvent_permission_asked_data_resources {
+  repeated LosslessString items = 1;
+}
+
+message PublicEvent_permission_asked_data_save {
+  repeated LosslessString items = 1;
+}
+
+message PublicEvent_permission_asked_data_metadata {
+  repeated PublicEvent_permission_asked_data_metadataEntry entries = 1;
+}
+
+message PublicEvent_permission_asked_data_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_permission_replied {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_permission_replied_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_permission_replied_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_permission_replied_data data = 7;
+}
+
+message PublicEvent_permission_replied_metadata {
+  repeated PublicEvent_permission_replied_metadataEntry entries = 1;
+}
+
+message PublicEvent_permission_replied_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_permission_replied_data {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required LosslessString requestID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required Permission_Reply reply = 3;
+}
+
+message PublicEvent_guardrail_asked {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_guardrail_asked_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_guardrail_asked_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_guardrail_asked_data data = 7;
+}
+
+message PublicEvent_guardrail_asked_metadata {
+  repeated PublicEvent_guardrail_asked_metadataEntry entries = 1;
+}
+
+message PublicEvent_guardrail_asked_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_guardrail_asked_data {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required LosslessString rootSessionID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required LosslessString sessionID = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required LosslessString action = 4;
+  required PublicEvent_guardrail_asked_data_resources resources = 5;
+  required PublicEvent_guardrail_asked_data_ruleIDs ruleIDs = 6;
+  required LosslessString reason = 7;
+  required bool standard = 8;
+  optional bool hardReview = 9;
+  optional Guardrail_Risk risk = 10;
+  optional PublicEvent_guardrail_asked_data_metadata metadata = 11;
+}
+
+message PublicEvent_guardrail_asked_data_resources {
+  repeated LosslessString items = 1;
+}
+
+message PublicEvent_guardrail_asked_data_ruleIDs {
+  repeated LosslessString items = 1;
+}
+
+message PublicEvent_guardrail_asked_data_metadata {
+  repeated PublicEvent_guardrail_asked_data_metadataEntry entries = 1;
+}
+
+message PublicEvent_guardrail_asked_data_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_guardrail_replied {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_guardrail_replied_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_guardrail_replied_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_guardrail_replied_data data = 7;
+}
+
+message PublicEvent_guardrail_replied_metadata {
+  repeated PublicEvent_guardrail_replied_metadataEntry entries = 1;
+}
+
+message PublicEvent_guardrail_replied_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_guardrail_replied_data {
+  required LosslessString rootSessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required LosslessString sessionID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required LosslessString requestID = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required Guardrail_Reply reply = 4;
+}
+
+message PublicEvent_guardrail_decided {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_guardrail_decided_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_guardrail_decided_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_guardrail_decided_data data = 7;
+}
+
+message PublicEvent_guardrail_decided_metadata {
+  repeated PublicEvent_guardrail_decided_metadataEntry entries = 1;
+}
+
+message PublicEvent_guardrail_decided_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_guardrail_decided_data {
+  required LosslessString rootSessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required LosslessString sessionID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required LosslessString action = 3;
+  required PublicEvent_guardrail_decided_data_ruleIDs ruleIDs = 4;
+  required Guardrail_Decision decision = 5;
+}
+
+message PublicEvent_guardrail_decided_data_ruleIDs {
+  repeated LosslessString items = 1;
+}
+
+message PublicEvent_plugin_added {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_plugin_added_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_plugin_added_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_plugin_added_data data = 7;
+}
+
+message PublicEvent_plugin_added_metadata {
+  repeated PublicEvent_plugin_added_metadataEntry entries = 1;
+}
+
+message PublicEvent_plugin_added_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_plugin_added_data {
+  required LosslessString id = 1;
+}
+
+message PublicEvent_plugin_updated {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_plugin_updated_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_plugin_updated_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_plugin_updated_data data = 7;
+}
+
+message PublicEvent_plugin_updated_metadata {
+  repeated PublicEvent_plugin_updated_metadataEntry entries = 1;
+}
+
+message PublicEvent_plugin_updated_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_plugin_updated_data {
+
+}
+
+message PublicEvent_project_directories_updated {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_project_directories_updated_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_project_directories_updated_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_project_directories_updated_data data = 7;
+}
+
+message PublicEvent_project_directories_updated_metadata {
+  repeated PublicEvent_project_directories_updated_metadataEntry entries = 1;
+}
+
+message PublicEvent_project_directories_updated_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_project_directories_updated_data {
+  required LosslessString projectID = 1;
+}
+
+message PublicEvent_command_updated {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_command_updated_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_command_updated_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_command_updated_data data = 7;
+}
+
+message PublicEvent_command_updated_metadata {
+  repeated PublicEvent_command_updated_metadataEntry entries = 1;
+}
+
+message PublicEvent_command_updated_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_command_updated_data {
+
+}
+
+message PublicEvent_config_updated {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_config_updated_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_config_updated_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_config_updated_data data = 7;
+}
+
+message PublicEvent_config_updated_metadata {
+  repeated PublicEvent_config_updated_metadataEntry entries = 1;
+}
+
+message PublicEvent_config_updated_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_config_updated_data {
+
+}
+
+message PublicEvent_skill_updated {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_skill_updated_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_skill_updated_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_skill_updated_data data = 7;
+}
+
+message PublicEvent_skill_updated_metadata {
+  repeated PublicEvent_skill_updated_metadataEntry entries = 1;
+}
+
+message PublicEvent_skill_updated_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_skill_updated_data {
+
+}
+
+message PublicEvent_pty_created {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_pty_created_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_pty_created_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_pty_created_data data = 7;
+}
+
+message PublicEvent_pty_created_metadata {
+  repeated PublicEvent_pty_created_metadataEntry entries = 1;
+}
+
+message PublicEvent_pty_created_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_pty_created_data {
+  required Pty info = 1;
+}
+
+message PublicEvent_pty_updated {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_pty_updated_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_pty_updated_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_pty_updated_data data = 7;
+}
+
+message PublicEvent_pty_updated_metadata {
+  repeated PublicEvent_pty_updated_metadataEntry entries = 1;
+}
+
+message PublicEvent_pty_updated_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_pty_updated_data {
+  required Pty info = 1;
+}
+
+message PublicEvent_pty_exited {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_pty_exited_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_pty_exited_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_pty_exited_data data = 7;
+}
+
+message PublicEvent_pty_exited_metadata {
+  repeated PublicEvent_pty_exited_metadataEntry entries = 1;
+}
+
+message PublicEvent_pty_exited_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_pty_exited_data {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required uint64 exitCode = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" integer_min: "0" integer_max: "9007199254740991" }];
+  required PublicEvent_pty_exited_data_reason reason = 3;
+}
+
+message PublicEvent_pty_deleted {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_pty_deleted_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_pty_deleted_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_pty_deleted_data data = 7;
+}
+
+message PublicEvent_pty_deleted_metadata {
+  repeated PublicEvent_pty_deleted_metadataEntry entries = 1;
+}
+
+message PublicEvent_pty_deleted_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_pty_deleted_data {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+}
+
+message PublicEvent_shell_created {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_shell_created_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_shell_created_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_shell_created_data data = 7;
+}
+
+message PublicEvent_shell_created_metadata {
+  repeated PublicEvent_shell_created_metadataEntry entries = 1;
+}
+
+message PublicEvent_shell_created_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_shell_created_data {
+  required Shell_Info info = 1;
+}
+
+message PublicEvent_shell_exited {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_shell_exited_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_shell_exited_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_shell_exited_data data = 7;
+}
+
+message PublicEvent_shell_exited_metadata {
+  repeated PublicEvent_shell_exited_metadataEntry entries = 1;
+}
+
+message PublicEvent_shell_exited_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_shell_exited_data {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional double exit = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required PublicEvent_shell_exited_data_status status = 3;
+}
+
+message PublicEvent_shell_deleted {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_shell_deleted_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_shell_deleted_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_shell_deleted_data data = 7;
+}
+
+message PublicEvent_shell_deleted_metadata {
+  repeated PublicEvent_shell_deleted_metadataEntry entries = 1;
+}
+
+message PublicEvent_shell_deleted_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_shell_deleted_data {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+}
+
+message PublicEvent_question_asked {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_question_asked_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_question_asked_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_question_asked_data data = 7;
+}
+
+message PublicEvent_question_asked_metadata {
+  repeated PublicEvent_question_asked_metadataEntry entries = 1;
+}
+
+message PublicEvent_question_asked_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_question_asked_data {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required LosslessString sessionID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required PublicEvent_question_asked_data_questions questions = 3;
+  optional Question_Tool tool = 4;
+}
+
+message PublicEvent_question_asked_data_questions {
+  repeated Question_Info items = 1;
+}
+
+message PublicEvent_question_replied {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_question_replied_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_question_replied_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_question_replied_data data = 7;
+}
+
+message PublicEvent_question_replied_metadata {
+  repeated PublicEvent_question_replied_metadataEntry entries = 1;
+}
+
+message PublicEvent_question_replied_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_question_replied_data {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required LosslessString requestID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required PublicEvent_question_replied_data_answers answers = 3;
+}
+
+message PublicEvent_question_replied_data_answers {
+  repeated Question_Answer items = 1;
+}
+
+message PublicEvent_question_rejected {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_question_rejected_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_question_rejected_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_question_rejected_data data = 7;
+}
+
+message PublicEvent_question_rejected_metadata {
+  repeated PublicEvent_question_rejected_metadataEntry entries = 1;
+}
+
+message PublicEvent_question_rejected_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_question_rejected_data {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required LosslessString requestID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+}
+
+message PublicEvent_form_created {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_form_created_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_form_created_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_form_created_data data = 7;
+}
+
+message PublicEvent_form_created_metadata {
+  repeated PublicEvent_form_created_metadataEntry entries = 1;
+}
+
+message PublicEvent_form_created_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_form_created_data {
+  required Form_Info form = 1;
+}
+
+message PublicEvent_form_replied {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_form_replied_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_form_replied_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_form_replied_data data = 7;
+}
+
+message PublicEvent_form_replied_metadata {
+  repeated PublicEvent_form_replied_metadataEntry entries = 1;
+}
+
+message PublicEvent_form_replied_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_form_replied_data {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required LosslessString sessionID = 2;
+  required Form_Answer answer = 3;
+}
+
+message PublicEvent_form_cancelled {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_form_cancelled_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_form_cancelled_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_form_cancelled_data data = 7;
+}
+
+message PublicEvent_form_cancelled_metadata {
+  repeated PublicEvent_form_cancelled_metadataEntry entries = 1;
+}
+
+message PublicEvent_form_cancelled_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_form_cancelled_data {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required LosslessString sessionID = 2;
+}
+
+message PublicEvent_todo_updated {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_todo_updated_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_todo_updated_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_todo_updated_data data = 7;
+}
+
+message PublicEvent_todo_updated_metadata {
+  repeated PublicEvent_todo_updated_metadataEntry entries = 1;
+}
+
+message PublicEvent_todo_updated_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_todo_updated_data {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required PublicEvent_todo_updated_data_todos todos = 2;
+}
+
+message PublicEvent_todo_updated_data_todos {
+  repeated SessionTodo_Info items = 1;
+}
+
+message PublicEvent_session_status {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_session_status_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_session_status_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_session_status_data data = 7;
+}
+
+message PublicEvent_session_status_metadata {
+  repeated PublicEvent_session_status_metadataEntry entries = 1;
+}
+
+message PublicEvent_session_status_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_session_status_data {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required SessionStatus status = 2;
+}
+
+message SessionStatus {
+  oneof kind {
+    SessionStatusValue1 value_1 = 1;
+    SessionStatusValue2 value_2 = 2;
+    SessionStatusValue3 value_3 = 3;
+  }
+}
+
+message SessionStatusValue1 {
+  required SessionStatusValue1_type type = 1;
+}
+
+message SessionStatusValue2 {
+  required SessionStatusValue2_type type = 1;
+  required uint64 attempt = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" integer_min: "0" integer_max: "9007199254740991" }];
+  required LosslessString message = 3;
+  optional SessionStatusValue2_action action = 4;
+  required uint64 next = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message SessionStatusValue2_action {
+  required LosslessString reason = 1;
+  required LosslessString provider = 2;
+  required LosslessString title = 3;
+  required LosslessString message = 4;
+  required LosslessString label = 5;
+  optional LosslessString link = 6;
+}
+
+message SessionStatusValue3 {
+  required SessionStatusValue3_type type = 1;
+}
+
+message PublicEvent_session_idle {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_session_idle_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_session_idle_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_session_idle_data data = 7;
+}
+
+message PublicEvent_session_idle_metadata {
+  repeated PublicEvent_session_idle_metadataEntry entries = 1;
+}
+
+message PublicEvent_session_idle_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_session_idle_data {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+}
+
+message PublicEvent_tui_prompt_append {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_tui_prompt_append_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_tui_prompt_append_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_tui_prompt_append_data data = 7;
+}
+
+message PublicEvent_tui_prompt_append_metadata {
+  repeated PublicEvent_tui_prompt_append_metadataEntry entries = 1;
+}
+
+message PublicEvent_tui_prompt_append_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_tui_prompt_append_data {
+  required LosslessString text = 1;
+}
+
+message PublicEvent_tui_command_execute {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_tui_command_execute_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_tui_command_execute_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_tui_command_execute_data data = 7;
+}
+
+message PublicEvent_tui_command_execute_metadata {
+  repeated PublicEvent_tui_command_execute_metadataEntry entries = 1;
+}
+
+message PublicEvent_tui_command_execute_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_tui_command_execute_data {
+  required PublicEvent_tui_command_execute_data_command command = 1;
+}
+
+message PublicEvent_tui_command_execute_data_command {
+  oneof kind {
+    PublicEvent_tui_command_execute_data_commandValue1 value_1 = 1;
+    LosslessString value_2 = 2;
+  }
+}
+
+message PublicEvent_tui_toast_show {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_tui_toast_show_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_tui_toast_show_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_tui_toast_show_data data = 7;
+}
+
+message PublicEvent_tui_toast_show_metadata {
+  repeated PublicEvent_tui_toast_show_metadataEntry entries = 1;
+}
+
+message PublicEvent_tui_toast_show_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_tui_toast_show_data {
+  optional LosslessString title = 1;
+  required LosslessString message = 2;
+  required PublicEvent_tui_toast_show_data_variant variant = 3;
+  required uint64 duration = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" integer_min: "1" integer_max: "9007199254740991" }];
+}
+
+message PublicEvent_tui_session_select {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_tui_session_select_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_tui_session_select_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_tui_session_select_data data = 7;
+}
+
+message PublicEvent_tui_session_select_metadata {
+  repeated PublicEvent_tui_session_select_metadataEntry entries = 1;
+}
+
+message PublicEvent_tui_session_select_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_tui_session_select_data {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+}
+
+message PublicEvent_installation_updated {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_installation_updated_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_installation_updated_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_installation_updated_data data = 7;
+}
+
+message PublicEvent_installation_updated_metadata {
+  repeated PublicEvent_installation_updated_metadataEntry entries = 1;
+}
+
+message PublicEvent_installation_updated_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_installation_updated_data {
+  required LosslessString version = 1;
+}
+
+message PublicEvent_installation_update_available {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_installation_update_available_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_installation_update_available_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_installation_update_available_data data = 7;
+}
+
+message PublicEvent_installation_update_available_metadata {
+  repeated PublicEvent_installation_update_available_metadataEntry entries = 1;
+}
+
+message PublicEvent_installation_update_available_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_installation_update_available_data {
+  required LosslessString version = 1;
+}
+
+message PublicEvent_vcs_branch_updated {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_vcs_branch_updated_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_vcs_branch_updated_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_vcs_branch_updated_data data = 7;
+}
+
+message PublicEvent_vcs_branch_updated_metadata {
+  repeated PublicEvent_vcs_branch_updated_metadataEntry entries = 1;
+}
+
+message PublicEvent_vcs_branch_updated_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_vcs_branch_updated_data {
+  optional LosslessString branch = 1;
+}
+
+message PublicEvent_mcp_status_changed {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_mcp_status_changed_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_mcp_status_changed_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_mcp_status_changed_data data = 7;
+}
+
+message PublicEvent_mcp_status_changed_metadata {
+  repeated PublicEvent_mcp_status_changed_metadataEntry entries = 1;
+}
+
+message PublicEvent_mcp_status_changed_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_mcp_status_changed_data {
+  required LosslessString server = 1;
+}
+
+message PublicEvent_mcp_resources_changed {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_mcp_resources_changed_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_mcp_resources_changed_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_mcp_resources_changed_data data = 7;
+}
+
+message PublicEvent_mcp_resources_changed_metadata {
+  repeated PublicEvent_mcp_resources_changed_metadataEntry entries = 1;
+}
+
+message PublicEvent_mcp_resources_changed_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_mcp_resources_changed_data {
+  required LosslessString server = 1;
+}
+
+message PublicEvent {
+  oneof kind {
+    PublicEvent_models_dev_refreshed models_dev_refreshed = 1 [(ycoding.v5.public_event) = { diagnostic_name: "models-dev.refreshed" durable: false }];
+    PublicEvent_integration_updated integration_updated = 2 [(ycoding.v5.public_event) = { diagnostic_name: "integration.updated" durable: false }];
+    PublicEvent_integration_connection_updated integration_connection_updated = 3 [(ycoding.v5.public_event) = { diagnostic_name: "integration.connection.updated" durable: false }];
+    PublicEvent_catalog_updated catalog_updated = 4 [(ycoding.v5.public_event) = { diagnostic_name: "catalog.updated" durable: false }];
+    PublicEvent_agent_updated agent_updated = 5 [(ycoding.v5.public_event) = { diagnostic_name: "agent.updated" durable: false }];
+    SessionLogItemValue1 session_created = 6 [(ycoding.v5.public_event) = { diagnostic_name: "session.created" durable: true }];
+    SessionLogItemValue2 session_agent_selected = 7 [(ycoding.v5.public_event) = { diagnostic_name: "session.agent.selected" durable: true }];
+    SessionLogItemValue3 session_model_selected = 8 [(ycoding.v5.public_event) = { diagnostic_name: "session.model.selected" durable: true }];
+    SessionLogItemValue4 session_daybreak_set = 9 [(ycoding.v5.public_event) = { diagnostic_name: "session.daybreak.set" durable: true }];
+    SessionLogItemValue5 session_project_artifacts_ended = 10 [(ycoding.v5.public_event) = { diagnostic_name: "session.project-artifacts-ended" durable: true }];
+    SessionLogItemValue6 session_moved = 11 [(ycoding.v5.public_event) = { diagnostic_name: "session.moved" durable: true }];
+    SessionLogItemValue7 session_renamed = 12 [(ycoding.v5.public_event) = { diagnostic_name: "session.renamed" durable: true }];
+    PublicEvent_session_usage_updated session_usage_updated = 13 [(ycoding.v5.public_event) = { diagnostic_name: "session.usage.updated" durable: false }];
+    PublicEvent_session_prediction_updated session_prediction_updated = 14 [(ycoding.v5.public_event) = { diagnostic_name: "session.prediction.updated" durable: false }];
+    PublicEvent_session_diagnostics_updated session_diagnostics_updated = 15 [(ycoding.v5.public_event) = { diagnostic_name: "session.diagnostics.updated" durable: false }];
+    SessionLogItemValue8 session_deleted = 16 [(ycoding.v5.public_event) = { diagnostic_name: "session.deleted" durable: true }];
+    SessionLogItemValue9 session_archived = 17 [(ycoding.v5.public_event) = { diagnostic_name: "session.archived" durable: true }];
+    SessionLogItemValue10 session_unarchived = 18 [(ycoding.v5.public_event) = { diagnostic_name: "session.unarchived" durable: true }];
+    SessionLogItemValue11 session_pinned = 19 [(ycoding.v5.public_event) = { diagnostic_name: "session.pinned" durable: true }];
+    SessionLogItemValue12 session_unpinned = 20 [(ycoding.v5.public_event) = { diagnostic_name: "session.unpinned" durable: true }];
+    SessionLogItemValue13 session_forked = 21 [(ycoding.v5.public_event) = { diagnostic_name: "session.forked" durable: true }];
+    SessionLogItemValue14 session_input_promoted = 22 [(ycoding.v5.public_event) = { diagnostic_name: "session.input.promoted" durable: true }];
+    SessionLogItemValue15 session_input_admitted = 23 [(ycoding.v5.public_event) = { diagnostic_name: "session.input.admitted" durable: true }];
+    SessionLogItemValue16 session_input_consumed = 24 [(ycoding.v5.public_event) = { diagnostic_name: "session.input.consumed" durable: true }];
+    SessionLogItemValue17 session_execution_started = 25 [(ycoding.v5.public_event) = { diagnostic_name: "session.execution.started" durable: true }];
+    SessionLogItemValue18 session_execution_succeeded = 26 [(ycoding.v5.public_event) = { diagnostic_name: "session.execution.succeeded" durable: true }];
+    SessionLogItemValue19 session_execution_failed = 27 [(ycoding.v5.public_event) = { diagnostic_name: "session.execution.failed" durable: true }];
+    SessionLogItemValue20 session_execution_interrupted = 28 [(ycoding.v5.public_event) = { diagnostic_name: "session.execution.interrupted" durable: true }];
+    SessionLogItemValue21 session_work_completed = 29 [(ycoding.v5.public_event) = { diagnostic_name: "session.work.completed" durable: true }];
+    SessionLogItemValue22 session_instructions_updated = 30 [(ycoding.v5.public_event) = { diagnostic_name: "session.instructions.updated" durable: true }];
+    SessionLogItemValue23 session_context_observed = 31 [(ycoding.v5.public_event) = { diagnostic_name: "session.context.observed" durable: true }];
+    SessionLogItemValue24 session_task_updated = 32 [(ycoding.v5.public_event) = { diagnostic_name: "session.task.updated" durable: true }];
+    SessionLogItemValue25 session_synthetic = 33 [(ycoding.v5.public_event) = { diagnostic_name: "session.synthetic" durable: true }];
+    SessionLogItemValue26 session_skill_activated = 34 [(ycoding.v5.public_event) = { diagnostic_name: "session.skill.activated" durable: true }];
+    SessionLogItemValue27 session_skill_deactivated = 35 [(ycoding.v5.public_event) = { diagnostic_name: "session.skill.deactivated" durable: true }];
+    SessionLogItemValue28 session_shell_started = 36 [(ycoding.v5.public_event) = { diagnostic_name: "session.shell.started" durable: true }];
+    SessionLogItemValue29 session_shell_ended = 37 [(ycoding.v5.public_event) = { diagnostic_name: "session.shell.ended" durable: true }];
+    SessionLogItemValue30 session_step_started = 38 [(ycoding.v5.public_event) = { diagnostic_name: "session.step.started" durable: true }];
+    SessionLogItemValue31 session_step_ended = 39 [(ycoding.v5.public_event) = { diagnostic_name: "session.step.ended" durable: true }];
+    SessionLogItemValue32 session_step_failed = 40 [(ycoding.v5.public_event) = { diagnostic_name: "session.step.failed" durable: true }];
+    SessionLogItemValue33 session_text_started = 41 [(ycoding.v5.public_event) = { diagnostic_name: "session.text.started" durable: true }];
+    PublicEvent_session_text_delta session_text_delta = 42 [(ycoding.v5.public_event) = { diagnostic_name: "session.text.delta" durable: false }];
+    SessionLogItemValue34 session_text_ended = 43 [(ycoding.v5.public_event) = { diagnostic_name: "session.text.ended" durable: true }];
+    SessionLogItemValue35 session_reasoning_started = 44 [(ycoding.v5.public_event) = { diagnostic_name: "session.reasoning.started" durable: true }];
+    PublicEvent_session_reasoning_delta session_reasoning_delta = 45 [(ycoding.v5.public_event) = { diagnostic_name: "session.reasoning.delta" durable: false }];
+    SessionLogItemValue36 session_reasoning_ended = 46 [(ycoding.v5.public_event) = { diagnostic_name: "session.reasoning.ended" durable: true }];
+    SessionLogItemValue37 session_tool_input_started = 47 [(ycoding.v5.public_event) = { diagnostic_name: "session.tool.input.started" durable: true }];
+    PublicEvent_session_tool_input_delta session_tool_input_delta = 48 [(ycoding.v5.public_event) = { diagnostic_name: "session.tool.input.delta" durable: false }];
+    SessionLogItemValue38 session_tool_input_ended = 49 [(ycoding.v5.public_event) = { diagnostic_name: "session.tool.input.ended" durable: true }];
+    SessionLogItemValue39 session_tool_called = 50 [(ycoding.v5.public_event) = { diagnostic_name: "session.tool.called" durable: true }];
+    SessionLogItemValue40 session_tool_progress = 51 [(ycoding.v5.public_event) = { diagnostic_name: "session.tool.progress" durable: true }];
+    SessionLogItemValue41 session_tool_success = 52 [(ycoding.v5.public_event) = { diagnostic_name: "session.tool.success" durable: true }];
+    SessionLogItemValue42 session_tool_failed = 53 [(ycoding.v5.public_event) = { diagnostic_name: "session.tool.failed" durable: true }];
+    SessionLogItemValue43 session_file_change_recorded = 54 [(ycoding.v5.public_event) = { diagnostic_name: "session.file-change.recorded" durable: true }];
+    SessionLogItemValue44 session_retry_scheduled = 55 [(ycoding.v5.public_event) = { diagnostic_name: "session.retry.scheduled" durable: true }];
+    SessionLogItemValue45 session_compaction_admitted = 56 [(ycoding.v5.public_event) = { diagnostic_name: "session.compaction.admitted" durable: true }];
+    SessionLogItemValue46 session_compaction_started = 57 [(ycoding.v5.public_event) = { diagnostic_name: "session.compaction.started" durable: true }];
+    PublicEvent_session_compaction_delta session_compaction_delta = 58 [(ycoding.v5.public_event) = { diagnostic_name: "session.compaction.delta" durable: false }];
+    SessionLogItemValue47 session_compaction_ended = 59 [(ycoding.v5.public_event) = { diagnostic_name: "session.compaction.ended" durable: true }];
+    SessionLogItemValue48 session_compaction_failed = 60 [(ycoding.v5.public_event) = { diagnostic_name: "session.compaction.failed" durable: true }];
+    SessionLogItemValue49 session_revert_staged = 61 [(ycoding.v5.public_event) = { diagnostic_name: "session.revert.staged" durable: true }];
+    SessionLogItemValue50 session_revert_cleared = 62 [(ycoding.v5.public_event) = { diagnostic_name: "session.revert.cleared" durable: true }];
+    SessionLogItemValue51 session_revert_committed = 63 [(ycoding.v5.public_event) = { diagnostic_name: "session.revert.committed" durable: true }];
+    PublicEvent_filesystem_changed filesystem_changed = 64 [(ycoding.v5.public_event) = { diagnostic_name: "filesystem.changed" durable: false }];
+    PublicEvent_reference_updated reference_updated = 65 [(ycoding.v5.public_event) = { diagnostic_name: "reference.updated" durable: false }];
+    PublicEvent_permission_asked permission_asked = 66 [(ycoding.v5.public_event) = { diagnostic_name: "permission.asked" durable: false }];
+    PublicEvent_permission_replied permission_replied = 67 [(ycoding.v5.public_event) = { diagnostic_name: "permission.replied" durable: false }];
+    PublicEvent_guardrail_asked guardrail_asked = 68 [(ycoding.v5.public_event) = { diagnostic_name: "guardrail.asked" durable: false }];
+    PublicEvent_guardrail_replied guardrail_replied = 69 [(ycoding.v5.public_event) = { diagnostic_name: "guardrail.replied" durable: false }];
+    PublicEvent_guardrail_decided guardrail_decided = 70 [(ycoding.v5.public_event) = { diagnostic_name: "guardrail.decided" durable: false }];
+    PublicEvent_plugin_added plugin_added = 71 [(ycoding.v5.public_event) = { diagnostic_name: "plugin.added" durable: false }];
+    PublicEvent_plugin_updated plugin_updated = 72 [(ycoding.v5.public_event) = { diagnostic_name: "plugin.updated" durable: false }];
+    PublicEvent_project_directories_updated project_directories_updated = 73 [(ycoding.v5.public_event) = { diagnostic_name: "project.directories.updated" durable: false }];
+    PublicEvent_command_updated command_updated = 74 [(ycoding.v5.public_event) = { diagnostic_name: "command.updated" durable: false }];
+    PublicEvent_config_updated config_updated = 75 [(ycoding.v5.public_event) = { diagnostic_name: "config.updated" durable: false }];
+    PublicEvent_skill_updated skill_updated = 76 [(ycoding.v5.public_event) = { diagnostic_name: "skill.updated" durable: false }];
+    PublicEvent_pty_created pty_created = 77 [(ycoding.v5.public_event) = { diagnostic_name: "pty.created" durable: false }];
+    PublicEvent_pty_updated pty_updated = 78 [(ycoding.v5.public_event) = { diagnostic_name: "pty.updated" durable: false }];
+    PublicEvent_pty_exited pty_exited = 79 [(ycoding.v5.public_event) = { diagnostic_name: "pty.exited" durable: false }];
+    PublicEvent_pty_deleted pty_deleted = 80 [(ycoding.v5.public_event) = { diagnostic_name: "pty.deleted" durable: false }];
+    PublicEvent_shell_created shell_created = 81 [(ycoding.v5.public_event) = { diagnostic_name: "shell.created" durable: false }];
+    PublicEvent_shell_exited shell_exited = 82 [(ycoding.v5.public_event) = { diagnostic_name: "shell.exited" durable: false }];
+    PublicEvent_shell_deleted shell_deleted = 83 [(ycoding.v5.public_event) = { diagnostic_name: "shell.deleted" durable: false }];
+    PublicEvent_question_asked question_asked = 84 [(ycoding.v5.public_event) = { diagnostic_name: "question.asked" durable: false }];
+    PublicEvent_question_replied question_replied = 85 [(ycoding.v5.public_event) = { diagnostic_name: "question.replied" durable: false }];
+    PublicEvent_question_rejected question_rejected = 86 [(ycoding.v5.public_event) = { diagnostic_name: "question.rejected" durable: false }];
+    PublicEvent_form_created form_created = 87 [(ycoding.v5.public_event) = { diagnostic_name: "form.created" durable: false }];
+    PublicEvent_form_replied form_replied = 88 [(ycoding.v5.public_event) = { diagnostic_name: "form.replied" durable: false }];
+    PublicEvent_form_cancelled form_cancelled = 89 [(ycoding.v5.public_event) = { diagnostic_name: "form.cancelled" durable: false }];
+    PublicEvent_todo_updated todo_updated = 90 [(ycoding.v5.public_event) = { diagnostic_name: "todo.updated" durable: false }];
+    PublicEvent_session_status session_status = 91 [(ycoding.v5.public_event) = { diagnostic_name: "session.status" durable: false }];
+    PublicEvent_session_idle session_idle = 92 [(ycoding.v5.public_event) = { diagnostic_name: "session.idle" durable: false }];
+    PublicEvent_tui_prompt_append tui_prompt_append = 93 [(ycoding.v5.public_event) = { diagnostic_name: "tui.prompt.append" durable: false }];
+    PublicEvent_tui_command_execute tui_command_execute = 94 [(ycoding.v5.public_event) = { diagnostic_name: "tui.command.execute" durable: false }];
+    PublicEvent_tui_toast_show tui_toast_show = 95 [(ycoding.v5.public_event) = { diagnostic_name: "tui.toast.show" durable: false }];
+    PublicEvent_tui_session_select tui_session_select = 96 [(ycoding.v5.public_event) = { diagnostic_name: "tui.session.select" durable: false }];
+    PublicEvent_installation_updated installation_updated = 97 [(ycoding.v5.public_event) = { diagnostic_name: "installation.updated" durable: false }];
+    PublicEvent_installation_update_available installation_update_available = 98 [(ycoding.v5.public_event) = { diagnostic_name: "installation.update-available" durable: false }];
+    PublicEvent_vcs_branch_updated vcs_branch_updated = 99 [(ycoding.v5.public_event) = { diagnostic_name: "vcs.branch.updated" durable: false }];
+    PublicEvent_mcp_status_changed mcp_status_changed = 100 [(ycoding.v5.public_event) = { diagnostic_name: "mcp.status.changed" durable: false }];
+    PublicEvent_mcp_resources_changed mcp_resources_changed = 101 [(ycoding.v5.public_event) = { diagnostic_name: "mcp.resources.changed" durable: false }];
+  }
+}

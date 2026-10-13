@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use prost::Message;
+use prost::{Message, Name};
 use std::{
     collections::{BTreeSet, VecDeque},
     net::SocketAddr,
@@ -592,6 +592,37 @@ pub enum Event {
     Closed(Close),
 }
 
+pub fn session_log_record(record: &v5::EventRecord) -> v5::EventRecord {
+    if record.event.type_name == v5::SessionLogItem::full_name() {
+        return record.clone();
+    }
+    assert_eq!(record.event.type_name, v5::PublicEvent::full_name());
+    decode_strict::<v5::PublicEvent>(&record.event.payload).unwrap();
+    let mut body = record.event.payload.as_slice();
+    let tag = prost::encoding::decode_varint(&mut body).unwrap() >> 3;
+    let descriptor = ycoding_protocol::PUBLIC_EVENTS
+        .iter()
+        .find(|event| u64::from(event.2) == tag)
+        .unwrap();
+    assert!(descriptor.1);
+    let variant = descriptor
+        .3
+        .strip_prefix("ycoding.v5.SessionLogItemValue")
+        .unwrap()
+        .parse::<u64>()
+        .unwrap();
+    let mut payload = Vec::new();
+    prost::encoding::encode_varint((variant << 3) | 2, &mut payload);
+    payload.extend_from_slice(body);
+    decode_strict::<v5::SessionLogItem>(&payload).unwrap();
+    let mut record = record.clone();
+    record.event = v5::TypedPayload {
+        type_name: v5::SessionLogItem::full_name(),
+        payload,
+    };
+    record
+}
+
 pub struct Client {
     pub socket: Socket,
     pub connection: Connection,
@@ -629,7 +660,10 @@ impl Client {
                 authorized_sessions: BTreeSet::new(),
                 authorized_workspaces: BTreeSet::new(),
                 reservation: None,
-                event_types: BTreeSet::from(["ycoding.v5.SessionLogItem".into()]),
+                event_types: BTreeSet::from([
+                    "ycoding.v5.SessionLogItem".into(),
+                    "ycoding.v5.PublicEvent".into(),
+                ]),
             },
             OPERATIONS.clone(),
             0,

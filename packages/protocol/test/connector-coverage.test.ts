@@ -6,12 +6,16 @@ import { messages } from "../src/generated/v5/contract.js"
 import type { Constraints } from "../src/v5/constraints.js"
 import path from "node:path"
 
-test("the closed remote surface contains exactly 70 connector and four relay notice operations", () => {
-  const expected = [...Object.values(connectorOperations), ...Object.values(noticeOperations)]
-  expect(expected).toHaveLength(74)
-  expect(new Set(expected.map(([id]) => id)).size).toBe(74)
+test("70 live source names resolve to 66 canonical connector and four relay notice operations", () => {
+  const expected = [
+    ...new Map(
+      [...Object.values(connectorOperations), ...Object.values(noticeOperations)].map((item) => [item[0], item]),
+    ).values(),
+  ]
+  expect(expected).toHaveLength(70)
+  expect(new Set(expected.map(([id]) => id)).size).toBe(70)
   const actual = operations.filter((item) => item.roles.includes(PeerRole.REMOTE_CLIENT))
-  expect(actual).toHaveLength(74)
+  expect(actual).toHaveLength(70)
   expect(actual.map((item) => [item.operationId, item.diagnosticName]).sort()).toEqual(
     expected.map(([id, name]) => [id, name]).sort(),
   )
@@ -24,13 +28,13 @@ test("generated per-role allowlists equal descriptor roles including empty agent
     expect(operationIDsByRole[role]).toEqual(
       operations.filter((item) => item.roles.includes(role)).map((item) => item.operationId),
     )
-  expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(74)
-  expect(operationIDsByRole[PeerRole.RELAY]).toHaveLength(70)
+  expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(70)
+  expect(operationIDsByRole[PeerRole.RELAY]).toHaveLength(66)
 })
 
-test("the connector contract adds no descriptor fields", () => {
+test("descriptor role-scope and event payload metadata append fresh fields", () => {
   expect(messages["ycoding.v5.OperationDescriptor"].fields.map((field) => field.tag)).toEqual([
-    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
   ])
 })
 
@@ -53,7 +57,7 @@ test("all connector fields, presence, associations and constraints match the bou
       }
     >
   > = messages
-  const primitives: Record<string, number> = { bool: 8, double: 1, int64: 3, uint64: 4, string: 9 }
+  const primitives: Record<string, number> = { bool: 8, double: 1, int64: 3, uint64: 4, string: 9, bytes: 12 }
   for (const [name, message] of contract.messages) {
     if (!(name.startsWith("Connector") || contract.operations.some((item) => name.startsWith(item.rpc)))) continue
     expect(actual[`ycoding.v5.${name}`]?.oneofs, name).toBe(message.oneof ? 1 : 0)
@@ -110,11 +114,9 @@ test("all connector fields, presence, associations and constraints match the bou
 
 test("relay forwards exactly the connector set; agents and servers send no operation requests", () => {
   const actual = operations.filter((item) => item.roles.includes(PeerRole.RELAY))
-  expect(actual).toHaveLength(70)
+  expect(actual).toHaveLength(66)
   expect(actual.map((item) => item.operationId).sort()).toEqual(
-    Object.values(connectorOperations)
-      .map(([id]) => id)
-      .sort(),
+    [...new Set(Object.values(connectorOperations).map(([id]) => id))].sort(),
   )
   for (const role of [PeerRole.AGENT, PeerRole.SERVER])
     expect(operations.filter((item) => item.roles.includes(role))).toEqual([])

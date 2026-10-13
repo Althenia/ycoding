@@ -204,6 +204,7 @@ struct Pending {
 }
 
 struct Subscription {
+    event_types: Vec<String>,
     scope: v5::Scope,
     source_epoch: Option<String>,
     hydration: Option<VecDeque<(v5::EventBatch, u64)>>,
@@ -620,7 +621,7 @@ impl Connection {
                 scope.target,
                 Some(v5::scope::Target::Session(_) | v5::scope::Target::Global(_))
             )
-            || self.descriptor(pending.operation_id)?.scope == v5::ScopeKind::Session as i32
+            || matches!(pending.scope.target, Some(v5::scope::Target::Session(_)))
                 && scope != pending.scope
         {
             return Err(ProtocolError::Malformed);
@@ -634,6 +635,7 @@ impl Connection {
         if subscriptions.len() >= limits::SUBSCRIPTIONS as usize {
             return Err(ProtocolError::Limit);
         }
+        let event_types = self.descriptor(pending.operation_id)?.event_types.clone();
         self.awaiting_subscription.remove(&key);
         let source_epoch = if direction == Direction::Send {
             Some(self.source_epoch.clone())
@@ -648,6 +650,7 @@ impl Connection {
         subscriptions.insert(
             subscription_id,
             Subscription {
+                event_types,
                 scope,
                 source_epoch,
                 hydration: None,
@@ -838,7 +841,7 @@ impl Connection {
             v5::PriorityMode::Background => self.config.budgets.background_coalesce_ms,
         });
         if reserve_bytes <= cap {
-            self.valid_events(&batch)?;
+            self.valid_events(&batch, Direction::Send)?;
             let open = self.queues[1].iter().position(|record| record.ready_at > self.now && matches!(&record.frame.body, Some(v5::frame::Body::EventBatch(previous)) if previous.subscription_id == batch.subscription_id && previous.scope == batch.scope && previous.events.len() < limits::EVENT_BATCH_COUNT as usize));
             if let Some(position) = open {
                 let previous = match &self.queues[1][position].frame.body {
@@ -1440,7 +1443,7 @@ impl Connection {
                 }])
             }
             v5::frame::Body::EventBatch(batch) => {
-                self.valid_events(&batch)?;
+                self.valid_events(&batch, Direction::Receive)?;
                 let subscription = self
                     .subscriptions
                     .get(&batch.subscription_id)
@@ -1790,10 +1793,23 @@ impl Connection {
         self.release(bytes)
     }
 
-    fn valid_events(&self, batch: &v5::EventBatch) -> Result<(), ProtocolError> {
+    fn valid_events(
+        &self,
+        batch: &v5::EventBatch,
+        direction: Direction,
+    ) -> Result<(), ProtocolError> {
+        let subscription = if direction == Direction::Receive {
+            &self.subscriptions
+        } else {
+            &self.sending_subscriptions
+        }
+        .get(&batch.subscription_id);
         for event in &batch.events {
             if event.event_id.is_empty()
                 || !self.config.event_types.contains(&event.event.type_name)
+                || subscription.is_some_and(|subscription| {
+                    !subscription.event_types.contains(&event.event.type_name)
+                })
             {
                 return Err(ProtocolError::Malformed);
             }
@@ -2295,7 +2311,13 @@ impl Connection {
             v5::scope::Target::Workspace(_) => v5::ScopeKind::Workspace,
             v5::scope::Target::Global(_) => v5::ScopeKind::Global,
         };
-        if kind as i32 != descriptor.scope {
+        let scopes = descriptor
+            .role_scopes
+            .iter()
+            .find(|rule| rule.role == role as i32);
+        if !scopes.map_or(kind as i32 == descriptor.scope, |rule| {
+            rule.scopes.contains(&(kind as i32))
+        }) {
             return Err(ProtocolError::Direction);
         }
         if role == v5::PeerRole::RemoteClient && !self.authorized(scope) {

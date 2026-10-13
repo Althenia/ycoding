@@ -213,6 +213,15 @@ export function sessionContract(endpoints = sessionRpcEndpoints()) {
     method: "POST",
   })
   contract.operations.sort((a, b) => a.id - b.id)
+  contract.enums.set("SessionsQuery_order", ["asc", "desc", "pinned", "active"])
+  contract.enums.set("SessionsQuery_status", ["running", "idle"])
+  contract.enums.set("SessionsQuery_searchFields", ["summary"])
+  contract.messages
+    .get("SessionsQuery")!
+    .fields.push(
+      { name: "status", type: "SessionsQuery_status", presence: "optional", constraints: [] },
+      { name: "searchFields", type: "SessionsQuery_searchFields", presence: "optional", constraints: [] },
+    )
   return contract
 }
 

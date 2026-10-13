@@ -60,6 +60,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let operations =
         operation_generation::read_operations(&fs::read(out.join("contract.bin"))?, &types)?;
     let constraints = operation_generation::read_constraints(&fs::read(out.join("contract.bin"))?)?;
+    let public_events =
+        operation_generation::read_public_events(&fs::read(out.join("contract.bin"))?)?;
+    fs::write(
+        out.join("public_events.rs"),
+        format!(
+            "pub const PUBLIC_EVENTS: &[(&str, bool, u32, &str)] = &[{}];\n",
+            public_events
+                .iter()
+                .map(|(name, durable, tag, ty)| format!("({name:?}, {durable}, {tag}, {ty:?})"))
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+    )?;
     let roles = set
         .file
         .iter()

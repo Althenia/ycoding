@@ -20,6 +20,65 @@ pub(super) struct Stream {
     held: Option<Arc<Item>>,
 }
 
+fn public_event(item: v5::SessionLogItem) -> Result<v5::PublicEvent, ProtocolError> {
+    use v5::session_log_item::Kind;
+    let kind = match item.kind.ok_or(ProtocolError::Malformed)? {
+        Kind::Value1(event) => v5::public_event::Kind::SessionCreated(event),
+        Kind::Value2(event) => v5::public_event::Kind::SessionAgentSelected(event),
+        Kind::Value3(event) => v5::public_event::Kind::SessionModelSelected(event),
+        Kind::Value4(event) => v5::public_event::Kind::SessionDaybreakSet(event),
+        Kind::Value5(event) => v5::public_event::Kind::SessionProjectArtifactsEnded(event),
+        Kind::Value6(event) => v5::public_event::Kind::SessionMoved(event),
+        Kind::Value7(event) => v5::public_event::Kind::SessionRenamed(event),
+        Kind::Value8(event) => v5::public_event::Kind::SessionDeleted(event),
+        Kind::Value9(event) => v5::public_event::Kind::SessionArchived(event),
+        Kind::Value10(event) => v5::public_event::Kind::SessionUnarchived(event),
+        Kind::Value11(event) => v5::public_event::Kind::SessionPinned(event),
+        Kind::Value12(event) => v5::public_event::Kind::SessionUnpinned(event),
+        Kind::Value13(event) => v5::public_event::Kind::SessionForked(event),
+        Kind::Value14(event) => v5::public_event::Kind::SessionInputPromoted(event),
+        Kind::Value15(event) => v5::public_event::Kind::SessionInputAdmitted(event),
+        Kind::Value16(event) => v5::public_event::Kind::SessionInputConsumed(event),
+        Kind::Value17(event) => v5::public_event::Kind::SessionExecutionStarted(event),
+        Kind::Value18(event) => v5::public_event::Kind::SessionExecutionSucceeded(event),
+        Kind::Value19(event) => v5::public_event::Kind::SessionExecutionFailed(event),
+        Kind::Value20(event) => v5::public_event::Kind::SessionExecutionInterrupted(event),
+        Kind::Value21(event) => v5::public_event::Kind::SessionWorkCompleted(event),
+        Kind::Value22(event) => v5::public_event::Kind::SessionInstructionsUpdated(event),
+        Kind::Value23(event) => v5::public_event::Kind::SessionContextObserved(event),
+        Kind::Value24(event) => v5::public_event::Kind::SessionTaskUpdated(event),
+        Kind::Value25(event) => v5::public_event::Kind::SessionSynthetic(event),
+        Kind::Value26(event) => v5::public_event::Kind::SessionSkillActivated(event),
+        Kind::Value27(event) => v5::public_event::Kind::SessionSkillDeactivated(event),
+        Kind::Value28(event) => v5::public_event::Kind::SessionShellStarted(event),
+        Kind::Value29(event) => v5::public_event::Kind::SessionShellEnded(event),
+        Kind::Value30(event) => v5::public_event::Kind::SessionStepStarted(event),
+        Kind::Value31(event) => v5::public_event::Kind::SessionStepEnded(event),
+        Kind::Value32(event) => v5::public_event::Kind::SessionStepFailed(event),
+        Kind::Value33(event) => v5::public_event::Kind::SessionTextStarted(event),
+        Kind::Value34(event) => v5::public_event::Kind::SessionTextEnded(event),
+        Kind::Value35(event) => v5::public_event::Kind::SessionReasoningStarted(event),
+        Kind::Value36(event) => v5::public_event::Kind::SessionReasoningEnded(event),
+        Kind::Value37(event) => v5::public_event::Kind::SessionToolInputStarted(event),
+        Kind::Value38(event) => v5::public_event::Kind::SessionToolInputEnded(event),
+        Kind::Value39(event) => v5::public_event::Kind::SessionToolCalled(event),
+        Kind::Value40(event) => v5::public_event::Kind::SessionToolProgress(event),
+        Kind::Value41(event) => v5::public_event::Kind::SessionToolSuccess(event),
+        Kind::Value42(event) => v5::public_event::Kind::SessionToolFailed(event),
+        Kind::Value43(event) => v5::public_event::Kind::SessionFileChangeRecorded(event),
+        Kind::Value44(event) => v5::public_event::Kind::SessionRetryScheduled(event),
+        Kind::Value45(event) => v5::public_event::Kind::SessionCompactionAdmitted(event),
+        Kind::Value46(event) => v5::public_event::Kind::SessionCompactionStarted(event),
+        Kind::Value47(event) => v5::public_event::Kind::SessionCompactionEnded(event),
+        Kind::Value48(event) => v5::public_event::Kind::SessionCompactionFailed(event),
+        Kind::Value49(event) => v5::public_event::Kind::SessionRevertStaged(event),
+        Kind::Value50(event) => v5::public_event::Kind::SessionRevertCleared(event),
+        Kind::Value51(event) => v5::public_event::Kind::SessionRevertCommitted(event),
+        Kind::Value52(_) => return Err(ProtocolError::Malformed),
+    };
+    Ok(v5::PublicEvent { kind: Some(kind) })
+}
+
 impl Driver {
     pub(super) fn open_event_stream(&mut self, request_id: String, result: &v5::Result) {
         let Some(scope) = self.pending_events.remove(&request_id) else {
@@ -222,8 +281,8 @@ impl Driver {
                 version: record.version,
             }),
             event: v5::TypedPayload {
-                type_name: v5::SessionLogItem::full_name(),
-                payload: record.item.encode_to_vec(),
+                type_name: v5::PublicEvent::full_name(),
+                payload: public_event(record.item)?.encode_to_vec(),
             },
         }))
     }

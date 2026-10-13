@@ -145,6 +145,7 @@ enum Paging { UNPAGED = 1; CURSOR = 2; OFFSET = 3; }
 enum Streaming { INLINE = 1; TYPED_BULK = 2; ASSET_BULK = 3; EVENTS = 4; }
 enum Sensitivity { PUBLIC = 1; PRIVATE = 2; SECRET = 3; }
 message FieldSensitivity { required string field_path = 1; required Sensitivity sensitivity = 2; }
+message RoleScopes { required PeerRole role = 1; repeated ScopeKind scopes = 2; }
 message OperationDescriptor {
   required uint32 operation_id = 1;
   required string diagnostic_name = 2;
@@ -159,6 +160,8 @@ message OperationDescriptor {
   required Streaming streaming = 11;
   required Sensitivity sensitivity = 12;
   repeated FieldSensitivity sensitive_fields = 13;
+  repeated RoleScopes role_scopes = 14;
+  repeated string event_types = 15;
 }
 message ReceiveWindows {
   required uint64 normal_bytes = 1;

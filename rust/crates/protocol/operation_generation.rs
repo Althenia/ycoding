@@ -225,7 +225,7 @@ pub fn read_constraints(
                     kind == 9 || text(&field, 6).ok() == Some(".ycoding.v5.LosslessString");
                 if (![3, 4, 5, 13].contains(&kind) && (min.is_some() || max.is_some()))
                     || (!is_text && bounds[..6].iter().any(Option::is_some))
-                    || (!repeated && bounds[6..].iter().any(Option::is_some))
+                    || (!repeated && kind != 12 && bounds[6..].iter().any(Option::is_some))
                 {
                     return Err("constraint type mismatch".into());
                 }
@@ -380,7 +380,7 @@ pub fn read_operations(
                     .chain(
                         options
                             .iter()
-                            .filter(|field| field.tag == 5)
+                            .filter(|field| [5, 15].contains(&field.tag))
                             .map(|field| std::str::from_utf8(field.bytes))
                             .collect::<Result<Vec<_>, _>>()
                             .map_err(|_| "invalid descriptor text")?,
@@ -388,6 +388,29 @@ pub fn read_operations(
                 {
                     if !types.contains(name) {
                         return Err(format!("unknown operation type: {name}"));
+                    }
+                }
+                let roles = options
+                    .iter()
+                    .filter(|field| field.tag == 6)
+                    .map(|field| field.number)
+                    .collect::<HashSet<_>>();
+                let mut scoped_roles = HashSet::new();
+                for rule in options.iter().filter(|field| field.tag == 14) {
+                    let rule = fields(rule.bytes)?;
+                    let role = number(&rule, 1)?;
+                    let scopes = rule
+                        .iter()
+                        .filter(|field| field.tag == 2)
+                        .map(|field| field.number)
+                        .collect::<Vec<_>>();
+                    if !roles.contains(&role)
+                        || !scoped_roles.insert(role)
+                        || scopes.is_empty()
+                        || scopes.iter().any(|scope| !(1..=6).contains(scope))
+                        || scopes.iter().collect::<HashSet<_>>().len() != scopes.len()
+                    {
+                        return Err("invalid operation role scopes".into());
                     }
                 }
                 let mut encoded = option_bytes.to_vec();
@@ -398,6 +421,37 @@ pub fn read_operations(
         }
     }
     output.sort_by_key(|operation| operation.0);
+    Ok(output)
+}
+
+pub fn read_public_events(bytes: &[u8]) -> Result<Vec<(String, bool, u32, String)>, String> {
+    let mut output = Vec::new();
+    let mut names = HashSet::new();
+    for file in fields(bytes)?.iter().filter(|field| field.tag == 1) {
+        let file = fields(file.bytes)?;
+        for message_type in file.iter().filter(|field| field.tag == 4) {
+            let message_type = fields(message_type.bytes)?;
+            if text(&message_type, 1)? != "PublicEvent" {
+                continue;
+            }
+            for field in message_type.iter().filter(|field| field.tag == 2) {
+                let field = fields(field.bytes)?;
+                let options = fields(message(&field, 8)?)?;
+                let event =
+                    fields(message(&options, 51001).map_err(|_| "missing public event metadata")?)?;
+                let name = text(&event, 1)?;
+                if name.is_empty() || !names.insert(name.to_owned()) {
+                    return Err("invalid public event metadata".into());
+                }
+                output.push((
+                    name.to_owned(),
+                    number(&event, 2)? == 1,
+                    number(&field, 3)? as u32,
+                    text(&field, 6)?.trim_start_matches('.').to_owned(),
+                ));
+            }
+        }
+    }
     Ok(output)
 }
 

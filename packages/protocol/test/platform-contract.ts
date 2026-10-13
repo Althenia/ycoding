@@ -129,6 +129,11 @@ export function platformContract(endpoints = platformRpcEndpoints()) {
   )
   const path = contract.messages.get("Platform_AssetPath")!.fields[0]
   path.source = assetSource
+  contract.messages
+    .get("FileSystem_Entry")!
+    .fields.push({ name: "uri", type: "LosslessString", presence: "optional", constraints: [] })
+  for (const name of ["fs_find_Result", "shell_output_Result"])
+    contract.messages.get(name)!.fields.find((field) => field.name === "location")!.presence = "optional"
   return contract
 }
 

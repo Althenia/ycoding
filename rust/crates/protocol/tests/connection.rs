@@ -7,6 +7,7 @@ use ycoding_protocol::{OPERATIONS, v5};
 
 struct Binding {
     machine: Connection,
+    role: v5::PeerRole,
     epoch: String,
     now: u64,
     next_request: u64,
@@ -28,10 +29,18 @@ impl std::ops::DerefMut for Binding {
 impl Binding {
     fn new(
         config: Config,
-        descriptors: Vec<v5::OperationDescriptor>,
+        mut descriptors: Vec<v5::OperationDescriptor>,
         now: u64,
     ) -> Result<Self, ProtocolError> {
+        for descriptor in &mut descriptors {
+            if config.event_types == test_only_public_event_types()
+                && !descriptor.event_types.is_empty()
+            {
+                descriptor.event_types = test_only_public_event_types().into_iter().collect();
+            }
+        }
         Ok(Self {
+            role: config.local_role,
             epoch: config.connection_epoch.clone(),
             machine: Connection::new(config, descriptors, now)?,
             now,
@@ -501,7 +510,11 @@ fn subscribe_target(
     let id = client
         .request(
             4000,
-            global_scope(),
+            if client.role == v5::PeerRole::LocalClient {
+                global_scope()
+            } else {
+                scope.clone()
+            },
             v5::EventSubscribeRequest {
                 scope: scope.clone(),
             }
@@ -1147,6 +1160,112 @@ fn generated_relay_operation() -> v5::OperationDescriptor {
         .find(|descriptor| descriptor.diagnostic_name == "workspace.list")
         .unwrap()
         .clone()
+}
+
+#[test]
+fn canonical_remote_scopes_allow_session_events_and_deny_global_or_location_feeds() {
+    for target in [
+        v5::scope::Target::Session("session".into()),
+        v5::scope::Target::Global(v5::Empty {}),
+        v5::scope::Target::Location(ycoding_protocol::encode_lossless(
+            &"/arbitrary".encode_utf16().collect::<Vec<_>>(),
+        )),
+    ] {
+        let (mut client, _) = role_pair(
+            v5::PeerRole::RemoteClient,
+            v5::PeerRole::Relay,
+            OPERATIONS.clone(),
+        );
+        client.replace_authority(BTreeSet::from(["session".into()]), BTreeSet::new());
+        let allowed = matches!(target, v5::scope::Target::Session(_));
+        let scope = v5::Scope {
+            target: Some(target),
+        };
+        let payload = v5::EventSubscribeRequest {
+            scope: scope.clone(),
+        }
+        .encode_to_vec();
+        assert_eq!(client.request(4000, scope, payload, 4).is_ok(), allowed);
+    }
+}
+
+#[test]
+fn public_subscription_accepts_ephemerals_but_not_log_sync_payloads() {
+    for is_public in [true, false] {
+        let mut client_config = config(v5::PeerRole::LocalClient, v5::PeerRole::Server);
+        client_config.event_types = BTreeSet::from([
+            v5::PublicEvent::full_name(),
+            v5::SessionLogItem::full_name(),
+        ]);
+        let mut server_config = config(v5::PeerRole::Server, v5::PeerRole::LocalClient);
+        server_config.event_types = client_config.event_types.clone();
+        let mut client = Binding::new(client_config, OPERATIONS.clone(), 0).unwrap();
+        let mut server = Binding::new(server_config, OPERATIONS.clone(), 0).unwrap();
+        let hello = send(client.start(0).unwrap());
+        let ready = send(server.receive(hello.clone(), hello.encoded_len() as u64, 1));
+        let ping = send(client.receive(ready.clone(), ready.encoded_len() as u64, 2));
+        server.receive(ping.clone(), ping.encoded_len() as u64, 3);
+        let pong = send(server.poll(3));
+        client.receive(pong.clone(), pong.encoded_len() as u64, 3);
+        subscribe_target(&mut client, &mut server, batch("sub").scope, "sub", 4);
+        let payload = if is_public {
+            v5::PublicEvent {
+                kind: Some(v5::public_event::Kind::CatalogUpdated(
+                    v5::PublicEventCatalogUpdated {
+                        id: ycoding_protocol::encode_lossless(
+                            &"evt_catalog".encode_utf16().collect::<Vec<_>>(),
+                        ),
+                        r#type: 1,
+                        ..Default::default()
+                    },
+                )),
+            }
+            .encode_to_vec()
+        } else {
+            v5::SessionLogItem {
+                kind: Some(v5::session_log_item::Kind::Value52(
+                    v5::SessionLogItemValue52 {
+                        r#type: 1,
+                        aggregate_id: ycoding_protocol::encode_lossless(
+                            &"session".encode_utf16().collect::<Vec<_>>(),
+                        ),
+                        source_epoch: ycoding_protocol::encode_lossless(
+                            &"source".encode_utf16().collect::<Vec<_>>(),
+                        ),
+                        ..Default::default()
+                    },
+                )),
+            }
+            .encode_to_vec()
+        };
+        let mut event_batch = batch("evt_catalog");
+        event_batch.events[0].event = v5::TypedPayload {
+            type_name: if is_public {
+                v5::PublicEvent::full_name()
+            } else {
+                v5::SessionLogItem::full_name()
+            },
+            payload,
+        };
+        let frame = established_frame(
+            v5::frame::Body::EventBatch(event_batch),
+            v5::LedgerClass::Event,
+            1,
+        );
+        let decisions = client.receive(frame.clone(), frame.encoded_len() as u64, 5);
+        assert_eq!(
+            decisions
+                .iter()
+                .any(|decision| matches!(decision, Decision::Events(_))),
+            is_public
+        );
+        assert_eq!(
+            decisions
+                .iter()
+                .any(|decision| matches!(decision, Decision::Closed(_))),
+            !is_public
+        );
+    }
 }
 
 fn workspace_list(binding: &mut Binding, now: u64) -> String {
@@ -2830,10 +2949,18 @@ fn boundary_inventory_revocation_refunds_endpoint_assembly_immediately() {
     relay.replace_authority(BTreeSet::from(["session".into()]), BTreeSet::new());
     let id = browser
         .request(
-            5019,
+            4063,
             batch("a").scope,
-            v5::RemoteSessionLogRequest {
-                payload: v5::RemoteSessionLogRequestPayload { after: None },
+            v5::SessionSnapshotRequest {
+                params: v5::SessionSnapshotRequestParams {
+                    session_id: ycoding_protocol::encode_lossless(
+                        &"session".encode_utf16().collect::<Vec<_>>(),
+                    ),
+                },
+                query: v5::SessionSnapshotQuery {
+                    before: None,
+                    limit: None,
+                },
             }
             .encode_to_vec(),
             4,
@@ -2846,8 +2973,8 @@ fn boundary_inventory_revocation_refunds_endpoint_assembly_immediately() {
             v5::frame::Body::BulkStart(v5::BulkStart {
                 request_id: id,
                 transfer_id: "transfer".into(),
-                operation_id: 5019,
-                type_name: "ycoding.v5.remote_session_log_Result".into(),
+                operation_id: 4063,
+                type_name: "ycoding.v5.session_snapshot_Result".into(),
                 content_kind: v5::ContentKind::TypedMessage as i32,
                 byte_count: 4096,
                 chunk_count: 1,

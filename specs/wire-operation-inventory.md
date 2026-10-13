@@ -91,3 +91,13 @@ Names inside braces share the prefix before the braces. Endpoint IDs are literal
 ### Relay-owned notice operations
 
 `notice.{subscribe,list,read,readAll}`
+
+## Complete Application Event Inventory
+
+`event.subscribe` (4000) carries `PublicEvent` through EventBatch. Its exact 101-member inventory is `EventManifest.ServerDefinitions`: 51 durable Session branches reused from SessionLogItem and 50 ephemeral branches. This includes all seven Session ephemerals and all public catalog/integration/filesystem/permission/guardrail/plugin/project/command/config/skill/PTY/shell/question/Form/todo/status/TUI/installation/VCS/MCP families. Local subscriptions may use the public global stream; remote subscriptions use verified Session scopes only.
+
+`session.log` (4039) carries its unchanged 52-member SessionLogItem union, public durable events plus log.synced. PublicEvent excludes log.synced, server.connected, internal profile/usage/provider-request facts, historical compaction.replaced and runtime-only families outside ServerDefinitions. Ready owns connection/source-epoch establishment. Protobuf event annotations generate TS/Rust diagnostic membership and durability catalogs; [wire-session.md](./wire-session.md) defines payload associations and generation.
+
+## Canonical generated remote disposition
+
+The 70 source connector names above resolve to 66 unique canonical descriptors, plus four role-2 relay notices. Preserve live `session.prediction` (4082) and `session.promptGenerate` (4083) authority. Shared operations retain local IDs; source names classified REPLACE are migration evidence only, not aliases or split dispatchers. `catalog.get` has fresh ID 5043 and accepts backend-resolved Session/workspace Scope. `provider.auth.*`, `workspace.list` and the nine derived Session workflows retain their canonical names; `session.compaction.list` shares local ID 4081. All typed allocations and role-scoped admission obligations are in [wire-connector.md](./wire-connector.md).

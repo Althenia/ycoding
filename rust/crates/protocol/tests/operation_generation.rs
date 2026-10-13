@@ -79,6 +79,11 @@ service Fixture {{ {methods} }}"#
             String::from_utf8_lossy(&result.stderr)
         );
         let types = HashSet::from(["ycoding.v5.Empty".to_owned()]);
+        assert!(
+            operation_generation::read_public_events(&fs::read(dir.join("contract.bin")).unwrap())
+                .unwrap()
+                .is_empty()
+        );
         operation_generation::validate_codec_names(&fs::read(dir.join("contract.bin")).unwrap())
             .unwrap();
         assert!(
