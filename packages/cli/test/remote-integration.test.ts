@@ -868,7 +868,7 @@ Require a fresh human decision in this isolated test.
     await createSession(server, unrelatedID, directory)
     await bridge.connect()
 
-    const ordinaryCommand = `cd ${JSON.stringify(homedir())} && echo guarded ordinary review`
+    const ordinaryCommand = `cd ${JSON.stringify(homedir())} && date`
     const ordinaryShell = startShell(ordinaryCommand)
     const ordinary = await pendingReview()
     expect(ordinary).toMatchObject({

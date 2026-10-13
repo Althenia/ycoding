@@ -811,7 +811,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 "Guardrail.CapExceededError",
                 (error) =>
                   new ServiceUnavailableError({
-                    message: `Session guardrail cap exceeded: ${error.counter} ${error.current}/${error.limit}`,
+                    message: error.message,
                     service: "guardrail",
                   }),
               ),

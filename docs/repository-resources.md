@@ -59,7 +59,7 @@ The built-in `memory` tool stores explicit folder-scoped knowledge outside repos
 
 ## Built-in Git worktrees
 
-The built-in `worktree` tool accepts `{ action: "list" }` or `{ action: "create", name }`. Names must match `^[a-z0-9][a-z0-9-]{0,62}$`. Listing returns each repository worktree's path, branch when known, and whether it contains the current Location. Creation uses the project-copy service and creates `<data>/worktrees/<repo-key>/<name>` on branch `<name>`; it does not switch the current Session Location. `repo-key` is `repo_` plus SHA-256 of the canonical Git common directory. Permission action `worktree` defaults to ask, and creation also uses the Session `file_mutation` guardrail. The tool has no remove action; deletion remains a human action in Manage workspaces.
+The built-in `worktree` tool accepts `{ action: "list" }` or `{ action: "create", name }`. Names must match `^[a-z0-9][a-z0-9-]{0,62}$`. Listing returns each repository worktree's path, branch when known, and whether it contains the current Location. Creation uses the project-copy service and creates `<data>/worktrees/<repo-key>/<name>` on branch `<name>`; it does not switch the current Session Location. `repo-key` is `repo_` plus SHA-256 of the canonical Git common directory. Permission action `worktree` defaults to allow (ask for the read-only BTW advisor), and creation also uses the Session `file_mutation` guardrail. The tool has no remove action; deletion remains a human action in Manage workspaces.
 
 ## Built-in task completion signal
 

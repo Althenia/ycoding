@@ -381,7 +381,6 @@ describe("Agent", () => {
 
       expect((yield* agent.get(Agent.ID.make("god")))?.permissions).toEqual([
         { action: "*", resource: "*", effect: "allow" },
-        { action: "worktree", resource: "*", effect: "ask" },
         { action: "external_directory", resource: "*", effect: "ask" },
         { action: "external_directory", resource: `${Global.Path.data}/shell/*/*`, effect: "allow" },
         { action: "external_directory", resource: `${Global.Path.tmp}/*`, effect: "allow" },
@@ -419,6 +418,7 @@ describe("Agent", () => {
       expect(Permission.evaluate("read", "README.md", btw.permissions).effect).toBe("allow")
       expect(Permission.evaluate("edit", "README.md", btw.permissions).effect).toBe("ask")
       expect(Permission.evaluate("shell", "git status", btw.permissions).effect).toBe("ask")
+      expect(Permission.evaluate("worktree", "/data/worktrees/repo_abc/feature", btw.permissions).effect).toBe("ask")
     }),
   )
 })

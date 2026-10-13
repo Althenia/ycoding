@@ -8,6 +8,7 @@ import { PositiveInt } from "../schema"
 export class Info extends Schema.Class<Info>("Config.Guardrail")({
   enabled: Schema.Boolean.pipe(Schema.optional),
   max_concurrent_shells: PositiveInt.pipe(Schema.optional),
+  shell_wait_seconds: PositiveInt.pipe(Schema.optional),
   max_concurrent_subagents: PositiveInt.pipe(Schema.optional),
   max_pending_reviews: PositiveInt.pipe(Schema.optional),
 }) {}

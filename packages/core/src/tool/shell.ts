@@ -237,14 +237,13 @@ export const Plugin = {
                     action: name,
                     resources: [input.command],
                     metadata: { workdir: target.canonical },
+                    holder: context.callID,
                   })
                   .pipe(
-                    Effect.mapError(
-                      (error) =>
-                        new ToolFailure({
-                          message: `Session guardrail rejected shell command: ${input.command}`,
-                          error,
-                        }),
+                    Effect.mapError((error) =>
+                      error._tag === "Guardrail.CapExceededError"
+                        ? new ToolFailure({ message: error.message, error, metadata: { reason: "capacity-exceeded" } })
+                        : new ToolFailure({ message: `Session guardrail rejected shell command: ${input.command}`, error }),
                     ),
                   )
                 const info = yield* shell.create(prepared).pipe(Effect.onError(() => reservation.release))

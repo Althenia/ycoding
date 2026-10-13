@@ -4,7 +4,7 @@ import path from "path"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import { Session } from "@ycoding-ai/schema/session"
 import { and, asc, eq } from "drizzle-orm"
-import { Context, Deferred, Effect, Layer, Option, Schema } from "effect"
+import { Context, Deferred, Duration, Effect, Layer, Option, Schema } from "effect"
 import { Config } from "../config"
 import { ConfigGuardrail } from "../config/guardrail"
 import { Database } from "../database/database"
@@ -35,6 +35,7 @@ export interface EvaluateInput {
   readonly metadata?: Guardrail.Request["metadata"]
   /** Admit ordinary and hard review decisions without a request; deny decisions still block. */
   readonly skipReview?: boolean
+  readonly holder?: string
 }
 
 export interface Evaluation {
@@ -173,6 +174,7 @@ export const layer = Layer.effect(
       subagents: settings?.max_concurrent_subagents ?? 8,
       reviews: settings?.max_pending_reviews ?? 16,
     })
+    const shellWait = Duration.seconds(settings?.shell_wait_seconds ?? 60)
     const pending = new Map<Guardrail.RequestID, Pending>()
     const approvals = new Map<Session.ID, number>()
     const blocked = new Map<Session.ID, number>()
@@ -349,28 +351,34 @@ export const layer = Layer.effect(
 
     const evaluate: Interface["evaluate"] = (input) => classify(input).pipe(Effect.map((result) => result.evaluation))
 
+    const managed = (rootSessionID: Session.ID, reservation: SessionGuardrailCounter.Reservation): ManagedReservation => {
+      advanceUnlocked(rootSessionID)
+      let released = false
+      const releaseUnlocked = Effect.suspend(() => {
+        if (released) return Effect.void
+        released = true
+        return reservation.release.pipe(Effect.andThen(Effect.sync(() => advanceUnlocked(rootSessionID))))
+      })
+      return {
+        release: withRootLock(rootSessionID, releaseUnlocked),
+        releaseUnlocked,
+      }
+    }
+
     const reserveUnlocked = (rootSessionID: Session.ID, kind: SessionGuardrailCounter.Kind) =>
-      counters.reserve(rootSessionID, kind).pipe(
-        Effect.map((reservation): ManagedReservation => {
-          advanceUnlocked(rootSessionID)
-          let released = false
-          const releaseUnlocked = Effect.suspend(() => {
-            if (released) return Effect.void
-            released = true
-            return reservation.release.pipe(Effect.andThen(Effect.sync(() => advanceUnlocked(rootSessionID))))
-          })
-          return {
-            release: withRootLock(rootSessionID, releaseUnlocked),
-            releaseUnlocked,
-          }
-        }),
-      )
+      counters.reserve(rootSessionID, kind).pipe(Effect.map((reservation) => managed(rootSessionID, reservation)))
 
     const reserveActionUnlocked = (rootSessionID: Session.ID, action: string) => {
-      if (action === "shell") return reserveUnlocked(rootSessionID, "shell")
       if (action === "subagent") return reserveUnlocked(rootSessionID, "subagent")
       return Effect.succeed<ManagedReservation>({ ...noReservation, releaseUnlocked: Effect.void })
     }
+
+    const reserveShell = (rootSessionID: Session.ID, holder: string | undefined) =>
+      Effect.uninterruptibleMask((restore) =>
+        restore(counters.reserve(rootSessionID, "shell", { holder, wait: shellWait })).pipe(
+          Effect.map((reservation) => managed(rootSessionID, reservation)),
+        ),
+      )
 
     const assert = Effect.fn("SessionGuardrail.assert")((input: EvaluateInput) =>
       Effect.gen(function* () {
@@ -448,19 +456,21 @@ export const layer = Layer.effect(
             return { type: "review" as const, request, deferred, review }
           }),
         )
-        if (admission.type === "allowed") return admission.reservation
-
-        yield* Deferred.await(admission.deferred).pipe(
-          Effect.ensuring(
-            withRootLock(
-              result.rootSessionID,
-              Effect.sync(() => removePendingUnlocked(admission.request.id)).pipe(
-                Effect.andThen(admission.review.releaseUnlocked),
+        if (admission.type === "allowed" && input.action !== "shell") return admission.reservation
+        if (admission.type === "review")
+          yield* Deferred.await(admission.deferred).pipe(
+            Effect.ensuring(
+              withRootLock(
+                result.rootSessionID,
+                Effect.sync(() => removePendingUnlocked(admission.request.id)).pipe(
+                  Effect.andThen(admission.review.releaseUnlocked),
+                ),
               ),
             ),
-          ),
-        )
-        return yield* withRootLock(result.rootSessionID, reserveActionUnlocked(result.rootSessionID, input.action))
+          )
+        if (input.action !== "shell")
+          return yield* withRootLock(result.rootSessionID, reserveActionUnlocked(result.rootSessionID, input.action))
+        return yield* reserveShell(result.rootSessionID, input.holder)
       }),
     )
 

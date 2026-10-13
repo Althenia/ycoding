@@ -509,6 +509,48 @@ describe("SessionGuardrailMatch", () => {
       .toMatchObject({ decision: "allow", hardReview: false, ruleIDs: [] })
   })
 
+  test.each([
+    "cd /outside/review/_src && sed -n 270,290p styles/ide.css | grep -n \"grid-area\\|@container\" | cut -c1-240",
+    "cd /outside/review || exit 1; git status --short | head -50; ls build 2>&1; ps -p 123 -o pid,etime,command 2>/dev/null | tail -1",
+    "cd /workspace/project/crates/core && grep -n \"pub fn\" history.rs | head -60; ls ../../../store/src 2>/dev/null",
+    "cd /workspace/project || exit 1; git -C /workspace/project ls-tree -r --name-only main src | grep '/restart'",
+    "cd /outside/review; grep -n -i -E \"usage|--screen\" _shared/tools/dev-verify.mjs; pgrep -fl cargo; lsof -nP -iTCP:8754",
+    "cd app && node -e \"console.log(1)\" | head -30; grep -n x ../../docs/specs.md | head",
+    "task-runner build; cat /outside/notes.md; sed -n 1,5p ~/.zshrc",
+    "python3 /home/user/.agents/skills/design/scripts/design_md.py lint DESIGN.md --strict",
+    "node /outside/tools/check.mjs --strict",
+    "python3 - <<'PY'\nimport re\nassert not re.search(r'/Users/|TODO', open('README.md').read())\nPY",
+    "node --input-type=module <<'JS'\nimport {readFileSync} from 'node:fs'\nconsole.log(readFileSync('/outside/notes.md', 'utf8'))\nJS",
+    "python3 - <<'PY'\n source.extend(re.findall(r'Endpoint\\.(?:get|post)\\(\\s*[\"\\']([^\"\\']+)',p.read_text()))\nassert set(expand('`notice.{subscribe,list}`'))==set(re.findall(r'\"([^\"]+)\"',notice))\nprint('PASS: 194 local / 68 connector; no private paths')\nPY",
+  ])("does not review read-only inspection or executed script paths: %s", (command) => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths }))
+      .toMatchObject({ decision: "allow", hardReview: false, ruleIDs: [] })
+  })
+
+  test.each([
+    "cd /outside && sed -i 's/a/b/' file",
+    "cd /outside && node build.mjs",
+    "cat file > /outside/out; ls",
+    "ls; grep x file | tee /outside/out",
+    "python3 script.py > /outside/out",
+    "python3 /outside/tool.py --write /outside/out",
+    "cd /outside && python3 - <<'PY'\nopen('x', 'w').write('y')\nPY",
+    "ls; cat $(touch /outside/file)",
+    "cd /outside || exit 1; touch file",
+  ])("keeps writes and execution outside the repository reviewed: %s", (command) => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths }))
+      .toMatchObject({ decision: "ask", hardReview: false, ruleIDs: ["standard.review.outside-repo"] })
+  })
+
+  test.each([
+    ["cd /outside && rm -rf ~/Documents", "standard.review.home-child"],
+    ["cd /outside || exit 1; git reset --hard HEAD", "standard.review.git-destructive"],
+    ["python3 /outside/tool.py; git push --force", "standard.review.force-push"],
+  ])("keeps hard review for %s", (command, id) => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths }))
+      .toMatchObject({ decision: "ask", hardReview: true, ruleIDs: [id] })
+  })
+
   test("lets custom hard review override ordinary allows across source layers while preserving an effective deny", () => {
     const hard = custom({
       id: "human-review-aws-close",

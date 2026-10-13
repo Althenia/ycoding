@@ -25,7 +25,8 @@ import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { ConfigAgentPlugin } from "@ycoding-ai/core/config/plugin/agent"
-import { Deferred, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect"
+import { Deferred, Duration, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect"
+import { TestClock } from "effect/testing"
 import { location } from "./fixture/location"
 import { tmpdir } from "./fixture/tmpdir"
 import { agentHost, host } from "./plugin/host"
@@ -261,6 +262,84 @@ exact.it.effect("allows file mutations inside the global data, cache, and state 
     decision: "allow", hardReview: false, ruleIDs: [],
   })
 }))
+
+exact.it.effect("admits YCoding-managed tool operations without a review request", () => Effect.gen(function* () {
+  const service = yield* SessionGuardrail.Service
+  const inputs: ReadonlyArray<Omit<SessionGuardrail.EvaluateInput, "sessionID">> = [
+    { action: "file_mutation", resources: [`${dataDir}/worktrees/repo_abc/feature`], metadata: { operation: "create_git_worktree" } },
+    { action: "file_mutation", resources: [`${dataDir}/memory/repo_abc`], metadata: { operation: "write", memoryAction: "write" } },
+    { action: "file_mutation", resources: [`${dataDir}/memory/knowledge`], metadata: { operation: "remove", memoryAction: "delete" } },
+    { action: "project_artifact_mutation", resources: ["skill/example"], metadata: { operation: "automatic_write" } },
+    { action: "subagent", resources: ["build"], metadata: { description: "task" } },
+    { action: "mcp_execute", resources: ["server/tool"], metadata: { arguments: [] } },
+    { action: "shell", resources: ["git worktree add -b feature .worktrees/feature"] },
+    { action: "shell", resources: ["mkdir -p .worktrees && git worktree add -b feature .worktrees/feature"] },
+    { action: "shell", resources: [`git -C ${dataDir}/worktrees/repo_abc/feature add -A`] },
+  ]
+  for (const input of inputs) {
+    expect(yield* service.evaluate({ sessionID: parentID, ...input })).toMatchObject({ decision: "allow", ruleIDs: [] })
+    yield* (yield* service.assert({ sessionID: parentID, ...input })).release
+  }
+  expect(yield* service.forSession(parentID)).toEqual([])
+}))
+
+const oneShell = harness({
+  entries: [new Config.Document({
+    type: "document",
+    info: new Config.Info({ guardrails: new ConfigGuardrail.Info({ max_concurrent_shells: 1, shell_wait_seconds: 5 }) }),
+  })],
+})
+const shellInput = (holder: string) => ({ sessionID: parentID, action: "shell", resources: ["task-runner build"], holder })
+const shellsRunning = (service: SessionGuardrail.Interface) =>
+  service.status(parentID).pipe(Effect.map((status) => status.counters.find((counter) => counter.id === "shells")?.current))
+const adjustUntilDone = <A, E>(fiber: Fiber.Fiber<A, E>, step: Duration.Input, limit: number): Effect.Effect<A, E> =>
+  fiber.pollUnsafe() === undefined && limit > 0
+    ? TestClock.adjust(step).pipe(Effect.andThen(Effect.suspend(() => adjustUntilDone(fiber, step, limit - 1))))
+    : Fiber.join(fiber)
+
+describe("SessionGuardrail shell capacity", () => {
+  oneShell.it.effect("a shell over the family limit waits for a running shell to finish, then runs", () => Effect.gen(function* () {
+    const service = yield* SessionGuardrail.Service
+    const running = yield* service.assert(shellInput("call-running"))
+    const waiting = yield* service.assert(shellInput("call-waiting")).pipe(Effect.forkChild({ startImmediately: true }))
+    for (const _ of [1, 2, 3]) yield* TestClock.adjust("1 second")
+    expect(waiting.pollUnsafe()).toBeUndefined()
+    expect(yield* shellsRunning(service)).toBe(1)
+    yield* running.release
+    const granted = yield* Fiber.join(waiting)
+    expect(yield* shellsRunning(service)).toBe(1)
+    yield* granted.release
+    expect(yield* shellsRunning(service)).toBe(0)
+    expect(yield* service.forSession(parentID)).toEqual([])
+  }))
+
+  oneShell.it.effect("fails after the configured wait with the limit, running holders, and setting", () => Effect.gen(function* () {
+    const service = yield* SessionGuardrail.Service
+    const running = yield* service.assert(shellInput("call-running"))
+    const waiting = yield* service.assert(shellInput("call-waiting")).pipe(Effect.flip, Effect.forkChild({ startImmediately: true }))
+    const error = yield* adjustUntilDone(waiting, "1 second", 20)
+    expect(error).toMatchObject({ _tag: "Guardrail.CapExceededError", counter: "shells", current: 1, limit: 1, waitedMs: 5_000 })
+    expect(error.message).toBe(
+      "Shell limit reached: 1/1 shells running in this session family (call-running); waited 5s. Wait for or stop a running shell, or raise guardrails.max_concurrent_shells.",
+    )
+    expect(yield* shellsRunning(service)).toBe(1)
+    yield* running.release
+    expect(yield* shellsRunning(service)).toBe(0)
+  }))
+
+  oneShell.it.effect("interrupting a waiting shell leaves the running count unchanged and the slot reusable", () => Effect.gen(function* () {
+    const service = yield* SessionGuardrail.Service
+    const running = yield* service.assert(shellInput("call-running"))
+    const waiting = yield* service.assert(shellInput("call-waiting")).pipe(Effect.forkChild({ startImmediately: true }))
+    for (const _ of [1, 2]) yield* TestClock.adjust("1 second")
+    yield* Fiber.interrupt(waiting)
+    expect(yield* shellsRunning(service)).toBe(1)
+    yield* running.release
+    expect(yield* shellsRunning(service)).toBe(0)
+    yield* (yield* service.assert(shellInput("call-next"))).release
+    expect(yield* shellsRunning(service)).toBe(0)
+  }))
+})
 
 const allowedDirectory = harness({
   rules: [{ action: "external_directory", resource: "~/Downloads/**", effect: "allow" }],

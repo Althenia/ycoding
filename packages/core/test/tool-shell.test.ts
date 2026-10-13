@@ -13,6 +13,7 @@ import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { makeGlobalNode, makeLocationNode } from "@ycoding-ai/core/effect/app-node"
 import { filesystem } from "@ycoding-ai/core/effect/app-node-platform"
 import { Config } from "@ycoding-ai/core/config"
+import { ConfigGuardrail } from "@ycoding-ai/core/config/guardrail"
 import { Database } from "@ycoding-ai/core/database/database"
 import { EventRuntime } from "@ycoding-ai/core/event"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
@@ -599,6 +600,46 @@ describe("ShellTool", () => {
         )
       },
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  fakeIt.effect("waits for a family shell slot and then reports the shell limit instead of a guardrail rejection", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        configEntries = [
+          configDocument(),
+          new Config.Document({
+            type: "document",
+            info: new Config.Info({ guardrails: new ConfigGuardrail.Info({ max_concurrent_shells: 1, shell_wait_seconds: 2 }) }),
+          }),
+        ]
+        return withSession(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const running = yield* settleTool(registry, call({ command: "fake running command" }, "call-running")).pipe(
+              Effect.forkChild,
+            )
+            while (!fakeShellState.complete) yield* Effect.yieldNow
+            const waiting = yield* executeTool(registry, call({ command: "pwd" }, "call-waiting")).pipe(
+              Effect.forkChild({ startImmediately: true }),
+            )
+            const adjustUntilDone = (limit: number): Effect.Effect<ToolRegistry.Settlement["result"], ToolOutputStore.Error> =>
+              waiting.pollUnsafe() === undefined && limit > 0
+                ? TestClock.adjust("500 millis").pipe(Effect.andThen(Effect.suspend(() => adjustUntilDone(limit - 1))))
+                : Fiber.join(waiting)
+            expect(yield* adjustUntilDone(40)).toEqual({
+              type: "error",
+              value:
+                "Shell limit reached: 1/1 shells running in this session family (call-running); waited 2s. Wait for or stop a running shell, or raise guardrails.max_concurrent_shells.",
+            })
+            expect(fakeShellState.creates).toBe(1)
+            yield* fakeShellState.complete!()
+            yield* Fiber.join(running)
+          }),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
     ),
   )
 

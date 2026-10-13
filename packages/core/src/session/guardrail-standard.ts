@@ -140,6 +140,7 @@ export function outsideTargets(action: string, resource: string, paths: Paths): 
     ? [{ path: resolveTarget(resource, paths.workdir, paths), directory: false }]
     : action === "shell" && !readOnlyShell(resource)
       ? shellWorkdirs(resource, paths).flatMap(({ segment, workdir }) => {
+          if (readOnlyShell(segment.rawTokens.join(" "))) return []
           const invocation = executable(segment.tokens)
           const operands = shellOperands(segment.tokens)
           const separator = invocation?.name === "cd" ? invocation.args.indexOf("--") : -1
@@ -172,7 +173,8 @@ function isOutside(target: string, paths: Paths) {
 }
 
 const redirection = /^(?:\d*|&)(<<<|<<-?|<>|>>|>\||>&|<&|>|<)(.*)$/s
-const heredocConsumers = new Set(["cat", "tee", "git", "gh"])
+const heredocConsumers = new Set(["cat", "tee", "git", "gh", "node", "bun", "deno", "python", "python3", "ruby", "perl"])
+const interpreters = new Set(["sh", "bash", "zsh", "node", "bun", "deno", "python", "python3", "ruby", "perl"])
 const gitMessageCommands = new Set(["commit", "tag", "merge", "stash", "notes"])
 const gitValueOptions = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace"])
 const ghTextOptions = new Set(["--title", "-t", "--body", "-b", "--notes", "--subject"])
@@ -206,6 +208,10 @@ function shellOperands(tokens: ReadonlyArray<string>) {
 
 function commandArguments(name: string, args: ReadonlyArray<string>) {
   if (name === "echo" || name === "printf") return []
+  if (interpreters.has(name)) {
+    const script = args.findIndex((arg) => !arg.startsWith("-"))
+    return args.filter((_, index) => index !== script)
+  }
   if (name === "git") {
     const subcommand = args.findIndex((arg, index) => !arg.startsWith("-") && !gitValueOptions.has(args[index - 1]))
     if (!gitMessageCommands.has(args[subcommand])) return args
@@ -258,6 +264,7 @@ const shellReaders = new Set([
   "cat", "head", "tail", "wc", "ls", "grep", "egrep", "fgrep", "rg", "cut", "tr", "nl",
   "basename", "dirname", "realpath", "readlink", "stat", "file", "du", "df", "pwd", "echo", "printf",
   "which", "type", "true", "false", "test", "diff", "cmp", "comm", "jq", "sed", "find", "sort", "uniq", "git",
+  "cd", "exit", "ps", "pgrep", "lsof",
 ])
 
 function readOnlyShell(command: string) {

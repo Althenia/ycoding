@@ -141,10 +141,9 @@ export const make = Effect.fn("SubagentTool.make")(function* () {
       const reservation = yield* guardrail.assert({
         sessionID: context.sessionID, action: name, resources: [prepared.target.id],
         metadata: { description: input.description },
-      }).pipe(Effect.mapError((error) => new ToolFailure({
-        message: `Session guardrail rejected subagent: ${prepared.target.id}`, error,
-        ...(error._tag === "Guardrail.CapExceededError" ? { metadata: { reason: "capacity-exceeded" } } : {}),
-      })))
+      }).pipe(Effect.mapError((error) => error._tag === "Guardrail.CapExceededError"
+        ? new ToolFailure({ message: error.message, error, metadata: { reason: "capacity-exceeded" } })
+        : new ToolFailure({ message: `Session guardrail rejected subagent: ${prepared.target.id}`, error })))
       const child = yield* orchestration.launch({
         parentID: context.sessionID, parentAssistantMessageID: context.messageID, toolCallID: context.callID,
         agent: Agent.ID.make(input.agent), description: input.description, prompt: input.prompt,

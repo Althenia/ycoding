@@ -94,13 +94,14 @@ The `always` reply, rendered as `Allow for this session`, approves the reviewed 
   "guardrails": {
     "enabled": true,
     "max_concurrent_shells": 8,
+    "shell_wait_seconds": 60,
     "max_concurrent_subagents": 8,
     "max_pending_reviews": 16
   }
 }
 ```
 
-Defaults are 8 running shells, 8 running subagents, and 16 pending reviews per root Session family. Reservations release after success, failure, cancellation, or interruption.
+Defaults are 8 running shells, 8 running subagents, and 16 pending reviews per root Session family. Reservations release after success, failure, cancellation, or interruption. A shell admitted while the family's shells are all running, including background shells, waits for a slot; released slots go to waiting shells in arrival order. Interrupting a waiting shell removes it from the queue without taking a slot. After `shell_wait_seconds` (default 60) the shell fails with `Shell limit reached: <running>/<limit> shells running in this session family (<tool call IDs>); waited <n>s. Wait for or stop a running shell, or raise guardrails.max_concurrent_shells.`, and the tool failure carries `reason: "capacity-exceeded"`. Subagents and reviews over their caps fail at once with the same form of message naming their setting.
 
 `guardrails.enabled` configures optional guardrail-service behavior. Agent permissions and shell sandbox configuration remain independent. Standard catastrophic denies and built-in hard reviews remain enforced when optional guardrails are disabled.
 
