@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 use ycoding_core::event_feed::Feed;
-use ycoding_core::platform::git;
+use ycoding_core::platform::{git, project_identity};
 use ycoding_core::process::guardrails::{Guardrails, Paths, Settings};
 use ycoding_core::resources::{agent, memory};
 use ycoding_core::session::{
@@ -231,15 +231,26 @@ impl Locations {
         workspace: Option<&LosslessString>,
     ) -> Result<Arc<LocationServices>, Failure> {
         self.acquire(directory, workspace, |directory| {
+            let resolved = self.resolve(directory)?;
             let snapshot = self.0.client.snapshot().map_err(unavailable)?;
-            let project = recorded_project(&snapshot, directory, workspace)
+            // A recorded Project that differs from the filesystem identity keeps its ID so
+            // Sessions, permissions and artifacts already bound to it stay attached.
+            if let Some(project) = recorded_project(&snapshot, directory, workspace)
                 .map_err(unavailable)?
-                .ok_or_else(|| {
-                    Failure::Unavailable("no Project is recorded for the Location directory".into())
-                })?;
+                .filter(|project| project.as_str() != Some(resolved.id.as_str()))
+            {
+                return Ok(Project {
+                    directory: project_worktree(&snapshot, &project)?,
+                    id: ProjectId::new(project).map_err(|_| unrepresentable())?,
+                });
+            }
             Ok(Project {
-                directory: project_worktree(&snapshot, &project)?,
-                id: ProjectId::new(project).map_err(|_| unrepresentable())?,
+                directory: resolved
+                    .directory
+                    .to_str()
+                    .map(LosslessString::from)
+                    .ok_or_else(unrepresentable)?,
+                id: ProjectId::new(resolved.id).map_err(|_| unrepresentable())?,
             })
         })
     }
@@ -432,6 +443,51 @@ impl Locations {
             .unwrap_or_else(PoisonError::into_inner)
             .remove(&key);
         Ok(())
+    }
+
+    pub async fn record(&self, info: &location::Info, opened: bool) -> Result<(), Failure> {
+        let directory = info.directory.as_lossless().clone();
+        if opened && !Path::new(directory.as_str().ok_or_else(unrepresentable)?).is_dir() {
+            return Ok(());
+        }
+        let locations = self.clone();
+        let target = directory.clone();
+        let resolved = tokio::task::spawn_blocking(move || locations.resolve(&target))
+            .await
+            .map_err(|_| Failure::Unavailable("Project identity resolution failed".into()))??;
+        let now = crate::ids::now_millis();
+        self.0
+            .sessions
+            .record_project(
+                ycoding_core::ycoding_store::project::Project {
+                    id: info.project.id.as_lossless().clone(),
+                    worktree: info.project.directory.as_lossless().clone(),
+                    vcs: resolved
+                        .vcs
+                        .filter(|_| info.project.id.as_lossless().as_str() == Some(&resolved.id))
+                        .map(|vcs| vcs.kind.as_str().into()),
+                    name: None,
+                    icon_url: None,
+                    icon_url_override: None,
+                    icon_color: None,
+                    time_created: now,
+                    time_updated: now,
+                    time_initialized: None,
+                    sandboxes: vec![],
+                    commands: None,
+                },
+                opened.then_some(directory),
+            )
+            .await
+            .map_err(unavailable)
+    }
+
+    fn resolve(&self, directory: &LosslessString) -> Result<project_identity::Resolved, Failure> {
+        project_identity::resolve(
+            &self.0.configuration.snapshots.git,
+            Path::new(directory.as_str().ok_or_else(unrepresentable)?),
+        )
+        .map_err(|_| Failure::Unavailable("Project identity resolution failed".into()))
     }
 }
 

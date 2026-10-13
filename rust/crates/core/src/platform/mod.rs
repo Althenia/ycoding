@@ -7,6 +7,7 @@ pub mod keep_awake;
 pub mod patch;
 pub mod process;
 pub mod project_copy;
+pub mod project_identity;
 pub mod pty;
 pub mod repository_cache;
 pub mod ripgrep_binary;

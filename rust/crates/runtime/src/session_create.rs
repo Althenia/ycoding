@@ -62,6 +62,7 @@ pub async fn create(
                     workspace: location.workspace_id.clone(),
                 });
             let services = invocation.location(requested.as_ref())?;
+            core.locations.record(&services.info, false).await?;
             (
                 services.info.project.id.clone(),
                 location::Ref {

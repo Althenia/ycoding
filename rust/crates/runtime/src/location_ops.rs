@@ -16,6 +16,7 @@ pub async fn get(
         q.and_then(|q| q.directory.as_ref()),
         q.and_then(|q| q.workspace.as_ref()),
     )?;
+    invocation.core()?.locations.record(&location, true).await?;
     let roots = services.config.roots();
     Ok(v5::LocationGetResult {
         data: v5::LocationInfo {

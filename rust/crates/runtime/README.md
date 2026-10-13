@@ -41,8 +41,12 @@ cargo test --locked -p ycoding-core --test generate_text
 
 `fs.read` resolves the request Location through `Core.platform` and serves one file through `PlatformServices.filesystem` as an asset with its extension MIME type. Paths that escape the Location lexically or through a symlink, directories, missing files and a request directory that disagrees with the scope return `InvalidRequestError`.
 
-`location.get` returns the backend-resolved Location and its Project with `backendPaths`: `home`, `state`, `config` and `worktree` (`<data>/worktree`) from the Location configuration roots. No other `Location_Info` projection carries `backendPaths`. The Location's Project must already be recorded; the read does not record an opened directory.
+`location.get` returns the backend-resolved Location and its Project with `backendPaths`: `home`, `state`, `config` and `worktree` (`<data>/worktree`) from the Location configuration roots. No other `Location_Info` projection carries `backendPaths`. When the Location directory is a directory, the read records it like TypeScript `Project.recordOpened`: one transaction inserts the Project row if absent and a `project_directory` row with no type or strategy if absent.
 
 `session.attachment.read` acquires the Session's backend Location, roots the managed attachment Store at the configuration data root, and serves `session::attachment_read` as an asset. Invalid digests return `InvalidRequestError`, unknown Sessions `SessionNotFoundError`, unreferenced, foreign or failed-verification digests `AttachmentNotFoundError`, and references above 10 MiB `AttachmentTooLargeError`.
 
 `debug.location` lists the cached Location keys. `debug.location.evict` removes the canonical key for the request Location scope; held leases keep their service set, the next acquisition builds a new one, and durable history is unchanged.
+
+## Location Project identity
+
+`Locations::location` resolves the Project with `platform::project_identity::resolve`, as TypeScript `Project.resolve` does, so a never-seen directory opens without a stored row. A recorded Project for the directory (a Session in it, a `project_directory` row, or a Project worktree) takes precedence only when its ID differs from the resolved ID; it then keeps that ID and its recorded worktree so Sessions, permissions and artifacts already bound to it stay attached. When the IDs agree, the resolved worktree is the Project directory, so a linked worktree copy reports its own root. A root `session.create` inserts the Location's Project row if absent, without a directory row.

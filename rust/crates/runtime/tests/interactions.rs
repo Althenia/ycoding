@@ -358,7 +358,7 @@ async fn workspaces_are_separate_location_graphs() {
             "wrk_other"
         );
         assert!(other.data.items.is_empty());
-        let unrecorded: v5::InvalidRequestError = refuse(
+        let unrecorded: v5::PermissionRequestListResult = ask(
             &mut client,
             "permission.request.list",
             location_scope("/loc/never"),
@@ -367,7 +367,9 @@ async fn workspaces_are_separate_location_graphs() {
             },
         )
         .await;
-        assert_eq!(units(unrecorded.kind.as_ref().unwrap()), "unavailable");
+        assert_eq!(units(&unrecorded.location.project.id), "global");
+        assert_eq!(units(&unrecorded.location.project.directory), "/");
+        assert!(unrecorded.data.items.is_empty());
         server.shutdown().await.unwrap();
     })
     .await;

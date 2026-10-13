@@ -157,7 +157,7 @@ async fn sessions_are_created_in_a_recorded_location_with_agent_model_and_a_stab
         )
         .await;
         assert_eq!(units(profiled.kind.as_ref().unwrap()), "unavailable");
-        let unrecorded: v5::InvalidRequestError = refuse(
+        let unrecorded: v5::SessionCreateResult = ask(
             &mut client,
             "session.create",
             location_scope("/never/recorded"),
@@ -167,7 +167,15 @@ async fn sessions_are_created_in_a_recorded_location_with_agent_model_and_a_stab
             }),
         )
         .await;
-        assert_eq!(units(unrecorded.kind.as_ref().unwrap()), "unavailable");
+        assert_eq!(units(&unrecorded.data.project_id), "global");
+        assert_eq!(
+            units(&unrecorded.data.location.directory),
+            "/never/recorded"
+        );
+        assert_eq!(
+            unrecorded.data.subpath.as_ref().map(units).as_deref(),
+            Some("never/recorded")
+        );
         server.shutdown().await.unwrap();
     })
     .await;

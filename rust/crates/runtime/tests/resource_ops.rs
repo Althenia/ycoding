@@ -3,6 +3,7 @@ mod support;
 use prost::{Message, Name};
 use std::{
     fs,
+    ops::Bound,
     os::unix::fs::PermissionsExt,
     path::PathBuf,
     sync::{
@@ -12,6 +13,7 @@ use std::{
 };
 use support::wire::{ask, location_scope, query, refuse};
 use support::*;
+use ycoding_core::ycoding_store::{KeyPart, project, tuple_key};
 use ycoding_core::{
     platform::{filesystem, git, project_copy, pty, shell},
     resources::{
@@ -37,6 +39,10 @@ struct Fixture {
 
 impl Fixture {
     async fn new() -> Self {
+        Self::create(true, None).await
+    }
+
+    async fn create(recorded: bool, origin: Option<&str>) -> Self {
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
         let root =
             std::env::temp_dir().join(format!("ycoding-resource-ops-{}-{n}", std::process::id()));
@@ -49,9 +55,25 @@ impl Fixture {
         let project = format!("prj_resource{n}");
         let owner = format!("ses_resource{n}");
         let other = format!("ses_resource_other{n}");
-        insert_project(&project, directory).await;
-        insert_session_of(&project, &owner, directory, None).await;
-        insert_session_of(&project, &other, directory, None).await;
+        if recorded {
+            insert_project(&project, directory).await;
+            insert_session_of(&project, &owner, directory, None).await;
+            insert_session_of(&project, &other, directory, None).await;
+        }
+        if let Some(origin) = origin {
+            for args in [
+                &["init", "-q", "-b", "main"][..],
+                &["config", "commit.gpgsign", "false"],
+                &["config", "user.name", "Test"],
+                &["config", "user.email", "test@ycoding.test"],
+                &["commit", "-q", "--allow-empty", "-m", "root"],
+            ] {
+                git(&root, args);
+            }
+            if !origin.is_empty() {
+                git(&root, &["remote", "add", "origin", origin]);
+            }
+        }
         let roots = Roots::development(&root).unwrap();
         let config = Arc::new(
             Configuration::load(LoadOptions {
@@ -153,6 +175,20 @@ impl Fixture {
         self.platform.shell.shutdown().await.unwrap();
         self.platform.pty.shutdown().await.unwrap();
     }
+}
+
+fn git(cwd: &std::path::Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().into()
 }
 
 impl Drop for Fixture {
@@ -534,4 +570,182 @@ async fn debug_location_evict_drops_the_cache_key_while_held_leases_stay_usable(
     drop(client);
     server.shutdown().await.unwrap();
     fixture.shutdown().await;
+}
+
+fn location_get(fixture: &Fixture) -> v5::LocationGetRequest {
+    v5::LocationGetRequest {
+        query: query(fixture.directory(), None),
+    }
+}
+
+fn project_row(id: &str) -> Option<project::Project> {
+    world()
+        .store
+        .snapshot()
+        .unwrap()
+        .get::<project::ProjectTable>(&tuple_key(&[KeyPart::String(&id.into())]))
+        .unwrap()
+}
+
+fn directory_rows(directory: &str) -> Vec<project::Directory> {
+    world()
+        .store
+        .snapshot()
+        .unwrap()
+        .scan::<project::DirectoryTable>(Bound::Unbounded, Bound::Unbounded, usize::MAX)
+        .unwrap()
+        .into_iter()
+        .filter(|row| row.directory.as_str() == Some(directory))
+        .collect()
+}
+
+const OPENED_REMOTE: &str = "git@github.com:resource-ops/opened.git";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn location_get_opens_and_records_a_never_seen_directory_once_with_its_filesystem_identity() {
+    let fixture = Fixture::create(false, Some(OPENED_REMOTE)).await;
+    let id = ycoding_core::platform::project_identity::remote_id(OPENED_REMOTE).unwrap();
+    assert!(project_row(&id).is_none());
+    let (server, mut client) = fixture.open().await;
+    let mut recorded = Vec::new();
+    for _ in 0..2 {
+        let location: v5::LocationGetResult = ask(
+            &mut client,
+            "location.get",
+            location_scope(fixture.directory()),
+            location_get(&fixture),
+        )
+        .await;
+        assert_eq!(units(&location.data.project.id), id);
+        assert_eq!(units(&location.data.project.directory), fixture.directory());
+        recorded.push((
+            project_row(&id).unwrap(),
+            directory_rows(fixture.directory()),
+        ));
+    }
+    assert_eq!(
+        recorded[0], recorded[1],
+        "recording an opened directory is idempotent"
+    );
+    let (project, directories) = &recorded[0];
+    assert_eq!(project.worktree.as_str(), Some(fixture.directory()));
+    assert_eq!(
+        project.vcs.as_ref().and_then(LosslessString::as_str),
+        Some("git")
+    );
+    assert!(project.sandboxes.is_empty());
+    assert_eq!(directories.len(), 1);
+    assert_eq!(directories[0].project_id.as_str(), Some(id.as_str()));
+    assert_eq!(
+        (
+            directories[0].type_.clone(),
+            directories[0].strategy.clone()
+        ),
+        (None, None)
+    );
+    drop(client);
+    server.shutdown().await.unwrap();
+    fixture.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn session_create_in_a_never_seen_directory_records_only_its_resolved_project() {
+    let origin = "https://github.com/resource-ops/created.git";
+    let fixture = Fixture::create(false, Some(origin)).await;
+    let id = ycoding_core::platform::project_identity::remote_id(origin).unwrap();
+    let (server, mut client) = fixture.open().await;
+    let created: v5::SessionCreateResult = ask(
+        &mut client,
+        "session.create",
+        location_scope(fixture.directory()),
+        v5::SessionCreateRequest {
+            payload: v5::SessionCreateRequestPayload {
+                location: Some(v5::LocationRef {
+                    directory: text(fixture.directory()),
+                    workspace_id: None,
+                }),
+                ..Default::default()
+            },
+        },
+    )
+    .await;
+    assert_eq!(units(&created.data.project_id), id);
+    assert_eq!(units(&created.data.location.directory), fixture.directory());
+    assert_eq!(created.data.subpath, None);
+    let project = project_row(&id).unwrap();
+    assert_eq!(project.worktree.as_str(), Some(fixture.directory()));
+    assert_eq!(
+        project.vcs.as_ref().and_then(LosslessString::as_str),
+        Some("git")
+    );
+    assert!(directory_rows(fixture.directory()).is_empty());
+    drop(client);
+    server.shutdown().await.unwrap();
+    fixture.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn recorded_projects_keep_their_ids_and_matching_rows_take_the_filesystem_directory() {
+    let imported = Fixture::create(false, Some("")).await;
+    let imported_id = format!("prj_imported_{}", imported.owner);
+    insert_project(&imported_id, imported.directory()).await;
+    let (server, mut client) = imported.open().await;
+    let location: v5::LocationGetResult = ask(
+        &mut client,
+        "location.get",
+        location_scope(imported.directory()),
+        location_get(&imported),
+    )
+    .await;
+    assert_eq!(units(&location.data.project.id), imported_id);
+    assert_eq!(
+        units(&location.data.project.directory),
+        imported.directory()
+    );
+    let directories = directory_rows(imported.directory());
+    assert_eq!(directories.len(), 1);
+    assert_eq!(
+        directories[0].project_id.as_str(),
+        Some(imported_id.as_str())
+    );
+    drop(client);
+    server.shutdown().await.unwrap();
+    imported.shutdown().await;
+
+    let matching = Fixture::create(false, Some("")).await;
+    let root = git(&matching.root, &["rev-list", "--max-parents=0", "HEAD"]);
+    insert_project(&root, "/recorded/elsewhere").await;
+    let row = project::Directory {
+        project_id: root.as_str().into(),
+        directory: matching.directory().into(),
+        type_: Some("copy".into()),
+        strategy: Some("git_worktree".into()),
+        time_created: 1,
+    };
+    world()
+        .store
+        .submit(move |tx| tx.put::<project::DirectoryTable>(&row))
+        .unwrap()
+        .await
+        .unwrap();
+    let (server, mut client) = matching.open().await;
+    let location: v5::LocationGetResult = ask(
+        &mut client,
+        "location.get",
+        location_scope(matching.directory()),
+        location_get(&matching),
+    )
+    .await;
+    assert_eq!(units(&location.data.project.id), root);
+    assert_eq!(
+        units(&location.data.project.directory),
+        matching.directory()
+    );
+    assert_eq!(
+        project_row(&root).unwrap().worktree.as_str(),
+        Some("/recorded/elsewhere")
+    );
+    drop(client);
+    server.shutdown().await.unwrap();
+    matching.shutdown().await;
 }

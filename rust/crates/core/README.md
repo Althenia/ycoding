@@ -1679,6 +1679,18 @@ operation validates and imports durable attachment payloads before atomically
 updating existing event, pending-input, and message Store records and publishing
 the completion marker. It does not run migrations at construction.
 
+`platform::project_identity::resolve` reproduces TypeScript `Project.resolve`. In
+a Git repository the ID is the SHA-1 of `git-remote:<normalized origin>`, else the
+trimmed `<common directory>/ycoding` cache, else the first sorted root commit,
+else `global`; the directory is the worktree root and the store is the common
+directory. Otherwise the nearest `.hg` gives the cached `<.hg>/ycoding` ID, else
+the first sorted `hg log -r roots(all())` node; otherwise the ID is `global` at
+the filesystem root. Origin normalization follows WHATWG URL parsing with `file:`
+excluded, then the SCP form `[user@]host:path`, strips leading slashes, one
+trailing `.git` or `.git/`, and trailing slashes, and lowercases the host.
+`session::store::Service::record_project` inserts a Project row and optionally a
+directory row, each only when absent, in one transaction.
+
 `session::attachment_read` serves `Service::attachment_read`. It accepts only a
 64-character lowercase hexadecimal digest, requires the Session, and finds the
 first managed file with that digest in the Session's user messages, then in its

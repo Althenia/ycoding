@@ -244,6 +244,34 @@ impl Service {
             })?
             .await
     }
+
+    pub async fn record_project(
+        &self,
+        project: Project,
+        directory: Option<LosslessString>,
+    ) -> Result<(), Error> {
+        self.client
+            .submit(move |tx| {
+                if tx.get::<ProjectTable>(&super::key(&project.id))?.is_none() {
+                    ProjectTable::insert(tx, &project)?;
+                }
+                let Some(directory) = directory else {
+                    return Ok(());
+                };
+                let key = tuple_key(&[KeyPart::String(&project.id), KeyPart::String(&directory)]);
+                if tx.get::<DirectoryTable>(&key)?.is_none() {
+                    tx.put::<DirectoryTable>(&Directory {
+                        project_id: project.id.clone(),
+                        directory,
+                        type_: None,
+                        strategy: None,
+                        time_created: project.time_created,
+                    })?;
+                }
+                Ok(())
+            })?
+            .await
+    }
 }
 
 fn text_order(left: &LosslessString, right: &LosslessString) -> Ordering {
