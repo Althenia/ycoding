@@ -79,7 +79,6 @@ const Result = Schema.Struct({
   message: Schema.String.pipe(Schema.optional),
   capture: Browser.CaptureOutput.pipe(Schema.optional),
   groupID: Browser.ActionResult.fields.groupID.pipe(Schema.optional),
-  input: Browser.ActionResult.fields.input.pipe(Schema.optional),
 })
 const Failed = Schema.Struct({
   type: Schema.Literal("error"),

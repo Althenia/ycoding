@@ -173,7 +173,9 @@ function makeCoordinator(invoke: InvokeNative, platform: NodeJS.Platform): Coord
             else claims.set(active.targetKey, { locationToken, sessionID: input.sessionID, revision: result.revision })
           })),
           Effect.tap(() => active.controller.signal.aborted
-            ? Effect.fail(new OwnershipError({ message: "Computer call was cancelled; inspect the target again" }))
+            ? Effect.fail(expectedRevision !== undefined || nativeRequest.action === "desktop.unstage"
+                ? new NativeError({ code: "unknown_outcome", message: "Computer mutation was cancelled; inspect the target again", outcome: "unknown" })
+                : new OwnershipError({ message: "Computer call was cancelled; inspect the target again" }))
             : Effect.void),
         )
       }).pipe(
@@ -205,7 +207,9 @@ function makeCoordinator(invoke: InvokeNative, platform: NodeJS.Platform): Coord
     return yield* (request.action === "desktop.quit" || (request.action === "desktop.launch" && request.remoteDebugging)
       ? desktopInput.withPermit(dispatch) : dispatch).pipe(
       Effect.tap(() => active.controller.signal.aborted
-        ? Effect.fail(new OwnershipError({ message: "Computer call was cancelled" })) : Effect.void),
+        ? Effect.fail(request.action === "desktop.launch" || request.action === "desktop.quit"
+            ? new NativeError({ code: "unknown_outcome", message: "Computer mutation was cancelled; inspect before retrying", outcome: "unknown" })
+            : new OwnershipError({ message: "Computer call was cancelled" })) : Effect.void),
       Effect.ensuring(finish(active)),
     )
   })
@@ -507,7 +511,9 @@ const coordinatorLayer = Layer.effect(
   Effect.gen(function* () {
     const processes = yield* AppProcess.Service
     const events = yield* EventRuntime.Service
-    const coordinator = makeCoordinator(MacOSComputer.invokeWithBridge(processes), process.platform)
+    const native = MacOSComputer.invokeWithBridge(processes)
+    const coordinator = makeCoordinator(native, process.platform)
+    yield* Effect.addFinalizer(native.shutdown)
     yield* events.subscribe([SessionEvent.Moved, SessionEvent.Deleted, SessionEvent.Archived]).pipe(
       Stream.runForEach((event) => coordinator.releaseSession(event.data.sessionID)),
       Effect.forkScoped({ startImmediately: true }),

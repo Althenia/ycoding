@@ -2,7 +2,8 @@ export * as MacOSComputer from "./macos"
 
 import path from "node:path"
 import os from "node:os"
-import { mkdtemp, open, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises"
+import { createConnection, type Socket } from "node:net"
 import { watch } from "node:fs"
 import { Effect, Schema } from "effect"
 import { ChildProcess } from "effect/unstable/process"
@@ -333,108 +334,191 @@ const Response = Schema.Union([
     outcome: NativeError.fields.outcome,
   }),
 ])
-const decodeResponse = Schema.decodeUnknownEffect(Schema.fromJsonString(Response))
+
+const apiVersion = 1
+const maxFrame = 8 * 1024 * 1024
+
+function frame(value: unknown) {
+  const body = Buffer.from(JSON.stringify(value))
+  if (body.length > maxFrame) throw new Error("Native helper request exceeds the frame limit")
+  const header = Buffer.alloc(4)
+  header.writeUInt32LE(body.length)
+  return Buffer.concat([header, body])
+}
+
+function connection(socket: Socket, onTimeout: () => void) {
+  let buffer = Buffer.alloc(0)
+  let nextID = 0
+  const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>()
+  const close = (error: Error) => {
+    for (const call of pending.values()) call.reject(error)
+    pending.clear()
+    socket.destroy()
+  }
+  socket.on("data", (chunk: Buffer) => {
+    buffer = Buffer.concat([buffer, chunk])
+    while (buffer.length >= 4) {
+      const length = buffer.readUInt32LE(0)
+      if (!length || length > maxFrame) return close(new Error("Invalid native helper frame length"))
+      if (buffer.length < length + 4) return
+      const body = buffer.subarray(4, length + 4)
+      buffer = buffer.subarray(length + 4)
+      try {
+        const message: unknown = JSON.parse(body.toString("utf8"))
+        if (!message || typeof message !== "object" || !("id" in message) || typeof message.id !== "number" || !("jsonrpc" in message) || message.jsonrpc !== "2.0")
+          throw new Error("Invalid native helper response")
+        const call = pending.get(message.id)
+        if (!call) throw new Error("Unexpected native helper response")
+        pending.delete(message.id)
+        if ("error" in message) {
+          const error = message.error
+          if (!error || typeof error !== "object" || !("message" in error) || typeof error.message !== "string") throw new Error("Invalid native helper error")
+          call.reject(new Error(error.message))
+          continue
+        }
+        if (!("result" in message)) throw new Error("Invalid native helper response")
+        call.resolve(message.result)
+      } catch (error) { return close(error instanceof Error ? error : new Error("Invalid native helper response")) }
+    }
+  })
+  socket.on("error", close)
+  socket.on("close", () => close(new Error("Native helper connection closed")))
+  return {
+    socket,
+    close,
+    send(method: string, params: unknown, timeout = 30_000): Promise<unknown> {
+      if (socket.destroyed) return Promise.reject(new Error("Native helper connection closed"))
+      const id = ++nextID
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { close(new Error("Native helper call timed out")); onTimeout() }, timeout)
+        pending.set(id, { resolve: (value) => { clearTimeout(timer); resolve(value) }, reject: (error) => { clearTimeout(timer); reject(error) } })
+        try { socket.write(frame({ jsonrpc: "2.0", id, method, params })) }
+        catch (error) { close(error instanceof Error ? error : new Error("Native helper write failed")) }
+      })
+    },
+  }
+}
+
+async function connect(socketPath: string): Promise<Socket> {
+  return new Promise((resolve, reject) => {
+    const socket = createConnection(socketPath)
+    socket.once("connect", () => { socket.removeAllListeners("error"); resolve(socket) })
+    socket.once("error", reject)
+  })
+}
 
 export function invokeWith(
   processes: AppProcess.Interface,
   platform: NodeJS.Platform = process.platform,
   application = applicationPath(),
-): Invoke {
-  return (request) => {
-    if (platform !== "darwin")
-      return Effect.fail(
-        new NativeError({
-          code: "unsupported_platform",
-          message: `Native computer use has no provider for ${platform}`,
-          outcome: "not_started",
-        }),
-      )
-    const mutating =
-      request.action === "iterm.send_text" ||
-      request.action === "finder.move" || request.action === "desktop.launch" || request.action === "desktop.quit" ||
-      request.action.startsWith("webbrowser.") && request.action !== "webbrowser.tabs" ||
-      (request.action.startsWith("desktop.") &&
-        request.action !== "desktop.inspect" &&
-        request.action !== "desktop.capture" && request.action !== "desktop.list")
-    // Every request runs inside the app so its Accessibility, Screen Recording, and Automation grants apply.
-    const output = Effect.uninterruptible(
-      Effect.scoped(
-        Effect.acquireRelease(
-          Effect.tryPromise({
-            try: () => mkdtemp(path.join(os.tmpdir(), "ycoding-computer-")),
-            catch: (cause) => cause,
-          }),
-          (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
-        ).pipe(
-          Effect.flatMap((directory) =>
-            Effect.tryPromise({
-              try: () => writeFile(path.join(directory, "request.json"), JSON.stringify(request), { mode: 0o600 }),
-              catch: (cause) => cause,
-            }).pipe(
-              Effect.andThen(
-                processes.run(
-                  ChildProcess.make("/usr/bin/open", [
-                    "-n",
-                    "-g",
-                    "-a",
-                    application,
-                    "--args",
-                    path.join(directory, "request.json"),
-                    path.join(directory, "response.json"),
-                  ]),
-                  {
-                    timeout: "10 seconds",
-                    maxOutputBytes: 1024,
-                    maxErrorBytes: 1024,
-                  },
-                ),
-              ),
-              Effect.flatMap(AppProcess.requireSuccess),
-              Effect.flatMap(() => Effect.tryPromise({ try: () => awaitResponse(directory), catch: (cause) => cause })),
-            ),
-          ),
-        ),
-      ),
-    )
-    return output.pipe(
-      Effect.flatMap(decodeResponse),
-      Effect.mapError((error) =>
-        error instanceof NativeError
-          ? error
-          : new NativeError({
-              code: mutating ? "unknown_outcome" : "helper_unavailable",
-              message: mutating
-                ? "Native helper settlement is unknown; inspect the target before any further mutation"
-                : "Native computer helper is unavailable or returned invalid output",
-              outcome: mutating ? "unknown" : "not_started",
-            }),
-      ),
-      Effect.flatMap((response) =>
-        response.status === "ok"
-          ? response.action === request.action
-            ? Effect.succeed(response)
-            : Effect.fail(
-                new NativeError({
-                  code: "invalid_response",
-                  message: "Native computer helper returned a mismatched action",
-                  outcome: "unknown",
-                }),
-              )
-          : Effect.fail(
-              new NativeError({
-                code: response.code,
-                message: response.message,
-                outcome: response.outcome,
-              }),
-            ),
-      ),
-    )
+) {
+  let directory: string | undefined
+  let service: ReturnType<typeof connection> | undefined
+  let starting: Promise<ReturnType<typeof connection>> | undefined
+  let stopping: Promise<void> | undefined
+  let chain = Promise.resolve()
+  const stop = async () => {
+    const current = service
+    service = undefined
+    if (current && !current.socket.destroyed) await current.send("shutdown", {}, 1000).catch(() => undefined)
+    current?.close(new Error("Native helper stopped"))
+    if (directory) {
+      await rm(directory, { recursive: true, force: true })
+      directory = undefined
+    }
   }
+  const terminate = async () => {
+    if (directory) {
+      const pid = Number(await readFile(path.join(directory, "pid"), "utf8").catch(() => ""))
+      if (Number.isSafeInteger(pid) && pid > 0) {
+        try { process.kill(pid, "SIGTERM") } catch {}
+      }
+    }
+    await stop()
+  }
+  const launch = async () => {
+    if (!directory) directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-computer-"))
+    const handoff = path.join(directory, "service.json")
+    await writeFile(handoff, JSON.stringify({ action: "service", controlDirectory: directory, ownerPID: process.pid }), { mode: 0o600 })
+    await Effect.runPromise(processes.run(ChildProcess.make("/usr/bin/open", ["-n", "-g", "-a", application, "--args", handoff]),
+      { timeout: "10 seconds", maxOutputBytes: 1024, maxErrorBytes: 1024 }).pipe(Effect.flatMap(AppProcess.requireSuccess)))
+  }
+  const ready = async () => {
+    if (service && !service.socket.destroyed) return service
+    if (starting) return starting
+    starting = (async () => {
+      if (stopping) await stopping
+      if (!directory) directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-computer-"))
+      let socket = await connect(path.join(directory, "computer-use.sock")).catch(() => undefined)
+      if (!socket) {
+        if (service?.socket.destroyed) await terminate()
+        await launch()
+        const deadline = Date.now() + 5000
+        while (!socket && Date.now() < deadline) {
+          await Bun.sleep(100)
+          socket = await connect(path.join(directory, "computer-use.sock")).catch(() => undefined)
+        }
+      }
+      if (!socket) throw new Error("Native helper did not start within five seconds")
+      const candidate = connection(socket, () => { stopping = terminate(); void stopping.catch(() => undefined) })
+      try {
+        const ping = await candidate.send("ping", { clientApiVersion: apiVersion }, 1000)
+        if (!ping || typeof ping !== "object" || !("serverApiVersion" in ping) || ping.serverApiVersion !== apiVersion)
+          throw new Error("Native helper API version mismatch")
+      } catch (error) {
+        candidate.close(new Error("Native helper handshake failed"))
+        await terminate()
+        throw error
+      }
+      service = candidate
+      return candidate
+    })().finally(() => { starting = undefined })
+    return starting
+  }
+  const invoke: Invoke = (request, signal) => {
+    if (platform !== "darwin") return Effect.fail(new NativeError({ code: "unsupported_platform", message: `Native computer use has no provider for ${platform}`, outcome: "not_started" }))
+    if (request.action === "display.hold") return Effect.tryPromise({
+      try: async () => {
+        const handoff = await mkdtemp(path.join(os.tmpdir(), "ycoding-computer-"))
+        try {
+          await writeFile(path.join(handoff, "request.json"), JSON.stringify(request), { mode: 0o600 })
+          await Effect.runPromise(processes.run(ChildProcess.make("/usr/bin/open", ["-n", "-g", "-a", application, "--args", path.join(handoff, "request.json"), path.join(handoff, "response.json")]),
+            { timeout: "10 seconds", maxOutputBytes: 1024, maxErrorBytes: 1024 }).pipe(Effect.flatMap(AppProcess.requireSuccess)))
+          return Schema.decodeUnknownSync(Schema.fromJsonString(Response))(await awaitResponse(handoff))
+        } finally { await rm(handoff, { recursive: true, force: true }) }
+      },
+      catch: () => new NativeError({ code: "background_unavailable", message: "Agent display helper is unavailable", outcome: "not_started" }),
+    }).pipe(Effect.flatMap((response) => response.status === "ok" && response.action === request.action
+      ? Effect.succeed(response)
+      : Effect.fail(new NativeError(response.status === "error"
+        ? { code: response.code, message: response.message, outcome: response.outcome }
+        : { code: "invalid_response", message: "Agent display helper returned a mismatched action", outcome: "unknown" }))))
+    const mutating = request.action === "iterm.send_text" || request.action === "finder.move" || request.action === "desktop.launch" || request.action === "desktop.quit" ||
+      request.action.startsWith("webbrowser.") && request.action !== "webbrowser.tabs" ||
+      request.action.startsWith("desktop.") && !["desktop.inspect", "desktop.capture", "desktop.list"].includes(request.action)
+    return Effect.uninterruptible(Effect.suspend(() => {
+      const work = chain.then(async () => {
+        if (signal.aborted) throw new Error("Native helper call cancelled")
+        const current = await ready()
+        const raw = await current.send("request", { deadlineUnixMilliseconds: Date.now() + 30_000, request })
+        return Schema.decodeUnknownSync(Response)(raw)
+      })
+      chain = work.then(() => undefined, () => undefined)
+      return Effect.tryPromise({ try: () => work, catch: () => new NativeError({
+        code: mutating ? "unknown_outcome" : "helper_unavailable",
+        message: mutating ? "Native helper settlement is unknown; inspect the target before any further mutation" : "Native computer helper is unavailable or returned invalid output",
+        outcome: mutating ? "unknown" : "not_started",
+      }) }).pipe(Effect.flatMap((response) => response.status === "ok"
+        ? response.action === request.action ? Effect.succeed(response) : Effect.fail(new NativeError({ code: "invalid_response", message: "Native computer helper returned a mismatched action", outcome: "unknown" }))
+        : Effect.fail(new NativeError({ code: response.code, message: response.message, outcome: response.outcome }))))
+    }))
+  }
+  return Object.assign(invoke, { shutdown: () => Effect.promise(() => chain.then(stop)) })
 }
 
-export function invokeWithBridge(processes: AppProcess.Interface, platform: NodeJS.Platform = process.platform, application = applicationPath(), electron?: ReturnType<typeof import("./electron").make>): Invoke {
+export function invokeWithBridge(processes: AppProcess.Interface, platform: NodeJS.Platform = process.platform, application = applicationPath(), electron?: ReturnType<typeof import("./electron").make>): ReturnType<typeof invokeWith> {
   const native = invokeWith(processes, platform, application)
-  return (request, signal) => {
+  return Object.assign((request: Request, signal: AbortSignal) => {
     if (platform !== "darwin" || !request.action.startsWith("desktop.")) return native(request, signal)
     if (request.action === "desktop.list" || request.action === "desktop.inspect" || request.action === "desktop.quit") return native(request, signal)
     return Effect.gen(function* () {
@@ -509,7 +593,7 @@ export function invokeWithBridge(processes: AppProcess.Interface, platform: Node
       }
       return yield* native(request, signal)
     })
-  }
+  }, { shutdown: native.shutdown })
 }
 
 function awaitResponse(directory: string): Promise<string> {

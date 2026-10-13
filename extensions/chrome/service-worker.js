@@ -501,6 +501,7 @@ async function openTab(message) {
     if (socket !== owner || generation !== bridgeGeneration || owner.readyState !== WebSocket.OPEN)
       throw new Error("Chrome bridge changed while opening a tab")
     await chrome.debugger.attach({ tabId: chromeTabID }, PROTOCOL_VERSION)
+    await command(chromeTabID, "Emulation.setFocusEmulationEnabled", { enabled: true })
     await Promise.all([
       command(chromeTabID, "Page.enable"),
       command(chromeTabID, "DOM.enable"),
@@ -749,7 +750,6 @@ async function abandonFresh(tab) {
 async function act(message) {
   let dispatched = false
   let fresh
-  let input
   try {
     const tab = requireTab(message)
     if (requestedPause) return paused(message, tab)
@@ -762,10 +762,10 @@ async function act(message) {
     await controlTabs([tab])
     tab.allowedOrigins = new Set(message.allowedOrigins)
     if (message.action.type === "navigate") await navigate(tab, message.action.url, () => (dispatched = true))
-    if (message.action.type === "click") input = await click(tab, message.action.ref, () => (dispatched = true))
+    if (message.action.type === "click") await click(tab, message.action.ref, () => (dispatched = true))
     if (message.action.type === "type")
       await typeText(tab, message.action.ref, message.action.text, () => (dispatched = true))
-    if (message.action.type === "scroll") input = await scroll(tab, message.action.deltaY, () => (dispatched = true))
+    if (message.action.type === "scroll") await scroll(tab, message.action.deltaY, () => (dispatched = true))
     const captured = message.action.type === "capture" ? await capture(tab) : undefined
     await isActive(tab)
     const info = await tabInfo(tab)
@@ -790,7 +790,6 @@ async function act(message) {
       title: info.title ?? "",
       url: tab.url,
       capture: captured,
-      input,
     })
   } catch (error) {
     if (!dispatched) await abandonFresh(fresh)
@@ -802,6 +801,7 @@ async function attachProfile(tab) {
   if (!tab.profile || tab.attached) return
   if (!pairing?.enabled || socket?.readyState !== WebSocket.OPEN) throw new Error("Profile access is unavailable")
   await chrome.debugger.attach({ tabId: tab.chromeTabID }, PROTOCOL_VERSION)
+  await command(tab.chromeTabID, "Emulation.setFocusEmulationEnabled", { enabled: true })
   tab.attached = true
   updateBadge(tab)
   if (tabs.get(tab.id) !== tab || !isAllowedPage(tab, (await chrome.tabs.get(tab.chromeTabID)).url)) {
@@ -852,22 +852,9 @@ async function click(tab, ref, markDispatched) {
   if (tabs.get(tab.id) !== tab || tab.documentGeneration !== documentGeneration)
     throw new Error("The shared tab observation is stale")
   await moveCursor(tab, x, y, LABELS.click, true)
-  if (await pageHidden(tab)) {
-    const { object } = await command(tab.chromeTabID, "DOM.resolveNode", {
-      backendNodeId,
-      executionContextId: await isolatedWorld(tab),
-    })
-    markDispatched()
-    await command(tab.chromeTabID, "Runtime.callFunctionOn", {
-      objectId: object.objectId,
-      functionDeclaration: "function () { this.click() }",
-    })
-    return "scripted"
-  }
   markDispatched()
   for (const type of ["mousePressed", "mouseReleased"])
     await inputCommand(tab, { type, x, y, button: "left", clickCount: 1 })
-  return "trusted"
 }
 
 async function scroll(tab, deltaY, markDispatched) {
@@ -875,14 +862,8 @@ async function scroll(tab, deltaY, markDispatched) {
   const x = (layoutViewport?.clientWidth ?? 0) / 2
   const y = (layoutViewport?.clientHeight ?? 0) / 2
   await moveCursor(tab, x, y, LABELS.scroll)
-  const hidden = await pageHidden(tab)
   markDispatched()
-  if (hidden) {
-    await pageEvaluate(tab, `scrollBy(0, ${Number(deltaY)})`)
-    return "scripted"
-  }
   await inputCommand(tab, { type: "mouseWheel", x, y, deltaX: 0, deltaY })
-  return "trusted"
 }
 
 function forgetDocument(tab) {
@@ -930,21 +911,6 @@ function bounded(promise, milliseconds, message) {
       timeout = setTimeout(() => reject(new Error(message)), milliseconds)
     }),
   ]).finally(() => clearTimeout(timeout))
-}
-
-async function pageHidden(tab) {
-  let timeout
-  const hidden = await Promise.race([
-    (async () => {
-      const { result } = await pageEvaluate(tab, "document.visibilityState")
-      return result?.value === "hidden"
-    })().catch(() => false),
-    new Promise((resolve) => {
-      timeout = setTimeout(() => resolve(false), CURSOR_COMMAND_TIMEOUT_MS)
-    }),
-  ])
-  clearTimeout(timeout)
-  return hidden
 }
 
 async function inputCommand(tab, params) {

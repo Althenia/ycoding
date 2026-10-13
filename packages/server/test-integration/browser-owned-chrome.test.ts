@@ -460,14 +460,13 @@ test("pairs a private Chrome extension for owned and automatically listed existi
       }),
     })
     expect(ownedClick.status, await ownedClick.clone().text()).toBe(200)
-    expect(
-      Schema.decodeUnknownSync(Schema.Struct({ data: Browser.ActionResult }))(await ownedClick.json()).data,
-    ).toMatchObject({
-      status: "completed",
-      input: "scripted",
-    })
+    const ownedClickResult = Schema.decodeUnknownSync(Schema.Struct({ data: Browser.ActionResult }))(
+      await ownedClick.json(),
+    ).data
+    expect(ownedClickResult).toMatchObject({ status: "completed" })
+    expect(ownedClickResult).not.toHaveProperty("input")
     await eventually(async () => (ownedClicks.length === 1 ? true : undefined), "background owned click")
-    expect(ownedClicks).toEqual(["hidden"])
+    expect(ownedClicks).toEqual(["visible"])
     expect(await activeTabIDs(cdp, workerSession)).toEqual(activeBefore)
     const unsafe = await request(`/api/session/${owner}/browser/action`, {
       method: "POST",
@@ -1478,10 +1477,27 @@ async function markerExpiry(extensionDirectory: string) {
 
     const frozenPage = await live.pageSessionAt("/csp")
     await client.send("Page.enable", {}, frozenPage)
+    await evaluate(
+      client,
+      frozenPage,
+      "window.__ycodingFreezeTicks=0;setInterval(()=>window.__ycodingFreezeTicks++,50)",
+    )
+    await eventually(
+      async () => (Number(await evaluate(client, frozenPage, "window.__ycodingFreezeTicks")) >= 2 ? true : undefined),
+      "page timer before freeze",
+    )
+    await evaluate(
+      client,
+      live.workerSession,
+      `chrome.debugger.sendCommand({tabId:${frozen}},"Emulation.setFocusEmulationEnabled",{enabled:false}).then(()=>true)`,
+    )
     const versionID = await eventually(async () => live.workerVersion(), "Chrome extension worker version")
     const lostAt = Date.now()
     await client.send("ServiceWorker.stopWorker", { versionId: versionID }, live.pageSession)
     await client.send("Page.setWebLifecycleState", { state: "frozen" }, frozenPage)
+    const frozenTicks = await evaluate(client, frozenPage, "window.__ycodingFreezeTicks")
+    await Bun.sleep(600)
+    expect(await evaluate(client, frozenPage, "window.__ycodingFreezeTicks")).toBe(frozenTicks)
 
     const bound = timing.expiry + timing.check + 10_000
     await live.awaitTitle(
@@ -1510,7 +1526,7 @@ async function markerExpiry(extensionDirectory: string) {
       "/csp",
       (title) => title === "CSP fixture",
       "frozen marker removed after the page is thawed",
-      timing.check + 4_000,
+      bound,
     )
   } finally {
     await live.dispose()

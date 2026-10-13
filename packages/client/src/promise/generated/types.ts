@@ -2726,7 +2726,6 @@ export type BrowserActionResult = {
   message?: string
   capture?: BrowserCaptureOutput
   groupID?: number
-  input?: "trusted" | "scripted"
 }
 
 export type IsolatedBrowserStatus = {

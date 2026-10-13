@@ -1,6 +1,6 @@
 import { describe, expect } from "bun:test"
 import { Effect } from "effect"
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { MacOSComputer } from "@ycoding-ai/core/computer/macos"
@@ -15,7 +15,9 @@ describe("macOS computer use app", () => {
   it.live("lists running apps and their layer-zero windows without changing the frontmost app", () =>
     Effect.gen(function* () {
       const processes = yield* AppProcess.Service
-      const response = yield* MacOSComputer.invokeWith(processes, "darwin")({
+      const invoke = MacOSComputer.invokeWith(processes, "darwin")
+      yield* Effect.addFinalizer(invoke.shutdown)
+      const response = yield* invoke({
         action: "desktop.list", owner: { sessionID: "integration", callID: "list" },
       }, new AbortController().signal)
       expect(response.apps).toBeDefined()
@@ -111,6 +113,52 @@ describe("macOS computer use app", () => {
       expect(clicked.effect).toBe("changed")
       expect(after.apps?.find((app) => app.is_active)?.pid).toBe(before.apps?.find((app) => app.is_active)?.pid)
     }), 60_000)
+  for (const [name, activates] of [
+    ["keeps foreground focus during a background fixture click", false],
+    ["prevents a background fixture click from stealing focus", true],
+  ] as const) it.live(name, () => Effect.gen(function* () {
+    const directory = yield* Effect.promise(() => mkdtemp(path.join(os.tmpdir(), "ycoding-focus-fixture-")))
+    yield* Effect.addFinalizer(() => Effect.promise(() => rm(directory, { recursive: true, force: true })))
+    const application = path.join(directory, "Focus Fixture.app")
+    const executable = path.join(application, "Contents/MacOS/fixture")
+    yield* Effect.promise(() => mkdir(path.dirname(executable), { recursive: true }))
+    const compiled = yield* Effect.promise(() => Bun.$`/usr/bin/xcrun swiftc ${path.join(import.meta.dir, "fixtures/computer-focus.swift")} -o ${executable}`.quiet())
+    expect(compiled.exitCode).toBe(0)
+    yield* Effect.promise(() => writeFile(path.join(application, "Contents/Info.plist"), `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>app.ycoding.focus-fixture</string><key>CFBundleExecutable</key><string>fixture</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>`))
+    const state = path.join(directory, "clicks")
+    yield* Effect.promise(() => writeFile(state, "0"))
+    const processes = yield* AppProcess.Service
+    const invoke = MacOSComputer.invokeWith(processes, "darwin")
+    yield* Effect.addFinalizer(invoke.shutdown)
+    const before = yield* invoke({ action: "desktop.list", owner: { sessionID: "fixture", callID: "before" } }, new AbortController().signal)
+    const foreground = before.apps?.find((entry) => entry.is_active)?.pid
+    expect(foreground).toBeGreaterThan(0)
+    const launch = yield* Effect.promise(() => Bun.$`/usr/bin/open -g -n -a ${application} --args ${state} ${activates ? "activate" : "plain"}`.quiet())
+    expect(launch.exitCode).toBe(0)
+    yield* Effect.addFinalizer(() => Effect.promise(async () => {
+      const pid = Number(await readFile(`${state}.pid`, "utf8").catch(() => ""))
+      if (Number.isInteger(pid) && pid > 0) await Bun.$`/bin/kill -TERM ${pid}`.quiet()
+    }))
+    const identity = yield* Effect.promise(async () => {
+      const deadline = Date.now() + 5000
+      while (Date.now() < deadline) {
+        const parts = (await readFile(`${state}.ready`, "utf8").catch(() => "")).split("/").map(Number)
+        if (parts.length === 2 && parts.every((part) => Number.isInteger(part) && part > 0)) return parts
+        await Bun.sleep(100)
+      }
+      throw new Error("Focus fixture window did not appear")
+    })
+    const target = { platform: "macos" as const, application: "desktop" as const,
+      bundleID: "app.ycoding.focus-fixture", pid: identity[0], windowID: identity[1] }
+    const inspected = yield* invoke({ action: "desktop.inspect", owner: { sessionID: "fixture", callID: "inspect" }, target }, new AbortController().signal)
+    const click = yield* invoke({ action: "desktop.click", owner: { sessionID: "fixture", callID: "click" }, target,
+      expectedRevision: inspected.revision, x: 100, y: 100, button: "left" }, new AbortController().signal)
+    expect(click.action).toBe("desktop.click")
+    const after = yield* invoke({ action: "desktop.list", owner: { sessionID: "fixture", callID: "after" } }, new AbortController().signal)
+    expect(after.apps?.find((entry) => entry.is_active)?.pid).toBe(foreground)
+    expect(yield* Effect.promise(() => readFile(state, "utf8"))).toBe("1")
+  }), 120_000)
+
 })
 
 function requireTarget() {

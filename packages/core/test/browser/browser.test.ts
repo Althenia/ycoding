@@ -202,7 +202,7 @@ describe("paired Chrome browser service", () => {
         generation: connected.generation, callID: "paused-observe" }).pipe(Effect.exit))).toBe(true)
     }))
   })
-  test("reports scripted input the extension used for a hidden tab", async () => {
+  test("accepts an action result without an input transport field", async () => {
     await run(Effect.gen(function* () {
       const browser = yield* Browser.Service
       const outbox = yield* Queue.unbounded<BrowserProtocol.ServerMessage>()
@@ -223,8 +223,10 @@ describe("paired Chrome browser service", () => {
       yield* Queue.take(outbox)
       yield* connected.attachment.receive({ type: "result", tabID, callID: "hidden-click",
         generation: connected.generation, documentGeneration: 1, observationRevision: 1,
-        status: "completed", title: "Hidden", url: "https://example.test/hidden", input: "scripted" })
-      expect(yield* Fiber.join(acting)).toMatchObject({ status: "completed", input: "scripted" })
+        status: "completed", title: "Hidden", url: "https://example.test/hidden" })
+      const result = yield* Fiber.join(acting)
+      expect(result).toMatchObject({ status: "completed" })
+      expect(result).not.toHaveProperty("input")
     }))
   })
 

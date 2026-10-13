@@ -59,6 +59,17 @@ describe("Browser selected-tab contract", () => {
     ).toBe(false)
   })
 
+  test("action results do not expose the browser input transport", () => {
+    const result = Schema.decodeUnknownSync(Browser.ActionResult)({
+      callID: "call_contract",
+      tab: { ...tab, generation: 1, documentGeneration: 2, observationRevision: 3 },
+      status: "completed",
+      input: "scripted",
+    })
+    expect(result.status).toBe("completed")
+    expect("input" in result).toBe(false)
+  })
+
   test("bounds profile tab grouping and accepts Chrome group zero", () => {
     const base = { sessionID: tab.sessionID, tabID: tab.id, generation: 1,
       documentGeneration: 2, observationRevision: 3, callID: "group" }

@@ -529,6 +529,12 @@ describe("Chrome bridge service worker", () => {
       })
       expect(harness.created).toEqual([{ url: "about:blank", active: false }])
       expect(harness.attached).toEqual([{ tabId: 24 }])
+      expect(harness.commands[0]).toEqual({
+        source: { tabId: 24 }, method: "Emulation.setFocusEmulationEnabled", params: { enabled: true },
+      })
+      expect(harness.commands.filter((item) => item.method === "Emulation.setFocusEmulationEnabled")).toEqual([
+        { source: { tabId: 24 }, method: "Emulation.setFocusEmulationEnabled", params: { enabled: true } },
+      ])
       expect(socket.outgoing).toContainEqual(
         expect.objectContaining({
           type: "opened",
@@ -903,7 +909,7 @@ describe("Chrome bridge service worker", () => {
     }
   }, 1500)
 
-  test("hidden tabs click and scroll with page scripts because Chrome drops CDP input there", async () => {
+  test("hidden tabs click and scroll with CDP input under focus emulation", async () => {
     harness.reset()
     harness.page.profileTabs = [{ id: 17, active: false, url: "https://example.test/form", title: "Background" }]
     harness.cursorDOM.setVisibility("hidden")
@@ -914,33 +920,50 @@ describe("Chrome bridge service worker", () => {
       await socket.receive({ type: "observe", tabID: shared.tabID, generation: "bridge-1", callID: "observe-hidden-input" })
       const observation = socket.outgoing.find((message) => message.callID === "observe-hidden-input")
       await socket.receive(action("hidden-click", shared.tabID, observation, { type: "click", ref: "b1" }))
-      expect(socket.outgoing.find((item) => item.callID === "hidden-click")).toMatchObject({
-        type: "result",
-        status: "completed",
-        input: "scripted",
-      })
-      expect(harness.page.scriptedClicks).toEqual(["node-91"])
+      const clickResult = socket.outgoing.find((item) => item.callID === "hidden-click")
+      expect(clickResult).toMatchObject({ type: "result", status: "completed" })
+      expect(clickResult).not.toHaveProperty("input")
       await socket.receive(action("hidden-scroll", shared.tabID, observation, { type: "scroll", deltaY: 120 }))
-      expect(socket.outgoing.find((item) => item.callID === "hidden-scroll")).toMatchObject({
-        type: "result",
-        status: "completed",
-        input: "scripted",
+      const scrollResult = socket.outgoing.find((item) => item.callID === "hidden-scroll")
+      expect(scrollResult).toMatchObject({ type: "result", status: "completed" })
+      expect(scrollResult).not.toHaveProperty("input")
+      expect(harness.commands.filter((item) => item.method === "Input.dispatchMouseEvent").map((item) => item.params.type))
+        .toEqual(["mousePressed", "mouseReleased", "mouseWheel"])
+      expect(harness.commands.some((item) => item.method === "Runtime.callFunctionOn")).toBe(false)
+      expect(harness.commands.some((item) => item.method === "Runtime.evaluate" && item.params.expression.includes("scrollBy")))
+        .toBe(false)
+      expect(harness.commands[0]).toEqual({
+        source: { tabId: 17 }, method: "Emulation.setFocusEmulationEnabled", params: { enabled: true },
       })
-      expect(harness.cursorDOM.scrolls).toEqual([[0, 120]])
-      expect(harness.commands.some((item) => item.method === "Input.dispatchMouseEvent")).toBe(false)
-
-      harness.cursorDOM.setVisibility("visible")
-      await socket.receive(action("visible-click", shared.tabID, observation, { type: "click", ref: "b1" }))
-      expect(socket.outgoing.find((item) => item.callID === "visible-click")).toMatchObject({
-        type: "result",
-        input: "trusted",
-      })
-      expect(harness.commands.some((item) => item.method === "Input.dispatchMouseEvent")).toBe(true)
+      expect(harness.commands.filter((item) => item.method === "Emulation.setFocusEmulationEnabled")).toEqual([
+        { source: { tabId: 17 }, method: "Emulation.setFocusEmulationEnabled", params: { enabled: true } },
+      ])
     } finally {
       if (harness.FakeWebSocket.instance?.readyState === harness.FakeWebSocket.OPEN)
         await harness.FakeWebSocket.instance.receive({ type: "control", action: "stop" })
     }
   }, 3000)
+
+  test("failed focus emulation detaches a profile tab and fails the action closed", async () => {
+    harness.reset()
+    harness.page.profileTabs = [{ id: 17, active: false, url: "https://example.test/form", title: "Background" }]
+    harness.page.focusEmulationFails = true
+    try {
+      await popup(harness.runtimeMessages, { type: "pair", serverURL: "http://127.0.0.1:4096", secret: "l".repeat(32) })
+      const socket = harness.FakeWebSocket.instance
+      const shared = socket.outgoing.find((message) => message.type === "shared")
+      await socket.receive({ type: "observe", tabID: shared.tabID, generation: "bridge-1", callID: "observe-focus-failure" })
+      const observation = socket.outgoing.find((item) => item.callID === "observe-focus-failure")
+      await socket.receive(action("focus-failure", shared.tabID, observation, { type: "click", ref: "b1" }))
+      expect(socket.outgoing.find((item) => item.callID === "focus-failure")).toMatchObject({ type: "error", dispatched: false })
+      expect(harness.detached).toContainEqual({ tabId: 17 })
+      expect(harness.badges).not.toContainEqual({ tabId: 17, text: "ON" })
+      expect(harness.commands.some((item) => item.method === "Input.dispatchMouseEvent")).toBe(false)
+    } finally {
+      if (harness.FakeWebSocket.instance?.readyState === harness.FakeWebSocket.OPEN)
+        await harness.FakeWebSocket.instance.receive({ type: "control", action: "stop" })
+    }
+  }, 1500)
 
   test("an unanswered CDP input command fails as dispatched instead of hanging the action", async () => {
     harness.reset()
@@ -1770,6 +1793,7 @@ function createHarness() {
     cursorEvaluationHangs: false,
     cursorPlacementFails: false,
     cursorPlacementHangs: false,
+    focusEmulationFails: false,
     axFails: false,
     axNavigates: undefined,
     holdMark: undefined,
@@ -1969,6 +1993,8 @@ function createHarness() {
           commands.push({ source, method, params })
           timeline.push(["command", method, source.tabId])
           if (!attachedNow.has(source.tabId)) throw new Error(`Debugger is not attached to the tab with id: ${source.tabId}`)
+          if (method === "Emulation.setFocusEmulationEnabled" && page.focusEmulationFails)
+            throw new Error("Focus emulation unavailable")
           if (method === "Page.navigate" && source.tabId === 24) createdURL = params.url
           if (method === "Page.getNavigationHistory") {
             if (source.tabId === 24 && page.historyUnavailable-- > 0)
@@ -1998,7 +2024,6 @@ function createHarness() {
           if (method === "Input.dispatchMouseEvent" && page.inputHangs) return new Promise(() => {})
           if (method === "DOM.resolveNode") return { object: { objectId: `node-${params.backendNodeId}` } }
           if (method === "Runtime.callFunctionOn") {
-            if (params.functionDeclaration.includes("click()")) page.scriptedClicks.push(params.objectId)
             return { result: { type: "undefined" } }
           }
           if (method === "Runtime.evaluate") {
@@ -2060,6 +2085,7 @@ function createHarness() {
       page.cursorEvaluationHangs = false
       page.cursorPlacementFails = false
       page.cursorPlacementHangs = false
+      page.focusEmulationFails = false
       page.axFails = false
       page.axNavigates = undefined
       page.holdMark = undefined
@@ -2067,7 +2093,6 @@ function createHarness() {
       page.evaluationFailsFor = undefined
       page.staleContext = 0
       page.inputHangs = false
-      page.scriptedClicks = []
       page.documentRoot = node("#document")
       cursorDOM.reset()
       timeline.length = 0

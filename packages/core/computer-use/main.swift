@@ -1014,19 +1014,19 @@ private enum BackgroundPost {
 }
 
 // Cua Driver (MIT), libs/cua-driver/rust/crates/platform-macos/src/input/skylight.rs:
-// Carbon focus records change AppKit's key-window routing without SLPSSetFrontProcess or window ordering.
 private struct BackgroundFocus {
     typealias PostRecord = @convention(c) (UnsafeRawPointer?, UnsafePointer<UInt8>?) -> Int32
     typealias GetFront = @convention(c) (UnsafeMutableRawPointer?) -> Int32
     typealias GetPSN = @convention(c) (Int32, UnsafeMutableRawPointer?) -> Int32
+    typealias SetFront = @convention(c) (UnsafeRawPointer?, UInt32) -> Int32
 
     static let postRecord: PostRecord? = BackgroundPost.library.flatMap { dlsym($0, "SLPSPostEventRecordTo") }.map { unsafeBitCast($0, to: PostRecord.self) }
     static let getFront: GetFront? = BackgroundPost.library.flatMap { dlsym($0, "_SLPSGetFrontProcess") }.map { unsafeBitCast($0, to: GetFront.self) }
     static let applicationServices = dlopen("/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices", RTLD_LAZY | RTLD_GLOBAL)
     static let getPSN: GetPSN? = applicationServices.flatMap { dlsym($0, "GetProcessForPID") }.map { unsafeBitCast($0, to: GetPSN.self) }
+    static let setFront: SetFront? = applicationServices.flatMap { dlsym($0, "SetFrontProcessWithOptions") }.map { unsafeBitCast($0, to: SetFront.self) }
 
     let previousPSN: [UInt8]
-    let previousPID: Int32
     let previousWindow: UInt32
     let targetPSN: [UInt8]
     let targetWindow: UInt32
@@ -1034,7 +1034,7 @@ private struct BackgroundFocus {
 
     static func begin(_ target: DesktopTarget) throws -> BackgroundFocus {
         guard let previous = NSWorkspace.shared.frontmostApplication?.processIdentifier,
-              let previousWindow = keyWindow(previous), let getFront, let getPSN, postRecord != nil else {
+              let previousWindow = keyWindow(previous), let getFront, let getPSN, postRecord != nil, setFront != nil else {
             throw HelperError.backgroundUnavailable
         }
         var frontPSN = [UInt8](repeating: 0, count: 8)
@@ -1044,7 +1044,7 @@ private struct BackgroundFocus {
               previousPSN.withUnsafeMutableBytes({ getPSN(previous, $0.baseAddress) }) == 0,
               targetPSN.withUnsafeMutableBytes({ getPSN(target.pid, $0.baseAddress) }) == 0,
               frontPSN == previousPSN else { throw HelperError.backgroundUnavailable }
-        let focus = BackgroundFocus(previousPSN: previousPSN, previousPID: previous, previousWindow: previousWindow,
+        let focus = BackgroundFocus(previousPSN: previousPSN, previousWindow: previousWindow,
                                     targetPSN: targetPSN, targetWindow: target.windowID,
                                     shifted: previous != target.pid || previousWindow != target.windowID)
         if !focus.shifted { return focus }
@@ -1066,10 +1066,24 @@ private struct BackgroundFocus {
             let focused = post(previousPSN, window: previousWindow, focused: true)
             if !defocused || !focused { return false }
         }
+        return isRestored()
+    }
+
+    func restoreIfStolen() {
+        guard shifted, let getFront = Self.getFront, let setFront = Self.setFront else { return }
+        var frontPSN = [UInt8](repeating: 0, count: 8)
+        guard frontPSN.withUnsafeMutableBytes({ getFront($0.baseAddress) }) == 0,
+              frontPSN == targetPSN, targetPSN != previousPSN else { return }
+        let restored = previousPSN.withUnsafeBytes { bytes in
+            setFront(bytes.baseAddress, UInt32(kSetFrontProcessFrontWindowOnly))
+        }
+        if restored == 0 { _ = post(previousPSN, window: previousWindow, focused: true) }
+    }
+
+    func isRestored() -> Bool {
         guard let getFront = Self.getFront else { return false }
         var frontPSN = [UInt8](repeating: 0, count: 8)
-        return frontPSN.withUnsafeMutableBytes { getFront($0.baseAddress) } == 0 && frontPSN == previousPSN &&
-            NSWorkspace.shared.frontmostApplication?.processIdentifier == previousPID
+        return frontPSN.withUnsafeMutableBytes { getFront($0.baseAddress) } == 0 && frontPSN == previousPSN
     }
 
     private func post(_ psn: [UInt8], window: UInt32, focused: Bool) -> Bool {
@@ -1095,6 +1109,12 @@ private struct BackgroundFocus {
 
 private func withBackgroundFocus(_ target: DesktopTarget, _ body: () throws -> Void) throws {
     let focus = try BackgroundFocus.begin(target)
+    let queue = DispatchQueue(label: "app.ycoding.computer-use.focus")
+    let monitor = DispatchSource.makeTimerSource(queue: queue)
+    monitor.schedule(deadline: .now(), repeating: .milliseconds(5))
+    monitor.setEventHandler { focus.restoreIfStolen() }
+    monitor.resume()
+    defer { monitor.cancel(); queue.sync {} }
     var restored = false
     var actionError: Error?
     do {
@@ -1103,7 +1123,10 @@ private func withBackgroundFocus(_ target: DesktopTarget, _ body: () throws -> V
         catch { actionError = error }
         if focus.shifted { Thread.sleep(forTimeInterval: 0.05) }
     }
-    guard restored else { throw HelperError.focusRestoreFailed }
+    let deadline = Date().addingTimeInterval(0.5)
+    while focus.shifted && Date() < deadline { Thread.sleep(forTimeInterval: 0.005) }
+    restored = restored || focus.isRestored()
+    guard restored && focus.isRestored() else { throw HelperError.focusRestoreFailed }
     if let actionError { throw actionError }
 }
 
@@ -1534,18 +1557,161 @@ private func holdAgentDisplay(_ request: Request, responseURL: URL) throws {
     try? FileManager.default.removeItem(atPath: controlDirectory)
 }
 
+private struct ServiceLaunch: Decodable {
+    let action: String
+    let controlDirectory: String
+    let ownerPID: Int32
+}
+
+private struct RPCRequest: Decodable {
+    let jsonrpc: String
+    let id: Int
+    let method: String
+    let params: Parameters
+
+    struct Parameters: Decodable {
+        let clientApiVersion: Int?
+        let deadlineUnixMilliseconds: Double?
+        let request: Request?
+    }
+}
+
+private struct RPCResponse<Result: Encodable>: Encodable {
+    let jsonrpc = "2.0"
+    let id: Int
+    let result: Result?
+    let error: RPCError?
+}
+
+private struct RPCError: Encodable {
+    let code: Int
+    let message: String
+}
+
+private struct Ping: Encodable { let serverApiVersion = 1 }
+
+private func receive(_ fd: Int32, count: Int) -> Data? {
+    var bytes = Data(count: count)
+    let complete = bytes.withUnsafeMutableBytes { buffer -> Bool in
+        guard let base = buffer.baseAddress else { return false }
+        var offset = 0
+        while offset < count {
+            let read = Darwin.read(fd, base.advanced(by: offset), count - offset)
+            if read <= 0 { return false }
+            offset += read
+        }
+        return true
+    }
+    return complete ? bytes : nil
+}
+
+private func sendFrame<T: Encodable>(_ fd: Int32, _ response: T) -> Bool {
+    guard let body = try? JSONEncoder().encode(response), body.count <= 8 * 1024 * 1024 else { return false }
+    var size = UInt32(body.count).littleEndian
+    var frame = withUnsafeBytes(of: &size) { Data($0) }
+    frame.append(body)
+    return frame.withUnsafeBytes { buffer in
+        guard let base = buffer.baseAddress else { return false }
+        var offset = 0
+        while offset < frame.count {
+            let written = Darwin.write(fd, base.advanced(by: offset), frame.count - offset)
+            if written <= 0 { return false }
+            offset += written
+        }
+        return true
+    }
+}
+
+private func serveClient(_ fd: Int32) async -> Bool {
+    while let header = await Task.detached(operation: { receive(fd, count: 4) }).value {
+        let length = header.enumerated().reduce(UInt32(0)) { $0 | (UInt32($1.element) << (8 * $1.offset)) }
+        guard length > 0, length <= 8 * 1024 * 1024,
+              let body = await Task.detached(operation: { receive(fd, count: Int(length)) }).value,
+              let command = try? JSONDecoder().decode(RPCRequest.self, from: body), command.jsonrpc == "2.0" else { return false }
+        if command.method == "shutdown" {
+            _ = sendFrame(fd, RPCResponse<String>(id: command.id, result: "ok", error: nil))
+            return true
+        }
+        if command.method == "ping" {
+            let valid = command.params.clientApiVersion == 1
+            _ = sendFrame(fd, RPCResponse<Ping>(id: command.id, result: valid ? Ping() : nil,
+                error: valid ? nil : RPCError(code: -32602, message: "Native helper API version mismatch")))
+            continue
+        }
+        guard command.method == "request", let request = command.params.request,
+              let deadline = command.params.deadlineUnixMilliseconds else {
+            _ = sendFrame(fd, RPCResponse<String>(id: command.id, result: nil,
+                error: RPCError(code: -32602, message: "Invalid native helper request")))
+            continue
+        }
+        let response: Response
+        if Date().timeIntervalSince1970 * 1000 >= deadline {
+            response = failure("native_failure", "Native helper request deadline expired")
+        } else {
+            do { response = try await handle(request) }
+            catch let error as HelperError { response = error.response }
+            catch { response = HelperError.invalidRequest.response }
+        }
+        guard sendFrame(fd, RPCResponse<Response>(id: command.id, result: response, error: nil)) else { return false }
+    }
+    return false
+}
+
+private func serve(_ launch: ServiceLaunch) async -> Bool {
+    guard launch.action == "service", launch.ownerPID > 0,
+          (try? FileManager.default.attributesOfItem(atPath: launch.controlDirectory)[.type] as? FileAttributeType) == .typeDirectory,
+          let attrs = try? FileManager.default.attributesOfItem(atPath: launch.controlDirectory),
+          attrs[.ownerAccountID] as? Int == Int(getuid()),
+          (attrs[.posixPermissions] as? Int ?? -1) & 0o777 == 0o700,
+          kill(launch.ownerPID, 0) == 0 else { return false }
+    let socketPath = (launch.controlDirectory as NSString).appendingPathComponent("computer-use.sock")
+    guard socketPath.utf8.count < 104 else { return false }
+    let listener = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+    guard listener >= 0 else { return false }
+    defer { Darwin.close(listener); unlink(socketPath) }
+    var address = sockaddr_un()
+    address.sun_family = sa_family_t(AF_UNIX)
+    address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+    _ = withUnsafeMutablePointer(to: &address.sun_path) { pointer in
+        socketPath.withCString { strlcpy(UnsafeMutableRawPointer(pointer).assumingMemoryBound(to: CChar.self), $0, 104) }
+    }
+    let bound = withUnsafePointer(to: &address) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(listener, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+    }
+    guard bound == 0, listen(listener, 8) == 0 else { return false }
+    let ownerExit = DispatchSource.makeProcessSource(identifier: pid_t(launch.ownerPID), eventMask: .exit, queue: .main)
+    ownerExit.setEventHandler { exit(0) }
+    ownerExit.resume()
+    defer { ownerExit.cancel() }
+    guard FileManager.default.createFile(atPath: (launch.controlDirectory as NSString).appendingPathComponent("pid"),
+                                         contents: String(getpid()).data(using: .utf8), attributes: [.posixPermissions: 0o600]) else { return false }
+    while kill(launch.ownerPID, 0) == 0 {
+        let client = await Task.detached(operation: { Darwin.accept(listener, nil, nil) }).value
+        if client < 0 { return false }
+        var peer = pid_t(0)
+        var length = socklen_t(MemoryLayout<pid_t>.size)
+        let verified = getsockopt(client, SOL_LOCAL, LOCAL_PEERPID, &peer, &length) == 0 && length == MemoryLayout<pid_t>.size && peer == launch.ownerPID
+        if !verified { Darwin.close(client); continue }
+        var noSignal: Int32 = 1
+        guard setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
+            Darwin.close(client)
+            continue
+        }
+        let shutdown = await serveClient(client)
+        Darwin.close(client)
+        if shutdown { return true }
+    }
+    return true
+}
+
 let arguments = CommandLine.arguments
+if arguments.count == 2, let launch = try? JSONDecoder().decode(ServiceLaunch.self, from: Data(contentsOf: URL(fileURLWithPath: arguments[1]))) {
+    exit(await serve(launch) ? 0 : 1)
+}
 guard arguments.count == 3 else { exit(64) }
 let input = (try? Data(contentsOf: URL(fileURLWithPath: arguments[1]))) ?? Data()
 let responseURL = URL(fileURLWithPath: arguments[2])
-if let request = try? JSONDecoder().decode(Request.self, from: input), request.action == "display.hold" {
-    do { try holdAgentDisplay(request, responseURL: responseURL) }
-    catch let error as HelperError { _ = writeResponse(error.response, to: responseURL) }
-    catch { _ = writeResponse(HelperError.agentDisplayUnavailable.response, to: responseURL) }
-    exit(0)
-}
-private let response: Response
-do { response = try await handle(JSONDecoder().decode(Request.self, from: input)) }
-catch let error as HelperError { response = error.response }
-catch { response = HelperError.invalidRequest.response }
-_ = writeResponse(response, to: responseURL)
+guard let request = try? JSONDecoder().decode(Request.self, from: input), request.action == "display.hold" else { exit(64) }
+do { try holdAgentDisplay(request, responseURL: responseURL) }
+catch let error as HelperError { _ = writeResponse(error.response, to: responseURL) }
+catch { _ = writeResponse(HelperError.agentDisplayUnavailable.response, to: responseURL) }

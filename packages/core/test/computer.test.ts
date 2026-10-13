@@ -13,6 +13,7 @@ import { Cause, Context, DateTime, Effect, Exit, Fiber, Layer, PubSub, Schema, S
 import path from "node:path"
 import { readFile, rm, stat, writeFile } from "node:fs/promises"
 import { statSync } from "node:fs"
+import { createServer } from "node:net"
 
 const owner = Session.ID.make("ses_computer_owner")
 const other = Session.ID.make("ses_computer_other")
@@ -65,18 +66,12 @@ describe("scoped desktop control", () => {
         : { type: "action" as const, effect: "changed" as const }
     } }
     const processLayer = Layer.mock(AppProcess.Service, { run: (command) => Effect.promise(async () => {
-      if (command._tag !== "StandardCommand") throw new Error("Expected native app launch")
-      const requestFile = command.args.at(-2)
-      const responseFile = command.args.at(-1)
-      if (!requestFile || !responseFile) throw new Error("Missing native handoff")
-      const request = Schema.decodeUnknownSync(Schema.Struct({ action: Schema.String }))(JSON.parse(await readFile(requestFile, "utf8")))
-      const response = request.action === "desktop.list"
+      await startFakeService(command, (request) => request.action === "desktop.list"
         ? { status: "ok", action: request.action, revision: "", apps: [{ bundle_id: desktop.bundleID, pid: desktop.pid,
           name: "Fixture", is_active: false, is_hidden: false, windows: [{ window_id: desktop.windowID, title: "Fixture",
             bounds: { x: 0, y: 0, width: 800, height: 500 }, on_screen: false, placement: "other_space" }] }] }
-        : { status: "ok", action: request.action, revision: "native-revision" }
-      await writeFile(responseFile, JSON.stringify(response))
-      return { command: "fixture", exitCode: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), stdoutTruncated: false, stderrTruncated: false }
+        : { status: "ok", action: request.action, revision: "native-revision" })
+      return fixtureRunResult()
     }) })
     await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
       const context = yield* Layer.build(processLayer)
@@ -88,6 +83,7 @@ describe("scoped desktop control", () => {
         expectedRevision: "native-revision", x: 20, y: 30 }, new AbortController().signal)
       expect(clicked).toMatchObject({ revision: "native-revision", effect: "changed" })
       expect(routed).toEqual(["capture", "action"])
+      yield* invoke.shutdown()
     })))
   })
   test("graceful quit invalidates all window claims for its pid even if exit is pending", async () => {
@@ -255,7 +251,7 @@ describe("scoped desktop control", () => {
     expect(response.revision).toBe("rev-3")
     expect(requests.at(-1)).toMatchObject({ action: "desktop.drag", fromX: 1, fromY: 2, toX: 30, toY: 40, expectedRevision: "rev-2" })
   })
-  test("waits for the app response after LaunchServices returns", async () => {
+  test("waits for a split service frame after LaunchServices returns", async () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -274,7 +270,7 @@ describe("scoped desktop control", () => {
       ),
     )
   })
-  test("uses a private LaunchServices handoff and removes it on settlement", async () => {
+  test("uses a private LaunchServices bootstrap and removes it on shutdown", async () => {
     const launched: string[] = []
     const modes: number[] = []
     await Effect.runPromise(
@@ -299,8 +295,8 @@ describe("scoped desktop control", () => {
             path.resolve(import.meta.dir, "../.cache/computer-use/YCoding Computer Use.app"),
             "--args",
           ])
-          expect(launched[5]).toEndWith("/request.json")
-          expect(launched[6]).toEndWith("/response.json")
+          expect(launched[5]).toEndWith("/service.json")
+          expect(launched[6]).toBeUndefined()
           expect(modes).toEqual([0o700, 0o600])
           yield* locations.close
         }),
@@ -329,7 +325,7 @@ describe("scoped desktop control", () => {
       ),
     )
     const application = path.resolve(import.meta.dir, "../.cache/computer-use/YCoding Computer Use.app")
-    expect(launched).toEqual([application, application])
+    expect(launched).toEqual([application])
   })
   test("requires an exact inspected app/window revision and invalidates uncertain mutation", async () => {
     const requests: Computer.NativeRequest[] = []
@@ -987,6 +983,118 @@ function yieldPubSub() {
   return Effect.runSync(PubSub.unbounded<EventRuntime.Payload>())
 }
 
+describe("native computer service transport", () => {
+  const request = { action: "desktop.inspect" as const, owner: { sessionID: "test", callID: "inspect" }, target: desktop }
+  const mutation = { action: "desktop.click" as const, owner: { sessionID: "test", callID: "click" }, target: desktop, expectedRevision: "rev", x: 2, y: 3 }
+  const success = (action: string) => ({ status: "ok", action, revision: "rev" })
+
+  async function fixture(behavior?: { version?: number; oversize?: boolean; closeOnRequest?: boolean; closeWhenDisconnected?: boolean },
+    respond: (request: typeof fixtureRequest.Type) => unknown = (request) => success(request.action)) {
+    let launches = 0
+    const processLayer = Layer.mock(AppProcess.Service, { run: (command) => Effect.promise(async () => {
+      launches++
+      await startFakeService(command, respond, true, launches === 1 ? behavior : undefined)
+      return fixtureRunResult()
+    }) })
+    const context = await Effect.runPromise(Effect.scoped(Layer.build(processLayer)))
+    const invoke = MacOSComputer.invokeWith(Context.get(context, AppProcess.Service), "darwin")
+    return { invoke, launches: () => launches, close: () => Effect.runPromise(invoke.shutdown()) }
+  }
+
+  test("decodes split length and JSON frames and serializes requests across callers", async () => {
+    const order: string[] = []
+    const service = await fixture(undefined, async (entry) => {
+      order.push(`start:${entry.owner.callID}`)
+      await Bun.sleep(10)
+      order.push(`end:${entry.owner.callID}`)
+      return success(entry.action)
+    })
+    try {
+      const calls = await Promise.all(["one", "two", "three"].map((callID) => Effect.runPromise(service.invoke({ ...request, owner: { ...request.owner, callID } }, new AbortController().signal))))
+      expect(calls.map((call) => call.action)).toEqual(["desktop.inspect", "desktop.inspect", "desktop.inspect"])
+      expect(order).toEqual(["start:one", "end:one", "start:two", "end:two", "start:three", "end:three"])
+      expect(service.launches()).toBe(1)
+    } finally { await service.close() }
+  })
+
+  test("rejects an oversized response before reading its body", async () => {
+    const service = await fixture({ oversize: true })
+    try {
+      const result = await Effect.runPromiseExit(service.invoke(mutation, new AbortController().signal))
+      expect(Exit.isFailure(result)).toBe(true)
+      if (Exit.isFailure(result)) expect(Cause.squash(result.cause)).toMatchObject({ code: "unknown_outcome", outcome: "unknown" })
+    } finally { await service.close() }
+  })
+
+  test("terminates a version-mismatched service and relaunches lazily without sending the request to it", async () => {
+    const received: string[] = []
+    const service = await fixture({ version: 2 }, (entry) => { received.push(entry.action); return success(entry.action) })
+    try {
+      const failed = await Effect.runPromiseExit(service.invoke(request, new AbortController().signal))
+      expect(Exit.isFailure(failed)).toBe(true)
+      expect(received).toEqual([])
+      expect((await Effect.runPromise(service.invoke(request, new AbortController().signal))).revision).toBe("rev")
+      expect(service.launches()).toBe(2)
+    } finally { await service.close() }
+  })
+
+  test("rejects a mutation on connection loss without replay and relaunches for the next inspection", async () => {
+    const received: string[] = []
+    const service = await fixture({ closeOnRequest: true }, (entry) => { received.push(entry.action); return success(entry.action) })
+    try {
+      const failed = await Effect.runPromiseExit(service.invoke(mutation, new AbortController().signal))
+      expect(Exit.isFailure(failed)).toBe(true)
+      if (Exit.isFailure(failed)) expect(Cause.squash(failed.cause)).toMatchObject({ code: "unknown_outcome", outcome: "unknown" })
+      expect(received).toEqual([])
+      expect((await Effect.runPromise(service.invoke(request, new AbortController().signal))).revision).toBe("rev")
+      expect(service.launches()).toBe(2)
+    } finally { await service.close() }
+  })
+  test("times out an unanswered mutation, reports uncertainty, and does not replay it", async () => {
+    const received: string[] = []
+    const service = await fixture({ closeWhenDisconnected: true }, (entry) => { received.push(entry.action); return undefined })
+    try {
+      const failed = await Effect.runPromiseExit(service.invoke(mutation, new AbortController().signal))
+      expect(Exit.isFailure(failed)).toBe(true)
+      if (Exit.isFailure(failed)) expect(Cause.squash(failed.cause)).toMatchObject({ code: "unknown_outcome", outcome: "unknown" })
+      expect(received).toEqual(["desktop.click"])
+      expect(service.launches()).toBe(1)
+    } finally { await service.close() }
+  }, 35_000)
+
+  test("a cancelled mutation keeps its target locked until the service settles, then requires inspection", async () => {
+    const started = Promise.withResolvers<void>()
+    const settled = Promise.withResolvers<Computer.NativeSuccess>()
+    const actions: string[] = []
+    await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+      const locations = yield* makeLocationComputers((entry) => {
+        actions.push(entry.action)
+        if (entry.action === "desktop.click") return Effect.promise(() => { started.resolve(); return settled.promise })
+        return Effect.succeed({ status: "ok" as const, action: entry.action, revision: "rev" })
+      })
+      yield* locations.first.inspect({ sessionID: owner, callID: "observe", target: desktop })
+      const active = Effect.runPromiseExit(locations.first.act({ sessionID: owner, callID: "click", target: desktop,
+        expectedRevision: "rev", action: { type: "desktop.click", x: 2, y: 3 } }))
+      yield* Effect.promise(() => started.promise)
+      expect(yield* locations.first.cancel({ sessionID: owner, callID: "click" })).toBe(true)
+      const concurrent = yield* locations.first.inspect({ sessionID: other, callID: "concurrent", target: desktop }).pipe(Effect.exit)
+      expect(Exit.isFailure(concurrent)).toBe(true)
+      settled.resolve({ status: "ok", action: "desktop.click", revision: "late" })
+      const failed = yield* Effect.promise(() => active)
+      expect(Exit.isFailure(failed)).toBe(true)
+      if (Exit.isFailure(failed)) expect(Cause.squash(failed.cause)).toMatchObject({ code: "unknown_outcome", outcome: "unknown" })
+      const replay = yield* locations.first.act({ sessionID: owner, callID: "replay", target: desktop,
+        expectedRevision: "rev", action: { type: "desktop.click", x: 2, y: 3 } }).pipe(Effect.exit)
+      expect(Exit.isFailure(replay)).toBe(true)
+      expect(actions).toEqual(["desktop.inspect", "desktop.click"])
+      yield* locations.close
+    })))
+  })
+
+})
+
+const serviceLaunch = Schema.Struct({ action: Schema.String, controlDirectory: Schema.String, ownerPID: Schema.Number })
+
 const fixtureRequest = Schema.Struct({
   action: Schema.Literals([
     "iterm.inspect",
@@ -1026,6 +1134,8 @@ const fixtureRequest = Schema.Struct({
   displayID: Schema.Int.pipe(Schema.optional),
   originalFrame: Schema.Unknown.pipe(Schema.optional),
 })
+
+const serviceMessage = Schema.Struct({ id: Schema.Number, method: Schema.String, params: Schema.Struct({ request: fixtureRequest.pipe(Schema.optional) }) })
 const decodeFixtureRequest = Schema.decodeUnknownSync(Schema.fromJsonString(fixtureRequest))
 
 function makeLocationComputers(
@@ -1044,41 +1154,22 @@ function makeLocationComputers(
   respondAfterOpen = false,
 ) {
   const processLayer = Layer.mock(AppProcess.Service, {
-    run: (command, options) =>
-      Effect.suspend(() => {
-        if (command._tag === "StandardCommand" && command.command === "/usr/bin/open") {
-          onLaunch?.(command.args, options?.signal)
-          const requestFile = command.args.at(-2)
-          const responseFile = command.args.at(-1)
-          if (!requestFile || !responseFile) return Effect.die(new Error("Missing desktop handoff paths"))
-          return Effect.promise(() => readFile(requestFile, "utf8")).pipe(
-            Effect.map(decodeFixtureRequest),
-            Effect.flatMap((request) => invoke(request, new AbortController().signal)),
-            Effect.flatMap((response) => {
-              const override = invalidResponse?.(response.action)
-              return override
-                ? Effect.promise(() => writeFile(responseFile, JSON.stringify(override === true ? {} : override)))
-                : respondAfterOpen
-                  ? Effect.sync(() => {
-                      setTimeout(() => {
-                        void writeFile(responseFile, JSON.stringify(response))
-                      }, 10)
-                    })
-                  : Effect.promise(() => writeFile(responseFile, JSON.stringify(response)))
-            }),
-            Effect.map(() => ({
-              command: "computer-fixture",
-              exitCode: 0,
-              stdout: Buffer.alloc(0),
-              stderr: Buffer.alloc(0),
-              stdoutTruncated: false,
-              stderrTruncated: false,
-            })),
-            Effect.mapError((error) => new AppProcess.AppProcessError({ command: "computer-fixture", cause: error })),
-          )
-        }
-        return Effect.die(new Error("Computer fixture accepts only the LaunchServices app handoff"))
-      }),
+    run: (command, options) => Effect.promise(async () => {
+      if (command._tag !== "StandardCommand" || command.command !== "/usr/bin/open") throw new Error("Expected LaunchServices")
+      onLaunch?.(command.args, options?.signal)
+      if (command.args[6]) {
+        const request = decodeFixtureRequest(await readFile(command.args[5], "utf8"))
+        const response = await Effect.runPromise(invoke(request, new AbortController().signal))
+        await writeFile(command.args[6], JSON.stringify(response))
+        return fixtureRunResult()
+      }
+      await startFakeService(command, async (request) => {
+        const response = await Effect.runPromise(invoke(request, new AbortController().signal))
+        const override = invalidResponse?.(response.action)
+        return override === true ? {} : override || response
+      }, respondAfterOpen)
+      return fixtureRunResult()
+    }),
   })
   const split = LayerNode.hoist(Computer.node, Node.tags.values.global, [
     [AppProcess.node, processLayer],
@@ -1103,4 +1194,55 @@ function makeLocationComputers(
       close: Scope.close(first.scope, Exit.void).pipe(Effect.andThen(Scope.close(second.scope, Exit.void))),
     }
   })
+}
+
+function fixtureRunResult() {
+  return { command: "computer-fixture", exitCode: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), stdoutTruncated: false, stderrTruncated: false }
+}
+
+async function startFakeService(
+  command: Parameters<AppProcess.Interface["run"]>[0],
+  respond: (request: typeof fixtureRequest.Type) => unknown,
+  split = false,
+  behavior?: { version?: number; oversize?: boolean; closeOnRequest?: boolean; closeWhenDisconnected?: boolean },
+) {
+  if (command._tag !== "StandardCommand") throw new Error("Expected LaunchServices")
+  const file = command.args[5]
+  const launch = Schema.decodeUnknownSync(Schema.fromJsonString(serviceLaunch))(await readFile(file, "utf8"))
+  if (launch.action === "display.hold") throw new Error("Expected display hold file handoff")
+  const socketPath = path.join(launch.controlDirectory, "computer-use.sock")
+  const server = createServer((socket) => {
+    let buffer = Buffer.alloc(0)
+    let chain = Promise.resolve()
+    const send = (value: unknown) => {
+      const body = Buffer.from(JSON.stringify(value))
+      const header = Buffer.alloc(4)
+      header.writeUInt32LE(body.length)
+      if (split) { socket.write(header.subarray(0, 2)); socket.write(header.subarray(2)); socket.write(body.subarray(0, 2)); socket.write(body.subarray(2)) }
+      else socket.write(Buffer.concat([header, body]))
+    }
+    if (behavior?.closeWhenDisconnected) socket.on("close", () => server.close())
+    socket.on("data", (chunk) => {
+      buffer = Buffer.concat([buffer, chunk])
+      while (buffer.length >= 4 && buffer.length >= buffer.readUInt32LE(0) + 4) {
+        const size = buffer.readUInt32LE(0)
+        const message = Schema.decodeUnknownSync(Schema.fromJsonString(serviceMessage))(buffer.subarray(4, size + 4).toString())
+        buffer = buffer.subarray(size + 4)
+        chain = chain.then(async () => {
+          if (message.method === "ping") {
+            send({ jsonrpc: "2.0", id: message.id, result: { serverApiVersion: behavior?.version ?? 1 } })
+            if (behavior?.version !== undefined && behavior.version !== 1) { socket.end(); server.close() }
+            return
+          }
+          if (message.method === "shutdown") { send({ jsonrpc: "2.0", id: message.id, result: "ok" }); socket.end(); server.close(); return }
+          if (behavior?.closeOnRequest) { socket.end(); server.close(); return }
+          if (behavior?.oversize) { const header = Buffer.alloc(4); header.writeUInt32LE(8 * 1024 * 1024 + 1); socket.write(header); socket.end(); server.close(); return }
+          const request = decodeFixtureRequest(JSON.stringify(message.params.request))
+          const result = await respond(request)
+          if (result !== undefined) send({ jsonrpc: "2.0", id: message.id, result })
+        })
+      }
+    })
+  })
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socketPath, resolve) })
 }
