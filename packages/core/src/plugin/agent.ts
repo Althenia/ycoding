@@ -191,7 +191,7 @@ export const Plugin = define({
     yield* ctx.agent.transform((draft) => {
       for (const definition of builtIns()) {
         draft.update(Agent.ID.make(definition.id), (item) => {
-          item.name = Agent.Name.make(definition.id)
+          item.name = Agent.Name.make(definition.id.charAt(0).toUpperCase() + definition.id.slice(1))
           item.description = definition.description
           item.mode = definition.mode
           item.request.body = { temperature: definition.temperature }

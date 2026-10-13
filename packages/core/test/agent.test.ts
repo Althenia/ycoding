@@ -231,23 +231,23 @@ describe("Agent", () => {
       )
 
       const catalog = [
-        ["GSD", "primary", 0.6, "#e67e22"],
-        ["architech", "primary", 0.5, "#3498db"],
-        ["god", "primary", 0.6, "#f1c40f"],
-        ["yangi", "primary", 0.5, "#2ecc71"],
-        ["occam", "subagent", 0.4, "#2ecc71"],
-        ["omoikane", "subagent", 0.5, "#3498db"],
-        ["wittgenstein", "subagent", 0.4, "#95a5a6"],
-        ["zeus", "subagent", 0.6, "#f1c40f"],
+        ["GSD", "GSD", "primary", 0.6, "#e67e22"],
+        ["architech", "Architech", "primary", 0.5, "#3498db"],
+        ["god", "God", "primary", 0.6, "#f1c40f"],
+        ["yangi", "Yangi", "primary", 0.5, "#2ecc71"],
+        ["occam", "Occam", "subagent", 0.4, "#2ecc71"],
+        ["omoikane", "Omoikane", "subagent", 0.5, "#3498db"],
+        ["wittgenstein", "Wittgenstein", "subagent", 0.4, "#95a5a6"],
+        ["zeus", "Zeus", "subagent", 0.6, "#f1c40f"],
       ] as const
-      for (const [id, mode, temperature, color] of catalog) {
+      for (const [id, name, mode, temperature, color] of catalog) {
         const item = yield* agent.get(Agent.ID.make(id))
         if (!item?.system) throw new Error(`expected ${id} with a system prompt`)
         const source = yield* Effect.promise(() =>
           Bun.file(new URL(`../src/plugin/agent/${id}.md`, import.meta.url)).text(),
         )
         const markdown = matter(source)
-        expect(item).toMatchObject({ id, mode, color, request: { body: { temperature } } })
+        expect(item).toMatchObject({ id, name, mode, color, request: { body: { temperature } } })
         expect(item.description).toBe(markdown.data.description)
         expect(item.system.startsWith("YCoding is the terminal-first runtime")).toBe(true)
         expect(item.system.split(markdown.content.trim())).toHaveLength(2)

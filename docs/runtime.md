@@ -632,7 +632,7 @@ The TUI Session route hydrates its durable task page independently of the sideba
 
 ### Built-in agents
 
-Every Location activates the maintained built-in catalog. The default selectable primary agent is `god`; omitting a configured primary selection resolves `god`. The selectable primary built-ins are `GSD`, `architech`, `god`, and `yangi`. The maintained task subagents are `occam`, `omoikane`, `wittgenstein`, and `zeus`.
+Every Location activates the maintained built-in catalog. The default selectable primary agent is `god`; omitting a configured primary selection resolves `god`. The selectable primary built-ins are `GSD`, `architech`, `god`, and `yangi`. The maintained task subagents are `occam`, `omoikane`, `wittgenstein`, and `zeus`. Built-in agents display capitalized names, such as `God`, `Architech`, and `Zeus`; agent selection, mentions, configuration, and stored Sessions use the lowercase IDs.
 
 `god`, `architech`, `GSD`, and `yangi` use the `build` permission defaults. `occam`, `omoikane`, `wittgenstein`, and `zeus` use the `general` subagent permission defaults. All eight agents explicitly allow `shell:*`; these profiles do not change the read-only `btw` advisor or the hidden `compaction`, `title`, `goal`, `decision`, and `summary` utility agents.
 
