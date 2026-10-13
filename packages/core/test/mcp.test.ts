@@ -1,17 +1,12 @@
 import path from "node:path"
 import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { describe, expect, test } from "bun:test"
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
-import { Server } from "@modelcontextprotocol/sdk/server/index.js"
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
 import {
-  CallToolRequestSchema,
-  ListResourcesRequestSchema,
-  ListResourceTemplatesRequestSchema,
-  ListToolsRequestSchema,
-  ReadResourceRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js"
+  createMcpHandler,
+  inputRequired,
+  Server,
+  WebStandardStreamableHTTPServerTransport,
+} from "@modelcontextprotocol/server"
 import { ConfigMCP } from "@ycoding-ai/core/config/mcp"
 import { Config } from "@ycoding-ai/core/config"
 import { Credential } from "@ycoding-ai/core/credential"
@@ -54,6 +49,7 @@ type ResourceTemplatePage = {
 
 function resourceServer(
   input: {
+    era?: "legacy" | "modern"
     resources?: boolean
     resourceMethods?: boolean
     listChanged?: boolean
@@ -77,69 +73,77 @@ function resourceServer(
         resourceMethodRequests: 0,
         templateMethodRequests: 0,
       }
-      const protocol = new Server(
-        { name: "mcp-resources", version: "1.0.0" },
-        {
-          capabilities: {
-            tools: {},
-            ...(input.resources === false ? {} : { resources: { listChanged: input.listChanged } }),
+      const elicitation = input.urlElicitation
+        ? {
+            tool: "url-elicitation",
+            legacy: {
+              mode: "url" as const,
+              message: "Authorize access",
+              url: "https://example.com/authorize",
+              elicitationId: "elicitation-test",
+            },
+            modern: inputRequired.elicitUrl({ message: "Authorize access", url: "https://example.com/authorize" }),
+          }
+        : input.emptyElicitation
+          ? {
+              tool: "empty-elicitation",
+              legacy: {
+                mode: "form" as const,
+                message: "Confirm",
+                requestedSchema: { type: "object" as const, properties: {} },
+              },
+              modern: inputRequired.elicit({ message: "Confirm", requestedSchema: { type: "object", properties: {} } }),
+            }
+          : undefined
+      const build = () => {
+        const protocol = new Server(
+          { name: "mcp-resources", version: "1.0.0" },
+          {
+            capabilities: {
+              tools: {},
+              ...(input.resources === false ? {} : { resources: { listChanged: input.listChanged } }),
+            },
           },
-        },
-      )
-      protocol.setRequestHandler(ListToolsRequestSchema, () =>
-        Promise.resolve({
-          tools: input.emptyElicitation
-            ? [{ name: "empty-elicitation", inputSchema: { type: "object" as const, properties: {} } }]
-            : input.urlElicitation
-              ? [{ name: "url-elicitation", inputSchema: { type: "object" as const, properties: {} } }]
-              : [],
-        }),
-      )
-      if (input.emptyElicitation) {
-        protocol.setRequestHandler(CallToolRequestSchema, async () => {
-          const result = await protocol.elicitInput({
-            mode: "form",
-            message: "Confirm",
-            requestedSchema: { type: "object", properties: {} },
+        )
+        protocol.setRequestHandler("tools/list", () => ({
+          tools: elicitation
+            ? [{ name: elicitation.tool, inputSchema: { type: "object" as const, properties: {} } }]
+            : [],
+        }))
+        if (elicitation) {
+          protocol.setRequestHandler("tools/call", async (_request, ctx) => {
+            const answered = input.era === "modern" ? ctx.mcpReq.inputResponses?.elicitation : undefined
+            if (input.era === "modern" && answered === undefined)
+              return inputRequired({ inputRequests: { elicitation: elicitation.modern } })
+            const result = answered ?? (await protocol.elicitInput(elicitation.legacy))
+            return {
+              content: [{ type: "text" as const, text: JSON.stringify(result) }],
+              structuredContent: result,
+            }
           })
-          return {
-            content: [{ type: "text", text: JSON.stringify(result) }],
-            structuredContent: result,
-          }
-        })
-      }
-      if (input.urlElicitation) {
-        protocol.setRequestHandler(CallToolRequestSchema, async () => {
-          const result = await protocol.elicitInput({
-            mode: "url",
-            message: "Authorize access",
-            url: "https://example.com/authorize",
-            elicitationId: "elicitation-test",
+        }
+        if (input.resources !== false && input.resourceMethods !== false) {
+          protocol.setRequestHandler("resources/list", (request) => {
+            state.resourceLists += 1
+            const page = state.resourcePages?.[request.params?.cursor ?? "initial"]
+            return { resources: page?.items ?? state.resources, nextCursor: page?.nextCursor }
           })
-          return {
-            content: [{ type: "text", text: JSON.stringify(result) }],
-            structuredContent: result,
-          }
-        })
+          protocol.setRequestHandler("resources/templates/list", (request) => {
+            state.templateLists += 1
+            const page = state.templatePages?.[request.params?.cursor ?? "initial"]
+            return { resourceTemplates: page?.items ?? state.templates, nextCursor: page?.nextCursor }
+          })
+          protocol.setRequestHandler("resources/read", () => ({ contents: state.contents }))
+        }
+        return protocol
       }
-      if (input.resources !== false && input.resourceMethods !== false) {
-        protocol.setRequestHandler(ListResourcesRequestSchema, (request) => {
-          state.resourceLists += 1
-          const page = state.resourcePages?.[request.params?.cursor ?? "initial"]
-          return Promise.resolve({ resources: page?.items ?? state.resources, nextCursor: page?.nextCursor })
-        })
-        protocol.setRequestHandler(ListResourceTemplatesRequestSchema, (request) => {
-          state.templateLists += 1
-          const page = state.templatePages?.[request.params?.cursor ?? "initial"]
-          return Promise.resolve({ resourceTemplates: page?.items ?? state.templates, nextCursor: page?.nextCursor })
-        })
-        protocol.setRequestHandler(ReadResourceRequestSchema, () => Promise.resolve({ contents: state.contents }))
-      }
+      const modern = createMcpHandler(build, { legacy: "reject" })
+      const legacy = build()
       const transport = new WebStandardStreamableHTTPServerTransport({
         sessionIdGenerator: () => crypto.randomUUID(),
         enableJsonResponse: true,
       })
-      await protocol.connect(transport)
+      await legacy.connect(transport)
       const http = Bun.serve({
         port: 0,
         fetch: async (request) => {
@@ -149,16 +153,18 @@ function resourceServer(
             .catch(() => undefined)) as { method?: string } | undefined
           if (body?.method === "resources/list") state.resourceMethodRequests++
           if (body?.method === "resources/templates/list") state.templateMethodRequests++
-          return transport.handleRequest(request)
+          return input.era === "modern" ? modern.fetch(request) : transport.handleRequest(request)
         },
       })
       return {
         state,
         url: http.url.toString(),
-        sendResourceListChanged: () => protocol.sendResourceListChanged(),
-        completeElicitation: () => protocol.createElicitationCompletionNotifier("elicitation-test")(),
+        sendResourceListChanged: async () =>
+          input.era === "modern" ? modern.notify.resourcesChanged() : legacy.sendResourceListChanged(),
+        completeElicitation: () => legacy.createElicitationCompletionNotifier("elicitation-test")(),
         close: async () => {
-          await protocol.close().catch(() => {})
+          await legacy.close().catch(() => {})
+          await modern.close()
           await http.stop(true)
         },
       }
@@ -318,60 +324,26 @@ test("MCP tool names match V1 sanitization", () => {
 })
 
 test("preserves output schema validation across paginated tool discovery", async () => {
-  const server = new Server({ name: "pagination", version: "1.0.0" }, { capabilities: { tools: {} } })
-  server.setRequestHandler(ListToolsRequestSchema, ({ params }) =>
-    Promise.resolve(
-      params?.cursor === "page-2"
-        ? {
-            tools: [
-              {
-                name: "second",
-                inputSchema: { type: "object" },
-                outputSchema: {
-                  type: "object",
-                  properties: { value: { type: "number" } },
-                  required: ["value"],
-                },
-              },
-            ],
-          }
-        : {
-            tools: [
-              {
-                name: "first",
-                inputSchema: { type: "object" },
-                outputSchema: {
-                  type: "object",
-                  properties: { value: { type: "string" } },
-                  required: ["value"],
-                },
-              },
-            ],
-            nextCursor: "page-2",
-          },
+  const result = Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const connection = yield* MCPClient.connect(
+          "pagination",
+          new ConfigMCP.Local({
+            type: "local",
+            command: [process.execPath, path.join(import.meta.dir, "fixture/mcp-output-schema.ts")],
+          }),
+          import.meta.dir,
+        )
+        expect((yield* connection.tools()).map((tool) => tool.name)).toEqual(["first", "second", "unresolved"])
+        expect(yield* connection.callTool({ name: "second" })).toMatchObject({ structured: { value: 1 } })
+        expect(yield* connection.callTool({ name: "unresolved" })).toMatchObject({ structured: { value: 1 } })
+        return yield* connection.callTool({ name: "first" })
+      }),
     ),
   )
-  server.setRequestHandler(CallToolRequestSchema, ({ params }) =>
-    Promise.resolve({
-      content: [],
-      structuredContent: { value: params.name === "first" ? 42 : 1 },
-    }),
-  )
 
-  const client = new Client({ name: "pagination-test", version: "1.0.0" })
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
-  await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
-
-  try {
-    const first = await client.listTools()
-    const second = await client.listTools({ cursor: first.nextCursor })
-    expect([...first.tools, ...second.tools].map((tool) => tool.name)).toEqual(["first", "second"])
-    await expect(client.callTool({ name: "first", arguments: {} })).rejects.toThrow(
-      "Structured content does not match the tool's output schema",
-    )
-  } finally {
-    await Promise.all([client.close(), server.close()])
-  }
+  await expect(result).rejects.toThrow("Structured content does not match the tool's output schema")
 })
 
 test("retains output schemas across paginated MCP discovery", async () => {
@@ -406,6 +378,13 @@ test("retains output schemas across paginated MCP discovery", async () => {
         type: "object",
         properties: { value: { type: "number" } },
         required: ["value"],
+      },
+    },
+    {
+      name: "unresolved",
+      outputSchema: {
+        type: "object",
+        properties: { value: { $ref: "#/$defs/missing" } },
       },
     },
   ])
@@ -514,11 +493,11 @@ test("applies configured MCP timeouts to resource operations", async () => {
   await expect(read).rejects.toThrow("Request timed out")
 })
 
-test("lists, reads, and reports MCP resource changes", async () => {
+test.each(["legacy", "modern"] as const)("lists, reads, and reports MCP resource changes (%s era)", async (era) => {
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const server = yield* resourceServer({ listChanged: true })
+        const server = yield* resourceServer({ era, listChanged: true })
         server.state.resourcePages = {
           initial: {
             items: [{ name: "Readme", uri: "docs://readme", description: "Project docs" }],
@@ -611,11 +590,11 @@ test("caches unsupported MCP resource list methods", async () => {
   )
 })
 
-test("accepts empty MCP elicitations without creating forms", async () => {
+test.each(["legacy", "modern"] as const)("accepts empty MCP elicitations without creating forms (%s era)", async (era) => {
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const server = yield* resourceServer({ resources: false, emptyElicitation: true })
+        const server = yield* resourceServer({ era, resources: false, emptyElicitation: true })
         const result = yield* Effect.gen(function* () {
           const service = yield* MCP.Service
           const forms = yield* Form.Service
@@ -648,6 +627,32 @@ test("acknowledges completed MCP URL elicitations without returning internal con
           const result = yield* Fiber.join(call)
           expect(yield* forms.state(form.id)).toEqual({ status: "answered", answer: { elicitation: true } })
           return result
+        }).pipe(
+          Effect.provide(resourceMcpLayer(server.url, (form) => Deferred.succeed(created, form).pipe(Effect.asVoid))),
+        )
+
+        expect(result.structured).toEqual({ action: "accept" })
+      }),
+    ),
+  )
+})
+
+test("answers MCP URL elicitations from the form on modern servers", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const server = yield* resourceServer({ era: "modern", resources: false, urlElicitation: true })
+        const created = yield* Deferred.make<Form.Info>()
+        const result = yield* Effect.gen(function* () {
+          const service = yield* MCP.Service
+          const forms = yield* Form.Service
+          const call = yield* service.callTool({ server: "resources", name: "url-elicitation" }).pipe(Effect.forkScoped)
+
+          const form = yield* Deferred.await(created)
+          expect(form.fields).toEqual([{ key: "elicitation", type: "external", url: "https://example.com/authorize" }])
+
+          yield* forms.reply({ id: form.id, answer: { elicitation: true } })
+          return yield* Fiber.join(call)
         }).pipe(
           Effect.provide(resourceMcpLayer(server.url, (form) => Deferred.succeed(created, form).pipe(Effect.asVoid))),
         )

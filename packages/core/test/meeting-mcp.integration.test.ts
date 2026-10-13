@@ -2,9 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { Server } from "@modelcontextprotocol/sdk/server/index.js"
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js"
+import { Server, WebStandardStreamableHTTPServerTransport, type Tool } from "@modelcontextprotocol/server"
 import { MeetingIntelligence } from "../../../extensions/meeting/src/intelligence"
 import { MeetingStore } from "../../../extensions/meeting/src/store"
 import type { TranscriptSegment } from "../../../extensions/meeting/src/types"
@@ -323,7 +321,7 @@ async function knowledgeServer(
     },
     url: "",
   }
-  const tools = [
+  const tools: Tool[] = [
     {
       name: "search",
       description: "Find knowledge documents",
@@ -351,7 +349,7 @@ async function knowledgeServer(
             name: "write",
             description: "Replace a knowledge document with revision check",
             inputSchema: {
-              type: "object",
+              type: "object" as const,
               properties: { id: { type: "string" }, content: { type: "string" }, expectedRevision: { type: "string" } },
               required: options.writerSchemaValid === false ? ["id", "content"] : ["id", "content", "expectedRevision"],
               additionalProperties: false,
@@ -359,8 +357,8 @@ async function knowledgeServer(
           },
         ]),
   ]
-  protocol.setRequestHandler(ListToolsRequestSchema, () => Promise.resolve({ tools }))
-  protocol.setRequestHandler(CallToolRequestSchema, ({ params }) => {
+  protocol.setRequestHandler("tools/list", () => ({ tools }))
+  protocol.setRequestHandler("tools/call", ({ params }) => {
     const args = params.arguments ?? {}
     if (params.name === "search") {
       state.searchRequests.push(args)

@@ -4,32 +4,41 @@ import path from "node:path"
 import { execFile } from "node:child_process"
 import { stat } from "node:fs/promises"
 import { pathToFileURL } from "node:url"
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
-import { UnauthorizedError, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js"
-import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js"
-import { z } from "zod"
 import {
-  CallToolResultSchema,
-  ElicitationCompleteNotificationSchema,
-  ElicitRequestSchema,
-  GetPromptResultSchema,
+  CLIENT_CAPABILITIES_META_KEY,
+  CLIENT_INFO_META_KEY,
+  Client,
+  isInitializedNotification,
+  isInitializeRequest,
+  isJSONRPCErrorResponse,
+  isJSONRPCNotification,
+  isJSONRPCRequest,
+  isJSONRPCResultResponse,
+  isSpecType,
+  LATEST_PROTOCOL_VERSION,
+  PROTOCOL_VERSION_META_KEY,
+  SdkHttpError,
+  StreamableHTTPClientTransport,
+  UnauthorizedError,
   type ElicitRequestFormParams,
   type ElicitRequestParams,
   type ElicitRequestURLParams,
   type ElicitResult,
-  ListPromptsResultSchema,
-  ListRootsRequestSchema,
-  ListToolsResultSchema,
-  PromptListChangedNotificationSchema,
-  PromptSchema,
-  ResourceListChangedNotificationSchema,
+  type FetchLike,
+  type JSONRPCErrorResponse,
+  type JSONRPCMessage,
+  type JsonSchemaType,
+  type JsonSchemaValidator,
+  type jsonSchemaValidator,
   type LoggingMessageNotification,
-  LoggingMessageNotificationSchema,
-  ToolListChangedNotificationSchema,
-  ToolSchema,
-} from "@modelcontextprotocol/sdk/types.js"
+  type OAuthClientProvider,
+  type PriorDiscovery,
+  type RequestId,
+  type TransportSendOptions,
+} from "@modelcontextprotocol/client"
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio"
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/client/validators/ajv"
+import { z } from "zod"
 import { McpSkill } from "@ycoding-ai/schema/mcp-skill"
 import { Cause, Effect, Exit, Schema } from "effect"
 import { ConfigMCP } from "../config/mcp"
@@ -40,16 +49,87 @@ const DEFAULT_STARTUP_TIMEOUT = 30_000
 const DEFAULT_CATALOG_TIMEOUT = 30_000
 const DEFAULT_EXECUTION_TIMEOUT = 12 * 60 * 60 * 1_000 // 12 hours
 
-type Transport = StdioClientTransport | StreamableHTTPClientTransport
+const DEFAULT_PROBE_TIMEOUT = 5_000
+const MODERN_PROTOCOL_VERSION = "2026-07-28"
+const PROBE_ID = "ycoding-server-discover"
 
-// Some servers advertise tool outputSchemas the SDK's strict validator can't resolve; this drops
-// only that field so a single bad schema doesn't blank out the whole tool list.
-const TolerantListToolsResult = ListToolsResultSchema.extend({
-  tools: ToolSchema.omit({ outputSchema: true }).array(),
-})
-const TolerantListPromptsResult = ListPromptsResultSchema.extend({
-  prompts: PromptSchema.array(),
-})
+const legacyServers = new Set<string>()
+
+type Transport = HandoverStdioTransport | SessionRenewingTransport
+
+type ProbeReply =
+  | { readonly kind: "result"; readonly result: unknown }
+  | { readonly kind: "error"; readonly error: JSONRPCErrorResponse["error"] }
+  | { readonly kind: "exited" }
+  | { readonly kind: "silent" }
+
+class HandoverStdioTransport extends StdioClientTransport {
+  private started: Promise<void> | undefined
+
+  override start() {
+    this.started ??= super.start()
+    return this.started
+  }
+}
+
+class SessionRenewingTransport extends StreamableHTTPClientTransport {
+  renew: (() => Promise<void>) | undefined
+  private renewal: { readonly expired: string; readonly done: Promise<void> } | undefined
+  private readonly pending = new Map<RequestId, { abandoned: boolean }>()
+
+  override send(message: JSONRPCMessage | JSONRPCMessage[], options?: TransportSendOptions) {
+    const cancelled = cancelledRequest(message)
+    const abandoned = cancelled === undefined ? undefined : this.pending.get(cancelled)
+    if (abandoned) abandoned.abandoned = true
+    if (Array.isArray(message) || !isJSONRPCRequest(message)) return this.deliver(message, options, undefined)
+    const request = { abandoned: false }
+    this.pending.set(message.id, request)
+    return this.deliver(message, options, request).finally(() => this.pending.delete(message.id))
+  }
+
+  private deliver(
+    message: JSONRPCMessage | JSONRPCMessage[],
+    options: TransportSendOptions | undefined,
+    request: { readonly abandoned: boolean } | undefined,
+  ) {
+    const session = this.sessionId
+    return super.send(message, options).catch(async (error: unknown) => {
+      if (!session || !expiredSession(error, message)) throw error
+      await this.renewSession(session)
+      if (request?.abandoned || cancelledRequest(message) !== undefined) return
+      return super.send(message, options)
+    })
+  }
+
+  private renewSession(expired: string) {
+    if (this.renewal?.expired === expired) return this.renewal.done
+    if (this.sessionId !== expired || !this.renew) return Promise.resolve()
+    const done = this.renew()
+      .catch(async (error: unknown) => {
+        await this.close()
+        throw error
+      })
+      .finally(() => {
+        if (this.renewal?.done === done) this.renewal = undefined
+      })
+    this.renewal = { expired, done }
+    return done
+  }
+}
+
+const expiredSession = (error: unknown, message: JSONRPCMessage | JSONRPCMessage[]) =>
+  error instanceof SdkHttpError &&
+  error.status === 404 &&
+  !Array.isArray(message) &&
+  !isInitializeRequest(message) &&
+  !isInitializedNotification(message)
+
+const cancelledRequest = (message: JSONRPCMessage | JSONRPCMessage[]) => {
+  if (Array.isArray(message) || !isJSONRPCNotification(message) || message.method !== "notifications/cancelled")
+    return undefined
+  const id = message.params?.requestId
+  return typeof id === "string" || typeof id === "number" ? id : undefined
+}
 
 export class NeedsAuthError extends Schema.TaggedErrorClass<NeedsAuthError>()("MCP.NeedsAuthError", {
   server: Schema.String,
@@ -181,7 +261,7 @@ export interface LogMessage {
 
 /** Handle over a connected MCP server that keeps the SDK `Client` out of the rest of core. */
 export interface Connection {
-  /** Server-supplied usage instructions from the initialize result, if any. */
+  /** Server-supplied usage instructions from the initialize or server/discover result, if any. */
   readonly instructions: string | undefined
   /**
    * The server's declared `io.modelcontextprotocol/skills` capability settings, or undefined when the
@@ -248,7 +328,7 @@ export const connect = Effect.fnUntraced(function* (
   auth?: { readonly provider: OAuthClientProvider; readonly fetch?: FetchLike },
   elicitation?: ElicitationHandler,
 ) {
-  const transport: Transport = yield* Effect.gen(function* () {
+  const create: () => Transport = yield* Effect.gen(function* () {
     if (config.type === "local") {
       const [command, ...args] = config.command
       const cwd = config.cwd ? path.resolve(directory, config.cwd) : directory
@@ -266,61 +346,125 @@ export const connect = Effect.fnUntraced(function* (
       })
       if (!workingDirectory.isDirectory())
         return yield* new ConnectError({ server, message: `Working directory is not a directory: ${cwd}` })
-      return new StdioClientTransport({
+      const parameters = {
         command,
         args,
         cwd,
-        stderr: "pipe",
+        stderr: "pipe" as const,
         env: {
           ...(process.env as Record<string, string>),
           ...(command === "ycoding" ? { BUN_BE_BUN: "1" } : {}),
           ...config.environment,
         },
-      })
+      }
+      return () => new HandoverStdioTransport(parameters)
     }
     if (!URL.canParse(config.url))
       return yield* new ConnectError({ server, message: `Invalid MCP URL for "${server}"` })
-    return new StreamableHTTPClientTransport(new URL(config.url), {
-      requestInit: config.headers ? { headers: config.headers } : undefined,
-      authProvider: auth?.provider,
-      fetch: auth?.fetch,
-    })
+    const url = new URL(config.url)
+    return () =>
+      new SessionRenewingTransport(url, {
+        requestInit: config.headers ? { headers: config.headers } : undefined,
+        authProvider: auth?.provider,
+        fetch: auth?.fetch,
+      })
   })
-  const client = new Client(
-    { name: "ycoding", version: InstallationVersion },
-    {
-      capabilities: {
-        ...(elicitation ? { elicitation: { form: { applyDefaults: true }, url: {} } } : {}),
-        // Some MCP servers require roots capability declaration before they request the workspace root.
-        roots: {},
-      },
-    },
-  )
-  client.setRequestHandler(ListRootsRequestSchema, () =>
-    Promise.resolve({ roots: [{ uri: pathToFileURL(directory).href }] }),
-  )
+  const clientInfo = { name: "ycoding", version: InstallationVersion }
+  const capabilities = {
+    ...(elicitation ? { elicitation: { form: { applyDefaults: true }, url: {} } } : {}),
+    // Some MCP servers require roots capability declaration before they request the workspace root.
+    roots: {},
+  }
+  const client = new Client(clientInfo, {
+    versionNegotiation: { mode: "auto" },
+    capabilities,
+    jsonSchemaValidator: tolerantValidator(new AjvJsonSchemaValidator()),
+  })
+  const startupTimeout = config.timeout?.startup ?? DEFAULT_STARTUP_TIMEOUT
+  client.setRequestHandler("roots/list", () => ({ roots: [{ uri: pathToFileURL(directory).href }] }))
   if (elicitation) {
-    client.setRequestHandler(ElicitRequestSchema, (request, extra) =>
-      Effect.runPromise(elicitation.create({ server, params: request.params, signal: extra.signal })),
+    client.setRequestHandler("elicitation/create", (request, ctx) =>
+      Effect.runPromise(elicitation.create({ server, params: request.params, signal: ctx.mcpReq.signal })),
     )
-    client.setNotificationHandler(ElicitationCompleteNotificationSchema, (notification) =>
+    client.setNotificationHandler("notifications/elicitation/complete", (notification) =>
       Effect.runPromise(elicitation.complete({ server, elicitationID: notification.params.elicitationId })),
     )
   }
 
-  const exit = yield* Effect.tryPromise({
-    try: (signal) => client.connect(transport, { timeout: config.timeout?.startup ?? DEFAULT_STARTUP_TIMEOUT, signal }),
-    catch: (error) => error,
-  }).pipe(Effect.exit)
+  const opened: Transport[] = []
+  const open = () => {
+    const transport = create()
+    opened.push(transport)
+    if (transport instanceof SessionRenewingTransport)
+      transport.renew = async () => {
+        const result = await client.request(
+          { method: "initialize", params: { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities, clientInfo } },
+          { timeout: startupTimeout },
+        )
+        transport.setProtocolVersion(result.protocolVersion)
+        await client.notification({ method: "notifications/initialized" })
+      }
+    return transport
+  }
+  const handshake = (transport: Transport, prior?: PriorDiscovery) =>
+    Effect.tryPromise({
+      try: (signal) => client.connect(transport, { timeout: startupTimeout, signal, ...(prior ? { prior } : {}) }),
+      catch: (error) => error,
+    }).pipe(Effect.as(transport))
+  const known = JSON.stringify([directory, config])
+  const negotiate = Effect.gen(function* () {
+    const transport = open()
+    if (legacyServers.has(known)) return yield* handshake(transport, { kind: "legacy" })
+    if (!(transport instanceof HandoverStdioTransport)) return yield* handshake(transport)
+    const reply = yield* probe(transport, Math.min(DEFAULT_PROBE_TIMEOUT, startupTimeout), {
+      [PROTOCOL_VERSION_META_KEY]: MODERN_PROTOCOL_VERSION,
+      [CLIENT_INFO_META_KEY]: clientInfo,
+      [CLIENT_CAPABILITIES_META_KEY]: capabilities,
+    })
+    if (
+      reply.kind === "result" &&
+      isSpecType.DiscoverResult(reply.result) &&
+      reply.result.supportedVersions.includes(MODERN_PROTOCOL_VERSION)
+    )
+      return yield* handshake(transport, { kind: "modern", discover: reply.result })
+    if (reply.kind === "error" && unsupportedModernVersion(reply.error))
+      return yield* Effect.fail(new Error(reply.error.message))
+    if (reply.kind === "result" || reply.kind === "error") return yield* handshake(transport, { kind: "legacy" })
+    yield* stop(transport)
+    return yield* handshake(open(), { kind: "legacy" })
+  })
+
+  const exit = yield* negotiate.pipe(
+    Effect.onInterrupt(() => Effect.forEach(opened, stop, { discard: true })),
+    Effect.exit,
+  )
   if (Exit.isSuccess(exit)) {
+    const transport = exit.value
+    if (client.getProtocolEra() === "legacy") legacyServers.add(known)
     yield* Effect.addFinalizer(() =>
       cleanupStdioDescendants(transport).pipe(Effect.andThen(Effect.promise(() => client.close())), Effect.ignore),
     )
     const catalogTimeout = config.timeout?.catalog ?? DEFAULT_CATALOG_TIMEOUT
     const executionTimeout = config.timeout?.execution ?? DEFAULT_EXECUTION_TIMEOUT
-    let resourceListSupported = !!client.getServerCapabilities()?.resources
+    const advertised = client.getServerCapabilities()
+    const changes = {
+      ...(advertised?.tools?.listChanged ? { toolsListChanged: true } : {}),
+      ...(advertised?.prompts?.listChanged ? { promptsListChanged: true } : {}),
+      ...(advertised?.resources?.listChanged ? { resourcesListChanged: true } : {}),
+    }
+    if (client.getProtocolEra() === "modern" && Object.keys(changes).length > 0)
+      yield* Effect.tryPromise({
+        try: () => client.listen(changes, { timeout: catalogTimeout }),
+        catch: (error) => (error instanceof Error ? error : new Error(String(error))),
+      }).pipe(
+        Effect.tapError((error) =>
+          Effect.logWarning("failed to subscribe to MCP list changes", { server, error: error.message }),
+        ),
+        Effect.ignore,
+      )
+    let resourceListSupported = !!advertised?.resources
     let resourceTemplateListSupported = resourceListSupported
-    const skills = MCPSkills.capability(client.getServerCapabilities())
+    const skills = MCPSkills.capability(advertised)
     return {
       instructions: client.getInstructions()?.trim() || undefined,
       skills,
@@ -387,54 +531,31 @@ export const connect = Effect.fnUntraced(function* (
       tools: () =>
         Effect.gen(function* () {
           if (!client.getServerCapabilities()?.tools) return []
-          const tools = yield* Effect.tryPromise({
-            try: () =>
-              paginate(
-                async (cursor) => {
-                  const params = cursor === undefined ? undefined : { cursor }
-                  try {
-                    return await client.listTools(params, { timeout: catalogTimeout })
-                  } catch (error) {
-                    if (!(error instanceof Error) || !isOutputSchemaError(error)) throw error
-                    return client.request({ method: "tools/list", params }, TolerantListToolsResult, {
-                      timeout: catalogTimeout,
-                    })
-                  }
-                },
-                (result) => result.tools,
-              ),
+          const result = yield* Effect.tryPromise({
+            try: () => client.listTools(undefined, { timeout: catalogTimeout }),
             catch: (error) => (error instanceof Error ? error : new Error(String(error))),
           }).pipe(
             Effect.tapError((error) => Effect.logWarning("failed to list MCP tools", { server, error: error.message })),
           )
-          return tools.map((tool) => ({
+          return result.tools.map((tool) => ({
             name: tool.name,
             description: tool.description,
             inputSchema: tool.inputSchema,
-            outputSchema: "outputSchema" in tool ? tool.outputSchema : undefined,
+            outputSchema: tool.outputSchema,
           }))
         }),
       prompts: () =>
         Effect.gen(function* () {
           if (!client.getServerCapabilities()?.prompts) return []
-          const prompts = yield* Effect.tryPromise({
-            try: () =>
-              paginate(
-                async (cursor) => {
-                  const params = cursor === undefined ? undefined : { cursor }
-                  return client.request({ method: "prompts/list", params }, TolerantListPromptsResult, {
-                    timeout: catalogTimeout,
-                  })
-                },
-                (result) => result.prompts,
-              ),
+          const result = yield* Effect.tryPromise({
+            try: () => client.listPrompts(undefined, { timeout: catalogTimeout }),
             catch: (error) => (error instanceof Error ? error : new Error(String(error))),
           }).pipe(
             Effect.tapError((error) =>
               Effect.logWarning("failed to list MCP prompts", { server, error: error.message }),
             ),
           )
-          return prompts.map((prompt) => ({
+          return result.prompts.map((prompt) => ({
             name: prompt.name,
             description: prompt.description,
             arguments: prompt.arguments?.map((argument) => ({
@@ -448,12 +569,7 @@ export const connect = Effect.fnUntraced(function* (
         Effect.gen(function* () {
           if (!resourceListSupported) return []
           const resources = yield* Effect.tryPromise({
-            try: () =>
-              paginate(
-                (cursor) =>
-                  client.listResources(cursor === undefined ? undefined : { cursor }, { timeout: catalogTimeout }),
-                (result) => result.resources,
-              ),
+            try: () => client.listResources(undefined, { timeout: catalogTimeout }).then((result) => result.resources),
             catch: (error) => (error instanceof Error ? error : new Error(String(error))),
           }).pipe(
             Effect.catch((error) => {
@@ -477,13 +593,9 @@ export const connect = Effect.fnUntraced(function* (
           if (!resourceTemplateListSupported) return []
           const templates = yield* Effect.tryPromise({
             try: () =>
-              paginate(
-                (cursor) =>
-                  client.listResourceTemplates(cursor === undefined ? undefined : { cursor }, {
-                    timeout: catalogTimeout,
-                  }),
-                (result) => result.resourceTemplates,
-              ),
+              client
+                .listResourceTemplates(undefined, { timeout: catalogTimeout })
+                .then((result) => result.resourceTemplates),
             catch: (error) => (error instanceof Error ? error : new Error(String(error))),
           }).pipe(
             Effect.catch((error) => {
@@ -560,11 +672,7 @@ export const connect = Effect.fnUntraced(function* (
       prompt: (input) =>
         Effect.tryPromise({
           try: (signal) =>
-            client.request(
-              { method: "prompts/get", params: { name: input.name, arguments: input.args ?? {} } },
-              GetPromptResultSchema,
-              { signal, timeout: executionTimeout },
-            ),
+            client.getPrompt({ name: input.name, arguments: input.args ?? {} }, { signal, timeout: executionTimeout }),
           catch: (error) => (error instanceof Error ? error : new Error(String(error))),
         }).pipe(
           Effect.map((result) => ({
@@ -576,7 +684,6 @@ export const connect = Effect.fnUntraced(function* (
           try: (signal) =>
             client.callTool(
               { name: input.name, arguments: input.args ?? {} },
-              CallToolResultSchema,
               // Keep progress tokens available while enforcing a hard wall-clock execution timeout.
               { signal, timeout: executionTimeout, onprogress: () => {} },
             ),
@@ -606,28 +713,78 @@ export const connect = Effect.fnUntraced(function* (
         client.onclose = callback
       },
       onLog: (callback) => {
-        client.setNotificationHandler(LoggingMessageNotificationSchema, (notification) => callback(notification.params))
+        client.setNotificationHandler("notifications/message", (notification) => callback(notification.params))
       },
       onToolsChanged: (callback) => {
-        if (!client.getServerCapabilities()?.tools?.listChanged) return
-        client.setNotificationHandler(ToolListChangedNotificationSchema, async () => callback())
+        if (!advertised?.tools?.listChanged) return
+        client.setNotificationHandler("notifications/tools/list_changed", async () => callback())
       },
       onPromptsChanged: (callback) => {
-        if (!client.getServerCapabilities()?.prompts?.listChanged) return
-        client.setNotificationHandler(PromptListChangedNotificationSchema, async () => callback())
+        if (!advertised?.prompts?.listChanged) return
+        client.setNotificationHandler("notifications/prompts/list_changed", async () => callback())
       },
       onResourcesChanged: (callback) => {
-        if (!client.getServerCapabilities()?.resources?.listChanged) return
-        client.setNotificationHandler(ResourceListChangedNotificationSchema, async () => callback())
+        if (!advertised?.resources?.listChanged) return
+        client.setNotificationHandler("notifications/resources/list_changed", async () => callback())
       },
     } satisfies Connection
   }
 
-  yield* cleanupStdioDescendants(transport).pipe(Effect.andThen(Effect.promise(() => transport.close())), Effect.ignore)
+  legacyServers.delete(known)
+  yield* Effect.forEach(opened, stop, { discard: true })
   const error = Cause.squash(exit.cause)
   if (error instanceof UnauthorizedError) return yield* new NeedsAuthError({ server })
   return yield* new ConnectError({ server, message: error instanceof Error ? error.message : String(error) })
 })
+
+const probe = (transport: HandoverStdioTransport, timeout: number, envelope: Record<string, unknown>) =>
+  Effect.callback<ProbeReply, unknown>((resume) => {
+    const detach = () => {
+      clearTimeout(timer)
+      transport.onmessage = undefined
+      transport.onclose = undefined
+    }
+    const settle = (reply: Effect.Effect<ProbeReply, unknown>) => {
+      detach()
+      resume(reply)
+    }
+    const timer = setTimeout(() => settle(Effect.succeed({ kind: "silent" })), timeout)
+    transport.onmessage = (message) => {
+      if (isJSONRPCResultResponse(message) && message.id === PROBE_ID)
+        settle(Effect.succeed({ kind: "result", result: message.result }))
+      if (isJSONRPCErrorResponse(message) && message.id === PROBE_ID)
+        settle(Effect.succeed({ kind: "error", error: message.error }))
+    }
+    transport.onclose = () => settle(Effect.succeed({ kind: "exited" }))
+    transport
+      .start()
+      .then(() =>
+        transport.send({ jsonrpc: "2.0", id: PROBE_ID, method: "server/discover", params: { _meta: envelope } }),
+      )
+      .catch((error: unknown) => settle(Effect.fail(error)))
+    return Effect.sync(detach)
+  })
+
+const unsupportedModernVersion = (error: JSONRPCErrorResponse["error"]) =>
+  error.code === -32022 &&
+  typeof error.data === "object" &&
+  error.data !== null &&
+  "supported" in error.data &&
+  Array.isArray(error.data.supported) &&
+  error.data.supported.some((version) => typeof version === "string" && version >= MODERN_PROTOCOL_VERSION)
+
+const tolerantValidator = (validators: jsonSchemaValidator): jsonSchemaValidator => ({
+  getValidator: <T>(schema: JsonSchemaType) =>
+    Effect.try(() => validators.getValidator<T>(schema)).pipe(
+      Effect.orElseSucceed(
+        (): JsonSchemaValidator<T> => (input) => ({ valid: true, data: input as T, errorMessage: undefined }),
+      ),
+      Effect.runSync,
+    ),
+})
+
+const stop = (transport: Transport) =>
+  cleanupStdioDescendants(transport).pipe(Effect.andThen(Effect.promise(() => transport.close())), Effect.ignore)
 
 // SDK close stops the MCP process, but not child processes it spawned.
 const cleanupStdioDescendants = (transport: Transport) =>
@@ -676,23 +833,21 @@ const childPids = (pid: number) =>
   )
 
 // The extension's result shapes are defined by the stable Skills extension spec and are not part of
-// SDK 1.29.0's type surface. The extension only exists at base revision 2026-07-28 and later, where
-// `resultType`, `ttlMs`, and `cacheScope` are REQUIRED on these results, so they are required here.
+// the SDK's type surface. The extension only exists at base revision 2026-07-28 and later, where
+// `ttlMs` and `cacheScope` are REQUIRED on these results, so they are required here; the SDK consumes
+// `resultType` before these schemas run.
 const SkillListResult = z.object({
-  resultType: z.literal("complete"),
   ttlMs: z.number(),
   cacheScope: z.string(),
   skills: z.array(z.unknown()),
   nextCursor: z.string().optional(),
 })
 const SkillGetResult = z.object({
-  resultType: z.literal("complete"),
   ttlMs: z.number(),
   cacheScope: z.string(),
   skill: z.unknown(),
 })
 const ResourceDirectoryResult = z.object({
-  resultType: z.literal("complete"),
   resources: z.array(
     z.object({
       uri: z.string(),
@@ -720,11 +875,6 @@ async function paginate<R extends { nextCursor?: string }, T>(
     cursor = result.nextCursor
   }
 }
-
-const isOutputSchemaError = (error: Error) =>
-  /can't resolve reference|resolves to more than one schema|outputSchema|schema.*reference|reference.*schema/i.test(
-    error.message,
-  )
 
 const isMethodNotFound = (error: unknown) => {
   if (typeof error === "object" && error !== null && "code" in error && error.code === -32601) return true

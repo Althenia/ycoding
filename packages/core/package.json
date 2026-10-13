@@ -56,6 +56,7 @@
     }
   },
   "devDependencies": {
+    "@modelcontextprotocol/server": "2.3.1",
     "@tsconfig/bun": "catalog:",
     "@types/bun": "catalog:",
     "@types/cross-spawn": "catalog:",
@@ -103,7 +104,7 @@
     "@effect/sql-sqlite-bun": "catalog:",
     "@ff-labs/fff-bun": "0.9.4",
     "@lydell/node-pty": "catalog:",
-    "@modelcontextprotocol/sdk": "1.29.0",
+    "@modelcontextprotocol/client": "2.3.1",
     "@npmcli/arborist": "9.4.0",
     "@npmcli/config": "10.8.1",
     "@openrouter/ai-sdk-provider": "2.9.0",

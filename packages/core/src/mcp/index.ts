@@ -351,9 +351,9 @@ export const layer = Layer.effect(
             await Effect.runPromise(credentials.remove(credentialID))
           },
           store: {
-            tokens: async () => {
+            tokens: async (ctx) => {
               const stored = await latest()
-              return stored ? MCPOAuth.toTokens(stored) : undefined
+              return stored ? { issuer: ctx?.issuer, ...MCPOAuth.toTokens(stored) } : undefined
             },
             saveTokens: async (tokens) => {
               const stored = await latest()
@@ -369,9 +369,10 @@ export const layer = Layer.effect(
                 }),
               )
             },
-            clientInformation: async () => {
+            clientInformation: async (ctx) => {
               const stored = await latest()
-              return stored ? MCPOAuth.clientFromCredential(stored) : undefined
+              const client = stored ? MCPOAuth.clientFromCredential(stored) : undefined
+              return client ? { issuer: ctx?.issuer, ...client } : undefined
             },
             saveClientInformation: async () => {},
             codeVerifier: async () => undefined,

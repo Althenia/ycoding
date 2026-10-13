@@ -1,8 +1,6 @@
 import { z } from "zod"
 import { Buffer } from "node:buffer"
-import { Server } from "@modelcontextprotocol/sdk/server/index.js"
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
-import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js"
+import { createMcpHandler, ProtocolError, ProtocolErrorCode, Server } from "@modelcontextprotocol/server"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigMCP } from "@ycoding-ai/core/config/mcp"
 import { Credential } from "@ycoding-ai/core/credential"
@@ -152,11 +150,9 @@ export function skillServer(input: SkillServerOptions = {}) {
         )
 
         protocol.setRequestHandler(
-          z.object({
-            method: z.literal("skills/list"),
-            params: z.object({ cursor: z.string().optional() }).optional(),
-          }),
-          async (request: { params?: { cursor?: string } }) => {
+          "skills/list",
+          { params: z.object({ cursor: z.string().optional() }) },
+          async (params) => {
             state.listCalls += 1
             if (input.rawSkills)
               return { resultType: "complete" as const, skills: input.rawSkills, ttlMs: 300000, cacheScope: "public" }
@@ -166,7 +162,7 @@ export function skillServer(input: SkillServerOptions = {}) {
             // Each page is a fresh object graph so callers cannot mutate a shared manifest.
             if (!input.paginate)
               return { resultType: "complete" as const, skills: listed, ttlMs: 300000, cacheScope: "public" }
-            return request.params?.cursor === "page-2"
+            return params.cursor === "page-2"
               ? { resultType: "complete" as const, skills: listed.slice(1), ttlMs: 300000, cacheScope: "public" }
               : {
                   resultType: "complete" as const,
@@ -178,12 +174,10 @@ export function skillServer(input: SkillServerOptions = {}) {
           },
         )
 
-        protocol.setRequestHandler(
-          z.object({ method: z.literal("skills/get"), params: z.object({ uri: z.string() }) }),
-          async (request: { params: { uri: string } }) => {
+        protocol.setRequestHandler("skills/get", { params: z.object({ uri: z.string() }) }, async (params) => {
             state.getCalls += 1
-            const skill = current.find((candidate) => candidate.uri === request.params.uri)
-            if (!skill) throw new McpError(ErrorCode.InvalidParams, "No skill is served at that URI")
+            const skill = current.find((candidate) => candidate.uri === params.uri)
+            if (!skill) throw new ProtocolError(ProtocolErrorCode.InvalidParams, "No skill is served at that URI")
             return {
               resultType: "complete" as const,
               skill: { ...(await entry(skill)), uri: input.getUriOverride ?? skill.uri },
@@ -195,21 +189,19 @@ export function skillServer(input: SkillServerOptions = {}) {
 
         if (!input.noResources) {
           protocol.setRequestHandler(
-            z.object({
-              method: z.literal("resources/directory/read"),
-              params: z.object({ uri: z.string(), cursor: z.string().optional() }),
-            }),
-            (request: { params: { uri: string; cursor?: string } }) => {
+            "resources/directory/read",
+            { params: z.object({ uri: z.string(), cursor: z.string().optional() }) },
+            (params) => {
               state.directoryCalls += 1
               const resources = input.paginateDirectory
-                ? request.params.cursor === "page-2"
+                ? params.cursor === "page-2"
                   ? (input.directoryEntries ?? []).slice(1)
                   : (input.directoryEntries ?? []).slice(0, 1)
                 : (input.directoryEntries ?? [])
               const result = {
                 resultType: "complete" as const,
                 resources,
-                ...(input.paginateDirectory && request.params.cursor === undefined ? { nextCursor: "page-2" } : {}),
+                ...(input.paginateDirectory && params.cursor === undefined ? { nextCursor: "page-2" } : {}),
               }
               return Promise.resolve(
                 input.omitDirectoryCacheFields ? result : { ...result, ttlMs: 300000, cacheScope: "public" },
@@ -217,15 +209,13 @@ export function skillServer(input: SkillServerOptions = {}) {
             },
           )
 
-          protocol.setRequestHandler(
-            z.object({ method: z.literal("resources/read"), params: z.object({ uri: z.string() }) }),
-            (request: { params: { uri: string } }) => {
+          protocol.setRequestHandler("resources/read", (request) => {
               state.readCalls += 1
               const skill = current.find((candidate) => request.params.uri.startsWith(`${root(candidate.uri)}/`))
               const file = skill?.files.find(
                 (candidate) => `${root(skill.uri)}/${candidate.name}` === request.params.uri,
               )
-              if (!file) throw new McpError(ErrorCode.InvalidParams, "Unknown resource")
+              if (!file) throw new ProtocolError(ProtocolErrorCode.InvalidParams, "Unknown resource")
               const text =
                 input.corrupt === "size"
                   ? `${file.text}\n`
@@ -246,27 +236,8 @@ export function skillServer(input: SkillServerOptions = {}) {
         return protocol
       }
 
-      // A fresh protocol per session: the SDK binds one server instance to one transport, and tests
-      // connect more than once against the same fixture.
-      const sessions = new Map<string, { protocol: Server; transport: WebStandardStreamableHTTPServerTransport }>()
-      const http = Bun.serve({
-        port: 0,
-        fetch: async (request) => {
-          const sessionID = request.headers.get("mcp-session-id")
-          const existing = sessionID === null ? undefined : sessions.get(sessionID)
-          if (existing) return existing.transport.handleRequest(request)
-          const protocol = createProtocol()
-          const transport = new WebStandardStreamableHTTPServerTransport({
-            sessionIdGenerator: () => crypto.randomUUID(),
-            enableJsonResponse: true,
-            onsessioninitialized: (id) => {
-              sessions.set(id, { protocol, transport })
-            },
-          })
-          await protocol.connect(transport)
-          return transport.handleRequest(request)
-        },
-      })
+      const handler = createMcpHandler(createProtocol, { legacy: "reject" })
+      const http = Bun.serve({ port: 0, fetch: (request) => handler.fetch(request) })
 
       return {
         state,
@@ -275,7 +246,7 @@ export function skillServer(input: SkillServerOptions = {}) {
           current = [...next]
         },
         close: async () => {
-          await Promise.all([...sessions.values()].map((session) => session.protocol.close().catch(() => {})))
+          await handler.close()
           await http.stop(true)
         },
       }

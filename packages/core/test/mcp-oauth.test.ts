@@ -1,7 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Server } from "@modelcontextprotocol/sdk/server/index.js"
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js"
+import { createMcpHandler, Server } from "@modelcontextprotocol/server"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigMCP } from "@ycoding-ai/core/config/mcp"
 import { Credential } from "@ycoding-ai/core/credential"
@@ -12,6 +10,7 @@ import { Form } from "@ycoding-ai/core/form"
 import { Integration } from "@ycoding-ai/core/integration"
 import { Location } from "@ycoding-ai/core/location"
 import { MCP } from "@ycoding-ai/core/mcp/index"
+import { MCPOAuth } from "@ycoding-ai/core/mcp/oauth"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { Context, Deferred, Effect, Fiber, Layer } from "effect"
@@ -34,6 +33,7 @@ function oauthServer(input: {
       const state = {
         access: new Set(input.access),
         refresh: new Set(input.refresh),
+        codes: new Set<string>(),
         refreshRequests: [] as string[],
         holdDiscoveries: 0,
         discoveries: 0,
@@ -62,7 +62,17 @@ function oauthServer(input: {
               grant_types_supported: ["authorization_code", "refresh_token"],
               code_challenge_methods_supported: ["S256"],
               token_endpoint_auth_methods_supported: ["none"],
+              authorization_response_iss_parameter_supported: true,
             })
+          }
+          if (url.pathname === "/authorize") {
+            const code = `code-${state.codes.size}`
+            state.codes.add(code)
+            const callback = new URL(url.searchParams.get("redirect_uri") ?? "")
+            callback.searchParams.set("code", code)
+            callback.searchParams.set("state", url.searchParams.get("state") ?? "")
+            callback.searchParams.set("iss", base)
+            return Response.redirect(callback.href, 302)
           }
           if (url.pathname === "/register")
             return Response.json(
@@ -71,6 +81,19 @@ function oauthServer(input: {
             )
           if (url.pathname === "/token") {
             const form = new URLSearchParams(await request.text())
+            if (form.get("grant_type") === "authorization_code") {
+              if (!state.codes.delete(form.get("code") ?? ""))
+                return Response.json({ error: "invalid_grant" }, { status: 400 })
+              state.issued += 1
+              state.access.add(`access-${state.issued}`)
+              state.refresh.add(`refresh-${state.issued}`)
+              return Response.json({
+                access_token: `access-${state.issued}`,
+                token_type: "Bearer",
+                expires_in: 3600,
+                refresh_token: `refresh-${state.issued}`,
+              })
+            }
             const presented = form.get("refresh_token") ?? ""
             state.refreshRequests.push(presented)
             await input.beforeRefresh?.(presented, state.refresh)
@@ -98,22 +121,23 @@ function oauthServer(input: {
                 "WWW-Authenticate": `Bearer resource_metadata="${base}/.well-known/oauth-protected-resource"`,
               },
             })
-          const protocol = new Server({ name: "oauth-fixture", version: "1.0.0" }, { capabilities: { tools: {} } })
-          protocol.setRequestHandler(ListToolsRequestSchema, () =>
-            Promise.resolve({ tools: [{ name: "echo", inputSchema: { type: "object" as const, properties: {} } }] }),
+          const handler = createMcpHandler(
+            () => {
+              const protocol = new Server({ name: "oauth-fixture", version: "1.0.0" }, { capabilities: { tools: {} } })
+              protocol.setRequestHandler("tools/list", () => ({
+                tools: [{ name: "echo", inputSchema: { type: "object" as const, properties: {} } }],
+              }))
+              protocol.setRequestHandler("tools/call", () => ({
+                content: [{ type: "text" as const, text: `served with ${token}` }],
+              }))
+              return protocol
+            },
+            { legacy: "reject" },
           )
-          protocol.setRequestHandler(CallToolRequestSchema, () =>
-            Promise.resolve({ content: [{ type: "text" as const, text: `served with ${token}` }] }),
-          )
-          const transport = new WebStandardStreamableHTTPServerTransport({
-            sessionIdGenerator: undefined,
-            enableJsonResponse: true,
-          })
-          await protocol.connect(transport)
-          return transport.handleRequest(request)
+          return handler.fetch(request)
         },
       })
-      return { state, url: `${http.url.origin}/mcp`, stop: () => http.stop(true) }
+      return { state, issuer: http.url.origin, url: `${http.url.origin}/mcp`, stop: () => http.stop(true) }
     }),
     (server) => Effect.promise(server.stop),
   )
@@ -167,7 +191,10 @@ const integrationOf = (mcp: MCP.Interface) =>
     }),
   )
 
-const store = (integrationID: Integration.ID, input: { access: string; refresh: string; label?: string }) =>
+const store = (
+  integrationID: Integration.ID,
+  input: { access: string; refresh: string; label?: string; issuer?: string },
+) =>
   Effect.gen(function* () {
     const credentials = yield* Credential.Service
     return yield* credentials.create({
@@ -179,7 +206,7 @@ const store = (integrationID: Integration.ID, input: { access: string; refresh: 
         access: input.access,
         refresh: input.refresh,
         expires: 0,
-        metadata: { tokenType: "Bearer", client: CLIENT },
+        metadata: { tokenType: "Bearer", client: CLIENT, ...(input.issuer ? { issuer: input.issuer } : {}) },
       }),
     })
   })
@@ -230,8 +257,95 @@ describe("MCP OAuth token refresh", () => {
       expect(yield* stored(credential.id)).toMatchObject({
         access: "access-2",
         refresh: "refresh-2",
-        metadata: { client: CLIENT },
+        metadata: { client: CLIENT, issuer: server.issuer },
       })
+    }),
+  )
+
+  it.live("does not present a refresh token recorded for a different authorization server", () =>
+    Effect.gen(function* () {
+      const server = yield* oauthServer({ rotate: true, access: [], refresh: ["refresh-0"] })
+      const mcp = yield* locationMcp(server.url, import.meta.dir)
+      const credential = yield* store(yield* integrationOf(mcp), {
+        access: "expired",
+        refresh: "refresh-0",
+        issuer: "https://other.example",
+      })
+
+      yield* mcp.connect(SERVER)
+
+      expect(yield* status(mcp)).toEqual({ status: "needs_auth" })
+      expect(server.state.refreshRequests).toEqual([])
+      expect(yield* stored(credential.id)).toMatchObject({ refresh: "refresh-0" })
+    }),
+  )
+
+  it.live("redeems an interactive authorization code only when the callback issuer matches", () =>
+    Effect.gen(function* () {
+      const server = yield* oauthServer({ rotate: true, access: [], refresh: [] })
+      const login = (issuer: string | undefined) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const attempt = yield* MCPOAuth.authorize({
+              name: SERVER,
+              config: new ConfigMCP.Remote({ type: "remote", url: server.url }),
+              methodID: Integration.MethodID.make("mcp_interactive"),
+            })
+            const redirect = yield* Effect.promise(() => fetch(attempt.url, { redirect: "manual" }))
+            const callback = new URL(redirect.headers.get("location") ?? "")
+            if (issuer === undefined) callback.searchParams.delete("iss")
+            if (issuer !== undefined) callback.searchParams.set("iss", issuer)
+            yield* Effect.promise(() => fetch(callback))
+            return yield* attempt.callback
+          }),
+        )
+
+      expect(yield* login(server.issuer)).toMatchObject({
+        access: "access-1",
+        refresh: "refresh-1",
+        metadata: { issuer: server.issuer, client: { client_id: "registered-client", issuer: server.issuer } },
+      })
+      expect(String(yield* login(undefined).pipe(Effect.flip))).toContain("IssuerMismatchError")
+      expect(String(yield* login("https://attacker.example").pipe(Effect.flip))).toContain("IssuerMismatchError")
+      expect(server.state.codes.size).toBe(2)
+    }),
+  )
+
+  it.live("shows a callback error only after its state and issuer are verified", () =>
+    Effect.gen(function* () {
+      const server = yield* oauthServer({ rotate: true, access: [], refresh: [] })
+      const reject = (forge: (callback: URL) => void) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const attempt = yield* MCPOAuth.authorize({
+              name: SERVER,
+              config: new ConfigMCP.Remote({ type: "remote", url: server.url }),
+              methodID: Integration.MethodID.make("mcp_interactive"),
+            })
+            const redirect = yield* Effect.promise(() => fetch(attempt.url, { redirect: "manual" }))
+            const callback = new URL(redirect.headers.get("location") ?? "")
+            callback.searchParams.delete("code")
+            callback.searchParams.set("error", "access_denied")
+            callback.searchParams.set("error_description", "Denied by the account owner")
+            forge(callback)
+            const page = yield* Effect.promise(() => fetch(callback).then((response) => response.text()))
+            const failure = yield* attempt.callback.pipe(Effect.flip)
+            return { page, failure: failure.message }
+          }),
+        )
+
+      const forged = yield* reject((callback) => callback.searchParams.set("state", "forged"))
+      expect(forged.failure).toBe("OAuth state mismatch")
+      expect(forged.page).not.toContain("Denied by the account owner")
+      const mixedUp = yield* reject((callback) => callback.searchParams.set("iss", "https://attacker.example"))
+      expect(mixedUp.failure).toBe("OAuth issuer mismatch")
+      expect(mixedUp.page).not.toContain("Denied by the account owner")
+      const unsigned = yield* reject((callback) => callback.searchParams.delete("iss"))
+      expect(unsigned.failure).toBe("OAuth issuer mismatch")
+      expect(unsigned.page).not.toContain("Denied by the account owner")
+      const genuine = yield* reject(() => {})
+      expect(genuine.failure).toBe("Denied by the account owner")
+      expect(genuine.page).toContain("Denied by the account owner")
     }),
   )
 
