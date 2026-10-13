@@ -19,7 +19,7 @@ test("ycoding meeting starts the runtime, arms a meeting, serves the live view a
   const { meetingDirectory } = await import("@ycoding-ai/meeting/discovery")
   const meeting = await withEnv({ XDG_DATA_HOME: data }, () => meetingDirectory(project))
   await mkdir(meeting, { recursive: true, mode: 0o700 })
-  const worker = path.join(root, "worker")
+  const worker = path.join(root, "worker.cjs")
   await writeFile(worker, protocolWorker, { mode: 0o700 })
   await writeFile(path.join(meeting, "settings.json"), JSON.stringify({ transcription: { pythonExecutable: worker } }))
   const first = run(["meeting", project, "--no-open"], env)
