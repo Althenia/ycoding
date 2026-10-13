@@ -471,8 +471,8 @@ fn both_guards_keep_every_unapproved_package_and_singular_provider_form_rejected
     let fixture = Fixture::new();
     for declaration in [
         r#"{"providers":{"fixture":{"package":"@example/provider"}}}"#,
-        r#"{"providers":{"fixture":{"package":"@ai-sdk/openai-compatible"}}}"#,
-        r#"{"providers":{"fixture":{"package":"aisdk:@ai-sdk/openai-compatible","models":{"code":{"package":"aisdk:@ai-sdk/openai-compatible"}}}}}"#,
+        r#"{"providers":{"fixture":{"package":"@ai-sdk/unknown-provider"}}}"#,
+        r#"{"providers":{"fixture":{"package":"aisdk:@ai-sdk/openai-compatible","models":{"code":{"package":"@example/unknown-model"}}}}}"#,
         r#"{"providers":{"fixture":{"package":"@ycoding-ai/ai/providers/runpod","npm":"@example/provider"}}}"#,
         r#"{"providers":{"fixture":{"package":"@ycoding-ai/ai/providers/runpod","plugin":"@example/provider"}}}"#,
         r#"{"provider":{"fixture":{"package":"aisdk:@ai-sdk/openai-compatible"}}}"#,
@@ -501,6 +501,50 @@ fn both_guards_keep_every_unapproved_package_and_singular_provider_form_rejected
             "supervisor accepted {declaration}"
         );
     }
+}
+
+#[test]
+fn native_aliases_share_configuration_implementation_ownership() {
+    for package in [
+        "@ai-sdk/openai-compatible",
+        "aisdk:@ai-sdk/openai-compatible",
+        "@ycoding-ai/ai/providers/openai-compatible",
+        "aisdk:@ycoding-ai/ai/providers/openai-compatible/responses",
+    ] {
+        let fixture = Fixture::new();
+        fixture.write("project/ycoding.json", &format!(r#"{{"providers":{{"fixture":{{"package":"{package}","models":{{"code":{{"package":"@ai-sdk/anthropic"}}}}}}}}}}"#));
+        let mut configuration = fixture.config();
+        configuration
+            .write_provider(Scope::Project, &provider("fixture"))
+            .unwrap();
+        configuration.reload().unwrap();
+        let catalog = Catalog::from_config(vec![], &configuration).unwrap();
+        assert_eq!(
+            catalog.providers[0].provider.package.as_str(),
+            Some("aisdk:@ai-sdk/openai-compatible")
+        );
+        assert_eq!(
+            catalog.providers[0].models[0]
+                .package
+                .as_ref()
+                .unwrap()
+                .as_str(),
+            Some("@ai-sdk/anthropic")
+        );
+    }
+    let fixture = Fixture::new();
+    let path = fixture.write(
+        "project/ycoding.json",
+        r#"{"providers":{"fixture":{"package":"aisdk:@openrouter/ai-sdk-provider"}}}"#,
+    );
+    let before = fs::read(&path).unwrap();
+    assert_eq!(
+        fixture
+            .config()
+            .write_provider(Scope::Project, &provider("fixture")),
+        Err(WriteError::ProviderCollision)
+    );
+    assert_eq!(fs::read(path).unwrap(), before);
 }
 
 #[test]

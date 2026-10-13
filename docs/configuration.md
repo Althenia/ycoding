@@ -1093,11 +1093,15 @@ every model in YCoding configuration.
 
 ### Rust backend endpoint configuration
 
-The Rust backend accepts provider-level `providers.<id>.package` declarations
-exactly for `aisdk:@ai-sdk/openai-compatible` and
-`@ycoding-ai/ai/providers/runpod`. These select fixed native implementations;
-they do not execute npm provider packages. Other string packages, model-level
-`package`, singular `provider`, and executable `plugins`, `npm` or `plugin`
+The Rust backend accepts provider-level `providers.<id>.package` and model-level
+`providers.<id>.models.<model>.package` declarations when the identity belongs to
+the native router's closed set (`resources::model::family`). Every identity can
+use one optional `aisdk:` prefix. For example,
+`aisdk:@openrouter/ai-sdk-provider` selects the native OpenRouter implementation,
+and `@ycoding-ai/ai/providers/openai` selects the native OpenAI implementation.
+Model-level packages override their provider's package. These declarations do
+not execute npm provider code; dynamic provider loading is unsupported. Unknown
+package identities, singular `provider`, and executable `plugins`, `npm` or `plugin`
 declarations are rejected.
 
 Local v5 clients can use `provider.configure` to persist an endpoint in global

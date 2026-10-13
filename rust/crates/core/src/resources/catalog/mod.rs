@@ -585,9 +585,8 @@ impl Catalog {
                 );
                 record.provider = provider::Info::decode(&encoded)?;
                 if record.provider.integration_id.is_none()
-                    && (super::config::is_native_endpoint_package(
-                        &record.provider.package.encode(),
-                    ) || field(item, "env").is_some())
+                    && (super::model::family(&record.provider.package).is_ok()
+                        || field(item, "env").is_some())
                 {
                     record.provider.integration_id =
                         Some(ycoding_schema::integration::Id::new(id.clone())?);

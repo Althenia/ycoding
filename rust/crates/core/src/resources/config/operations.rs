@@ -9,15 +9,34 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-use ycoding_schema::{DomainEncode, JsonObject, JsonValue, LosslessString, mcp};
+use ycoding_schema::{
+    DomainEncode, JsonObject, JsonPath, JsonValue, LosslessString, PathSegment, mcp,
+};
 
-pub const ENDPOINT_PACKAGES: [&str; 2] = [
-    "aisdk:@ai-sdk/openai-compatible",
-    "@ycoding-ai/ai/providers/runpod",
-];
-
-pub fn is_native_endpoint_package(value: &JsonValue) -> bool {
-    matches!(value, JsonValue::String(package) if package.as_str().is_some_and(|package| ENDPOINT_PACKAGES.contains(&package)))
+pub fn native_package_declaration(value: &JsonValue, path: &JsonPath) -> bool {
+    let JsonValue::String(package) = value else {
+        return false;
+    };
+    let declaration = match path.0.as_slice() {
+        [
+            PathSegment::Key(providers),
+            PathSegment::Key(_),
+            PathSegment::Key(field),
+        ] => providers.as_str() == Some("providers") && field.as_str() == Some("package"),
+        [
+            PathSegment::Key(providers),
+            PathSegment::Key(_),
+            PathSegment::Key(models),
+            PathSegment::Key(_),
+            PathSegment::Key(field),
+        ] => {
+            providers.as_str() == Some("providers")
+                && models.as_str() == Some("models")
+                && field.as_str() == Some("package")
+        }
+        _ => false,
+    };
+    declaration && crate::resources::model::family(package).is_ok()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,12 +117,18 @@ pub struct ProviderConfiguration {
 impl ProviderConfiguration {
     pub fn package(&self) -> &'static str {
         match self.endpoint {
-            Endpoint::OpenAi { .. } => ENDPOINT_PACKAGES[0],
-            Endpoint::Runpod { .. } => ENDPOINT_PACKAGES[1],
+            Endpoint::OpenAi { .. } => "aisdk:@ai-sdk/openai-compatible",
+            Endpoint::Runpod { .. } => "@ycoding-ai/ai/providers/runpod",
         }
     }
 
+    pub fn family(&self) -> Result<crate::resources::model::ProviderFamily, WriteError> {
+        crate::resources::model::family(&self.package().into())
+            .map_err(|_| WriteError::InvalidConfig)
+    }
+
     pub fn validate(&self) -> Result<(), WriteError> {
+        self.family()?;
         identifier(&self.provider_id, 128)?;
         let base = match &self.endpoint {
             Endpoint::OpenAi { base_url, .. } | Endpoint::Runpod { base_url, .. } => base_url,
@@ -206,7 +231,7 @@ impl Configuration {
                     .map_err(|_| WriteError::InvalidConfig)?,
             )?;
             if let Some(package) = field(&existing, "package")
-                && package != &JsonValue::String(input.package().into())
+                && !matches!(package, JsonValue::String(package) if crate::resources::model::family(package).ok() == Some(input.family()?))
             {
                 return Err(WriteError::ProviderCollision);
             }

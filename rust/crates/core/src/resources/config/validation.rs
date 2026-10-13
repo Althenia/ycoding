@@ -824,18 +824,13 @@ fn obsolete_paths(input: &JsonValue) -> Vec<JsonPath> {
     if let Some(JsonValue::Object(providers)) = object.get(&"providers".into()) {
         for (name, value) in providers.iter() {
             let path = JsonPath::default().key("providers").key(name.clone());
-            obsolete_provider_paths(value, &path, true, &mut paths);
+            obsolete_provider_paths(value, &path, &mut paths);
         }
     }
     paths
 }
 
-fn obsolete_provider_paths(
-    value: &JsonValue,
-    path: &JsonPath,
-    provider: bool,
-    paths: &mut Vec<JsonPath>,
-) {
+fn obsolete_provider_paths(value: &JsonValue, path: &JsonPath, paths: &mut Vec<JsonPath>) {
     match value {
         JsonValue::Object(object) => {
             for (key, value) in object.iter() {
@@ -843,17 +838,17 @@ fn obsolete_provider_paths(
                 if matches!(key.as_str(), Some("npm" | "plugin"))
                     || (key.as_str() == Some("package")
                         && matches!(value, JsonValue::String(_))
-                        && !(provider && super::is_native_endpoint_package(value)))
+                        && !super::native_package_declaration(value, &path))
                 {
                     paths.push(path);
                     continue;
                 }
-                obsolete_provider_paths(value, &path, false, paths);
+                obsolete_provider_paths(value, &path, paths);
             }
         }
         JsonValue::Array(values) => {
             for (index, value) in values.iter().enumerate() {
-                obsolete_provider_paths(value, &path.index(index), false, paths);
+                obsolete_provider_paths(value, &path.index(index), paths);
             }
         }
         _ => (),

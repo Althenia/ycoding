@@ -314,26 +314,24 @@ fn config_strings(value: Option<&JsonValue>) -> Result<Vec<String>, Error> {
     items.iter().map(|item| config_text(Some(item))).collect()
 }
 fn obsolete_provider(value: &JsonValue) -> bool {
-    match value {
-        JsonValue::Object(providers) => providers
-            .iter()
-            .any(|(_, value)| obsolete_provider_value(value, true)),
-        _ => obsolete_provider_value(value, false),
-    }
+    obsolete_provider_value(value, &ycoding_schema::JsonPath::default().key("providers"))
 }
-fn obsolete_provider_value(value: &JsonValue, provider: bool) -> bool {
+fn obsolete_provider_value(value: &JsonValue, path: &ycoding_schema::JsonPath) -> bool {
     match value {
         JsonValue::Object(object) => object.iter().any(|(key, value)| {
             (key.as_str()
                 .is_some_and(|key| ["npm", "package", "plugin"].contains(&key))
-                && !(provider
-                    && key.as_str() == Some("package")
-                    && crate::resources::config::is_native_endpoint_package(value)))
-                || obsolete_provider_value(value, false)
+                && !(key.as_str() == Some("package")
+                    && crate::resources::config::native_package_declaration(
+                        value,
+                        &path.key(key.clone()),
+                    )))
+                || obsolete_provider_value(value, &path.key(key.clone()))
         }),
         JsonValue::Array(items) => items
             .iter()
-            .any(|value| obsolete_provider_value(value, false)),
+            .enumerate()
+            .any(|(index, value)| obsolete_provider_value(value, &path.index(index))),
         _ => false,
     }
 }

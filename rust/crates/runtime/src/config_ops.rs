@@ -6,6 +6,7 @@ use crate::{
 };
 use std::{path::PathBuf, sync::Arc};
 use ycoding_core::{
+    resources::model,
     resources::{config, frontend_package},
     ycoding_schema::provider,
 };
@@ -156,10 +157,9 @@ async fn configure_provider(
         .models
         .catalog()
         .provider(&provider::Id(input.provider_id.clone()))
-        && existing
-            .package
-            .as_str()
-            .is_none_or(|package| package != input.package())
+        && !existing.package.is_empty()
+        && model::family(&existing.package).ok()
+            != Some(input.family().map_err(Failure::ConfigurationWrite)?)
     {
         return Err(Failure::ConfigurationWrite(
             config::WriteError::ProviderCollision,

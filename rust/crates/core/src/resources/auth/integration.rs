@@ -94,9 +94,14 @@ pub struct Draft {
 impl Draft {
     pub fn register_endpoints(&mut self, catalog: &crate::resources::catalog::Catalog) {
         for record in &catalog.providers {
-            if !crate::resources::config::is_native_endpoint_package(
-                &record.provider.package.encode(),
-            ) {
+            if crate::resources::model::family(&record.provider.package).is_err()
+                && !record.models.iter().any(|model| {
+                    model
+                        .package
+                        .as_ref()
+                        .is_some_and(|package| crate::resources::model::family(package).is_ok())
+                })
+            {
                 continue;
             }
             let id = record.provider.integration_id.as_ref().map_or_else(

@@ -11,8 +11,8 @@ mod roots;
 mod validation;
 mod variable;
 pub use operations::{
-    ENDPOINT_PACKAGES, Endpoint, EndpointApi, EndpointModel, EndpointWorker, Mutation,
-    MutationPolicy, ProviderConfiguration, Scope, Target, WriteError, is_native_endpoint_package,
+    Endpoint, EndpointApi, EndpointModel, EndpointWorker, Mutation, MutationPolicy,
+    ProviderConfiguration, Scope, Target, WriteError, native_package_declaration,
 };
 pub use roots::Roots;
 

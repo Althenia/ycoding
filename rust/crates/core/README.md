@@ -240,7 +240,7 @@ The following TS internal IDs are excluded:
 | `ycoding.command`                                                                                                                                                                            | `resources/command/mod.rs::Service::from_documents` loads configured commands; it does not register the TS bundled `init`/`review` templates from `packages/core/src/plugin/command.ts`.                                                  |
 | `ycoding.skill`                                                                                                                                                                              | `resources/skill/mod.rs::Service::from_entries` discovers configured sources; it does not register the TS bundled YCoding/report skills from `packages/core/src/plugin/skill.ts`.                                                         |
 | `ycoding.system-prompt.openai`, `ycoding.system-prompt.google`, `ycoding.system-prompt.anthropic`, `ycoding.system-prompt.kimi`, `ycoding.system-prompt.arcee`, `ycoding.system-prompt.meta` | `session/runner/mod.rs` assembles instructions and the selected agent system prompt, not the six model-family prompt selectors in `packages/core/src/plugin/system-prompt.ts`.                                                            |
-| `ycoding.provider.dynamic`                                                                                                                                                                   | Executable custom-provider loading is unsupported. `config::ENDPOINT_PACKAGES` admits only two declarative native endpoint identities; `resources/model/mod.rs::family` selects their fixed native routes.                                |
+| `ycoding.provider.dynamic`                                                                                                                                                                   | Executable custom-provider loading is unsupported. Provider/model package declarations select only identities in `resources/model/mod.rs::family`'s closed native set, optionally prefixed by `aisdk:`; no npm provider code is loaded.   |
 
 The channel also defines ordered domain/context/tool transforms and hooks,
 bounded receipt-owned event subscriptions, and generation-scoped resource
@@ -1951,11 +1951,16 @@ units; invalid optional agent fields and array items retain valid siblings.
 Malformed permissions append deny rules after valid rules, and malformed
 guardrails become `{ "enabled": true }`. These diagnostics carry `failClosed`.
 
-Provider-level `providers.<id>.package` accepts exactly
-`aisdk:@ai-sdk/openai-compatible` and `@ycoding-ai/ai/providers/runpod` as
-declarative native route identities. The shared `config::ENDPOINT_PACKAGES`
-definition drives endpoint writes, validation, catalog integration identity and
-the process-extension guard. Other string packages, model-level packages,
+Provider-level `providers.<id>.package` and model-level
+`providers.<id>.models.<model>.package` accept exactly the identities served by
+`resources::model::family`, with or without one `aisdk:` prefix. They are
+declarative native route selections, not executable module imports. The shared
+`config::native_package_declaration` predicate checks those two declaration
+positions against that router-owned set for validation and the process-extension
+guard. Catalog integration identity and configured key registration also use
+`model::family`; typed endpoint writes compare native families for collisions
+so an alternate spelling of the same implementation is not a collision.
+Unknown package identities, packages in other configuration positions,
 `plugins`, `npm`, `plugin`, and singular `provider` declarations reject their
 entire document with an actionable diagnostic. Executable JS/TS/npm provider
 configuration is neither translated nor partially loaded. Other valid documents
@@ -1992,7 +1997,7 @@ grants global/project configuration writes and presentation-package installation
 to its LOCAL_CLIENT-only operations. A project grant does not grant global scope.
 
 Reload remains owned by the composition runtime. Each generation adds its
-configured native endpoints to the authentication Draft through
+configured native providers and model-package overrides to the authentication Draft through
 `Draft::register_endpoints`; its existing registration handle retains those
 API-key and configured environment methods. Credentials are connected separately.
 
