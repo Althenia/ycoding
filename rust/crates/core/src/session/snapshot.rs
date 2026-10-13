@@ -124,6 +124,34 @@ impl Snapshots for GitSnapshots {
             .map_err(|cause| failure("restore", cause))
     }
 
+    fn files(
+        &self,
+        from: &snapshot::Id,
+        to: &snapshot::Id,
+    ) -> Result<Vec<RelativePath>, SnapshotFailure> {
+        let repositories = self.repositories("files")?;
+        let changed = self
+            .git
+            .tree_files(
+                &repositories.snapshot,
+                &text(from.as_lossless())?,
+                &text(to.as_lossless())?,
+            )
+            .map_err(|cause| failure("files", cause))?;
+        let ignored = self
+            .git
+            .ignored(
+                &repositories.source,
+                &changed.iter().map(String::as_str).collect::<Vec<_>>(),
+            )
+            .map_err(|cause| failure("files", cause))?;
+        changed
+            .into_iter()
+            .filter(|file| !ignored.contains(file))
+            .map(|file| RelativePath::new(file).map_err(|cause| failure("files", cause)))
+            .collect()
+    }
+
     fn diff(
         &self,
         from: &snapshot::Id,

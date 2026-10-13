@@ -433,6 +433,7 @@ async fn real_runner_flow_preserves_order_follow_watermark_cursor_and_full_value
         let session_id = session::Id::new(id).unwrap();
         let (session, location) = world().core.locations.session(&session_id).unwrap();
         let runner = Local::new(Services {
+            snapshots: None,
             store: Service::new(world().store.clone()), events: world().core.events.clone(), location: session.location,
             models: Arc::new(model::Resolver::new(catalog)), agents: Arc::new(agent::Service::new(vec![agent::empty("build".into())])),
             credentials: credential::Service::new(world().store.clone()), tools: registry,

@@ -9,7 +9,7 @@ use std::{
 };
 use ycoding_schema::{JsonValue, LosslessString, session, session_message};
 use ycoding_store::{
-    Error, IndexOrder, IndexQuery,
+    Error, IndexOrder, IndexQuery, Write,
     resources::{StateBlob, StateBlobTable, StateLink, StateLinkTable, capture_state},
     session::{ContextStateTable, Document},
 };
@@ -26,6 +26,38 @@ pub fn state_key(message: &LosslessString, ordinal: i64, kind: &str) -> String {
 }
 
 impl Service {
+    pub async fn publish_step_end(
+        &self,
+        event: ycoding_store::session::NewEvent,
+        provider: LosslessString,
+        model_id: LosslessString,
+        captures: Vec<Capture>,
+        continuation: Option<super::continuation::State>,
+    ) -> Result<(), Error> {
+        if event.type_.as_str() != Some("session.step.ended.1") {
+            return Err(Error::Rejected(
+                "Step settlement requires session.step.ended.1",
+            ));
+        }
+        self.client
+            .submit(move |tx| {
+                super::projector::append(tx, &event)?;
+                capture_in(
+                    tx,
+                    &event.aggregate_id,
+                    &provider,
+                    &model_id,
+                    &captures,
+                    event.created,
+                )?;
+                if let Some(state) = continuation {
+                    super::continuation::remember_in(tx, state, event.created)?;
+                }
+                Ok(())
+            })?
+            .await
+    }
+
     pub async fn capture_provider_state(
         &self,
         session: &session::Id,
@@ -36,38 +68,7 @@ impl Service {
     ) -> Result<(), Error> {
         let session = session.as_lossless().clone();
         self.client
-            .submit(move |tx| {
-                let revision = tx
-                    .get::<ContextStateTable>(&key(&session))?
-                    .map_or(0, |state| state.revision);
-                for capture in &captures {
-                    let digest =
-                        LosslessString::from(sha256(&canonical_json(&capture.item)).as_str());
-                    capture_state(
-                        tx,
-                        &StateBlob {
-                            digest: digest.clone(),
-                            provider: provider.clone(),
-                            model_id: model_id.clone(),
-                            item_type: item_type(&capture.item),
-                            content: Document::new(capture.item.clone())?,
-                            time_created: now,
-                        },
-                        &StateLink {
-                            session_id: session.clone(),
-                            message_id: capture.message.as_lossless().clone(),
-                            part_ordinal: capture.ordinal as i64,
-                            part_kind: capture.kind.into(),
-                            provider: provider.clone(),
-                            model_id: model_id.clone(),
-                            blob_digest: digest,
-                            context_revision: revision,
-                            time_created: now,
-                        },
-                    )?;
-                }
-                Ok(())
-            })?
+            .submit(move |tx| capture_in(tx, &session, &provider, &model_id, &captures, now))?
             .await
     }
 
@@ -121,6 +122,47 @@ impl Service {
             }
         }
     }
+}
+
+fn capture_in(
+    tx: &mut Write<'_>,
+    session: &LosslessString,
+    provider: &LosslessString,
+    model_id: &LosslessString,
+    captures: &[Capture],
+    now: i64,
+) -> Result<(), Error> {
+    let revision = tx
+        .get::<ContextStateTable>(&key(session))?
+        .map_or(0, |state| state.revision);
+    for capture in captures {
+        let part_ordinal = i64::try_from(capture.ordinal)
+            .map_err(|_| tx.reject(Error::Rejected("provider state ordinal exceeds range")))?;
+        let digest = LosslessString::from(sha256(&canonical_json(&capture.item)).as_str());
+        capture_state(
+            tx,
+            &StateBlob {
+                digest: digest.clone(),
+                provider: provider.clone(),
+                model_id: model_id.clone(),
+                item_type: item_type(&capture.item),
+                content: Document::new(capture.item.clone())?,
+                time_created: now,
+            },
+            &StateLink {
+                session_id: session.clone(),
+                message_id: capture.message.as_lossless().clone(),
+                part_ordinal,
+                part_kind: capture.kind.into(),
+                provider: provider.clone(),
+                model_id: model_id.clone(),
+                blob_digest: digest,
+                context_revision: revision,
+                time_created: now,
+            },
+        )?;
+    }
+    Ok(())
 }
 
 fn item_type(item: &JsonValue) -> LosslessString {

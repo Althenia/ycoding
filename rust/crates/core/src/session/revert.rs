@@ -78,6 +78,12 @@ impl From<SnapshotFailure> for Error {
 pub trait Snapshots {
     fn capture(&self) -> Option<snapshot::Id>;
 
+    fn files(
+        &self,
+        from: &snapshot::Id,
+        to: &snapshot::Id,
+    ) -> Result<Vec<RelativePath>, SnapshotFailure>;
+
     fn restore(&self, files: &[(RelativePath, snapshot::Id)]) -> Result<(), SnapshotFailure>;
 
     fn diff(

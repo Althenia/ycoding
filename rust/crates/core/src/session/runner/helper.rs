@@ -11,8 +11,6 @@ use std::collections::BTreeMap;
 use ycoding_ai::llm;
 use ycoding_schema::{DomainEncode, JsonValue, permission, session};
 
-static LEDGER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 pub(super) struct StreamInput<'a> {
     pub helper: &'a Helper,
     pub session: &'a session::Id,
@@ -89,6 +87,11 @@ impl Local {
         if let Some(policy) = cache.cache {
             request.cache = policy;
         }
+        let pending = services
+            .store
+            .begin_provider_request_with_id(&begin, request_id)
+            .await
+            .ok()?;
         let mut streamed = Streamed {
             text: String::new(),
             failed: false,
@@ -150,11 +153,6 @@ impl Local {
                 }
             },
         }
-        let _ordinal = LEDGER.lock().await;
-        let pending = services
-            .store
-            .begin_provider_request_with_id(&begin, request_id)
-            .ok()?;
         let settled_usage = finish.as_ref().and_then(|settled| settled.usage.as_ref());
         let tokens = usage::tokens(settled_usage);
         let reported = cache_diagnostics::reported(

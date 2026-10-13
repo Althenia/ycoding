@@ -427,6 +427,7 @@ impl Factory {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| unavailable("compaction configuration"))?;
         let runner = runner::Local::new(runner::Services {
+            snapshots: None,
             store: Service::new(self.client.clone()),
             events: self.events.clone(),
             location: location::Ref {

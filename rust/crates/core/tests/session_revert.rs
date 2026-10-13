@@ -181,6 +181,14 @@ impl Recorder {
 }
 
 impl Snapshots for Recorder {
+    fn files(
+        &self,
+        _: &snapshot::Id,
+        _: &snapshot::Id,
+    ) -> Result<Vec<RelativePath>, SnapshotFailure> {
+        Ok(Vec::new())
+    }
+
     fn capture(&self) -> Option<snapshot::Id> {
         self.calls.lock().unwrap().push("capture".into());
         self.captures.lock().unwrap().pop_front().flatten()

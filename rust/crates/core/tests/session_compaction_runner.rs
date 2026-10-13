@@ -177,6 +177,7 @@ fn local_with_resolver(
     let mut catalog = Catalog::new(models_dev::normalize(&parse_json(&models).unwrap()).unwrap());
     catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"openai","model":"gpt-reasoning"}},"providers":{{"openai":{{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
     Local::new(Services {
+        snapshots: None,
         store: Service::new(store.client()),
         events: ycoding_core::event_feed::Feed::attach(&store.client()),
         location: ycoding_schema::location::Ref::decode(
@@ -948,6 +949,7 @@ async fn a_provider_context_overflow_rebuilds_the_same_step_once_after_a_forced_
     let owner = requests_of(&store, "ses_one");
     assert_eq!(owner.len(), 1);
     assert_eq!(owner[0].attempts, 2);
+    assert_eq!(owner[0].request, 1);
     coordinator.shutdown().await.unwrap();
 }
 

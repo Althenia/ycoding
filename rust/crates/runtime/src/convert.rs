@@ -2,7 +2,7 @@ use crate::dispatch::Failure;
 use ycoding_core::session::autonomy;
 use ycoding_core::ycoding_schema::{
     DecodeError, DecodeErrorKind, DomainDecode, DomainEncode, JsonObject, JsonPath, JsonValue,
-    LosslessString, ObjectDecoder, location, prompt,
+    LosslessString, ObjectDecoder, location, prompt, provider_request,
     schema::NonNegativeInt,
     session, session_cache_diagnostics,
     session_orchestration::{Progress, Question, State, Task},
@@ -301,8 +301,129 @@ pub fn cache_diagnostics(
             below_minimum: info.cache.below_minimum,
         },
         estimated_cost: info.estimated_cost.map(|cost| cost.get()),
-        requests: None,
-        generation_speed: None,
+        requests: info
+            .requests
+            .as_ref()
+            .map(provider_summary)
+            .transpose()
+            .map_err(|_| {
+                JsonPath::default()
+                    .error(DecodeErrorKind::Expected("representable request summary"))
+            })?,
+        generation_speed: info
+            .generation_speed
+            .as_ref()
+            .map(generation_speed)
+            .transpose()?,
+    })
+}
+
+pub fn generation_speed(
+    history: &session_cache_diagnostics::GenerationSpeedHistory,
+) -> Result<v5::SessionGenerationSpeedHistory, DecodeError> {
+    let sample = |speed: &session_cache_diagnostics::GenerationSpeed| -> Result<v5::SessionGenerationSpeed, DecodeError> {
+        Ok(v5::SessionGenerationSpeed {
+            model: model_ref(&speed.model.encode())?, tokens: speed.tokens.get() as u64,
+            duration_ns: speed.duration_ns.get() as u64, tokens_per_second: speed.tokens_per_second,
+        })
+    };
+    Ok(v5::SessionGenerationSpeedHistory {
+        latest: history.latest.as_ref().map(sample).transpose()?,
+        recent: v5::SessionGenerationSpeedHistoryRecent {
+            items: history
+                .recent
+                .iter()
+                .map(sample)
+                .collect::<Result<_, _>>()?,
+        },
+    })
+}
+
+pub fn provider_summary(
+    summary: &provider_request::Summary,
+) -> Result<v5::ProviderRequestSummary, DecodeError> {
+    let count = |value: NonNegativeInt| value.get() as u64;
+    let invalid =
+        || JsonPath::default().error(DecodeErrorKind::Expected("representable request summary"));
+    let models = summary
+        .models
+        .as_ref()
+        .map(|models| {
+            models
+                .iter()
+                .map(|spend| {
+                    Ok(v5::ProviderRequestSummaryModelsItem {
+                        model: model_ref(&spend.model.encode())?,
+                        requests: count(spend.requests),
+                        tokens: tokens(&spend.tokens.encode())?,
+                        cache_read_reported: spend.cache_read_reported,
+                        cost: spend.cost.map(|cost| cost.get()),
+                        cost_provenance: spend
+                            .cost_provenance
+                            .as_ref()
+                            .map(|value| match value.0.as_str() {
+                                Some("recorded") => Ok(1),
+                                Some("current_catalog") => Ok(2),
+                                _ => Err(invalid()),
+                            })
+                            .transpose()?,
+                    })
+                })
+                .collect::<Result<Vec<_>, DecodeError>>()
+                .map(|items| v5::ProviderRequestSummaryModels { items })
+        })
+        .transpose()?;
+    let invalidations = [
+        "first-request",
+        "compaction-reset",
+        "model-switched",
+        "model-variant-switched",
+        "stable-hit",
+        "prefix-changed",
+        "system-prefix-changed",
+        "tool-prefix-changed",
+        "below-minimum",
+        "provider-not-reported",
+        "cache-disabled",
+        "retry-fallback",
+    ];
+    Ok(v5::ProviderRequestSummary {
+        logical: count(summary.logical),
+        physical: count(summary.physical),
+        helpers: count(summary.helpers),
+        continued: count(summary.continued),
+        fallback: count(summary.fallback),
+        cache_read_reported: summary.cache_read_reported,
+        cost: summary.cost.map(|cost| cost.get()),
+        models,
+        tokens: tokens(&summary.tokens.encode())?,
+        latest_invalidation: summary
+            .latest_invalidation
+            .as_ref()
+            .map(|value| {
+                invalidations
+                    .iter()
+                    .position(|name| value.0.as_str() == Some(name))
+                    .map(|index| index as i32 + 1)
+                    .ok_or_else(invalid)
+            })
+            .transpose()?,
+        latest_namespace: summary.latest_namespace.as_ref().map(wire),
+        latest_timing: summary
+            .latest_timing
+            .as_ref()
+            .map(|timing| v5::ProviderRequestTiming {
+                first_output_ms: timing.first_output_ms.map(count),
+                total_ms: timing.total_ms.map(count),
+                retry_wait_ms: timing.retry_wait_ms.map(count),
+                prompt_eval_duration_ns: timing.prompt_eval_duration_ns.map(count),
+                generation_duration_ns: timing.generation_duration_ns.map(count),
+                observed_generation_duration_ns: timing
+                    .observed_generation_duration_ns
+                    .map(|value| value.get() as u64),
+                generated_tokens: timing.generated_tokens.map(|value| value.get() as u64),
+                load_duration_ns: timing.load_duration_ns.map(count),
+            }),
     })
 }
 

@@ -5,7 +5,7 @@ use super::{
 };
 use ycoding_schema::{JsonValue, LosslessString, ObjectEncoder, session};
 use ycoding_store::{
-    Error,
+    Error, Write,
     resources::{
         Continuation, ContinuationGeneration, ContinuationTable, ensure_generation,
         remember_continuation,
@@ -193,34 +193,38 @@ impl Service {
     }
 
     pub async fn remember_continuation(&self, state: State, now: i64) -> Result<bool, Error> {
-        let fingerprint = state.fingerprint;
-        if !fingerprint.provider.eq("openai") || !is_responses_route(&fingerprint.route_id) {
-            return Ok(false);
-        }
-        let row = Continuation {
-            continuation_fingerprint: fingerprint.digest().into(),
-            session_id: fingerprint.session,
-            response_id: state.response_id,
-            represented_through_message_id: fingerprint.represented_through_message_id,
-            represented_message_count: fingerprint.represented_message_count,
-            context_revision: fingerprint.context_revision,
-            continuation_generation: fingerprint.continuation_generation,
-            provider: fingerprint.provider.into(),
-            route_id: fingerprint.route_id.into(),
-            model_id: fingerprint.model_id.into(),
-            variant: fingerprint.variant.map(Into::into),
-            connection_identity_digest: fingerprint.connection_identity_digest.into(),
-            prompt_cache_key: fingerprint.prompt_cache_key.into(),
-            instructions_digest: fingerprint.instructions_digest.into(),
-            tools_digest: fingerprint.tools_digest.into(),
-            options_digest: fingerprint.options_digest.into(),
-            volatile_context_digest: fingerprint.volatile_context_digest.into(),
-            time_updated: now,
-        };
         self.client
-            .submit(move |tx| remember_continuation(tx, &row))?
+            .submit(move |tx| remember_in(tx, state, now))?
             .await
     }
+}
+
+pub(crate) fn remember_in(tx: &mut Write<'_>, state: State, now: i64) -> Result<bool, Error> {
+    let fingerprint = state.fingerprint;
+    if !fingerprint.provider.eq("openai") || !is_responses_route(&fingerprint.route_id) {
+        return Ok(false);
+    }
+    let row = Continuation {
+        continuation_fingerprint: fingerprint.digest().into(),
+        session_id: fingerprint.session,
+        response_id: state.response_id,
+        represented_through_message_id: fingerprint.represented_through_message_id,
+        represented_message_count: fingerprint.represented_message_count,
+        context_revision: fingerprint.context_revision,
+        continuation_generation: fingerprint.continuation_generation,
+        provider: fingerprint.provider.into(),
+        route_id: fingerprint.route_id.into(),
+        model_id: fingerprint.model_id.into(),
+        variant: fingerprint.variant.map(Into::into),
+        connection_identity_digest: fingerprint.connection_identity_digest.into(),
+        prompt_cache_key: fingerprint.prompt_cache_key.into(),
+        instructions_digest: fingerprint.instructions_digest.into(),
+        tools_digest: fingerprint.tools_digest.into(),
+        options_digest: fingerprint.options_digest.into(),
+        volatile_context_digest: fingerprint.volatile_context_digest.into(),
+        time_updated: now,
+    };
+    remember_continuation(tx, &row)
 }
 
 fn text(value: &LosslessString) -> String {

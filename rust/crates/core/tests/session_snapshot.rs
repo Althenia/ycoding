@@ -121,6 +121,11 @@ fn captures_a_location_scope_then_diffs_and_restores_only_selected_paths() {
     fixture.write("project/outside.txt", "changed outside\n");
     let after = snapshots.capture().unwrap();
 
+    assert_eq!(
+        snapshots.files(&before, &after).unwrap(),
+        vec![relative("scope/added.txt"), relative("scope/tracked.txt")]
+    );
+
     let diffs = snapshots
         .diff(
             &before,

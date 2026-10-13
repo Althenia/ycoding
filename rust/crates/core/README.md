@@ -875,6 +875,17 @@ failure. A settled empty terminal answer receives one additional
 text-only recovery Step with no synthetic user prompt. A second empty answer
 fails; recovery cannot create a third Step.
 
+`Services::snapshots` supplies the Location's optional `Snapshots` provider. A Step
+captures its starting tree before execution and stores it on `session.step.started`.
+After the stream and owned tools settle, both successful and failed Steps capture
+the final tree and the changed, non-ignored paths. Snapshot capture unavailability
+leaves the ID absent; a file-comparison failure leaves the paths absent. Shell and
+external-tool edits are included without requiring tool-returned file metadata.
+Revert stages, clears and commits those paths through the same snapshot provider.
+The production constructor leaves `Services::snapshots` unset. Composition must
+supply the Location's `GitSnapshots` shared with revert; the runner does not
+discover a repository or construct snapshot storage.
+
 Before each Step the runner records the trusted Session state (todos, autonomy,
 permission ceiling, goal reminder) as a System `session-state` observation, the
 child-task TeamView as a user-authority `team-view` observation, and the
@@ -926,7 +937,7 @@ request number, physical attempt count, route, prompt-cache namespace
 (`session::prompt_cache`), system and tool digests, the account identity digest,
 invalidation classification, cache-read reporting, estimated cost and tokens. A
 Step that never settled records `provider-not-reported` with zero usage; an
-interrupted Step records no request. The
+interrupted Step records its request best effort after terminal failure. The
 account identity digest hashes the saved credential identity and account
 generation, or the configured API key material, endpoint and organization; it
 does not include OAuth, bearer-token or Vertex access-token material.
@@ -937,9 +948,12 @@ removed item is captured instead: each assistant content part (text, reasoning
 and tool, numbered in the order its start event is published) that carries an
 `opaqueCompactionItem` yields one `session::provider_state::Capture` keyed by
 message, content ordinal and kind (`reasoning`, `tool-call`, `tool-result`).
-After `session.step.ended`, `capture_provider_state` writes the content-addressed
-blob (SHA-256 of the canonical JSON, item type from its `type`) and one link per
-part in a single transaction under the active context revision. Compaction
+`publish_step_end` appends and projects `session.step.ended`, captures the
+content-addressed blob (SHA-256 of the canonical JSON, item type from its `type`)
+and one link per part under the active context revision, and remembers eligible
+Responses continuation in one store transaction. A failed state or continuation
+write rolls back the terminal event and its projection too; stale continuation
+authority refuses the continuation without revoking the settled Step. Compaction
 activation deletes the links of every message through the covered boundary.
 Replay into later requests is account-bound: a prior assistant message reuses its
 stored state only when the current model matches, the message has no error, and
@@ -974,6 +988,37 @@ by the store. Provider requests record `continued` or `full`.
 Provider request records include `firstOutputMs`, `totalMs` and `retryWaitMs`
 only while telemetry consent is enabled, and an interrupted Step records its
 request with `provider-not-reported`.
+
+Step and helper requests reserve their ordinal before opening the provider stream
+in the store writer transaction, using the existing resource sequence keyed by
+Session. Overlapping requests keep initiation order even if they settle in reverse
+order. Reserved ordinals are not reused after cancellation or restart; Session
+deletion removes its reservation sequence. Completion
+publishes the request fact and projects usage once. An overflow-triggered
+compaction rebuild keeps the logical Step's original reservation.
+
+Generation timing is recorded independently from latency consent. Provider-timed
+generation counts normalized output plus reasoning tokens. Observed timing begins
+at the earliest non-whitespace text or tool-input delta; reasoning deltas begin the
+span only when reasoning is folded into output. Unreported hidden reasoning hides
+observed samples. Observed durations shorter than one second remain absent rather
+than exposing buffered bursts as generation speed. Diagnostics include the
+Session-only request summary and speed from the newest eight Step requests, with
+the trend filtered to the newest request's provider, model and variant. Helpers
+count in the summary but not the trend. A newest request without a valid speed
+sample has no `latest`; older matching samples remain in `recent`. Snapshots read
+the same speed under their store snapshot and expose it only when a measured
+assistant remains after the resident compaction and before the revert boundary.
+The runtime wire preserves absent speed and timing values, separately from
+provider quota and prompt-cache reporting.
+
+After a valid provider StepFinish is projected by the publisher, the runner emits
+one ephemeral `session.diagnostics.updated` through `Services::events`, scoped to
+the Session and its Location, before waiting for owned tools. The payload carries
+that request's model, tokens, cost, context breakdown, cache reporting and speed,
+including the current Step in its eight-request trend. It does not carry the
+retrospective request summary; `Service::diagnostics` supplies that ledger view
+after terminal settlement. Diagnostics emission creates no durable event.
 
 A provider rejection that names an invalid, expired, missing or unknown previous
 response (or a bare `invalid_prompt` rejection), received before any output on a
@@ -1065,8 +1110,8 @@ restart: the rejected first attempt is not recorded separately, and the single
 record counts both attempts. A second overflow fails the Step with `context.limit`;
 without reducible history the original provider error fails the Step.
 
-Remote (Codex) compaction, the synthetic `remoteCompactionV2` replay message,
-context-breakdown and generation-speed diagnostics are not exposed by this runner.
+Remote (Codex) compaction and the synthetic `remoteCompactionV2` replay message
+are not exposed by this runner.
 
 A Step that fails after the provider settled it carries the settled tokens, cost,
 context limit and `providerCache` on `session.step.failed`. When the selected
@@ -1197,7 +1242,7 @@ probes read one index row per event type.
 
 `session::revert` stages, clears, and commits a Session revert through durable
 events. `Snapshots` is the Location file-snapshot boundary
-(`capture`, `restore`, `diff`); `session::snapshot::GitSnapshots` implements
+(`capture`, `files`, `restore`, `diff`); `session::snapshot::GitSnapshots` implements
 it over the Git tree primitives.
 
 - `plan(&Snapshot, session, message)` fails with `Error::MessageNotFound` when

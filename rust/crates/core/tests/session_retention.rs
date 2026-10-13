@@ -40,6 +40,7 @@ const CATALOG: Catalog = Catalog::new(
         TableDeclaration::of::<tables::InstructionBlobTable>(),
         TableDeclaration::of::<tables::InstructionStateTable>(),
         TableDeclaration::of::<resources::RequestTable>(),
+        TableDeclaration::of::<resources::SequenceTable>(),
         TableDeclaration::of::<resources::UsageTable>(),
         TableDeclaration::of::<resources::ContinuationGenerationTable>(),
         TableDeclaration::of::<resources::ContinuationTable>(),

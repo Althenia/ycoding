@@ -242,6 +242,7 @@ fn fixture_services(
         helpers: Default::default(),
         cursor: None,
         skill_resolver: None,
+        snapshots: None,
         claude: None,
         auth: None,
     }
@@ -2416,11 +2417,12 @@ async fn request_latency_requires_consent_while_generation_counts_are_always_rep
     admit_input(&service, "second", "Again", "steer").await;
     coordinator.run(&id).await.unwrap();
     let rows = provider_requests(&store);
-    let first = rows[0].timing.as_ref().unwrap().domain().unwrap();
-    assert_eq!(first.generated_tokens.unwrap().get(), 2);
-    assert!(first.first_output_ms.is_none());
-    assert!(first.total_ms.is_none());
-    assert!(first.retry_wait_ms.is_none());
+    let unconsented = rows[0].timing.as_ref().unwrap().domain().unwrap();
+    assert!(unconsented.first_output_ms.is_none());
+    assert!(unconsented.total_ms.is_none());
+    assert!(unconsented.retry_wait_ms.is_none());
+    assert_eq!(unconsented.generated_tokens.unwrap().get(), 2);
+    assert!(unconsented.observed_generation_duration_ns.is_none());
     let timing = rows[1].timing.as_ref().unwrap().domain().unwrap();
     assert!(timing.first_output_ms.is_some());
     assert!(timing.total_ms.is_some());
@@ -2430,6 +2432,546 @@ async fn request_latency_requires_consent_while_generation_counts_are_always_rep
 }
 
 const INVALID_PREVIOUS: &str = r#"{"error":{"message":"Previous response with id 'resp_x' not found.","type":"invalid_request_error","param":"previous_response_id","code":"previous_response_not_found"}}"#;
+
+struct SnapshotProject(std::path::PathBuf);
+
+impl SnapshotProject {
+    fn new() -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "ycoding-step-snapshots-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(path.join("project")).unwrap();
+        std::fs::write(path.join("project/tracked.txt"), "original\n").unwrap();
+        std::fs::write(path.join("project/.gitignore"), "ignored.txt\n").unwrap();
+        for args in [vec!["init"], vec!["add", "."]] {
+            assert!(
+                std::process::Command::new("git")
+                    .args(args)
+                    .current_dir(path.join("project"))
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+        }
+        Self(path)
+    }
+
+    fn snapshots(&self) -> Arc<ycoding_core::session::snapshot::GitSnapshots> {
+        Arc::new(ycoding_core::session::snapshot::GitSnapshots::new(
+            Arc::new(ycoding_core::platform::git::Service::new(16 * 1024 * 1024)),
+            self.0.join("data"),
+            "prj_one".into(),
+            self.0.join("project"),
+            self.0.join("project"),
+            true,
+        ))
+    }
+}
+
+impl Drop for SnapshotProject {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).unwrap();
+    }
+}
+
+fn snapshot_services(
+    store: &ycoding_store::Store,
+    endpoint: &str,
+    tools: Arc<Registry>,
+) -> Services {
+    let mut catalog = Catalog::new(
+        models_dev::normalize(
+            &parse_json(include_str!(
+                "../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"openai","model":"gpt-reasoning"}},"providers":{{"openai":{{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
+    fixture_services(
+        store,
+        catalog,
+        vec![agent::empty("build".into())],
+        tools,
+        Arc::new(WallClock),
+        Vec::new(),
+    )
+}
+
+#[tokio::test]
+async fn runner_snapshots_restore_shell_and_external_tool_edits_through_revert_clear_and_commit() {
+    use ycoding_core::session::revert;
+    let project = SnapshotProject::new();
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let tools = registry();
+    let directory = project.0.join("project");
+    let _registration = tools.register(vec![("echo".into(), Arc::new(ycoding_core::tools::registry::DynamicTool::new("External edit", parse_json(r#"{"type":"object"}"#).unwrap(), None, None, move |_, _| {
+        let directory = directory.clone();
+        Box::pin(async move {
+            assert!(std::process::Command::new("/bin/sh").args(["-c", "printf 'shell edit\\n' > tracked.txt; printf 'created\\n' > added.txt; printf 'ignored\\n' > ignored.txt"]).current_dir(&directory).output().unwrap().status.success());
+            std::fs::write(directory.join("external.txt"), "external edit\n").unwrap();
+            Ok(ycoding_ai::llm::ToolOutput { structured: ycoding_schema::JsonValue::Null, content: Vec::new() })
+        })
+    })))], ycoding_core::tools::registry::Options::direct()).unwrap();
+    let (endpoint, _requests, server) = server(vec![TOOL, TEXT]).await;
+    let snapshots = project.snapshots();
+    let mut services = snapshot_services(&store, &endpoint, tools);
+    services.snapshots = Some(snapshots.clone());
+    let coordinator = Coordinator::new(Arc::new(Local::new(services)));
+    let id = session::Id::new("ses_one").unwrap();
+    coordinator.run(&id).await.unwrap();
+    let assistants = service
+        .context(&id)
+        .unwrap()
+        .into_iter()
+        .filter_map(|message| match message {
+            session_message::Info::Assistant(assistant) => Some(assistant),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(assistants.len(), 2);
+    let captured = assistants[0].snapshot.as_ref().unwrap();
+    assert!(captured.start.is_some());
+    assert!(captured.end.is_some());
+    assert_eq!(
+        captured
+            .files
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|file| file.as_lossless().to_utf8().unwrap())
+            .collect::<Vec<_>>(),
+        ["added.txt", "external.txt", "tracked.txt"]
+    );
+    assert!(
+        assistants[1]
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .files
+            .as_ref()
+            .unwrap()
+            .is_empty()
+    );
+    let boundary = session_message::Id::new("msg_input").unwrap();
+    let plan = revert::plan(&store.snapshot().unwrap(), &id, &boundary).unwrap();
+    assert_eq!(plan.len(), 3);
+    let session = service.get(&id).unwrap().unwrap();
+    revert::stage(&service, snapshots.as_ref(), &session, &boundary, true, 3)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(project.0.join("project/tracked.txt")).unwrap(),
+        "original\n"
+    );
+    assert!(!project.0.join("project/added.txt").exists());
+    assert!(!project.0.join("project/external.txt").exists());
+    assert!(project.0.join("project/ignored.txt").exists());
+    revert::clear(
+        &service,
+        snapshots.as_ref(),
+        &service.get(&id).unwrap().unwrap(),
+        4,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(project.0.join("project/tracked.txt")).unwrap(),
+        "shell edit\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(project.0.join("project/external.txt")).unwrap(),
+        "external edit\n"
+    );
+    revert::stage(
+        &service,
+        snapshots.as_ref(),
+        &service.get(&id).unwrap().unwrap(),
+        &boundary,
+        true,
+        5,
+    )
+    .await
+    .unwrap();
+    revert::commit(&service, &service.get(&id).unwrap().unwrap(), 6)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(project.0.join("project/tracked.txt")).unwrap(),
+        "original\n"
+    );
+    assert!(service.message(&assistants[0].id).unwrap().is_none());
+    assert!(matches!(
+        revert::plan(&store.snapshot().unwrap(), &id, &boundary),
+        Err(revert::Error::MessageNotFound { .. })
+    ));
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_failed_step_still_captures_tool_side_effects_for_revert() {
+    let project = SnapshotProject::new();
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let tools = registry();
+    let target = project.0.join("project/tracked.txt");
+    let _registration = tools
+        .register(
+            vec![(
+                "echo".into(),
+                Arc::new(ycoding_core::tools::registry::DynamicTool::new(
+                    "External edit",
+                    parse_json(r#"{"type":"object"}"#).unwrap(),
+                    None,
+                    None,
+                    move |_, _| {
+                        let target = target.clone();
+                        Box::pin(async move {
+                            std::fs::write(target, "edited\n").unwrap();
+                            panic!("synthetic external tool failure");
+                        })
+                    },
+                )),
+            )],
+            ycoding_core::tools::registry::Options::direct(),
+        )
+        .unwrap();
+    let (endpoint, _requests, server) = server(vec![TOOL]).await;
+    let snapshots = project.snapshots();
+    let mut services = snapshot_services(&store, &endpoint, tools);
+    services.snapshots = Some(snapshots.clone());
+    let coordinator = Coordinator::new(Arc::new(Local::new(services)));
+    let id = session::Id::new("ses_one").unwrap();
+    assert!(coordinator.run(&id).await.is_err());
+    let assistant = last_assistant(&service);
+    assert!(assistant.error.is_some());
+    assert_eq!(
+        assistant.snapshot.unwrap().files.unwrap()[0]
+            .as_lossless()
+            .as_str(),
+        Some("tracked.txt")
+    );
+    let types = event_types(&store);
+    assert_eq!(count(&types, "session.step.started"), 1);
+    assert_eq!(count(&types, "session.step.failed"), 1);
+    assert_eq!(count(&types, "session.step.ended"), 0);
+    let boundary = session_message::Id::new("msg_input").unwrap();
+    ycoding_core::session::revert::stage(
+        &service,
+        snapshots.as_ref(),
+        &service.get(&id).unwrap().unwrap(),
+        &boundary,
+        true,
+        3,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(project.0.join("project/tracked.txt")).unwrap(),
+        "original\n"
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+struct GenerationClock(std::sync::atomic::AtomicU64);
+
+#[tokio::test]
+async fn overlapping_step_and_helper_ordinals_follow_initiation_not_settlement_order() {
+    use axum::{
+        Router,
+        body::{Body, to_bytes},
+        extract::{Request, State},
+        response::Response,
+        routing::any,
+    };
+    use ycoding_core::session::helper_generation::Generate;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let held = Arc::new(tokio::sync::Notify::new());
+    let gate = held.clone();
+    let (sent, mut received) = mpsc::unbounded_channel();
+    let app = Router::new()
+        .fallback(any(
+            |State((counter, sent, gate)): State<(
+                Arc<std::sync::atomic::AtomicU64>,
+                mpsc::UnboundedSender<()>,
+                Arc<tokio::sync::Notify>,
+            )>,
+             request: Request| async move {
+                to_bytes(request.into_body(), 1_048_576).await.unwrap();
+                let first = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0;
+                sent.send(()).unwrap();
+                if first {
+                    gate.notified().await;
+                }
+                Response::builder()
+                    .header("content-type", "text/event-stream")
+                    .body(Body::from(TEXT))
+                    .unwrap()
+            },
+        ))
+        .with_state((Arc::new(std::sync::atomic::AtomicU64::new(0)), sent, gate));
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                stopped.await.unwrap();
+            })
+            .await
+            .unwrap();
+    });
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let local = Arc::new(local(&store, &endpoint, registry()));
+    let coordinator = Arc::new(Coordinator::new(local.clone()));
+    let owner = coordinator.clone();
+    let id = session::Id::new("ses_one").unwrap();
+    let running_id = id.clone();
+    let step = tokio::spawn(async move { owner.run(&running_id).await });
+    tokio::time::timeout(std::time::Duration::from_secs(5), received.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let session = service.get(&id).unwrap().unwrap();
+    let agent = agent::empty("build".into());
+    let cancellation = ycoding_core::tools::code_mode::Cancellation::default();
+    let helper = local.generate(ycoding_core::session::helper_generation::Request {
+        session: &session,
+        role: ycoding_core::tools::policy::helper::Role::Prediction,
+        source: "prediction",
+        agent: &agent,
+        user: "Suggest".into(),
+        character_limit: 100,
+        cancellation: &cancellation,
+    });
+    assert_eq!(
+        tokio::time::timeout(std::time::Duration::from_secs(5), helper)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("Answer")
+    );
+    let early = provider_requests(&store);
+    assert_eq!(early.len(), 1);
+    assert_eq!(early[0].request, 2);
+    assert_eq!(early[0].source.as_str(), Some("prediction"));
+    held.notify_one();
+    step.await.unwrap().unwrap();
+    let rows = provider_requests(&store);
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.request, row.source.as_str().unwrap()))
+            .collect::<Vec<_>>(),
+        [(1, "step"), (2, "prediction")]
+    );
+    coordinator.shutdown().await.unwrap();
+    stop.send(()).unwrap();
+    server.await.unwrap();
+}
+impl ycoding_core::session::runner::Clock for GenerationClock {
+    fn now(&self) -> i64 {
+        2
+    }
+    fn nanos(&self) -> u64 {
+        self.0
+            .fetch_add(1_000_000_000, std::sync::atomic::Ordering::Relaxed)
+    }
+    fn sleep(&self, _: u64) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        Box::pin(async {})
+    }
+}
+
+#[tokio::test]
+async fn runner_records_generation_speed_without_telemetry_consent_and_rehydrates_snapshot_diagnostics()
+ {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, _requests, server) = server(vec![TEXT]).await;
+    let mut services = snapshot_services(&store, &endpoint, registry());
+    services.clock = Arc::new(GenerationClock(std::sync::atomic::AtomicU64::new(0)));
+    let coordinator = Coordinator::new(Arc::new(Local::new(services)));
+    let id = session::Id::new("ses_one").unwrap();
+    coordinator.run(&id).await.unwrap();
+    let diagnostics = service.diagnostics(&id, None).unwrap().unwrap();
+    let requests = diagnostics.requests.unwrap();
+    assert_eq!((requests.logical.get(), requests.physical.get()), (1, 1));
+    let timing = requests.latest_timing.unwrap();
+    assert_eq!(timing.generated_tokens.unwrap().get(), 2);
+    assert_eq!(
+        timing.observed_generation_duration_ns.unwrap().get(),
+        2_000_000_000
+    );
+    assert!(timing.first_output_ms.is_none());
+    assert!(timing.total_ms.is_none());
+    let speed = diagnostics.generation_speed.unwrap();
+    assert_eq!(speed.latest.as_ref().unwrap().tokens_per_second, 1.0);
+    assert_eq!(
+        service.snapshot(&id, 100, None).unwrap().generation_speed,
+        Some(speed.clone())
+    );
+    assert_eq!(
+        Service::new(store.client())
+            .diagnostics(&id, None)
+            .unwrap()
+            .unwrap()
+            .generation_speed,
+        Some(speed)
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn step_finish_emits_scoped_request_diagnostics_before_owned_tools_settle() {
+    use ycoding_core::event_feed::{Data, Payload, Scope};
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let tools = registry();
+    let held = Arc::new(tokio::sync::Notify::new());
+    let release = held.clone();
+    let _registration = tools
+        .register(
+            vec![(
+                "echo".into(),
+                Arc::new(ycoding_core::tools::registry::DynamicTool::new(
+                    "Held external tool",
+                    parse_json(r#"{"type":"object"}"#).unwrap(),
+                    None,
+                    None,
+                    move |_, _| {
+                        let held = held.clone();
+                        Box::pin(async move {
+                            held.notified().await;
+                            Ok(ycoding_ai::llm::ToolOutput {
+                                structured: parse_json(r#"{"observed":true}"#).unwrap(),
+                                content: Vec::new(),
+                            })
+                        })
+                    },
+                )),
+            )],
+            ycoding_core::tools::registry::Options::direct(),
+        )
+        .unwrap();
+    let used = Box::leak(TOOL.replace("data: [DONE]\n\n", "data: {\"id\":\"tool\",\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n").into_boxed_str());
+    let (endpoint, mut requests, server) = server(vec![used, TEXT]).await;
+    let mut services = snapshot_services(&store, &endpoint, tools);
+    services.clock = Arc::new(GenerationClock(std::sync::atomic::AtomicU64::new(0)));
+    let feed = services.events.clone();
+    let location = services.location.clone();
+    let id = session::Id::new("ses_one").unwrap();
+    let wake = Arc::new(tokio::sync::Notify::new());
+    let signal = wake.clone();
+    let scoped = feed
+        .subscribe(Scope::Session(id.clone()), None, move || {
+            signal.notify_one()
+        })
+        .unwrap();
+    let other = feed
+        .subscribe(
+            Scope::Session(session::Id::new("ses_two").unwrap()),
+            None,
+            || {},
+        )
+        .unwrap();
+    let coordinator = Coordinator::new(Arc::new(Local::new(services)));
+    let owner = coordinator.clone();
+    let running_id = id.clone();
+    let running = tokio::spawn(async move { owner.run(&running_id).await });
+    let observed = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            while let Some(item) = scoped.next().unwrap() {
+                if matches!(&item.payload, Payload::Ephemeral(event) if matches!(&event.data, Data::SessionDiagnosticsUpdated(_))) {
+                    return item;
+                }
+            }
+            wake.notified().await;
+        }
+    }).await.expect("valid StepFinish emits while the tool is held");
+    let Payload::Ephemeral(event) = &observed.payload else {
+        panic!()
+    };
+    assert_eq!(event.session.as_ref(), Some(&id));
+    assert_eq!(event.location.as_ref(), Some(&location));
+    let Data::SessionDiagnosticsUpdated(updated) = &event.data else {
+        panic!()
+    };
+    assert_eq!(updated.session_id, id);
+    let diagnostics = &updated.diagnostics;
+    assert_eq!(diagnostics.model.provider_id.0.as_str(), Some("openai"));
+    assert_eq!(diagnostics.model.id.as_str(), Some("gpt-reasoning"));
+    assert_eq!(
+        (
+            diagnostics.tokens.uncached_input.get(),
+            diagnostics.tokens.output.get(),
+            diagnostics.context.total.get()
+        ),
+        (3, 2, 5)
+    );
+    assert_eq!(diagnostics.context.limit.unwrap().get(), 128000);
+    assert!(diagnostics.context_breakdown.as_ref().unwrap().tools.get() > 0);
+    assert_eq!(
+        diagnostics.cache.mechanism.0.as_str(),
+        Some("openai-prefix-cache")
+    );
+    assert!(!diagnostics.cache.read_reported);
+    assert!(!diagnostics.cache.write_reported);
+    assert!(diagnostics.cache.hit_ratio.is_none());
+    assert!(diagnostics.requests.is_none());
+    let speed = diagnostics.generation_speed.as_ref().unwrap();
+    assert_eq!(speed.latest.as_ref().unwrap().tokens.get(), 2);
+    assert!(speed.latest.as_ref().unwrap().duration_ns.get() >= 1_000_000_000);
+    assert_eq!(speed.recent.len(), 1);
+    assert!(last_assistant(&service).time.completed.is_none());
+    assert!(provider_requests(&store).is_empty());
+    assert!(!running.is_finished());
+    assert!(other.next().unwrap().is_none());
+    release.notify_one();
+    tokio::time::timeout(std::time::Duration::from_secs(10), running)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    requests.recv().await.unwrap();
+    requests.recv().await.unwrap();
+    let remainder = std::iter::from_fn(|| scoped.next().unwrap()).collect::<Vec<_>>();
+    let next_diagnostics = remainder.iter().filter(|item| matches!(&item.payload, Payload::Ephemeral(event) if matches!(&event.data, Data::SessionDiagnosticsUpdated(_)))).count();
+    assert_eq!(next_diagnostics, 1);
+    let terminal = remainder.iter().find(|item| matches!(&item.payload, Payload::Durable(event) if event.type_.as_str() == Some("session.step.ended.1"))).unwrap();
+    assert!(observed.position < terminal.position);
+    let types = event_types(&store);
+    assert_eq!(count(&types, "session.step.ended"), 2);
+    assert_eq!(count(&types, "session.diagnostics.updated"), 0);
+    assert_eq!(
+        service
+            .diagnostics(&id, None)
+            .unwrap()
+            .unwrap()
+            .requests
+            .unwrap()
+            .logical
+            .get(),
+        2
+    );
+    assert!(other.next().unwrap().is_none());
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
 
 async fn assert_fallback(rejection: &'static str) {
     let store = support::store();
@@ -2521,6 +3063,7 @@ fn analysis_local(
         helpers: Default::default(),
         cursor: None,
         skill_resolver: None,
+        snapshots: None,
         claude: None,
         auth: None,
     })

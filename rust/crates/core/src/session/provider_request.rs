@@ -1,10 +1,11 @@
 use super::{key, projector::record_error, store::Service};
+use std::ops::Bound;
 use ycoding_schema::{
-    DomainEncode, JsonValue, LosslessString, ObjectDecoder, ObjectEncoder, model, provider_request,
-    session, stringify_json, token_usage,
+    DomainDecode, DomainEncode, JsonValue, LosslessString, ObjectDecoder, ObjectEncoder, model,
+    provider_request, session, stringify_json, token_usage,
 };
 use ycoding_store::{
-    Error, IndexOrder, KeyPart, Write,
+    Error, IndexOrder, IndexQuery, KeyPart, Snapshot, Write,
     resources::{Request, RequestTable, Usage, UsageTable},
     session::Document,
     tuple_key,
@@ -19,6 +20,227 @@ pub struct Begin {
     pub prompt_cache_key: String,
     pub system_digest: String,
     pub tool_digest: String,
+}
+
+pub(crate) fn summary_in(
+    snapshot: &Snapshot,
+    id: &session::Id,
+) -> Result<provider_request::Summary, Error> {
+    let prefix = key(id.as_lossless());
+    let mut after = None;
+    let mut rows = Vec::new();
+    loop {
+        let page = snapshot.scan::<UsageTable>(
+            after
+                .as_ref()
+                .map_or(Bound::Included(prefix.as_slice()), |after: &Vec<u8>| {
+                    Bound::Excluded(after.as_slice())
+                }),
+            Bound::Unbounded,
+            128,
+        )?;
+        let Some(last) = page.last() else {
+            break;
+        };
+        after = Some(tuple_key(&[
+            KeyPart::String(&last.session_id),
+            KeyPart::String(&last.model_key),
+        ]));
+        let finished = page.iter().any(|row| row.session_id != *id.as_lossless());
+        rows.extend(
+            page.into_iter()
+                .filter(|row| row.session_id == *id.as_lossless()),
+        );
+        if finished {
+            break;
+        }
+    }
+    let mut models = rows
+        .iter()
+        .map(|row| Ok((row.model.domain()?, row)))
+        .collect::<Result<Vec<_>, Error>>()?;
+    let compare = |left: &LosslessString, right: &LosslessString| {
+        crate::platform::filesystem::collation::compare(
+            &left.code_units().collect::<Vec<_>>(),
+            &right.code_units().collect::<Vec<_>>(),
+        )
+    };
+    models.sort_by(|left, right| {
+        right
+            .1
+            .cost
+            .partial_cmp(&left.1.cost)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| compare(&left.0.provider_id.0, &right.0.provider_id.0))
+            .then_with(|| compare(&left.0.id, &right.0.id))
+            .then_with(|| {
+                compare(
+                    left.0
+                        .variant
+                        .as_ref()
+                        .unwrap_or(&LosslessString::default()),
+                    right
+                        .0
+                        .variant
+                        .as_ref()
+                        .unwrap_or(&LosslessString::default()),
+                )
+            })
+            .then_with(|| {
+                compare(
+                    left.0
+                        .profile
+                        .as_ref()
+                        .map(|profile| &profile.0)
+                        .unwrap_or(&LosslessString::default()),
+                    right
+                        .0
+                        .profile
+                        .as_ref()
+                        .map(|profile| &profile.0)
+                        .unwrap_or(&LosslessString::default()),
+                )
+            })
+    });
+    let tokens = |input: i64, output: i64, reasoning: i64, read: i64, write: i64| {
+        ObjectEncoder::new()
+            .field("input", &(input as f64))
+            .field("output", &(output as f64))
+            .field("reasoning", &(reasoning as f64))
+            .field(
+                "cache",
+                &ObjectEncoder::new()
+                    .field("read", &(read as f64))
+                    .field("write", &(write as f64))
+                    .finish(),
+            )
+            .finish()
+    };
+    let sum = |value: fn(&Usage) -> i64| rows.iter().map(value).sum::<i64>() as f64;
+    let last = ycoding_store::resources::requests(
+        snapshot,
+        id.as_lossless(),
+        IndexOrder::Descending,
+        None,
+        1,
+    )?
+    .into_iter()
+    .next()
+    .map(|entry| entry.record);
+    provider_request::Summary::decode(
+        &ObjectEncoder::new()
+            .field("logical", &sum(|row| row.logical))
+            .field("physical", &sum(|row| row.physical))
+            .field("helpers", &sum(|row| row.helpers))
+            .field("continued", &sum(|row| row.continued))
+            .field("fallback", &sum(|row| row.fallback))
+            .optional(
+                "cost",
+                &rows
+                    .iter()
+                    .any(|row| row.cost.is_some())
+                    .then(|| rows.iter().filter_map(|row| row.cost).sum::<f64>()),
+            )
+            .optional(
+                "models",
+                &(!models.is_empty()).then(|| {
+                    JsonValue::Array(
+                        models
+                            .iter()
+                            .map(|(model, row)| {
+                                ObjectEncoder::new()
+                                    .field("model", model)
+                                    .field("requests", &(row.logical as f64))
+                                    .field(
+                                        "tokens",
+                                        &tokens(
+                                            row.input,
+                                            row.output,
+                                            row.reasoning,
+                                            row.cache_read,
+                                            row.cache_write,
+                                        ),
+                                    )
+                                    .optional("cost", &row.cost)
+                                    .optional(
+                                        "costProvenance",
+                                        &row.cost.map(|_| LosslessString::from("recorded")),
+                                    )
+                                    .finish()
+                            })
+                            .collect(),
+                    )
+                }),
+            )
+            .field(
+                "tokens",
+                &tokens(
+                    rows.iter().map(|row| row.input).sum(),
+                    rows.iter().map(|row| row.output).sum(),
+                    rows.iter().map(|row| row.reasoning).sum(),
+                    rows.iter().map(|row| row.cache_read).sum(),
+                    rows.iter().map(|row| row.cache_write).sum(),
+                ),
+            )
+            .optional(
+                "latestInvalidation",
+                &last.as_ref().map(|row| row.invalidation.clone()),
+            )
+            .optional(
+                "latestNamespace",
+                &last.as_ref().map(|row| {
+                    LosslessString::from_utf16(row.prompt_cache_key.code_units().take(8).collect())
+                }),
+            )
+            .optional(
+                "latestTiming",
+                &last
+                    .as_ref()
+                    .and_then(|row| row.timing.as_ref().map(|timing| timing.value().clone())),
+            )
+            .finish(),
+    )
+    .map_err(record_error)
+}
+
+pub(crate) fn recent_steps_in(
+    snapshot: &Snapshot,
+    id: &session::Id,
+) -> Result<Vec<(model::Ref, Option<provider_request::Timing>)>, Error> {
+    let mut after = None;
+    let mut records = Vec::new();
+    loop {
+        let page = ycoding_store::resources::requests(
+            snapshot,
+            id.as_lossless(),
+            IndexOrder::Descending,
+            after.as_ref(),
+            128,
+        )?;
+        let Some(last) = page.last() else {
+            break;
+        };
+        after = Some(last.cursor.clone());
+        for row in page
+            .into_iter()
+            .map(|entry| entry.record)
+            .filter(|row| row.source.as_str() == Some("step"))
+        {
+            records.push((
+                row.model.domain()?,
+                row.timing
+                    .as_ref()
+                    .map(|timing| timing.domain())
+                    .transpose()?,
+            ));
+            if records.len() == 8 {
+                records.reverse();
+                return Ok(records);
+            }
+        }
+    }
+    records.reverse();
+    Ok(records)
 }
 
 #[derive(Clone)]
@@ -42,12 +264,12 @@ pub struct Completion<'a> {
 }
 
 impl Service {
-    pub(crate) fn begin_provider_request_with_id(
+    pub(crate) async fn begin_provider_request_with_id(
         &self,
         begin: &Begin,
         id: provider_request::Id,
     ) -> Result<Pending, Error> {
-        self.begin_provider_request_with_pending_id(begin, id)
+        self.begin_provider_request_with_pending_id(begin, id).await
     }
 
     pub fn telemetry_enabled(&self) -> Result<bool, Error> {
@@ -91,8 +313,9 @@ impl Service {
         }
     }
 
-    pub fn begin_provider_request(&self, begin: &Begin) -> Result<Pending, Error> {
+    pub async fn begin_provider_request(&self, begin: &Begin) -> Result<Pending, Error> {
         self.begin_provider_request_with_pending_id(begin, new_id()?)
+            .await
     }
 }
 
@@ -110,27 +333,42 @@ pub(crate) fn new_id() -> Result<provider_request::Id, Error> {
 }
 
 impl Service {
-    fn begin_provider_request_with_pending_id(
+    async fn begin_provider_request_with_pending_id(
         &self,
         begin: &Begin,
         id: provider_request::Id,
     ) -> Result<Pending, Error> {
-        let snapshot = self.client.snapshot()?;
-        let previous = ycoding_store::resources::requests(
-            &snapshot,
-            begin.session.as_lossless(),
-            IndexOrder::Descending,
-            None,
-            1,
-        )?
-        .into_iter()
-        .next()
-        .map(|entry| entry.record);
-        Ok(Pending {
-            id,
-            request: previous.as_ref().map_or(0, |row| row.request) + 1,
-            default_invalidation: default_invalidation(previous.as_ref(), begin),
-        })
+        let begin = begin.clone();
+        self.client
+            .submit(move |tx| {
+                let prefix = key(begin.session.as_lossless());
+                let previous = tx
+                    .index_range::<RequestTable>(
+                        "session_provider_request_session_request_idx",
+                        IndexQuery {
+                            lower: Bound::Unbounded,
+                            upper: Bound::Unbounded,
+                            prefix: Some(&prefix),
+                            order: IndexOrder::Descending,
+                            after: None,
+                            limit: 1,
+                        },
+                    )?
+                    .into_iter()
+                    .next()
+                    .map(|entry| entry.record);
+                let request = ycoding_store::resources::reserve_request(
+                    tx,
+                    begin.session.as_lossless(),
+                    previous.as_ref().map_or(0, |row| row.request),
+                )?;
+                Ok(Pending {
+                    id,
+                    request,
+                    default_invalidation: default_invalidation(previous.as_ref(), &begin),
+                })
+            })?
+            .await
     }
 }
 

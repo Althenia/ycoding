@@ -41,6 +41,13 @@ use ycoding_schema::{
 
 pub trait Clock: Send + Sync {
     fn now(&self) -> i64;
+    fn nanos(&self) -> u64 {
+        static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        START
+            .get_or_init(std::time::Instant::now)
+            .elapsed()
+            .as_nanos() as u64
+    }
     fn sleep(&self, milliseconds: u64) -> Pin<Box<dyn Future<Output = ()> + Send>>;
 }
 pub struct WallClock;
@@ -75,6 +82,7 @@ pub struct Services {
     pub claude: Option<model::ClaudeHost>,
     pub auth: Option<crate::resources::auth::Preparation>,
     pub skill_resolver: Option<Arc<dyn skill::Resolver>>,
+    pub snapshots: Option<Arc<dyn super::revert::Snapshots + Send + Sync>>,
 }
 
 struct Work {
@@ -90,6 +98,7 @@ struct Work {
     fallback: std::sync::atomic::AtomicBool,
     overflow: std::sync::atomic::AtomicBool,
     text_only: bool,
+    start_snapshot: Option<ycoding_schema::snapshot::Id>,
 }
 #[derive(Clone, Copy, PartialEq)]
 enum Overflow {
@@ -99,12 +108,10 @@ enum Overflow {
 struct Timing {
     started: std::time::Instant,
     first_output: Option<std::time::Instant>,
-    first_text: Option<std::time::Instant>,
-    first_reasoning: Option<std::time::Instant>,
-    first_tool_input: Option<std::time::Instant>,
     ended: Option<std::time::Instant>,
     waiting: Option<std::time::Instant>,
     retry_wait: std::time::Duration,
+    generation: usage::GenerationTimes,
 }
 struct Recording {
     tracked: Tracked,
@@ -474,7 +481,7 @@ impl Local {
         let mut gate_admissions = 0u8;
         let mut gate_rounds = 0u8;
         let mut overflow = None;
-        let mut restart: Option<(session_message::Id, u32)> = None;
+        let mut restart: Option<(session_message::Id, u32, provider_request::Pending)> = None;
         let mut request_skills: Vec<(skill_schema::Info, ycoding_schema::LosslessString)> =
             Vec::new();
         loop {
@@ -966,8 +973,16 @@ impl Local {
             };
             let resumed = restart.take();
             let assistant = match &resumed {
-                Some((assistant, _)) => assistant.clone(),
+                Some((assistant, ..)) => assistant.clone(),
                 None => session_message::Id::from_event(&projector::random_event_id()?),
+            };
+            let tracked = Tracked {
+                pending: match &resumed {
+                    Some((_, _, pending)) => pending.clone(),
+                    None => services.store.begin_provider_request(&begin).await?,
+                },
+                begin,
+                continuation: continuation_plan,
             };
             let work = Arc::new(Work {
                 assistant: assistant.clone(),
@@ -976,23 +991,37 @@ impl Local {
                 progress_error: Mutex::new(None),
                 usage: Mutex::new(None),
                 attempts: std::sync::atomic::AtomicU32::new(
-                    resumed.as_ref().map_or(0, |(_, attempts)| *attempts),
+                    resumed.as_ref().map_or(0, |(_, attempts, _)| *attempts),
                 ),
                 timing: Mutex::new(Timing {
                     started: std::time::Instant::now(),
                     first_output: None,
-                    first_text: None,
-                    first_reasoning: None,
-                    first_tool_input: None,
                     ended: None,
                     waiting: None,
                     retry_wait: std::time::Duration::ZERO,
+                    generation: usage::GenerationTimes::default(),
                 }),
                 recording: Mutex::new(None),
-                continuation_used: continuation_plan.used,
+                continuation_used: tracked.continuation.used,
                 fallback: std::sync::atomic::AtomicBool::new(false),
                 overflow: std::sync::atomic::AtomicBool::new(false),
                 text_only,
+                start_snapshot: if resumed.is_some() {
+                    services
+                        .store
+                        .message(&assistant)?
+                        .and_then(|(_, message)| match message {
+                            session_message::Info::Assistant(assistant) => {
+                                assistant.snapshot.and_then(|snapshot| snapshot.start)
+                            }
+                            _ => None,
+                        })
+                } else {
+                    services
+                        .snapshots
+                        .as_ref()
+                        .and_then(|snapshots| snapshots.capture())
+                },
             });
             self.0
                 .active
@@ -1008,16 +1037,12 @@ impl Local {
                     ObjectEncoder::new()
                         .field("agent", &agent.id)
                         .field("model", &selection)
+                        .optional("snapshot", &work.start_snapshot)
                         .finish(),
                     services.clock.now(),
                 )
                 .await?;
             }
-            let tracked = Tracked {
-                pending: services.store.begin_provider_request(&begin)?,
-                begin,
-                continuation: continuation_plan,
-            };
             *work
                 .recording
                 .lock()
@@ -1095,6 +1120,7 @@ impl Local {
                         restart = Some((
                             assistant.clone(),
                             work.attempts.load(std::sync::atomic::Ordering::Relaxed),
+                            tracked.pending.clone(),
                         ));
                         force = true;
                         continue;
@@ -1170,13 +1196,15 @@ impl Local {
                         },
                     )
                     .await?;
-                    publish(
-                        &services.store,
+                    let terminal = event(
                         &session.id,
                         Some(&assistant),
                         "session.step.ended",
                         with_usage(
-                            ObjectEncoder::new().field("finish", finish(settlement.reason)),
+                            self.snapshot_end(
+                                &work,
+                                ObjectEncoder::new().field("finish", finish(settlement.reason)),
+                            ),
                             settlement,
                             &resolved.info.cost,
                             &prepared,
@@ -1184,33 +1212,31 @@ impl Local {
                         )
                         .finish(),
                         services.clock.now(),
-                    )
-                    .await?;
-                    if !publisher.captures.is_empty() {
-                        services
-                            .store
-                            .capture_provider_state(
-                                &session.id,
-                                prepared.model.provider.0.clone(),
-                                text(&selection.id),
-                                std::mem::take(&mut publisher.captures),
-                                services.clock.now(),
-                            )
-                            .await?;
-                    }
-                    if tracked.continuation.eligible
-                        && let Some(response_id) = response_id(settlement, &metadata_key)
+                    )?;
+                    let continuation = tracked
+                        .continuation
+                        .eligible
+                        .then(|| response_id(settlement, &metadata_key))
+                        .flatten()
+                        .map(|response_id| continuation::State {
+                            fingerprint: tracked.continuation.fingerprint.clone(),
+                            response_id,
+                        });
+                    if let Err(failure) = services
+                        .store
+                        .publish_step_end(
+                            terminal,
+                            prepared.model.provider.0.clone(),
+                            text(&selection.id),
+                            std::mem::take(&mut publisher.captures),
+                            continuation,
+                        )
+                        .await
                     {
-                        services
-                            .store
-                            .remember_continuation(
-                                continuation::State {
-                                    fingerprint: tracked.continuation.fingerprint.clone(),
-                                    response_id,
-                                },
-                                services.clock.now(),
-                            )
-                            .await?;
+                        let failure = Error::from(failure);
+                        self.fail(&session.id, &work, &failure).await?;
+                        self.remove(&session.id);
+                        return Err(failure);
                     }
                     self.record_request(
                         &tracked,
@@ -1387,28 +1413,26 @@ impl Local {
                     llm::Event::ToolCall(_) => true,
                     _ => false,
                 };
+                let received = services.clock.nanos();
+                match &event {
+                    llm::Event::TextDelta(delta) if generation_output(&delta.text) => {
+                        timing.generation.text.get_or_insert(received);
+                    }
+                    llm::Event::ReasoningDelta(delta) if generation_output(&delta.text) => {
+                        timing.generation.reasoning.get_or_insert(received);
+                    }
+                    llm::Event::ToolInputDelta { text, .. } if generation_output(text) => {
+                        timing.generation.tool_input.get_or_insert(received);
+                    }
+                    llm::Event::StepFinish { .. } => {
+                        timing.generation.ended.get_or_insert(received);
+                    }
+                    _ => {}
+                }
                 if output {
                     timing
                         .first_output
                         .get_or_insert_with(std::time::Instant::now);
-                }
-                match &event {
-                    llm::Event::TextDelta(delta) if messages::meaningful(&delta.text) => {
-                        timing
-                            .first_text
-                            .get_or_insert_with(std::time::Instant::now);
-                    }
-                    llm::Event::ReasoningDelta(delta) if messages::meaningful(&delta.text) => {
-                        timing
-                            .first_reasoning
-                            .get_or_insert_with(std::time::Instant::now);
-                    }
-                    llm::Event::ToolInputDelta { text, .. } if messages::meaningful(text) => {
-                        timing
-                            .first_tool_input
-                            .get_or_insert_with(std::time::Instant::now);
-                    }
-                    _ => {}
                 }
                 if matches!(event, llm::Event::StepFinish { .. } | llm::Event::Finish(_)) {
                     timing.ended.get_or_insert_with(std::time::Instant::now);
@@ -1625,6 +1649,18 @@ impl Local {
             Some(JsonValue::Object(fields)) => fields,
             _ => ycoding_schema::JsonObject::new(),
         };
+        if let Some(JsonValue::Object(generation)) = usage::generation_timing(
+            usage,
+            &work
+                .timing
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .generation,
+        ) {
+            for (name, value) in generation.iter() {
+                timing.insert(name.clone(), value.clone());
+            }
+        }
         if self.0.services.store.telemetry_enabled()? {
             let state = work
                 .timing
@@ -1653,54 +1689,6 @@ impl Local {
                 ),
             );
         }
-        let normalized = ycoding_schema::token_usage::Info::decode(&usage::tokens(usage))
-            .map_err(projector::record_error)?;
-        let state = work
-            .timing
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        let provider_timed = usage
-            .and_then(|usage| usage.generation_duration_ns)
-            .is_some();
-        let visible = [state.first_text, state.first_tool_input]
-            .into_iter()
-            .flatten()
-            .min();
-        let folded = state.first_reasoning.is_some() && normalized.reasoning.get() == 0.0;
-        let generated = if provider_timed {
-            normalized.output.get() + normalized.reasoning.get()
-        } else if folded || visible.is_some() {
-            normalized.output.get()
-        } else {
-            0.0
-        };
-        if (provider_timed
-            || !(usage.and_then(|usage| usage.output_may_include_unreported_reasoning)
-                == Some(true)
-                && normalized.reasoning.get() == 0.0))
-            && generated > 0.0
-            && generated.fract() == 0.0
-            && generated <= 9_007_199_254_740_991.0
-        {
-            timing.insert("generatedTokens".into(), JsonValue::Number(generated));
-            if !provider_timed {
-                let start = if folded {
-                    [state.first_reasoning, visible].into_iter().flatten().min()
-                } else {
-                    visible
-                };
-                if let Some((start, end)) = start.zip(state.ended) {
-                    let duration = end.duration_since(start).as_nanos();
-                    if (1_000_000_000..=9_007_199_254_740_991).contains(&duration) {
-                        timing.insert(
-                            "observedGenerationDurationNs".into(),
-                            JsonValue::Number(duration as f64),
-                        );
-                    }
-                }
-            }
-        }
-        drop(state);
         let populated = timing.iter().next().is_some();
         Ok(populated.then_some(JsonValue::Object(timing)))
     }
@@ -1817,7 +1805,9 @@ impl Local {
             },
         };
         self.fail_unsettled(id, work, &failure).await?;
-        let mut fields = ObjectEncoder::new().field("error", &failure).finish();
+        let mut fields = self
+            .snapshot_end(work, ObjectEncoder::new().field("error", &failure))
+            .finish();
         if let (JsonValue::Object(fields), Some(JsonValue::Object(usage))) = (
             &mut fields,
             work.usage
@@ -1838,6 +1828,23 @@ impl Local {
             services.clock.now(),
         )
         .await
+    }
+
+    fn snapshot_end(&self, work: &Work, fields: ObjectEncoder) -> ObjectEncoder {
+        let snapshot = self
+            .0
+            .services
+            .snapshots
+            .as_ref()
+            .and_then(|snapshots| snapshots.capture());
+        let files = work
+            .start_snapshot
+            .as_ref()
+            .zip(snapshot.as_ref())
+            .and_then(|(from, to)| self.0.services.snapshots.as_ref()?.files(from, to).ok());
+        fields
+            .optional("snapshot", &snapshot)
+            .optional("files", &files)
     }
 
     async fn observe_context(
@@ -2106,6 +2113,19 @@ pub(crate) async fn publish(
     fields: JsonValue,
     now: i64,
 ) -> Outcome {
+    store
+        .publish(event(id, assistant, kind, fields, now)?)
+        .await?;
+    Ok(())
+}
+
+fn event(
+    id: &session::Id,
+    assistant: Option<&session_message::Id>,
+    kind: &str,
+    fields: JsonValue,
+    now: i64,
+) -> Result<ycoding_store::session::NewEvent, Error> {
     let JsonValue::Object(fields) = fields else {
         return Err(error("unknown", "Session event fields must be an object"));
     };
@@ -2119,16 +2139,13 @@ pub(crate) async fn publish(
     for (key, value) in fields.iter() {
         data.insert(key.clone(), value.clone());
     }
-    store
-        .publish(ycoding_store::session::NewEvent {
-            id: projector::random_event_id()?.as_lossless().clone(),
-            aggregate_id: id.as_lossless().clone(),
-            created: now,
-            type_: format!("{kind}.1").into(),
-            data: JsonValue::Object(data),
-        })
-        .await?;
-    Ok(())
+    Ok(ycoding_store::session::NewEvent {
+        id: projector::random_event_id()?.as_lossless().clone(),
+        aggregate_id: id.as_lossless().clone(),
+        created: now,
+        type_: format!("{kind}.1").into(),
+        data: JsonValue::Object(data),
+    })
 }
 fn finish(reason: llm::FinishReason) -> &'static str {
     match reason {
@@ -2139,6 +2156,11 @@ fn finish(reason: llm::FinishReason) -> &'static str {
         llm::FinishReason::Error => "error",
         llm::FinishReason::Unknown => "unknown",
     }
+}
+
+fn generation_output(text: &ycoding_schema::LosslessString) -> bool {
+    text.code_units()
+        .any(|unit| !crate::process::guardrails::is_whitespace(unit))
 }
 fn with_usage(
     encoder: ObjectEncoder,

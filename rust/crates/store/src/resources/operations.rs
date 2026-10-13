@@ -245,6 +245,40 @@ pub fn request_by_number(
         .into_iter()
         .next())
 }
+
+pub fn reserve_request(
+    tx: &mut Write<'_>,
+    session: &LosslessString,
+    minimum: i64,
+) -> Result<i64, Error> {
+    let name = request_sequence(session)?;
+    let high_water = tx
+        .get::<SequenceTable>(&key(&name))?
+        .map_or(0, |row| row.high_water)
+        .max(minimum);
+    let request = high_water
+        .checked_add(1)
+        .filter(|value| *value <= 9_007_199_254_740_991)
+        .ok_or_else(|| tx.reject(Error::Rejected("provider request ordinal exhausted")))?;
+    SequenceTable::put(
+        tx,
+        &Sequence {
+            name,
+            high_water: request,
+        },
+    )?;
+    Ok(request)
+}
+
+fn request_sequence(session: &LosslessString) -> Result<LosslessString, Error> {
+    Ok(format!(
+        "session_provider_request:{}",
+        session
+            .to_utf8()
+            .map_err(|_| Error::Rejected("invalid Session ID"))?
+    )
+    .into())
+}
 pub fn requests(
     snapshot: &Snapshot,
     session: &LosslessString,
@@ -373,6 +407,7 @@ pub(crate) fn remove_session_children(
     tx: &mut Write<'_>,
     id: &LosslessString,
 ) -> Result<(), Error> {
+    tx.delete::<SequenceTable>(&key(&request_sequence(id)?))?;
     crate::project::remove_children::<StateLinkTable>(tx, |row| &row.session_id == id)?;
     tx.delete::<ContinuationGenerationTable>(&key(id))?;
     tx.delete::<ContinuationTable>(&key(id))?;

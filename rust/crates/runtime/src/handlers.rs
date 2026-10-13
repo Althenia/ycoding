@@ -339,7 +339,12 @@ async fn session_snapshot(
                 aggregate_id: convert::wire(id.as_lossless()),
                 seq: snapshot.watermark.map(|watermark| watermark as u64),
             },
-            generation_speed: None,
+            generation_speed: snapshot
+                .generation_speed
+                .as_ref()
+                .map(convert::generation_speed)
+                .transpose()
+                .map_err(unrepresentable_info)?,
             before: snapshot.before.as_deref().map(convert::text),
         },
     })

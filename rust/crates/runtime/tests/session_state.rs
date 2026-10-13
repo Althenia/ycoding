@@ -455,6 +455,29 @@ async fn diagnostics_report_the_latest_measured_assistant_step() {
         );
         assert_eq!(data.estimated_cost, Some(0.5));
         assert_eq!(units(&data.model.id), "m1");
+        assert_eq!(data.requests.as_ref().unwrap().logical, 0);
+        assert!(data.generation_speed.is_none());
+
+        ycoding_core::session::store::Service::new(world().store.clone()).publish(
+            ycoding_core::ycoding_store::session::NewEvent {
+                id: "evt_state_diag_request".into(), aggregate_id: "ses_state_diag".into(), created: 12,
+                type_: "session.provider.request.recorded.1".into(),
+                data: parse_json(r#"{"sessionID":"ses_state_diag","id":"prq_state_diag","source":"step","agent":"build","model":{"providerID":"p1","id":"m1"},"routeID":"unknown","promptCacheKey":"namespace","systemDigest":"system","toolDigest":"tools","request":1,"attempts":2,"invalidation":"provider-not-reported","continuation":"full","tokens":{"input":100,"output":2,"reasoning":3,"cache":{"read":4,"write":5}},"timing":{"generatedTokens":12,"generationDurationNs":2000000000},"time":12}"#).unwrap(),
+            }
+        ).await.unwrap();
+        let measured: v5::SessionDiagnosticsResult = success(client.call("session.diagnostics", session_scope("ses_state_diag"), request("ses_state_diag")).await);
+        let data = measured.data.unwrap();
+        let requests = data.requests.unwrap(); assert_eq!((requests.logical, requests.physical), (1, 2));
+        assert_eq!(requests.latest_timing.unwrap().generated_tokens, Some(12));
+        assert!(requests.cost.is_none()); assert!(requests.cache_read_reported.is_none());
+        let speed = data.generation_speed.unwrap();
+        assert_eq!(speed.latest.as_ref().unwrap().tokens_per_second, 6.0);
+        assert_eq!(speed.recent.items.len(), 1);
+        let snapshot: v5::SessionSnapshotResult = success(client.call("session.snapshot", session_scope("ses_state_diag"), v5::SessionSnapshotRequest {
+            params: v5::SessionSnapshotRequestParams { session_id: text("ses_state_diag") },
+            query: v5::SessionSnapshotQuery { limit: Some(100), before: None },
+        }.encode_to_vec()).await);
+        assert_eq!(snapshot.data.generation_speed, Some(speed));
 
         let missing = rejected(
             client

@@ -704,6 +704,7 @@ pub fn local_with_settings(store: &Store, endpoint: &str, helpers: helper::Setti
     let scratch =
         std::env::temp_dir().join(format!("ycoding-generation-scratch-{}", std::process::id()));
     Local::new(Services {
+        snapshots: None,
         store: SessionStore::new(store.client()),
         events: ycoding_core::event_feed::Feed::attach(&store.client()),
         location: ycoding_schema::location::Ref::decode(

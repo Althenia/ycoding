@@ -411,6 +411,7 @@ fn runner_services(
         tools::registry::Registry,
     };
     Services {
+        snapshots: None,
         store: Service::new(store.client()),
         events: ycoding_core::event_feed::Feed::attach(&store.client()),
         location: ycoding_schema::location::Ref::decode(

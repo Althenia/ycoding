@@ -7,28 +7,14 @@ use std::{
     hash::{BuildHasher, Hasher},
 };
 use ycoding_core::ycoding_schema::{
-    DomainDecode, DomainEncode, LosslessString, ObjectEncoder, provider_request,
-    schema::NonNegativeInt, session, session_captured_changes, session_compaction, token_usage,
+    DomainDecode, LosslessString, ObjectEncoder, provider_request, schema::NonNegativeInt, session,
+    session_captured_changes, session_compaction, token_usage,
 };
 use ycoding_core::ycoding_store::Error;
 use ycoding_protocol::v5;
 
 const GROUPS: [&str; 7] = [
     "model", "hour", "day", "month", "session", "project", "agent",
-];
-const INVALIDATIONS: [&str; 12] = [
-    "first-request",
-    "compaction-reset",
-    "model-switched",
-    "model-variant-switched",
-    "stable-hit",
-    "prefix-changed",
-    "system-prefix-changed",
-    "tool-prefix-changed",
-    "below-minimum",
-    "provider-not-reported",
-    "cache-disabled",
-    "retry-fallback",
 ];
 const SORTS: [&str; 9] = [
     "key",
@@ -68,7 +54,7 @@ pub async fn usage(
         .usage(&id, core.usage_pricer.as_deref().map(|pricer| pricer as &_))
         .map_err(|error| failure(error, &id))?;
     Ok(v5::SessionUsageResult {
-        data: wire_summary(&summary)?,
+        data: convert::provider_summary(&summary).map_err(|_| unrepresentable())?,
     })
 }
 
@@ -230,71 +216,8 @@ fn tokens(info: &token_usage::Info) -> v5::TokenUsageInfo {
     }
 }
 
-fn timing(timing: &provider_request::Timing) -> v5::ProviderRequestTiming {
-    v5::ProviderRequestTiming {
-        first_output_ms: timing.first_output_ms.map(count),
-        total_ms: timing.total_ms.map(count),
-        retry_wait_ms: timing.retry_wait_ms.map(count),
-        prompt_eval_duration_ns: timing.prompt_eval_duration_ns.map(count),
-        generation_duration_ns: timing.generation_duration_ns.map(count),
-        observed_generation_duration_ns: timing
-            .observed_generation_duration_ns
-            .map(|value| value.get() as u64),
-        generated_tokens: timing.generated_tokens.map(|value| value.get() as u64),
-        load_duration_ns: timing.load_duration_ns.map(count),
-    }
-}
-
 fn provenance(value: &provider_request::CostProvenance) -> Result<i32, Failure> {
     tag(&PROVENANCES, literal(&value.0)?)
-}
-
-pub(crate) fn wire_summary(
-    summary: &provider_request::Summary,
-) -> Result<v5::ProviderRequestSummary, Failure> {
-    let models = summary
-        .models
-        .as_ref()
-        .map(|models| {
-            models
-                .iter()
-                .map(|spend| {
-                    Ok(v5::ProviderRequestSummaryModelsItem {
-                        model: convert::model_ref(&spend.model.encode())
-                            .map_err(|_| unrepresentable())?,
-                        requests: count(spend.requests),
-                        tokens: tokens(&spend.tokens),
-                        cache_read_reported: spend.cache_read_reported,
-                        cost: spend.cost.map(|cost| cost.get()),
-                        cost_provenance: spend
-                            .cost_provenance
-                            .as_ref()
-                            .map(provenance)
-                            .transpose()?,
-                    })
-                })
-                .collect::<Result<_, Failure>>()
-                .map(|items| v5::ProviderRequestSummaryModels { items })
-        })
-        .transpose()?;
-    Ok(v5::ProviderRequestSummary {
-        logical: count(summary.logical),
-        physical: count(summary.physical),
-        helpers: count(summary.helpers),
-        continued: count(summary.continued),
-        fallback: count(summary.fallback),
-        cache_read_reported: summary.cache_read_reported,
-        cost: summary.cost.map(|cost| cost.get()),
-        models,
-        tokens: tokens(&summary.tokens),
-        latest_invalidation: summary
-            .latest_invalidation
-            .as_ref()
-            .map(|value| tag(&INVALIDATIONS, literal(&value.0)?))
-            .transpose()?,
-        latest_namespace: summary.latest_namespace.as_ref().map(convert::wire),
-        latest_timing: summary.latest_timing.as_ref().map(timing),
-    })
 }
 
 pub(crate) fn wire_report(

@@ -25,6 +25,7 @@ const CATALOG: Catalog = Catalog::new(
         TableDeclaration::of::<session::InstructionStateTable>(),
         TableDeclaration::of::<ycoding_store::resources::CredentialTable>(),
         TableDeclaration::of::<ycoding_store::resources::RequestTable>(),
+        TableDeclaration::of::<ycoding_store::resources::SequenceTable>(),
         TableDeclaration::of::<ycoding_store::resources::UsageTable>(),
         TableDeclaration::of::<ycoding_store::resources::ContinuationGenerationTable>(),
         TableDeclaration::of::<ycoding_store::resources::ContinuationTable>(),

@@ -1,4 +1,5 @@
 use crate::{
+    convert,
     dispatch::{Failure, Invocation},
     session_read_models,
 };
@@ -15,7 +16,9 @@ pub async fn get(
         .usage_all(core.usage_pricer.as_deref().map(|pricer| pricer as &_))
         .map_err(failure)?;
     Ok(v5::UsageGetResult {
-        data: session_read_models::wire_summary(&summary)?,
+        data: convert::provider_summary(&summary).map_err(|_| {
+            Failure::Unavailable("stored Session state is not representable on the wire".into())
+        })?,
     })
 }
 

@@ -194,14 +194,16 @@ pub async fn diagnostics(
     let id = invocation.session(&request.params.session_id)?;
     let diagnostics = core
         .sessions
-        .diagnostics(&id, None)
+        .diagnostics(
+            &id,
+            core.sessions
+                .get(&id)
+                .map_err(|_| Failure::Unavailable("Session diagnostics unavailable".into()))?
+                .and_then(|session| session.revert)
+                .as_ref()
+                .map(|revert| &revert.message_id),
+        )
         .map_err(|_| Failure::Unavailable("Session diagnostics unavailable".into()))?;
-    if diagnostics
-        .as_ref()
-        .is_some_and(|info| info.requests.is_some() || info.generation_speed.is_some())
-    {
-        return Err(unrepresentable());
-    }
     Ok(v5::SessionDiagnosticsResult {
         data: diagnostics
             .as_ref()

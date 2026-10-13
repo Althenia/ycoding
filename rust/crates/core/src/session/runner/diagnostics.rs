@@ -71,7 +71,14 @@ impl Local {
             provider_cache: Some(
                 ProviderCache::decode(&cache_diagnostics::provider_cache(
                     &request.model.route.id,
-                    request.model.provider.0.as_str().unwrap_or_default(),
+                    recording
+                        .tracked
+                        .begin
+                        .model
+                        .provider_id
+                        .0
+                        .as_str()
+                        .unwrap_or_default(),
                     settlement.usage.as_ref(),
                 ))
                 .map_err(projector::record_error)?,

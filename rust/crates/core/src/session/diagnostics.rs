@@ -20,138 +20,138 @@ impl Service {
         current: (model::Ref, Option<ycoding_schema::provider_request::Timing>),
     ) -> Result<Option<cache_diagnostics::GenerationSpeedHistory>, Error> {
         let snapshot = self.client.snapshot()?;
-        let mut records = Vec::new();
-        let mut after = None;
-        while records.len() < 8 {
-            let rows = ycoding_store::resources::requests(
-                &snapshot,
-                id.as_lossless(),
-                IndexOrder::Descending,
-                after.as_ref(),
-                128,
-            )?;
-            if rows.is_empty() {
-                break;
-            }
-            after = rows.last().map(|row| row.cursor.clone());
-            for row in rows
-                .into_iter()
-                .filter(|row| row.record.source.as_str() == Some("step"))
-            {
-                if records.len() == 8 {
-                    break;
-                }
-                records.push((
-                    row.record.model.domain()?,
-                    row.record
-                        .timing
-                        .map(|timing| timing.domain())
-                        .transpose()?,
-                ));
-            }
-        }
-        records.reverse();
+        let mut records = super::provider_request::recent_steps_in(&snapshot, id)?;
         records.push(current);
-        let records = &records[records.len().saturating_sub(8)..];
-        let Some((newest, _)) = records.last() else {
-            return Ok(None);
-        };
-        let samples = records
-            .iter()
-            .map(|(model, timing)| {
-                let timing = timing.as_ref()?;
-                let tokens = timing.generated_tokens?;
-                let duration = timing
-                    .generation_duration_ns
-                    .map(|value| value.get())
-                    .or_else(|| {
-                        timing
-                            .observed_generation_duration_ns
-                            .filter(|value| value.get() >= 1_000_000_000)
-                            .map(|value| value.get())
-                    })?;
-                if duration <= 0 {
-                    return None;
-                }
-                let tokens_per_second = tokens.get() as f64 * 1_000_000_000.0 / duration as f64;
-                if !tokens_per_second.is_finite() || tokens_per_second <= 0.0 {
-                    return None;
-                }
-                Some(cache_diagnostics::GenerationSpeed {
-                    model: model.clone(),
-                    tokens,
-                    duration_ns: ycoding_schema::schema::PositiveInt::new(duration).ok()?,
-                    tokens_per_second,
-                })
-            })
-            .collect::<Vec<_>>();
-        let latest = samples.last().cloned().flatten();
-        let recent = samples
-            .into_iter()
-            .flatten()
-            .filter(|sample| {
-                sample.model.provider_id == newest.provider_id
-                    && sample.model.id == newest.id
-                    && sample.model.variant == newest.variant
-            })
-            .collect::<Vec<_>>();
-        Ok((!recent.is_empty())
-            .then_some(cache_diagnostics::GenerationSpeedHistory { latest, recent }))
+        Ok(generation_speed(&records))
     }
     pub fn diagnostics(
         &self,
         id: &session::Id,
         boundary: Option<&session_message::Id>,
     ) -> Result<Option<cache_diagnostics::Info>, Error> {
-        let snapshot = self.client.snapshot()?;
-        let legacy = history::latest_compaction(&snapshot, id)?;
-        let anchor = match boundary {
-            None => None,
-            Some(boundary) => {
-                let Some(row) = snapshot
-                    .get::<MessageTable>(&key(boundary.as_lossless()))?
-                    .filter(|row| &row.session_id == id.as_lossless())
-                else {
-                    return Ok(None);
-                };
-                Some(row.seq)
-            }
-        };
-        let compaction = completed_compaction(&snapshot, id, anchor)?;
-        let floor = compaction
-            .map(Bound::Excluded)
-            .or(legacy.map(Bound::Included));
-        let Some(assistant) = latest_measured_assistant(&snapshot, id, anchor, floor)? else {
-            return Ok(None);
-        };
-        let data = &assistant.data;
-        let path = JsonPath::default();
-        let object = ObjectDecoder::new(data, &path).map_err(super::projector::record_error)?;
-        let tokens: Option<token_usage::Info> = object
-            .optional("tokens")
-            .map_err(super::projector::record_error)?;
-        let Some(tokens) = tokens else {
-            return Ok(None);
-        };
-        let diagnostics: Option<session_message::Diagnostics> = object
-            .optional("diagnostics")
-            .map_err(super::projector::record_error)?;
-        Ok(Some(calculate(Calculation {
-            model: object
-                .field("model")
-                .map_err(super::projector::record_error)?,
-            tokens,
-            estimated_cost: object
-                .optional("cost")
-                .map_err(super::projector::record_error)?
-                .unwrap_or_else(money::Usd::zero),
-            context_limit: diagnostics.as_ref().and_then(|value| value.context_limit),
-            context_breakdown: diagnostics
-                .as_ref()
-                .and_then(|value| value.context_breakdown.clone()),
-            provider_cache: diagnostics.and_then(|value| value.provider_cache),
-        })?))
+        read(&self.client.snapshot()?, id, boundary)
     }
+}
+
+pub(crate) fn read(
+    snapshot: &Snapshot,
+    id: &session::Id,
+    boundary: Option<&session_message::Id>,
+) -> Result<Option<cache_diagnostics::Info>, Error> {
+    let legacy = history::latest_compaction(snapshot, id)?;
+    let anchor = match boundary {
+        None => None,
+        Some(boundary) => {
+            let Some(row) = snapshot
+                .get::<MessageTable>(&key(boundary.as_lossless()))?
+                .filter(|row| &row.session_id == id.as_lossless())
+            else {
+                return Ok(None);
+            };
+            Some(row.seq)
+        }
+    };
+    let compaction = completed_compaction(snapshot, id, anchor)?;
+    let floor = compaction
+        .map(Bound::Excluded)
+        .or(legacy.map(Bound::Included));
+    let Some(assistant) = latest_measured_assistant(snapshot, id, anchor, floor)? else {
+        return Ok(None);
+    };
+    let data = &assistant.data;
+    let path = JsonPath::default();
+    let object = ObjectDecoder::new(data, &path).map_err(super::projector::record_error)?;
+    let tokens: Option<token_usage::Info> = object
+        .optional("tokens")
+        .map_err(super::projector::record_error)?;
+    let Some(tokens) = tokens else {
+        return Ok(None);
+    };
+    let diagnostics: Option<session_message::Diagnostics> = object
+        .optional("diagnostics")
+        .map_err(super::projector::record_error)?;
+    let mut diagnostics = calculate(Calculation {
+        model: object
+            .field("model")
+            .map_err(super::projector::record_error)?,
+        tokens,
+        estimated_cost: object
+            .optional("cost")
+            .map_err(super::projector::record_error)?
+            .unwrap_or_else(money::Usd::zero),
+        context_limit: diagnostics.as_ref().and_then(|value| value.context_limit),
+        context_breakdown: diagnostics
+            .as_ref()
+            .and_then(|value| value.context_breakdown.clone()),
+        provider_cache: diagnostics.and_then(|value| value.provider_cache),
+    })?;
+    diagnostics.requests = Some(super::provider_request::summary_in(snapshot, id)?);
+    diagnostics.generation_speed =
+        generation_speed(&super::provider_request::recent_steps_in(snapshot, id)?);
+    Ok(Some(diagnostics))
+}
+
+pub fn generation_speed(
+    records: &[(model::Ref, Option<ycoding_schema::provider_request::Timing>)],
+) -> Option<cache_diagnostics::GenerationSpeedHistory> {
+    let records = &records[records.len().saturating_sub(8)..];
+    let newest = &records.last()?.0;
+    let samples = records
+        .iter()
+        .map(|(model, timing)| {
+            let timing = timing.as_ref()?;
+            let tokens = timing.generated_tokens?;
+            let duration = timing
+                .generation_duration_ns
+                .map(|duration| duration.get())
+                .or_else(|| {
+                    timing
+                        .observed_generation_duration_ns
+                        .map(|duration| duration.get())
+                        .filter(|duration| *duration >= 1_000_000_000)
+                })?;
+            let duration_ns = ycoding_schema::schema::PositiveInt::new(duration).ok()?;
+            let rate = tokens.get() as f64 * 1_000_000_000.0 / duration as f64;
+            (rate.is_finite() && rate > 0.0).then(|| cache_diagnostics::GenerationSpeed {
+                model: model.clone(),
+                tokens,
+                duration_ns,
+                tokens_per_second: rate,
+            })
+        })
+        .collect::<Vec<_>>();
+    let latest = samples.last().cloned().flatten();
+    let recent = samples
+        .into_iter()
+        .flatten()
+        .filter(|sample| {
+            sample.model.provider_id == newest.provider_id
+                && sample.model.id == newest.id
+                && sample.model.variant == newest.variant
+        })
+        .collect::<Vec<_>>();
+    (!recent.is_empty()).then_some(cache_diagnostics::GenerationSpeedHistory { latest, recent })
+}
+
+pub(crate) fn has_measured_assistant(
+    messages: &[session_message::Info],
+    boundary: Option<&session_message::Id>,
+) -> Result<bool, Error> {
+    let end = match boundary {
+        Some(boundary) => match messages
+            .iter()
+            .map(history::message_id)
+            .collect::<Result<Vec<_>, _>>()?
+            .iter()
+            .position(|message| message == boundary)
+        {
+            Some(index) => index,
+            None => return Ok(false),
+        },
+        None => messages.len(),
+    };
+    Ok(messages[..end].iter().rev().take_while(|message| !matches!(message, session_message::Info::Compaction(session_message::Compaction::Completed(_) | session_message::Compaction::CompletedV1(_))))
+        .any(|message| matches!(message, session_message::Info::Assistant(assistant) if assistant.tokens.is_some())))
 }
 
 pub(crate) struct Calculation {

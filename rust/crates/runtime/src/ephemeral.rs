@@ -1,12 +1,8 @@
 use crate::dispatch::Failure;
-use crate::{
-    convert, form, guardrail, message, permission, pty, question, session_read_models, shell,
-};
+use crate::{convert, form, guardrail, message, permission, pty, question, shell};
 use prost::{Message, Name};
 use ycoding_core::event_feed::{Data, Ephemeral};
-use ycoding_core::ycoding_schema::{
-    DomainEncode, LosslessString, session_cache_diagnostics, session_status_event,
-};
+use ycoding_core::ycoding_schema::{DomainEncode, LosslessString, session_status_event};
 use ycoding_protocol::v5;
 
 type R<T> = Result<T, Failure>;
@@ -91,7 +87,8 @@ pub(crate) fn record(event: &Ephemeral, epoch: &LosslessString) -> R<v5::EventRe
             PublicEventSessionDiagnosticsUpdated,
             v5::PublicEventSessionDiagnosticsUpdatedData {
                 session_id: convert::wire(data.session_id.as_lossless()),
-                diagnostics: diagnostics(&data.diagnostics)?,
+                diagnostics: convert::cache_diagnostics(&data.diagnostics)
+                    .map_err(|_| unrepresentable())?,
             }
         ),
         Data::SessionTextDelta(data) => envelope!(
@@ -563,37 +560,6 @@ fn enumeration(value: &ycoding_core::ycoding_schema::JsonValue, table: &[(&str, 
 
 fn tokens(tokens: &ycoding_core::ycoding_schema::token_usage::Info) -> R<v5::TokenUsageInfo> {
     message::tokens(message::J(&tokens.encode())).map_err(|_| unrepresentable())
-}
-
-fn diagnostics(info: &session_cache_diagnostics::Info) -> R<v5::SessionCacheDiagnostics> {
-    let mut result = convert::cache_diagnostics(info).map_err(|_| unrepresentable())?;
-    result.requests = info
-        .requests
-        .as_ref()
-        .map(session_read_models::wire_summary)
-        .transpose()?;
-    result.generation_speed = info
-        .generation_speed
-        .as_ref()
-        .map(|history| {
-            Ok(v5::SessionGenerationSpeedHistory {
-                latest: history.latest.as_ref().map(speed).transpose()?,
-                recent: v5::SessionGenerationSpeedHistoryRecent {
-                    items: history.recent.iter().map(speed).collect::<R<_>>()?,
-                },
-            })
-        })
-        .transpose()?;
-    Ok(result)
-}
-
-fn speed(speed: &session_cache_diagnostics::GenerationSpeed) -> R<v5::SessionGenerationSpeed> {
-    Ok(v5::SessionGenerationSpeed {
-        model: convert::model_ref(&speed.model.encode()).map_err(|_| unrepresentable())?,
-        tokens: speed.tokens.get() as u64,
-        duration_ns: speed.duration_ns.get() as u64,
-        tokens_per_second: speed.tokens_per_second,
-    })
 }
 
 fn status(status: &session_status_event::Info) -> R<v5::SessionStatus> {

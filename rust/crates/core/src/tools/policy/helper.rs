@@ -519,7 +519,6 @@ pub struct Streamed {
     pub cancelled: bool,
     pub too_large: bool,
 }
-static HELPER_LEDGER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 pub async fn stream(
     store: &crate::session::store::Service,
     executor: &ycoding_ai::route::Executor,
@@ -554,6 +553,10 @@ pub async fn stream(
         system_digest: prompt_cache::system_digest(&input.request.system),
         tool_digest: prompt_cache::tool_digest(&input.request.tools),
     };
+    let pending = store
+        .begin_provider_request_with_id(&begin, request_id)
+        .await
+        .map_err(|error| error.to_string())?;
     let mut result = Streamed {
         text: "".into(),
         tokens: None,
@@ -655,10 +658,6 @@ pub async fn stream(
         },
     }
     result.text = LosslessString::from_utf16(units);
-    let _ledger = HELPER_LEDGER.lock().await;
-    let pending = store
-        .begin_provider_request_with_id(&begin, request_id)
-        .map_err(|error| error.to_string())?;
     let now = chrono::Utc::now().timestamp_millis();
     if let Some(tokens) = &result.tokens {
         publish(

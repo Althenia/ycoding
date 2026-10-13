@@ -843,6 +843,7 @@ fn runner(
     };
     catalog.configure(&[parse_json(&serde_json::json!({"model":{"providerID":integration,"model":"gpt-reasoning"},"providers":{integration:{"package":package,"settings":{"baseURL":format!("{endpoint}/v1")},"models":{"gpt-reasoning":{"modelID":model_id}}}}}).to_string()).unwrap()]).unwrap();
     Local::new(Services {
+        snapshots: None,
         store: Service::new(store.client()),
         events: ycoding_core::event_feed::Feed::attach(&store.client()),
         location: ycoding_schema::location::Ref::decode(

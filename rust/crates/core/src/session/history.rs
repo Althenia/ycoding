@@ -30,6 +30,7 @@ pub struct SessionSnapshot {
     pub messages: Vec<session_message::Info>,
     pub before: Option<String>,
     pub watermark: Option<i64>,
+    pub generation_speed: Option<ycoding_schema::session_cache_diagnostics::GenerationSpeedHistory>,
 }
 
 impl Service {
@@ -53,8 +54,19 @@ impl Service {
             before.map(|value| cursor(id, value)).transpose()?,
         )?;
         let sequence = tables::latest_sequence(&snapshot, id.as_lossless())?;
+        let session = info::from_row(&row)?;
         Ok(SessionSnapshot {
-            session: info::from_row(&row)?,
+            generation_speed: if super::diagnostics::has_measured_assistant(
+                &window.messages,
+                session.revert.as_ref().map(|revert| &revert.message_id),
+            )? {
+                super::diagnostics::generation_speed(&super::provider_request::recent_steps_in(
+                    &snapshot, id,
+                )?)
+            } else {
+                None
+            },
+            session,
             messages: window.messages,
             before: window.before,
             watermark: (sequence >= 0).then_some(sequence),
@@ -196,7 +208,7 @@ fn merge(
     Ok(entries.into_iter().map(|entry| entry.message).collect())
 }
 
-fn message_id(message: &session_message::Info) -> Result<session_message::Id, Error> {
+pub(super) fn message_id(message: &session_message::Info) -> Result<session_message::Id, Error> {
     let value = message.encode();
     ObjectDecoder::new(&value, &JsonPath::default())
         .map_err(super::projector::record_error)?
