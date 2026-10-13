@@ -38,17 +38,12 @@ export const Commands = Spec.make(typeof YCODING_CLI_NAME === "string" ? YCODING
       description: "Make a request to the running server",
       params: {
         ...ServerParams,
-        request: Argument.string("operation | method path").pipe(
-          Argument.withDescription("OpenAPI operation ID, or an HTTP method followed by a path"),
-          Argument.variadic({ min: 1, max: 2 }),
+        request: Argument.string("operation").pipe(Argument.withDescription("Typed local v5 operation name")),
+        data: Flag.string("data").pipe(
+          Flag.withAlias("d"),
+          Flag.withDescription("Typed v5 JSON request (params, query, payload)"),
+          Flag.optional,
         ),
-        data: Flag.string("data").pipe(Flag.withAlias("d"), Flag.withDescription("Request body"), Flag.optional),
-        header: Flag.string("header").pipe(
-          Flag.withAlias("H"),
-          Flag.withDescription("Request header in name:value form"),
-          Flag.atMost(100),
-        ),
-        param: Flag.keyValuePair("param").pipe(Flag.withDescription("OpenAPI path or query parameter"), Flag.optional),
       },
     }),
     Spec.make("debug", {

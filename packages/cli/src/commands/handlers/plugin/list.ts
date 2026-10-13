@@ -1,6 +1,6 @@
 import { EOL } from "node:os"
 import { Effect } from "effect"
-import { YCoding } from "@ycoding-ai/client"
+import { frontendClient } from "../../../services/client"
 import { Service } from "@ycoding-ai/client/effect/service"
 import { Commands } from "../../commands"
 import { Runtime } from "../../../framework/runtime"
@@ -12,7 +12,7 @@ export default Runtime.handler(
     const options = yield* ServiceConfig.options()
     const found = yield* Service.discover(options)
     const endpoint = found ?? (yield* Service.ensure(options))
-    const client = YCoding.make({ baseUrl: endpoint.url, headers: Service.headers(endpoint) })
+    const client = yield* frontendClient(endpoint)
     const response = yield* Effect.promise(() => client.plugin.list({ location: { directory: process.cwd() } }))
     const plugins = response.data.toSorted((a, b) => a.id.localeCompare(b.id))
     if (plugins.length === 0) {

@@ -1,6 +1,7 @@
 import { Cause, Effect, Exit, Option } from "effect"
 import { Service } from "@ycoding-ai/client/effect/service"
-import { YCoding, type YCodingClient } from "@ycoding-ai/client/promise"
+import type { YCodingClient } from "@ycoding-ai/client/promise"
+import { frontendClient } from "../../../services/client"
 import { AppProcess } from "@ycoding-ai/core/process"
 import { Commands } from "../../commands"
 import { Runtime } from "../../../framework/runtime"
@@ -36,7 +37,7 @@ const login = Effect.fn("cli.console.login.run")(function* (timeline: TimelineHo
   yield* request(() => timeline.pending("Connecting to YCoding..."))
 
   const endpoint = yield* Service.ensure(yield* ServiceConfig.options())
-  const client = YCoding.make({ baseUrl: endpoint.url, headers: Service.headers(endpoint) })
+  const client = yield* frontendClient(endpoint)
   const found = yield* request((signal) => client.integration.get({ integrationID, location }, { signal }))
   const integration = yield* required(found.data, "OpenCode Console integration is unavailable")
   const method = yield* required(

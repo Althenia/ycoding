@@ -1,10 +1,10 @@
 import { createHash, randomUUID } from "node:crypto"
 import { access, chmod, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { constants } from "node:fs"
-import os from "node:os"
 import path from "node:path"
 import { InstallationChannel, InstallationVersion } from "./version"
 import { platformBinary } from "./binary"
+import { FrontendPaths } from "./paths"
 
 declare const YCODING_RUNTIME_PAYLOAD: string
 
@@ -41,12 +41,7 @@ export async function extractRuntime(payload: Uint8Array, bin: string, version: 
 
 export async function runtimeExecutable() {
   if (typeof YCODING_RUNTIME_PAYLOAD === "string") {
-    const namespace = InstallationChannel === "beta" ? "ycoding-beta" : "ycoding"
-    return extractRuntime(
-      Buffer.from(YCODING_RUNTIME_PAYLOAD, "base64"),
-      path.join(process.env.XDG_CACHE_HOME ?? path.join(os.homedir(), ".cache"), namespace, "bin"),
-      InstallationVersion,
-    )
+    return extractRuntime(Buffer.from(YCODING_RUNTIME_PAYLOAD, "base64"), FrontendPaths.Path.bin, InstallationVersion)
   }
   const executable =
     process.env.YCODING_RUNTIME_EXECUTABLE ??

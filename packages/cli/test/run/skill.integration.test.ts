@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
-import { YCoding } from "@ycoding-ai/client/promise"
+import { YCoding } from "@ycoding-ai/client/v5"
 import { runNonInteractivePrompt } from "../../src/run/noninteractive"
-import { auth, createSession, startServer } from "../remote-harness"
+import { createSession, startServer } from "../remote-harness"
 
 async function skillServer(deny = false) {
   const scratch = path.resolve(import.meta.dir, "../../../../.cache/tmp")
@@ -39,7 +39,7 @@ async function skillServer(deny = false) {
     providerID: server.provider.providerID,
     id: server.provider.modelID,
   })
-  const client = YCoding.make({ baseUrl: server.base, headers: { authorization: auth } })
+  const client = YCoding.make({ endpoint: server.endpoint })
   return {
     server,
     provider: server.provider,
@@ -48,6 +48,7 @@ async function skillServer(deny = false) {
     sessionID,
     skillPath,
     close: async () => {
+      client.transport.close()
       await server.close()
       await rm(directory, { recursive: true, force: true })
     },
@@ -120,11 +121,12 @@ test("a direct skill request cannot leak selected-agent denied instructions into
       resume: false,
     })
     await fixture.client.session.switchAgent({ sessionID: fixture.sessionID, agent: "build" })
-    const response = await fixture.server.request(`/api/session/${fixture.sessionID}/skill`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ skill: "cli-explicit-audit", resume: false }),
-    })
+    const response = await fixture.client.session
+      .skill({ sessionID: fixture.sessionID, skill: "cli-explicit-audit", resume: false })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      )
     await runNonInteractivePrompt({
       client: fixture.client,
       sessionID: fixture.sessionID,
@@ -143,8 +145,7 @@ test("a direct skill request cannot leak selected-agent denied instructions into
         "Inspect the CLI skill boundary before making a model decision.",
       ),
     ).toBe(false)
-    expect(response.status).toBe(404)
-    expect(await response.json()).toMatchObject({ _tag: "SkillNotFoundError", skill: "cli-explicit-audit" })
+    expect(response).toMatchObject({ _tag: "SkillNotFoundError", skill: "cli-explicit-audit" })
     expect(
       (await fixture.client.session.snapshot({ sessionID: fixture.sessionID })).messages.filter(
         (message) => message.type === "skill",

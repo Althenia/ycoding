@@ -1,96 +1,44 @@
-import { Effect, FileSystem, Option } from "effect"
-import { Global } from "@ycoding-ai/core/global"
-import { RemoteAgent } from "../../../remote-bridge"
-import { RemoteConfig } from "../../../remote-config"
-import { RemoteCredentials } from "../../../remote-credentials"
+import { Effect, Option } from "effect"
 import { Runtime } from "../../../framework/runtime"
 import { RemoteCommand } from "../../remote"
-import { line, requireIdentity } from "./shared"
-import { createRemoteConnector } from "./connector"
-import { RemoteLocal } from "../../../remote-local"
-import type { Endpoint } from "@ycoding-ai/client/effect/service"
-import { Service } from "@ycoding-ai/client/effect/service"
-import { YCoding } from "@ycoding-ai/client/promise"
-import { ServerConnection } from "../../../services/server-connection"
-import { RemoteSetupError, type RemoteDiagnostic } from "../../../remote-error"
-
-export function privateLocalServer(endpoint: Endpoint) {
-  RemoteLocal.assertPrivateEndpoint(endpoint)
-  return RemoteLocal.createLocalServer(endpoint)
-}
-
-export const makeRemoteConnector = Effect.fn("cli.remote.connector")(function* (input: {
-  endpoint: Endpoint
-  onDiagnostic?: RemoteDiagnostic
-}) {
-  const identity = yield* requireIdentity()
-  const relayURL = yield* Effect.try({
-    try: () => RemoteConfig.assertEnrolledRelay({
-      requested: RemoteConfig.normalizeRelayURL(process.env[RemoteConfig.envVar] ?? identity.relayURL),
-      enrolled: RemoteConfig.normalizeRelayURL(identity.relayURL),
-    }),
-    catch: (error) => new RemoteSetupError(error instanceof Error ? error.message : "Invalid enrolled relay origin"),
-  })
-  const local = yield* Effect.try({
-    try: () => privateLocalServer(input.endpoint),
-    catch: (error) => new RemoteSetupError(error instanceof Error ? error.message : "Invalid local remote backend"),
-  })
-  const services = yield* Effect.context<FileSystem.FileSystem | Global.Service>()
-  const run = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem | Global.Service>) =>
-    Effect.runPromise(effect.pipe(Effect.provide(services)))
-  const global = yield* Global.Service
-  const notice = `Connecting ${identity.name} to ${relayURL}; all backend Sessions are available to its owner.`
-  return createRemoteConnector({
-    directory: global.data,
-    notice,
-    onDiagnostic: input.onDiagnostic,
-    makeBridge: (hooks) => new RemoteAgent({
-      relayURL,
-      local,
-      credentials: (signal) => run(Effect.gen(function* () {
-        const current = yield* RemoteCredentials.read()
-        if (current === undefined) return yield* Effect.fail(new RemoteSetupError("The device identity disappeared; enroll this device again"))
-        return yield* RemoteCredentials.credentials(current, { signal })
-      })),
-      onDiagnostic: hooks.onDiagnostic,
-      onTerminal: hooks.onTerminal,
-    }),
-  })
-})
+import { line, relayOrigin, remoteClient } from "./shared"
 
 export default Runtime.handler(
   RemoteCommand.commands.connect,
-  Effect.fn("cli.remote.connect")(function* (input) {
-    const identity = yield* requireIdentity()
-    yield* Effect.try(() => RemoteConfig.assertEnrolledRelay({
-      requested: Option.getOrUndefined(input.relay) ?? process.env[RemoteConfig.envVar] ?? identity.relayURL,
-      enrolled: identity.relayURL,
-    }))
-    const server = yield* ServerConnection.resolve({
-      server: Option.getOrUndefined(input.server),
-      standalone: input.standalone,
-    })
-    yield* Effect.try(() => RemoteLocal.assertPrivateEndpoint(server.endpoint))
-    const client = YCoding.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) })
-    line(`Connecting ${identity.name} to ${identity.relayURL}; all backend Sessions are available to its owner.`)
+  Effect.fnUntraced(function* (input) {
+    const client = yield* remoteClient({ server: Option.getOrUndefined(input.server), standalone: input.standalone })
+    const status = yield* Effect.tryPromise(() => client.remote.get())
+    if (!status.device)
+      return yield* Effect.fail(
+        new Error("This machine is not enrolled; run `ycoding remote enroll <enrollmentID>` first"),
+      )
+    const requested = Option.getOrUndefined(input.relay) ?? process.env.YCODING_REMOTE_URL
+    if (requested && (yield* Effect.try(() => relayOrigin(requested))) !== status.device.relayOrigin)
+      return yield* Effect.fail(
+        new Error("This device is enrolled at another relay; enroll a device for the requested relay instead"),
+      )
+    line(
+      `Connecting ${status.device.name} to ${status.device.relayOrigin}; all existing and future backend Sessions are available to its owner.`,
+    )
     yield* Effect.tryPromise(() => client.remote.set({ enabled: true }))
-    const awaitConnection = Effect.gen(function* () {
+    yield* Effect.gen(function* () {
       while (true) {
-        const status = yield* Effect.tryPromise(() => client.remote.get())
-        if (status.state === "error") yield* Effect.fail(new Error(status.message ?? "Remote connection failed"))
-        if (status.state === "on") break
+        const next = yield* Effect.tryPromise(() => client.remote.get())
+        if (next.state === "error") return yield* Effect.fail(new Error(next.message ?? "Remote connection failed"))
+        if (next.state === "on") return
+        if (next.state === "off")
+          return yield* Effect.fail(new Error("Remote connection was disabled before connecting"))
         yield* Effect.sleep("250 millis")
       }
-    })
-    yield* awaitConnection
+    }).pipe(Effect.timeout("30 seconds"))
     line("Remote connection on.")
     if (!input.standalone) return
     line("Press Ctrl-C to stop the private server.")
     while (true) {
       yield* Effect.sleep("1 second")
-      const status = yield* Effect.tryPromise(() => client.remote.get())
-      if (status.state === "error") yield* Effect.fail(new Error(status.message ?? "Remote connection failed"))
-      if (status.state === "off") break
+      const next = yield* Effect.tryPromise(() => client.remote.get())
+      if (next.state === "error") return yield* Effect.fail(new Error(next.message ?? "Remote connection failed"))
+      if (next.state === "off") return
     }
   }),
 )

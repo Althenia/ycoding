@@ -1,4 +1,5 @@
-import { ClientError, type YCodingClient } from "@ycoding-ai/client/promise"
+import type { YCodingClient } from "@ycoding-ai/client/promise"
+import { V5ClientError } from "@ycoding-ai/client/v5"
 
 // Location plugins initialize asynchronously, so explicit model selection must
 // wait for that exact model before prompt admission. The execution path owns
@@ -14,13 +15,11 @@ export async function waitForCatalogReady(input: {
   const deadline = Date.now() + (input.timeoutMs ?? 5_000)
   while (Date.now() < deadline && !input.signal?.aborted) {
     const models = await input.sdk.model
-      .list(
-        { location: { directory: input.directory, workspace: input.workspace } },
-        { signal: input.signal },
-      )
+      .list({ location: { directory: input.directory, workspace: input.workspace } }, { signal: input.signal })
       .then((result) => result.data)
       .catch((error) => {
-        if (input.signal && error instanceof ClientError && error.reason === "Transport") throw error
+        if (input.signal && error instanceof V5ClientError && ["unavailable", "unsent"].includes(error.status))
+          throw error
         return undefined
       })
     if (models?.some((model) => model.providerID === input.model.providerID && model.id === input.model.modelID)) return

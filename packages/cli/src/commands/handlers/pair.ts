@@ -1,7 +1,7 @@
 import { EOL } from "os"
 import { Effect } from "effect"
 import { Service } from "@ycoding-ai/client/effect/service"
-import { YCoding } from "@ycoding-ai/client/promise"
+import { frontendClient } from "../../services/client"
 import { renderUnicodeCompact } from "uqr"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
@@ -12,9 +12,8 @@ export default Runtime.handler(
   Effect.fn("cli.pair")(function* () {
     const endpoint = yield* Service.ensure(yield* ServiceConfig.options())
     const password = yield* ServiceConfig.password()
-    const server = yield* Effect.tryPromise(() =>
-      YCoding.make({ baseUrl: endpoint.url, headers: Service.headers(endpoint) }).server.get(),
-    )
+    const client = yield* frontendClient(endpoint)
+    const server = yield* Effect.tryPromise(() => client.server.get())
     const info = { urls: server.urls, username: "ycoding", password }
     process.stdout.write(
       [
@@ -36,8 +35,6 @@ export default Runtime.handler(
 
     const hostname = new URL(endpoint.url).hostname
     if (!["localhost", "127.0.0.1", "[::1]"].includes(hostname)) return
-    process.stderr.write(
-      `  Run \`ycoding service set hostname 0.0.0.0\` to access the service remotely.${EOL}${EOL}`,
-    )
+    process.stderr.write(`  Run \`ycoding service set hostname 0.0.0.0\` to access the service remotely.${EOL}${EOL}`)
   }),
 )

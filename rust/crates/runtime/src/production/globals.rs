@@ -3,11 +3,65 @@ use crate::dispatch::Failure;
 use std::sync::{Arc, Mutex, PoisonError};
 use ycoding_core::{
     event_feed::Feed,
-    platform::{browser, git, repository_cache, ripgrep_binary},
+    platform::{browser, computer, git, repository_cache, ripgrep_binary},
     resources::{auth, catalog, credential, discovery, model, project_artifact},
     session::store::Service,
     ycoding_store::Client,
 };
+
+#[cfg(test)]
+mod frontend_helper_tests {
+    use super::{ComputerClient, helper_application};
+    use std::path::Path;
+    use ycoding_core::platform::computer::{
+        service::Invoke,
+        types::{Code, Outcome, Owner, Request},
+    };
+
+    #[test]
+    fn frontend_helper_uses_installed_directory_not_runtime_extraction_directory() {
+        let root = std::env::temp_dir().join("ycoding-helper-path");
+        let frontend = root.join("installed").join("ycoding");
+        let runtime = root.join("cache/bin/runtime/version/digest/ycoding-runtime");
+        let application = helper_application(Some(frontend.to_str().unwrap())).unwrap();
+        assert_eq!(
+            application,
+            frontend
+                .parent()
+                .unwrap()
+                .join(ycoding_core::platform::computer::macos::HELPER_APPLICATION)
+        );
+        assert_ne!(
+            application,
+            runtime
+                .parent()
+                .unwrap()
+                .join(ycoding_core::platform::computer::macos::HELPER_APPLICATION)
+        );
+        assert!(application.starts_with(Path::new(&root.join("installed"))));
+    }
+
+    #[tokio::test]
+    async fn missing_frontend_flag_reports_helper_unavailable_without_a_launch() {
+        let error = helper_application(None).unwrap_err();
+        let client = ComputerClient::Unavailable(error);
+        let (_, signal) = tokio::sync::watch::channel(false);
+        let result = client
+            .invoke(
+                Request::list(Owner {
+                    session_id: "ses_fixture".into(),
+                    call_id: "call_fixture".into(),
+                }),
+                signal,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(result.code, Code::HelperUnavailable);
+        assert_eq!(result.outcome, Some(Outcome::NotStarted));
+        assert!(result.message.contains("--frontend-executable"));
+        client.shutdown().await.unwrap();
+    }
+}
 
 pub(super) struct Globals {
     pub composition: Composition,
@@ -30,7 +84,7 @@ pub(super) struct Globals {
     pub meetings: Meetings,
     pub watcher: Arc<ycoding_core::platform::filesystem::watcher::Service>,
     pub computer: Arc<ycoding_core::platform::computer::service::Coordinator>,
-    computer_client: Arc<ycoding_core::platform::computer::bridged::Client>,
+    computer_client: Arc<ComputerClient>,
     controls: tokio::sync::Mutex<Option<super::controls::Owner>>,
     worker: Mutex<Option<catalog::models_dev::RefreshWorker>>,
 }
@@ -152,30 +206,32 @@ impl Globals {
             "windows" => "win32",
             other => other,
         };
-        // Like the TypeScript computer service, the native helper app sits beside the executable.
-        let application = std::env::current_exe()
-            .ok()
-            .and_then(|executable| {
-                executable.parent().map(|directory| {
-                    directory.join(ycoding_core::platform::computer::macos::HELPER_APPLICATION)
-                })
-            })
-            .ok_or_else(|| unavailable("computer helper location"))?;
-        let computer_client = Arc::new(ycoding_core::platform::computer::bridged::Client {
-            native: Arc::new(ycoding_core::platform::computer::macos::NativeClient::new(
-                platform,
-                application,
-                Arc::new(ycoding_core::platform::computer::macos::LaunchServices),
-                std::time::Duration::from_secs(30),
-            )),
-            electron: Arc::new(
-                ycoding_core::platform::computer::electron::Bridge::new(Arc::new(
-                    ycoding_core::platform::computer::electron::NativeRuntime,
-                ))
-                .map_err(|_| unavailable("computer Electron bridge"))?,
-            ),
-            platform: platform.into(),
-        });
+        let computer_client = Arc::new(
+            match helper_application(
+                production
+                    .configuration
+                    .env
+                    .get(crate::launch::FRONTEND_EXECUTABLE_KEY)
+                    .map(String::as_str),
+            ) {
+                Ok(application) => ComputerClient::Ready(Arc::new(computer::bridged::Client {
+                    native: Arc::new(ycoding_core::platform::computer::macos::NativeClient::new(
+                        platform,
+                        application,
+                        Arc::new(ycoding_core::platform::computer::macos::LaunchServices),
+                        std::time::Duration::from_secs(30),
+                    )),
+                    electron: Arc::new(
+                        ycoding_core::platform::computer::electron::Bridge::new(Arc::new(
+                            ycoding_core::platform::computer::electron::NativeRuntime,
+                        ))
+                        .map_err(|_| unavailable("computer Electron bridge"))?,
+                    ),
+                    platform: platform.into(),
+                })),
+                Err(error) => ComputerClient::Unavailable(error),
+            },
+        );
         let computer = ycoding_core::platform::computer::service::Coordinator::new(
             computer_client.clone(),
             platform,
@@ -330,5 +386,42 @@ impl browser::isolated::Executor for UnsupportedIsolated {
                 phase: browser::isolated::Phase::Predispatch,
             })
         })
+    }
+}
+
+fn helper_application(
+    frontend: Option<&str>,
+) -> Result<std::path::PathBuf, computer::types::NativeError> {
+    frontend.and_then(|executable| std::path::Path::new(executable).parent()).map(|directory| directory.join(computer::macos::HELPER_APPLICATION)).ok_or_else(|| computer::types::NativeError::new(
+        computer::types::Code::HelperUnavailable,
+        "Computer use requires --frontend-executable with the installed YCoding frontend path",
+        computer::types::Outcome::NotStarted,
+    ))
+}
+
+enum ComputerClient {
+    Ready(Arc<computer::bridged::Client>),
+    Unavailable(computer::types::NativeError),
+}
+
+impl computer::service::Invoke for ComputerClient {
+    fn invoke<'a>(
+        &'a self,
+        request: computer::types::Request,
+        signal: tokio::sync::watch::Receiver<bool>,
+    ) -> computer::Future<'a, Result<computer::types::Success, computer::types::NativeError>> {
+        match self {
+            Self::Ready(client) => client.invoke(request, signal),
+            Self::Unavailable(error) => Box::pin(async { Err(error.clone()) }),
+        }
+    }
+}
+
+impl ComputerClient {
+    async fn shutdown(&self) -> Result<(), computer::types::NativeError> {
+        match self {
+            Self::Ready(client) => client.shutdown().await,
+            Self::Unavailable(_) => Ok(()),
+        }
     }
 }

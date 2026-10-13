@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { BrowserExtension } from "@ycoding-ai/core/browser/extension"
+import { BrowserExtension } from "../src/assets"
 import { cp, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -19,9 +19,12 @@ async function packaged<T>(use: (bin: string, extension: string) => Promise<T>) 
 async function archive(bin: string, extra: string[] = []) {
   await writeFile(path.join(bin, "ycoding"), "executable\n")
   for (const file of extra) await writeFile(path.join(bin, "ycoding-chrome-extension", file), `${file}\n`)
-  const tar = Bun.spawnSync(["tar", "-C", bin, "-czf", path.join(bin, "release.tar.gz"), "ycoding", "ycoding-chrome-extension"], {
-    env: { ...process.env, COPYFILE_DISABLE: "1" },
-  })
+  const tar = Bun.spawnSync(
+    ["tar", "-C", bin, "-czf", path.join(bin, "release.tar.gz"), "ycoding", "ycoding-chrome-extension"],
+    {
+      env: { ...process.env, COPYFILE_DISABLE: "1" },
+    },
+  )
   expect(tar.exitCode, tar.stderr.toString()).toBe(0)
   return new Uint8Array(await readFile(path.join(bin, "release.tar.gz")))
 }
@@ -57,7 +60,9 @@ test("the released v0.7.15 updater rejects an archive with an additional extensi
 test("bundles the indicator module into service-worker.js and keeps protocol.js external", async () => {
   await packaged(async (_, extension) => {
     const worker = await readFile(path.join(extension, "service-worker.js"), "utf8")
-    expect([...worker.matchAll(/(?:from|import\()\s*["']([^"']+)["']/g)].map((match) => match[1])).toEqual(["./protocol.js"])
+    expect([...worker.matchAll(/(?:from|import\()\s*["']([^"']+)["']/g)].map((match) => match[1])).toEqual([
+      "./protocol.js",
+    ])
     expect(worker).toContain('"\u24CE "')
     expect(worker).toContain("M40 40h40l48 64 48-64h40l-64 96v80h-48v-80z")
     expect(worker).toContain("markerScript")
@@ -67,8 +72,12 @@ test("bundles the indicator module into service-worker.js and keeps protocol.js 
 test("bundles the Geist Sans data into service-worker.js once, without shipping fonts.js or Geist Mono there", async () => {
   await packaged(async (bin, extension) => {
     const worker = await readFile(path.join(extension, "service-worker.js"), "utf8")
-    const sans = Buffer.from(await readFile(path.join(chromeExtensionSource, "../../assets/brand/fonts/Geist.woff2"))).toString("base64")
-    const mono = Buffer.from(await readFile(path.join(chromeExtensionSource, "../../assets/brand/fonts/GeistMono.woff2"))).toString("base64")
+    const sans = Buffer.from(
+      await readFile(path.join(chromeExtensionSource, "../../assets/brand/fonts/Geist.woff2")),
+    ).toString("base64")
+    const mono = Buffer.from(
+      await readFile(path.join(chromeExtensionSource, "../../assets/brand/fonts/GeistMono.woff2")),
+    ).toString("base64")
     expect(worker.split(sans).length - 1).toBe(1)
     expect(worker).not.toContain(mono)
     expect(await Bun.file(path.join(extension, "fonts.js")).exists()).toBe(false)
@@ -76,7 +85,9 @@ test("bundles the Geist Sans data into service-worker.js once, without shipping 
     expect(css).toBe(await readFile(path.join(chromeExtensionSource, "popup.css"), "utf8"))
     expect(css).toContain(sans)
     expect(css).toContain(mono)
-    const license = (await readFile(path.join(chromeExtensionSource, "../../assets/brand/fonts/OFL.txt"), "utf8")).trim()
+    const license = (
+      await readFile(path.join(chromeExtensionSource, "../../assets/brand/fonts/OFL.txt"), "utf8")
+    ).trim()
     expect(worker).toContain(license)
     expect(css).toContain(license)
     await releasedUpdaterAcceptsLinuxArchive(await archive(bin))

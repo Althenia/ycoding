@@ -1,6 +1,6 @@
 export * as Config from "./config"
 
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "../paths"
 import { Context, Effect, FileSystem, Layer, Option, Schema, Semaphore } from "effect"
 import { produce, type Draft } from "immer"
 import { applyEdits, modify, parse, type ParseError } from "jsonc-parser"
@@ -25,7 +25,7 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
-    const global = yield* Global.Service
+    const global = yield* FrontendPaths.Service
     const file = path.join(global.config, "cli.json")
     const lock = yield* Semaphore.make(1)
 

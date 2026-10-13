@@ -1,6 +1,6 @@
 import { copyFile, mkdir, rm } from "node:fs/promises"
 import path from "node:path"
-import { BrowserExtension } from "@ycoding-ai/core/browser/extension"
+import { BrowserExtension } from "../src/assets"
 
 export const chromeExtensionSource = path.resolve(import.meta.dir, "../../../extensions/chrome")
 

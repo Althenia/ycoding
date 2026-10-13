@@ -24,7 +24,12 @@ export class SessionTargetMutationError extends Error {
   override readonly name = "SessionTargetMutationError"
 
   constructor(cause: unknown) {
-    super(cause instanceof Error ? cause.message : "Session target mutation failed", { cause })
+    super(
+      typeof cause === "object" && cause !== null && "message" in cause && typeof cause.message === "string"
+        ? cause.message
+        : "Session target mutation failed",
+      { cause },
+    )
   }
 }
 

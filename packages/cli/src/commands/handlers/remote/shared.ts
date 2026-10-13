@@ -1,31 +1,26 @@
 import { EOL } from "node:os"
 import { Effect } from "effect"
 import { ServerConnection } from "../../../services/server-connection"
-import { RemoteCredentials } from "../../../remote-credentials"
-import { RemoteLocal } from "../../../remote-local"
-import { RemoteSetupError } from "../../../remote-error"
+import { frontendClient } from "../../../services/client"
 
-export const requireIdentity = Effect.fn("cli.remote.identity")(function* () {
-  const identity = yield* RemoteCredentials.read()
-  if (identity === undefined)
-    return yield* Effect.fail(
-      new RemoteSetupError("This machine is not enrolled; run `ycoding remote enroll <enrollmentID>` first"),
-    )
-  return identity
+export const remoteClient = Effect.fnUntraced(function* (input: { server?: string; standalone?: boolean }) {
+  const server = yield* ServerConnection.resolve(input)
+  const url = new URL(server.endpoint.url)
+  if (!["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) || url.username || url.password)
+    return yield* Effect.fail(new Error("Remote controls require a private loopback backend"))
+  return yield* frontendClient(server.endpoint)
 })
 
-export const resolveLocalServer = (input: { readonly server?: string; readonly standalone?: boolean }) =>
-  Effect.gen(function* () {
-    const resolved = yield* ServerConnection.resolve({ server: input.server, standalone: input.standalone })
-    yield* Effect.try(() => RemoteLocal.assertPrivateEndpoint(resolved.endpoint))
-    return RemoteLocal.createLocalServer(resolved.endpoint)
-  })
-
-export function credentialState(identity: RemoteCredentials.Identity, now = Date.now()) {
-  if (identity.refreshToken === undefined || identity.refreshExpiresAt === undefined) return "not yet authenticated"
-  if (identity.refreshExpiresAt <= now) return "expired; enroll again"
-  const days = Math.floor((identity.refreshExpiresAt - now) / 86_400_000)
-  return days >= 1 ? `valid for ${days} more day(s)` : "valid for less than a day"
+export function relayOrigin(value: string) {
+  const url = new URL(value)
+  if (url.username || url.password || url.search || url.hash || url.pathname !== "/")
+    throw new Error("The relay URL must be an origin without a path, credentials, query or fragment")
+  if (
+    url.protocol !== "https:" &&
+    !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))
+  )
+    throw new Error("The relay URL must be HTTPS; only a loopback relay may use HTTP")
+  return url.origin
 }
 
 export function line(value: string) {

@@ -60,8 +60,10 @@ try {
     YCODING_CONFIG_DIR: undefined,
     YCODING_CONFIG: undefined,
     YCODING_REMOTE_URL: undefined,
+    YCODING_DISABLE_MODELS_FETCH: "1",
+    YCODING_CONFIG_PROJECT_DISABLE: "1",
   }
-  const result = Bun.spawnSync([binary, "remote", "status"], {
+  const result = Bun.spawnSync([binary, "remote", "status", "--standalone"], {
     stdout: "pipe",
     stderr: "pipe",
     env,
@@ -78,7 +80,7 @@ try {
     stderr: "pipe",
     env: { ...env, YCODING_PASSWORD: "tui-artifact-smoke" },
   })
-  server.stdin.end()
+  await server.stdin.end()
   const stdout = new Response(server.stdout).text()
   const stderr = new Response(server.stderr).text()
   const timeout = setTimeout(() => server.kill(), 5_000)

@@ -1,86 +1,54 @@
 import { EOL } from "node:os"
 import { Effect, Option } from "effect"
+import { operations, PeerRole, Streaming } from "@ycoding-ai/protocol/v5"
+import type { V5Client } from "@ycoding-ai/client/v5"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
-import { Service, type Endpoint } from "@ycoding-ai/client/effect/service"
+import { frontendClient } from "../../services/client"
 import { ServerConnection } from "../../services/server-connection"
 
-const methods = new Set(["delete", "get", "head", "options", "patch", "post", "put"])
-
-type Operation = {
-  operationId?: string
+export function resolveOperation(name: string) {
+  const operation = operations.find((item) => item.diagnosticName === name)
+  if (!operation || !operation.roles.includes(PeerRole.LOCAL_CLIENT))
+    throw new Error(`Local operation not found: ${name}`)
+  return operation
 }
 
-type OpenApi = {
-  paths?: Record<string, Record<string, Operation>>
+export function invokeOperation(client: V5Client, name: string, data: Record<string, unknown>) {
+  const operation = resolveOperation(name)
+  const binding = { method: operation.diagnosticName, operationID: operation.operationId }
+  if (operation.streaming === Streaming.EVENTS) return client.transport.stream<unknown>(binding, data, data)
+  return client.transport.call<unknown>(binding, data, data)
 }
 
 export default Runtime.handler(
   Commands.commands.api,
-  Effect.fn("cli.api")(function* (input) {
+  Effect.fnUntraced(function* (input) {
+    resolveOperation(input.request)
+    const data = yield* Effect.try(() => {
+      const value: unknown = JSON.parse(Option.getOrElse(input.data, () => "{}"))
+      if (typeof value !== "object" || value === null || Array.isArray(value))
+        throw new Error("--data must be a JSON request object")
+      return value as Record<string, unknown>
+    })
     const server = yield* ServerConnection.resolve({
       server: Option.getOrUndefined(input.server),
       standalone: input.standalone,
       mismatch: "ignore",
     })
-    const endpoint = server.endpoint
-    const params = Option.getOrElse(input.param, () => ({}))
-    const request = yield* resolveRequest(endpoint, input.request, params)
-    const headers = new Headers(Service.headers(endpoint))
-    for (const header of input.header) {
-      const index = header.indexOf(":")
-      if (index < 1) return yield* Effect.fail(new Error(`Invalid header, expected name:value: ${header}`))
-      headers.set(header.slice(0, index).trim(), header.slice(index + 1).trim())
+    const client = yield* frontendClient(server.endpoint)
+    const output = invokeOperation(client, input.request, data)
+    if ("then" in output) {
+      const result = yield* Effect.tryPromise(() => output)
+      if (result instanceof Uint8Array) {
+        process.stdout.write(result)
+        return
+      }
+      if (result !== undefined) process.stdout.write(JSON.stringify(result) + EOL)
+      return
     }
-    const body = Option.getOrUndefined(input.data)
-    if (body !== undefined && !headers.has("content-type")) headers.set("content-type", "application/json")
-
-    const response = yield* Effect.tryPromise(() =>
-      fetch(new URL(request.path, endpoint.url), {
-        method: request.method,
-        headers,
-        body,
-      }),
-    )
-    const output = yield* Effect.promise(() => response.text())
-    if (output) process.stdout.write(output + (output.endsWith(EOL) ? "" : EOL))
+    yield* Effect.tryPromise(async () => {
+      for await (const event of output) process.stdout.write(JSON.stringify(event) + EOL)
+    })
   }),
 )
-
-export function resolveOperation(spec: OpenApi, operationID: string, params: Record<string, string>) {
-  for (const [path, operations] of Object.entries(spec.paths ?? {})) {
-    for (const [method, operation] of Object.entries(operations)) {
-      if (!methods.has(method) || operation.operationId !== operationID) continue
-      return { method: method.toUpperCase(), path: interpolate(path, params) }
-    }
-  }
-  throw new Error(`Operation not found: ${operationID}`)
-}
-
-export function rawRequest(input: readonly string[]) {
-  if (input.length !== 2 || !methods.has(input[0].toLowerCase()) || !input[1].startsWith("/")) return
-  return { method: input[0].toUpperCase(), path: input[1] }
-}
-
-function resolveRequest(endpoint: Endpoint, input: readonly string[], params: Record<string, string>) {
-  const raw = rawRequest(input)
-  if (raw) return Effect.succeed(raw)
-  if (input.length !== 1) return Effect.fail(new Error("Expected an operation name or an HTTP method and path"))
-  return Effect.tryPromise(async () => {
-    const response = await fetch(new URL("/openapi.json", endpoint.url), { headers: Service.headers(endpoint) })
-    if (!response.ok) throw new Error(`Failed to load OpenAPI document: HTTP ${response.status}`)
-    return resolveOperation((await response.json()) as OpenApi, input[0], params)
-  })
-}
-
-function interpolate(path: string, params: Record<string, string>) {
-  const used = new Set<string>()
-  const pathname = path.replaceAll(/\{([^}]+)\}/g, (_, name: string) => {
-    const value = params[name]
-    if (value === undefined) throw new Error(`Missing path parameter: ${name}`)
-    used.add(name)
-    return encodeURIComponent(value)
-  })
-  const query = new URLSearchParams(Object.entries(params).filter(([name]) => !used.has(name))).toString()
-  return query ? `${pathname}?${query}` : pathname
-}

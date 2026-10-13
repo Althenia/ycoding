@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { BrowserExtension } from "@ycoding-ai/core/browser/extension"
+import { BrowserExtension } from "../src/assets"
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -19,7 +19,13 @@ async function build(root: string, label: string, platform: NodeJS.Platform) {
       `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>helper</string><key>CFBundleIdentifier</key><string>test.ycoding.helper</string></dict></plist>`,
     )
     await Bun.write(path.join(executable, "helper"), Bun.file("/usr/bin/true"))
-    const signed = Bun.spawnSync(["/usr/bin/codesign", "--force", "--sign", "-", path.join(source, COMPUTER_HELPER_APPLICATION)])
+    const signed = Bun.spawnSync([
+      "/usr/bin/codesign",
+      "--force",
+      "--sign",
+      "-",
+      path.join(source, COMPUTER_HELPER_APPLICATION),
+    ])
     if (signed.exitCode !== 0) throw new Error(signed.stderr.toString())
   }
   return source
@@ -67,36 +73,39 @@ test("leaves the previous install untouched when the build is incomplete", async
   }
 })
 
-test.skipIf(process.platform !== "darwin")("installs the signed computer helper app beside the executable on macOS", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-install-local-"))
-  try {
-    const destination = path.join(root, "bin")
-    await installLocalBuild({ source: await build(root, "mac", "darwin"), destination, platform: "darwin" })
-    expect((await readdir(destination)).sort()).toEqual(
-      ["ycoding", COMPUTER_HELPER_APPLICATION, BrowserExtension.directory].sort(),
-    )
-    const verified = Bun.spawnSync([
-      "/usr/bin/codesign",
-      "--verify",
-      "--deep",
-      "--strict",
-      path.join(destination, COMPUTER_HELPER_APPLICATION),
-    ])
-    expect(verified.exitCode).toBe(0)
+test.skipIf(process.platform !== "darwin")(
+  "installs the signed computer helper app beside the executable on macOS",
+  async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-install-local-"))
+    try {
+      const destination = path.join(root, "bin")
+      await installLocalBuild({ source: await build(root, "mac", "darwin"), destination, platform: "darwin" })
+      expect((await readdir(destination)).sort()).toEqual(
+        ["ycoding", COMPUTER_HELPER_APPLICATION, BrowserExtension.directory].sort(),
+      )
+      const verified = Bun.spawnSync([
+        "/usr/bin/codesign",
+        "--verify",
+        "--deep",
+        "--strict",
+        path.join(destination, COMPUTER_HELPER_APPLICATION),
+      ])
+      expect(verified.exitCode).toBe(0)
 
-    const tampered = await build(root, "tampered", "darwin")
-    await Bun.write(path.join(tampered, COMPUTER_HELPER_APPLICATION, "Contents", "MacOS", "helper"), "altered")
-    await expect(installLocalBuild({ source: tampered, destination, platform: "darwin" })).rejects.toThrow(
-      "signature verification failed",
-    )
-    expect(await readFile(path.join(destination, "ycoding"), "utf8")).toBe("binary-mac")
-    expect((await readdir(destination)).sort()).toEqual(
-      ["ycoding", COMPUTER_HELPER_APPLICATION, BrowserExtension.directory].sort(),
-    )
-  } finally {
-    await rm(root, { recursive: true, force: true })
-  }
-})
+      const tampered = await build(root, "tampered", "darwin")
+      await Bun.write(path.join(tampered, COMPUTER_HELPER_APPLICATION, "Contents", "MacOS", "helper"), "altered")
+      await expect(installLocalBuild({ source: tampered, destination, platform: "darwin" })).rejects.toThrow(
+        "signature verification failed",
+      )
+      expect(await readFile(path.join(destination, "ycoding"), "utf8")).toBe("binary-mac")
+      expect((await readdir(destination)).sort()).toEqual(
+        ["ycoding", COMPUTER_HELPER_APPLICATION, BrowserExtension.directory].sort(),
+      )
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  },
+)
 
 test("describes an ad-hoc signature as a per-build requirement that needs new authorization", () => {
   const notice = signingNotice("Identifier=app.ycoding.computer-use\nSignature=adhoc\nTeamIdentifier=not set\n")
@@ -106,28 +115,35 @@ test("describes an ad-hoc signature as a per-build requirement that needs new au
 })
 
 test("names the signing certificate without promising that existing grants survive", () => {
-  const notice = signingNotice("Identifier=app.ycoding.computer-use\nAuthority=YCoding Code Signing\nTeamIdentifier=not set\n")
+  const notice = signingNotice(
+    "Identifier=app.ycoding.computer-use\nAuthority=YCoding Code Signing\nTeamIdentifier=not set\n",
+  )
   expect(notice).toContain("signed by YCoding Code Signing")
   expect(notice).toContain("macOS decides whether existing YCoding Computer Use grants")
   expect(notice).not.toContain("ad-hoc")
   expect(notice).not.toContain("remove old")
 })
 
-test.skipIf(process.platform !== "darwin")("reports the signature of the installed app rather than the environment", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-install-local-"))
-  try {
-    const destination = path.join(root, "bin")
-    await installLocalBuild({ source: await build(root, "mac", "darwin"), destination, platform: "darwin" })
-    const previous = process.env.YCODING_MACOS_SIGNING_IDENTITY
-    process.env.YCODING_MACOS_SIGNING_IDENTITY = "Identity Absent From The Keychain"
+test.skipIf(process.platform !== "darwin")(
+  "reports the signature of the installed app rather than the environment",
+  async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-install-local-"))
     try {
-      expect(computerHelperSigningNotice(path.join(destination, COMPUTER_HELPER_APPLICATION))).toContain("ad-hoc signed")
+      const destination = path.join(root, "bin")
+      await installLocalBuild({ source: await build(root, "mac", "darwin"), destination, platform: "darwin" })
+      const previous = process.env.YCODING_MACOS_SIGNING_IDENTITY
+      process.env.YCODING_MACOS_SIGNING_IDENTITY = "Identity Absent From The Keychain"
+      try {
+        expect(computerHelperSigningNotice(path.join(destination, COMPUTER_HELPER_APPLICATION))).toContain(
+          "ad-hoc signed",
+        )
+      } finally {
+        if (previous === undefined) delete process.env.YCODING_MACOS_SIGNING_IDENTITY
+        else process.env.YCODING_MACOS_SIGNING_IDENTITY = previous
+      }
+      expect(() => computerHelperSigningNotice(path.join(root, "missing.app"))).toThrow("Failed to read the signature")
     } finally {
-      if (previous === undefined) delete process.env.YCODING_MACOS_SIGNING_IDENTITY
-      else process.env.YCODING_MACOS_SIGNING_IDENTITY = previous
+      await rm(root, { recursive: true, force: true })
     }
-    expect(() => computerHelperSigningNotice(path.join(root, "missing.app"))).toThrow("Failed to read the signature")
-  } finally {
-    await rm(root, { recursive: true, force: true })
-  }
-})
+  },
+)

@@ -1,6 +1,6 @@
 import { Service } from "@ycoding-ai/client/effect/service"
-import { YCoding } from "@ycoding-ai/client/promise"
-import { InstallationLocal, InstallationVersion } from "@ycoding-ai/core/installation/version"
+import { frontendClient } from "../../services/client"
+import { InstallationLocal, InstallationVersion } from "../../version"
 import { Effect, Option, Result } from "effect"
 import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
@@ -40,7 +40,9 @@ export default Runtime.handler(UpdateCommand, (input) =>
       process.stderr.write(`ycoding update failed: ${message(error)}\n`)
       return undefined
     }
-  }).pipe(Effect.flatMap((installed) => (installed === undefined ? Effect.void : restartServer(installed, input.force)))),
+  }).pipe(
+    Effect.flatMap((installed) => (installed === undefined ? Effect.void : restartServer(installed, input.force))),
+  ),
 )
 
 const restartCommand = "`ycoding service restart`"
@@ -53,9 +55,10 @@ function restartServer(installed: string, force: boolean) {
       process.stdout.write("No background server is running; nothing to restart\n")
       return
     }
+    const client = yield* frontendClient(endpoint)
     const outstanding = yield* Effect.tryPromise({
       try: () =>
-        YCoding.make({ baseUrl: endpoint.url, headers: Service.headers(endpoint) }).session.outstanding(undefined, {
+        client.session.outstanding(undefined, {
           signal: AbortSignal.timeout(5_000),
         }),
       catch: (cause) => cause,
@@ -97,5 +100,7 @@ function restartServer(installed: string, force: boolean) {
 }
 
 function message(error: unknown) {
-  return error instanceof Error ? error.message : String(error)
+  return typeof error === "object" && error !== null && "message" in error && typeof error.message === "string"
+    ? error.message
+    : String(error)
 }

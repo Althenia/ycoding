@@ -1,9 +1,5 @@
-import { Global } from "@ycoding-ai/core/global"
-import {
-  InstallationChannel,
-  InstallationLocal,
-  InstallationVersion,
-} from "@ycoding-ai/core/installation/version"
+import { FrontendPaths } from "../paths"
+import { InstallationChannel, InstallationLocal, InstallationVersion } from "../version"
 import { Context, Effect, FileSystem, Layer } from "effect"
 import { parse, type ParseError } from "jsonc-parser"
 import path from "node:path"
@@ -58,16 +54,17 @@ export const layerWith = (options: Options = {}) =>
     Service,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
-      const global = yield* Global.Service
+      const global = yield* FrontendPaths.Service
       const local = options.local ?? InstallationLocal
       const version = options.version ?? InstallationVersion
       const disabled = ["1", "true"].includes(process.env.YCODING_DISABLE_AUTOUPDATE?.toLowerCase() ?? "")
 
       const readPolicy = Effect.fnUntraced(function* () {
         const values = yield* Effect.forEach(["config.json", "ycoding.json", "ycoding.jsonc"], (name) =>
-          fs
-            .readFileString(path.join(global.config, name))
-            .pipe(Effect.map(decodePolicy), Effect.catch(() => Effect.succeed(undefined))),
+          fs.readFileString(path.join(global.config, name)).pipe(
+            Effect.map(decodePolicy),
+            Effect.catch(() => Effect.succeed(undefined)),
+          ),
         )
         return values.findLast((value) => value !== undefined) ?? true
       })
@@ -79,30 +76,33 @@ export const layerWith = (options: Options = {}) =>
         })
       })
 
-      const check = Effect.fn("cli.updater.check")(function* (notify: (message: string) => Effect.Effect<void>) {
-        const reason = updateCheckSkipReason({ local, disabled, version })
-        if (reason)
-          return yield* Effect.logInfo("update check skipped", {
-            reason,
-            version,
-            channel: InstallationChannel,
-          })
-        const policy = yield* readPolicy()
-        if (policy === false) return yield* Effect.logInfo("update check skipped", { reason: "policy-disabled" })
+      const check = Effect.fn("cli.updater.check")(
+        function* (notify: (message: string) => Effect.Effect<void>) {
+          const reason = updateCheckSkipReason({ local, disabled, version })
+          if (reason)
+            return yield* Effect.logInfo("update check skipped", {
+              reason,
+              version,
+              channel: InstallationChannel,
+            })
+          const policy = yield* readPolicy()
+          if (policy === false) return yield* Effect.logInfo("update check skipped", { reason: "policy-disabled" })
 
-        return yield* Effect.gen(function* () {
-          const latestVersion = yield* latest()
-          yield* Effect.logInfo("update check", {
-            current: version,
-            latest: latestVersion,
+          return yield* Effect.gen(function* () {
+            const latestVersion = yield* latest()
+            yield* Effect.logInfo("update check", {
+              current: version,
+              latest: latestVersion,
+            })
+            const next = action(version, latestVersion, policy)
+            if (next === "none") return yield* Effect.logInfo("update check done", { action: "up-to-date" })
+            const message = `YCoding ${latestVersion} available. Run \`ycoding update\`.`
+            yield* notify(message)
+            return yield* Effect.logInfo("update available", { current: version, latest: latestVersion })
           })
-          const next = action(version, latestVersion, policy)
-          if (next === "none") return yield* Effect.logInfo("update check done", { action: "up-to-date" })
-          const message = `YCoding ${latestVersion} available. Run \`ycoding update\`.`
-          yield* notify(message)
-          return yield* Effect.logInfo("update available", { current: version, latest: latestVersion })
-        })
-      }, Effect.catchCause((cause) => Effect.logWarning("update check failed", { cause })))
+        },
+        Effect.catchCause((cause) => Effect.logWarning("update check failed", { cause })),
+      )
 
       return Service.of({ check })
     }),

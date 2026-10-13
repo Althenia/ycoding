@@ -1,9 +1,21 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { chmod, copyFile, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises"
+import {
+  chmod,
+  copyFile,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { installRelease, latestRelease, releaseTarget, validVersion } from "../src/update/update"
-import { BrowserExtension } from "@ycoding-ai/core/browser/extension"
+import { BrowserExtension } from "../src/assets"
 
 const temporary: string[] = []
 const fixtureVersion = process.env.YCODING_TEST_VERSION ?? "9.9.9"
@@ -57,7 +69,12 @@ describe("release updater", () => {
         { tag_name: "v98.0.0-beta.1", draft: false, prerelease: false },
         { tag_name: "v97.0.0-rc.1", draft: false, prerelease: true },
         { tag_name: "v96.0.0-beta.01", draft: false, prerelease: true },
-        ...(beta ? [{ tag_name: `v${beta}`, draft: false, prerelease: true }, { tag_name: "v0.9.0-beta.2", draft: false, prerelease: true }] : []),
+        ...(beta
+          ? [
+              { tag_name: `v${beta}`, draft: false, prerelease: true },
+              { tag_name: "v0.9.0-beta.2", draft: false, prerelease: true },
+            ]
+          : []),
       ])
     }, "0.11.0-beta.1")
     expect(version).toBe(expected)
@@ -69,7 +86,10 @@ describe("release updater", () => {
     const version = await latestRelease(async (url) => {
       urls.push(url)
       if (url.endsWith("/latest")) return Response.json({ tag_name: "v0.10.6" })
-      if (url.endsWith("page=1")) return Response.json(Array.from({ length: 100 }, () => ({ tag_name: "v0.11.0-beta.2", draft: false, prerelease: true })))
+      if (url.endsWith("page=1"))
+        return Response.json(
+          Array.from({ length: 100 }, () => ({ tag_name: "v0.11.0-beta.2", draft: false, prerelease: true })),
+        )
       return Response.json([{ tag_name: "v0.11.0-beta.10", draft: false, prerelease: true }])
     }, "0.11.0-beta.1")
     expect(version).toBe("0.11.0-beta.10")
@@ -78,22 +98,31 @@ describe("release updater", () => {
 
   test("a stable build never discovers or accepts a beta as latest", async () => {
     const urls: string[] = []
-    expect(await latestRelease(async (url) => {
-      urls.push(url)
-      return Response.json({ tag_name: "v0.10.6" })
-    }, "0.10.5")).toBe("0.10.6")
+    expect(
+      await latestRelease(async (url) => {
+        urls.push(url)
+        return Response.json({ tag_name: "v0.10.6" })
+      }, "0.10.5"),
+    ).toBe("0.10.6")
     expect(urls).toEqual(["https://api.github.com/repos/Althenia/ycoding/releases/latest"])
-    await expect(latestRelease(async () => Response.json({ tag_name: "v0.11.0-beta.1" }), "0.10.6")).rejects.toThrow("invalid version")
+    await expect(latestRelease(async () => Response.json({ tag_name: "v0.11.0-beta.1" }), "0.10.6")).rejects.toThrow(
+      "invalid version",
+    )
   })
 
-  test.each(["http", "shape", "size"])("beta discovery surfaces %s failures instead of silently installing stable", async (failure) => {
-    await expect(latestRelease(async (url) => {
-      if (url.endsWith("/latest")) return Response.json({ tag_name: "v0.10.6" })
-      if (failure === "http") return new Response("", { status: 403 })
-      if (failure === "size") return new Response(" ".repeat(8 * 1024 * 1024 + 1))
-      return Response.json({ message: "invalid list" })
-    }, "0.11.0-beta.1")).rejects.toThrow()
-  })
+  test.each(["http", "shape", "size"])(
+    "beta discovery surfaces %s failures instead of silently installing stable",
+    async (failure) => {
+      await expect(
+        latestRelease(async (url) => {
+          if (url.endsWith("/latest")) return Response.json({ tag_name: "v0.10.6" })
+          if (failure === "http") return new Response("", { status: 403 })
+          if (failure === "size") return new Response(" ".repeat(8 * 1024 * 1024 + 1))
+          return Response.json({ message: "invalid list" })
+        }, "0.11.0-beta.1"),
+      ).rejects.toThrow()
+    },
+  )
 
   test("verifies and installs the complete macOS executable pair", async () => {
     const fixture = await setup()
@@ -155,17 +184,43 @@ describe("release updater", () => {
 
   test("installs the v0.7.1 app bundle beside the existing macOS helper", async () => {
     const fixture = await setup({ version: "0.7.1", app: true })
-    await installRelease({ version: fixture.version, executable: fixture.executable, platform: "darwin", arch: "arm64", fetch: fixtureFetch(fixture), filesystem: { rename, verifyApplication: async () => {} } })
-    expect(await readFile(path.join(fixture.root, "ycoding-computer-helper.app/Contents/MacOS/ycoding-computer-helper"), "utf8")).toBe("app helper\n")
-    expect(await readFile(path.join(fixture.root, "ycoding-computer-helper.app/Contents/Resources/YCoding.icns"), "utf8")).toBe("fixture icon\n")
-    expect(await readFile(path.join(fixture.root, "ycoding-computer-helper.app/Contents/Info.plist"), "utf8")).toContain("<key>CFBundleDisplayName</key><string>YCoding Computer Use</string>")
+    await installRelease({
+      version: fixture.version,
+      executable: fixture.executable,
+      platform: "darwin",
+      arch: "arm64",
+      fetch: fixtureFetch(fixture),
+      filesystem: { rename, verifyApplication: async () => {} },
+    })
+    expect(
+      await readFile(
+        path.join(fixture.root, "ycoding-computer-helper.app/Contents/MacOS/ycoding-computer-helper"),
+        "utf8",
+      ),
+    ).toBe("app helper\n")
+    expect(
+      await readFile(path.join(fixture.root, "ycoding-computer-helper.app/Contents/Resources/YCoding.icns"), "utf8"),
+    ).toBe("fixture icon\n")
+    expect(
+      await readFile(path.join(fixture.root, "ycoding-computer-helper.app/Contents/Info.plist"), "utf8"),
+    ).toContain("<key>CFBundleDisplayName</key><string>YCoding Computer Use</string>")
     expect(await readFile(fixture.helper, "utf8")).toBe("new helper\n")
     expect(await updatePaths(fixture.root)).toEqual([])
   })
 
   test("rejects an app missing its branded icon without replacing the installed pair", async () => {
     const fixture = await setup({ version: "0.7.1", app: true, icon: false })
-    const error = await installRelease({ version: fixture.version, executable: fixture.executable, platform: "darwin", arch: "arm64", fetch: fixtureFetch(fixture), filesystem: { rename, verifyApplication: async () => {} } }).then(() => "", (cause) => String(cause))
+    const error = await installRelease({
+      version: fixture.version,
+      executable: fixture.executable,
+      platform: "darwin",
+      arch: "arm64",
+      fetch: fixtureFetch(fixture),
+      filesystem: { rename, verifyApplication: async () => {} },
+    }).then(
+      () => "",
+      (cause) => String(cause),
+    )
     expect(error).toContain("missing required entries")
     expect(error).toContain("YCoding.icns")
     expect(await readFile(fixture.executable, "utf8")).toBe("old executable\n")
@@ -175,63 +230,172 @@ describe("release updater", () => {
 
   macTest("installs an ad-hoc signed app and verifies the installed signature", async () => {
     const fixture = await setup({ version: "0.7.1", app: true, signedApp: true })
-    await installRelease({ version: fixture.version, executable: fixture.executable, platform: "darwin", arch: "arm64", fetch: fixtureFetch(fixture) })
-    expect(Bun.spawnSync(["/usr/bin/codesign", "--verify", "--deep", "--strict", path.join(fixture.root, "ycoding-computer-helper.app")]).exitCode).toBe(0)
+    await installRelease({
+      version: fixture.version,
+      executable: fixture.executable,
+      platform: "darwin",
+      arch: "arm64",
+      fetch: fixtureFetch(fixture),
+    })
+    expect(
+      Bun.spawnSync([
+        "/usr/bin/codesign",
+        "--verify",
+        "--deep",
+        "--strict",
+        path.join(fixture.root, "ycoding-computer-helper.app"),
+      ]).exitCode,
+    ).toBe(0)
     expect(await updatePaths(fixture.root)).toEqual([])
   })
 
   test("rejects incomplete app bundles and keeps the installed pair", async () => {
     const fixture = await setup({ version: "0.7.1" })
-    const error = await installRelease({ version: fixture.version, executable: fixture.executable, platform: "darwin", arch: "arm64", fetch: fixtureFetch(fixture) }).then(() => "", (cause) => String(cause))
+    const error = await installRelease({
+      version: fixture.version,
+      executable: fixture.executable,
+      platform: "darwin",
+      arch: "arm64",
+      fetch: fixtureFetch(fixture),
+    }).then(
+      () => "",
+      (cause) => String(cause),
+    )
     expect(error).toContain("missing required entries")
     expect(await readFile(fixture.executable, "utf8")).toBe("old executable\n")
     expect(await updatePaths(fixture.root)).toEqual([])
   })
 
   test("skips unknown archive files and directories without writing them", async () => {
-    const fixture = await setup({ version: "0.7.1", app: true, entries: ["ycoding", "ycoding-computer-helper", "ycoding-computer-helper.app", "extra", "nested"] })
-    await installRelease({ version: fixture.version, executable: fixture.executable, platform: "darwin", arch: "arm64", fetch: fixtureFetch(fixture), filesystem: { rename, verifyApplication: async () => {} } })
+    const fixture = await setup({
+      version: "0.7.1",
+      app: true,
+      entries: ["ycoding", "ycoding-computer-helper", "ycoding-computer-helper.app", "extra", "nested"],
+    })
+    await installRelease({
+      version: fixture.version,
+      executable: fixture.executable,
+      platform: "darwin",
+      arch: "arm64",
+      fetch: fixtureFetch(fixture),
+      filesystem: { rename, verifyApplication: async () => {} },
+    })
     expect(await readFile(fixture.executable, "utf8")).toBe("new executable\n")
     expect(await readFile(fixture.helper, "utf8")).toBe("new helper\n")
-    expect(await installedNames(fixture.root)).toEqual(["ycoding", "ycoding-computer-helper", "ycoding-computer-helper.app"])
+    expect(await installedNames(fixture.root)).toEqual([
+      "ycoding",
+      "ycoding-computer-helper",
+      "ycoding-computer-helper.app",
+    ])
   })
 
-  test.each(["0.7.14", "0.7.15"])("accepts the published %s archive layout with LICENSE and NOTICE and installs neither", async (version) => {
-    const macOS = await setup({ version, app: true, renamed: true, entries: ["ycoding", "ycoding-chrome-extension", "LICENSE", "NOTICE", "YCoding Computer Use.app"] })
-    await installRelease({ version, executable: macOS.executable, platform: "darwin", arch: "arm64", fetch: fixtureFetch(macOS), filesystem: { rename, verifyApplication: async () => {} } })
-    expect(await readFile(macOS.executable, "utf8")).toBe("new executable\n")
-    expect(await readFile(path.join(macOS.root, "YCoding Computer Use.app/Contents/MacOS/ycoding-computer-use"), "utf8")).toBe("app helper\n")
-    expect(await readFile(path.join(macOS.root, "ycoding-chrome-extension/manifest.json"), "utf8")).toBe("new manifest.json\n")
-    expect(await installedNames(macOS.root)).toEqual(["YCoding Computer Use.app", "ycoding", "ycoding-chrome-extension"])
-    const linux = await setup({ version, target: "linux-x64", extension: true, entries: ["ycoding", "ycoding-chrome-extension", "LICENSE", "NOTICE"] })
-    await installRelease({ version, executable: linux.executable, platform: "linux", arch: "x64", fetch: fixtureFetch(linux) })
-    expect(await readFile(linux.executable, "utf8")).toBe("new executable\n")
-    expect(await installedNames(linux.root)).toEqual(["ycoding", "ycoding-chrome-extension", "ycoding-computer-helper"])
-  })
+  test.each(["0.7.14", "0.7.15"])(
+    "accepts the published %s archive layout with LICENSE and NOTICE and installs neither",
+    async (version) => {
+      const macOS = await setup({
+        version,
+        app: true,
+        renamed: true,
+        entries: ["ycoding", "ycoding-chrome-extension", "LICENSE", "NOTICE", "YCoding Computer Use.app"],
+      })
+      await installRelease({
+        version,
+        executable: macOS.executable,
+        platform: "darwin",
+        arch: "arm64",
+        fetch: fixtureFetch(macOS),
+        filesystem: { rename, verifyApplication: async () => {} },
+      })
+      expect(await readFile(macOS.executable, "utf8")).toBe("new executable\n")
+      expect(
+        await readFile(path.join(macOS.root, "YCoding Computer Use.app/Contents/MacOS/ycoding-computer-use"), "utf8"),
+      ).toBe("app helper\n")
+      expect(await readFile(path.join(macOS.root, "ycoding-chrome-extension/manifest.json"), "utf8")).toBe(
+        "new manifest.json\n",
+      )
+      expect(await installedNames(macOS.root)).toEqual([
+        "YCoding Computer Use.app",
+        "ycoding",
+        "ycoding-chrome-extension",
+      ])
+      const linux = await setup({
+        version,
+        target: "linux-x64",
+        extension: true,
+        entries: ["ycoding", "ycoding-chrome-extension", "LICENSE", "NOTICE"],
+      })
+      await installRelease({
+        version,
+        executable: linux.executable,
+        platform: "linux",
+        arch: "x64",
+        fetch: fixtureFetch(linux),
+      })
+      expect(await readFile(linux.executable, "utf8")).toBe("new executable\n")
+      expect(await installedNames(linux.root)).toEqual([
+        "ycoding",
+        "ycoding-chrome-extension",
+        "ycoding-computer-helper",
+      ])
+    },
+  )
 
   test("rejects a symlinked app executable before extraction or replacement", async () => {
     const fixture = await setup({ version: "0.7.1", app: true, appSymlink: true })
-    const error = await installRelease({ version: fixture.version, executable: fixture.executable, platform: "darwin", arch: "arm64", fetch: fixtureFetch(fixture), filesystem: { rename, verifyApplication: async () => {} } }).then(() => "", (cause) => String(cause))
+    const error = await installRelease({
+      version: fixture.version,
+      executable: fixture.executable,
+      platform: "darwin",
+      arch: "arm64",
+      fetch: fixtureFetch(fixture),
+      filesystem: { rename, verifyApplication: async () => {} },
+    }).then(
+      () => "",
+      (cause) => String(cause),
+    )
     expect(error).toContain("unsupported type")
     expect(await readFile(fixture.executable, "utf8")).toBe("old executable\n")
-    expect(await Bun.file(path.join(fixture.root, "ycoding-computer-helper.app/Contents/Info.plist")).exists()).toBe(false)
+    expect(await Bun.file(path.join(fixture.root, "ycoding-computer-helper.app/Contents/Info.plist")).exists()).toBe(
+      false,
+    )
     expect(await updatePaths(fixture.root)).toEqual([])
   })
 
   test("skips an app bundle in an archive that does not ship one", async () => {
     const fixture = await setup({ version: "0.7.0", app: true })
-    await installRelease({ version: fixture.version, executable: fixture.executable, platform: "darwin", arch: "arm64", fetch: fixtureFetch(fixture) })
+    await installRelease({
+      version: fixture.version,
+      executable: fixture.executable,
+      platform: "darwin",
+      arch: "arm64",
+      fetch: fixtureFetch(fixture),
+    })
     expect(await readFile(fixture.executable, "utf8")).toBe("new executable\n")
     expect(await installedNames(fixture.root)).toEqual(["ycoding", "ycoding-computer-helper"])
   })
 
   test("treats v0.7.1 prereleases as pair archives and later prereleases as app archives", async () => {
     const early = await setup({ version: "0.7.1-beta.1" })
-    await installRelease({ version: early.version, executable: early.executable, platform: "darwin", arch: "arm64", fetch: fixtureFetch(early) })
+    await installRelease({
+      version: early.version,
+      executable: early.executable,
+      platform: "darwin",
+      arch: "arm64",
+      fetch: fixtureFetch(early),
+    })
     expect(await readFile(early.helper, "utf8")).toBe("new helper\n")
     const later = await setup({ version: "0.7.2-beta.1", app: true, renamed: true })
-    await installRelease({ version: later.version, executable: later.executable, platform: "darwin", arch: "arm64", fetch: fixtureFetch(later), filesystem: { rename, verifyApplication: async () => {} } })
-    expect(await readFile(path.join(later.root, "YCoding Computer Use.app/Contents/Info.plist"), "utf8")).toContain("app.ycoding.computer-use")
+    await installRelease({
+      version: later.version,
+      executable: later.executable,
+      platform: "darwin",
+      arch: "arm64",
+      fetch: fixtureFetch(later),
+      filesystem: { rename, verifyApplication: async () => {} },
+    })
+    expect(await readFile(path.join(later.root, "YCoding Computer Use.app/Contents/Info.plist"), "utf8")).toContain(
+      "app.ycoding.computer-use",
+    )
   })
 
   test("installs releases after v0.7.1 with only YCoding Computer Use.app and removes superseded helpers", async () => {
@@ -239,27 +403,66 @@ describe("release updater", () => {
     const legacy = path.join(fixture.root, "ycoding-computer-helper.app/Contents")
     await mkdir(legacy, { recursive: true })
     await writeFile(path.join(legacy, "Info.plist"), "old app\n")
-    await installRelease({ version: fixture.version, executable: fixture.executable, platform: "darwin", arch: "arm64", fetch: fixtureFetch(fixture), filesystem: { rename, verifyApplication: async () => {} } })
-    expect(await readFile(path.join(fixture.root, "YCoding Computer Use.app/Contents/MacOS/ycoding-computer-use"), "utf8")).toBe("app helper\n")
-    expect(await readFile(path.join(fixture.root, "YCoding Computer Use.app/Contents/Info.plist"), "utf8")).toContain("<key>CFBundleIdentifier</key><string>app.ycoding.computer-use</string>")
+    await installRelease({
+      version: fixture.version,
+      executable: fixture.executable,
+      platform: "darwin",
+      arch: "arm64",
+      fetch: fixtureFetch(fixture),
+      filesystem: { rename, verifyApplication: async () => {} },
+    })
+    expect(
+      await readFile(path.join(fixture.root, "YCoding Computer Use.app/Contents/MacOS/ycoding-computer-use"), "utf8"),
+    ).toBe("app helper\n")
+    expect(await readFile(path.join(fixture.root, "YCoding Computer Use.app/Contents/Info.plist"), "utf8")).toContain(
+      "<key>CFBundleIdentifier</key><string>app.ycoding.computer-use</string>",
+    )
     expect(await Bun.file(fixture.helper).exists()).toBe(false)
     expect(await Bun.file(fixture.legacyHelper).exists()).toBe(false)
-    expect(await readFile(path.join(fixture.root, "ycoding-chrome-extension/manifest.json"), "utf8")).toBe("new manifest.json\n")
+    expect(await readFile(path.join(fixture.root, "ycoding-chrome-extension/manifest.json"), "utf8")).toBe(
+      "new manifest.json\n",
+    )
     expect(await Bun.file(path.join(legacy, "Info.plist")).exists()).toBe(false)
     expect(await readFile(fixture.executable, "utf8")).toBe("new executable\n")
     expect(await updatePaths(fixture.root)).toEqual([])
   })
 
   test("skips a bare computer-use executable in a later release", async () => {
-    const fixture = await setup({ version: "0.7.2", app: true, renamed: true, entries: ["ycoding", "ycoding-computer-use", "ycoding-chrome-extension", "YCoding Computer Use.app"] })
-    await installRelease({ version: fixture.version, executable: fixture.executable, platform: "darwin", arch: "arm64", fetch: fixtureFetch(fixture), filesystem: { rename, verifyApplication: async () => {} } })
+    const fixture = await setup({
+      version: "0.7.2",
+      app: true,
+      renamed: true,
+      entries: ["ycoding", "ycoding-computer-use", "ycoding-chrome-extension", "YCoding Computer Use.app"],
+    })
+    await installRelease({
+      version: fixture.version,
+      executable: fixture.executable,
+      platform: "darwin",
+      arch: "arm64",
+      fetch: fixtureFetch(fixture),
+      filesystem: { rename, verifyApplication: async () => {} },
+    })
     expect(await readFile(fixture.executable, "utf8")).toBe("new executable\n")
-    expect(await installedNames(fixture.root)).toEqual(["YCoding Computer Use.app", "ycoding", "ycoding-chrome-extension"])
+    expect(await installedNames(fixture.root)).toEqual([
+      "YCoding Computer Use.app",
+      "ycoding",
+      "ycoding-chrome-extension",
+    ])
   })
 
   test("rejects v0.7.1 helper names in a later release", async () => {
     const fixture = await setup({ version: "0.7.2", app: true })
-    const error = await installRelease({ version: fixture.version, executable: fixture.executable, platform: "darwin", arch: "arm64", fetch: fixtureFetch(fixture), filesystem: { rename, verifyApplication: async () => {} } }).then(() => "", (cause) => String(cause))
+    const error = await installRelease({
+      version: fixture.version,
+      executable: fixture.executable,
+      platform: "darwin",
+      arch: "arm64",
+      fetch: fixtureFetch(fixture),
+      filesystem: { rename, verifyApplication: async () => {} },
+    }).then(
+      () => "",
+      (cause) => String(cause),
+    )
     expect(error).toContain("missing required entries")
     expect(await readFile(fixture.executable, "utf8")).toBe("old executable\n")
   })
@@ -270,10 +473,26 @@ describe("release updater", () => {
     await mkdir(legacy, { recursive: true })
     await writeFile(path.join(legacy, "Info.plist"), "old app\n")
     let failed = false
-    const error = await installRelease({ version: fixture.version, executable: fixture.executable, platform: "darwin", arch: "arm64", fetch: fixtureFetch(fixture), filesystem: { verifyApplication: async () => {}, rename: async (source, destination) => {
-      if (destination === fixture.executable && !failed) { failed = true; throw new Error("injected replacement failure") }
-      await rename(source, destination)
-    } } }).then(() => "", (cause) => String(cause))
+    const error = await installRelease({
+      version: fixture.version,
+      executable: fixture.executable,
+      platform: "darwin",
+      arch: "arm64",
+      fetch: fixtureFetch(fixture),
+      filesystem: {
+        verifyApplication: async () => {},
+        rename: async (source, destination) => {
+          if (destination === fixture.executable && !failed) {
+            failed = true
+            throw new Error("injected replacement failure")
+          }
+          await rename(source, destination)
+        },
+      },
+    }).then(
+      () => "",
+      (cause) => String(cause),
+    )
     expect(error).toContain("injected replacement failure")
     expect(await readFile(path.join(legacy, "Info.plist"), "utf8")).toBe("old app\n")
     expect(await Bun.file(path.join(fixture.root, "YCoding Computer Use.app/Contents/Info.plist")).exists()).toBe(false)
@@ -289,7 +508,17 @@ describe("release updater", () => {
     await mkdir(target)
     await writeFile(path.join(target, "keep"), "keep\n")
     await symlink(target, path.join(fixture.root, "ycoding-computer-helper.app"))
-    const error = await installRelease({ version: fixture.version, executable: fixture.executable, platform: "darwin", arch: "arm64", fetch: fixtureFetch(fixture), filesystem: { rename, verifyApplication: async () => {} } }).then(() => "", (cause) => String(cause))
+    const error = await installRelease({
+      version: fixture.version,
+      executable: fixture.executable,
+      platform: "darwin",
+      arch: "arm64",
+      fetch: fixtureFetch(fixture),
+      filesystem: { rename, verifyApplication: async () => {} },
+    }).then(
+      () => "",
+      (cause) => String(cause),
+    )
     expect(error).toContain("owned directory")
     expect(await readFile(path.join(target, "keep"), "utf8")).toBe("keep\n")
     expect(await readFile(fixture.executable, "utf8")).toBe("old executable\n")
@@ -298,7 +527,22 @@ describe("release updater", () => {
 
   test("keeps the installed release when app signature verification fails", async () => {
     const fixture = await setup({ version: "0.7.1", app: true })
-    const error = await installRelease({ version: fixture.version, executable: fixture.executable, platform: "darwin", arch: "arm64", fetch: fixtureFetch(fixture), filesystem: { rename, verifyApplication: async () => { throw new Error("bad app signature") } } }).then(() => "", (cause) => String(cause))
+    const error = await installRelease({
+      version: fixture.version,
+      executable: fixture.executable,
+      platform: "darwin",
+      arch: "arm64",
+      fetch: fixtureFetch(fixture),
+      filesystem: {
+        rename,
+        verifyApplication: async () => {
+          throw new Error("bad app signature")
+        },
+      },
+    }).then(
+      () => "",
+      (cause) => String(cause),
+    )
     expect(error).toContain("bad app signature")
     expect(await readFile(fixture.executable, "utf8")).toBe("old executable\n")
     expect(await readFile(fixture.helper, "utf8")).toBe("old helper\n")
@@ -311,10 +555,26 @@ describe("release updater", () => {
     await mkdir(existing, { recursive: true })
     await writeFile(path.join(existing, "Info.plist"), "old app\n")
     let failed = false
-    const error = await installRelease({ version: fixture.version, executable: fixture.executable, platform: "darwin", arch: "arm64", fetch: fixtureFetch(fixture), filesystem: { verifyApplication: async () => {}, rename: async (source, destination) => {
-      if (destination === fixture.executable && !failed) { failed = true; throw new Error("injected replacement failure") }
-      await rename(source, destination)
-    } } }).then(() => "", (cause) => String(cause))
+    const error = await installRelease({
+      version: fixture.version,
+      executable: fixture.executable,
+      platform: "darwin",
+      arch: "arm64",
+      fetch: fixtureFetch(fixture),
+      filesystem: {
+        verifyApplication: async () => {},
+        rename: async (source, destination) => {
+          if (destination === fixture.executable && !failed) {
+            failed = true
+            throw new Error("injected replacement failure")
+          }
+          await rename(source, destination)
+        },
+      },
+    }).then(
+      () => "",
+      (cause) => String(cause),
+    )
     expect(error).toContain("injected replacement failure")
     expect(await readFile(path.join(existing, "Info.plist"), "utf8")).toBe("old app\n")
     expect(await readFile(fixture.helper, "utf8")).toBe("old helper\n")
@@ -324,14 +584,32 @@ describe("release updater", () => {
   test("removes a newly added app after a failed executable replacement", async () => {
     const fixture = await setup({ version: "0.7.1", app: true })
     let failed = false
-    const error = await installRelease({ version: fixture.version, executable: fixture.executable, platform: "darwin", arch: "arm64", fetch: fixtureFetch(fixture), filesystem: { verifyApplication: async () => {}, rename: async (source, destination) => {
-      if (destination === fixture.executable && !failed) { failed = true; throw new Error("injected replacement failure") }
-      await rename(source, destination)
-    } } }).then(() => "", (cause) => String(cause))
+    const error = await installRelease({
+      version: fixture.version,
+      executable: fixture.executable,
+      platform: "darwin",
+      arch: "arm64",
+      fetch: fixtureFetch(fixture),
+      filesystem: {
+        verifyApplication: async () => {},
+        rename: async (source, destination) => {
+          if (destination === fixture.executable && !failed) {
+            failed = true
+            throw new Error("injected replacement failure")
+          }
+          await rename(source, destination)
+        },
+      },
+    }).then(
+      () => "",
+      (cause) => String(cause),
+    )
     expect(error).toContain("injected replacement failure")
     expect(await readFile(fixture.executable, "utf8")).toBe("old executable\n")
     expect(await readFile(fixture.helper, "utf8")).toBe("old helper\n")
-    expect(await Bun.file(path.join(fixture.root, "ycoding-computer-helper.app/Contents/Info.plist")).exists()).toBe(false)
+    expect(await Bun.file(path.join(fixture.root, "ycoding-computer-helper.app/Contents/Info.plist")).exists()).toBe(
+      false,
+    )
     expect(await updatePaths(fixture.root)).toEqual([])
   })
 
@@ -341,12 +619,34 @@ describe("release updater", () => {
     await mkdir(existing, { recursive: true })
     await writeFile(path.join(existing, "Info.plist"), "old app\n")
     let failed = false
-    const error = await installRelease({ version: fixture.version, executable: fixture.executable, platform: "darwin", arch: "arm64", fetch: fixtureFetch(fixture), filesystem: { verifyApplication: async () => {}, rename: async (source, destination) => {
-      if (destination === fixture.executable && !failed) { failed = true; throw new Error("injected replacement failure") }
-      if (source.includes(".ycoding-update-backup-") && destination === path.join(fixture.root, "ycoding-computer-helper.app")) throw new Error("injected app restoration failure")
-      await rename(source, destination)
-    } } }).then(() => "", (cause) => String(cause))
-    const backups = await Array.fromAsync(new Bun.Glob(".ycoding-update-backup-*/ycoding-computer-helper.app/Contents/Info.plist").scan(fixture.root))
+    const error = await installRelease({
+      version: fixture.version,
+      executable: fixture.executable,
+      platform: "darwin",
+      arch: "arm64",
+      fetch: fixtureFetch(fixture),
+      filesystem: {
+        verifyApplication: async () => {},
+        rename: async (source, destination) => {
+          if (destination === fixture.executable && !failed) {
+            failed = true
+            throw new Error("injected replacement failure")
+          }
+          if (
+            source.includes(".ycoding-update-backup-") &&
+            destination === path.join(fixture.root, "ycoding-computer-helper.app")
+          )
+            throw new Error("injected app restoration failure")
+          await rename(source, destination)
+        },
+      },
+    }).then(
+      () => "",
+      (cause) => String(cause),
+    )
+    const backups = await Array.fromAsync(
+      new Bun.Glob(".ycoding-update-backup-*/ycoding-computer-helper.app/Contents/Info.plist").scan(fixture.root),
+    )
     expect(backups).toHaveLength(1)
     expect(await readFile(path.join(fixture.root, backups[0]), "utf8")).toBe("old app\n")
     expect(error).toContain("Computer helper app backup retained at")
@@ -418,11 +718,22 @@ describe("release updater", () => {
   })
 
   test("installs the Chrome extension beside the executable for releases after v0.7.1", async () => {
-    const fixture = await setup({ version: "0.7.2", target: "linux-x64", extension: true, entries: ["ycoding", "ycoding-chrome-extension"] })
+    const fixture = await setup({
+      version: "0.7.2",
+      target: "linux-x64",
+      extension: true,
+      entries: ["ycoding", "ycoding-chrome-extension"],
+    })
     const installed = path.join(fixture.root, "ycoding-chrome-extension")
     await mkdir(installed)
     await writeFile(path.join(installed, "stale.js"), "old\n")
-    await installRelease({ version: fixture.version, executable: fixture.executable, platform: "linux", arch: "x64", fetch: fixtureFetch(fixture) })
+    await installRelease({
+      version: fixture.version,
+      executable: fixture.executable,
+      platform: "linux",
+      arch: "x64",
+      fetch: fixtureFetch(fixture),
+    })
     expect(await readFile(fixture.executable, "utf8")).toBe("new executable\n")
     expect(await readFile(path.join(installed, "manifest.json"), "utf8")).toBe("new manifest.json\n")
     expect(await Bun.file(path.join(installed, "stale.js")).exists()).toBe(false)
@@ -430,15 +741,35 @@ describe("release updater", () => {
   })
 
   test("restores the installed Chrome extension when the final executable replacement fails", async () => {
-    const fixture = await setup({ version: "0.7.2", target: "linux-x64", extension: true, entries: ["ycoding", "ycoding-chrome-extension"] })
+    const fixture = await setup({
+      version: "0.7.2",
+      target: "linux-x64",
+      extension: true,
+      entries: ["ycoding", "ycoding-chrome-extension"],
+    })
     const installed = path.join(fixture.root, "ycoding-chrome-extension")
     await mkdir(installed)
     await writeFile(path.join(installed, "manifest.json"), "old manifest\n")
     let failed = false
-    const error = await installRelease({ version: fixture.version, executable: fixture.executable, platform: "linux", arch: "x64", fetch: fixtureFetch(fixture), filesystem: { rename: async (source, destination) => {
-      if (destination === fixture.executable && !failed) { failed = true; throw new Error("injected replacement failure") }
-      await rename(source, destination)
-    } } }).then(() => "", (cause) => String(cause))
+    const error = await installRelease({
+      version: fixture.version,
+      executable: fixture.executable,
+      platform: "linux",
+      arch: "x64",
+      fetch: fixtureFetch(fixture),
+      filesystem: {
+        rename: async (source, destination) => {
+          if (destination === fixture.executable && !failed) {
+            failed = true
+            throw new Error("injected replacement failure")
+          }
+          await rename(source, destination)
+        },
+      },
+    }).then(
+      () => "",
+      (cause) => String(cause),
+    )
     expect(error).toContain("injected replacement failure")
     expect(await readFile(path.join(installed, "manifest.json"), "utf8")).toBe("old manifest\n")
     expect(await readFile(fixture.executable, "utf8")).toBe("old executable\n")
@@ -514,9 +845,14 @@ describe("release updater", () => {
         arch: item.arch,
         fetch: fixtureFetch(item.fixture),
         filesystem: {
-          rename: async () => { throw new Error("injected replacement failure") },
+          rename: async () => {
+            throw new Error("injected replacement failure")
+          },
         },
-      }).then(() => "", (cause) => String(cause))
+      }).then(
+        () => "",
+        (cause) => String(cause),
+      )
 
       expect(error).toContain("injected replacement failure")
       expect(await readFile(item.fixture.executable, "utf8")).toBe("old executable\n")
@@ -528,7 +864,13 @@ describe("release updater", () => {
   test("skips unknown top-level files and nested files in a macOS archive", async () => {
     const fixture = await setup({ entries: ["ycoding", "ycoding-computer-helper", "extra", "nested/file"] })
 
-    await installRelease({ version: fixture.version, executable: fixture.executable, platform: "darwin", arch: "arm64", fetch: fixtureFetch(fixture) })
+    await installRelease({
+      version: fixture.version,
+      executable: fixture.executable,
+      platform: "darwin",
+      arch: "arm64",
+      fetch: fixtureFetch(fixture),
+    })
 
     expect(await readFile(fixture.executable, "utf8")).toBe("new executable\n")
     expect(await readFile(fixture.helper, "utf8")).toBe("new helper\n")
@@ -541,7 +883,11 @@ describe("release updater", () => {
     ["character device", tarEntry("device", { type: "3" })],
     ["named pipe", tarEntry("pipe", { type: "6" })],
   ])("rejects an unknown %s entry without replacing the installed pair", async (_, entry) => {
-    const fixture = await withArchive(await setup(), [tarEntry("ycoding", { content: "new executable\n" }), tarEntry("ycoding-computer-helper", { content: "new helper\n" }), entry])
+    const fixture = await withArchive(await setup(), [
+      tarEntry("ycoding", { content: "new executable\n" }),
+      tarEntry("ycoding-computer-helper", { content: "new helper\n" }),
+      entry,
+    ])
     await expectRejected(fixture, "unsupported type")
   })
 
@@ -554,36 +900,60 @@ describe("release updater", () => {
     ["control character", "bad\u0007name"],
     ["backslash", "nested\\extra"],
   ])("rejects an unknown entry with an unsafe name: %s", async (_, name) => {
-    const fixture = await withArchive(await setup(), [tarEntry("ycoding", { content: "new executable\n" }), tarEntry("ycoding-computer-helper", { content: "new helper\n" }), tarEntry(name, { content: "escape\n" })])
+    const fixture = await withArchive(await setup(), [
+      tarEntry("ycoding", { content: "new executable\n" }),
+      tarEntry("ycoding-computer-helper", { content: "new helper\n" }),
+      tarEntry(name, { content: "escape\n" }),
+    ])
     await expectRejected(fixture, "unsafe name")
     expect(await Bun.file(path.join(fixture.root, "ycoding-escape")).exists()).toBe(false)
   })
 
   test("rejects a duplicate entry instead of choosing between its copies", async () => {
-    const fixture = await withArchive(await setup(), [tarEntry("ycoding", { content: "new executable\n" }), tarEntry("ycoding-computer-helper", { content: "new helper\n" }), tarEntry("ycoding", { content: "replacement\n" })])
+    const fixture = await withArchive(await setup(), [
+      tarEntry("ycoding", { content: "new executable\n" }),
+      tarEntry("ycoding-computer-helper", { content: "new helper\n" }),
+      tarEntry("ycoding", { content: "replacement\n" }),
+    ])
     await expectRejected(fixture, "duplicate entry")
   })
 
   test("rejects an entry that declares more than the archive size limit", async () => {
-    const fixture = await withArchive(await setup(), [tarEntry("ycoding", { content: "new executable\n" }), tarEntry("ycoding-computer-helper", { content: "new helper\n" }), tarEntry("extra", { size: 600 * 1024 * 1024 })])
+    const fixture = await withArchive(await setup(), [
+      tarEntry("ycoding", { content: "new executable\n" }),
+      tarEntry("ycoding-computer-helper", { content: "new helper\n" }),
+      tarEntry("extra", { size: 600 * 1024 * 1024 }),
+    ])
     await expectRejected(fixture, "size limit")
   })
 
   test("rejects an archive that ends inside an entry", async () => {
-    const fixture = await withArchive(await setup(), [tarEntry("ycoding", { content: "new executable\n" }), tarEntry("ycoding-computer-helper", { size: 4096 })])
+    const fixture = await withArchive(await setup(), [
+      tarEntry("ycoding", { content: "new executable\n" }),
+      tarEntry("ycoding-computer-helper", { size: 4096 }),
+    ])
     await expectRejected(fixture, "truncated")
   })
 
   test("rejects an archive with more entries than the limit", async () => {
     const extras = Array.from({ length: 1025 }, (_, index) => tarEntry(`extra-${index}`, { content: "x" }))
-    const fixture = await withArchive(await setup(), [tarEntry("ycoding", { content: "new executable\n" }), tarEntry("ycoding-computer-helper", { content: "new helper\n" }), ...extras])
+    const fixture = await withArchive(await setup(), [
+      tarEntry("ycoding", { content: "new executable\n" }),
+      tarEntry("ycoding-computer-helper", { content: "new helper\n" }),
+      ...extras,
+    ])
     await expectRejected(fixture, "too many entries")
   })
 
   test("rejects entries after the archive terminator", async () => {
     const fixture = await withArchive(
       await setup(),
-      [tarEntry("ycoding", { content: "new executable\n" }), tarEntry("ycoding-computer-helper", { content: "new helper\n" }), new Uint8Array(1024), tarEntry("extra", { content: "late\n" })],
+      [
+        tarEntry("ycoding", { content: "new executable\n" }),
+        tarEntry("ycoding-computer-helper", { content: "new helper\n" }),
+        new Uint8Array(1024),
+        tarEntry("extra", { content: "late\n" }),
+      ],
       false,
     )
     await expectRejected(fixture, "after its terminator")
@@ -779,7 +1149,12 @@ async function setup(
     await mkdir(path.join(contents, "MacOS"), { recursive: true })
     await mkdir(path.join(contents, "_CodeSignature"))
     if (options.icon !== false) await mkdir(path.join(contents, "Resources"))
-    await writeFile(path.join(contents, "Info.plist"), options.signedApp ? `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>${helperName}</string><key>CFBundleIdentifier</key><string>${bundleID}</string><key>CFBundleDisplayName</key><string>YCoding Computer Use</string><key>CFBundleIconFile</key><string>YCoding.icns</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>1</string></dict></plist>` : `<key>CFBundleIdentifier</key><string>${bundleID}</string><key>CFBundleDisplayName</key><string>YCoding Computer Use</string><key>CFBundleIconFile</key><string>YCoding.icns</string>\n`)
+    await writeFile(
+      path.join(contents, "Info.plist"),
+      options.signedApp
+        ? `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>${helperName}</string><key>CFBundleIdentifier</key><string>${bundleID}</string><key>CFBundleDisplayName</key><string>YCoding Computer Use</string><key>CFBundleIconFile</key><string>YCoding.icns</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>1</string></dict></plist>`
+        : `<key>CFBundleIdentifier</key><string>${bundleID}</string><key>CFBundleDisplayName</key><string>YCoding Computer Use</string><key>CFBundleIconFile</key><string>YCoding.icns</string>\n`,
+    )
     if (options.icon !== false) await writeFile(path.join(contents, "Resources/YCoding.icns"), "fixture icon\n")
     if (!options.signedApp) await writeFile(path.join(contents, "_CodeSignature/CodeResources"), "signature\n")
     if (options.appSymlink) await symlink(`../../../${helperName}`, path.join(contents, `MacOS/${helperName}`))
@@ -787,19 +1162,35 @@ async function setup(
       if (options.signedApp) await copyFile("/usr/bin/true", path.join(contents, `MacOS/${helperName}`))
       else await writeFile(path.join(contents, `MacOS/${helperName}`), "app helper\n")
       await chmod(path.join(contents, `MacOS/${helperName}`), 0o755)
-      if (options.signedApp) expect(Bun.spawnSync(["/usr/bin/codesign", "--force", "--sign", "-", path.join(source, appName)]).exitCode).toBe(0)
+      if (options.signedApp)
+        expect(
+          Bun.spawnSync(["/usr/bin/codesign", "--force", "--sign", "-", path.join(source, appName)]).exitCode,
+        ).toBe(0)
     }
   }
   if (options.extension ?? options.renamed) {
     await mkdir(path.join(source, "ycoding-chrome-extension/icons"), { recursive: true })
-    for (const file of BrowserExtension.files) await writeFile(path.join(source, "ycoding-chrome-extension", file), `new ${file}\n`)
+    for (const file of BrowserExtension.files)
+      await writeFile(path.join(source, "ycoding-chrome-extension", file), `new ${file}\n`)
   }
   const version = options.version ?? "0.7.0"
   const target = options.target ?? "darwin-arm64"
   const asset = `ycoding-${version}-${target}.tar.gz`
   const archiveFile = path.join(root, asset)
   const tar = Bun.spawnSync(
-    ["tar", "-C", source, "-czf", archiveFile, ...(options.entries ?? ["ycoding", ...(options.renamed ? [] : [helperName]), ...(options.app ? [appName] : []), ...(options.extension ?? options.renamed ? ["ycoding-chrome-extension"] : [])])],
+    [
+      "tar",
+      "-C",
+      source,
+      "-czf",
+      archiveFile,
+      ...(options.entries ?? [
+        "ycoding",
+        ...(options.renamed ? [] : [helperName]),
+        ...(options.app ? [appName] : []),
+        ...((options.extension ?? options.renamed) ? ["ycoding-chrome-extension"] : []),
+      ]),
+    ],
     {
       env: { ...process.env, COPYFILE_DISABLE: "1" },
     },
@@ -878,7 +1269,13 @@ function tarEntry(name: string, options: { type?: string; content?: string; link
   field(options.type ?? "0", 156)
   field(options.link ?? "", 157)
   field("ustar\x0000", 257)
-  field(`${header.reduce((sum, byte) => sum + byte, 0).toString(8).padStart(6, "0")}\0 `, 148)
+  field(
+    `${header
+      .reduce((sum, byte) => sum + byte, 0)
+      .toString(8)
+      .padStart(6, "0")}\0 `,
+    148,
+  )
   const data = new Uint8Array(Math.ceil(content.length / 512) * 512)
   data.set(content)
   return Buffer.concat([header, data])

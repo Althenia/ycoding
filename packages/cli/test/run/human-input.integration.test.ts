@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test"
 import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import path from "node:path"
-import { YCoding } from "@ycoding-ai/client/promise"
+import { YCoding } from "@ycoding-ai/client/v5"
 import { deltaChunk, finishChunk, toolCallChunk } from "../../../ai/test/lib/openai-chunks"
-import { auth, createSession, startServer } from "../remote-harness"
+import { createSession, startServer } from "../remote-harness"
 
 test("required human review stays pending until answered and continues without a completion receipt", async () => {
   const scratch = path.resolve(import.meta.dir, "../../../../.cache/tmp")
@@ -39,7 +39,7 @@ test("required human review stays pending until answered and continues without a
       },
     },
   })
-  const client = YCoding.make({ baseUrl: server.base, headers: { authorization: auth } })
+  const client = YCoding.make({ endpoint: server.endpoint })
   const sessionID = "ses_human_input_flow"
   const live = client.event.subscribe({ signal: AbortSignal.timeout(10000) })[Symbol.asyncIterator]()
   try {
@@ -79,9 +79,10 @@ test("required human review stays pending until answered and continues without a
     expect(
       snapshot.messages.flatMap((message) => (message.type === "assistant" ? message.content : [])),
     ).toContainEqual(expect.objectContaining({ type: "text", text: "Continued after review." }))
-    expect(await (await server.request("/api/session/completions")).json()).toEqual({ data: [] })
+    expect(await client.session.completions()).toEqual({ data: [] })
   } finally {
     await live.return?.()
+    client.transport.close()
     await server.close()
     await rm(directory, { recursive: true, force: true })
   }

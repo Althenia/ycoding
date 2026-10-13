@@ -1,5 +1,5 @@
 import { NodeFileSystem } from "@effect/platform-node"
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "../src/paths"
 import { Effect } from "effect"
 import { expect, test } from "bun:test"
 import path from "path"
@@ -9,7 +9,9 @@ function run<A, E>(directory: string, effect: Effect.Effect<A, E, Config.Service
   return Effect.runPromise(
     effect.pipe(
       Effect.provide(Config.layer),
-      Effect.provide(Global.layerWith({ data: path.join(directory, "data"), config: directory, state: directory })),
+      Effect.provide(
+        FrontendPaths.layerWith({ data: path.join(directory, "data"), config: directory, state: directory }),
+      ),
       Effect.provide(NodeFileSystem.layer),
     ),
   )
@@ -64,7 +66,7 @@ test("updates current config without reading obsolete files", async () => {
 
 test("updates a config draft while preserving JSONC comments", async () => {
   const directory = await Bun.$`mktemp -d`.text().then((value) => value.trim())
-  await Bun.write(path.join(directory, "cli.json"), "{\n  // Keep this comment\n  \"animations\": true\n}\n")
+  await Bun.write(path.join(directory, "cli.json"), '{\n  // Keep this comment\n  "animations": true\n}\n')
 
   try {
     const config = await run(

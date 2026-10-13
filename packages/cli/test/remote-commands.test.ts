@@ -1,197 +1,142 @@
-import { describe, expect, setDefaultTimeout, test } from "bun:test"
-import fs from "node:fs/promises"
+import { expect, test } from "bun:test"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { sessionFixture, v5Server } from "./fixture/v5-server"
 import { createSession, password, startServer } from "./remote-harness"
 
-const cli = path.join(import.meta.dir, "../src/index.ts")
-setDefaultTimeout(30_000)
-
-function isolatedEnv(root: string, extra: Record<string, string> = {}) {
-  const env: Record<string, string | undefined> = {
-    ...process.env,
-    HOME: root,
-    YCODING_TEST_HOME: root,
-    XDG_CACHE_HOME: path.join(root, "cache"),
-    XDG_CONFIG_HOME: path.join(root, "config"),
-    XDG_DATA_HOME: path.join(root, "data"),
-    XDG_STATE_HOME: path.join(root, "state"),
-    ...extra,
-  }
-  delete env.YCODING_DB
-  delete env.YCODING_PASSWORD
-  delete env.YCODING_CONFIG_DIR
-  delete env.YCODING_CONFIG
-  delete env.YCODING_REMOTE_URL
-  return { ...env, ...extra }
-}
-
-// The isolated server runs in this process, so the CLI child must run
-// asynchronously; a blocking spawn would starve the event loop it needs.
-async function run(env: Record<string, string | undefined>, args: readonly string[]) {
-  const child = Bun.spawn([process.execPath, cli, ...args], {
-    cwd: path.resolve(import.meta.dir, ".."),
-    env,
+async function run(args: string[], root?: string) {
+  const child = Bun.spawn([process.execPath, path.resolve(import.meta.dirname, "../src/index.ts"), ...args], {
+    cwd: path.resolve(import.meta.dirname, ".."),
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
+    env: { ...process.env, YCODING_PASSWORD: password, ...(root ? { XDG_STATE_HOME: path.join(root, "state") } : {}) },
   })
   const [exitCode, stdout, stderr] = await Promise.all([
     child.exited,
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
   ])
-  return { exitCode, stdout, stderr, output: stdout + stderr }
+  return { exitCode, stdout, stderr }
 }
 
-async function withHome<A>(run: (root: string) => Promise<A>) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-remote-commands-"))
+test("remote help exposes backend enrollment and controls without per-Session access commands", async () => {
+  const result = await run(["remote", "--help"])
+  expect(result.exitCode).toBe(0)
+  for (const name of ["enroll", "connect", "disconnect", "status", "sessions"]) expect(result.stdout).toContain(name)
+  for (const name of ["allow", "deny"]) expect(result.stdout).not.toContain(`  ${name}`)
+})
+
+test("remote status reads only the backend device projection, not frontend credentials", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-cli-device-"))
+  await mkdir(path.join(root, "state/ycoding"), { recursive: true })
+  await writeFile(path.join(root, "state/ycoding/remote-device.json"), "not a credential")
+  const server = v5Server((name) => {
+    if (name === "health.get")
+      return { data: { healthy: true, version: "local", pid: process.pid, sourceEpoch: "source_fixture" } }
+    if (name === "remote.get") return { data: { state: "off" } }
+    throw new Error(name)
+  })
   try {
-    return await run(root)
+    const result = await run(["remote", "status", "--server", server.url], root)
+    expect(result.exitCode, result.stderr).toBe(0)
+    expect(result.stdout).toContain("Not enrolled")
   } finally {
-    await fs.rm(root, { recursive: true, force: true })
+    await server.close()
+    await rm(root, { recursive: true, force: true })
   }
-}
+})
 
-describe("remote command surface", () => {
-  test("exposes enrollment, connection, status, and backend session commands", async () => {
-    const help = await run({}, ["remote", "--help"])
-    expect(help.exitCode).toBe(0)
-    for (const command of ["enroll", "connect", "disconnect", "status", "sessions"]) {
-      expect(help.stdout).toContain(command)
+test("connect grants every existing and future Session to the owner and disconnect controls the same backend", async () => {
+  let state = "off"
+  const enabled: boolean[] = []
+  const device = {
+    name: "Fixture",
+    deviceID: "dev_fixture",
+    relayOrigin: "https://relay.example",
+    enrolledAt: 1,
+    credentialState: "not_authenticated",
+  }
+  const server = v5Server((name, data) => {
+    if (name === "health.get")
+      return { data: { healthy: true, version: "local", pid: process.pid, sourceEpoch: "source_fixture" } }
+    if (name === "remote.get") return { data: { state, device } }
+    if (name === "remote.set") {
+      if (
+        typeof data !== "object" ||
+        data === null ||
+        !("payload" in data) ||
+        typeof data.payload !== "object" ||
+        data.payload === null ||
+        !("enabled" in data.payload) ||
+        typeof data.payload.enabled !== "boolean"
+      )
+        throw new Error("Invalid control")
+      enabled.push(data.payload.enabled)
+      state = data.payload.enabled ? "on" : "off"
+      return { data: { state } }
     }
-    expect(help.stdout).not.toContain("  allow")
-    expect(help.stdout).not.toContain("  deny")
+    throw new Error(name)
   })
+  try {
+    const mismatched = await run(["remote", "connect", "--server", server.url, "--relay", "https://other.example"])
+    expect(mismatched.exitCode).toBe(1)
+    expect(enabled).toEqual([])
+    const connected = await run(["remote", "connect", "--server", server.url])
+    expect(connected.exitCode, connected.stderr).toBe(0)
+    expect(connected.stdout).toContain("all existing and future backend Sessions are available to its owner")
+    expect(connected.stdout).toContain("Remote connection on")
+    const disconnected = await run(["remote", "disconnect", "--server", server.url])
+    expect(disconnected.exitCode, disconnected.stderr).toBe(0)
+    expect(disconnected.stdout).toContain("Remote connection off")
+    expect(enabled).toEqual([true, false])
+  } finally {
+    await server.close()
+  }
+})
 
-  test("reports an unenrolled machine without failing", async () => {
-    await withHome(async (root) => {
-      const status = await run(isolatedEnv(root), ["remote", "status"])
-      expect(status.exitCode).toBe(0)
-      expect(status.stdout).toContain("Not enrolled")
-    })
+test("remote CLI uses a real Rust backend for enrollment status and complete Session inventory", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-cli-inventory-"))
+  const server = await startServer(directory)
+  try {
+    const status = await run(["remote", "status", "--server", server.base])
+    expect(status.exitCode, status.stderr).toBe(0)
+    expect(status.stdout).toContain("Not enrolled")
+    const empty = await run(["remote", "sessions", "--server", server.base])
+    expect(empty.exitCode, empty.stderr).toBe(0)
+    expect(empty.stdout).toContain("The backend has no Sessions")
+    await createSession(server, "ses_cli_shared", directory)
+    const listed = await run(["remote", "sessions", "--server", server.base])
+    expect(listed.exitCode, listed.stderr).toBe(0)
+    expect(listed.stdout).toContain("ses_cli_shared")
+    expect(listed.stdout).toContain(directory)
+  } finally {
+    await server.close()
+    await rm(directory, { recursive: true, force: true })
+  }
+}, 60_000)
+
+test("remote sessions follows every opaque backend inventory page", async () => {
+  const cursors: unknown[] = []
+  const server = v5Server((name, data) => {
+    if (name === "health.get")
+      return { data: { healthy: true, version: "local", pid: process.pid, sourceEpoch: "source-1" } }
+    if (name !== "session.list") throw new Error(name)
+    const query = typeof data === "object" && data !== null && "query" in data ? data.query : undefined
+    const cursor = typeof query === "object" && query !== null && "cursor" in query ? query.cursor : undefined
+    cursors.push(cursor)
+    return cursor === undefined
+      ? { data: { data: [sessionFixture("ses_page_a", "/page/a")], cursor: { next: "opaque-page-two" } } }
+      : { data: { data: [sessionFixture("ses_page_b", "/page/b")], cursor: {} } }
   })
-
-  test("reports an unenrolled machine without contacting a local server", async () => {
-    const requests: string[] = []
-    const server = Bun.serve({
-      port: 0,
-      fetch: (request) => {
-        requests.push(new URL(request.url).pathname)
-        return new Response("unavailable", { status: 503 })
-      },
-    })
-    try {
-      await withHome(async (root) => {
-        const status = await run(isolatedEnv(root), ["remote", "status", "--server", server.url.href])
-        expect(status.exitCode).toBe(0)
-        expect(status.stdout).toContain("Not enrolled")
-        expect(status.stdout).not.toContain("Connection")
-      })
-      expect(requests).toEqual([])
-    } finally {
-      await server.stop(true)
-    }
-  })
-
-  test("requires a relay origin and refuses a relay URL with a path before prompting", async () => {
-    await withHome(async (root) => {
-      const missing = await run(isolatedEnv(root), ["remote", "enroll", "enr_1"])
-      expect(missing.exitCode).not.toBe(0)
-      expect(missing.output).toContain("relay origin is required")
-
-      const pathed = await run(isolatedEnv(root), ["remote", "enroll", "enr_1", "--relay", "https://relay.example/ws/agent"])
-      expect(pathed.exitCode).not.toBe(0)
-      expect(pathed.output).toContain("without a path")
-    })
-  })
-
-  test("tells an unenrolled machine how to enroll before connecting", async () => {
-    await withHome(async (root) => {
-      const connect = await run(isolatedEnv(root), ["remote", "connect"])
-      expect(connect.exitCode).not.toBe(0)
-      expect(connect.output).toContain("not enrolled")
-    })
-  })
-
-  test("reports an empty backend inventory without per-session commands", async () => {
-    await withHome(async (root) => {
-      const server = await startServer(root)
-      try {
-        const sessions = await run(isolatedEnv(root, { YCODING_PASSWORD: password }), [
-          "remote", "sessions", "--server", server.base,
-        ])
-        expect(sessions.exitCode, sessions.output).toBe(0)
-        expect(sessions.stdout).toContain("The backend has no Sessions")
-
-        const deny = await run(isolatedEnv(root), ["remote", "deny", "ses_missing"])
-        expect(deny.exitCode).not.toBe(0)
-        expect(deny.output).toContain('Unknown subcommand "deny"')
-      } finally {
-        await server.close()
-      }
-    })
-  })
-
-  test("lists every real isolated backend Session without a local allow step", async () => {
-    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-remote-commands-work-"))
-    const server = await startServer(directory)
-    try {
-      await withHome(async (root) => {
-        await createSession(server, "ses_cli_shared", directory)
-        const env = isolatedEnv(root, { YCODING_PASSWORD: password })
-
-        const listed = await run(env, ["remote", "sessions", "--server", server.base])
-        expect(listed.exitCode, listed.output).toBe(0)
-        expect(listed.stdout).toContain("ses_cli_shared")
-        expect(listed.stdout).toContain(directory)
-      })
-    } finally {
-      await server.close()
-      await fs.rm(directory, { recursive: true, force: true })
-    }
-  }, 60_000)
-
-  test("connects, reports, and disconnects the remote switch on one isolated server", async () => {
-    await withHome(async (root) => {
-      let state: "off" | "on" = "off"
-      const enabled: boolean[] = []
-      let shutdowns = 0
-      const server = await startServer(root, { remote: {
-        status: async () => ({ state }),
-        set: async (value) => { enabled.push(value); state = value ? "on" : "off"; return { state } },
-        shutdown: async () => { shutdowns++ },
-      } })
-      try {
-        const denied = await fetch(`${server.base}/api/remote`, {
-          method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: true }),
-        })
-        expect(denied.status).toBe(401)
-        expect(enabled).toEqual([])
-        const identity = {
-          deviceID: "dev_fixture", name: "fixture", relayURL: "https://relay.example",
-          publicKey: { kty: "EC", crv: "P-256", x: "fixture", y: "fixture" },
-          privateKey: { kty: "EC", crv: "P-256", x: "fixture", y: "fixture", d: "fixture" },
-          enrolledAt: 1,
-        }
-        await fs.mkdir(path.join(root, "state", "ycoding"), { recursive: true })
-        await fs.writeFile(path.join(root, "state", "ycoding", "remote-device.json"), JSON.stringify(identity), { mode: 0o600 })
-        const env = isolatedEnv(root, { YCODING_PASSWORD: password })
-        const connect = await run(env, ["remote", "connect", "--server", server.base])
-        expect(connect.exitCode, connect.output).toBe(0)
-        expect(connect.stdout).toContain("all backend Sessions are available to its owner")
-        expect(connect.stdout).toContain("Remote connection on")
-        const status = await run(env, ["remote", "status", "--server", server.base])
-        expect(status.exitCode, status.output).toBe(0)
-        expect(status.stdout).toContain("Connection    on")
-        const disconnect = await run(env, ["remote", "disconnect", "--server", server.base])
-        expect(disconnect.exitCode, disconnect.output).toBe(0)
-        expect(disconnect.stdout).toContain("Remote connection off")
-        expect(enabled).toEqual([true, false])
-      } finally {
-        await server.close()
-      }
-      expect(shutdowns).toBe(1)
-    })
-  }, 60_000)
+  try {
+    const result = await run(["remote", "sessions", "--server", server.url])
+    expect(result.exitCode, result.stderr).toBe(0)
+    expect(result.stdout).toContain("ses_page_a")
+    expect(result.stdout).toContain("ses_page_b")
+    expect(cursors).toEqual([undefined, "opaque-page-two"])
+  } finally {
+    await server.close()
+  }
 })

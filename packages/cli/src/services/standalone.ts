@@ -15,7 +15,7 @@ type Options = {
 function command(password: string, options: Options) {
   const [executable, ...args] = options.command ?? []
   if (!executable) throw new Error("Failed to resolve standalone server command")
-  return ChildProcess.make(executable, [...args, "--stdio", "--port", "0"], {
+  return ChildProcess.make(executable, [...args, "--frontend-executable", process.execPath, "--stdio", "--port", "0"], {
     cwd: process.cwd(),
     // Explicit entry wins over anything inherited, so a user-exported
     // YCODING_PASSWORD cannot shadow the child's lease credential.

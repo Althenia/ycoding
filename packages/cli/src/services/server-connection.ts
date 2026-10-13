@@ -1,6 +1,7 @@
 import { Service, type Endpoint, type EnsureOptions } from "@ycoding-ai/client/effect/service"
-import { ClientError, isUnauthorizedError, YCoding } from "@ycoding-ai/client/promise"
-import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import { V5ClientError } from "@ycoding-ai/client/v5"
+import { createClient } from "./client"
+import { InstallationVersion } from "../version"
 import { Effect, Redacted } from "effect"
 import { Env } from "../env"
 import { ServiceConfig } from "./service-config"
@@ -27,7 +28,8 @@ export const resolve = Effect.fn("cli.server-connection.resolve")(function* (arg
       url: args.server,
       auth: password ? { type: "basic" as const, username: "ycoding", password: Redacted.value(password) } : undefined,
     } satisfies Endpoint
-    const client = YCoding.make({ baseUrl: endpoint.url, headers: Service.headers(endpoint) })
+    const client = createClient(endpoint)
+    yield* Effect.addFinalizer(() => Effect.sync(() => client.transport.close()))
     const health = yield* Effect.tryPromise({
       try: () => client.health.get({ signal: AbortSignal.timeout(5_000) }),
       catch: (cause) => connectError(endpoint, cause),
@@ -61,10 +63,7 @@ export function managedService(options: EnsureOptions) {
   }
 }
 
-const resolveManaged = Effect.fnUntraced(function* (
-  options: EnsureOptions,
-  mismatch: NonNullable<Args["mismatch"]>,
-) {
+const resolveManaged = Effect.fnUntraced(function* (options: EnsureOptions, mismatch: NonNullable<Args["mismatch"]>) {
   if (mismatch === "replace") return yield* Service.ensure(options)
   if (mismatch === "ignore") return yield* Service.ensure({ ...options, version: undefined })
 
@@ -77,16 +76,11 @@ const resolveManaged = Effect.fnUntraced(function* (
 })
 
 function connectError(endpoint: Endpoint, cause: unknown) {
-  if (isUnauthorizedError(cause)) {
+  if (cause instanceof V5ClientError && ["unavailable", "unsent"].includes(cause.status))
     return new Error(
-      endpoint.auth === undefined
-        ? `Server at ${endpoint.url} requires a password; set YCODING_PASSWORD`
-        : `Server at ${endpoint.url} rejected the password`,
+      `Could not reach or authenticate with server at ${endpoint.url}; check the address and YCODING_PASSWORD`,
       { cause },
     )
-  }
-  if (cause instanceof ClientError && cause.reason === "Transport")
-    return new Error(`Could not reach server at ${endpoint.url}`, { cause })
   return new Error(`Server at ${endpoint.url} did not provide a compatible health response`, { cause })
 }
 

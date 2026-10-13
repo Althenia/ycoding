@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import { InstallationVersion } from "./version"
 import { Commands } from "./commands/commands"
 import { Runtime } from "./framework/runtime"
 import { main } from "./main"

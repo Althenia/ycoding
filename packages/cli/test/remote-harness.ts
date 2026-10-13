@@ -1,20 +1,11 @@
 import { expect } from "bun:test"
-import { ServerProcess } from "@ycoding-ai/server/process"
-import type { RemoteConnection } from "@ycoding-ai/server/remote-connection"
-import { Effect, Exit, Logger, Scope } from "effect"
-import { createServer } from "node:net"
+import { YCoding } from "@ycoding-ai/client/v5"
+import { mkdir, mkdtemp, rm } from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
 import { deltaChunk, finishChunk } from "../../ai/test/lib/openai-chunks"
 
-// Isolated YCoding server harness for remote bridge tests: an in-process server
-// with an in-memory database and a private configuration directory, so no test
-// touches the user's runtime, database, or service registration.
-//
-// Model-backed behavior (goal synthesis, later agent turns) can opt into a
-// loopback OpenAI-compatible stand-in. It answers on 127.0.0.1 only, so no test
-// reaches an external provider and no credential participates.
-
 export const password = "test-password"
-export const auth = `Basic ${Buffer.from(`ycoding:${password}`).toString("base64")}`
 
 export type IsolatedServer = Awaited<ReturnType<typeof startServer>>
 
@@ -40,43 +31,103 @@ type ProviderStandIn = {
   readonly releaseAll: () => void
 }
 
-export type IsolatedServerOptions = {
-  readonly plugins?: readonly string[]
-  readonly provider?: ProviderFixture
-  readonly remote?: RemoteConnection.Interface
-}
+export type IsolatedServerOptions = { readonly provider?: ProviderFixture }
 
 export async function startServer(directory: string, options: IsolatedServerOptions = {}) {
   const standIn = options.provider === undefined ? undefined : await startProviderStandIn(options.provider)
-  const port = await availablePort()
-  const scope = await Effect.runPromise(Scope.make())
+  const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-cli-runtime-"))
+  await mkdir(path.join(root, "home"))
+  if (standIn)
+    await Bun.write(
+      path.join(root, "models.json"),
+      JSON.stringify({
+        [providerID]: {
+          id: providerID,
+          name: "Isolated stand-in",
+          env: [],
+          npm: "@ai-sdk/openai-compatible",
+          models: {
+            [modelID]: {
+              id: modelID,
+              name: "Isolated Model",
+              release_date: "2026-01-01",
+              attachment: false,
+              reasoning: false,
+              tool_call: true,
+              modalities: { input: ["text"], output: ["text"] },
+              limit: { context: 128_000, output: 8192 },
+              cost: { input: 1, output: 1 },
+            },
+          },
+        },
+      }),
+    )
   const logs: string[] = []
-  const logger = Logger.map(Logger.formatStructured, (entry) => logs.push(JSON.stringify(entry)))
-  const startingRaw = ServerProcess.start<never, never>({
-    hostname: "127.0.0.1",
-    port,
-    password,
-    database: { path: ":memory:" },
-    config: {
-      directory,
-      project: false,
-      content: JSON.stringify({ ...(standIn === undefined ? {} : JSON.parse(providerConfig(standIn))), ...(options.plugins === undefined ? {} : { plugins: options.plugins }) }),
+  const executable = path.resolve(
+    import.meta.dirname,
+    "../../../rust/target/debug",
+    process.platform === "win32" ? "ycoding-runtime.exe" : "ycoding-runtime",
+  )
+  const child = Bun.spawn([executable, "--stdio", "--port", "0"], {
+    cwd: directory,
+    env: {
+      PATH: process.env.PATH,
+      SYSTEMROOT: process.env.SYSTEMROOT,
+      HOME: path.join(root, "home"),
+      XDG_CONFIG_HOME: path.join(root, "config"),
+      XDG_CACHE_HOME: path.join(root, "cache"),
+      XDG_STATE_HOME: path.join(root, "state"),
+      XDG_DATA_HOME: path.join(root, "data"),
+      YCODING_CONFIG_DIR: directory,
+      YCODING_CONFIG_PROJECT_DISABLE: "1",
+      YCODING_DISABLE_MODELS_FETCH: "1",
+      YCODING_VERSION: "local",
+      YCODING_PASSWORD: password,
+      ...(standIn
+        ? { YCODING_CONFIG_CONTENT: providerConfig(standIn), YCODING_MODELS_PATH: path.join(root, "models.json") }
+        : {}),
     },
-    models: { fetch: false },
-    fs: { filewatcher: false, fff: false },
-  }, undefined, options.remote ? async () => options.remote! : undefined).pipe(Effect.provideService(Scope.Scope, scope))
-  // Runtime-owned request markers are supplied when the assembled router dispatches.
-  const starting = startingRaw as Effect.Effect<Effect.Success<typeof startingRaw>, Effect.Error<typeof startingRaw>>
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  const stderr = new Response(child.stderr).text().then((text) => {
+    logs.push(text)
+    return text
+  })
+  const reader = child.stdout.getReader()
+  let output = ""
+  const deadline = setTimeout(() => child.kill("SIGTERM"), 15_000)
   try {
-    await Effect.runPromise(starting.pipe(Effect.provide(Logger.layer([logger]))))
+    while (!output.includes("\n")) {
+      const next = await reader.read()
+      if (next.done) throw new Error(`Rust test runtime exited before readiness: ${await stderr}`)
+      output += new TextDecoder().decode(next.value)
+    }
   } catch (error) {
+    child.kill("SIGTERM")
+    await child.exited
     await standIn?.close()
+    await rm(root, { recursive: true, force: true })
     throw error
+  } finally {
+    clearTimeout(deadline)
+    reader.releaseLock()
   }
+  const ready: unknown = JSON.parse(output.split("\n")[0])
+  if (typeof ready !== "object" || ready === null || !("url" in ready) || typeof ready.url !== "string")
+    throw new Error("Invalid Rust readiness")
+  const base = ready.url
+  const client = YCoding.make({
+    endpoint: { url: base, auth: { type: "basic", username: "ycoding", password } },
+    location: { directory },
+  })
+  await client.transport.ready()
   let closed = false
-  const base = `http://127.0.0.1:${port}`
   return {
     base,
+    client,
+    endpoint: { url: base, auth: { type: "basic" as const, username: "ycoding", password } },
     logs,
     ...(standIn === undefined
       ? {}
@@ -89,16 +140,16 @@ export async function startServer(directory: string, options: IsolatedServerOpti
             releaseAll: standIn.releaseAll,
           } satisfies ProviderStandIn,
         }),
-    request(path: string, options: RequestInit = {}) {
-      const headers = new Headers(options.headers)
-      headers.set("authorization", auth)
-      return fetch(`${base}${path}`, { ...options, headers })
-    },
     async close() {
       if (closed) return
       closed = true
-      await Effect.runPromise(Scope.close(scope, Exit.void))
+      client.transport.close()
+      await child.stdin.end()
+      const timeout = setTimeout(() => child.kill("SIGKILL"), 5_000)
+      await child.exited
+      clearTimeout(timeout)
       await standIn?.close()
+      await rm(root, { recursive: true, force: true })
     },
   }
 }
@@ -111,10 +162,15 @@ function providerConfig(standIn: { readonly url: string }) {
   return JSON.stringify({
     providers: {
       [providerID]: {
-        package: "aisdk:@ai-sdk/openai-compatible",
         name: "Isolated stand-in",
         settings: { baseURL: `${standIn.url}/v1`, apiKey: "isolated-stand-in-key" },
-        models: { [modelID]: { name: "Isolated Model" } },
+        models: {
+          [modelID]: {
+            name: "Isolated Model",
+            capabilities: { tools: true, input: ["text"], output: ["text"] },
+            limit: { context: 128_000, output: 8192 },
+          },
+        },
       },
     },
   })
@@ -133,7 +189,11 @@ async function startProviderStandIn(fixture: ProviderFixture) {
       requests.push(body)
       const heldRequest = fixture.holdAfter !== undefined && requests.length > fixture.holdAfter
       const encoder = new TextEncoder()
-      const frames = fixture.reply?.(body) ?? [deltaChunk({ role: "assistant" }), deltaChunk({ content: fixture.text }), finishChunk("stop")]
+      const frames = fixture.reply?.(body) ?? [
+        deltaChunk({ role: "assistant" }),
+        deltaChunk({ content: fixture.text }),
+        finishChunk("stop"),
+      ]
       const stream = new ReadableStream({
         async start(controller) {
           for (const frame of frames) controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`))
@@ -173,22 +233,6 @@ export async function createSession(
   directory: string,
   model?: { readonly providerID: string; readonly id: string },
 ) {
-  const response = await server.request("/api/session", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ id: sessionID, location: { directory }, ...(model === undefined ? {} : { model }) }),
-  })
-  expect(response.status, await response.clone().text()).toBe(200)
-}
-
-export async function availablePort() {
-  const server = createServer()
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject)
-    server.listen(0, "127.0.0.1", resolve)
-  })
-  const address = server.address()
-  if (!address || typeof address === "string") throw new Error("failed to reserve a test port")
-  await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
-  return address.port
+  const created = await server.client.session.create({ id: sessionID, location: { directory }, model })
+  expect(created.id).toBe(sessionID)
 }

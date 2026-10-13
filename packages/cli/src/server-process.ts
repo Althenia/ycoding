@@ -16,6 +16,8 @@ export type Options = {
 export const run = Effect.fnUntraced(function* (options: Options) {
   const executable = yield* Effect.tryPromise(runtimeExecutable)
   const args = [
+    "--frontend-executable",
+    process.execPath,
     ...(options.mode === "default" ? [] : [options.mode === "service" ? "--service" : "--stdio"]),
     ...(options.hostname === undefined ? [] : ["--hostname", options.hostname]),
     ...(options.port === undefined ? [] : ["--port", String(options.port)]),

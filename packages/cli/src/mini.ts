@@ -1,5 +1,6 @@
-import { Service, type Endpoint } from "@ycoding-ai/client/effect/service"
-import { ClientError, YCoding, type YCodingClient } from "@ycoding-ai/client/promise"
+import type { Endpoint } from "@ycoding-ai/client/effect/service"
+import { V5ClientError, type V5Client } from "@ycoding-ai/client/v5"
+import { createClient } from "./services/client"
 import type { MiniFrontendInput } from "@ycoding-ai/tui/mini"
 import { setTimeout } from "node:timers/promises"
 import { waitForCatalogReady } from "./services/catalog"
@@ -36,91 +37,95 @@ export async function runMini(input: MiniCommandInput) {
       const frontendTask = import("@ycoding-ai/tui/mini")
       const directory = localDirectory()
       const connection = createMiniConnection(input.server)
-      const sdk = connection.sdk
-      const requested = parseModel(input.model)
-      const model = requested ? { providerID: requested.providerID, modelID: requested.id } : undefined
-      const prepare = prepareTarget(input.agent)
-      const resolveTarget = async (initial: YCodingClient, signal: AbortSignal) => {
-        const resolved = await resolveMiniTarget({
-          sdk: initial,
-          reconnect: connection.reconnect,
-          signal,
-          resolve: (client) =>
-            resolveSessionTarget({
-              client,
-              location: { directory },
-              continue: input.continue,
-              session: input.session,
-              fork: input.fork,
-              model: requested,
-              agent: input.agent,
-              prepare,
-              signal,
-            }).catch((error) => {
-              if (error instanceof Error && error.message === "Session not found")
-                throw new MiniInputError(error.message)
-              throw error
-            }),
-        })
-        const target = resolved.value
-        return {
-          sdk: resolved.sdk,
-          sessionID: target.session.id,
-          sessionTitle: target.session.title,
-          location: target.location,
-          model: target.model ? { providerID: target.model.providerID, modelID: target.model.id } : undefined,
-          variant: target.model?.variant,
-          agent: target.agent,
-          resume: target.resume,
+      try {
+        const sdk = connection.sdk
+        const requested = parseModel(input.model)
+        const model = requested ? { providerID: requested.providerID, modelID: requested.id } : undefined
+        const prepare = prepareTarget(input.agent)
+        const resolveTarget = async (initial: V5Client, signal: AbortSignal) => {
+          const resolved = await resolveMiniTarget({
+            sdk: initial,
+            reconnect: connection.reconnect,
+            signal,
+            resolve: (client) =>
+              resolveSessionTarget({
+                client,
+                location: { directory },
+                continue: input.continue,
+                session: input.session,
+                fork: input.fork,
+                model: requested,
+                agent: input.agent,
+                prepare,
+                signal,
+              }).catch((error) => {
+                if (error instanceof Error && error.message === "Session not found")
+                  throw new MiniInputError(error.message)
+                throw error
+              }),
+          })
+          const target = resolved.value
+          return {
+            sdk: resolved.sdk,
+            sessionID: target.session.id,
+            sessionTitle: target.session.title,
+            location: target.location,
+            model: target.model ? { providerID: target.model.providerID, modelID: target.model.id } : undefined,
+            variant: target.model?.variant,
+            agent: target.agent,
+            resume: target.resume,
+          }
         }
+        const create = (
+          client: V5Client,
+          next: {
+            location: { directory: string; workspaceID?: string }
+            agent: string | undefined
+            model: Model
+            variant: string | undefined
+          },
+          signal?: AbortSignal,
+        ) =>
+          resolveSessionTarget({
+            client,
+            location: { directory: next.location.directory, workspace: next.location.workspaceID },
+            agent: next.agent,
+            model: next.model
+              ? { providerID: next.model.providerID, id: next.model.modelID, variant: next.variant }
+              : undefined,
+            prepare,
+            signal,
+          }).then((target) => ({
+            sessionID: target.session.id,
+            sessionTitle: target.session.title,
+            location: target.location,
+            model: target.model ? { providerID: target.model.providerID, modelID: target.model.id } : undefined,
+            variant: target.model?.variant,
+            agent: target.agent,
+            resume: false,
+          }))
+        const frontend = await frontendTask
+        return await frontend.runMiniFrontend({
+          host: createMiniHost({ terminal, directory }),
+          sdk,
+          directory,
+          target: resolveTarget,
+          reconnect: connection.reconnect,
+          createSession: create,
+          agent: input.agent,
+          model,
+          variant: requested?.variant,
+          files: [],
+          initialInput,
+          replay: input.replay ?? true,
+          replayLimit: input.replayLimit,
+          browserAddress: connection.address,
+          demo: input.demo,
+          tuiConfig: input.tuiConfig,
+        })
+      } finally {
+        connection.close()
       }
-      const create = (
-        client: YCodingClient,
-        next: {
-          location: { directory: string; workspaceID?: string }
-          agent: string | undefined
-          model: Model
-          variant: string | undefined
-        },
-        signal?: AbortSignal,
-      ) =>
-        resolveSessionTarget({
-          client,
-          location: { directory: next.location.directory, workspace: next.location.workspaceID },
-          agent: next.agent,
-          model: next.model
-            ? { providerID: next.model.providerID, id: next.model.modelID, variant: next.variant }
-            : undefined,
-          prepare,
-          signal,
-        }).then((target) => ({
-          sessionID: target.session.id,
-          sessionTitle: target.session.title,
-          location: target.location,
-          model: target.model ? { providerID: target.model.providerID, modelID: target.model.id } : undefined,
-          variant: target.model?.variant,
-          agent: target.agent,
-          resume: false,
-        }))
-      const frontend = await frontendTask
-      return frontend.runMiniFrontend({
-        host: createMiniHost({ terminal, directory }),
-        sdk,
-        directory,
-        target: resolveTarget,
-        reconnect: connection.reconnect,
-        createSession: create,
-        agent: input.agent,
-        model,
-        variant: requested?.variant,
-        files: [],
-        initialInput,
-        replay: input.replay ?? true,
-        replayLimit: input.replayLimit,
-        browserAddress: connection.address,
-        demo: input.demo,
-        tuiConfig: input.tuiConfig,
-      })
     })
     if (result.exitCode !== 0) process.exit(result.exitCode)
   } catch (error) {
@@ -133,17 +138,18 @@ export async function runMini(input: MiniCommandInput) {
 /** @internal Exported for CLI boundary tests. */
 export function createMiniConnection(input: MiniCommandInput["server"]) {
   let currentAddress = input.endpoint.url
+  let current: ReturnType<typeof createClient> | undefined
   const make = (endpoint: Endpoint) => {
     currentAddress = endpoint.url
-    return YCoding.make({
-      baseUrl: endpoint.url,
-      headers: Service.headers(endpoint),
-    })
+    current?.transport.close()
+    current = createClient(endpoint)
+    return current
   }
   const reconnect = input.reconnect
   return {
     sdk: make(input.endpoint),
     address: () => currentAddress,
+    close: () => current?.transport.close(),
     reconnect: reconnect
       ? async (signal: AbortSignal) => {
           const endpoint = await reconnect(signal)
@@ -155,17 +161,18 @@ export function createMiniConnection(input: MiniCommandInput["server"]) {
 
 /** @internal Exported for reconnect lifecycle tests. */
 export async function resolveMiniTarget<A>(input: {
-  sdk: YCodingClient
-  reconnect?: (signal: AbortSignal) => Promise<YCodingClient>
+  sdk: V5Client
+  reconnect?: (signal: AbortSignal) => Promise<V5Client>
   signal: AbortSignal
-  resolve: (sdk: YCodingClient) => Promise<A>
+  resolve: (sdk: V5Client) => Promise<A>
 }) {
   let sdk = input.sdk
   while (true) {
     try {
       return { sdk, value: await input.resolve(sdk) }
     } catch (error) {
-      if (!input.reconnect || !(error instanceof ClientError) || error.reason !== "Transport") throw error
+      if (!input.reconnect || !(error instanceof V5ClientError) || !["unavailable", "unsent"].includes(error.status))
+        throw error
       while (true) {
         try {
           sdk = await input.reconnect(input.signal)
@@ -242,7 +249,7 @@ function prepareTarget(requestedAgent?: string): SessionTargetPreparation {
 }
 
 async function validateAgent(
-  sdk: YCodingClient,
+  sdk: Pick<V5Client, "agent">,
   directory: string,
   workspace: string | undefined,
   name?: string,
@@ -250,10 +257,10 @@ async function validateAgent(
 ) {
   if (!name) return
   const deadline = Date.now() + 5_000
-  let agents: Awaited<ReturnType<YCodingClient["agent"]["list"]>> | undefined
+  let agents: Awaited<ReturnType<V5Client["agent"]["list"]>> | undefined
   while (Date.now() < deadline && !signal?.aborted) {
     agents = await sdk.agent.list({ location: { directory, workspace } }, { signal }).catch((error) => {
-      if (signal && error instanceof ClientError && error.reason === "Transport") throw error
+      if (signal && error instanceof V5ClientError && ["unavailable", "unsent"].includes(error.status)) throw error
       return undefined
     })
     const agent = agents?.data.find((item) => item.id === name)

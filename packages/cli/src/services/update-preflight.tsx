@@ -3,7 +3,7 @@
 // version-mismatched background service before the TUI attaches.
 import { createCliRenderer, RGBA, TextAttributes, type CliRenderer, type ThemeMode } from "@opentui/core"
 import { render, useTerminalDimensions } from "@opentui/solid"
-import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import { InstallationVersion } from "../version"
 import { registerYCodingSpinner } from "@ycoding-ai/tui/component/register-spinner"
 import { SPINNER_FRAMES } from "@ycoding-ai/tui/component/spinner"
 import { go } from "@ycoding-ai/tui/logo"
@@ -413,9 +413,7 @@ function UpdateFooter(props: {
     const completion = smoothstep(headerFade.progress())
     return Array.from({ length: width }, (_, index) => {
       const color =
-        index >= filled
-          ? colors.muted
-          : shade(railRamp, Math.max(0, 1 - Math.abs(index - center) / glowRadius) ** 2)
+        index >= filled ? colors.muted : shade(railRamp, Math.max(0, 1 - Math.abs(index - center) / glowRadius) ** 2)
       return {
         char: success || index < filled ? "━" : "·",
         color: success ? blend(color, colors.accent, completion) : color,

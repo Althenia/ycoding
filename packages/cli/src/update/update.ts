@@ -4,7 +4,7 @@ import { Readable } from "node:stream"
 import { createGunzip } from "node:zlib"
 import semver from "semver"
 import type { UpdateProgress } from "./progress"
-import { BrowserExtension } from "@ycoding-ai/core/browser/extension"
+import { BrowserExtension } from "../assets"
 
 const repository = "Althenia/ycoding"
 const maxArchiveBytes = 512 * 1024 * 1024
@@ -70,7 +70,8 @@ export async function latestRelease(fetcher: Fetch = fetch, current?: string) {
     throw new Error("Latest release response did not contain a tag")
   }
   const version = data.tag_name.startsWith("v") ? data.tag_name.slice(1) : ""
-  if (!validVersion(version) || semver.prerelease(version)) throw new Error(`Latest release returned an invalid version: ${data.tag_name}`)
+  if (!validVersion(version) || semver.prerelease(version))
+    throw new Error(`Latest release returned an invalid version: ${data.tag_name}`)
   if (!current || !/^\d+\.\d+\.\d+-beta\.\d+$/.test(current) || !validVersion(current)) return version
   let newest = version
   for (let page = 1; ; page++) {
@@ -80,10 +81,19 @@ export async function latestRelease(fetcher: Fetch = fetch, current?: string) {
     })
     requireHttps(response)
     if (!response.ok) throw new Error(`Failed to resolve beta releases: HTTP ${response.status}`)
-    const releases: unknown = JSON.parse(new TextDecoder().decode(await readLimited(response, 8 * maxChecksumsBytes, "beta releases response")))
+    const releases: unknown = JSON.parse(
+      new TextDecoder().decode(await readLimited(response, 8 * maxChecksumsBytes, "beta releases response")),
+    )
     if (!Array.isArray(releases)) throw new Error("Beta releases response did not contain a release list")
     for (const release of releases) {
-      if (typeof release !== "object" || release === null || release.draft !== false || release.prerelease !== true || typeof release.tag_name !== "string") continue
+      if (
+        typeof release !== "object" ||
+        release === null ||
+        release.draft !== false ||
+        release.prerelease !== true ||
+        typeof release.tag_name !== "string"
+      )
+        continue
       const beta = release.tag_name.slice(1)
       if (!/^v\d+\.\d+\.\d+-beta\.\d+$/.test(release.tag_name) || !validVersion(beta)) continue
       if (semver.gt(beta, newest)) newest = beta
@@ -145,7 +155,9 @@ export async function installRelease(input: InstallReleaseInput) {
     if (appRequired) {
       const metadata = await Bun.file(path.join(temporary, appFiles[0])).text()
       if (
-        !metadata.includes(`<key>CFBundleIdentifier</key><string>app.ycoding.${currentLayout ? "computer-use" : "computer-helper"}</string>`) ||
+        !metadata.includes(
+          `<key>CFBundleIdentifier</key><string>app.ycoding.${currentLayout ? "computer-use" : "computer-helper"}</string>`,
+        ) ||
         !metadata.includes("<key>CFBundleDisplayName</key><string>YCoding Computer Use</string>") ||
         !metadata.includes("<key>CFBundleIconFile</key><string>YCoding.icns</string>")
       )
@@ -168,7 +180,10 @@ export async function installRelease(input: InstallReleaseInput) {
     const installDirectory = path.dirname(input.executable)
     const helper = bareHelper ? path.join(installDirectory, legacyComputerHelper) : undefined
     const installedHelper = helper ? await statIfExists(helper) : undefined
-    if (installedHelper && (!installedHelper.isFile() || installedHelper.isSymbolicLink() || installedHelper.uid !== process.getuid?.())) {
+    if (
+      installedHelper &&
+      (!installedHelper.isFile() || installedHelper.isSymbolicLink() || installedHelper.uid !== process.getuid?.())
+    ) {
       throw new Error("Installed computer helper must be a regular file owned by the current user")
     }
     const bundles: ReadonlyArray<Bundle> = await Promise.all(
@@ -178,10 +193,18 @@ export async function installRelease(input: InstallReleaseInput) {
       ].map(async (bundle) => {
         const target = path.join(installDirectory, bundle.name)
         const installed = await statIfExists(target)
-        if (installed && (!installed.isDirectory() || installed.isSymbolicLink() || installed.uid !== process.getuid?.())) {
+        if (
+          installed &&
+          (!installed.isDirectory() || installed.isSymbolicLink() || installed.uid !== process.getuid?.())
+        ) {
           throw new Error(`Installed ${bundle.label} must be an owned directory`)
         }
-        return { label: bundle.label, target, candidate: path.join(temporary, bundle.name), exists: installed !== undefined }
+        return {
+          label: bundle.label,
+          target,
+          candidate: path.join(temporary, bundle.name),
+          exists: installed !== undefined,
+        }
       }),
     )
     const superseded = currentLayout && input.platform === "darwin" ? await installedSuperseded(installDirectory) : []
@@ -328,9 +351,15 @@ async function installedSuperseded(directory: string) {
   const helper = path.join(directory, legacyComputerHelper)
   const app = path.join(directory, legacyComputerApp)
   const [installedHelper, installedApp] = await Promise.all([statIfExists(helper), statIfExists(app)])
-  if (installedHelper && (!installedHelper.isFile() || installedHelper.isSymbolicLink() || installedHelper.uid !== process.getuid?.()))
+  if (
+    installedHelper &&
+    (!installedHelper.isFile() || installedHelper.isSymbolicLink() || installedHelper.uid !== process.getuid?.())
+  )
     throw new Error("Installed computer helper must be a regular file owned by the current user")
-  if (installedApp && (!installedApp.isDirectory() || installedApp.isSymbolicLink() || installedApp.uid !== process.getuid?.()))
+  if (
+    installedApp &&
+    (!installedApp.isDirectory() || installedApp.isSymbolicLink() || installedApp.uid !== process.getuid?.())
+  )
     throw new Error("Installed computer helper app must be an owned directory")
   return [...(installedHelper ? [helper] : []), ...(installedApp ? [app] : [])]
 }
@@ -439,7 +468,8 @@ function readArchive(tar: Uint8Array, required: ReadonlyArray<string>) {
       continue
     }
     const directory = type === 53 && size === 0
-    if (!directory && type !== 48 && type !== 0) throw new Error(`Release archive entry ${name} has an unsupported type`)
+    if (!directory && type !== 48 && type !== 0)
+      throw new Error(`Release archive entry ${name} has an unsupported type`)
     const normalized = directory ? name.replace(/\/$/, "") : name
     if (!safeName(normalized)) throw new Error(`Release archive entry has an unsafe name: ${JSON.stringify(name)}`)
     if (names.has(normalized)) throw new Error(`Release archive has duplicate entry ${normalized}`)
@@ -454,7 +484,8 @@ function readArchive(tar: Uint8Array, required: ReadonlyArray<string>) {
     if (!directory && required.includes(normalized)) files.set(normalized, tar.subarray(offset, offset + size))
     offset = next
   }
-  if (!tar.subarray(offset).every((byte) => byte === 0)) throw new Error("Release archive has entries after its terminator")
+  if (!tar.subarray(offset).every((byte) => byte === 0))
+    throw new Error("Release archive has entries after its terminator")
   const missing = required.filter((name) => !files.has(name))
   if (missing.length > 0) throw new Error(`Release archive is missing required entries: ${missing.join(", ")}`)
   const empty = required.find((name) => files.get(name)!.length === 0)
@@ -463,10 +494,12 @@ function readArchive(tar: Uint8Array, required: ReadonlyArray<string>) {
 }
 
 function entryName(header: Uint8Array) {
-  const field = (start: number, end: number) => Buffer.from(header.subarray(start, end)).toString("utf8").split("\0", 1)[0]
+  const field = (start: number, end: number) =>
+    Buffer.from(header.subarray(start, end)).toString("utf8").split("\0", 1)[0]
   const prefix = field(345, 500)
   return prefix ? `${prefix}/${field(0, 100)}` : field(0, 100)
 }
 
 const safeName = (name: string) =>
-  !/[\\\x00-\x1f\x7f]/.test(name) && name.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..")
+  !/[\\\x00-\x1f\x7f]/.test(name) &&
+  name.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..")

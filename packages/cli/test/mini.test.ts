@@ -1,16 +1,18 @@
 import { describe, expect, test } from "bun:test"
-import { ClientError, YCoding } from "@ycoding-ai/client/promise"
+import { V5ClientError, YCoding } from "@ycoding-ai/client/v5"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
 import path from "node:path"
 import { createMiniConnection, mergeInput as mergeInteractiveInput, resolveMiniTarget } from "../src/mini"
 import { mergeInput as mergeNonInteractiveInput, parseRunModel } from "../src/run/run"
 import { parseSessionTargetModel } from "../src/session-target"
+import { modelFixture, v5Server } from "./fixture/v5-server"
 
-async function cli(args: string[]) {
+async function cli(args: string[], environment: NodeJS.ProcessEnv = {}) {
   const child = Bun.spawn([process.execPath, "run", "src/index.ts", ...args], {
     cwd: path.join(import.meta.dir, ".."),
     stdout: "pipe",
     stderr: "pipe",
+    env: { ...process.env, ...environment },
   })
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(child.stdout).text(),
@@ -27,55 +29,51 @@ describe("mini command", () => {
   })
 
   test("constructs a fresh authenticated client for a replacement endpoint", async () => {
-    const authorization: Array<string | null> = []
-    const initial = Bun.serve({
-      port: 0,
-      fetch() {
-        return Response.json({ healthy: true, version: InstallationVersion, pid: process.pid })
-      },
+    const health = () => ({
+      data: { healthy: true, version: InstallationVersion, pid: process.pid, sourceEpoch: "source-1" },
     })
-    const replacement = Bun.serve({
-      port: 0,
-      fetch(request) {
-        authorization.push(request.headers.get("authorization"))
-        return Response.json({ healthy: true, version: InstallationVersion, pid: process.pid })
-      },
-    })
+    const initial = v5Server(health)
+    const replacement = v5Server(health)
     const controller = new AbortController()
     let signal: AbortSignal | undefined
 
     try {
       const connection = createMiniConnection({
-        endpoint: { url: initial.url.toString() },
+        endpoint: { url: initial.url },
         reconnect: async (next) => {
           signal = next
           return {
-            url: replacement.url.toString(),
+            url: replacement.url,
             auth: { type: "basic", username: "replacement", password: "secret" },
           }
         },
       })
-      expect(connection.address()).toBe(initial.url.toString())
+      expect(connection.address()).toBe(initial.url)
       const client = await connection.reconnect?.(controller.signal)
       if (!client) throw new Error("Expected a replacement client")
       await client.health.get()
 
       expect(client).not.toBe(connection.sdk)
-      expect(connection.address()).toBe(replacement.url.toString())
+      expect(connection.sdk.transport.state).toBe("closed")
+      expect(connection.address()).toBe(replacement.url)
       expect(signal).toBe(controller.signal)
-      expect(authorization).toEqual([`Basic ${btoa("replacement:secret")}`])
-      expect(createMiniConnection({ endpoint: { url: initial.url.toString() } }).reconnect).toBeUndefined()
+      expect(replacement.authorizations).toEqual([`Basic ${btoa("replacement:secret")}`])
+      const unmanaged = createMiniConnection({ endpoint: { url: initial.url } })
+      expect(unmanaged.reconnect).toBeUndefined()
+      unmanaged.close()
+      connection.close()
+      expect(client.transport.state).toBe("closed")
     } finally {
-      initial.stop(true)
-      replacement.stop(true)
+      await initial.close()
+      await replacement.close()
     }
   })
 
   test("re-resolves a managed target when the endpoint moves before transport construction", async () => {
-    const initial = YCoding.make({ baseUrl: "https://initial.ycoding.test" })
-    const replacement = YCoding.make({ baseUrl: "https://replacement.ycoding.test" })
+    const initial = YCoding.make({ endpoint: { url: "http://127.0.0.1:1" } })
+    const replacement = YCoding.make({ endpoint: { url: "http://127.0.0.1:1" } })
     const controller = new AbortController()
-    const seen: (typeof initial)[] = []
+    const seen: unknown[] = []
     let reconnects = 0
 
     const result = await resolveMiniTarget({
@@ -89,7 +87,7 @@ describe("mini command", () => {
       signal: controller.signal,
       resolve: async (sdk) => {
         seen.push(sdk)
-        if (sdk === initial) throw new ClientError("Transport")
+        if (sdk === initial) throw new V5ClientError("unavailable")
         return "ses-replacement"
       },
     })
@@ -97,11 +95,41 @@ describe("mini command", () => {
     expect(seen).toEqual([initial, replacement])
     expect(reconnects).toBe(2)
     expect(result).toEqual({ sdk: replacement, value: "ses-replacement" })
+    initial.transport.close()
+    replacement.transport.close()
   })
 
   test("merges non-interactive argument and stdin input", () => {
     expect(mergeNonInteractiveInput("from args", "from stdin")).toBe("from args\nfrom stdin")
     expect(mergeNonInteractiveInput(undefined, "from stdin")).toBe("from stdin")
+  })
+
+  test("does not replay target resolution after an unknown mutation settlement", async () => {
+    const client = YCoding.make({ endpoint: { url: "http://127.0.0.1:1" } })
+    let resolutions = 0
+    let reconnects = 0
+    try {
+      const result = await resolveMiniTarget({
+        sdk: client,
+        signal: new AbortController().signal,
+        reconnect: async () => {
+          reconnects++
+          return client
+        },
+        resolve: async () => {
+          resolutions++
+          throw new V5ClientError("unknown", "session.create")
+        },
+      }).then(
+        () => undefined,
+        (error: unknown) => error,
+      )
+      expect(result).toMatchObject({ status: "unknown", operation: "session.create" })
+      expect(resolutions).toBe(1)
+      expect(reconnects).toBe(0)
+    } finally {
+      client.transport.close()
+    }
   })
 
   test("parses model variants from the model reference", () => {
@@ -152,56 +180,50 @@ describe("mini command", () => {
   })
 
   test("preserves a run failure exit code", async () => {
-    let modelRequests = 0
-    const server = Bun.serve({
-      port: 0,
-      fetch(request) {
-        const url = new URL(request.url)
-        if (url.pathname === "/api/health")
-          return Response.json({ healthy: true, version: InstallationVersion, pid: process.pid })
-        if (url.pathname === "/api/location")
-          return Response.json({ directory: process.cwd(), project: { id: "global", directory: process.cwd() } })
-        if (url.pathname === "/api/model") {
-          modelRequests++
-          return Response.json({
-            location: { directory: process.cwd(), project: { id: "global", directory: process.cwd() } },
-            data: modelRequests === 1 ? [{ id: "missing", providerID: "definitely" }] : [],
-          })
-        }
-        return new Response(undefined, { status: 404 })
-      },
+    let models = 0
+    const directory = process.cwd()
+    const location = { directory, project: { id: "global", directory } }
+    const server = v5Server((name) => {
+      if (name === "health.get")
+        return { data: { healthy: true, version: InstallationVersion, pid: process.pid, sourceEpoch: "source-1" } }
+      if (name === "location.get") return { data: location }
+      if (name === "model.list")
+        return { location, data: ++models === 1 ? [modelFixture("definitely", "missing")] : [] }
+      throw new Error(name)
     })
 
     try {
-      const result = await cli(["run", "--server", server.url.toString(), "--model", "definitely/missing", "hi"])
+      const result = await cli(["run", "--server", server.url, "--model", "definitely/missing", "hi"])
 
       expect(result.exitCode).toBe(1)
       expect(result.stderr).toContain("Model unavailable: definitely/missing")
     } finally {
-      server.stop(true)
+      await server.close()
     }
   })
 
   test("reports pre-admission errors as JSON", async () => {
-    const server = Bun.serve({
-      port: 0,
-      fetch(request) {
-        if (new URL(request.url).pathname === "/api/session") return new Response("boom", { status: 500 })
-        return Response.json({ healthy: true, version: "incompatible", pid: process.pid })
-      },
+    const directory = process.cwd()
+    const server = v5Server((name) => {
+      if (name === "health.get")
+        return { data: { healthy: true, version: "incompatible", pid: process.pid, sourceEpoch: "source-1" } }
+      if (name === "location.get") return { data: { directory, project: { id: "global", directory } } }
+      if (name === "model.default") return { location: { directory, project: { id: "global", directory } }, data: {} }
+      if (name === "session.create") return new Error("Scripted rejection")
+      throw new Error(name)
     })
 
     try {
-      const result = await cli(["run", "--format", "json", "--server", server.url.toString(), "hi"])
+      const result = await cli(["run", "--format", "json", "--server", server.url, "hi"])
 
       expect(result.exitCode).toBe(1)
       expect(JSON.parse(result.stdout)).toMatchObject({
         type: "error",
         sessionID: "",
-        error: { type: "unknown", message: "UnexpectedStatus" },
+        error: { type: "unknown", message: "Scripted rejection" },
       })
     } finally {
-      server.stop(true)
+      await server.close()
     }
   })
 

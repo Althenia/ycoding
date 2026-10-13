@@ -3,7 +3,7 @@
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { YCoding } from "@ycoding-ai/client/promise"
+import { YCoding } from "@ycoding-ai/client/v5"
 import { BUN_BINARY, platformBinary } from "../src/binary"
 
 const KEY = "runtime-smoke-openrouter-key"
@@ -72,7 +72,12 @@ function streamResponse(input: {
       model: MODEL_ID,
       provider: "Smoke",
       choices: [
-        { index: 0, delta: { role: "assistant", content: input.content }, finish_reason: null, native_finish_reason: null },
+        {
+          index: 0,
+          delta: { role: "assistant", content: input.content },
+          finish_reason: null,
+          native_finish_reason: null,
+        },
       ],
     },
     {
@@ -105,57 +110,59 @@ function toolCallResponse(input: {
   cacheWrite: number
 }) {
   const id = `runtime-smoke-${input.index}`
-  return eventStream(
-    {
-      id,
-      object: "chat.completion.chunk",
-      created: Math.floor(Date.now() / 1000),
-      model: MODEL_ID,
-      provider: "Smoke",
-      choices: [
-        {
-          index: 0,
-          delta: {
-            role: "assistant",
-            content: null,
-            tool_calls: [
-              {
-                index: 0,
-                id: input.callID,
-                type: "function",
-                function: { name: input.name, arguments: JSON.stringify(input.arguments) },
-              },
-            ],
+  return (
+    eventStream(
+      {
+        id,
+        object: "chat.completion.chunk",
+        created: Math.floor(Date.now() / 1000),
+        model: MODEL_ID,
+        provider: "Smoke",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              role: "assistant",
+              content: null,
+              tool_calls: [
+                {
+                  index: 0,
+                  id: input.callID,
+                  type: "function",
+                  function: { name: input.name, arguments: JSON.stringify(input.arguments) },
+                },
+              ],
+            },
+            finish_reason: null,
+            native_finish_reason: null,
           },
-          finish_reason: null,
-          native_finish_reason: null,
-        },
-      ],
-    },
-    {
-      id,
-      object: "chat.completion.chunk",
-      created: Math.floor(Date.now() / 1000),
-      model: MODEL_ID,
-      provider: "Smoke",
-      choices: [
-        {
-          index: 0,
-          delta: { role: "assistant", content: "" },
-          finish_reason: "tool_calls",
-          native_finish_reason: "tool_calls",
-        },
-      ],
-      usage: {
-        prompt_tokens: input.prompt,
-        completion_tokens: 10,
-        total_tokens: input.prompt + 10,
-        cost: 0.001,
-        prompt_tokens_details: { cached_tokens: input.cached, cache_write_tokens: input.cacheWrite },
-        completion_tokens_details: { reasoning_tokens: 5 },
+        ],
       },
-    },
-  ) + "data: [DONE]\n\n"
+      {
+        id,
+        object: "chat.completion.chunk",
+        created: Math.floor(Date.now() / 1000),
+        model: MODEL_ID,
+        provider: "Smoke",
+        choices: [
+          {
+            index: 0,
+            delta: { role: "assistant", content: "" },
+            finish_reason: "tool_calls",
+            native_finish_reason: "tool_calls",
+          },
+        ],
+        usage: {
+          prompt_tokens: input.prompt,
+          completion_tokens: 10,
+          total_tokens: input.prompt + 10,
+          cost: 0.001,
+          prompt_tokens_details: { cached_tokens: input.cached, cache_write_tokens: input.cacheWrite },
+          completion_tokens_details: { reasoning_tokens: 5 },
+        },
+      },
+    ) + "data: [DONE]\n\n"
+  )
 }
 
 function responsesToolCall(responseID: string) {
@@ -300,8 +307,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       if (url.pathname.endsWith("/responses")) {
         const input = Array.isArray(body.input) ? body.input : []
         const serializedInput = JSON.stringify(input)
-        const previousResponseID =
-          typeof body.previous_response_id === "string" ? body.previous_response_id : undefined
+        const previousResponseID = typeof body.previous_response_id === "string" ? body.previous_response_id : undefined
         const hasToolOutput = serializedInput.includes('"function_call_output"')
         const hasPrompt = serializedInput.includes("runtime-smoke-openai-continuation")
         if (previousResponseID !== undefined) {
@@ -329,8 +335,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
 
       const messages = Array.isArray(body.messages) ? body.messages : []
       const toolResults = messages.filter(
-        (message) =>
-          typeof message === "object" && message !== null && "role" in message && message.role === "tool",
+        (message) => typeof message === "object" && message !== null && "role" in message && message.role === "tool",
       ).length
       if (text.includes("runtime-smoke-tool-chain")) {
         if (toolResults === 0)
@@ -390,10 +395,9 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
           { headers: { "content-type": "text/event-stream" } },
         )
       if (text.includes("runtime-smoke-subagent-block")) await sleep(5_000)
-      return new Response(
-        streamResponse({ index, content: index === 1 ? "First" : "Second" }),
-        { headers: { "content-type": "text/event-stream" } },
-      )
+      return new Response(streamResponse({ index, content: index === 1 ? "First" : "Second" }), {
+        headers: { "content-type": "text/event-stream" },
+      })
     },
   })
 
@@ -477,7 +481,11 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     XDG_CACHE_HOME: cache,
     XDG_STATE_HOME: state,
     YCODING_PASSWORD: PASSWORD,
+    YCODING_CONFIG_DIR: path.join(config, "ycoding"),
+    YCODING_CONFIG: undefined,
+    YCODING_CONFIG_CONTENT: undefined,
     YCODING_DISABLE_CHANNEL_DB: "1",
+    YCODING_CONFIG_PROJECT_DISABLE: "0",
   }
   const server = Bun.spawn([binary, "serve", "--stdio", "--port", "0"], {
     stdin: "pipe",
@@ -494,16 +502,18 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     readiness += new TextDecoder().decode(next.value)
   }
   reader.releaseLock()
-  const line = readiness.split("\n").map((value) => value.trim()).find(Boolean)
+  const line = readiness
+    .split("\n")
+    .map((value) => value.trim())
+    .find(Boolean)
   if (!line) throw new Error("Runtime smoke server produced no readiness line")
   const ready = JSON.parse(line) as { url?: unknown }
   if (typeof ready.url !== "string") throw new Error(`Invalid readiness payload: ${line}`)
 
-  const clientHeaders = {
-    authorization: `Basic ${Buffer.from(`ycoding:${PASSWORD}`).toString("base64")}`,
-    "x-ycoding-directory": project,
-  }
-  const client = YCoding.make({ baseUrl: ready.url, headers: clientHeaders })
+  const client = YCoding.make({
+    endpoint: { url: ready.url, auth: { type: "basic", username: "ycoding", password: PASSWORD } },
+    location: { directory: project },
+  })
 
   let phase = "integration readiness"
   let summary: string | undefined
@@ -511,7 +521,9 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     await eventually(async () => {
       const result = await client.integration.list({ location: { directory: project } })
       const ids = new Set(result.data.map((integration) => integration.id))
-      return ids.has(PROVIDER_ID) && ids.has(OPENAI_PROVIDER_ID) ? true : undefined
+      if (!ids.has(PROVIDER_ID) || !ids.has(OPENAI_PROVIDER_ID))
+        throw new Error(`Missing smoke provider integrations; backend returned: ${[...ids].join(", ")}`)
+      return true
     })
     phase = "credential storage"
     await Promise.all([
@@ -570,7 +582,9 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
 
     phase = "first prompt"
     await client.session.prompt({ sessionID: session.id, text: "First turn" })
-    await eventually(async () => ((await client.session.diagnostics({ sessionID: session.id }))?.tokens ? true : undefined))
+    await eventually(async () =>
+      (await client.session.diagnostics({ sessionID: session.id }))?.tokens ? true : undefined,
+    )
     phase = "second prompt"
     await client.session.prompt({ sessionID: session.id, text: "Second turn" })
     const diagnostics = await eventually(async () => {
@@ -579,10 +593,13 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     })
 
     if (requests.length < 2) throw new Error(`Expected at least two provider requests, got ${requests.length}`)
-    if (diagnostics.tokens.uncachedInput !== 300) throw new Error(`Unexpected uncached input: ${diagnostics.tokens.uncachedInput}`)
+    if (diagnostics.tokens.uncachedInput !== 300)
+      throw new Error(`Unexpected uncached input: ${diagnostics.tokens.uncachedInput}`)
     if (diagnostics.tokens.cacheRead !== 900) throw new Error(`Unexpected cache read: ${diagnostics.tokens.cacheRead}`)
-    if (diagnostics.cache.eligible !== 1200) throw new Error(`Unexpected cache-eligible tokens: ${diagnostics.cache.eligible}`)
-    if (diagnostics.cache.hitRatio !== 0.75) throw new Error(`Unexpected cache hit ratio: ${diagnostics.cache.hitRatio}`)
+    if (diagnostics.cache.eligible !== 1200)
+      throw new Error(`Unexpected cache-eligible tokens: ${diagnostics.cache.eligible}`)
+    if (diagnostics.cache.hitRatio !== 0.75)
+      throw new Error(`Unexpected cache hit ratio: ${diagnostics.cache.hitRatio}`)
     const expectedContext =
       diagnostics.tokens.uncachedInput +
       diagnostics.tokens.output +
@@ -590,7 +607,9 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       diagnostics.tokens.cacheRead +
       diagnostics.tokens.cacheWrite
     if (diagnostics.context.total !== expectedContext)
-      throw new Error(`Context total does not match normalized tokens: ${diagnostics.context.total} != ${expectedContext}`)
+      throw new Error(
+        `Context total does not match normalized tokens: ${diagnostics.context.total} != ${expectedContext}`,
+      )
     if (diagnostics.context.remaining !== 100_000 - expectedContext)
       throw new Error(`Unexpected context remaining: ${diagnostics.context.remaining}`)
 
@@ -743,7 +762,10 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     if (openAIRequests[2]?.body.previous_response_id !== undefined)
       throw new Error("OpenAI fallback retained previous response state")
     const fallbackInput = JSON.stringify(openAIRequests[2]?.body.input)
-    if (!fallbackInput.includes("runtime-smoke-openai-continuation") || !fallbackInput.includes('"function_call_output"'))
+    if (
+      !fallbackInput.includes("runtime-smoke-openai-continuation") ||
+      !fallbackInput.includes('"function_call_output"')
+    )
       throw new Error("OpenAI fallback did not restore full canonical history")
 
     phase = "yolo autonomy API"
@@ -768,14 +790,14 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       sessionID: goalSession.id,
       payload: { goal: goalText, maxNoProgress: 2 },
     })
-    if (goalSet.goal?.status !== "active")
-      throw new Error("Goal mode was not activated")
+    if (goalSet.goal?.status !== "active") throw new Error("Goal mode was not activated")
     const canonicalGoal = goalSet.goal.text
     const completedGoal = await eventually(async () => {
       const value = await client.session.autonomy.get({ sessionID: goalSession.id })
       return value.goal?.status === "completed" ? value : undefined
     }, 30_000)
-    if (completedGoal.mode !== "normal") throw new Error(`Completed Goal did not return to normal mode: ${completedGoal.mode}`)
+    if (completedGoal.mode !== "normal")
+      throw new Error(`Completed Goal did not return to normal mode: ${completedGoal.mode}`)
     if (completedGoal.goal?.iteration !== 1)
       throw new Error(`Expected one Goal continuation, got ${completedGoal.goal?.iteration ?? "missing"}`)
     const steerRequest = requests.find(
@@ -798,20 +820,27 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       model: { providerID: PROVIDER_ID, id: MODEL_ID },
       location: { directory: project },
     })
-    const oversizedSubagent = await fetch(new URL(`/api/session/${subagentParent.id}/subagent`, ready.url), {
-      method: "POST",
-      headers: { ...clientHeaders, "content-type": "application/json" },
-      body: JSON.stringify({
+    const oversizedSubagent = await client.session.subagent
+      .launch({
+        parentID: subagentParent.id,
         parentAssistantMessageID: "msg_runtime_smoke_oversized",
         toolCallID: "call_runtime_smoke_oversized",
         agent: "reviewer",
         description: "d".repeat(4 * 1024 + 1),
         prompt: "must be rejected before persistence",
         background: true,
-      }),
-    })
-    if (oversizedSubagent.status !== 400)
-      throw new Error(`Oversized subagent payload returned ${oversizedSubagent.status}, expected 400`)
+      })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      )
+    if (
+      typeof oversizedSubagent !== "object" ||
+      oversizedSubagent === null ||
+      !("_tag" in oversizedSubagent) ||
+      oversizedSubagent._tag !== "InvalidRequestError"
+    )
+      throw new Error("Oversized subagent payload did not return InvalidRequestError")
     if ((await client.session.subagent.list({ parentID: subagentParent.id })).data.length !== 0)
       throw new Error("Oversized subagent payload persisted a task")
 
@@ -852,6 +881,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   } catch (error) {
     throw new Error(`Runtime smoke failed during ${phase}`, { cause: error })
   } finally {
+    client.transport.close()
     await cleanupRuntimeSmoke(provider, server, root)
   }
   console.log(summary)
@@ -864,7 +894,15 @@ export async function cleanupRuntimeSmoke(
 ) {
   await provider.stop(true)
   server.stdin.end()
-  if (!(await Promise.race([server.exited.then(() => true, () => true), Bun.sleep(5_000).then(() => false)]))) {
+  if (
+    !(await Promise.race([
+      server.exited.then(
+        () => true,
+        () => true,
+      ),
+      Bun.sleep(5_000).then(() => false),
+    ]))
+  ) {
     server.kill()
   }
   await server.exited.catch(() => undefined)

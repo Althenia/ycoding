@@ -3,8 +3,9 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { crc32, deflateSync } from "node:zlib"
-import { YCoding } from "@ycoding-ai/client/promise"
-import { auth, createSession, startServer } from "../remote-harness"
+import { YCoding } from "@ycoding-ai/client/v5"
+import { createSession, startServer } from "../remote-harness"
+import { prepareRunFile } from "../../src/run/run"
 
 const header = Buffer.alloc(13)
 header.writeUInt32BE(1320, 0)
@@ -18,52 +19,58 @@ const image = Buffer.concat([
   pngChunk("IEND", Buffer.alloc(0)),
 ])
 
-test.each(["file", "data"] as const)(
-  "admits a large valid PNG through %s input and returns a managed attachment",
-  async (kind) => {
-    expect(image.byteLength).toBeGreaterThan(7 * 1024 * 1024)
-    expect(image.byteLength).toBeLessThan(20 * 1024 * 1024)
-    const scratch = path.resolve(import.meta.dir, "../../../../.cache/tmp")
-    await mkdir(scratch, { recursive: true })
-    const directory = await mkdtemp(path.join(scratch, "large-image-flow-"))
-    await writeFile(path.join(directory, "large.png"), image)
-    const server = await startServer(directory)
-    const client = YCoding.make({ baseUrl: server.base, headers: { authorization: auth } })
-    const sessionID = `ses_large_image_${kind}`
-    try {
-      await createSession(server, sessionID, directory)
-      const admitted = await client.session.prompt({
-        sessionID,
-        id: `msg_large_image_${kind}`,
-        text: "Inspect this image.",
-        resume: false,
-        files: [
-          {
-            name: "large.png",
-            uri:
-              kind === "file"
-                ? pathToFileURL(path.join(directory, "large.png")).href
-                : `data:image/png;base64,${image.toString("base64")}`,
-          },
-        ],
-      })
-      const file = admitted.data.files?.[0]
-      expect(file).toMatchObject({ name: "large.png", mime: "image/png", content: { type: "managed" } })
-      expect(file?.content.bytes).toBeLessThan(image.byteLength)
-      expect(await client.session.pending.list({ sessionID })).toMatchObject([{ id: admitted.id }])
-      const read = await server.request(`/api/session/${sessionID}/attachment/${file!.content.digest}`)
-      expect(read.status).toBe(200)
-      const stored = await read.json()
-      expect(stored.mime).toBe("image/png")
-      expect(Buffer.from(stored.data, "base64").readUInt32BE(16)).toBe(1320)
-      expect(Buffer.from(stored.data, "base64").readUInt32BE(20)).toBe(1536)
-    } finally {
-      await server.close()
-      await rm(directory, { recursive: true, force: true })
-    }
-  },
-  30000,
-)
+test("admits a large CLI PNG by file reference and returns a readable managed attachment", async () => {
+  expect(image.byteLength).toBeGreaterThan(7 * 1024 * 1024)
+  expect(image.byteLength).toBeLessThan(20 * 1024 * 1024)
+  const scratch = path.resolve(import.meta.dir, "../../../../.cache/tmp")
+  await mkdir(scratch, { recursive: true })
+  const directory = await mkdtemp(path.join(scratch, "large-image-flow-"))
+  const source = path.join(directory, "large image #%.png")
+  await writeFile(source, image)
+  const prepared = await prepareRunFile(path.basename(source), directory)
+  expect(prepared.url).toBe(pathToFileURL(source).href)
+  expect(prepared.url.startsWith("file://")).toBe(true)
+  expect(prepared.url).not.toContain("data:")
+  const server = await startServer(directory)
+  const client = YCoding.make({ endpoint: server.endpoint })
+  const sessionID = "ses_large_image_file"
+  const messageID = "msg_large_image_file"
+  let admissionConfirmed = false
+  try {
+    await createSession(server, sessionID, directory)
+    const admitted = await client.session.prompt({
+      sessionID,
+      id: messageID,
+      text: "Inspect this image.",
+      resume: false,
+      files: [
+        {
+          name: prepared.filename,
+          uri: prepared.url,
+        },
+      ],
+    })
+    admissionConfirmed = true
+    expect(await Bun.file(source).exists()).toBe(true)
+    const file = admitted.data.files?.[0]
+    expect(file).toMatchObject({ name: prepared.filename, mime: "image/png", content: { type: "managed" } })
+    expect(file?.content.bytes).toBeLessThan(image.byteLength)
+    expect(await client.session.pending.list({ sessionID })).toMatchObject([{ id: admitted.id }])
+    const stored = await client.session.attachment.read({ sessionID, digest: file!.content.digest })
+    expect(stored.mime).toBe("image/png")
+    expect(Buffer.from(stored.data, "base64").readUInt32BE(16)).toBe(1320)
+    expect(Buffer.from(stored.data, "base64").readUInt32BE(20)).toBe(1536)
+  } finally {
+    if (!admissionConfirmed)
+      admissionConfirmed = await client.session.pending
+        .list({ sessionID })
+        .then((pending) => pending.some((row) => row.id === messageID))
+        .catch(() => false)
+    client.transport.close()
+    await server.close()
+    if (admissionConfirmed) await rm(directory, { recursive: true, force: true })
+  }
+}, 30000)
 
 function pngChunk(type: string, content: Buffer) {
   const payload = Buffer.concat([Buffer.from(type), content])

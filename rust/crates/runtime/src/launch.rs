@@ -18,6 +18,7 @@ use ycoding_core::ycoding_store::{Metadata, Options, Store, import};
 use ycoding_protocol::connection::Budgets;
 
 pub const BETA_NAMESPACE: &str = "ycoding-beta";
+pub(crate) const FRONTEND_EXECUTABLE_KEY: &str = "YCODING_FRONTEND_EXECUTABLE";
 
 pub fn namespace(channel: &str) -> &'static str {
     if channel == "beta" {
@@ -41,6 +42,7 @@ Options:
   --stdio            Print one JSON readiness line and stop when stdin closes
   --cors <origin>    Allow one additional WebSocket origin (repeatable)
   --meeting          Start the Meeting runtime for each Location the server composes
+  --frontend-executable <path>  Installed frontend executable owning native assets
   --paths           Print resolved global paths as JSON without starting
   -h, --help         Print this help
   -V, --version      Print the runtime version
@@ -116,6 +118,7 @@ pub fn parse_launch(
     let mut stdio = false;
     let mut paths = false;
     let mut meeting = false;
+    let mut frontend_executable = None;
     while position < args.len() {
         let arg = &args[position];
         let (flag, inline) = match arg.split_once('=') {
@@ -152,6 +155,16 @@ pub fn parse_launch(
                 ));
             }
             "--hostname" => hostname = Some(take(&mut position)?),
+            "--frontend-executable" => {
+                let value = take(&mut position)?;
+                let path = std::path::Path::new(&value);
+                if !path.is_absolute() || path.file_name().is_none() {
+                    return Err(LaunchError::Usage(
+                        "--frontend-executable requires an absolute executable path".into(),
+                    ));
+                }
+                frontend_executable = Some(value);
+            }
             "--port" => {
                 let value = take(&mut position)?;
                 port = Some(value.parse::<u16>().map_err(|_| {
@@ -210,6 +223,7 @@ pub fn parse_launch(
             .filter(|v| !v.is_empty())
             .map(|v| (key.to_string(), v))
     })
+    .chain(frontend_executable.map(|value| (FRONTEND_EXECUTABLE_KEY.into(), value)))
     .collect::<BTreeMap<_, _>>();
     let temp = env("TMPDIR")
         .or_else(|| env("TEMP"))
@@ -333,8 +347,16 @@ pub async fn build_production_services(
                 content: config.environment.get("YCODING_CONFIG_CONTENT").cloned(),
                 env: std::env::vars()
                     .filter(|(key, _)| {
-                        key != "YCODING_PASSWORD" && key != "YCODING_SERVER_PASSWORD"
+                        key != "YCODING_PASSWORD"
+                            && key != "YCODING_SERVER_PASSWORD"
+                            && key != FRONTEND_EXECUTABLE_KEY
                     })
+                    .chain(
+                        config
+                            .environment
+                            .get(FRONTEND_EXECUTABLE_KEY)
+                            .map(|value| (FRONTEND_EXECUTABLE_KEY.into(), value.clone())),
+                    )
                     .collect(),
             },
             catalog: models_dev::Options {
@@ -1153,4 +1175,53 @@ fn sha1(input: &[u8]) -> [u8; 20] {
         output[index * 4..index * 4 + 4].copy_from_slice(&word.to_be_bytes());
     }
     output
+}
+
+#[cfg(test)]
+mod frontend_launch_tests {
+    use super::{LaunchError, Parsed, parse_launch};
+
+    #[test]
+    fn frontend_launch_flag_is_explicit_absolute_and_not_read_from_environment() {
+        let home = std::env::temp_dir().join("ycoding-frontend-launch");
+        let frontend = home.join("installed").join("ycoding");
+        let env = |key: &str| match key {
+            "HOME" => Some(home.to_string_lossy().into_owned()),
+            "YCODING_FRONTEND_EXECUTABLE" => Some("untrusted-environment-value".into()),
+            _ => None,
+        };
+        let Parsed::Run(config) = parse_launch(
+            &[
+                "--frontend-executable".into(),
+                frontend.to_string_lossy().into_owned(),
+            ],
+            env,
+        )
+        .unwrap() else {
+            panic!("expected launch configuration")
+        };
+        assert_eq!(
+            config.environment.get("YCODING_FRONTEND_EXECUTABLE"),
+            Some(&frontend.to_string_lossy().into_owned())
+        );
+        let Parsed::Run(config) = parse_launch(&[], env).unwrap() else {
+            panic!("expected launch configuration")
+        };
+        assert!(
+            !config
+                .environment
+                .contains_key("YCODING_FRONTEND_EXECUTABLE")
+        );
+        assert!(matches!(
+            parse_launch(
+                &["--frontend-executable".into(), "relative/ycoding".into()],
+                env
+            ),
+            Err(LaunchError::Usage(_))
+        ));
+        assert!(matches!(
+            parse_launch(&["--frontend-executable".into()], env),
+            Err(LaunchError::Usage(_))
+        ));
+    }
 }

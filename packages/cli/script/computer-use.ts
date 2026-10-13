@@ -2,10 +2,10 @@ import { copyFile, lstat, mkdir, mkdtemp, readdir, rm, stat, writeFile } from "n
 import { createConnection, type Socket } from "node:net"
 import os from "node:os"
 import path from "node:path"
-import { MacOSComputer } from "@ycoding-ai/core/computer/macos"
+import { helperBinary, helperApplication, applicationPath } from "../src/assets"
 
-export const COMPUTER_HELPER_BINARY = MacOSComputer.helperBinary
-export const COMPUTER_HELPER_APPLICATION = MacOSComputer.helperApplication
+export const COMPUTER_HELPER_BINARY = helperBinary
+export const COMPUTER_HELPER_APPLICATION = helperApplication
 
 export interface ComputerHelperTarget {
   readonly platform: NodeJS.Platform
@@ -37,7 +37,7 @@ export const computerHelperBuildAvailable = (
 export function developmentComputerHelperBuild(
   arch: ComputerHelperTarget["arch"] = computerHelperHostArchitecture(),
 ): ComputerHelperBuild {
-  const plan = computerHelperBuild({ platform: "darwin", arch }, path.dirname(MacOSComputer.applicationPath(process.execPath)))
+  const plan = computerHelperBuild({ platform: "darwin", arch }, path.dirname(applicationPath(process.execPath)))
   if (!plan) throw new Error("Failed to plan the macOS computer helper development build")
   return plan
 }
@@ -136,10 +136,12 @@ export async function verifyPackagedComputerHelper(binDirectory: string, platfor
   const application = path.join(binDirectory, COMPUTER_HELPER_APPLICATION)
   const entries = await readdir(binDirectory)
   if (platform !== "darwin") {
-    if (entries.includes(COMPUTER_HELPER_APPLICATION)) throw new Error(`Unexpected macOS computer helper: ${application}`)
+    if (entries.includes(COMPUTER_HELPER_APPLICATION))
+      throw new Error(`Unexpected macOS computer helper: ${application}`)
     return
   }
-  if (!entries.includes(COMPUTER_HELPER_APPLICATION)) throw new Error(`Computer helper application missing: ${application}`)
+  if (!entries.includes(COMPUTER_HELPER_APPLICATION))
+    throw new Error(`Computer helper application missing: ${application}`)
   const appInfo = await lstat(application)
   const executable = await lstat(path.join(application, "Contents", "MacOS", COMPUTER_HELPER_BINARY))
   const plist = await lstat(path.join(application, "Contents", "Info.plist"))
@@ -170,13 +172,22 @@ export async function verifyPackagedComputerHelper(binDirectory: string, platfor
 async function smokeApplication(executable: string) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-computer-smoke-"))
   const launch = path.join(directory, "service.json")
-  await writeFile(launch, JSON.stringify({ action: "service", controlDirectory: directory, ownerPID: process.pid }), { mode: 0o600 })
+  await writeFile(launch, JSON.stringify({ action: "service", controlDirectory: directory, ownerPID: process.pid }), {
+    mode: 0o600,
+  })
   const service = Bun.spawn([executable, launch], { stdout: "ignore", stderr: "pipe" })
   try {
     const responses = await exchange(path.join(directory, "computer-use.sock"), [
       { jsonrpc: "2.0", id: 1, method: "ping", params: { clientApiVersion: 1 } },
-      { jsonrpc: "2.0", id: 2, method: "request", params: { deadlineUnixMilliseconds: Date.now() + 10_000,
-        request: { action: "smoke", owner: { sessionID: "", callID: "" } } } },
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "request",
+        params: {
+          deadlineUnixMilliseconds: Date.now() + 10_000,
+          request: { action: "smoke", owner: { sessionID: "", callID: "" } },
+        },
+      },
       { jsonrpc: "2.0", id: 3, method: "shutdown", params: {} },
     ])
     const response = Reflect.get(responses[1] ?? {}, "result")
@@ -190,14 +201,24 @@ async function smokeApplication(executable: string) {
     )
       throw new Error(`Computer helper returned an invalid smoke response: ${JSON.stringify(responses)}`)
     if ((await service.exited) !== 0)
-      throw new Error(`Computer helper smoke failed (${service.exitCode}): ${await new Response(service.stderr).text()}`)
+      throw new Error(
+        `Computer helper smoke failed (${service.exitCode}): ${await new Response(service.stderr).text()}`,
+      )
   } finally {
     service.kill()
     await rm(directory, { recursive: true, force: true })
   }
 }
 
-async function exchange(socketPath: string, messages: ReadonlyArray<{ readonly jsonrpc: "2.0"; readonly id: number; readonly method: string; readonly params: object }>) {
+async function exchange(
+  socketPath: string,
+  messages: ReadonlyArray<{
+    readonly jsonrpc: "2.0"
+    readonly id: number
+    readonly method: string
+    readonly params: object
+  }>,
+) {
   const deadline = Date.now() + 10_000
   const socket = await connectService(socketPath, deadline)
   const responses: unknown[] = []
@@ -213,7 +234,11 @@ async function exchange(socketPath: string, messages: ReadonlyArray<{ readonly j
       if (responses.length === messages.length) resolve(responses)
     })
     socket.on("error", reject)
-    socket.on("close", () => (responses.length === messages.length ? resolve(responses) : reject(new Error("Computer helper closed the smoke connection"))))
+    socket.on("close", () =>
+      responses.length === messages.length
+        ? resolve(responses)
+        : reject(new Error("Computer helper closed the smoke connection")),
+    )
     setTimeout(() => reject(new Error("Computer helper smoke timed out")), Math.max(0, deadline - Date.now()))
   })
   for (const message of messages) {

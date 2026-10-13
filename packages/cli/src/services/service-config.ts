@@ -1,9 +1,8 @@
-import { Global } from "@ycoding-ai/core/global"
-import { InstallationChannel, InstallationVersion } from "@ycoding-ai/core/installation/version"
-import { Hash } from "@ycoding-ai/core/util/hash"
+import { FrontendPaths } from "../paths"
+import { InstallationChannel, InstallationVersion } from "../version"
 import { Service } from "@ycoding-ai/client/effect/service"
 import { Effect, FileSystem, Option, Schema } from "effect"
-import { randomBytes } from "crypto"
+import { createHash, randomBytes } from "node:crypto"
 import path from "path"
 import { selfCommand } from "../util/process"
 
@@ -27,11 +26,13 @@ const decodeRegistration = Schema.decodeUnknownEffect(Schema.fromJsonString(Serv
 export function filename(channel = InstallationChannel) {
   if (channel === "latest") return "service.json"
   if (channel === "local") return "service-local.json"
-  return `service-${Hash.fast(channel)}.json`
+  return `service-${createHash("sha1").update(channel).digest("hex")}.json`
 }
 
 export function defaultPort(channel = InstallationChannel) {
-  return 10_000 + (Number.parseInt(Hash.fast(`ycoding:${channel}`).slice(0, 8), 16) % 50_000)
+  return (
+    10_000 + (Number.parseInt(createHash("sha1").update(`ycoding:${channel}`).digest("hex").slice(0, 8), 16) % 50_000)
+  )
 }
 
 export function versionBelongsToChannel(
@@ -69,7 +70,7 @@ function configKey(key: string): Key {
 
 const paths = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
-  const global = yield* Global.Service
+  const global = yield* FrontendPaths.Service
   const name = filename()
   const file = path.join(global.state, name)
   return {

@@ -1,5 +1,5 @@
 import { NodeFileSystem } from "@effect/platform-node"
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "../paths"
 import { afterEach, describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
@@ -20,9 +20,7 @@ describe("updater", () => {
     expect(updateCheckSkipReason({ local: false, disabled: false, version: "0.0.0-main-20260722034528845" })).toBe(
       "preview-build",
     )
-    expect(updateCheckSkipReason({ local: false, disabled: false, version: "0.0.0-feature-123" })).toBe(
-      "preview-build",
-    )
+    expect(updateCheckSkipReason({ local: false, disabled: false, version: "0.0.0-feature-123" })).toBe("preview-build")
     expect(updateCheckSkipReason({ local: false, disabled: false, version: "1.2.3" })).toBeUndefined()
     expect(updateCheckSkipReason({ local: false, disabled: false, version: "1.2.3-beta.1" })).toBeUndefined()
   })
@@ -55,7 +53,9 @@ describe("updater release source", () => {
       ["1.2.4", "1.3.0", "2.0.0"].map((latest) => [policy, latest] as const),
     ),
   )("announces an available release without mutating the installation", async (policy, latest) => {
-    const fixture = await releaseFixture(policy === undefined ? undefined : `{ "autoupdate": ${JSON.stringify(policy)} }`)
+    const fixture = await releaseFixture(
+      policy === undefined ? undefined : `{ "autoupdate": ${JSON.stringify(policy)} }`,
+    )
     const urls: string[] = []
     const notices: string[] = []
 
@@ -74,7 +74,7 @@ describe("updater release source", () => {
             },
           }),
         ),
-        Effect.provide(Global.layerWith({ config: fixture.config })),
+        Effect.provide(FrontendPaths.layerWith({ config: fixture.config })),
         Effect.provide(NodeFileSystem.layer),
       ),
     )
@@ -102,7 +102,7 @@ describe("updater release source", () => {
             },
           }),
         ),
-        Effect.provide(Global.layerWith({ config: fixture.config })),
+        Effect.provide(FrontendPaths.layerWith({ config: fixture.config })),
         Effect.provide(NodeFileSystem.layer),
       ),
     )

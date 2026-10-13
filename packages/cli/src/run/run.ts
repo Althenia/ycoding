@@ -1,5 +1,6 @@
-import { Service, type Endpoint } from "@ycoding-ai/client/effect/service"
-import { YCoding, type YCodingClient, type SessionMessageAssistantTool } from "@ycoding-ai/client/promise"
+import type { Endpoint } from "@ycoding-ai/client/effect/service"
+import { createClient } from "../services/client"
+import type { YCodingClient, SessionMessageAssistantTool } from "@ycoding-ai/client/promise"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { open } from "node:fs/promises"
 import path from "node:path"
@@ -66,87 +67,91 @@ async function run(input: RunCommandInput) {
 }
 
 async function execute(input: RunCommandInput, prepared: Prepared, endpoint: Endpoint) {
-  const client = YCoding.make({ baseUrl: endpoint.url, headers: Service.headers(endpoint) })
-  const explicit = parseRunModel(input.model)
-  const target = await resolveSessionTarget({
-    client,
-    location: prepared.directory ? { directory: prepared.directory } : undefined,
-    continue: input.continue,
-    session: input.session,
-    fork: input.fork,
-    model: explicit
-      ? { providerID: explicit.model.providerID, id: explicit.model.modelID, variant: explicit.variant }
-      : undefined,
-    agent: input.agent,
-    prepare: async (next) => {
-      const selected =
-        next.model ??
-        (await client.model
-          .default({ location: { directory: next.location.directory, workspace: next.location.workspaceID } })
-          .then((result) => result.data))
-      const model = selected
-        ? {
-            providerID: selected.providerID,
-            id: selected.id,
-            variant: explicit?.variant ?? ("variant" in selected ? selected.variant : undefined),
-          }
-        : undefined
-      if (explicit?.variant && !model)
-        throw new RunTargetError("Cannot select a variant before selecting a model", next.session?.id)
-      if (model) {
-        await waitForCatalogReady({
-          sdk: client,
-          directory: next.location.directory,
-          workspace: next.location.workspaceID,
-          model: { providerID: model.providerID, modelID: model.id },
-        })
-        const available = await client.model.list({
-          location: { directory: next.location.directory, workspace: next.location.workspaceID },
-        })
-        if (!available.data.some((item) => item.providerID === model.providerID && item.id === model.id))
-          throw new RunTargetError(`Model unavailable: ${model.providerID}/${model.id}`, next.session?.id)
-      }
-      return {
-        model,
-        agent: input.agent
-          ? await validateAgent(client, next.location.directory, next.location.workspaceID, input.agent)
-          : next.agent,
-      }
-    },
-  }).catch((error) => {
-    if (!(error instanceof RunTargetError)) throw error
-    reportRunError(input, error.message, error.sessionID)
-    return undefined
-  })
-  if (!target) return
-  const model = target.model ? { providerID: target.model.providerID, modelID: target.model.id } : undefined
-  const variant = target.model?.variant
-  if (!target.resume && input.title !== undefined) {
-    await client.session.rename({
-      sessionID: target.session.id,
-      title: input.title || prepared.message.slice(0, 50) + (prepared.message.length > 50 ? "..." : ""),
+  const client = createClient(endpoint)
+  try {
+    const explicit = parseRunModel(input.model)
+    const target = await resolveSessionTarget({
+      client,
+      location: prepared.directory ? { directory: prepared.directory } : undefined,
+      continue: input.continue,
+      session: input.session,
+      fork: input.fork,
+      model: explicit
+        ? { providerID: explicit.model.providerID, id: explicit.model.modelID, variant: explicit.variant }
+        : undefined,
+      agent: input.agent,
+      prepare: async (next) => {
+        const selected =
+          next.model ??
+          (await client.model
+            .default({ location: { directory: next.location.directory, workspace: next.location.workspaceID } })
+            .then((result) => result.data))
+        const model = selected
+          ? {
+              providerID: selected.providerID,
+              id: selected.id,
+              variant: explicit?.variant ?? ("variant" in selected ? selected.variant : undefined),
+            }
+          : undefined
+        if (explicit?.variant && !model)
+          throw new RunTargetError("Cannot select a variant before selecting a model", next.session?.id)
+        if (model) {
+          await waitForCatalogReady({
+            sdk: client,
+            directory: next.location.directory,
+            workspace: next.location.workspaceID,
+            model: { providerID: model.providerID, modelID: model.id },
+          })
+          const available = await client.model.list({
+            location: { directory: next.location.directory, workspace: next.location.workspaceID },
+          })
+          if (!available.data.some((item) => item.providerID === model.providerID && item.id === model.id))
+            throw new RunTargetError(`Model unavailable: ${model.providerID}/${model.id}`, next.session?.id)
+        }
+        return {
+          model,
+          agent: input.agent
+            ? await validateAgent(client, next.location.directory, next.location.workspaceID, input.agent)
+            : next.agent,
+        }
+      },
+    }).catch((error) => {
+      if (!(error instanceof RunTargetError)) throw error
+      reportRunError(input, error.message, error.sessionID)
+      return undefined
     })
-  }
-  if (input.yolo !== undefined) {
-    await client.session.autonomy.set({ sessionID: target.session.id, payload: { yolo: input.yolo } })
-  }
+    if (!target) return
+    const model = target.model ? { providerID: target.model.providerID, modelID: target.model.id } : undefined
+    const variant = target.model?.variant
+    if (!target.resume && input.title !== undefined) {
+      await client.session.rename({
+        sessionID: target.session.id,
+        title: input.title || prepared.message.slice(0, 50) + (prepared.message.length > 50 ? "..." : ""),
+      })
+    }
+    if (input.yolo !== undefined) {
+      await client.session.autonomy.set({ sessionID: target.session.id, payload: { yolo: input.yolo } })
+    }
 
-  await runNonInteractivePrompt({
-    client,
-    sessionID: target.session.id,
-    location: target.location,
-    message: prepared.message,
-    files: prepared.files,
-    agent: target.agent,
-    model,
-    variant,
-    profile: target.model?.profile,
-    thinking: input.thinking ?? false,
-    format: input.format,
-    attached: true,
-    renderTool: (part) => renderTool(part, target.location.directory),
-    renderToolError: (part) => renderToolError(part, target.location.directory),
-  }).catch((error) => reportRunError(input, errorMessage(error), target.session.id))
+    await runNonInteractivePrompt({
+      client,
+      sessionID: target.session.id,
+      location: target.location,
+      message: prepared.message,
+      files: prepared.files,
+      agent: target.agent,
+      model,
+      variant,
+      profile: target.model?.profile,
+      thinking: input.thinking ?? false,
+      format: input.format,
+      attached: true,
+      renderTool: (part) => renderTool(part, target.location.directory),
+      renderToolError: (part) => renderToolError(part, target.location.directory),
+    }).catch((error) => reportRunError(input, errorMessage(error), target.session.id))
+  } finally {
+    client.transport.close()
+  }
 }
 
 export function mergeInput(message: string | undefined, piped: string | undefined) {

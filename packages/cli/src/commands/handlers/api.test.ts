@@ -1,35 +1,28 @@
-import { describe, expect, test } from "bun:test"
-import { rawRequest, resolveOperation } from "./api"
+import { expect, test } from "bun:test"
+import { YCoding } from "@ycoding-ai/client/v5"
+import { invokeOperation, resolveOperation } from "./api"
+import { v5Server } from "../../../test/fixture/v5-server"
 
-describe("api request resolution", () => {
-  test("resolves an operation ID with path and query parameters", () => {
-    expect(
-      resolveOperation(
-        {
-          paths: {
-            "/api/session/{sessionID}": {
-              get: { operationId: "session.get" },
-            },
-          },
-        },
-        "session.get",
-        { sessionID: "ses/a", workspace: "work" },
-      ),
-    ).toEqual({ method: "GET", path: "/api/session/ses%2Fa?workspace=work" })
-  })
+test("generic API resolves the local typed catalog and rejects HTTP and remote-only names", () => {
+  expect(resolveOperation("health.get").requestType).toBe("ycoding.v5.health_get_Request")
+  expect(() => resolveOperation("GET /api/health")).toThrow("Local operation not found")
+  expect(() => resolveOperation("notice.list")).toThrow("Local operation not found")
+})
 
-  test("rejects a missing path parameter", () => {
-    expect(() =>
-      resolveOperation(
-        { paths: { "/api/session/{sessionID}": { get: { operationId: "session.get" } } } },
-        "session.get",
-        {},
-      ),
-    ).toThrow("Missing path parameter: sessionID")
+test("generic API invokes the catalog request and returns the typed result over v5", async () => {
+  const requests: unknown[] = []
+  const server = v5Server((name, data) => {
+    requests.push({ name, data })
+    return { data: { accepted: true } }
   })
-
-  test("resolves curl-like method and path input", () => {
-    expect(rawRequest(["post", "/api/foo"])).toEqual({ method: "POST", path: "/api/foo" })
-    expect(rawRequest(["session.list"])).toBeUndefined()
-  })
+  const client = YCoding.make({ endpoint: { url: server.url } })
+  try {
+    expect(await invokeOperation(client, "health.stop", { payload: { instanceID: "instance_fixture" } })).toEqual({
+      data: { accepted: true },
+    })
+    expect(requests).toEqual([{ name: "health.stop", data: { payload: { instanceID: "instance_fixture" } } }])
+  } finally {
+    client.transport.close()
+    await server.close()
+  }
 })

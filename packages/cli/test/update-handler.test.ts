@@ -1,5 +1,5 @@
 import { NodeFileSystem } from "@effect/platform-node"
-import { Global } from "@ycoding-ai/core/global"
+import { FrontendPaths } from "../src/paths"
 import { expect, mock, spyOn, test } from "bun:test"
 import { Effect, Option } from "effect"
 import { appendFileSync, rmSync } from "node:fs"
@@ -7,11 +7,14 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { ServiceConfig } from "../src/services/service-config"
+import { v5Server } from "./fixture/v5-server"
 
 const marker = "UPDATE_HANDLER_RESULT:"
 
 type Scenario = {
-  readonly server: "absent" | { readonly outstanding: ReadonlyArray<string> | "error"; readonly running?: ReadonlyArray<string> }
+  readonly server:
+    | "absent"
+    | { readonly outstanding: ReadonlyArray<string> | "error"; readonly running?: ReadonlyArray<string> }
   readonly install?: "fails"
   readonly force?: boolean
   readonly requested?: string
@@ -32,7 +35,7 @@ type Outcome = {
 if (process.argv[2] === "serve") await serveReplacement()
 else if (process.env.YCODING_UPDATE_SCENARIO) await runHandler(JSON.parse(process.env.YCODING_UPDATE_SCENARIO))
 else {
-  const outstandingOnly = ["GET /api/session/outstanding"]
+  const outstandingOnly = ["session.outstanding"]
 
   test("an idle background server is restarted after the update installs", async () => {
     const outcome = await run({ server: { outstanding: [] } })
@@ -218,7 +221,8 @@ async function run(scenario: Scenario) {
       new Response(child.stderr).text(),
     ])
     const line = stdout.split("\n").find((value) => value.startsWith(marker))
-    if (!line) throw new Error(`Update handler fixture exited ${exit} without a result: ${stderr}\n${stdout.slice(-500)}`)
+    if (!line)
+      throw new Error(`Update handler fixture exited ${exit} without a result: ${stderr}\n${stdout.slice(-500)}`)
     const outcome: Outcome = JSON.parse(line.slice(marker.length))
     return outcome
   } finally {
@@ -232,7 +236,10 @@ async function runHandler(scenario: Scenario) {
   const oldRequests: string[] = []
   const installs: string[] = []
   await fs.mkdir(path.dirname(registration), { recursive: true })
-  const old = scenario.server === "absent" ? undefined : await startOldServer(scenario.server.outstanding, scenario.server.running ?? [], registration, oldRequests)
+  const old =
+    scenario.server === "absent"
+      ? undefined
+      : await startOldServer(scenario.server.outstanding, scenario.server.running ?? [], registration, oldRequests)
   const actual = await import("../src/update/update")
   await mock.module("../src/update/update", () => ({
     ...actual,
@@ -253,7 +260,7 @@ async function runHandler(scenario: Scenario) {
     stderr.push(String(chunk))
     return true
   })
-  const layer = Global.layerWith({
+  const layer = FrontendPaths.layerWith({
     data: path.join(root, "data"),
     config: path.join(root, "config"),
     state: path.join(root, "state"),
@@ -263,6 +270,7 @@ async function runHandler(scenario: Scenario) {
       update({ version: Option.some(scenario.requested ?? "2.0.0"), force: scenario.force ?? false }).pipe(
         Effect.provide(layer),
         Effect.provide(NodeFileSystem.layer),
+        Effect.scoped,
       ),
     )
   } finally {
@@ -280,7 +288,7 @@ async function runHandler(scenario: Scenario) {
     .catch(() => [])
   if (newServerAlive) process.kill(final.pid, "SIGKILL")
   old?.holder.kill()
-  await old?.server.stop(true)
+  await old?.server.close()
   const outcome: Outcome = {
     stdout: stdout.join(""),
     stderr: stderr.join(""),
@@ -302,29 +310,32 @@ async function startOldServer(
   requests: string[],
 ) {
   // The stop handshake waits for the registered pid to exit, so it belongs to a separate holder process.
-  const holder = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "ignore" })
-  const server = Bun.serve({
-    port: 0,
-    fetch(request) {
-      const url = new URL(request.url)
-      requests.push(`${request.method} ${url.pathname}`)
-      if (url.pathname === "/api/health")
-        return Response.json({ healthy: true, version: "1.0.0", pid: holder.pid, sourceEpoch: "epoch_old" })
-      if (url.pathname === "/api/session/outstanding")
-        return outstanding === "error"
-          ? new Response("unavailable", { status: 500 })
-          : Response.json({ data: outstanding, running, failed: [] })
-      if (url.pathname === "/api/service/stop") {
+  const holder = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], {
+    stdout: "ignore",
+    stderr: "ignore",
+  })
+  const server = v5Server(
+    (name) => {
+      if (name === "health.get")
+        return { data: { healthy: true, version: "1.0.0", pid: holder.pid, sourceEpoch: "epoch_old" } }
+      requests.push(name)
+      if (name === "session.outstanding")
+        return outstanding === "error" ? new Error("unavailable") : { data: outstanding, running, failed: [], lost: [] }
+      throw new Error(name)
+    },
+    {
+      httpRequests: requests,
+      stop: (instanceID) => {
+        if (instanceID !== "old-service") return false
         rmSync(registration, { force: true })
         holder.kill()
-        return Response.json({ accepted: true })
-      }
-      return new Response(null, { status: 404 })
+        return true
+      },
     },
-  })
+  )
   await fs.writeFile(
     registration,
-    JSON.stringify({ id: "old-service", version: "1.0.0", url: server.url.toString(), pid: holder.pid }),
+    JSON.stringify({ id: "old-service", version: "1.0.0", url: server.url, pid: holder.pid }),
   )
   return { server, holder }
 }

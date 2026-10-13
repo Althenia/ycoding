@@ -1,7 +1,8 @@
 import { EOL } from "node:os"
 import { Effect } from "effect"
 import { Service } from "@ycoding-ai/client/effect/service"
-import { YCoding, type IntegrationCommandStatusOutput, type YCodingClient } from "@ycoding-ai/client/promise"
+import type { IntegrationCommandStatusOutput, YCodingClient } from "@ycoding-ai/client/promise"
+import { frontendClient } from "../../../services/client"
 import { Commands } from "../../commands"
 import { Runtime } from "../../../framework/runtime"
 import { ServiceConfig } from "../../../services/service-config"
@@ -13,7 +14,7 @@ export default Runtime.handler(
   Effect.fn("cli.auth.connect")(function* (input) {
     process.stdout.write("Connecting..." + EOL + EOL)
     const endpoint = yield* Service.ensure(yield* ServiceConfig.options())
-    const client = YCoding.make({ baseUrl: endpoint.url, headers: Service.headers(endpoint) })
+    const client = yield* frontendClient(endpoint)
     yield* request(() => client.integration.wellknown.add({ url: input.url, location }))
     const integrationID = input.url.replace(/\/+$/, "")
     const started = yield* request(() =>
