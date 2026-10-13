@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { MacOSComputer } from "@ycoding-ai/core/computer/macos"
+import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
+import { AppProcess } from "@ycoding-ai/core/process"
+import { Effect } from "effect"
 import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -67,14 +70,15 @@ describe("macOS computer helper packaging", () => {
       const bin = await mkdtemp(path.join(os.tmpdir(), "ycoding-computer-placement-"))
       try {
         await buildComputerHelper({ platform: "darwin", arch: process.arch === "x64" ? "x64" : "arm64" }, bin)
-        const request = path.join(bin, "request.json")
-        const response = path.join(bin, "response.json")
-        await Bun.write(request, JSON.stringify({ action: "desktop.list", owner: { sessionID: "ses_placement", callID: "call_placement" } }))
-        const run = Bun.spawnSync([path.join(bin, "YCoding Computer Use.app/Contents/MacOS/ycoding-computer-use"), request, response])
-        expect(run.exitCode).toBe(0)
-        const listed = await Bun.file(response).json()
+        const listed = await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+          const processes = yield* AppProcess.Service
+          const invoke = MacOSComputer.invokeWith(processes, "darwin", path.join(bin, "YCoding Computer Use.app"))
+          yield* Effect.addFinalizer(invoke.shutdown)
+          return yield* invoke({ action: "desktop.list", owner: { sessionID: "ses_placement", callID: "call_placement" } },
+            new AbortController().signal)
+        })).pipe(Effect.provide(LayerNode.compile(AppProcess.node))))
         expect(listed).toMatchObject({ status: "ok", action: "desktop.list" })
-        const windows = listed.apps.flatMap((app: { windows: ReadonlyArray<{ on_screen: boolean; placement: string }> }) => app.windows)
+        const windows = (listed.apps ?? []).flatMap((app) => app.windows)
         for (const window of windows) {
           expect(["current_space", "other_space", "full_screen", "unplaced"]).toContain(window.placement)
           if (window.on_screen) expect(["current_space", "full_screen"]).toContain(window.placement)

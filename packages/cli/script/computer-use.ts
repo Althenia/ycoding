@@ -1,4 +1,5 @@
 import { copyFile, lstat, mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises"
+import { createConnection, type Socket } from "node:net"
 import os from "node:os"
 import path from "node:path"
 import { MacOSComputer } from "@ycoding-ai/core/computer/macos"
@@ -168,26 +169,72 @@ export async function verifyPackagedComputerHelper(binDirectory: string, platfor
 
 async function smokeApplication(executable: string) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-computer-smoke-"))
+  const launch = path.join(directory, "service.json")
+  await writeFile(launch, JSON.stringify({ action: "service", controlDirectory: directory, ownerPID: process.pid }), { mode: 0o600 })
+  const service = Bun.spawn([executable, launch], { stdout: "ignore", stderr: "pipe" })
   try {
-    await writeFile(path.join(directory, "request.json"), "{}")
-    const result = Bun.spawnSync(
-      [executable, path.join(directory, "request.json"), path.join(directory, "response.json")],
-      { stdout: "pipe", stderr: "pipe" },
-    )
-    if (result.exitCode !== 0)
-      throw new Error(`Computer helper smoke failed (${result.exitCode}): ${result.stderr.toString()}`)
-    const response: unknown = await Bun.file(path.join(directory, "response.json")).json()
+    const responses = await exchange(path.join(directory, "computer-use.sock"), [
+      { jsonrpc: "2.0", id: 1, method: "ping", params: { clientApiVersion: 1 } },
+      { jsonrpc: "2.0", id: 2, method: "request", params: { deadlineUnixMilliseconds: Date.now() + 10_000,
+        request: { action: "smoke", owner: { sessionID: "", callID: "" } } } },
+      { jsonrpc: "2.0", id: 3, method: "shutdown", params: {} },
+    ])
+    const response = Reflect.get(responses[1] ?? {}, "result")
     if (
+      Reflect.get(Reflect.get(responses[0] ?? {}, "result") ?? {}, "serverApiVersion") !== 1 ||
       typeof response !== "object" ||
       response === null ||
       Reflect.get(response, "status") !== "error" ||
       Reflect.get(response, "code") !== "invalid_request" ||
       Reflect.get(response, "outcome") !== "not_started"
     )
-      throw new Error(`Computer helper returned an invalid smoke response: ${JSON.stringify(response)}`)
+      throw new Error(`Computer helper returned an invalid smoke response: ${JSON.stringify(responses)}`)
+    if ((await service.exited) !== 0)
+      throw new Error(`Computer helper smoke failed (${service.exitCode}): ${await new Response(service.stderr).text()}`)
   } finally {
+    service.kill()
     await rm(directory, { recursive: true, force: true })
   }
+}
+
+async function exchange(socketPath: string, messages: ReadonlyArray<{ readonly jsonrpc: "2.0"; readonly id: number; readonly method: string; readonly params: object }>) {
+  const deadline = Date.now() + 10_000
+  const socket = await connectService(socketPath, deadline)
+  const responses: unknown[] = []
+  const received = new Promise<unknown[]>((resolve, reject) => {
+    let buffer = Buffer.alloc(0)
+    socket.on("data", (chunk: Buffer) => {
+      buffer = Buffer.concat([buffer, chunk])
+      while (buffer.length >= 4 && buffer.length >= buffer.readUInt32LE(0) + 4) {
+        const size = buffer.readUInt32LE(0)
+        responses.push(JSON.parse(buffer.subarray(4, size + 4).toString("utf8")))
+        buffer = buffer.subarray(size + 4)
+      }
+      if (responses.length === messages.length) resolve(responses)
+    })
+    socket.on("error", reject)
+    socket.on("close", () => (responses.length === messages.length ? resolve(responses) : reject(new Error("Computer helper closed the smoke connection"))))
+    setTimeout(() => reject(new Error("Computer helper smoke timed out")), Math.max(0, deadline - Date.now()))
+  })
+  for (const message of messages) {
+    const body = Buffer.from(JSON.stringify(message))
+    const header = Buffer.alloc(4)
+    header.writeUInt32LE(body.length)
+    socket.write(Buffer.concat([header, body]))
+  }
+  return received.finally(() => socket.destroy())
+}
+
+async function connectService(socketPath: string, deadline: number): Promise<Socket> {
+  const socket = await new Promise<Socket | undefined>((resolve) => {
+    const connection = createConnection(socketPath)
+    connection.once("connect", () => resolve(connection))
+    connection.once("error", () => resolve(undefined))
+  })
+  if (socket) return socket
+  if (Date.now() >= deadline) throw new Error("Computer helper service did not start")
+  await Bun.sleep(50)
+  return connectService(socketPath, deadline)
 }
 
 function run(command: readonly string[]) {
