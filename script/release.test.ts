@@ -441,8 +441,53 @@ test("packaging overlaps packaged-browser acceptance without bypassing either de
   expect(verify).not.toContain("token:")
   expect(verify).not.toContain("permissions:")
   expect(verify).toContain("persist-credentials: false")
-  expect(verify).toContain("git merge-base --is-ancestor \"$GITHUB_SHA\" origin/main")
-  expect(verify).toContain("      - name: Verify tag is reachable from main\n        if: github.event_name == 'push'\n")
+  expect(verify).toContain('git merge-base --is-ancestor "$GITHUB_SHA" "origin/$branch"')
+  expect(verify).toContain("      - name: Verify tag is reachable from release branch\n        if: github.event_name == 'push'\n")
+})
+
+test.each(["0.10.6", "0.11.0-beta.1", "0.11.0-beta.10"])("release version validation accepts %s", (version) => {
+  const check = workflow.split("\n").find((line) => line.includes("grep -Eq '^(0|"))!.trim().replace(/ \\$/, "")
+  expect(Bun.spawnSync(["bash", "-o", "pipefail", "-c", check], { env: { ...process.env, version }, stdout: "pipe", stderr: "pipe" }).exitCode).toBe(0)
+})
+
+test.each([
+  ["v0.10.6", "main", "bun run deploy:cloudflare", ""],
+  ["v0.11.0-beta.1", "rust-backend", "bun run deploy:cloudflare --env beta", "--prerelease --latest=false"],
+])("%s selects the release branch, deploy environment and publication flags", (tag, branch, deploy, flags) => {
+  const sourceStep = workflow.split("      - name: Verify tag is reachable from release branch")[1]!.split("      - name:")[0]!.split("        run: |\n")[1]!
+  const deployStep = workflow.split("      - name: Deploy to Cloudflare")[1]!.split("        run: |\n")[1]!
+  const publicationStart = workflow.indexOf("          release_flags=()")
+  const publicationEnd = workflow.indexOf("\n          gh release create", publicationStart)
+  const publication = workflow.slice(publicationStart, publicationEnd)
+  const result = Bun.spawnSync(["bash", "-euo", "pipefail", "-c", `git() { printf 'git %s\\n' "$*"; }\nbun() { printf 'bun %s\\n' "$*"; }\n${sourceStep}\n${deployStep}\nversion="$RELEASE_VERSION"\n${publication}\nprintf 'flags %s\\n' "\${release_flags[*]}"`], {
+    env: { ...process.env, GITHUB_REF_NAME: tag, GITHUB_SHA: "synthetic-verified-sha", CLOUDFLARE_API_TOKEN: "synthetic-test-value", RELEASE_VERSION: tag.slice(1) },
+    stdout: "pipe", stderr: "pipe",
+  })
+  expect(result.exitCode, result.stderr.toString()).toBe(0)
+  expect(result.stdout.toString()).toContain(`origin ${branch}:refs/remotes/origin/${branch}`)
+  expect(result.stdout.toString()).toContain(`origin/${branch}`)
+  expect(result.stdout.toString()).toContain(`${deploy}\n`)
+  expect(result.stdout.toString()).toContain(`flags ${flags}\n`)
+  expect(workflow).toContain('"${release_flags[@]}"')
+})
+
+test.each([
+  ["0.10.6", true],
+  ["0.11.0-beta.1", false],
+])("changelog range lookup for %s filters prereleases only for stable releases", (version, stable) => {
+  const start = workflow.indexOf('          case "$version" in\n            *-beta.*)\n              release_query=')
+  const end = workflow.indexOf("\n          range=", start)
+  const selection = workflow.slice(start, end)
+  const result = Bun.spawnSync(["bash", "-euo", "pipefail", "-c", `gh() { printf '%s\n' "$*" >&3; if [ "$1" = api ]; then printf 'v0.10.6\n'; fi; }\nexec 3>&2\nversion="$RELEASE_VERSION"\nRELEASE_TAG="v$version"\nGH_REPO=Althenia/ycoding\n${selection}\nprintf '%s\n' "$prev"`], {
+    env: { ...process.env, RELEASE_VERSION: version },
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  expect(result.exitCode, result.stderr.toString()).toBe(0)
+  expect(result.stdout.toString()).toBe("v0.10.6\n")
+  expect(result.stderr.toString()).toContain("--json tagName,isPrerelease")
+  expect(result.stderr.toString().includes(".isPrerelease == false")).toBe(stable)
+  expect(result.stderr.toString().includes(".prerelease == false")).toBe(stable)
 })
 
 test("the packaged isolated-browser smoke waits for the native builds on the approved host", () => {

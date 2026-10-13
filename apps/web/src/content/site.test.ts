@@ -10,6 +10,7 @@ describe("public landing copy", () => {
       secondaryAction: { label: "Open workspace", href: "/remote" },
     })
     expect(SITE.installing.command).toBe("curl -fsSL https://ycoding.althenia.app/install.sh | sh")
+    expect(SITE.installing.betaCommand).toBe("curl -fsSL https://beta.ycoding.althenia.app/install.sh | sh -s -- --beta")
     expect(SITE.features.map((feature) => feature.title)).toEqual([
       "Durable Sessions",
       "Explicit autonomy",

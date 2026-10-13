@@ -1,6 +1,16 @@
 import { expect, test } from "bun:test"
 import path from "node:path"
 
+test("release builds retain the exact first beta version rather than the manifest version", async () => {
+  const result = Bun.spawn(["bun", "-e", 'const { Script } = await import("./packages/script/src/index.ts"); if (Script.version !== "0.11.0-beta.1") throw new Error("Unexpected beta version")'], {
+    cwd: path.resolve(import.meta.dirname, ".."),
+    env: { ...process.env, YCODING_CHANNEL: "beta", YCODING_VERSION: "0.11.0-beta.1" },
+    stdout: "pipe", stderr: "pipe", timeout: 10_000,
+  })
+  const error = await new Response(result.stderr).text()
+  expect(await result.exited, error).toBe(0)
+})
+
 test("workspace and build scripts run with the installed Bun without a version pin", async () => {
   const root = await Bun.file(new URL("../package.json", import.meta.url)).json()
   expect(root.packageManager).toBe("bun@https://github.com/oven-sh/bun/releases/latest")

@@ -15,7 +15,7 @@ export default Runtime.handler(UpdateCommand, (input) =>
       const { UpdateProgress } = await import("../../update/progress")
       const requested = Option.getOrUndefined(input.version)
       if (requested && !validVersion(requested)) throw new Error(`Invalid YCoding version: ${requested}`)
-      const version = requested ?? (await latestRelease())
+      const version = requested ?? (await latestRelease(undefined, InstallationVersion))
       if (version === InstallationVersion) {
         process.stdout.write(`ycoding ${InstallationVersion} is already up to date\n`)
         return undefined

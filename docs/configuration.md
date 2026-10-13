@@ -42,6 +42,8 @@ The obsolete files `tui.json` and `kv.json` have no effect. Project-local `.ycod
 
 ## Global directories
 
+The beta channel keeps its own data directory and imports a copy of existing data on first start without changing stable data.
+
 YCoding resolves directories through `xdg-basedir` and appends the `ycoding` namespace.
 
 | Purpose                        | Base                                                     |
@@ -52,6 +54,18 @@ YCoding resolves directories through `xdg-basedir` and appends the `ycoding` nam
 | Cache                          | `$XDG_CACHE_HOME/ycoding`, or the platform XDG fallback  |
 
 `YCODING_CONFIG_DIR` overrides the global configuration directory used by the process.
+
+## Installation and release channels
+
+Stable installation uses `curl -fsSL https://ycoding.althenia.app/install.sh | sh` and resolves GitHub's latest stable release. The Rust backend beta channel starts at `0.11.0-beta.1`:
+
+```sh
+curl -fsSL https://beta.ycoding.althenia.app/install.sh | sh -s -- --beta
+```
+
+The installer accepts `--beta` or `YCODING_CHANNEL=beta` to select the newest published, non-draft `X.Y.Z-beta.N` prerelease. `YCODING_VERSION` pins an exact version and takes precedence over channel discovery. These are installer options, not runtime JSON/JSONC settings.
+
+`ycoding update` derives its channel from the running version. Beta builds select the higher of the newest beta and newest stable by semantic version, so a newer stable supersedes the beta, including the stable release of the same version. Stable builds stay on stable unless an explicit `--version <version>` is supplied. Background update notices follow the same selection. To switch back explicitly, run the normal stable install command above.
 
 ### Native computer helper
 

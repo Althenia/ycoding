@@ -29,10 +29,10 @@ describe("release updater", () => {
     const urls: string[] = []
     const version = await latestRelease(async (url) => {
       urls.push(url)
-      return Response.json({ tag_name: "v1.2.3-beta.1" })
+      return Response.json({ tag_name: "v0.10.6" })
     })
 
-    expect(version).toBe("1.2.3-beta.1")
+    expect(version).toBe("0.10.6")
     expect(urls).toEqual(["https://api.github.com/repos/Althenia/ycoding/releases/latest"])
     expect(
       await latestRelease(async () => Response.json({ tag_name: "../../bad" })).then(
@@ -40,6 +40,59 @@ describe("release updater", () => {
         (error) => (error instanceof Error ? error.message : String(error)),
       ),
     ).toContain("invalid version")
+  })
+
+  test.each([
+    ["0.10.6", "0.11.0-beta.1", "0.11.0-beta.1"],
+    ["0.11.0", "0.11.0-beta.10", "0.11.0"],
+    ["0.12.0", "0.11.0-beta.10", "0.12.0"],
+    ["0.10.6", undefined, "0.10.6"],
+  ])("a beta build selects the higher published beta or stable (%s, %s)", async (stable, beta, expected) => {
+    const urls: string[] = []
+    const version = await latestRelease(async (url) => {
+      urls.push(url)
+      if (url.endsWith("/latest")) return Response.json({ tag_name: `v${stable}` })
+      return Response.json([
+        { tag_name: "v99.0.0-beta.1", draft: true, prerelease: true },
+        { tag_name: "v98.0.0-beta.1", draft: false, prerelease: false },
+        { tag_name: "v97.0.0-rc.1", draft: false, prerelease: true },
+        { tag_name: "v96.0.0-beta.01", draft: false, prerelease: true },
+        ...(beta ? [{ tag_name: `v${beta}`, draft: false, prerelease: true }, { tag_name: "v0.9.0-beta.2", draft: false, prerelease: true }] : []),
+      ])
+    }, "0.11.0-beta.1")
+    expect(version).toBe(expected)
+    expect(urls).toContain("https://api.github.com/repos/Althenia/ycoding/releases?per_page=100&page=1")
+  })
+
+  test("beta discovery paginates and compares beta counters numerically", async () => {
+    const urls: string[] = []
+    const version = await latestRelease(async (url) => {
+      urls.push(url)
+      if (url.endsWith("/latest")) return Response.json({ tag_name: "v0.10.6" })
+      if (url.endsWith("page=1")) return Response.json(Array.from({ length: 100 }, () => ({ tag_name: "v0.11.0-beta.2", draft: false, prerelease: true })))
+      return Response.json([{ tag_name: "v0.11.0-beta.10", draft: false, prerelease: true }])
+    }, "0.11.0-beta.1")
+    expect(version).toBe("0.11.0-beta.10")
+    expect(urls.at(-1)).toEndWith("page=2")
+  })
+
+  test("a stable build never discovers or accepts a beta as latest", async () => {
+    const urls: string[] = []
+    expect(await latestRelease(async (url) => {
+      urls.push(url)
+      return Response.json({ tag_name: "v0.10.6" })
+    }, "0.10.5")).toBe("0.10.6")
+    expect(urls).toEqual(["https://api.github.com/repos/Althenia/ycoding/releases/latest"])
+    await expect(latestRelease(async () => Response.json({ tag_name: "v0.11.0-beta.1" }), "0.10.6")).rejects.toThrow("invalid version")
+  })
+
+  test.each(["http", "shape", "size"])("beta discovery surfaces %s failures instead of silently installing stable", async (failure) => {
+    await expect(latestRelease(async (url) => {
+      if (url.endsWith("/latest")) return Response.json({ tag_name: "v0.10.6" })
+      if (failure === "http") return new Response("", { status: 403 })
+      if (failure === "size") return new Response(" ".repeat(8 * 1024 * 1024 + 1))
+      return Response.json({ message: "invalid list" })
+    }, "0.11.0-beta.1")).rejects.toThrow()
   })
 
   test("verifies and installs the complete macOS executable pair", async () => {

@@ -143,16 +143,99 @@ fail() {
 command -v curl >/dev/null 2>&1 || fail "curl is required"
 command -v tar >/dev/null 2>&1 || fail "tar is required"
 
+channel=${YCODING_CHANNEL:-stable}
+
 # An unknown argument fails rather than being ignored, because silently accepting
 # a misspelled flag would install less than the user asked for.
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --beta) channel=beta ;;
     *) fail "Unknown argument: $1" ;;
   esac
   shift
 done
 
 version=${YCODING_VERSION:-}
+if [ -z "$version" ] && [ "$channel" = beta ]; then
+  temporary=$(mktemp -d "${TMPDIR:-/tmp}/ycoding-install.XXXXXX") || fail "Failed to create a temporary directory"
+  page=1
+  while :; do
+    curl --proto '=https' --proto-redir '=https' --max-filesize 8388608 -fsSL "https://api.github.com/repos/$repository/releases?per_page=100&page=$page" >"$temporary/releases.json" ||
+      fail "Failed to resolve the latest beta release"
+    [ "$(wc -c < "$temporary/releases.json")" -le 8388608 ] || fail "Beta releases response is too large"
+    selected=$(awk -v best="$version" '
+      function newer(value, current, a, b, i) {
+        if (current == "") return 1
+        split(value, a, /[.-]/); split(current, b, /[.-]/)
+        for (i = 1; i <= 5; i++) {
+          if (i == 4) continue
+          if (a[i] + 0 != b[i] + 0) return a[i] + 0 > b[i] + 0
+        }
+        return 0
+      }
+      { json = json $0 "\n" }
+      END {
+        for (pos = 1; pos <= length(json); pos++) {
+          token = substr(json, pos, 1)
+          if (token ~ /[[:space:]]/) continue
+          if (token == "\"") {
+            token = ""
+            closed = 0
+            while (++pos <= length(json)) {
+              char = substr(json, pos, 1)
+              if (char == "\\") { token = token char substr(json, ++pos, 1); continue }
+              if (char == "\"") { closed = 1; break }
+              token = token char
+            }
+            if (!closed) exit 1
+            if (depth == 2) {
+              if (key == "") key = token
+              else { if (key == "tag_name") tag = token; key = "" }
+            }
+            continue
+          }
+          if (token == "[" || token == "{") {
+            if (depth == 0 && (token != "[" || started)) exit 1
+            started = 1
+            stack[++depth] = token
+            if (depth == 2) { if (token != "{") exit 1; tag = ""; draft = ""; prerelease = ""; key = "" }
+            continue
+          }
+          if (token == "]" || token == "}") {
+            if (depth == 0 || (token == "]" && stack[depth] != "[") || (token == "}" && stack[depth] != "{")) exit 1
+            if (depth == 2) {
+              count++
+              if (draft == "false" && prerelease == "true" && tag ~ /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-beta\.(0|[1-9][0-9]*)$/) {
+                value = substr(tag, 2)
+                if (newer(value, best)) best = value
+              }
+            }
+            depth--
+            if (depth == 2) key = ""
+            continue
+          }
+          if (token == ":" || token == ",") continue
+          if (match(substr(json, pos), /^(true|false|null|-?[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?)/) != 1) exit 1
+          token = substr(json, pos, RLENGTH)
+          pos += RLENGTH - 1
+          if (depth == 2) {
+            if (key == "draft") draft = token
+            if (key == "prerelease") prerelease = token
+            key = ""
+          }
+        }
+        if (!started || depth != 0) exit 1
+        print best
+        print count + 0
+      }
+    ' "$temporary/releases.json") || fail "Invalid beta releases response"
+    version=$(printf '%s\n' "$selected" | head -n 1)
+    count=$(printf '%s\n' "$selected" | tail -n 1)
+    [ "$count" -ge 100 ] || break
+    page=$((page + 1))
+  done
+  [ -n "$version" ] || fail "No published beta release is available"
+fi
 if [ -z "$version" ]; then
   latest_url=$(curl --proto '=https' --proto-redir '=https' -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$repository/releases/latest") ||
     fail "Failed to resolve the latest release"
@@ -186,7 +269,9 @@ esac
 asset="ycoding-$version-$target.tar.gz"
 checksums="ycoding-$version-checksums.txt"
 release_url="https://github.com/$repository/releases/download/v$version"
-temporary=$(mktemp -d "${TMPDIR:-/tmp}/ycoding-install.XXXXXX") || fail "Failed to create a temporary directory"
+if [ -z "$temporary" ]; then
+  temporary=$(mktemp -d "${TMPDIR:-/tmp}/ycoding-install.XXXXXX") || fail "Failed to create a temporary directory"
+fi
 
 # Download the release asset and verify it against the release checksum file.
 fetch_verified() {

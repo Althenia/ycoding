@@ -74,7 +74,7 @@ export const layerWith = (options: Options = {}) =>
 
       const latest = Effect.fnUntraced(function* () {
         return yield* Effect.tryPromise({
-          try: () => latestRelease(options.fetch),
+          try: () => latestRelease(options.fetch, version),
           catch: (cause) => new Error("Failed to check for updates", { cause }),
         })
       })

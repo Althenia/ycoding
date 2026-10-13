@@ -57,6 +57,22 @@ ycoding --model <[profile#]provider/model[#variant]> "Explain this repository"
 
 Keep up to date with `ycoding update`. See [installation](https://ycoding.althenia.app/docs/installation) for macOS permissions, quarantine, and upgrade notes.
 
+## Install the beta
+
+The Rust backend ships through a separate beta channel, starting at `0.11.0-beta.1`; stable releases stay separate. On macOS or Linux:
+
+```sh
+curl -fsSL https://beta.ycoding.althenia.app/install.sh | sh -s -- --beta
+```
+
+`--beta` or `YCODING_CHANNEL=beta` selects the newest published, non-draft beta prerelease. `YCODING_VERSION` still pins an exact version. The beta keeps its own data directory and imports a copy of existing data on first start without changing stable data. On a beta build, `ycoding update` selects the higher of the newest beta and newest stable; a newer stable supersedes the beta. Stable builds never update to a beta automatically.
+
+Switch back with the normal stable installer:
+
+```sh
+curl -fsSL https://ycoding.althenia.app/install.sh | sh
+```
+
 ## Three surfaces, one runtime
 
 | Terminal                                                                                                                                                                                                           | Web                                                                                                                                                                     | Phone                                                                                                                                            |

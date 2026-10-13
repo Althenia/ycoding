@@ -45,6 +45,12 @@ const INTERNAL_DOC_SLUGS = [
 ] as const
 
 describe("public docs allowlist", () => {
+  test("installation documents beta selection, isolated data and the stable return command", () => {
+    const page = findDocPage("installation")!
+    const text = JSON.stringify(page)
+    for (const required of ["curl -fsSL https://beta.ycoding.althenia.app/install.sh | sh -s -- --beta", "YCODING_CHANNEL=beta", "YCODING_VERSION", "own data directory", "imports a copy", "without changing stable data", "newer stable", "curl -fsSL https://ycoding.althenia.app/install.sh | sh"])
+      expect(text).toContain(required)
+  })
   test("documents Muse account and key setup with current authentication limits", () => {
     const section = findDocPage("configuration/providers")?.sections.find((section) => section.heading === "Muse (Meta)")
     const text = section?.blocks.flatMap((block) => block.kind === "paragraph" ? [block.text] : []).join(" ") ?? ""

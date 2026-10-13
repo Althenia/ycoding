@@ -56,7 +56,7 @@ export function releaseTarget(platform: string, arch: string) {
   )
 }
 
-export async function latestRelease(fetcher: Fetch = fetch) {
+export async function latestRelease(fetcher: Fetch = fetch, current?: string) {
   const response = await fetcher(`https://api.github.com/repos/${repository}/releases/latest`, {
     headers: { Accept: "application/vnd.github+json", "User-Agent": "ycoding" },
     signal: AbortSignal.timeout(10_000),
@@ -70,8 +70,26 @@ export async function latestRelease(fetcher: Fetch = fetch) {
     throw new Error("Latest release response did not contain a tag")
   }
   const version = data.tag_name.startsWith("v") ? data.tag_name.slice(1) : ""
-  if (!validVersion(version)) throw new Error(`Latest release returned an invalid version: ${data.tag_name}`)
-  return version
+  if (!validVersion(version) || semver.prerelease(version)) throw new Error(`Latest release returned an invalid version: ${data.tag_name}`)
+  if (!current || !/^\d+\.\d+\.\d+-beta\.\d+$/.test(current) || !validVersion(current)) return version
+  let newest = version
+  for (let page = 1; ; page++) {
+    const response = await fetcher(`https://api.github.com/repos/${repository}/releases?per_page=100&page=${page}`, {
+      headers: { Accept: "application/vnd.github+json", "User-Agent": "ycoding" },
+      signal: AbortSignal.timeout(10_000),
+    })
+    requireHttps(response)
+    if (!response.ok) throw new Error(`Failed to resolve beta releases: HTTP ${response.status}`)
+    const releases: unknown = JSON.parse(new TextDecoder().decode(await readLimited(response, 8 * maxChecksumsBytes, "beta releases response")))
+    if (!Array.isArray(releases)) throw new Error("Beta releases response did not contain a release list")
+    for (const release of releases) {
+      if (typeof release !== "object" || release === null || release.draft !== false || release.prerelease !== true || typeof release.tag_name !== "string") continue
+      const beta = release.tag_name.slice(1)
+      if (!/^v\d+\.\d+\.\d+-beta\.\d+$/.test(release.tag_name) || !validVersion(beta)) continue
+      if (semver.gt(beta, newest)) newest = beta
+    }
+    if (releases.length < 100) return newest
+  }
 }
 
 export async function installRelease(input: InstallReleaseInput) {

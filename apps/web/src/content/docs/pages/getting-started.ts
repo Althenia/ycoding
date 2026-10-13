@@ -1,4 +1,5 @@
 import type { DocPage } from "../types"
+import { SITE } from "../../site"
 
 export const gettingStartedPages: readonly DocPage[] = [
   {
@@ -130,7 +131,7 @@ export const gettingStartedPages: readonly DocPage[] = [
         blocks: [
           {
             kind: "paragraph",
-            text: "The installer resolves the newest GitHub release, checks the downloaded archive against its SHA-256 checksum, and installs `ycoding` under `~/.local/bin`. It adds that directory to a recognized shell profile only when needed; if your shell is not recognized, add it to PATH yourself.",
+            text: "The installer resolves the newest stable GitHub release, checks the downloaded archive against its SHA-256 checksum, and installs `ycoding` under `~/.local/bin`. It adds that directory to a recognized shell profile only when needed; if your shell is not recognized, add it to PATH yourself.",
           },
           { kind: "code", language: "sh", label: "macOS or Linux x64", code: "curl -fsSL https://ycoding.althenia.app/install.sh | sh" },
           {
@@ -163,6 +164,16 @@ export const gettingStartedPages: readonly DocPage[] = [
             text: "macOS releases sign the computer-use app with a self-signed release identity; the signature is not an Apple Developer ID and does not notarize it. An archive downloaded with a web browser carries the `com.apple.quarantine` attribute, so after extracting it, clear that attribute before the first run. The curl installer and `ycoding update` download without it.",
           },
           { kind: "code", language: "sh", label: "Clear quarantine on a browser-downloaded macOS archive", code: "xattr -dr com.apple.quarantine <extracted-folder>" },
+        ],
+      },
+      {
+        heading: "Install the beta",
+        blocks: [
+          { kind: "paragraph", text: "The Rust backend ships through a separate beta channel, starting at `0.11.0-beta.1`. Stable releases remain separate. Opt in on macOS or Linux with `--beta`, or set `YCODING_CHANNEL=beta` for the installer, to select the newest published, non-draft beta prerelease." },
+          { kind: "code", language: "sh", label: "Install the beta", code: SITE.installing.betaCommand },
+          { kind: "paragraph", text: "`YCODING_VERSION` pins an exact version even when the beta channel is selected. The beta keeps its own data directory and imports a copy of existing data on first start without changing stable data." },
+          { kind: "paragraph", text: "On a beta build, `ycoding update` selects the higher version of the newest beta and newest stable; a newer stable supersedes the beta, including the stable release of the same version. Stable builds never move to a beta automatically. To switch back explicitly, run the normal stable install command:" },
+          { kind: "code", language: "sh", label: "Switch back to stable", code: SITE.installing.command },
         ],
       },
       {

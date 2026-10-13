@@ -94,6 +94,56 @@ describe("curl installer", () => {
 
     expect(result.exitCode).toBe(0)
     expect(result.stdout).toContain(`Installed ycoding ${fixtureVersion}`)
+    expect(await readFile(path.join(fixture.fixture, "curl-urls"), "utf8")).toContain("https://github.com/Althenia/ycoding/releases/latest\n")
+    expect(await readFile(path.join(fixture.fixture, "curl-urls"), "utf8")).not.toContain("api.github.com")
+  })
+
+  test.each(["flag", "environment"])("resolves published beta prereleases with the %s channel selector", async (selector) => {
+    const fixture = await setup({ system: "Linux", machine: "x86_64", version: "0.11.0-beta.10" })
+    await linuxExtensionArchive(fixture)
+    await writeFile(path.join(fixture.fixture, "releases-1"), JSON.stringify([
+      { tag_name: "v9.0.0-beta.1", draft: true, prerelease: true },
+      { tag_name: "v8.0.0-beta.1", draft: false, prerelease: false },
+      { tag_name: "v7.0.0-rc.1", draft: false, prerelease: true },
+      { tag_name: "v0.11.0-beta.2", draft: false, prerelease: true, assets: [{ tag_name: "v99.0.0-beta.1" }], body: "quoted \\\" } text" },
+      { tag_name: "v0.11.0-beta.10", draft: false, prerelease: true },
+    ]))
+    const result = await runInstaller(fixture, { YCODING_VERSION: "", ...(selector === "environment" ? { YCODING_CHANNEL: "beta" } : {}) }, selector === "flag" ? ["--beta"] : [])
+    expect(result.exitCode, result.stderr).toBe(0)
+    expect(result.stdout).toContain("Installed ycoding 0.11.0-beta.10")
+    const urls = await readFile(path.join(fixture.fixture, "curl-urls"), "utf8")
+    expect(urls).toContain("https://api.github.com/repos/Althenia/ycoding/releases?per_page=100&page=1")
+    expect(urls).not.toContain("/releases/latest")
+  })
+
+  test("beta discovery follows full API pages and ignores nested tags", async () => {
+    const fixture = await setup({ system: "Linux", machine: "x86_64", version: "0.11.0-beta.1" })
+    await linuxExtensionArchive(fixture)
+    await writeFile(path.join(fixture.fixture, "releases-1"), JSON.stringify(Array.from({ length: 100 }, () => ({ tag_name: "v0.10.6", draft: false, prerelease: false }))))
+    await writeFile(path.join(fixture.fixture, "releases-2"), JSON.stringify([{ tag_name: "v0.11.0-beta.1", draft: false, prerelease: true }]))
+    const result = await runInstaller(fixture, { YCODING_VERSION: "" }, ["--beta"])
+    expect(result.exitCode, result.stderr).toBe(0)
+    expect(await readFile(path.join(fixture.fixture, "curl-urls"), "utf8")).toContain("&page=2")
+  })
+
+  test.each(["0.11.0-beta.1", "0.10.6"])("an exact %s pin bypasses beta discovery", async (version) => {
+    const fixture = await setup({ system: "Linux", machine: "x86_64", version })
+    await linuxExtensionArchive(fixture)
+    const result = await runInstaller(fixture, { YCODING_CHANNEL: "beta" }, ["--beta"])
+    expect(result.exitCode, result.stderr).toBe(0)
+    const urls = await readFile(path.join(fixture.fixture, "curl-urls"), "utf8")
+    expect(urls).not.toContain("api.github.com")
+    expect(urls).not.toContain("/releases/latest")
+    expect(result.stdout).toContain(`Installed ycoding ${version}`)
+  })
+
+  test.each(["[]", "{bad json", JSON.stringify([{ tag_name: "v0.11.0-beta.01", draft: false, prerelease: true }])])("beta discovery fails safely without an eligible release: %s", async (releases) => {
+    const fixture = await setup()
+    await writeFile(path.join(fixture.fixture, "releases-1"), releases)
+    const result = await runInstaller(fixture, { YCODING_VERSION: "" }, ["--beta"])
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toMatch(/beta release|releases response/)
+    expect(await Bun.file(path.join(fixture.home, ".local/bin/ycoding")).exists()).toBe(false)
   })
 
   test("prints a manual fallback for unsupported shells without creating a profile", async () => {
@@ -551,7 +601,11 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 [ "$proto" = true ] && [ "$proto_redir" = true ] || exit 45
+printf '%s\\n' "$url" >> "$FIXTURE/curl-urls"
 case "$url" in
+  'https://api.github.com/repos/Althenia/ycoding/releases?per_page=100&page='*)
+    page=\${url##*=}
+    cat "$FIXTURE/releases-$page" ;;
   https://github.com/Althenia/ycoding/releases/latest)
     printf '%s' 'https://github.com/Althenia/ycoding/releases/tag/v${version}' ;;
   https://github.com/Althenia/ycoding/releases/download/v${version}/ycoding-${version}-checksums.txt)
