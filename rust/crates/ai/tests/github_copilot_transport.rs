@@ -11,6 +11,108 @@ use ycoding_ai::{
 };
 use ycoding_schema::{parse_json, stringify_json};
 
+#[tokio::test]
+async fn copilot_messages_uses_bearer_and_anthropic_nested_vision_and_initiator() {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for (initiator, vision) in [("user", true), ("agent", true), ("user", true), ("agent", false)] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let actual = read_request(&mut socket).await;
+                let (headers, body) = actual.split_once("\r\n\r\n").unwrap();
+                assert!(headers.starts_with("POST /v1/messages HTTP/1.1"));
+                for header in ["authorization: Bearer fixture", "user-agent: ycoding/fixture", "openai-intent: conversation-edits", "x-github-api-version: 2026-06-01", "anthropic-beta: interleaved-thinking-2025-05-14"] { assert!(headers.contains(header)); }
+                assert!(headers.contains(&format!("x-initiator: {initiator}")));
+                assert_eq!(headers.contains("copilot-vision-request: true"), vision);
+                assert!(!headers.contains("x-api-key"));
+                assert!(!headers.contains("stale-auth"));
+                let body: serde_json::Value = serde_json::from_str(body).unwrap();
+                assert_eq!(body["model"], "claude-sonnet-4");
+                if initiator == "agent" && vision { assert_eq!(body["messages"][0]["content"][0]["content"][0]["type"], "image"); }
+                let sse = "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":0}}\n\ndata: {\"type\":\"message_stop\"}\n\n";
+                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{sse}", sse.len()).as_bytes()).await.unwrap();
+            }
+        });
+        let mut config = github_copilot::SubscriptionConfig::new(Auth::bearer(Credential::value("fixture")), "ycoding/fixture");
+        config.common.base_url = Some(format!("http://{address}/v1"));
+        config.endpoint = Some(github_copilot::Endpoint::Messages);
+        let model = github_copilot::subscription_model("claude-sonnet-4", config).unwrap();
+        let image = Part::Media(ycoding_ai::llm::Media { mime: "image/png".into(), data: ycoding_ai::llm::MediaData::Encoded("AA==".into()), filename: None });
+        let result = Part::ToolResult(ToolResult { id: "call".into(), name: "read".into(), result: ToolResultValue::Content(vec![ycoding_schema::llm::ToolContent::File(ycoding_schema::llm::ToolFileContent { uri: "data:image/png;base64,AA==".into(), mime: "image/png".into(), name: None })]), cache: None, provider_executed: None, provider_metadata: None, output: None });
+        let executor = Executor::new(Executor::http_client().unwrap());
+        for messages in [
+            vec![Message::new(Role::User, vec![image])],
+            vec![Message::new(Role::Tool, vec![result.clone()])],
+            vec![Message::new(Role::Tool, vec![result]), Message::user("Continue")],
+            vec![Message::assistant(vec![Part::Text("Continue".into())])],
+        ] {
+            let mut request = Request::new(model.clone());
+            request.messages = messages;
+            request.http.headers.insert("authorization".into(), "Bearer stale-auth".into());
+            request.http.headers.insert("x-api-key".into(), "stale-key".into());
+            request.http.headers.insert("anthropic-beta".into(), "stale-beta".into());
+            assert_eq!(executor.generate(&request).await.unwrap().finish_reason, FinishReason::Stop);
+        }
+        server.await.unwrap();
+    }).await.unwrap();
+}
+
+#[test]
+fn copilot_subscription_endpoint_and_enterprise_selection() {
+    for (id, endpoint, path) in [
+        ("gpt-5", None, "/responses"),
+        ("gpt-5-mini", None, "/chat/completions"),
+        (
+            "gpt-5",
+            Some(github_copilot::Endpoint::Chat),
+            "/chat/completions",
+        ),
+        (
+            "mai-code-1",
+            Some(github_copilot::Endpoint::Responses),
+            "/responses",
+        ),
+        (
+            "claude-sonnet-4",
+            Some(github_copilot::Endpoint::Messages),
+            "/v1/messages",
+        ),
+    ] {
+        let mut config = github_copilot::SubscriptionConfig::new(
+            Auth::bearer(Credential::value("fixture")),
+            "ycoding/fixture",
+        );
+        config.endpoint = endpoint;
+        config.enterprise_url = Some("https://enterprise.example.test/".into());
+        let model = github_copilot::subscription_model(id, config).unwrap();
+        let mut request = Request::new(model);
+        request.generation.max_tokens = Some(16384.0);
+        request.messages.push(Message::user("Hello"));
+        let prepared = request.model.route.prepare(&request).unwrap();
+        assert_eq!(
+            prepared.url.as_str(),
+            format!("https://copilot-api.enterprise.example.test{path}")
+        );
+        if id.contains("gpt") {
+            assert!(!prepared.encoded_body.contains("max_tokens"));
+            assert!(!prepared.encoded_body.contains("max_output_tokens"));
+        }
+    }
+    let config = github_copilot::SubscriptionConfig::new(
+        Auth::bearer(Credential::value("fixture")),
+        "ycoding/fixture",
+    );
+    let model = github_copilot::subscription_model("gpt-5", config).unwrap();
+    assert_eq!(
+        model.route.endpoint.base_url,
+        "https://api.githubcopilot.com"
+    );
+    let mut config = github_copilot::SubscriptionConfig::new(Auth::None, "ycoding/fixture");
+    config.enterprise_url = Some("enterprise.example.test/path".into());
+    assert!(github_copilot::subscription_model("gpt-5", config).is_err());
+}
+
 async fn read_request(socket: &mut tokio::net::TcpStream) -> String {
     let mut bytes = Vec::new();
     let mut chunk = [0; 1024];

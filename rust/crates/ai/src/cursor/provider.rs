@@ -232,6 +232,22 @@ impl Runtime {
         sessions.insert(key.to_owned(), session.clone());
         Ok(session)
     }
+    fn continuation_key(&self, results: &[&ToolResult]) -> Result<Option<String>, Error> {
+        let sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| Error::transport("Cursor Session map lock failed", "client"))?;
+        Ok(results.iter().find_map(|result| {
+            sessions.iter().find_map(|(key, session)| {
+                let session = session.try_lock().ok()?;
+                session
+                    .pending
+                    .as_ref()
+                    .filter(|pending| pending.call.id == result.id && session.run.is_some())
+                    .map(|_| key.clone())
+            })
+        }))
+    }
     pub async fn snapshot(&self, key: &str) -> Result<Snapshot, Error> {
         Ok(self.session(key)?.lock().await.snapshot.clone())
     }
@@ -509,7 +525,14 @@ impl Provider {
                     .filter(|value| !value.trim().is_empty())
                     .map(|value| value.trim().to_owned())
             });
-        let key = session_key.clone().unwrap_or(utf8(&uuid()?));
+        let request = &prepared.request;
+        let results = trailing_results(request);
+        let key = self
+            .config
+            .runtime
+            .continuation_key(&results)?
+            .or(session_key.clone())
+            .unwrap_or(utf8(&uuid()?));
         let mut session = self.config.runtime.session(&key)?.lock_owned().await;
         if !session.hydrated {
             session.hydrated = true;
@@ -520,20 +543,38 @@ impl Provider {
                 session.snapshot = snapshot;
             }
         }
-        let request = &prepared.request;
-        let results = trailing_results(request);
         if session.pending.as_ref().is_some_and(|pending| {
             pending.started.elapsed() >= Duration::from_millis(self.config.continuation.hard_cap_ms)
+                || !results.is_empty() && !results.iter().any(|result| result.id == pending.call.id)
         }) {
             if let Some(run) = session.release_run() {
                 run.writer.cancel();
             }
             session.pending = None;
         }
-        if let Some(pending) = session.pending.as_ref() {
+        let fresh = results.is_empty() && session.pending.is_some();
+        let cancelled = fresh
+            .then(|| {
+                session.pending.as_ref().map(|pending| ToolResult {
+                    id: pending.call.id.clone(),
+                    name: pending.call.name.clone(),
+                    result: ToolResultValue::Error(json::s(
+                        "Host started a new user turn before this tool result was delivered",
+                    )),
+                    cache: None,
+                    provider_executed: None,
+                    provider_metadata: None,
+                    output: None,
+                })
+            })
+            .flatten();
+        let resumed = if let Some(pending) = session.pending.as_ref() {
+            let delivered = async {
             let result = results
                 .iter()
                 .find(|result| result.id == pending.call.id)
+                .copied()
+                .or(cancelled.as_ref())
                 .ok_or_else(|| {
                     Error::invalid("Cursor held Run requires its pending tool result")
                 })?;
@@ -649,11 +690,93 @@ impl Provider {
                 }
                 Reply::Display => {}
             }
+            Ok::<_, Error>(refreshed_todos)
+            }.await;
             session.pending = None;
-            if let Some(todos) = refreshed_todos {
-                session.mirrored_todos = todos;
+            match delivered {
+                Ok(todos) => {
+                    if let Some(todos) = todos {
+                        session.mirrored_todos = todos;
+                    }
+                    true
+                }
+                Err(error) => {
+                    if let Some(run) = session.release_run() {
+                        run.writer.cancel();
+                    }
+                    if error.reason != crate::provider_error::Reason::Transport {
+                        return Err(error);
+                    }
+                    false
+                }
             }
         } else {
+            false
+        };
+        if fresh && resumed {
+            let drained = tokio::time::timeout(Duration::from_secs(8), async {
+                loop {
+                    let frame = session
+                        .run
+                        .as_mut()
+                        .ok_or_else(|| Error::output("Cursor fresh-turn drain has no Run"))?
+                        .reader
+                        .next()
+                        .await?
+                        .ok_or_else(Error::missing_terminal)?;
+                    let batch = session
+                        .state
+                        .push(&framing::encode(frame.flags, &frame.payload)?)?;
+                    session.snapshot.checkpoint = session.state.checkpoint().map(<[u8]>::to_vec);
+                    session.snapshot.blobs = session.state.blobs().clone();
+                    for reply in batch.replies {
+                        session
+                            .run
+                            .as_ref()
+                            .ok_or_else(|| Error::output("Cursor drain reply has no Run"))?
+                            .writer
+                            .write(&reply)
+                            .await?;
+                    }
+                    if batch
+                        .events
+                        .iter()
+                        .any(|event| matches!(event, Event::Finish(_)))
+                    {
+                        return Ok::<_, Error>(());
+                    }
+                    if batch.controls.iter().any(|control| {
+                        !matches!(
+                            control,
+                            ServerMessage::Interaction(
+                                Update::Heartbeat
+                                    | Update::PartialTool(_)
+                                    | Update::StepStarted(_)
+                                    | Update::StepCompleted(_)
+                            )
+                        )
+                    }) {
+                        return Err(Error::output("Cursor fresh-turn drain requires host input"));
+                    }
+                }
+            })
+            .await;
+            if drained.is_ok_and(|result| result.is_ok()) {
+                if let (Some(store), Some(key)) = (&self.config.persistence, &session_key) {
+                    store.save(&key.clone().into(), &session.snapshot).await;
+                }
+            }
+            if let Some(run) = session.release_run() {
+                run.writer.cancel();
+            }
+        }
+        if !resumed || fresh {
+            if !results.is_empty() {
+                session.snapshot.conversation_id = uuid()?;
+                session.snapshot.checkpoint = None;
+                session.snapshot.blobs.clear();
+                session.image_hashes.clear();
+            }
             if let Some(run) = session.release_run() {
                 run.writer.cancel();
             }
@@ -674,11 +797,10 @@ impl Provider {
                 .rposition(|message| message.role == Role::User);
             let user = newest.map(|index| text(&request.messages[index]));
             let continuing = !results.is_empty();
-            run_request.action = if continuing {
-                Action::Resume
-            } else {
-                Action::User
-            };
+            run_request.action = Action::User;
+            if continuing {
+                run_request.text = "Continue the interrupted turn from the conversation history above. Do not repeat completed work.".into();
+            }
             if !continuing {
                 run_request.text = user.clone().unwrap_or_default();
                 if !matches!(request.tool_choice, Some(ToolChoice::None))
@@ -721,17 +843,13 @@ impl Provider {
                     .and_then(|options| json::get(options, "cursor")),
                 &self.config.models,
             )?;
-            let (selected_images, image_hashes) = if continuing {
-                (Vec::new(), Vec::new())
-            } else {
-                images::extract(
-                    &request.messages,
-                    images::supports(&selection.id, &self.config.models),
-                    &session.image_hashes,
-                    self.config.image_host.as_deref(),
-                )
-                .await?
-            };
+            let (selected_images, image_hashes) = images::extract(
+                &request.messages,
+                images::supports(&selection.id, &self.config.models),
+                &session.image_hashes,
+                self.config.image_host.as_deref(),
+            )
+            .await?;
             run_request.images = selected_images;
             run_request.model_id = selection.id;
             run_request.parameters = selection.parameters;

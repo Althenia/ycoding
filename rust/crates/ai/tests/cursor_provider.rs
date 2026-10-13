@@ -247,6 +247,15 @@ fn config(address: std::net::SocketAddr) -> provider::Config {
 
 #[tokio::test]
 async fn cursor_catalog_model_uses_common_executor_and_preserves_absent_usage() {
+    text_generation(true).await;
+}
+
+#[tokio::test]
+async fn cursor_stateless_text_generation_needs_no_session_headers() {
+    text_generation(false).await;
+}
+
+async fn text_generation(session_headers: bool) {
     tokio::time::timeout(Duration::from_secs(5), async {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -257,7 +266,8 @@ async fn cursor_catalog_model_uses_common_executor_and_preserves_absent_usage() 
             assert_eq!(request.headers()["content-type"], "application/connect+proto");
             assert_eq!(request.headers()["authorization"], "Bearer fixture-token");
             assert_eq!(request.headers()["x-request-id"], "request-1");
-            assert_eq!(request.headers()["x-session-id"], "ses-fixture");
+            if session_headers { assert_eq!(request.headers()["x-session-id"], "ses-fixture"); }
+            else { assert!(!request.headers().contains_key("x-session-id")); }
             let mut body = request.into_body();
             let exchange = async move {
                 let mut decoder = framing::Decoder::default();
@@ -284,7 +294,7 @@ async fn cursor_catalog_model_uses_common_executor_and_preserves_absent_usage() 
         let runtime = config.runtime.clone();
         let mut request = Request::new(provider::model("composer-fixture", config).unwrap());
         request.id = Some("request-1".into());
-        request.http.headers.insert("x-session-id".into(), "ses-fixture".into());
+        if session_headers { request.http.headers.insert("x-session-id".into(), "ses-fixture".into()); }
         request.messages.push(Message::user("Hello"));
         let response = Executor::new(Executor::http_client().unwrap()).generate(&request).await.unwrap();
         assert_eq!(response.text(), "answer!".into());
@@ -297,15 +307,20 @@ async fn cursor_catalog_model_uses_common_executor_and_preserves_absent_usage() 
 
 #[tokio::test]
 async fn cursor_tool_result_resumes_the_originating_run_without_resending_user_input() {
-    tool_continuation(false).await;
+    tool_continuation(false, true).await;
 }
 
 #[tokio::test]
 async fn cursor_stream_releases_session_ownership_when_the_tool_finish_is_consumed() {
-    tool_continuation(true).await;
+    tool_continuation(true, true).await;
 }
 
-async fn tool_continuation(retain_finished_stream: bool) {
+#[tokio::test]
+async fn cursor_tool_continuation_without_session_headers_finds_the_originating_run() {
+    tool_continuation(false, false).await;
+}
+
+async fn tool_continuation(retain_finished_stream: bool, session_headers: bool) {
     tokio::time::timeout(Duration::from_secs(5), async {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -354,7 +369,7 @@ async fn tool_continuation(retain_finished_stream: bool) {
         let runtime = config.runtime.clone();
         let mut request = Request::new(provider::model("composer-fixture", config).unwrap());
         request.id = Some("request-1".into());
-        request.http.headers.insert("x-session-id".into(), "ses-fixture".into());
+        if session_headers { request.http.headers.insert("x-session-id".into(), "ses-fixture".into()); }
         request.messages.push(Message::user("Read"));
         request.tools.push(ToolDefinition { name: "read".into(), description: "Read".into(), input_schema: ycoding_schema::parse_json("{\"type\":\"object\"}").unwrap(), output_schema: None, cache: None, metadata: None, native: None });
         let executor = Executor::new(Executor::http_client().unwrap());
@@ -378,8 +393,6 @@ async fn tool_continuation(retain_finished_stream: bool) {
         };
         let call = first.content.iter().find_map(|part| if let Part::ToolCall(call) = part { Some(call.clone()) } else { None }).unwrap();
         assert_eq!(call.name, "read".into());
-        let missing = executor.generate(&request).await.unwrap_err();
-        assert_eq!(missing.reason, ycoding_ai::provider_error::Reason::InvalidRequest);
         request.messages.push(first);
         request.messages.push(Message::new(ycoding_ai::llm::Role::Tool, vec![Part::ToolResult(ToolResult { id: call.id.clone(), name: call.name.clone(), result: ToolResultValue::Text(ycoding_schema::JsonValue::String("done".into())), cache: None, provider_executed: None, provider_metadata: None, output: None })]));
         let second = executor.generate(&request).await.unwrap();
@@ -397,6 +410,168 @@ struct MemoryStore {
     loaded: Mutex<Option<provider::Snapshot>>,
     loads: Mutex<Vec<String>>,
     saves: Mutex<Vec<(String, provider::Snapshot)>>,
+}
+
+#[tokio::test]
+async fn cursor_fresh_input_cancels_held_exec_drains_and_preserves_conversation_checkpoint() {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut connection = h2::server::handshake(socket).await.unwrap();
+            let conversation = Arc::new(Mutex::new(Vec::new()));
+            let mut handlers = Vec::new();
+            while let Some(accepted) = connection.accept().await {
+                let (request, mut response) = accepted.unwrap();
+                let index = handlers.len();
+                let conversation = conversation.clone();
+                handlers.push(tokio::spawn(async move {
+                    let mut body = request.into_body();
+                    let mut decoder = framing::Decoder::default();
+                    let first = loop {
+                        let bytes = body.data().await.unwrap().unwrap();
+                        body.flow_control().release_capacity(bytes.len()).unwrap();
+                        if let Some(frame) = decoder.push(&bytes).pop() {
+                            break frame;
+                        }
+                    };
+                    let client = protobuf::fields(&first.payload).unwrap();
+                    let run = protobuf::fields(client[0].bytes().unwrap()).unwrap();
+                    let id = run
+                        .iter()
+                        .find(|field| field.number == 5)
+                        .unwrap()
+                        .bytes()
+                        .unwrap();
+                    let mut send = response
+                        .send_response(Response::builder().status(200).body(()).unwrap(), false)
+                        .unwrap();
+                    if index == 0 {
+                        *conversation.lock().unwrap() = id.to_vec();
+                        let mut args = Vec::new();
+                        protobuf::write_string(&mut args, 1, &"opencode-read".into()).unwrap();
+                        protobuf::write_string(&mut args, 4, &"opencode".into()).unwrap();
+                        protobuf::write_string(&mut args, 5, &"read".into()).unwrap();
+                        let mut exec = Vec::new();
+                        protobuf::write_varint(&mut exec, 1, 7).unwrap();
+                        protobuf::write_bytes(&mut exec, 11, &args).unwrap();
+                        let mut message = Vec::new();
+                        protobuf::write_bytes(&mut message, 2, &exec).unwrap();
+                        send.send_data(Bytes::from(framing::encode(0, &message).unwrap()), false)
+                            .unwrap();
+                        let mut received = Vec::new();
+                        while received.len() < 2 {
+                            let bytes = body.data().await.unwrap().unwrap();
+                            body.flow_control().release_capacity(bytes.len()).unwrap();
+                            received.extend(
+                                decoder
+                                    .push(&bytes)
+                                    .into_iter()
+                                    .filter(|frame| frame.payload != [0x3a, 0]),
+                            );
+                        }
+                        assert_eq!(protobuf::fields(&received[0].payload).unwrap()[0].number, 2);
+                        assert_eq!(protobuf::fields(&received[1].payload).unwrap()[0].number, 5);
+                        let reason =
+                            b"Host started a new user turn before this tool result was delivered";
+                        assert!(
+                            received[0]
+                                .payload
+                                .windows(reason.len())
+                                .any(|bytes| bytes == reason)
+                        );
+                        send.send_data(
+                            Bytes::from(framing::encode(0, &[10, 2, 58, 0]).unwrap()),
+                            false,
+                        )
+                        .unwrap();
+                        send.send_data(
+                            Bytes::from(framing::encode(0, &[10, 3, 130, 1, 0]).unwrap()),
+                            false,
+                        )
+                        .unwrap();
+                        send.send_data(
+                            Bytes::from(framing::encode(0, &[26, 3, 7, 7, 7]).unwrap()),
+                            false,
+                        )
+                        .unwrap();
+                    } else {
+                        assert_eq!(index, 1);
+                        assert_eq!(id, conversation.lock().unwrap().as_slice());
+                        assert_eq!(
+                            run.iter()
+                                .find(|field| field.number == 1)
+                                .unwrap()
+                                .bytes()
+                                .unwrap(),
+                            [7, 7, 7]
+                        );
+                        let action = protobuf::fields(
+                            run.iter()
+                                .find(|field| field.number == 2)
+                                .unwrap()
+                                .bytes()
+                                .unwrap(),
+                        )
+                        .unwrap();
+                        assert_eq!(action[0].number, 1);
+                        assert!(
+                            first
+                                .payload
+                                .windows(b"New input".len())
+                                .any(|bytes| bytes == b"New input")
+                        );
+                    }
+                    send.send_data(
+                        Bytes::from(framing::encode(0, &[10, 2, 114, 0]).unwrap()),
+                        false,
+                    )
+                    .unwrap();
+                    while let Some(bytes) = body.data().await {
+                        match bytes {
+                            Ok(bytes) => body.flow_control().release_capacity(bytes.len()).unwrap(),
+                            Err(_) => break,
+                        }
+                    }
+                }));
+            }
+            assert_eq!(handlers.len(), 2);
+            for handler in handlers {
+                handler.await.unwrap();
+            }
+        });
+        let config = config(address);
+        let runtime = config.runtime.clone();
+        let mut request = Request::new(provider::model("composer-fixture", config).unwrap());
+        request
+            .http
+            .headers
+            .insert("x-session-id".into(), "fresh-turn".into());
+        request.messages.push(Message::user("Read"));
+        request.tools.push(ToolDefinition {
+            name: "read".into(),
+            description: "Read".into(),
+            input_schema: ycoding_schema::parse_json("{\"type\":\"object\"}").unwrap(),
+            output_schema: None,
+            cache: None,
+            metadata: None,
+            native: None,
+        });
+        let executor = Executor::new(Executor::http_client().unwrap());
+        let first = executor.generate(&request).await.unwrap();
+        assert_eq!(first.finish_reason, FinishReason::ToolCalls);
+        request.messages.push(first.message);
+        request.messages.push(Message::user("New input"));
+        assert_eq!(
+            executor.generate(&request).await.unwrap().finish_reason,
+            FinishReason::Stop
+        );
+        runtime.shutdown().await;
+        server.await.unwrap();
+    })
+    .await
+    .unwrap();
 }
 impl persistence::Store for MemoryStore {
     fn load<'a>(
@@ -920,9 +1095,42 @@ async fn cursor_held_run_past_the_hard_cap_is_closed_and_the_continuation_starts
                             .unwrap(),
                     )
                     .unwrap();
-                    assert_ne!(
-                        action[0].number, 1,
-                        "the replacement Run resumes instead of repeating the user prompt"
+                    assert_eq!(action[0].number, 1);
+                    let user = protobuf::fields(action[0].bytes().unwrap()).unwrap();
+                    let message = protobuf::fields(user[0].bytes().unwrap()).unwrap();
+                    let images = protobuf::fields(
+                        message
+                            .iter()
+                            .find(|field| field.number == 3)
+                            .unwrap()
+                            .bytes()
+                            .unwrap(),
+                    )
+                    .unwrap();
+                    let image = protobuf::fields(images[0].bytes().unwrap()).unwrap();
+                    assert_eq!(
+                        image
+                            .iter()
+                            .find(|field| field.number == 8)
+                            .unwrap()
+                            .bytes()
+                            .unwrap(),
+                        [1, 2, 3]
+                    );
+                    assert!(
+                        first
+                            .payload
+                            .windows(b"Continue the interrupted turn".len())
+                            .any(|bytes| bytes == b"Continue the interrupted turn")
+                    );
+                    assert!(
+                        run.iter()
+                            .find(|field| field.number == 1)
+                            .unwrap()
+                            .bytes()
+                            .unwrap()
+                            .windows(b"Tool result read: done".len())
+                            .any(|bytes| bytes == b"Tool result read: done")
                     );
                     send.send_data(
                         Bytes::from(framing::encode(0, &[10, 2, 114, 0]).unwrap()),
@@ -944,13 +1152,30 @@ async fn cursor_held_run_past_the_hard_cap_is_closed_and_the_continuation_starts
         });
         let mut config = config(address);
         config.continuation = policy(10, 40, 80);
+        config.models = ycoding_ai::cursor::models::available_models(
+            &ycoding_schema::parse_json(
+                r#"{"models":[{"name":"composer-fixture","supportsImages":true}]}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let runtime = config.runtime.clone();
         let mut request = Request::new(provider::model("composer-fixture", config).unwrap());
         request
             .http
             .headers
             .insert("x-session-id".into(), "ses-fixture".into());
-        request.messages.push(Message::user("Read"));
+        request.messages.push(Message::new(
+            ycoding_ai::llm::Role::User,
+            vec![
+                Part::Text("Read".into()),
+                Part::Media(ycoding_ai::llm::Media {
+                    mime: "image/png".into(),
+                    data: ycoding_ai::llm::MediaData::Bytes(vec![1, 2, 3]),
+                    filename: None,
+                }),
+            ],
+        ));
         request.tools.push(ToolDefinition {
             name: "read".into(),
             description: "Read".into(),

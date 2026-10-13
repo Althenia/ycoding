@@ -25,6 +25,7 @@ pub mod llm;
 mod media;
 pub mod muse;
 pub mod openai_chat;
+pub mod openai_codex;
 pub mod openai_images;
 mod openai_options;
 pub mod openai_responses;

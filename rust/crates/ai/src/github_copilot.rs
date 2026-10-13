@@ -16,6 +16,99 @@ pub struct Config {
     pub user_agent: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Endpoint {
+    Chat,
+    Responses,
+    Messages,
+}
+pub struct SubscriptionConfig {
+    pub common: providers::Config,
+    pub endpoint: Option<Endpoint>,
+    pub enterprise_url: Option<String>,
+    pub user_agent: String,
+}
+impl SubscriptionConfig {
+    pub fn new(auth: Auth, user_agent: impl Into<String>) -> Self {
+        Self {
+            common: providers::Config::new(auth),
+            endpoint: None,
+            enterprise_url: None,
+            user_agent: user_agent.into(),
+        }
+    }
+}
+pub fn subscription_model(
+    id: impl Into<LosslessString>,
+    mut config: SubscriptionConfig,
+) -> Result<Model, Error> {
+    if config
+        .common
+        .base_url
+        .as_ref()
+        .is_none_or(|url| url.is_empty())
+    {
+        config.common.base_url = Some(match config.enterprise_url {
+            Some(domain) => {
+                let domain = domain
+                    .strip_prefix("https://")
+                    .or_else(|| domain.strip_prefix("http://"))
+                    .unwrap_or(&domain)
+                    .trim_end_matches('/');
+                let url = reqwest::Url::parse(&format!("https://copilot-api.{domain}"))
+                    .map_err(|_| Error::invalid("Invalid Copilot enterprise domain"))?;
+                if url.path() != "/"
+                    || url.query().is_some()
+                    || url.fragment().is_some()
+                    || !url.username().is_empty()
+                    || url.password().is_some()
+                {
+                    return Err(Error::invalid("Invalid Copilot enterprise domain"));
+                }
+                url.as_str().trim_end_matches('/').into()
+            }
+            None => "https://api.githubcopilot.com".into(),
+        });
+    }
+    let id = id.into();
+    if config.endpoint != Some(Endpoint::Messages) {
+        return model(
+            id,
+            Config {
+                common: config.common,
+                api: config.endpoint.map(|endpoint| {
+                    if endpoint == Endpoint::Responses {
+                        Api::Responses
+                    } else {
+                        Api::Chat
+                    }
+                }),
+                user_agent: config.user_agent,
+            },
+        );
+    }
+    let mut route = Route::anthropic();
+    route.id = "github-copilot-messages".into();
+    route.provider = ycoding_schema::provider::Id("github-copilot".into());
+    route.endpoint.base_url = config.common.base_url.unwrap_or_default();
+    route.endpoint.path = if route
+        .endpoint
+        .base_url
+        .trim_end_matches('/')
+        .ends_with("/v1")
+    {
+        "/messages"
+    } else {
+        "/v1/messages"
+    }
+    .into();
+    route.endpoint.query = config.common.query;
+    route.auth = inference_auth(config.common.auth, &config.user_agent, true)?;
+    let mut model = route.model(id);
+    model.defaults = config.common.defaults;
+    Ok(model)
+}
+
 pub fn model(id: impl Into<LosslessString>, config: Config) -> Result<Model, Error> {
     let id = id.into();
     let base_url = config
@@ -24,8 +117,6 @@ pub fn model(id: impl Into<LosslessString>, config: Config) -> Result<Model, Err
         .as_ref()
         .filter(|url| !url.is_empty())
         .ok_or_else(|| Error::invalid("GitHub Copilot requires a baseURL"))?;
-    let user_agent = HeaderValue::from_str(&config.user_agent)
-        .map_err(|_| Error::invalid("Invalid Copilot user-agent"))?;
     let mut route = if providers::copilot_uses_responses(&id, config.api) {
         let mut route = Route::openai_responses();
         route.protocol = Arc::new(crate::github_copilot_responses::Responses);
@@ -41,8 +132,17 @@ pub fn model(id: impl Into<LosslessString>, config: Config) -> Result<Model, Err
     route.provider_metadata_key = Some("copilot".into());
     route.endpoint.base_url = base_url.clone();
     route.endpoint.query = config.common.query;
-    route.auth = Auth::Remove("x-api-key".into())
-        .and_then(config.common.auth)
+    route.auth = inference_auth(config.common.auth, &config.user_agent, false)?;
+    let mut model = route.model(id);
+    model.defaults = config.common.defaults;
+    Ok(model)
+}
+
+fn inference_auth(auth: Auth, user_agent: &str, anthropic: bool) -> Result<Auth, Error> {
+    let user_agent = HeaderValue::from_str(user_agent)
+        .map_err(|_| Error::invalid("Invalid Copilot user-agent"))?;
+    Ok(Auth::Remove("x-api-key".into())
+        .and_then(auth)
         .and_then(Auth::custom(move |input| {
             let mut headers = input.headers;
             headers.insert("user-agent", user_agent.clone());
@@ -54,41 +154,65 @@ pub fn model(id: impl Into<LosslessString>, config: Config) -> Result<Model, Err
                 "x-github-api-version",
                 HeaderValue::from_static("2026-06-01"),
             );
+            if anthropic {
+                headers.insert(
+                    "anthropic-beta",
+                    HeaderValue::from_static("interleaved-thinking-2025-05-14"),
+                );
+            }
             let body = parse_json(input.body)
                 .map_err(|_| Error::invalid("Invalid Copilot request body"))?;
             let messages = get(&body, "input")
                 .or_else(|| get(&body, "messages"))
                 .and_then(json::array)
                 .unwrap_or(&[]);
-            let agent = messages
-                .last()
-                .and_then(|item| get(item, "role"))
+            let last = messages.last();
+            let agent = last
+                .and_then(|message| get(message, "role"))
                 .and_then(json::text)
-                != Some("user");
+                != Some("user")
+                || anthropic
+                    && !last
+                        .and_then(|message| get(message, "content"))
+                        .and_then(json::array)
+                        .unwrap_or(&[])
+                        .iter()
+                        .any(|part| {
+                            get(part, "type")
+                                .and_then(json::text)
+                                .is_some_and(|kind| kind != "tool_result")
+                        });
             headers.insert(
                 "x-initiator",
                 HeaderValue::from_static(if agent { "agent" } else { "user" }),
             );
-            let vision = messages.iter().any(|item| {
-                get(item, "content")
+            let vision = messages.iter().any(|message| {
+                get(message, "content")
                     .and_then(json::array)
-                    .is_some_and(|parts| {
-                        parts.iter().any(|part| {
-                            matches!(
-                                get(part, "type").and_then(json::text),
-                                Some("input_image" | "image_url")
-                            )
-                        })
+                    .unwrap_or(&[])
+                    .iter()
+                    .any(|part| {
+                        matches!(
+                            get(part, "type").and_then(json::text),
+                            Some("input_image" | "image_url")
+                        ) || anthropic
+                            && (get(part, "type").and_then(json::text) == Some("image")
+                                || get(part, "type").and_then(json::text) == Some("tool_result")
+                                    && get(part, "content")
+                                        .and_then(json::array)
+                                        .unwrap_or(&[])
+                                        .iter()
+                                        .any(|nested| {
+                                            get(nested, "type").and_then(json::text)
+                                                == Some("image")
+                                        }))
                     })
             });
             if vision {
                 headers.insert("copilot-vision-request", HeaderValue::from_static("true"));
             }
             Ok(headers)
-        }));
-    let mut model = route.model(id);
-    model.defaults = config.common.defaults;
-    Ok(model)
+        })))
 }
 
 pub(crate) fn options(request: &Request) -> JsonValue {

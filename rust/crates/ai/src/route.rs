@@ -26,6 +26,10 @@ pub trait StreamParser: Send {
     fn finish(&mut self) -> Result<Vec<Event>, Error>;
 }
 pub trait Protocol: Send + Sync {
+    fn request_headers(&self, _request: &Request, headers: HeaderMap) -> Result<HeaderMap, Error> {
+        Ok(headers)
+    }
+    fn response_headers(&self, _request: &Request, _headers: &HeaderMap) {}
     fn native(&self) -> Option<&crate::cursor::provider::Provider> {
         None
     }
@@ -226,6 +230,7 @@ impl Route {
             headers,
         })?;
         headers.insert("content-type", HeaderValue::from_static("application/json"));
+        let headers = self.protocol.request_headers(&request, headers)?;
         Ok(Prepared {
             id: request.id.clone().unwrap_or_else(|| "request".into()),
             route: self.id.clone(),
@@ -456,11 +461,12 @@ impl Executor {
             .map_err(|_| Error::transport("Failed to construct HTTP client", "client"))
     }
     pub async fn execute(&self, prepared: &Prepared) -> Result<reqwest::Response, Error> {
-        self.execute_http(
+        self.execute_http_inner(
             &prepared.url,
             &prepared.headers,
             reqwest::Method::POST,
             prepared.encoded_body.as_bytes().to_vec(),
+            Some(prepared),
         )
         .await
     }
@@ -470,6 +476,17 @@ impl Executor {
         request_headers: &HeaderMap,
         method: reqwest::Method,
         body: Vec<u8>,
+    ) -> Result<reqwest::Response, Error> {
+        self.execute_http_inner(url, request_headers, method, body, None)
+            .await
+    }
+    async fn execute_http_inner(
+        &self,
+        url: &Url,
+        request_headers: &HeaderMap,
+        method: reqwest::Method,
+        body: Vec<u8>,
+        prepared: Option<&Prepared>,
     ) -> Result<reqwest::Response, Error> {
         let mut headers = request_headers.clone();
         headers.insert("connection", HeaderValue::from_static("close"));
@@ -487,16 +504,32 @@ impl Executor {
             }
             error
         })?;
+        if let Some(prepared) = prepared {
+            prepared
+                .request
+                .model
+                .route
+                .protocol
+                .response_headers(&prepared.request, response.headers());
+        }
         if response.status().as_u16() < 400 {
             return Ok(response);
         }
         let status = response.status().as_u16();
+        let response_secrets: Vec<_> = response
+            .headers()
+            .iter()
+            .filter(|(name, value)| sensitive(name.as_str()) || value.is_sensitive())
+            .filter_map(|(_, value)| value.to_str().ok().map(String::from))
+            .filter(|value| value.len() >= 4)
+            .collect();
         let headers = headers_map(response.headers())
             .into_iter()
             .map(|(key, value)| (key, redact_http(&value, url, request_headers)))
             .collect();
         let raw = response.text().await.ok();
-        let raw = raw.map(|body| redact_http(&body, url, request_headers));
+        let raw = raw
+            .map(|body| redact_with(&redact_http(&body, url, request_headers), &response_secrets));
         let retry = retry_after_ms(&headers, now_ms() as i64);
         let rate_limit = rate_limit_details(&headers, retry);
         let body_truncated = raw
@@ -976,6 +1009,8 @@ pub(crate) fn sensitive(name: &str) -> bool {
         "secret",
         "credential",
         "signature",
+        "x-codex-turn-state",
+        "chatgpt-account-id",
     ]
     .iter()
     .any(|pattern| name.contains(pattern))
