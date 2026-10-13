@@ -80,7 +80,10 @@ impl Driver {
                 Progress::Done => {
                     self.streams.remove(position);
                 }
-                Progress::Failed(error) => self.fail(error),
+                Progress::Failed(error) => self.fail_with(ycoding_protocol::connection::Close {
+                    code: 1002,
+                    category: error,
+                }),
             }
         }
     }
@@ -152,8 +155,10 @@ impl Driver {
                     Err(_) => return Progress::Failed(ProtocolError::Limit),
                 },
             };
-            let Some(record) = self.event_record(&item) else {
-                continue;
+            let record = match self.event_record(&item) {
+                Ok(Some(record)) => record,
+                Ok(None) => continue,
+                Err(error) => return Progress::Failed(error),
             };
             match self.enqueue_record(&scope, &sub_id, record) {
                 Ok(()) => {}
@@ -166,20 +171,24 @@ impl Driver {
         }
     }
 
-    fn event_record(&self, item: &Item) -> Option<v5::EventRecord> {
-        let Payload::Durable(event) = &item.payload else {
-            tracing::debug!(
-                position = item.position,
-                "ephemeral feed event has no v5 wire shape"
-            );
-            return None;
+    fn event_record(&self, item: &Item) -> Result<Option<v5::EventRecord>, ProtocolError> {
+        let event = match &item.payload {
+            Payload::Durable(event) => event,
+            Payload::Ephemeral(event) => return self.typed_ephemeral_record(event),
         };
-        let session = session::Id::decode(&JsonValue::String(event.aggregate_id.clone())).ok()?;
+        let Some(type_) = event.type_.as_str() else {
+            return Err(ProtocolError::Malformed);
+        };
+        if !type_.starts_with("session.") || log::excluded(type_) {
+            return Ok(None);
+        }
+        let session = session::Id::decode(&JsonValue::String(event.aggregate_id.clone()))
+            .map_err(|_| ProtocolError::Malformed)?;
         let entry = Entry::from_event(event)
             .inspect_err(|_| {
                 tracing::warn!(position = item.position, "feed event is not decodable")
             })
-            .ok()?;
+            .map_err(|_| ProtocolError::Malformed)?;
         let record = log::record(&entry, &session, &self.source_epoch())
             .inspect_err(|error| {
                 tracing::debug!(
@@ -188,12 +197,15 @@ impl Driver {
                     "feed event has no v5 wire shape"
                 );
             })
-            .ok()?;
-        Some(v5::EventRecord {
+            .map_err(|_| ProtocolError::Malformed)?;
+        Ok(Some(v5::EventRecord {
             event_id: record.event_id,
             created_ms: record.created_ms,
             durable: Some(v5::DurablePosition {
-                aggregate_id: event.aggregate_id.to_utf8().ok()?,
+                aggregate_id: event
+                    .aggregate_id
+                    .to_utf8()
+                    .map_err(|_| ProtocolError::Malformed)?,
                 sequence: record.seq,
                 version: record.version,
             }),
@@ -201,7 +213,14 @@ impl Driver {
                 type_name: v5::SessionLogItem::full_name(),
                 payload: record.item.encode_to_vec(),
             },
-        })
+        }))
+    }
+
+    fn typed_ephemeral_record(
+        &self,
+        _event: &ycoding_core::event_feed::Ephemeral,
+    ) -> Result<Option<v5::EventRecord>, ProtocolError> {
+        Ok(None)
     }
 
     fn enqueue_record(

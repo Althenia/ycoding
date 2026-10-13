@@ -570,7 +570,10 @@ impl Driver {
                 Progress::Done => {
                     self.subs.remove(position);
                 }
-                Progress::Failed(error) => self.fail(error),
+                Progress::Failed(error) => self.fail_with(Close {
+                    code: 1002,
+                    category: error,
+                }),
             }
         }
     }
@@ -641,12 +644,20 @@ impl Driver {
             Err(_) => return Progress::Failed(ProtocolError::Closed),
         };
         for entry in &page.events {
+            let versioned = format!(
+                "{}.{}",
+                entry.event.0.event_type.as_str().unwrap_or(""),
+                entry.version
+            );
+            if log::excluded(&versioned) {
+                self.subs[position].next = Some(entry.seq);
+                continue;
+            }
             let record = match log::record(entry, &session, &self.source_epoch()) {
                 Ok(record) => record,
                 Err(error) => {
-                    tracing::warn!(event_type = ?entry.event.0.event_type.as_str(), reason = error.0, "skipping unrepresentable session log event");
-                    self.subs[position].next = Some(entry.seq);
-                    continue;
+                    tracing::warn!(event_type = ?entry.event.0.event_type.as_str(), reason = error.0, "rejecting unrepresentable session log event");
+                    return Progress::Failed(ProtocolError::Malformed);
                 }
             };
             match self.emit(&scope, &sub_id, &record) {

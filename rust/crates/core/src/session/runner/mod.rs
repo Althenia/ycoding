@@ -6,6 +6,7 @@ mod notifier;
 mod publisher;
 
 pub use notifier::{Wake, mcp_notifier};
+pub use ycoding_ai::route::Executor;
 
 use super::{
     cache_diagnostics, compaction_gate, continuation, execution, history, live_state,
@@ -31,7 +32,7 @@ use std::{
     pin::Pin,
     sync::{Arc, Mutex},
 };
-use ycoding_ai::{llm, provider_error, route::Executor};
+use ycoding_ai::{llm, provider_error};
 use ycoding_schema::{
     DomainDecode, JsonObject, JsonValue, ObjectEncoder, instruction, session, session_message,
     session_pending, skill as skill_schema,

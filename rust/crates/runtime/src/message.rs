@@ -9,35 +9,35 @@ pub struct Unrepresentable(pub &'static str);
 type R<T> = Result<T, Unrepresentable>;
 
 #[derive(Clone, Copy)]
-struct J<'a>(&'a JsonValue);
+pub(crate) struct J<'a>(pub(crate) &'a JsonValue);
 
 impl<'a> J<'a> {
-    fn opt(self, key: &str) -> Option<J<'a>> {
+    pub(crate) fn opt(self, key: &str) -> Option<J<'a>> {
         let JsonValue::Object(object) = self.0 else {
             return None;
         };
         object.get(&LosslessString::from(key)).map(J)
     }
 
-    fn field(self, key: &'static str) -> R<J<'a>> {
+    pub(crate) fn field(self, key: &'static str) -> R<J<'a>> {
         self.opt(key).ok_or(Unrepresentable(key))
     }
 
-    fn text(self) -> R<v5::LosslessString> {
+    pub(crate) fn text(self) -> R<v5::LosslessString> {
         match self.0 {
             JsonValue::String(text) => Ok(wire(text)),
             _ => Err(Unrepresentable("string")),
         }
     }
 
-    fn number(self) -> R<f64> {
+    pub(crate) fn number(self) -> R<f64> {
         match self.0 {
             JsonValue::Number(number) => Ok(*number),
             _ => Err(Unrepresentable("number")),
         }
     }
 
-    fn count(self) -> R<u64> {
+    pub(crate) fn count(self) -> R<u64> {
         let number = self.number()?;
         if number >= 0.0 && number.fract() == 0.0 && number <= 9_007_199_254_740_991.0 {
             return Ok(number as u64);
@@ -45,14 +45,14 @@ impl<'a> J<'a> {
         Err(Unrepresentable("count"))
     }
 
-    fn boolean(self) -> R<bool> {
+    pub(crate) fn boolean(self) -> R<bool> {
         match self.0 {
             JsonValue::Bool(value) => Ok(*value),
             _ => Err(Unrepresentable("boolean")),
         }
     }
 
-    fn items(self) -> R<&'a [JsonValue]> {
+    pub(crate) fn items(self) -> R<&'a [JsonValue]> {
         match self.0 {
             JsonValue::Array(items) => Ok(items),
             _ => Err(Unrepresentable("array")),
@@ -60,31 +60,31 @@ impl<'a> J<'a> {
     }
 }
 
-fn text(json: J, key: &'static str) -> R<v5::LosslessString> {
+pub(crate) fn text(json: J, key: &'static str) -> R<v5::LosslessString> {
     json.field(key)?.text()
 }
 
-fn opt_text(json: J, key: &str) -> R<Option<v5::LosslessString>> {
+pub(crate) fn opt_text(json: J, key: &str) -> R<Option<v5::LosslessString>> {
     json.opt(key).map(J::text).transpose()
 }
 
-fn number(json: J, key: &'static str) -> R<f64> {
+pub(crate) fn number(json: J, key: &'static str) -> R<f64> {
     json.field(key)?.number()
 }
 
-fn opt_number(json: J, key: &str) -> R<Option<f64>> {
+pub(crate) fn opt_number(json: J, key: &str) -> R<Option<f64>> {
     json.opt(key).map(J::number).transpose()
 }
 
-fn count(json: J, key: &'static str) -> R<u64> {
+pub(crate) fn count(json: J, key: &'static str) -> R<u64> {
     json.field(key)?.count()
 }
 
-fn opt_count(json: J, key: &str) -> R<Option<u64>> {
+pub(crate) fn opt_count(json: J, key: &str) -> R<Option<u64>> {
     json.opt(key).map(J::count).transpose()
 }
 
-fn literal(json: J, key: &'static str, table: &[(&str, i32)]) -> R<i32> {
+pub(crate) fn literal(json: J, key: &'static str, table: &[(&str, i32)]) -> R<i32> {
     let JsonValue::String(value) = json.field(key)?.0 else {
         return Err(Unrepresentable(key));
     };
@@ -95,11 +95,14 @@ fn literal(json: J, key: &'static str, table: &[(&str, i32)]) -> R<i32> {
         .ok_or(Unrepresentable(key))
 }
 
-fn opt_literal(json: J, key: &'static str, table: &[(&str, i32)]) -> R<Option<i32>> {
+pub(crate) fn opt_literal(json: J, key: &'static str, table: &[(&str, i32)]) -> R<Option<i32>> {
     json.opt(key).map(|_| literal(json, key, table)).transpose()
 }
 
-fn object_entries<T>(value: J, make: impl Fn(v5::LosslessString, v5::Value) -> T) -> R<Vec<T>> {
+pub(crate) fn object_entries<T>(
+    value: J,
+    make: impl Fn(v5::LosslessString, v5::Value) -> T,
+) -> R<Vec<T>> {
     let JsonValue::Object(object) = value.0 else {
         return Err(Unrepresentable("object"));
     };
@@ -167,7 +170,7 @@ fn artifact(json: J) -> R<v5::SessionMessageArtifactProvenance> {
     })
 }
 
-fn model_ref(json: J) -> R<v5::ModelRef> {
+pub(crate) fn model_ref(json: J) -> R<v5::ModelRef> {
     Ok(v5::ModelRef {
         id: text(json, "id")?,
         provider_id: text(json, "providerID")?,
@@ -176,7 +179,7 @@ fn model_ref(json: J) -> R<v5::ModelRef> {
     })
 }
 
-fn tokens(json: J) -> R<v5::TokenUsageInfo> {
+pub(crate) fn tokens(json: J) -> R<v5::TokenUsageInfo> {
     let cache = json.field("cache")?;
     Ok(v5::TokenUsageInfo {
         input: number(json, "input")?,
@@ -189,7 +192,7 @@ fn tokens(json: J) -> R<v5::TokenUsageInfo> {
     })
 }
 
-fn structured_error(json: J) -> R<v5::SessionStructuredError> {
+pub(crate) fn structured_error(json: J) -> R<v5::SessionStructuredError> {
     Ok(v5::SessionStructuredError {
         r#type: text(json, "type")?,
         message: text(json, "message")?,
@@ -436,7 +439,7 @@ fn shell(json: J) -> R<v5::SessionMessageShell> {
     })
 }
 
-fn provider_state(json: J) -> R<v5::SessionMessageProviderState> {
+pub(crate) fn provider_state(json: J) -> R<v5::SessionMessageProviderState> {
     Ok(v5::SessionMessageProviderState {
         entries: entries!(json, SessionMessageProviderStateEntry),
     })
@@ -459,7 +462,7 @@ fn tool_content(json: J) -> R<v5::LlmToolContent> {
     Ok(v5::LlmToolContent { kind: Some(kind) })
 }
 
-fn tool_contents(json: J) -> R<Vec<v5::LlmToolContent>> {
+pub(crate) fn tool_contents(json: J) -> R<Vec<v5::LlmToolContent>> {
     json.items()?
         .iter()
         .map(|item| tool_content(J(item)))
