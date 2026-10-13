@@ -5,6 +5,371 @@ use ycoding_store::{
     TableSpec, project, session, tuple_key,
 };
 
+#[test]
+fn cleanup_keyset_is_bounded_and_uses_sqlite_binary_tiebreaks() {
+    let store = store();
+    store
+        .submit(|tx| {
+            for index in 0..205 {
+                session::SessionTable::put(
+                    tx,
+                    &session::Session {
+                        time_updated: 1,
+                        ..record(&format!("ses_{index:03}"))
+                    },
+                )?;
+            }
+            for id in ["ses_\u{e000}", "ses_\u{10000}"] {
+                session::SessionTable::put(
+                    tx,
+                    &session::Session {
+                        time_updated: 2,
+                        ..record(id)
+                    },
+                )?;
+            }
+            for unit in [0xd800, 0xd801] {
+                session::SessionTable::put(
+                    tx,
+                    &session::Session {
+                        id: LosslessString::from_utf16(
+                            "ses_".encode_utf16().chain([unit]).collect(),
+                        ),
+                        time_updated: 2,
+                        ..record("unused")
+                    },
+                )?;
+            }
+            session::SessionTable::put(
+                tx,
+                &session::Session {
+                    time_updated: 3,
+                    ..record("ses_boundary")
+                },
+            )
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    let snapshot = store.snapshot().unwrap();
+    let first = session::cleanup_sessions(&snapshot, 3, None).unwrap();
+    assert_eq!(first.len(), 200);
+    assert_eq!(first[0].id, LosslessString::from("ses_000"));
+    assert_eq!(first[199].id, LosslessString::from("ses_199"));
+    let second = session::cleanup_sessions(&snapshot, 3, first.last()).unwrap();
+    assert_eq!(second.len(), 9);
+    assert_eq!(second[5].id, LosslessString::from("ses_\u{e000}"));
+    assert_eq!(second[8].id, LosslessString::from("ses_\u{10000}"));
+    let remainder = session::cleanup_sessions(&snapshot, 3, Some(&second[6])).unwrap();
+    assert_eq!(remainder.len(), 2);
+    assert_eq!(remainder[0].id, second[7].id);
+    assert!(
+        session::cleanup_sessions(&snapshot, 3, second.last())
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn cleanup_rolls_back_and_resumes_from_committed_pages_without_touching_history() {
+    let store = store();
+    store
+        .submit(|tx| {
+            session::SessionTable::put(
+                tx,
+                &session::Session {
+                    time_updated: 0,
+                    ..record("s")
+                },
+            )?;
+            session::SessionTable::put(
+                tx,
+                &session::Session {
+                    time_updated: 0,
+                    ..record("other")
+                },
+            )?;
+            session::append(tx, &event("e0"), None)?;
+            session::MessageTable::put(tx, &message("m", 0))?;
+            for index in 0..260 {
+                session::FileChangeTable::put(
+                    tx,
+                    &session::FileChange {
+                        session_id: "s".into(),
+                        path: format!("file{index}").into(),
+                        patch: "@@".into(),
+                        additions: 1,
+                        deletions: 0,
+                        latest_seq: 0,
+                    },
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    let snapshot = std::sync::Arc::new(store.snapshot().unwrap());
+    let page = session::cleanup_sessions(&snapshot, 1, None).unwrap();
+    let initial = snapshot.clone();
+    let sessions = page.clone();
+    assert!(
+        store
+            .submit(move |tx| {
+                assert_eq!(
+                    session::cleanup_projections(
+                        tx,
+                        &initial,
+                        &sessions,
+                        1,
+                        &[],
+                        session::Projection::Files
+                    )?
+                    .files,
+                    260
+                );
+                Err::<(), _>(Error::Rejected("interrupted sweep"))
+            })
+            .unwrap()
+            .wait()
+            .is_err()
+    );
+    assert_eq!(
+        store
+            .snapshot()
+            .unwrap()
+            .scan::<session::FileChangeTable>(Bound::Unbounded, Bound::Unbounded, 300)
+            .unwrap()
+            .len(),
+        260
+    );
+    let initial = snapshot.clone();
+    let sessions = page.clone();
+    let deleted = store
+        .submit(move |tx| {
+            session::cleanup_projections(
+                tx,
+                &initial,
+                &sessions,
+                1,
+                &[],
+                session::Projection::Files,
+            )
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert_eq!(deleted.files, 260);
+    assert_eq!(
+        store
+            .snapshot()
+            .unwrap()
+            .scan::<session::MessageTable>(Bound::Unbounded, Bound::Unbounded, 1)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        store
+            .snapshot()
+            .unwrap()
+            .scan::<session::EventTable>(Bound::Unbounded, Bound::Unbounded, 1)
+            .unwrap()
+            .len(),
+        1
+    );
+    let deleted = store
+        .submit(move |tx| {
+            session::cleanup_projections(tx, &snapshot, &page, 1, &[], session::Projection::Files)
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert_eq!(deleted.files, 0);
+}
+
+#[test]
+fn cleanup_rechecks_activity_and_freshness_and_preserves_new_rows() {
+    let store = store();
+    store
+        .submit(|tx| {
+            for id in ["s", "active", "fresh"] {
+                session::SessionTable::put(
+                    tx,
+                    &session::Session {
+                        time_updated: 0,
+                        ..record(id)
+                    },
+                )?;
+                session::FileChangeTable::put(
+                    tx,
+                    &session::FileChange {
+                        session_id: id.into(),
+                        path: "old".into(),
+                        patch: "@@".into(),
+                        additions: 1,
+                        deletions: 0,
+                        latest_seq: 0,
+                    },
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    let snapshot = std::sync::Arc::new(store.snapshot().unwrap());
+    let page = session::cleanup_sessions(&snapshot, 1, None).unwrap();
+    store
+        .submit(|tx| {
+            session::SessionTable::put(
+                tx,
+                &session::Session {
+                    time_updated: 1,
+                    ..record("fresh")
+                },
+            )?;
+            session::FileChangeTable::put(
+                tx,
+                &session::FileChange {
+                    session_id: "s".into(),
+                    path: "new".into(),
+                    patch: "new row".into(),
+                    additions: 1,
+                    deletions: 0,
+                    latest_seq: 0,
+                },
+            )
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    let deleted = store
+        .submit(move |tx| {
+            session::cleanup_projections(
+                tx,
+                &snapshot,
+                &page,
+                1,
+                &["active".into()],
+                session::Projection::Files,
+            )
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert_eq!(deleted.files, 1);
+    let rows = store
+        .snapshot()
+        .unwrap()
+        .scan::<session::FileChangeTable>(Bound::Unbounded, Bound::Unbounded, 10)
+        .unwrap();
+    assert_eq!(rows.len(), 3);
+    assert!(rows.iter().any(|row| row.patch.as_str() == Some("new row")));
+}
+
+#[test]
+fn cleanup_restart_resumes_after_a_committed_200_session_page() {
+    let path = std::env::temp_dir().join(format!(
+        "ycoding-cleanup-resume-{}-{}.redb",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let store =
+        Store::initialize(&path, Options::core(), CATALOG, Metadata::new([6; 16], 1)).unwrap();
+    store
+        .submit(|tx| {
+            project::ProjectTable::put(tx, &root())?;
+            for index in 0..205 {
+                let id = format!("ses_{index:03}");
+                session::SessionTable::put(
+                    tx,
+                    &session::Session {
+                        time_updated: 0,
+                        ..record(&id)
+                    },
+                )?;
+                session::FileChangeTable::put(
+                    tx,
+                    &session::FileChange {
+                        session_id: id.into(),
+                        path: "file".into(),
+                        patch: "@@".into(),
+                        additions: 1,
+                        deletions: 0,
+                        latest_seq: 0,
+                    },
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    let snapshot = std::sync::Arc::new(store.snapshot().unwrap());
+    let page = session::cleanup_sessions(&snapshot, 1, None).unwrap();
+    assert_eq!(
+        store
+            .submit(move |tx| session::cleanup_projections(
+                tx,
+                &snapshot,
+                &page,
+                1,
+                &[],
+                session::Projection::Files
+            ))
+            .unwrap()
+            .wait()
+            .unwrap()
+            .files,
+        200
+    );
+    store.shutdown().unwrap();
+    let store = Store::open(&path, Options::core(), CATALOG).unwrap();
+    let snapshot = std::sync::Arc::new(store.snapshot().unwrap());
+    let first = session::cleanup_sessions(&snapshot, 1, None).unwrap();
+    let initial = snapshot.clone();
+    let next = first.last().cloned();
+    assert_eq!(
+        store
+            .submit(move |tx| session::cleanup_projections(
+                tx,
+                &initial,
+                &first,
+                1,
+                &[],
+                session::Projection::Files
+            ))
+            .unwrap()
+            .wait()
+            .unwrap()
+            .files,
+        0
+    );
+    let second = session::cleanup_sessions(&snapshot, 1, next.as_ref()).unwrap();
+    assert_eq!(
+        store
+            .submit(move |tx| session::cleanup_projections(
+                tx,
+                &snapshot,
+                &second,
+                1,
+                &[],
+                session::Projection::Files
+            ))
+            .unwrap()
+            .wait()
+            .unwrap()
+            .files,
+        5
+    );
+    store.shutdown().unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
 const CATALOG: Catalog = Catalog::new(
     1,
     &[

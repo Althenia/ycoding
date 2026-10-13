@@ -5,6 +5,80 @@ history as durable synthetic instructions. The Location-scoped loader deduplicat
 concurrent and repeated reads, respects the current `instruction_max_bytes`
 limit, and skips missing files, external reads, and the Location-root file.
 
+## Derived Session retention and maintenance ownership
+
+`session::cleanups::Cleanups` removes only derived context exclusions, file-change
+ledgers, provider requests and usage aggregates. Each sweep samples its injected
+`session::runner::Clock` once and uses the strict cutoff `now - 30 * 86_400_000`
+milliseconds. `WallClock` uses UTC Unix milliseconds, equivalent to `Date.now()`.
+The only Session exemption is executor-active membership, supplied by
+`Execution::active()` through `Cleanups::process(client, roots)`. Pins, goals,
+suspension, pending work, family membership and `time_active` do not independently
+exempt projections. Session rows, transcripts, durable events, context revisions
+and manifest blobs are retained.
+
+File-change and usage sweeps commit pages of at most 200 Sessions ordered by
+`(time_updated, id)` with SQLite-compatible UTF-8 binary ID ordering. Context
+exclusions commit in one transaction. One sweep snapshot selects Session and
+projection values; transactions recheck Session freshness and current executor
+activity, and delete only unchanged projection rows present at that boundary.
+New or changed rows survive until a subsequent eligible sweep. Initially active
+Sessions remain exempt throughout the sweep. Failed transactions roll back their
+complete page; restart begins at the first key and already deleted rows contribute
+zero. Counts are deleted exclusions, file changes and provider requests
+respectively; usage aggregate rows are excluded from the usage count.
+
+`Cleanups::usage().await` waits for committed canonical receipts, then runs the
+attached analytics handle's blocking `purge()` on a blocking task before returning
+success. It also retries pending purge when no new rows were deleted. An absent,
+stopped or failing engine returns an error; durable pending-purge markers keep
+report reads fenced. No canonical report fallback is used.
+
+`Maintenance::start(cleanups).await` admits one process owner, runs all startup
+sweeps and exposes counts and failures through `startup()`. It then schedules each
+cleanup independently after hourly delays measured from its previous completion.
+Failures use the existing stderr diagnostics path and do not stop other cleanups
+or scheduling. `close().await` stops scheduling and joins the current sweep,
+including receipts and purge. Close is idempotent; drop signals stop but does not
+replace joining before Store shutdown.
+
+### Composition handoff
+
+1. Open the selected Store after offline import/activation. Install process
+   Session execution before admitting live Session work.
+2. Construct `Cleanups::process(store.client(), &roots)` and retain
+   `Maintenance::start(cleanups).await`. Await startup before starting analytics
+   or admitting report reads. Inspect `startup().failures`; usage
+   `Analytics(Unavailable)` after canonical deletion means pending physical purge,
+   not cleanup success.
+3. Start and retain `analytics::reports::start(store.client(), private_directory)`
+   outside executor threads. Complete `handle.purge()` and `handle.rebuild()`
+   before admitting reports. This resolves startup's absent-engine fence;
+   subsequent usage sweeps purge themselves.
+4. Stop live intake/execution, await maintenance `close()`, close/join the analytics
+   Engine outside executor threads, then shut down the Store. Keep both Store
+   and analytics alive until maintenance has drained.
+
+Tool-output maintenance uses one global `tool_output_store::Store` without
+Location configuration, a seven-day mtime cutoff and the `tool_` name filter.
+Directory, metadata and removal failures are best effort as in TS. Writers hold
+their path during `bound`; consumers retain `Store::hold` while an output is live.
+Holds are process-shared across Location and global Store instances; deletion
+waits until the last hold drops. Shell live outputs use the separate `shell`
+directory and are outside this sweep.
+
+Safety rechecks, sweep-boundary write preservation and failure-resilient schedules
+strengthen TS's active-ID snapshot, unchecked ID deletes and uncaught
+`Effect.orDie` failures. Without an updated-time index, Store selects ordered
+Session pages through bounded primary scans without schema changes. These are
+required concurrency and failure differences; retention eligibility,
+counts and retained data match TS.
+
+`tests/session_cleanups.rs` exercises real Store/DuckDB deletion and purge,
+injected clocks, interleaved writes, startup/hourly ownership, failure continuity,
+held outputs and close/drain. Store boundary checks reside in
+`tests/session_tables.rs`.
+
 ## Process extensions
 
 `extension::{Configuration, Extension}` resolves explicit trusted executable

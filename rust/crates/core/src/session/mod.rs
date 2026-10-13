@@ -2,6 +2,7 @@ pub mod analysis;
 pub mod autonomy;
 pub mod cache_diagnostics;
 pub mod captured_changes;
+pub mod cleanups;
 pub mod compaction;
 pub mod compaction_constraints;
 pub mod compaction_execution;

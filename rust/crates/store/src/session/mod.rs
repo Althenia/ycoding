@@ -1,6 +1,8 @@
+mod cleanup;
 pub(crate) mod codec;
 mod operations;
 mod tables;
+pub use cleanup::*;
 pub use codec::Document;
 pub use operations::*;
 pub use tables::*;

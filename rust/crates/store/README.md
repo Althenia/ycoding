@@ -1,5 +1,37 @@
 # Operational storage engine
 
+## Derived Session cleanup transactions
+
+`session::cleanup_sessions(snapshot, cutoff, cursor)` returns at most 200 expired
+Sessions in ascending `(time_updated, id)` order with an exclusive cursor and
+strict `time_updated < cutoff`. IDs use UTF-8 binary order, not the tuple codec's
+UTF-16 order. Without an updated-time index, the helper scans primary rows in
+bounded 200-row reads and retains at most 200 candidates per page. No catalog,
+codec or table change is required.
+Lossless IDs with colliding replacement-character renderings use their original
+code units as a final tiebreak so an exclusive cursor cannot skip distinct rows.
+
+`session::cleanup_projections(tx, sweep_snapshot, sessions, cutoff, active, kind)`
+deletes only selected exclusions, file changes or usage/request projections.
+It rechecks Session age/update identity, excludes active IDs, and compares current
+projection encodings with the snapshot. New or changed rows remain intact. Child
+reads are bounded at 128 records; counts accumulate without returning deleted
+records. The transaction owns rollback; committed pages can be retried or resumed
+after reopen without double-counting. Events, sequences, messages, Session rows,
+revisions and manifest blobs are not mutated.
+
+Usage/request deletion uses the existing domain operations, recording analytics
+source intents and a pending physical-purge fence in the same transaction. After
+the canonical receipt, Core maintenance calls the attached `Handle::purge()`
+before acknowledging success. An absent engine retains the fence and reports
+failure; start reports, purge and rebuild before admitting reads. Restart retains
+the fence, and sweeps with no remaining deletions still retry purge. Keep the
+Engine alive until maintenance closes, and close the Engine before the Store.
+
+`tests/session_tables.rs` covers the strict cutoff, 200-Session pages, non-BMP
+UTF-8 ties, page rollback, restart after a committed page, activity/freshness
+rechecks, concurrent new rows and durable-history preservation.
+
 `ycoding-store` owns the redb engine and transaction/index boundary. `Catalog::EMPTY` declares no domain tables. Domain owners supply compiled `TableSpec` declarations and schema-owned record codecs; the engine creates only `storage_metadata` plus the declared primary/index tables. All operational tables use `TableDefinition<&[u8], &[u8]>`.
 
 ## Lifecycle and resources

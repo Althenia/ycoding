@@ -1,9 +1,25 @@
 use super::config::{Configuration, Roots};
 use std::{
+    collections::BTreeMap,
     io,
     path::PathBuf,
+    sync::{LazyLock, Mutex},
     time::{Duration, SystemTime},
 };
+static HELD: LazyLock<Mutex<BTreeMap<PathBuf, usize>>> = LazyLock::new(Mutex::default);
+
+pub struct Hold(PathBuf);
+impl Drop for Hold {
+    fn drop(&mut self) {
+        let mut held = HELD.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(count) = held.get_mut(&self.0) {
+            *count -= 1;
+            if *count == 0 {
+                held.remove(&self.0);
+            }
+        }
+    }
+}
 use ycoding_ai::llm::ToolOutput;
 use ycoding_schema::{
     JsonValue,
@@ -29,6 +45,14 @@ impl Store {
         Self {
             directory: roots.data.join("tool-output"),
         }
+    }
+    pub fn hold(&self, path: PathBuf) -> Hold {
+        *HELD
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .entry(path.clone())
+            .or_default() += 1;
+        Hold(path)
     }
     pub fn limits(&self, config: Option<&Configuration>) -> Limits {
         let mut limits = Limits {
@@ -81,6 +105,7 @@ impl Store {
         }
         tokio::fs::create_dir_all(&self.directory).await?;
         let path = self.directory.join(crate::platform::identifier("tool_")?);
+        let _held = self.hold(path.clone());
         let mut file = tokio::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -112,17 +137,28 @@ impl Store {
     pub async fn cleanup(&self, now: SystemTime) -> io::Result<()> {
         let mut entries = match tokio::fs::read_dir(&self.directory).await {
             Ok(entries) => entries,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => return Err(error),
+            Err(_) => return Ok(()),
         };
         let cutoff = now.checked_sub(RETENTION).unwrap_or(SystemTime::UNIX_EPOCH);
-        while let Some(entry) = entries.next_entry().await? {
+        while let Ok(Some(entry)) = entries.next_entry().await {
             if !entry.file_name().to_string_lossy().starts_with("tool_") {
                 continue;
             }
-            if entry.metadata().await?.modified()? < cutoff {
-                tokio::fs::remove_file(entry.path()).await?;
-            }
+            let path = entry.path();
+            tokio::task::spawn_blocking(move || {
+                let held = HELD.lock().unwrap_or_else(|error| error.into_inner());
+                if held.contains_key(&path) {
+                    return;
+                }
+                if std::fs::metadata(&path)
+                    .and_then(|metadata| metadata.modified())
+                    .is_ok_and(|modified| modified < cutoff)
+                {
+                    let _ = std::fs::remove_file(&path);
+                }
+            })
+            .await
+            .map_err(io::Error::other)?;
         }
         Ok(())
     }
