@@ -1,4 +1,5 @@
 mod compaction;
+mod diagnostics;
 mod helper;
 mod max_steps;
 mod messages;
@@ -56,6 +57,7 @@ impl Clock for WallClock {
 
 pub struct Services {
     pub store: Service,
+    pub events: crate::event_feed::Feed,
     pub location: ycoding_schema::location::Ref,
     pub models: Arc<model::Resolver>,
     pub agents: Arc<agent::Service>,
@@ -97,6 +99,9 @@ enum Overflow {
 struct Timing {
     started: std::time::Instant,
     first_output: Option<std::time::Instant>,
+    first_text: Option<std::time::Instant>,
+    first_reasoning: Option<std::time::Instant>,
+    first_tool_input: Option<std::time::Instant>,
     ended: Option<std::time::Instant>,
     waiting: Option<std::time::Instant>,
     retry_wait: std::time::Duration,
@@ -943,6 +948,9 @@ impl Local {
                 timing: Mutex::new(Timing {
                     started: std::time::Instant::now(),
                     first_output: None,
+                    first_text: None,
+                    first_reasoning: None,
+                    first_tool_input: None,
                     ended: None,
                     waiting: None,
                     retry_wait: std::time::Duration::ZERO,
@@ -988,6 +996,8 @@ impl Local {
             });
             let mut publisher = publisher::Publisher::new(
                 services.store.clone(),
+                services.events.clone(),
+                services.location.clone(),
                 session.id.clone(),
                 assistant.clone(),
                 metadata_key.clone(),
@@ -1304,6 +1314,8 @@ impl Local {
                     drop(timing);
                     *publisher = publisher::Publisher::new(
                         publisher.store.clone(),
+                        self.0.services.events.clone(),
+                        self.0.services.location.clone(),
                         publisher.session.clone(),
                         publisher.assistant.clone(),
                         publisher.metadata_key.clone(),
@@ -1346,6 +1358,24 @@ impl Local {
                     timing
                         .first_output
                         .get_or_insert_with(std::time::Instant::now);
+                }
+                match &event {
+                    llm::Event::TextDelta(delta) if messages::meaningful(&delta.text) => {
+                        timing
+                            .first_text
+                            .get_or_insert_with(std::time::Instant::now);
+                    }
+                    llm::Event::ReasoningDelta(delta) if messages::meaningful(&delta.text) => {
+                        timing
+                            .first_reasoning
+                            .get_or_insert_with(std::time::Instant::now);
+                    }
+                    llm::Event::ToolInputDelta { text, .. } if messages::meaningful(text) => {
+                        timing
+                            .first_tool_input
+                            .get_or_insert_with(std::time::Instant::now);
+                    }
+                    _ => {}
                 }
                 if matches!(event, llm::Event::StepFinish { .. } | llm::Event::Finish(_)) {
                     timing.ended.get_or_insert_with(std::time::Instant::now);
@@ -1405,7 +1435,12 @@ impl Local {
                 work.overflow
                     .store(true, std::sync::atomic::Ordering::Relaxed);
             }
-            if let Some(call) = publisher.push(event, services.clock.now()).await? {
+            let settled = matches!(event, llm::Event::StepFinish { .. });
+            let call = publisher.push(event, services.clock.now()).await?;
+            if settled {
+                self.publish_diagnostics(request, publisher, work)?;
+            }
+            if let Some(call) = call {
                 if request.tools.is_empty() {
                     return Err(error(
                         "provider.invalid-output",
@@ -1585,6 +1620,54 @@ impl Local {
                 ),
             );
         }
+        let normalized = ycoding_schema::token_usage::Info::decode(&usage::tokens(usage))
+            .map_err(projector::record_error)?;
+        let state = work
+            .timing
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let provider_timed = usage
+            .and_then(|usage| usage.generation_duration_ns)
+            .is_some();
+        let visible = [state.first_text, state.first_tool_input]
+            .into_iter()
+            .flatten()
+            .min();
+        let folded = state.first_reasoning.is_some() && normalized.reasoning.get() == 0.0;
+        let generated = if provider_timed {
+            normalized.output.get() + normalized.reasoning.get()
+        } else if folded || visible.is_some() {
+            normalized.output.get()
+        } else {
+            0.0
+        };
+        if (provider_timed
+            || !(usage.and_then(|usage| usage.output_may_include_unreported_reasoning)
+                == Some(true)
+                && normalized.reasoning.get() == 0.0))
+            && generated > 0.0
+            && generated.fract() == 0.0
+            && generated <= 9_007_199_254_740_991.0
+        {
+            timing.insert("generatedTokens".into(), JsonValue::Number(generated));
+            if !provider_timed {
+                let start = if folded {
+                    [state.first_reasoning, visible].into_iter().flatten().min()
+                } else {
+                    visible
+                };
+                if let Some((start, end)) = start.zip(state.ended) {
+                    let duration = end.duration_since(start).as_nanos();
+                    if (1_000_000_000..=9_007_199_254_740_991).contains(&duration) {
+                        timing.insert(
+                            "observedGenerationDurationNs".into(),
+                            JsonValue::Number(duration as f64),
+                        );
+                    }
+                }
+            }
+        }
+        drop(state);
         let populated = timing.iter().next().is_some();
         Ok(populated.then_some(JsonValue::Object(timing)))
     }

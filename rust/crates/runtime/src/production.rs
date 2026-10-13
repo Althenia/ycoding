@@ -75,6 +75,7 @@ pub(crate) struct Factory {
     options: config::LoadOptions,
     snapshots: Vec<models_dev::Snapshot>,
     client: Client,
+    events: Feed,
     credentials: credential::Service,
     executor: Arc<Executor>,
     git: Arc<git::Service>,
@@ -104,6 +105,7 @@ impl Core {
             options: production.configuration,
             snapshots,
             client: client.clone(),
+            events: events.clone(),
             credentials,
             executor: Arc::new(Executor::new(
                 Executor::http_client().map_err(|_| unavailable("provider execution"))?,
@@ -293,7 +295,7 @@ impl Factory {
         .collect::<Result<Vec<_>, _>>()?;
         Ok(Configuration {
             agents,
-            publisher: self.publisher.clone(),
+            publisher: Arc::new(|_| Ok(())),
             helpers: None,
             guardrails: Settings {
                 paths: Paths {
@@ -425,6 +427,7 @@ impl Factory {
             .map_err(|_| unavailable("compaction configuration"))?;
         let runner = runner::Local::new(runner::Services {
             store: Service::new(self.client.clone()),
+            events: self.events.clone(),
             location: location::Ref {
                 directory: services.info.directory.clone(),
                 workspace_id: services.info.workspace_id.clone(),

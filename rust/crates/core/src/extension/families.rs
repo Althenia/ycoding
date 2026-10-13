@@ -821,6 +821,12 @@ impl Resources {
         context: &Context,
     ) -> Result<Self, Error> {
         let mut output = self.clone();
+        output.agents.event_source = Default::default();
+        output.commands.event_source = Default::default();
+        output.references.event_source = Default::default();
+        output.skills.event_source = Default::default();
+        output.catalog.event_source = Default::default();
+        let mut touched = BTreeSet::new();
         let mut extensions = extensions.to_vec();
         extensions.sort_by_key(|extension| extension.order);
         for extension in extensions {
@@ -856,6 +862,7 @@ impl Resources {
                     &registration.key,
                     wire::read_value(registration.value.clone())?,
                 )?;
+                touched.insert(stage as i32);
             }
             for registration in &extension.declarations {
                 let stage = v5::TransformStage::try_from(registration.stage)
@@ -875,10 +882,44 @@ impl Resources {
                     .transform(registration, context, 0, draft)
                     .await?;
                 output.install(stage, transformed)?;
+                touched.insert(stage as i32);
             }
             if !extension.shared.accepting.load(Ordering::Acquire) {
                 return Err(Error::Stopped);
             }
+        }
+        output.agents.event_source = self.agents.event_source.clone();
+        output.commands.event_source = self.commands.event_source.clone();
+        output.references.event_source = self.references.event_source.clone();
+        output.skills.event_source = self.skills.event_source.clone();
+        output.catalog.event_source = self.catalog.event_source.clone();
+        for stage in touched {
+            use crate::event_feed::Data;
+            let (source, data) =
+                match v5::TransformStage::try_from(stage).map_err(|_| Error::Protocol)? {
+                    v5::TransformStage::Agents => (
+                        &output.agents.event_source,
+                        Data::AgentUpdated(Box::new(ycoding_schema::agent::Empty)),
+                    ),
+                    v5::TransformStage::Commands => (
+                        &output.commands.event_source,
+                        Data::CommandUpdated(Box::new(ycoding_schema::command::Empty)),
+                    ),
+                    v5::TransformStage::References => (
+                        &output.references.event_source,
+                        Data::ReferenceUpdated(Box::new(ycoding_schema::models_dev::Empty)),
+                    ),
+                    v5::TransformStage::Skills => (
+                        &output.skills.event_source,
+                        Data::SkillUpdated(Box::new(ycoding_schema::models_dev::Empty)),
+                    ),
+                    v5::TransformStage::Catalog => (
+                        &output.catalog.event_source,
+                        Data::CatalogUpdated(Box::new(ycoding_schema::catalog::Empty)),
+                    ),
+                    _ => return Err(Error::Unauthorized),
+                };
+            source.emit(data).map_err(|_| Error::ExecutionFailed)?;
         }
         Ok(output)
     }
@@ -913,7 +954,9 @@ impl Resources {
                     .cloned()
                     .collect::<Vec<_>>();
                 values.push(value);
-                self.references = reference::Service::from_infos(values);
+                self.references
+                    .replace(values)
+                    .map_err(|_| Error::ExecutionFailed)?;
             }
             v5::TransformStage::Skills => self
                 .skills
@@ -1011,7 +1054,9 @@ impl Resources {
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(|_| Error::Schema)?;
                 unique(references.iter().map(|reference| reference.name.clone()))?;
-                self.references = reference::Service::from_infos(references);
+                self.references
+                    .replace(references)
+                    .map_err(|_| Error::ExecutionFailed)?;
             }
             v5::TransformStage::Skills => {
                 let sources = items

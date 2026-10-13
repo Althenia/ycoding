@@ -37,6 +37,32 @@ fn services(
         })?;
     let services = resolver(&location)
         .map_err(|_| Failure::Unavailable("Location catalog services are unavailable".into()))?;
+    let scope = ycoding_core::ycoding_schema::location::Ref {
+        directory: location.directory.clone(),
+        workspace_id: location.workspace_id.clone(),
+    };
+    let feed = invocation.core()?.events.clone();
+    services
+        .models
+        .catalog()
+        .event_source
+        .bind(feed.clone(), Some(scope.clone()))
+        .map_err(Failure::Unavailable)?;
+    services
+        .agents
+        .event_source
+        .bind(feed.clone(), Some(scope.clone()))
+        .map_err(Failure::Unavailable)?;
+    services
+        .commands
+        .event_source
+        .bind(feed.clone(), Some(scope.clone()))
+        .map_err(Failure::Unavailable)?;
+    services
+        .references
+        .event_source
+        .bind(feed, Some(scope))
+        .map_err(Failure::Unavailable)?;
     if !std::sync::Arc::ptr_eq(&services.models, &services.generate.models) {
         return Err(Failure::Unavailable(
             "Location catalog and generation model services disagree".into(),
@@ -311,10 +337,18 @@ async fn skill_list(
     request: v5::SkillListRequest,
 ) -> Result<v5::SkillListResult, Failure> {
     let (location, services) = services(&invocation, &request.query)?;
-    let skills = services
-        .skills
-        .lock()
-        .await
+    let mut service = services.skills.lock().await;
+    service
+        .event_source
+        .bind(
+            invocation.core()?.events.clone(),
+            Some(location::Ref {
+                directory: location.directory.clone(),
+                workspace_id: location.workspace_id.clone(),
+            }),
+        )
+        .map_err(Failure::Unavailable)?;
+    let skills = service
         .list()
         .await
         .map_err(|_| Failure::Unavailable("Skill catalog unavailable".into()))?;

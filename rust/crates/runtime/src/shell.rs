@@ -13,7 +13,7 @@ fn failure(id: &v5::LosslessString, error: std::io::Error) -> Failure {
     platform_services::io(error)
 }
 
-fn info(info: &shell::Info) -> Result<v5::ShellInfo, Failure> {
+pub(crate) fn info(info: &shell::Info) -> Result<v5::ShellInfo, Failure> {
     Ok(v5::ShellInfo {
         id: convert::identity(&info.id)?,
         command: convert::wire(&info.command),

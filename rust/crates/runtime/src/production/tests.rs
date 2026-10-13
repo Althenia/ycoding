@@ -26,6 +26,34 @@ const MODELS: &str = r#"{"openai":{"id":"openai","name":"OpenAI","api":"http://1
 
 static FIXTURE: AtomicU64 = AtomicU64::new(0);
 
+#[test]
+fn location_policy_events_publish_once_with_the_owned_location() {
+    let f = fixture("{}", "{}");
+    let (_, services) = f
+        .locations()
+        .session(&session::Id::new("ses_one").unwrap())
+        .unwrap();
+    let subscriber = f
+        .feed
+        .subscribe(ycoding_core::event_feed::Scope::Global, None, || {})
+        .unwrap();
+    services.forms.create(form::Info::decode(&parse_json(r#"{"id":"frm_location_once","sessionID":"global","title":"Choose","fields":[{"key":"name","type":"string","required":true}]}"#).unwrap()).unwrap()).unwrap();
+    let items = std::iter::from_fn(|| subscriber.next().unwrap()).collect::<Vec<_>>();
+    assert_eq!(items.len(), 1, "one policy event must publish exactly once");
+    let ycoding_core::event_feed::Payload::Ephemeral(event) = &items[0].payload else {
+        panic!("ephemeral form event expected")
+    };
+    assert!(matches!(
+        event.data,
+        ycoding_core::event_feed::Data::FormCreated(_)
+    ));
+    assert_eq!(
+        event.location.as_ref().unwrap().directory,
+        services.info.directory
+    );
+    assert!(event.session.is_none());
+}
+
 struct Fixture {
     store: Store,
     roots: config::Roots,
@@ -102,6 +130,7 @@ fn fixture(global: &str, project_configuration: &str) -> Fixture {
             },
             snapshots: models_dev::normalize(&parse_json(MODELS).unwrap()).unwrap(),
             client: client.clone(),
+            events: feed.clone(),
             credentials: credential::Service::new(client),
             executor: Arc::new(Executor::new(Executor::http_client().unwrap())),
             git: Arc::new(git::Service::new(16 * 1024 * 1024)),

@@ -41,6 +41,22 @@ pub fn resolve(
             "Platform resolver returned another Location".into(),
         ));
     }
+    let feed = invocation.core()?.events.clone();
+    services
+        .shell
+        .event_source
+        .bind(feed.clone(), Some(reference.clone()))
+        .map_err(Failure::Unavailable)?;
+    services
+        .pty
+        .event_source
+        .bind(feed.clone(), Some(reference.clone()))
+        .map_err(Failure::Unavailable)?;
+    services
+        .config
+        .event_source
+        .bind(feed, Some(reference))
+        .map_err(Failure::Unavailable)?;
     Ok((location.info.clone(), services))
 }
 

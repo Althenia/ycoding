@@ -95,6 +95,10 @@ fn resolve(
     })?;
     let services = resolver(&location.info)
         .map_err(|_| Failure::Unavailable("Location integration registry unavailable".into()))?;
+    services
+        .registry
+        .bind_events(invocation.core()?.events.clone(), None)
+        .map_err(Failure::Unavailable)?;
     Ok((convert::location_info(&location.info), services))
 }
 

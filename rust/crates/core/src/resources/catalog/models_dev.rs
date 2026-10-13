@@ -474,6 +474,7 @@ pub struct Options {
     pub user_agent: String,
 }
 pub struct Service {
+    pub event_source: crate::event_feed::EventSource,
     options: Options,
     client: reqwest::Client,
     snapshot: tokio::sync::Mutex<Option<Vec<Snapshot>>>,
@@ -485,6 +486,7 @@ impl Service {
     pub fn new(options: Options) -> Result<Self, Error> {
         Ok(Self {
             options,
+            event_source: Default::default(),
             client: reqwest::Client::builder()
                 .no_proxy()
                 .redirect(reqwest::redirect::Policy::none())
@@ -543,6 +545,11 @@ impl Service {
         *self.snapshot.lock().await = None;
         self.refreshed
             .send_modify(|generation| *generation = generation.saturating_add(1));
+        self.event_source
+            .emit(crate::event_feed::Data::ModelsDevRefreshed(Box::new(
+                ycoding_schema::models_dev::Empty,
+            )))
+            .map_err(|_| Error::Closed)?;
         Ok(true)
     }
     pub fn refreshed(&self) -> tokio::sync::watch::Receiver<u64> {

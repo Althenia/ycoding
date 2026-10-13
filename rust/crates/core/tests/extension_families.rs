@@ -160,6 +160,34 @@ fn options() -> Options {
         write: Duration::from_millis(500),
     }
 }
+
+fn resource_events(
+    resources: &Resources,
+    fixture: &ToolFixture,
+) -> ycoding_core::event_feed::Subscriber {
+    let feed = ycoding_core::event_feed::Feed::attach(&fixture.authority.store.client());
+    let location = ycoding_schema::location::Ref::decode(
+        &parse_json(&format!(
+            r#"{{"directory":{}}}"#,
+            ycoding_schema::stringify_json(&JsonValue::String(
+                fixture.root.to_str().unwrap().into()
+            ))
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    for source in [
+        &resources.agents.event_source,
+        &resources.commands.event_source,
+        &resources.references.event_source,
+        &resources.skills.event_source,
+        &resources.catalog.event_source,
+    ] {
+        source.bind(feed.clone(), Some(location.clone())).unwrap();
+    }
+    feed.subscribe(ycoding_core::event_feed::Scope::Global, None, || {})
+        .unwrap()
+}
 async fn start(
     fixture: &ToolFixture,
     mode: &str,
@@ -183,15 +211,39 @@ async fn ordered_real_process_hooks_resources_context_and_subscription_consumers
     let fixture = ToolFixture::new();
     let registry = fixture.registry();
     let (base, records) = resources(&fixture);
+    let updates = resource_events(&base, &fixture);
     let second = start(&fixture, "familyB", 1, &[], &registry).await.unwrap();
     let first = start(&fixture, "familyA", 0, &records, &registry)
         .await
         .unwrap();
     let extensions = [&second, &first];
-    let projected = base
+    let mut projected = base
         .materialize(&extensions, &fixture.context())
         .await
         .unwrap();
+    let publications = std::iter::from_fn(|| updates.next().unwrap())
+        .map(|item| {
+            let ycoding_core::event_feed::Payload::Ephemeral(event) = &item.payload else {
+                panic!("resource update is ephemeral");
+            };
+            event.data.name()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        publications,
+        [
+            "agent.updated",
+            "command.updated",
+            "reference.updated",
+            "skill.updated",
+            "catalog.updated"
+        ]
+    );
+    projected.agents.set_default(Some("custom".into()));
+    let item = updates.next().unwrap().unwrap();
+    assert!(
+        matches!(&item.payload, ycoding_core::event_feed::Payload::Ephemeral(event) if event.data.name() == "agent.updated")
+    );
     assert_eq!(
         projected
             .agents
@@ -323,6 +375,7 @@ async fn family_grants_revision_fences_exit_and_subscription_deadlines() {
         let fixture = ToolFixture::new();
         let registry = fixture.registry();
         let (base, records) = resources(&fixture);
+        let updates = resource_events(&base, &fixture);
         let extension = start(&fixture, mode, 0, &records, &registry).await;
         if mode == "family_bad_subscription" {
             assert_eq!(extension.err(), Some(Error::Unauthorized));
@@ -346,6 +399,7 @@ async fn family_grants_revision_fences_exit_and_subscription_deadlines() {
                     .await
                     .is_err()
             );
+            assert!(updates.next().unwrap().is_none());
         }
         tokio::time::timeout(Duration::from_secs(3), extension.closed())
             .await

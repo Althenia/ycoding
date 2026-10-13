@@ -68,6 +68,7 @@ struct Slot {
     authentication: watch::Sender<Authentication>,
 }
 struct Inner {
+    event_source: crate::event_feed::EventSource,
     definitions: Definitions,
     slots: Mutex<BTreeMap<String, Arc<Slot>>>,
     directory: PathBuf,
@@ -81,6 +82,13 @@ struct Inner {
 pub struct Service(Arc<Inner>);
 
 impl Service {
+    pub fn bind_events(
+        &self,
+        feed: crate::event_feed::Feed,
+        location: Option<ycoding_schema::location::Ref>,
+    ) -> Result<(), String> {
+        self.0.event_source.bind(feed, location)
+    }
     pub fn new(
         entries: &[Entry],
         directory: PathBuf,
@@ -100,6 +108,7 @@ impl Service {
             slots.insert(name, slot(config.clone(), authentication, registration));
         }
         let service = Self(Arc::new(Inner {
+            event_source: hooks.event_source.clone(),
             definitions,
             slots: Mutex::new(slots),
             directory,
@@ -517,6 +526,27 @@ impl Service {
 
 impl Inner {
     fn publish(&self, event: Event) {
+        let data = match &event {
+            Event::StatusChanged(server) => Some(crate::event_feed::Data::McpStatusChanged(
+                Box::new(ycoding_schema::mcp_event::ServerData {
+                    server: server.as_str().into(),
+                }),
+            )),
+            Event::ResourcesChanged(server) => Some(crate::event_feed::Data::McpResourcesChanged(
+                Box::new(ycoding_schema::mcp_event::ServerData {
+                    server: server.as_str().into(),
+                }),
+            )),
+            Event::PromptsChanged(_) => Some(crate::event_feed::Data::CommandUpdated(Box::new(
+                ycoding_schema::command::Empty,
+            ))),
+            Event::ToolsChanged(_) | Event::Log { .. } => None,
+        };
+        if let Some(data) = data {
+            if self.event_source.emit(data).is_err() {
+                eprintln!("MCP event publication failed");
+            }
+        }
         let _ = self.events.send(event);
     }
     fn spawn(&self, future: impl Future<Output = ()> + Send + 'static) -> Result<(), Error> {

@@ -105,9 +105,9 @@ fn watch(id: &str) -> ycoding_core::event_feed::Subscriber {
 fn published_predictions(subscriber: &ycoding_core::event_feed::Subscriber) -> Vec<JsonValue> {
     std::iter::from_fn(|| subscriber.next().unwrap())
         .filter_map(|item| match &item.payload {
-            Payload::Ephemeral(event) if event.event_type == "session.prediction.updated" => {
-                Some(event.data.clone())
-            }
+            Payload::Ephemeral(event) if event.data.name() == "session.prediction.updated" => Some(
+                ycoding_core::ycoding_schema::DomainEncode::encode(&event.data),
+            ),
             _ => None,
         })
         .collect()
@@ -118,6 +118,23 @@ async fn prediction_returns_the_suggestion_and_publishes_the_ephemeral_event() {
     bounded(async {
         let server = start(services(LocalAuth::disabled(), true), standard().unwrap()).await;
         let mut client = Client::open(server.address(), &[]).await.unwrap();
+        let global = v5::Scope {
+            target: Some(v5::scope::Target::Global(v5::Empty {})),
+        };
+        let mut subscriptions = Vec::new();
+        for scope in [global.clone(), session_scope("ses_predict_hint")] {
+            let request = client
+                .send(
+                    "event.subscribe",
+                    global.clone(),
+                    v5::EventSubscribeRequest {
+                        scope: scope.clone(),
+                    }
+                    .encode_to_vec(),
+                )
+                .await;
+            subscriptions.push(client.subscribe_events(&request, scope).await);
+        }
         let events = watch("ses_predict_hint");
         let script = script("ses_predict_hint");
         script.reply(Some("Run the focused tests"));
@@ -137,6 +154,40 @@ async fn prediction_returns_the_suggestion_and_publishes_the_ephemeral_event() {
             ycoding_core::ycoding_schema::stringify_json(&published[0])
                 .contains("Run the focused tests")
         );
+        let received = |client: &Client, subscription: &String| {
+            client
+                .batches
+                .iter()
+                .filter(|batch| &batch.subscription_id == subscription)
+                .flat_map(|batch| &batch.events)
+                .filter(|record| record.durable.is_none())
+                .find_map(|record| {
+                    let Some(v5::public_event::Kind::SessionPredictionUpdated(event)) =
+                        v5::PublicEvent::decode(record.event.payload.as_slice())
+                            .unwrap()
+                            .kind
+                    else {
+                        return None;
+                    };
+                    Some(event)
+                })
+        };
+        while subscriptions
+            .iter()
+            .any(|subscription| received(&client, subscription).is_none())
+        {
+            client.step().await;
+        }
+        for subscription in &subscriptions {
+            let event = received(&client, subscription).unwrap();
+            assert_eq!(units(&event.data.text), "Run the focused tests");
+            assert_eq!(units(&event.data.session_id), "ses_predict_hint");
+            assert_eq!(
+                units(&event.data.source_message_id),
+                "msg_ses_predict_hint_assistant"
+            );
+            assert_eq!(units(&event.location.unwrap().directory), "/project");
+        }
         server.shutdown().await.unwrap();
     })
     .await;

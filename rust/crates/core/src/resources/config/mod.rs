@@ -35,6 +35,7 @@ pub struct LoadOptions {
 
 #[derive(Debug)]
 pub struct Configuration {
+    pub event_source: crate::event_feed::EventSource,
     pub entries: Vec<Entry>,
     pub diagnostics: Vec<Diagnostic>,
     options: LoadOptions,
@@ -49,6 +50,7 @@ impl Configuration {
         let (entries, diagnostics) = discover(&options)?;
         Ok(Self {
             entries,
+            event_source: Default::default(),
             diagnostics,
             options,
         })
@@ -57,6 +59,15 @@ impl Configuration {
         let (entries, diagnostics) = discover(&self.options)?;
         self.entries = entries;
         self.diagnostics = diagnostics;
+        if self
+            .event_source
+            .emit(crate::event_feed::Data::ConfigUpdated(Box::new(
+                ycoding_schema::config::Empty,
+            )))
+            .is_err()
+        {
+            eprintln!("Config event publication failed");
+        }
         Ok(())
     }
     pub fn values<'a>(&'a self, key: &'a str) -> impl DoubleEndedIterator<Item = &'a JsonValue> {

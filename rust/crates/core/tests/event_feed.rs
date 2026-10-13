@@ -9,7 +9,7 @@ use ycoding_core::{
     event_feed::{Ephemeral, Feed, Item, Overflow, Payload, ResumeError, Scope, Subscriber},
     session::store::Service,
 };
-use ycoding_schema::{JsonValue, parse_json, session};
+use ycoding_schema::{DomainDecode, parse_json, session};
 use ycoding_store::{
     Client, Error,
     session::{self as tables, NewEvent},
@@ -36,9 +36,12 @@ fn ephemeral(event: &str, session: Option<&str>) -> Ephemeral {
     Ephemeral {
         id: event.into(),
         created: 7,
-        event_type: "session.status".into(),
         session: session.map(id),
-        data: JsonValue::Null,
+        metadata: None,
+        location: None,
+        data: ycoding_core::event_feed::Data::ConfigUpdated(Box::new(
+            ycoding_schema::config::Empty,
+        )),
     }
 }
 
@@ -83,6 +86,38 @@ fn append_in_one_transaction(client: &Client, events: Vec<NewEvent>) {
         .unwrap()
         .wait()
         .unwrap();
+}
+
+#[test]
+fn event_source_retains_one_feed_and_location_and_rejects_reassignment() {
+    let store = support::store();
+    let feed = Feed::attach(&store.client());
+    let source = ycoding_core::event_feed::EventSource::default();
+    let location = ycoding_schema::location::Ref::decode(
+        &parse_json(r#"{"directory":"/project","workspaceID":"wrk_one"}"#).unwrap(),
+    )
+    .unwrap();
+    let subscriber = live(&feed, Scope::Global);
+    source.bind(feed.clone(), Some(location.clone())).unwrap();
+    source.bind(feed.clone(), Some(location.clone())).unwrap();
+    assert!(
+        source
+            .bind(Feed::attach(&store.client()), Some(location.clone()))
+            .is_err()
+    );
+    assert!(source.bind(feed, None).is_err());
+    source
+        .emit(ycoding_core::event_feed::Data::ConfigUpdated(Box::new(
+            ycoding_schema::config::Empty,
+        )))
+        .unwrap();
+    let items = drain(&subscriber);
+    assert_eq!(items.len(), 1);
+    let Payload::Ephemeral(event) = &items[0].payload else {
+        panic!("source emits an ephemeral");
+    };
+    assert_eq!(event.location, Some(location));
+    assert!(event.session.is_none());
 }
 
 #[tokio::test]

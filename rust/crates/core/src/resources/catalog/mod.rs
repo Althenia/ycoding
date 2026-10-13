@@ -26,6 +26,7 @@ struct Account {
 }
 #[derive(Clone, Default)]
 pub struct Catalog {
+    pub event_source: crate::event_feed::EventSource,
     pub providers: Vec<ProviderRecord>,
     default: Option<model::Ref>,
     accounts: Vec<Account>,
@@ -62,9 +63,19 @@ impl Catalog {
     }
     pub fn set_default(&mut self, selection: Option<model::Ref>) {
         self.default = selection;
+        if self
+            .event_source
+            .emit(crate::event_feed::Data::CatalogUpdated(Box::new(
+                ycoding_schema::catalog::Empty,
+            )))
+            .is_err()
+        {
+            eprintln!("Catalog event publication failed");
+        }
     }
     pub fn new(snapshots: Vec<models_dev::Snapshot>) -> Self {
         Self {
+            event_source: Default::default(),
             providers: snapshots
                 .into_iter()
                 .map(|snapshot| {
@@ -145,20 +156,25 @@ impl Catalog {
     pub fn set_connected(&mut self, integration: LosslessString, connected: bool) {
         if connected {
             self.connected.insert(integration);
+            self.updated();
             return;
         }
         self.connected.remove(&integration);
+        self.updated();
     }
     pub fn set_denied(&mut self, provider: provider::Id, denied: bool) {
         if denied {
             self.denied.insert(provider);
+            self.updated();
             return;
         }
         self.denied.remove(&provider);
+        self.updated();
     }
     pub fn set_disabled(&mut self, id: &provider::Id, disabled: bool) {
         if let Some(record) = self.providers.iter_mut().find(|p| &p.provider.id == id) {
             record.provider.disabled = Some(disabled);
+            self.updated();
         }
     }
     pub fn account_update(
@@ -179,11 +195,13 @@ impl Catalog {
             provider,
             models,
         });
+        self.updated();
     }
     pub fn account_clear(&mut self, provider: &provider::Id) {
         self.contextual.insert(provider.clone());
         self.accounts
             .retain(|account| &account.provider != provider);
+        self.updated();
     }
     fn account(
         &self,
@@ -613,7 +631,20 @@ impl Catalog {
             }
         }
         *self = configured;
+        self.updated();
         Ok(())
+    }
+
+    fn updated(&self) {
+        if self
+            .event_source
+            .emit(crate::event_feed::Data::CatalogUpdated(Box::new(
+                ycoding_schema::catalog::Empty,
+            )))
+            .is_err()
+        {
+            eprintln!("Catalog event publication failed");
+        }
     }
 }
 

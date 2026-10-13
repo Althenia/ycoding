@@ -56,6 +56,7 @@ pub struct Selection<'a> {
 
 #[derive(Clone)]
 pub struct Service {
+    pub event_source: crate::event_feed::EventSource,
     agents: Vec<Info>,
     default: Option<Id>,
     revision: u64,
@@ -64,6 +65,7 @@ impl Service {
     pub fn new(agents: Vec<Info>) -> Self {
         Self {
             agents,
+            event_source: Default::default(),
             default: None,
             revision: 0,
         }
@@ -191,10 +193,28 @@ impl Service {
         f(current);
         current.id = id;
         self.revision += 1;
+        if self
+            .event_source
+            .emit(crate::event_feed::Data::AgentUpdated(Box::new(
+                ycoding_schema::agent::Empty,
+            )))
+            .is_err()
+        {
+            eprintln!("Agent event publication failed");
+        }
     }
     pub fn set_default(&mut self, id: Option<Id>) {
         self.default = id;
         self.revision += 1;
+        if self
+            .event_source
+            .emit(crate::event_feed::Data::AgentUpdated(Box::new(
+                ycoding_schema::agent::Empty,
+            )))
+            .is_err()
+        {
+            eprintln!("Agent event publication failed");
+        }
     }
     pub fn default_id(&self) -> Option<&Id> {
         self.default.as_ref()
@@ -202,6 +222,15 @@ impl Service {
     pub fn remove(&mut self, id: &Id) {
         self.agents.retain(|a| &a.id != id);
         self.revision += 1;
+        if self
+            .event_source
+            .emit(crate::event_feed::Data::AgentUpdated(Box::new(
+                ycoding_schema::agent::Empty,
+            )))
+            .is_err()
+        {
+            eprintln!("Agent event publication failed");
+        }
     }
     pub fn default(&self) -> Option<&Info> {
         self.default

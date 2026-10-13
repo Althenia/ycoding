@@ -208,7 +208,7 @@ pub async fn saved_remove(
     Ok(v5::PermissionSavedRemoveResult { data: v5::Empty {} })
 }
 
-fn wire(request: &permission::Request) -> Result<v5::PermissionRequest, Failure> {
+pub(crate) fn wire(request: &permission::Request) -> Result<v5::PermissionRequest, Failure> {
     Ok(v5::PermissionRequest {
         id: convert::identity(&request.id)?,
         session_id: convert::wire(request.session_id.as_lossless()),

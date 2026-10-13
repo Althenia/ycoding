@@ -315,6 +315,7 @@ impl Harness {
             Arc::new(attachment_store::Store::new(fixture.root.join("attachments")).unwrap());
         let local = Local::new(Services {
             store: store.clone(),
+            events: ycoding_core::event_feed::Feed::attach(&fixture.authority.store.client()),
             location: store
                 .get(&session::Id::new("ses_tool").unwrap())
                 .unwrap()
@@ -2375,6 +2376,7 @@ async fn task_complete_real_registry_runner_and_execution_publish_one_receipt_af
         .location;
     let local = Local::new(Services {
         store: h.store.clone(),
+        events: ycoding_core::event_feed::Feed::attach(&h.fixture.authority.store.client()),
         location: location.clone(),
         models: h.models.models.clone(),
         agents: h.agents.clone(),

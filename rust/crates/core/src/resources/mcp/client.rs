@@ -102,6 +102,7 @@ pub type ElicitationHandler =
 
 #[derive(Clone, Default)]
 pub struct Hooks {
+    pub event_source: crate::event_feed::EventSource,
     pub elicitation: Option<ElicitationHandler>,
     pub credentials: Option<crate::resources::credential::Service>,
     pub integrations: Option<crate::resources::auth::integration::Registry>,

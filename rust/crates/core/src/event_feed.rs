@@ -1,8 +1,8 @@
 use std::{
     collections::VecDeque,
-    sync::{Arc, Mutex, MutexGuard, PoisonError, Weak},
+    sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak},
 };
-use ycoding_schema::{JsonValue, LosslessString, session};
+use ycoding_schema::{JsonObject, LosslessString, location, session};
 use ycoding_store::{Client, session::Event};
 
 pub const RETAINED_ITEMS: usize = 4_096;
@@ -18,9 +18,10 @@ pub enum Scope {
 pub struct Ephemeral {
     pub id: LosslessString,
     pub created: i64,
-    pub event_type: String,
     pub session: Option<session::Id>,
-    pub data: JsonValue,
+    pub location: Option<location::Ref>,
+    pub metadata: Option<JsonObject>,
+    pub data: Data,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -49,7 +50,42 @@ pub struct Overflow {
 #[derive(Clone)]
 pub struct Feed(Arc<Shared>);
 
+#[derive(Clone, Default)]
+pub struct EventSource(Arc<OnceLock<(Feed, Option<location::Ref>)>>);
+
+impl std::fmt::Debug for EventSource {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("EventSource")
+            .field("bound", &self.0.get().is_some())
+            .finish()
+    }
+}
+
+impl EventSource {
+    pub fn bind(&self, feed: Feed, location: Option<location::Ref>) -> Result<(), String> {
+        if let Some((current, current_location)) = self.0.get() {
+            if Arc::ptr_eq(&current.0, &feed.0) && *current_location == location {
+                return Ok(());
+            }
+            return Err("Event source already belongs to another feed or Location".into());
+        }
+        if self.0.set((feed.clone(), location.clone())).is_err() {
+            return self.bind(feed, location);
+        }
+        Ok(())
+    }
+
+    pub fn emit(&self, data: Data) -> Result<(), String> {
+        let Some((feed, location)) = self.0.get() else {
+            return Ok(());
+        };
+        feed.emit(data, location.clone())
+    }
+}
+
 struct Shared {
+    client: Client,
     retained: usize,
     capacity: usize,
     state: Mutex<State>,
@@ -92,6 +128,7 @@ impl Feed {
 
     pub fn attach_with(client: &Client, retained: usize, capacity: usize) -> Self {
         let feed = Self(Arc::new(Shared {
+            client: client.clone(),
             retained,
             capacity,
             state: Mutex::new(State {
@@ -106,7 +143,51 @@ impl Feed {
             let Some(shared) = shared.upgrade() else {
                 return false;
             };
-            Feed(shared).publish_all(events.iter().cloned().map(Payload::Durable));
+            let feed = Feed(shared);
+            feed.publish_all(events.iter().cloned().map(Payload::Durable));
+            for event in events.iter().filter(|event| {
+                matches!(
+                    event.type_.as_str(),
+                    Some(
+                        "session.step.ended.1"
+                            | "session.step.failed.1"
+                            | "session.usage.recorded.1"
+                    )
+                )
+            }) {
+                if event.type_.as_str() == Some("session.step.failed.1") {
+                    let ycoding_schema::JsonValue::Object(data) = &event.data else {
+                        continue;
+                    };
+                    if data.get(&"cost".into()).is_none() || data.get(&"tokens".into()).is_none() {
+                        continue;
+                    }
+                }
+                let id = match session::Id::new(event.aggregate_id.clone()) {
+                    Ok(id) => id,
+                    Err(_) => continue,
+                };
+                let service = crate::session::store::Service::new(feed.0.client.clone());
+                match service.get(&id) {
+                    Ok(Some(session)) => {
+                        if feed
+                            .emit(
+                                Data::SessionUsageUpdated(Box::new(ephemeral::Usage {
+                                    session_id: id,
+                                    cost: session.cost,
+                                    tokens: session.tokens,
+                                })),
+                                Some(session.location),
+                            )
+                            .is_err()
+                        {
+                            eprintln!("Session usage publication failed");
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(_) => eprintln!("Session usage projection unavailable"),
+                }
+            }
             true
         });
         feed
@@ -122,6 +203,22 @@ impl Feed {
 
     pub fn publish(&self, event: Ephemeral) {
         self.publish_all([Payload::Ephemeral(event)]);
+    }
+
+    pub fn emit(&self, data: Data, location: Option<location::Ref>) -> Result<(), String> {
+        let session = data.session()?;
+        self.publish(Ephemeral {
+            id: crate::session::projector::random_event_id()
+                .map_err(|error| error.to_string())?
+                .as_lossless()
+                .clone(),
+            created: chrono::Utc::now().timestamp_millis(),
+            session,
+            location,
+            metadata: None,
+            data,
+        });
+        Ok(())
     }
 
     pub fn subscribe(
@@ -247,3 +344,5 @@ fn matches(scope: &Scope, item: &Item) -> bool {
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
+pub mod ephemeral;
+pub use ephemeral::Data;

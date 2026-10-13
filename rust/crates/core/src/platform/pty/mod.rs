@@ -184,6 +184,7 @@ pub enum Event {
     Deleted(Id),
 }
 pub struct Pty {
+    pub event_source: crate::event_feed::EventSource,
     directory: PathBuf,
     state: Arc<Mutex<State>>,
     events: broadcast::Sender<Event>,
@@ -196,6 +197,7 @@ impl Pty {
     pub fn new(directory: PathBuf) -> Self {
         Self {
             directory,
+            event_source: Default::default(),
             state: Arc::new(Mutex::new(State {
                 sessions: HashMap::new(),
                 exited: VecDeque::new(),
@@ -359,9 +361,15 @@ impl Pty {
             state.sessions.insert(info.id.clone(), session.clone());
             (info, session, native, requests)
         };
+        self.event_source
+            .emit(crate::event_feed::Data::PtyCreated(Box::new(
+                pty::InfoData { info: info.clone() },
+            )))
+            .map_err(io::Error::other)?;
         let _ = self.events.send(Event::Created(info.clone()));
         let weak = Arc::downgrade(&self.state);
         let events = self.events.clone();
+        let event_source = self.event_source.clone();
         let active = session.clone();
         *session.task.lock().await = Some(tokio::spawn(async move {
             let result = drive(&active, native, requests).await;
@@ -369,7 +377,7 @@ impl Pty {
                 Ok(info) => {
                     active.done.send_replace(Some(Ok(info.clone())));
                     if info.exit_reason != Some(pty::ExitReason::Terminated) {
-                        let _ = events.send(Event::Exited(pty::ExitedData {
+                        let exited = pty::ExitedData {
                             id: info.id.clone(),
                             exit_code: info.exit_code.expect("terminal PTY has an exit code"),
                             reason: if info.exit_reason == Some(pty::ExitReason::Timeout) {
@@ -377,7 +385,11 @@ impl Pty {
                             } else {
                                 pty::ExitEventReason::Exit
                             },
-                        }));
+                        };
+                        event_source
+                            .emit(crate::event_feed::Data::PtyExited(Box::new(exited.clone())))
+                            .map_err(io::Error::other)?;
+                        let _ = events.send(Event::Exited(exited));
                     }
                     if let Some(state) = weak.upgrade() {
                         let evicted = {
@@ -391,6 +403,13 @@ impl Pty {
                             }
                         };
                         if let Some(evicted) = evicted {
+                            event_source
+                                .emit(crate::event_feed::Data::PtyDeleted(Box::new(
+                                    pty::DeletedData {
+                                        id: evicted.state.lock().map_err(poison)?.info.id.clone(),
+                                    },
+                                )))
+                                .map_err(io::Error::other)?;
                             let _ = events.send(Event::Deleted(
                                 evicted.state.lock().map_err(poison)?.info.id.clone(),
                             ));
@@ -557,6 +576,11 @@ impl Pty {
             state.info.size = size;
         }
         let info = state.info.clone();
+        self.event_source
+            .emit(crate::event_feed::Data::PtyUpdated(Box::new(
+                pty::InfoData { info: info.clone() },
+            )))
+            .map_err(io::Error::other)?;
         let _ = self.events.send(Event::Updated(info.clone()));
         Ok(info)
     }
@@ -580,6 +604,11 @@ impl Pty {
                 .map_err(io::Error::other)?,
         };
         let info = state.info.clone();
+        self.event_source
+            .emit(crate::event_feed::Data::PtyUpdated(Box::new(
+                pty::InfoData { info: info.clone() },
+            )))
+            .map_err(io::Error::other)?;
         let _ = self.events.send(Event::Updated(info.clone()));
         Ok(info)
     }
@@ -616,6 +645,11 @@ impl Pty {
             state.sessions.remove(id);
             state.exited.retain(|exited| exited != id);
         }
+        self.event_source
+            .emit(crate::event_feed::Data::PtyDeleted(Box::new(
+                pty::DeletedData { id: id.clone() },
+            )))
+            .map_err(io::Error::other)?;
         let _ = self.events.send(Event::Deleted(id.clone()));
         Ok(())
     }

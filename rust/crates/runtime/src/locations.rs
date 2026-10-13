@@ -304,11 +304,24 @@ impl Locations {
                     .map(|agent| (agent.id.clone(), agent.permissions.clone()))
             }),
         };
-        let permissions = Permissions::new(
-            authority.clone(),
-            project.id.clone(),
-            configuration.publisher.clone(),
-        );
+        let feed = self.0.feed.clone();
+        let sink = configuration.publisher.clone();
+        let event_location = location::Ref {
+            directory: AbsolutePath::new(directory.clone()).map_err(|_| unrepresentable())?,
+            workspace_id: workspace
+                .map(|id| WorkspaceId::new(id.clone()))
+                .transpose()
+                .map_err(|_| unrepresentable())?,
+        };
+        let publisher: Publisher = Arc::new(move |event| {
+            let mut publication = crate::services::ephemeral(&event)?;
+            publication.location = Some(event_location.clone());
+            sink(event)?;
+            feed.publish(publication);
+            Ok(())
+        });
+        let permissions =
+            Permissions::new(authority.clone(), project.id.clone(), publisher.clone());
         let guardrails = Guardrails::new(
             authority.clone(),
             permissions.clone(),
@@ -330,7 +343,7 @@ impl Locations {
                 },
                 ..configuration.guardrails.clone()
             },
-            configuration.publisher.clone(),
+            publisher.clone(),
         );
         let info = location::Info {
             directory: AbsolutePath::new(directory.clone()).map_err(|_| unrepresentable())?,
@@ -351,8 +364,8 @@ impl Locations {
                 store: self.0.client.clone(),
             },
             permissions,
-            questions: Questions::new(authority.clone(), configuration.publisher.clone()),
-            forms: Forms::new(authority, configuration.publisher.clone()),
+            questions: Questions::new(authority.clone(), publisher.clone()),
+            forms: Forms::new(authority, publisher),
             guardrails,
             agents: configuration.agents.clone(),
             production: None,

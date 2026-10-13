@@ -42,7 +42,7 @@ fn size(size: v5::PtySize) -> Result<pty::Size, Failure> {
     })
 }
 
-fn info(info: &pty::Info) -> Result<v5::Pty, Failure> {
+pub(crate) fn info(info: &pty::Info) -> Result<v5::Pty, Failure> {
     Ok(v5::Pty {
         id: convert::identity(&info.id)?,
         title: convert::wire(&info.title),

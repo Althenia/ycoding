@@ -14,6 +14,90 @@ use ycoding_store::{
 const TYPE_INDEX: &str = "session_message_session_type_seq_idx";
 
 impl Service {
+    pub(crate) fn generation_speed(
+        &self,
+        id: &session::Id,
+        current: (model::Ref, Option<ycoding_schema::provider_request::Timing>),
+    ) -> Result<Option<cache_diagnostics::GenerationSpeedHistory>, Error> {
+        let snapshot = self.client.snapshot()?;
+        let mut records = Vec::new();
+        let mut after = None;
+        while records.len() < 8 {
+            let rows = ycoding_store::resources::requests(
+                &snapshot,
+                id.as_lossless(),
+                IndexOrder::Descending,
+                after.as_ref(),
+                128,
+            )?;
+            if rows.is_empty() {
+                break;
+            }
+            after = rows.last().map(|row| row.cursor.clone());
+            for row in rows
+                .into_iter()
+                .filter(|row| row.record.source.as_str() == Some("step"))
+            {
+                if records.len() == 8 {
+                    break;
+                }
+                records.push((
+                    row.record.model.domain()?,
+                    row.record
+                        .timing
+                        .map(|timing| timing.domain())
+                        .transpose()?,
+                ));
+            }
+        }
+        records.reverse();
+        records.push(current);
+        let records = &records[records.len().saturating_sub(8)..];
+        let Some((newest, _)) = records.last() else {
+            return Ok(None);
+        };
+        let samples = records
+            .iter()
+            .map(|(model, timing)| {
+                let timing = timing.as_ref()?;
+                let tokens = timing.generated_tokens?;
+                let duration = timing
+                    .generation_duration_ns
+                    .map(|value| value.get())
+                    .or_else(|| {
+                        timing
+                            .observed_generation_duration_ns
+                            .filter(|value| value.get() >= 1_000_000_000)
+                            .map(|value| value.get())
+                    })?;
+                if duration <= 0 {
+                    return None;
+                }
+                let tokens_per_second = tokens.get() as f64 * 1_000_000_000.0 / duration as f64;
+                if !tokens_per_second.is_finite() || tokens_per_second <= 0.0 {
+                    return None;
+                }
+                Some(cache_diagnostics::GenerationSpeed {
+                    model: model.clone(),
+                    tokens,
+                    duration_ns: ycoding_schema::schema::PositiveInt::new(duration).ok()?,
+                    tokens_per_second,
+                })
+            })
+            .collect::<Vec<_>>();
+        let latest = samples.last().cloned().flatten();
+        let recent = samples
+            .into_iter()
+            .flatten()
+            .filter(|sample| {
+                sample.model.provider_id == newest.provider_id
+                    && sample.model.id == newest.id
+                    && sample.model.variant == newest.variant
+            })
+            .collect::<Vec<_>>();
+        Ok((!recent.is_empty())
+            .then_some(cache_diagnostics::GenerationSpeedHistory { latest, recent }))
+    }
     pub fn diagnostics(
         &self,
         id: &session::Id,
@@ -70,13 +154,13 @@ impl Service {
     }
 }
 
-struct Calculation {
-    model: model::Ref,
-    tokens: token_usage::Info,
-    estimated_cost: money::Usd,
-    context_limit: Option<NonNegativeInt>,
-    context_breakdown: Option<cache_diagnostics::ContextBreakdown>,
-    provider_cache: Option<cache_diagnostics::ProviderCache>,
+pub(crate) struct Calculation {
+    pub model: model::Ref,
+    pub tokens: token_usage::Info,
+    pub estimated_cost: money::Usd,
+    pub context_limit: Option<NonNegativeInt>,
+    pub context_breakdown: Option<cache_diagnostics::ContextBreakdown>,
+    pub provider_cache: Option<cache_diagnostics::ProviderCache>,
 }
 
 fn type_key(id: &session::Id, type_: &str, seq: i64) -> Vec<u8> {
@@ -155,7 +239,7 @@ fn latest_measured_assistant(
     )
 }
 
-fn calculate(input: Calculation) -> Result<cache_diagnostics::Info, Error> {
+pub(crate) fn calculate(input: Calculation) -> Result<cache_diagnostics::Info, Error> {
     let uncached_input = input.tokens.input.get().max(0.0);
     let output = input.tokens.output.get().max(0.0);
     let reasoning = input.tokens.reasoning.get().max(0.0);

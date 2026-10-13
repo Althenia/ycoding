@@ -101,7 +101,11 @@ fn received(client: &Client, sub: &str, input: &str) -> bool {
         .filter(|batch| batch.subscription_id == sub)
         .flat_map(|batch| &batch.events)
         .any(|record| {
-            let record = support::session_log_record(record);
+            if record.event.type_name == v5::PublicEvent::full_name() {
+                let item = v5::PublicEvent::decode(record.event.payload.as_slice()).unwrap();
+                return matches!(item.kind, Some(v5::public_event::Kind::SessionInputAdmitted(event)) if units(&event.data.input_id) == input);
+            }
+            assert_eq!(record.event.type_name, v5::SessionLogItem::full_name());
             let item = v5::SessionLogItem::decode(record.event.payload.as_slice()).unwrap();
             matches!(item.kind, Some(v5::session_log_item::Kind::Value15(event)) if units(&event.data.input_id) == input)
         })

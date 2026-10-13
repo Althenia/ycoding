@@ -5,6 +5,7 @@ use super::{
 use ycoding_schema::{DomainDecode, DomainEncode, JsonValue, LosslessString, command::Info};
 #[derive(Clone, Default)]
 pub struct Service {
+    pub event_source: crate::event_feed::EventSource,
     commands: Vec<Info>,
     revision: u64,
 }
@@ -88,10 +89,28 @@ impl Service {
         f(command);
         command.name = name;
         self.revision += 1;
+        if self
+            .event_source
+            .emit(crate::event_feed::Data::CommandUpdated(Box::new(
+                ycoding_schema::command::Empty,
+            )))
+            .is_err()
+        {
+            eprintln!("Command event publication failed");
+        }
     }
     pub fn remove(&mut self, name: &LosslessString) {
         self.commands.retain(|c| &c.name != name);
         self.revision += 1;
+        if self
+            .event_source
+            .emit(crate::event_feed::Data::CommandUpdated(Box::new(
+                ycoding_schema::command::Empty,
+            )))
+            .is_err()
+        {
+            eprintln!("Command event publication failed");
+        }
     }
     pub fn revision(&self) -> u64 {
         self.revision

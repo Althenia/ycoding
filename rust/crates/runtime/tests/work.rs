@@ -1,6 +1,6 @@
 mod support;
 
-use prost::{Message, Name};
+use prost::Message;
 use std::{collections::BTreeSet, time::Duration};
 use support::{wire::*, *};
 use ycoding_core::event_feed::{Ephemeral, Payload, Scope, Subscriber};
@@ -238,7 +238,7 @@ fn ephemeral(subscriber: &Subscriber, event_type: &str) -> Ephemeral {
             .unwrap()
             .unwrap_or_else(|| panic!("{event_type} reached the feed"));
         if let Payload::Ephemeral(event) = &item.payload
-            && event.event_type == event_type
+            && event.data.name() == event_type
         {
             return event.clone();
         }
@@ -256,6 +256,23 @@ async fn todo_update_replaces_the_list_publishes_todo_updated_and_reports_unknow
             .unwrap();
         let (server, mut client) = open().await;
         let scope = session_scope("ses_todo_update");
+        let mut subscriptions = Vec::new();
+        let global = v5::Scope {
+            target: Some(v5::scope::Target::Global(v5::Empty {})),
+        };
+        for target in [global.clone(), scope.clone()] {
+            let request = client
+                .send(
+                    "event.subscribe",
+                    global.clone(),
+                    v5::EventSubscribeRequest {
+                        scope: target.clone(),
+                    }
+                    .encode_to_vec(),
+                )
+                .await;
+            subscriptions.push(client.subscribe_events(&request, target).await);
+        }
         let first = vec![
             todo(
                 "first",
@@ -288,7 +305,8 @@ async fn todo_update_replaces_the_list_publishes_todo_updated_and_reports_unknow
 
         let event = ephemeral(&subscriber, "todo.updated");
         assert_eq!(event.session, Some(id("ses_todo_update")));
-        let JsonValue::Object(data) = &event.data else {
+        let encoded = ycoding_core::ycoding_schema::DomainEncode::encode(&event.data);
+        let JsonValue::Object(data) = &encoded else {
             panic!("todo.updated carries an object")
         };
         assert_eq!(
@@ -299,6 +317,35 @@ async fn todo_update_replaces_the_list_publishes_todo_updated_and_reports_unknow
             panic!("todo.updated carries the replaced list")
         };
         assert_eq!(todos.len(), 2);
+        let received = |client: &Client, subscription: &String| {
+            client
+                .batches
+                .iter()
+                .filter(|batch| &batch.subscription_id == subscription)
+                .flat_map(|batch| &batch.events)
+                .filter(|record| record.durable.is_none())
+                .find_map(|record| {
+                    let Some(v5::public_event::Kind::TodoUpdated(event)) =
+                        v5::PublicEvent::decode(record.event.payload.as_slice())
+                            .unwrap()
+                            .kind
+                    else {
+                        return None;
+                    };
+                    Some(event)
+                })
+        };
+        while subscriptions
+            .iter()
+            .any(|subscription| received(&client, subscription).is_none())
+        {
+            client.step().await;
+        }
+        for subscription in &subscriptions {
+            let event = received(&client, subscription).unwrap();
+            assert_eq!(event.data.todos.items, first);
+            assert_eq!(units(&event.location.unwrap().directory), "/loc/todo");
+        }
 
         let replacement = vec![todo(
             "only",
@@ -335,7 +382,7 @@ async fn todo_update_replaces_the_list_publishes_todo_updated_and_reports_unknow
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn permission_events_reach_feed_subscribers_while_the_wire_carries_only_session_log_items() {
+async fn permission_events_reach_feed_subscribers_and_the_public_wire() {
     bounded(async {
         insert_session("ses_feed_perm", "/loc/feedperm", None).await;
         let subscriber = world()
@@ -384,7 +431,8 @@ async fn permission_events_reach_feed_subscribers_while_the_wire_carries_only_se
 
         let event = ephemeral(&subscriber, "permission.asked");
         assert_eq!(event.session, Some(id("ses_feed_perm")));
-        let JsonValue::Object(data) = &event.data else {
+        let encoded = ycoding_core::ycoding_schema::DomainEncode::encode(&event.data);
+        let JsonValue::Object(data) = &encoded else {
             panic!("permission.asked carries an object")
         };
         assert_eq!(
@@ -392,14 +440,34 @@ async fn permission_events_reach_feed_subscribers_while_the_wire_carries_only_se
             Some(&JsonValue::String(units(&created.data.id).into()))
         );
 
-        client.run_for(Duration::from_millis(300)).await;
-        assert!(client.close.is_none());
-        assert!(
+        let published = |client: &Client| {
             client
                 .batches
                 .iter()
-                .flat_map(|batch| batch.events.iter())
-                .all(|record| record.event.type_name == v5::SessionLogItem::full_name())
+                .flat_map(|batch| &batch.events)
+                .find_map(|record| {
+                    if record.durable.is_some() {
+                        return None;
+                    }
+                    let public = v5::PublicEvent::decode(record.event.payload.as_slice()).unwrap();
+                    let Some(v5::public_event::Kind::PermissionAsked(asked)) = public.kind else {
+                        return None;
+                    };
+                    Some((record.event_id.clone(), asked.data))
+                })
+        };
+        while published(&client).is_none() {
+            client.step().await;
+        }
+        assert!(client.close.is_none());
+        let (event_id, asked) = published(&client).unwrap();
+        assert_eq!(event_id, event.id.as_str().unwrap());
+        assert_eq!(asked.id, created.data.id);
+        assert_eq!(units(&asked.session_id), "ses_feed_perm");
+        assert_eq!(units(&asked.action), "bash_feed");
+        assert_eq!(
+            asked.resources.items.iter().map(units).collect::<Vec<_>>(),
+            ["ls"]
         );
         server.shutdown().await.unwrap();
     })

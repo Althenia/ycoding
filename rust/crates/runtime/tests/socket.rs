@@ -135,13 +135,14 @@ async fn global_form_publication(cancel: bool) {
         let expected = if cancel { "form.cancelled" } else { "form.replied" };
         let events = std::iter::from_fn(|| global.next().unwrap()).filter_map(|item| {
             let Payload::Ephemeral(event) = &item.payload else { return None; };
-            if !["form.created", expected].contains(&event.event_type.as_str()) { return None; }
+            if !["form.created", expected].contains(&event.data.name()) { return None; }
             let path = Default::default();
-            let data = ycoding_core::ycoding_schema::ObjectDecoder::new(&event.data, &path).unwrap();
-            let form_id = if event.event_type == "form.created" { data.field::<form::Info>("form").unwrap().id } else { data.field::<form::Id>("id").unwrap() };
+            let encoded = ycoding_core::ycoding_schema::DomainEncode::encode(&event.data);
+            let data = ycoding_core::ycoding_schema::ObjectDecoder::new(&encoded, &path).unwrap();
+            let form_id = if event.data.name() == "form.created" { data.field::<form::Info>("form").unwrap().id } else { data.field::<form::Id>("id").unwrap() };
             (form_id == input.id).then(|| event.clone())
         }).collect::<Vec<_>>();
-        assert_eq!(events.iter().map(|event| event.event_type.as_str()).collect::<Vec<_>>(), ["form.created", expected]);
+        assert_eq!(events.iter().map(|event| event.data.name()).collect::<Vec<_>>(), ["form.created", expected]);
         assert!(events.iter().all(|event| event.session.is_none()));
         assert!(session.next().unwrap().is_none());
         server.shutdown().await.unwrap();
@@ -174,7 +175,7 @@ async fn only_form_settlement_events_accept_the_global_owner_sentinel() {
         (core.publisher)(Event {
             type_: kind,
             data: parse_json(
-                r#"{"sessionID":"ses_form_event_owner_socket","id":"frm_owner","answer":{}}"#,
+                r#"{"sessionID":"ses_form_event_owner_socket","id":"frm_owner","answer":{},"status":{"type":"busy"}}"#,
             )
             .unwrap(),
         })
@@ -184,7 +185,7 @@ async fn only_form_settlement_events_accept_the_global_owner_sentinel() {
             panic!("expected ephemeral publication");
         };
         assert_eq!(event.session.as_ref(), Some(&id));
-        assert_eq!(event.event_type, kind);
+        assert_eq!(event.data.name(), kind);
     }
     assert!(
         (core.publisher)(Event {

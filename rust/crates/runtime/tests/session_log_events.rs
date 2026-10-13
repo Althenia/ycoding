@@ -46,6 +46,12 @@ use ycoding_protocol::{decode_strict, v5};
 use ycoding_runtime::{LocalAuth, standard};
 
 static SERIAL: Mutex<()> = Mutex::const_new(());
+
+fn global() -> v5::Scope {
+    v5::Scope {
+        target: Some(v5::scope::Target::Global(v5::Empty {})),
+    }
+}
 const SESSION: &str = "ses_wire_events";
 
 fn hex(text: &str) -> Vec<u8> {
@@ -219,6 +225,7 @@ fn records(client: &Client, sub: &str) -> Vec<v5::EventRecord> {
 fn durable_records(client: &Client, sub: &str) -> Vec<v5::EventRecord> {
     records(client, sub)
         .into_iter()
+        .filter(|record| record.durable.is_some())
         .map(|record| support::session_log_record(&record))
         .filter(|record| {
             !matches!(
@@ -318,7 +325,7 @@ async fn both_wire_operations_deliver_every_ts_case_in_order_and_filter_only_int
         ].into_iter().enumerate() {
             append(NewEvent { id: format!("evt_wire_internal_{index}").as_str().into(), aggregate_id: SESSION.into(), created: 42, type_: kind.into(), data: parse_json(data).unwrap() }).await;
         }
-        world().core.events.publish(ycoding_core::event_feed::Ephemeral { id: "evt_wire_ephemeral".into(), created: 42, event_type: "session.prediction.updated".into(), session: Some(session::Id::new(SESSION).unwrap()), data: parse_json(r#"{"sessionID":"ses_wire_events","sourceMessageID":"msg_fixture","text":"A prediction"}"#).unwrap() });
+        world().core.events.publish(ycoding_core::event_feed::Ephemeral { id: "evt_wire_ephemeral".into(), created: 42, session: Some(session::Id::new(SESSION).unwrap()), metadata: None, location: None, data: ycoding_core::event_feed::Data::decode("session.prediction.updated", &parse_json(r#"{"sessionID":"ses_wire_events","sourceMessageID":"msg_fixture","text":"A prediction"}"#).unwrap()).unwrap() });
         let replay = subscribe(&mut client, SESSION, true, None, false).await;
         until(&mut client, |client| client.ended.contains(&replay) && durable_records(client, &live).len() >= fixtures.len()).await;
         for sub in [&live, &replay] {
@@ -424,7 +431,7 @@ async fn real_runner_flow_preserves_order_follow_watermark_cursor_and_full_value
         let session_id = session::Id::new(id).unwrap();
         let (session, location) = world().core.locations.session(&session_id).unwrap();
         let runner = Local::new(Services {
-            store: Service::new(world().store.clone()), location: session.location,
+            store: Service::new(world().store.clone()), events: world().core.events.clone(), location: session.location,
             models: Arc::new(model::Resolver::new(catalog)), agents: Arc::new(agent::Service::new(vec![agent::empty("build".into())])),
             credentials: credential::Service::new(world().store.clone()), tools: registry,
             attachments: Arc::new(attachment_store::Store::new(root.join("attachments")).unwrap()), instructions: Vec::new(), analysis: None,
@@ -435,6 +442,8 @@ async fn real_runner_flow_preserves_order_follow_watermark_cursor_and_full_value
         let server = start(support::services(LocalAuth::disabled(), true), standard().unwrap()).await;
         let mut client = Client::open(server.address(), &[]).await.unwrap();
         let live = subscribe(&mut client, id, false, None, true).await;
+        let global_request = client.send("event.subscribe", global(), v5::EventSubscribeRequest { scope: global() }.encode_to_vec()).await;
+        let global_live = client.subscribe_events(&global_request, global()).await;
         let follow = subscribe(&mut client, id, true, None, true).await;
         until(&mut client, |client| records(client, &follow).iter().any(|record| matches!(v5::SessionLogItem::decode(record.event.payload.as_slice()).unwrap().kind, Some(v5::session_log_item::Kind::Value52(_))))).await;
         let initial = records(&client, &follow);
@@ -451,6 +460,20 @@ async fn real_runner_flow_preserves_order_follow_watermark_cursor_and_full_value
         let replay = subscribe(&mut client, id, true, None, false).await;
         until(&mut client, |client| client.ended.contains(&replay) && durable_records(client, &live).len() == durable_records(client, &replay).len() && durable_records(client, &follow).len() == durable_records(client, &replay).len()).await;
         let sequence = durable_records(&client, &replay);
+        until(&mut client, |client| records(client, &global_live).iter().filter(|record| record.durable.is_none()).count() >= 4).await;
+        for subscription in [&live, &global_live] {
+            let live_records = records(&client, subscription);
+            let ephemerals = live_records.iter().filter(|record| record.durable.is_none()).map(|record| v5::PublicEvent::decode(record.event.payload.as_slice()).unwrap().kind.unwrap()).collect::<Vec<_>>();
+            use v5::public_event::Kind;
+            assert!(ephemerals.iter().any(|event| matches!(event, Kind::SessionTextDelta(value) if units(&value.data.delta) == "Answer" && value.data.ordinal == 0 && units(&value.data.session_id) == id)));
+            assert!(ephemerals.iter().any(|event| matches!(event, Kind::SessionReasoningDelta(value) if units(&value.data.delta) == "Think" && value.data.ordinal == 0)));
+            assert!(ephemerals.iter().any(|event| matches!(event, Kind::SessionUsageUpdated(value) if value.data.tokens.input == 3.0 && value.data.tokens.output == 2.0)));
+            assert!(ephemerals.iter().any(|event| matches!(event, Kind::SessionDiagnosticsUpdated(value) if value.data.diagnostics.context.total == 5 && value.data.diagnostics.tokens.uncached_input == 3 && value.data.diagnostics.tokens.output == 2 && value.data.diagnostics.cache.read_reported == false)));
+            assert!(ephemerals.iter().any(|event| matches!(event, Kind::SessionDiagnosticsUpdated(value) if value.data.diagnostics.context_breakdown.as_ref().is_some_and(|breakdown| breakdown.user > 0) && value.data.diagnostics.generation_speed.is_none())));
+            let diagnostics = live_records.iter().position(|record| record.durable.is_none() && matches!(v5::PublicEvent::decode(record.event.payload.as_slice()).unwrap().kind, Some(Kind::SessionDiagnosticsUpdated(_)))).unwrap();
+            let step_ended = live_records.iter().position(|record| record.durable.is_some() && matches!(v5::PublicEvent::decode(record.event.payload.as_slice()).unwrap().kind, Some(Kind::SessionStepEnded(_)))).unwrap();
+            assert!(diagnostics < step_ended);
+        }
         let kinds = sequence.iter().map(|record| {
             let bytes = &record.event.payload;
             let mut tag = 0u64;

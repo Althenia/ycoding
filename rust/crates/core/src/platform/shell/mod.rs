@@ -58,6 +58,7 @@ struct State {
 }
 type Settlement = Result<Info, (io::ErrorKind, String)>;
 pub struct Shell {
+    pub event_source: crate::event_feed::EventSource,
     directory: PathBuf,
     output_directory: PathBuf,
     owner: Arc<()>,
@@ -89,6 +90,7 @@ impl Shell {
         let output_directory = roots.data.join("shell").join(project);
         tokio::fs::create_dir_all(&output_directory).await?;
         Ok(Self {
+            event_source: Default::default(),
             directory,
             output_directory,
             owner: Arc::new(()),
@@ -253,9 +255,9 @@ impl Shell {
                 completed: None,
             },
         };
-        let created = info.clone();
         let mut info = info;
         info.pid = Some(NonNegativeInt::new(i64::from(process.pid())).map_err(io::Error::other)?);
+        let created = info.clone();
         let active = Arc::new(Active {
             info: Mutex::new(info.clone()),
             file,
@@ -269,9 +271,17 @@ impl Shell {
             .map_err(poison)?
             .sessions
             .insert(id, active.clone());
+        self.event_source
+            .emit(crate::event_feed::Data::ShellCreated(Box::new(
+                ycoding_schema::shell::CreatedData {
+                    info: created.clone(),
+                },
+            )))
+            .map_err(io::Error::other)?;
         let _ = self.events.send(Event::Created(Box::new(created)));
         let weak = Arc::downgrade(&self.state);
         let events = self.events.clone();
+        let event_source = self.event_source.clone();
         let memory = state.memory_limit_mb;
         let session = active.clone();
         let ledger = self.ledger.clone();
@@ -289,11 +299,17 @@ impl Shell {
                     if !settled {
                         return Ok(());
                     }
-                    let _ = events.send(Event::Exited(ycoding_schema::shell::ExitedData {
+                    let exited = ycoding_schema::shell::ExitedData {
                         id: info.id.clone(),
                         exit: info.exit,
                         status: info.status,
-                    }));
+                    };
+                    event_source
+                        .emit(crate::event_feed::Data::ShellExited(Box::new(
+                            exited.clone(),
+                        )))
+                        .map_err(io::Error::other)?;
+                    let _ = events.send(Event::Exited(exited));
                     let evicted = if let Some(state) = weak.upgrade() {
                         let mut state = state.lock().map_err(poison)?;
                         state.exited.push_back(info.id);
@@ -311,6 +327,11 @@ impl Shell {
                         let id = evicted.info.lock().map_err(poison)?.id.clone();
                         ledger.release(&id).await.map_err(io::Error::other)?;
                         tokio::fs::remove_file(&evicted.file).await?;
+                        event_source
+                            .emit(crate::event_feed::Data::ShellDeleted(Box::new(
+                                ycoding_schema::shell::DeletedData { id: id.clone() },
+                            )))
+                            .map_err(io::Error::other)?;
                         let _ = events.send(Event::Deleted(
                             evicted.info.lock().map_err(poison)?.id.clone(),
                         ));
@@ -400,6 +421,11 @@ impl Shell {
         }
         join(&session).await?;
         tokio::fs::remove_file(&session.file).await?;
+        self.event_source
+            .emit(crate::event_feed::Data::ShellDeleted(Box::new(
+                ycoding_schema::shell::DeletedData { id: id.clone() },
+            )))
+            .map_err(io::Error::other)?;
         let _ = self.events.send(Event::Deleted(id.clone()));
         Ok(())
     }

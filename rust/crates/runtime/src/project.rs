@@ -6,7 +6,7 @@ use crate::{
 use ycoding_core::{
     event_feed::Ephemeral,
     session::project::InventoryQuery,
-    ycoding_schema::{DomainEncode, LosslessString, project as contract},
+    ycoding_schema::{LosslessString, project as contract},
 };
 use ycoding_protocol::v5;
 
@@ -81,12 +81,14 @@ pub async fn forget(
         core.events.publish(Ephemeral {
             id: event_id.as_lossless().clone(),
             created: ids::now_millis(),
-            event_type: "project.directories.updated".into(),
             session: None,
-            data: ycoding_core::ycoding_schema::project_directories::UpdatedData {
-                project_id: project_event_id,
-            }
-            .encode(),
+            metadata: None,
+            location: None,
+            data: ycoding_core::event_feed::Data::ProjectDirectoriesUpdated(Box::new(
+                ycoding_core::ycoding_schema::project_directories::UpdatedData {
+                    project_id: project_event_id,
+                },
+            )),
         });
     }
     Ok(v5::ProjectForgetResult { data: v5::Empty {} })

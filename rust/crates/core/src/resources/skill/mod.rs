@@ -14,6 +14,7 @@ pub mod discovery;
 pub mod instructions;
 #[derive(Clone)]
 pub struct Service {
+    pub event_source: crate::event_feed::EventSource,
     sources: Vec<Source>,
     revision: u64,
     cache: PathBuf,
@@ -23,6 +24,7 @@ pub struct Service {
 impl Service {
     pub fn new(cache: &Path) -> Self {
         Self {
+            event_source: Default::default(),
             sources: Vec::new(),
             revision: 0,
             cache: cache.into(),
@@ -89,6 +91,15 @@ impl Service {
     pub fn source(&mut self, source: Source) {
         if !self.sources.iter().any(|s| s.equals(&source)) {
             self.sources.push(source);
+            if self
+                .event_source
+                .emit(crate::event_feed::Data::SkillUpdated(Box::new(
+                    ycoding_schema::models_dev::Empty,
+                )))
+                .is_err()
+            {
+                eprintln!("Skill event publication failed");
+            }
         }
     }
     pub fn sources(&self) -> &[Source] {
@@ -237,6 +248,15 @@ impl Service {
         });
         if matched {
             self.revision += 1;
+            if self
+                .event_source
+                .emit(crate::event_feed::Data::SkillUpdated(Box::new(
+                    ycoding_schema::models_dev::Empty,
+                )))
+                .is_err()
+            {
+                eprintln!("Skill event publication failed");
+            }
         }
         matched
     }

@@ -86,7 +86,7 @@ pub async fn reply(
     Ok(v5::SessionGuardrailRequestReplyResult { data: v5::Empty {} })
 }
 
-fn wire(request: &guardrail::Request) -> Result<v5::GuardrailRequest, Failure> {
+pub(crate) fn wire(request: &guardrail::Request) -> Result<v5::GuardrailRequest, Failure> {
     Ok(v5::GuardrailRequest {
         id: convert::identity(&request.id)?,
         root_session_id: convert::wire(request.root_session_id.as_lossless()),

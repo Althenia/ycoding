@@ -320,9 +320,9 @@ async fn global_forms_are_created_listed_and_settled_in_the_selected_location_on
         while let Some(item) = published.next().unwrap() {
             if let ycoding_core::event_feed::Payload::Ephemeral(event) = &item.payload
                 && event.session.is_none()
-                && matches!(event.event_type.as_str(), "form.replied" | "form.cancelled")
+                && matches!(event.data.name(), "form.replied" | "form.cancelled")
             {
-                settlements.push(event.event_type.clone());
+                settlements.push(event.data.name());
             }
         }
         assert_eq!(settlements, ["form.replied", "form.cancelled"]);

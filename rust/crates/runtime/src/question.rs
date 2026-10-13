@@ -94,7 +94,7 @@ fn owned(
         .ok_or_else(|| missing(requested))
 }
 
-fn wire(request: &question::Request) -> Result<v5::QuestionRequest, Failure> {
+pub(crate) fn wire(request: &question::Request) -> Result<v5::QuestionRequest, Failure> {
     Ok(v5::QuestionRequest {
         id: convert::identity(&request.id)?,
         session_id: convert::wire(request.session_id.as_lossless()),

@@ -31,6 +31,8 @@ struct Tool {
 
 pub struct Publisher {
     pub store: Service,
+    events: crate::event_feed::Feed,
+    location: ycoding_schema::location::Ref,
     pub session: session::Id,
     pub assistant: session_message::Id,
     pub metadata_key: String,
@@ -50,12 +52,16 @@ pub struct Publisher {
 impl Publisher {
     pub fn new(
         store: Service,
+        events: crate::event_feed::Feed,
+        location: ycoding_schema::location::Ref,
         session: session::Id,
         assistant: session_message::Id,
         metadata_key: String,
     ) -> Self {
         Self {
             store,
+            events,
+            location,
             session,
             assistant,
             metadata_key,
@@ -135,12 +141,30 @@ impl Publisher {
                         "Text delta before matching start",
                     ));
                 };
-                fragment.text = crate::instructions::join(&[fragment.text.clone(), delta.text], "");
+                let ordinal = fragment.ordinal;
+                fragment.text =
+                    crate::instructions::join(&[fragment.text.clone(), delta.text.clone()], "");
                 merge(
                     &mut fragment.state,
                     state(&self.metadata_key, delta.provider_metadata.as_ref()),
                 );
                 self.evidence |= super::messages::meaningful(&fragment.text);
+                self.events
+                    .emit(
+                        crate::event_feed::Data::SessionTextDelta(Box::new(
+                            crate::event_feed::ephemeral::Fragment {
+                                session_id: self.session.clone(),
+                                assistant_message_id: self.assistant.clone(),
+                                ordinal: ycoding_schema::schema::NonNegativeInt::new(
+                                    ordinal as i64,
+                                )
+                                .map_err(|_| error("stream", "Invalid text ordinal"))?,
+                                delta: delta.text,
+                            },
+                        )),
+                        Some(self.location.clone()),
+                    )
+                    .map_err(|message| error("stream", &message))?;
             }
             llm::Event::TextEnd(block) => {
                 if let Some(fragment) = self
@@ -196,10 +220,27 @@ impl Publisher {
                 };
                 let next = self.captured(delta.provider_metadata.as_ref(), content, "reasoning");
                 if let Some(fragment) = self.reasoning.as_mut() {
+                    let ordinal = fragment.ordinal;
                     fragment.text =
-                        crate::instructions::join(&[fragment.text.clone(), delta.text], "");
+                        crate::instructions::join(&[fragment.text.clone(), delta.text.clone()], "");
                     merge(&mut fragment.state, next);
                     self.evidence |= super::messages::meaningful(&fragment.text);
+                    self.events
+                        .emit(
+                            crate::event_feed::Data::SessionReasoningDelta(Box::new(
+                                crate::event_feed::ephemeral::Fragment {
+                                    session_id: self.session.clone(),
+                                    assistant_message_id: self.assistant.clone(),
+                                    ordinal: ycoding_schema::schema::NonNegativeInt::new(
+                                        ordinal as i64,
+                                    )
+                                    .map_err(|_| error("stream", "Invalid reasoning ordinal"))?,
+                                    delta: delta.text,
+                                },
+                            )),
+                            Some(self.location.clone()),
+                        )
+                        .map_err(|message| error("stream", &message))?;
                 }
             }
             llm::Event::ReasoningEnd(block) => {
@@ -237,7 +278,20 @@ impl Publisher {
                         "Tool input delta before matching start",
                     ));
                 };
-                tool.raw = crate::instructions::join(&[tool.raw.clone(), text], "");
+                tool.raw = crate::instructions::join(&[tool.raw.clone(), text.clone()], "");
+                self.events
+                    .emit(
+                        crate::event_feed::Data::SessionToolInputDelta(Box::new(
+                            crate::event_feed::ephemeral::ToolFragment {
+                                session_id: self.session.clone(),
+                                assistant_message_id: self.assistant.clone(),
+                                call_id: id,
+                                delta: text,
+                            },
+                        )),
+                        Some(self.location.clone()),
+                    )
+                    .map_err(|message| error("stream", &message))?;
             }
             llm::Event::ToolInputEnd(input) => {
                 self.end_tool(&input.id, &input.name, None, now).await?

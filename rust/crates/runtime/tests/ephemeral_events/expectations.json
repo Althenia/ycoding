@@ -1,0 +1,2793 @@
+{
+  "variants": [
+    "agent.updated",
+    "catalog.updated",
+    "command.updated",
+    "config.updated",
+    "filesystem.changed",
+    "form.cancelled",
+    "form.created",
+    "form.replied",
+    "guardrail.asked",
+    "guardrail.decided",
+    "guardrail.replied",
+    "installation.update-available",
+    "installation.updated",
+    "integration.connection.updated",
+    "integration.updated",
+    "mcp.resources.changed",
+    "mcp.status.changed",
+    "models-dev.refreshed",
+    "permission.asked",
+    "permission.replied",
+    "plugin.added",
+    "plugin.updated",
+    "project.directories.updated",
+    "pty.created",
+    "pty.deleted",
+    "pty.exited",
+    "pty.updated",
+    "question.asked",
+    "question.rejected",
+    "question.replied",
+    "reference.updated",
+    "session.compaction.delta",
+    "session.diagnostics.updated",
+    "session.idle",
+    "session.prediction.updated",
+    "session.reasoning.delta",
+    "session.status",
+    "session.text.delta",
+    "session.tool.input.delta",
+    "session.usage.updated",
+    "shell.created",
+    "shell.deleted",
+    "shell.exited",
+    "skill.updated",
+    "todo.updated",
+    "tui.command.execute",
+    "tui.prompt.append",
+    "tui.session.select",
+    "tui.toast.show",
+    "vcs.branch.updated"
+  ],
+  "cases": [
+    {
+      "name": "models-dev.refreshed/absent",
+      "type": "models-dev.refreshed",
+      "event": {
+        "id": "evt_ephemeral_0",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "models-dev.refreshed",
+        "data": {}
+      },
+      "hex": "0a350a110a0f6576745f657068656d6572616c5f3011000000000000454022130a11736f757263652d65706f63682d7465737428013a00"
+    },
+    {
+      "name": "models-dev.refreshed/present",
+      "type": "models-dev.refreshed",
+      "event": {
+        "id": "evt_ephemeral_1",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "models-dev.refreshed",
+        "data": {},
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "0ab7010a110a0f6576745f657068656d6572616c5f311100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a00"
+    },
+    {
+      "name": "integration.updated/absent",
+      "type": "integration.updated",
+      "event": {
+        "id": "evt_ephemeral_2",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "integration.updated",
+        "data": {}
+      },
+      "hex": "12350a110a0f6576745f657068656d6572616c5f3211000000000000454022130a11736f757263652d65706f63682d7465737428013a00"
+    },
+    {
+      "name": "integration.updated/present",
+      "type": "integration.updated",
+      "event": {
+        "id": "evt_ephemeral_3",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "integration.updated",
+        "data": {},
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "12b7010a110a0f6576745f657068656d6572616c5f331100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a00"
+    },
+    {
+      "name": "integration.connection.updated/absent",
+      "type": "integration.connection.updated",
+      "event": {
+        "id": "evt_ephemeral_4",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "integration.connection.updated",
+        "data": {
+          "integrationID": "fixture"
+        }
+      },
+      "hex": "1a400a110a0f6576745f657068656d6572616c5f3411000000000000454022130a11736f757263652d65706f63682d7465737428013a0b0a090a0766697874757265"
+    },
+    {
+      "name": "integration.connection.updated/present",
+      "type": "integration.connection.updated",
+      "event": {
+        "id": "evt_ephemeral_5",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "integration.connection.updated",
+        "data": {
+          "integrationID": "fixture"
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "1ac2010a110a0f6576745f657068656d6572616c5f351100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a0b0a090a0766697874757265"
+    },
+    {
+      "name": "catalog.updated/absent",
+      "type": "catalog.updated",
+      "event": {
+        "id": "evt_ephemeral_6",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "catalog.updated",
+        "data": {}
+      },
+      "hex": "22350a110a0f6576745f657068656d6572616c5f3611000000000000454022130a11736f757263652d65706f63682d7465737428013a00"
+    },
+    {
+      "name": "catalog.updated/present",
+      "type": "catalog.updated",
+      "event": {
+        "id": "evt_ephemeral_7",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "catalog.updated",
+        "data": {},
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "22b7010a110a0f6576745f657068656d6572616c5f371100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a00"
+    },
+    {
+      "name": "agent.updated/absent",
+      "type": "agent.updated",
+      "event": {
+        "id": "evt_ephemeral_8",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "agent.updated",
+        "data": {}
+      },
+      "hex": "2a350a110a0f6576745f657068656d6572616c5f3811000000000000454022130a11736f757263652d65706f63682d7465737428013a00"
+    },
+    {
+      "name": "agent.updated/present",
+      "type": "agent.updated",
+      "event": {
+        "id": "evt_ephemeral_9",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "agent.updated",
+        "data": {},
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "2ab7010a110a0f6576745f657068656d6572616c5f391100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a00"
+    },
+    {
+      "name": "session.usage.updated/absent",
+      "type": "session.usage.updated",
+      "event": {
+        "id": "evt_ephemeral_10",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.usage.updated",
+        "data": {
+          "sessionID": "ses_prompt",
+          "cost": 0,
+          "tokens": {
+            "input": 1,
+            "output": 2,
+            "reasoning": 3,
+            "cache": {
+              "read": 4,
+              "write": 5
+            }
+          }
+        }
+      },
+      "hex": "6a7e0a120a106576745f657068656d6572616c5f313011000000000000454022130a11736f757263652d65706f63682d7465737428013a480a0c0a0a7365735f70726f6d70741100000000000000001a2f09000000000000f03f1100000000000000401900000000000008402212090000000000001040110000000000001440"
+    },
+    {
+      "name": "session.usage.updated/present",
+      "type": "session.usage.updated",
+      "event": {
+        "id": "evt_ephemeral_11",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.usage.updated",
+        "data": {
+          "sessionID": "ses_prompt",
+          "cost": 0,
+          "tokens": {
+            "input": 1,
+            "output": 2,
+            "reasoning": 3,
+            "cache": {
+              "read": 4,
+              "write": 5
+            }
+          }
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "6a80020a120a106576745f657068656d6572616c5f31311100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a480a0c0a0a7365735f70726f6d70741100000000000000001a2f09000000000000f03f1100000000000000401900000000000008402212090000000000001040110000000000001440"
+    },
+    {
+      "name": "session.prediction.updated/absent",
+      "type": "session.prediction.updated",
+      "event": {
+        "id": "evt_ephemeral_12",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.prediction.updated",
+        "data": {
+          "sessionID": "ses_prompt",
+          "sourceMessageID": "msg_fixture",
+          "text": "\ud800😀\udfff"
+        }
+      },
+      "hex": "725f0a120a106576745f657068656d6572616c5f313211000000000000454022130a11736f757263652d65706f63682d7465737428013a290a0c0a0a7365735f70726f6d7074120d0a0b6d73675f666978747572651a0a120800d83dd800deffdf"
+    },
+    {
+      "name": "session.prediction.updated/present",
+      "type": "session.prediction.updated",
+      "event": {
+        "id": "evt_ephemeral_13",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.prediction.updated",
+        "data": {
+          "sessionID": "ses_prompt",
+          "sourceMessageID": "msg_fixture",
+          "text": "\ud800😀\udfff"
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "72e1010a120a106576745f657068656d6572616c5f31331100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a290a0c0a0a7365735f70726f6d7074120d0a0b6d73675f666978747572651a0a120800d83dd800deffdf"
+    },
+    {
+      "name": "session.diagnostics.updated/absent",
+      "type": "session.diagnostics.updated",
+      "event": {
+        "id": "evt_ephemeral_14",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.diagnostics.updated",
+        "data": {
+          "sessionID": "ses_prompt",
+          "diagnostics": {
+            "model": {
+              "providerID": "openai",
+              "id": "fixture"
+            },
+            "context": {
+              "total": 0
+            },
+            "tokens": {
+              "uncachedInput": 0,
+              "output": 0,
+              "reasoning": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "cache": {
+              "eligible": 0,
+              "mechanism": "none",
+              "readReported": false,
+              "writeReported": false
+            }
+          }
+        }
+      },
+      "hex": "7a770a120a106576745f657068656d6572616c5f313411000000000000454022130a11736f757263652d65706f63682d7465737428013a410a0c0a0a7365735f70726f6d707412310a150a090a076669787475726512080a066f70656e61691a020800220a080010001800200028002a080800180720002800"
+    },
+    {
+      "name": "session.diagnostics.updated/present",
+      "type": "session.diagnostics.updated",
+      "event": {
+        "id": "evt_ephemeral_15",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.diagnostics.updated",
+        "data": {
+          "sessionID": "ses_prompt",
+          "diagnostics": {
+            "model": {
+              "providerID": "openai",
+              "id": "fixture"
+            },
+            "context": {
+              "total": 0,
+              "limit": 0,
+              "remaining": 0,
+              "percent": 0
+            },
+            "tokens": {
+              "uncachedInput": 0,
+              "output": 0,
+              "reasoning": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "cache": {
+              "eligible": 0,
+              "mechanism": "none",
+              "readReported": false,
+              "writeReported": false,
+              "hitRatio": 0,
+              "minimumTokens": 0,
+              "belowMinimum": false
+            },
+            "contextBreakdown": {
+              "system": 0,
+              "tools": 1,
+              "user": 2,
+              "assistant": 3,
+              "reasoning": 4,
+              "toolCalls": 5,
+              "other": 6
+            },
+            "estimatedCost": 0,
+            "requests": {
+              "logical": 0,
+              "physical": 0,
+              "helpers": 0,
+              "continued": 0,
+              "fallback": 0,
+              "cacheReadReported": false,
+              "cost": 0,
+              "models": [],
+              "tokens": {
+                "input": 1,
+                "output": 2,
+                "reasoning": 3,
+                "cache": {
+                  "read": 4,
+                  "write": 5
+                }
+              },
+              "latestInvalidation": "stable-hit",
+              "latestNamespace": "fixture0",
+              "latestTiming": {
+                "firstOutputMs": 0,
+                "totalMs": 0,
+                "generatedTokens": 1,
+                "generationDurationNs": 1000000000
+              }
+            },
+            "generationSpeed": {
+              "latest": {
+                "model": {
+                  "providerID": "openai",
+                  "id": "fixture"
+                },
+                "tokens": 1,
+                "durationNs": 1000000000,
+                "tokensPerSecond": 1
+              },
+              "recent": [
+                {
+                  "model": {
+                    "providerID": "openai",
+                    "id": "fixture"
+                  },
+                  "tokens": 1,
+                  "durationNs": 1000000000,
+                  "tokensPerSecond": 1
+                }
+              ]
+            }
+          }
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "7aec030a120a106576745f657068656d6572616c5f31351100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653ab3020a0c0a0a7365735f70726f6d707412a2020a150a090a076669787475726512080a066f70656e6169120e08001001180220032804300538061a0f080010001800210000000000000000220a080010001800200028002a150800110000000000000000180720002800300038003100000000000000003a6408001000180020002800300039000000000000000042004a2f09000000000000f03f110000000000000040190000000000000840221209000000000000104011000000000000144050055a0a0a086669787475726530620c08001000288094ebdc03380142560a280a150a090a076669787475726512080a066f70656e61691001188094ebdc0321000000000000f03f122a0a280a150a090a076669787475726512080a066f70656e61691001188094ebdc0321000000000000f03f"
+    },
+    {
+      "name": "session.text.delta/absent",
+      "type": "session.text.delta",
+      "event": {
+        "id": "evt_ephemeral_16",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.text.delta",
+        "data": {
+          "sessionID": "ses_prompt",
+          "assistantMessageID": "msg_fixture",
+          "ordinal": 0,
+          "delta": "\ud800😀\udfff"
+        }
+      },
+      "hex": "d202610a120a106576745f657068656d6572616c5f313611000000000000454022130a11736f757263652d65706f63682d7465737428013a2b0a0c0a0a7365735f70726f6d7074120d0a0b6d73675f666978747572651800220a120800d83dd800deffdf"
+    },
+    {
+      "name": "session.text.delta/present",
+      "type": "session.text.delta",
+      "event": {
+        "id": "evt_ephemeral_17",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.text.delta",
+        "data": {
+          "sessionID": "ses_prompt",
+          "assistantMessageID": "msg_fixture",
+          "ordinal": 0,
+          "delta": "\ud800😀\udfff"
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "d202e3010a120a106576745f657068656d6572616c5f31371100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a2b0a0c0a0a7365735f70726f6d7074120d0a0b6d73675f666978747572651800220a120800d83dd800deffdf"
+    },
+    {
+      "name": "session.reasoning.delta/absent",
+      "type": "session.reasoning.delta",
+      "event": {
+        "id": "evt_ephemeral_18",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.reasoning.delta",
+        "data": {
+          "sessionID": "ses_prompt",
+          "assistantMessageID": "msg_fixture",
+          "ordinal": 0,
+          "delta": "\ud800😀\udfff"
+        }
+      },
+      "hex": "ea02610a120a106576745f657068656d6572616c5f313811000000000000454022130a11736f757263652d65706f63682d7465737428013a2b0a0c0a0a7365735f70726f6d7074120d0a0b6d73675f666978747572651800220a120800d83dd800deffdf"
+    },
+    {
+      "name": "session.reasoning.delta/present",
+      "type": "session.reasoning.delta",
+      "event": {
+        "id": "evt_ephemeral_19",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.reasoning.delta",
+        "data": {
+          "sessionID": "ses_prompt",
+          "assistantMessageID": "msg_fixture",
+          "ordinal": 0,
+          "delta": "\ud800😀\udfff"
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "ea02e3010a120a106576745f657068656d6572616c5f31391100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a2b0a0c0a0a7365735f70726f6d7074120d0a0b6d73675f666978747572651800220a120800d83dd800deffdf"
+    },
+    {
+      "name": "session.tool.input.delta/absent",
+      "type": "session.tool.input.delta",
+      "event": {
+        "id": "evt_ephemeral_20",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.tool.input.delta",
+        "data": {
+          "sessionID": "ses_prompt",
+          "assistantMessageID": "msg_fixture",
+          "callID": "\ud800😀\udfff",
+          "delta": ""
+        }
+      },
+      "hex": "8203630a120a106576745f657068656d6572616c5f323011000000000000454022130a11736f757263652d65706f63682d7465737428013a2d0a0c0a0a7365735f70726f6d7074120d0a0b6d73675f666978747572651a0a120800d83dd800deffdf22020a00"
+    },
+    {
+      "name": "session.tool.input.delta/present",
+      "type": "session.tool.input.delta",
+      "event": {
+        "id": "evt_ephemeral_21",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.tool.input.delta",
+        "data": {
+          "sessionID": "ses_prompt",
+          "assistantMessageID": "msg_fixture",
+          "callID": "\ud800😀\udfff",
+          "delta": ""
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "8203e5010a120a106576745f657068656d6572616c5f32311100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a2d0a0c0a0a7365735f70726f6d7074120d0a0b6d73675f666978747572651a0a120800d83dd800deffdf22020a00"
+    },
+    {
+      "name": "session.compaction.delta/absent",
+      "type": "session.compaction.delta",
+      "event": {
+        "id": "evt_ephemeral_22",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.compaction.delta",
+        "data": {
+          "sessionID": "ses_prompt",
+          "text": "\ud800😀\udfff"
+        }
+      },
+      "hex": "d203500a120a106576745f657068656d6572616c5f323211000000000000454022130a11736f757263652d65706f63682d7465737428013a1a0a0c0a0a7365735f70726f6d7074120a120800d83dd800deffdf"
+    },
+    {
+      "name": "session.compaction.delta/present",
+      "type": "session.compaction.delta",
+      "event": {
+        "id": "evt_ephemeral_23",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.compaction.delta",
+        "data": {
+          "sessionID": "ses_prompt",
+          "text": "\ud800😀\udfff"
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "d203d2010a120a106576745f657068656d6572616c5f32331100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a1a0a0c0a0a7365735f70726f6d7074120a120800d83dd800deffdf"
+    },
+    {
+      "name": "filesystem.changed/absent",
+      "type": "filesystem.changed",
+      "event": {
+        "id": "evt_ephemeral_24",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "filesystem.changed",
+        "data": {
+          "file": "\ud800😀\udfff",
+          "event": "add"
+        }
+      },
+      "hex": "8204440a120a106576745f657068656d6572616c5f323411000000000000454022130a11736f757263652d65706f63682d7465737428013a0e0a0a120800d83dd800deffdf1001"
+    },
+    {
+      "name": "filesystem.changed/present",
+      "type": "filesystem.changed",
+      "event": {
+        "id": "evt_ephemeral_25",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "filesystem.changed",
+        "data": {
+          "file": "\ud800😀\udfff",
+          "event": "add"
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "8204c6010a120a106576745f657068656d6572616c5f32351100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a0e0a0a120800d83dd800deffdf1001"
+    },
+    {
+      "name": "reference.updated/absent",
+      "type": "reference.updated",
+      "event": {
+        "id": "evt_ephemeral_26",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "reference.updated",
+        "data": {}
+      },
+      "hex": "8a04360a120a106576745f657068656d6572616c5f323611000000000000454022130a11736f757263652d65706f63682d7465737428013a00"
+    },
+    {
+      "name": "reference.updated/present",
+      "type": "reference.updated",
+      "event": {
+        "id": "evt_ephemeral_27",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "reference.updated",
+        "data": {},
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "8a04b8010a120a106576745f657068656d6572616c5f32371100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a00"
+    },
+    {
+      "name": "permission.asked/absent",
+      "type": "permission.asked",
+      "event": {
+        "id": "evt_ephemeral_28",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "permission.asked",
+        "data": {
+          "id": "per_fixture",
+          "sessionID": "ses_prompt",
+          "action": "read",
+          "resources": [
+            "/project"
+          ]
+        }
+      },
+      "hex": "9204690a120a106576745f657068656d6572616c5f323811000000000000454022130a11736f757263652d65706f63682d7465737428013a330a0d0a0b7065725f66697874757265120c0a0a7365735f70726f6d70741a060a0472656164220c0a0a0a082f70726f6a656374"
+    },
+    {
+      "name": "permission.asked/present",
+      "type": "permission.asked",
+      "event": {
+        "id": "evt_ephemeral_29",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "permission.asked",
+        "data": {
+          "id": "per_fixture",
+          "sessionID": "ses_prompt",
+          "action": "read",
+          "resources": [
+            "/project"
+          ],
+          "save": [],
+          "metadata": {
+            "\ud800": {
+              "text": "\ud800😀\udfff",
+              "zero": 0,
+              "no": false,
+              "empty": [],
+              "value": null
+            }
+          },
+          "source": {
+            "type": "tool",
+            "messageID": "msg_fixture",
+            "callID": "\ud800😀\udfff"
+          }
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "9204f2020a120a106576745f657068656d6572616c5f32391100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653ab9010a0d0a0b7065725f66697874757265120c0a0a7365735f70726f6d70741a060a0472656164220c0a0a0a082f70726f6a6563742a0032630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a003a1d0801120d0a0b6d73675f666978747572651a0a120800d83dd800deffdf"
+    },
+    {
+      "name": "permission.replied/absent",
+      "type": "permission.replied",
+      "event": {
+        "id": "evt_ephemeral_30",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "permission.replied",
+        "data": {
+          "sessionID": "ses_prompt",
+          "requestID": "per_fixture",
+          "reply": "once"
+        }
+      },
+      "hex": "9a04550a120a106576745f657068656d6572616c5f333011000000000000454022130a11736f757263652d65706f63682d7465737428013a1f0a0c0a0a7365735f70726f6d7074120d0a0b7065725f666978747572651801"
+    },
+    {
+      "name": "permission.replied/present",
+      "type": "permission.replied",
+      "event": {
+        "id": "evt_ephemeral_31",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "permission.replied",
+        "data": {
+          "sessionID": "ses_prompt",
+          "requestID": "per_fixture",
+          "reply": "once"
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "9a04d7010a120a106576745f657068656d6572616c5f33311100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a1f0a0c0a0a7365735f70726f6d7074120d0a0b7065725f666978747572651801"
+    },
+    {
+      "name": "guardrail.asked/absent",
+      "type": "guardrail.asked",
+      "event": {
+        "id": "evt_ephemeral_32",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "guardrail.asked",
+        "data": {
+          "id": "grq_fixture",
+          "rootSessionID": "ses_prompt",
+          "sessionID": "ses_prompt",
+          "action": "shell",
+          "resources": [],
+          "ruleIDs": [],
+          "reason": "\ud800😀\udfff",
+          "standard": true
+        }
+      },
+      "hex": "a2047c0a120a106576745f657068656d6572616c5f333211000000000000454022130a11736f757263652d65706f63682d7465737428013a460a0d0a0b6772715f66697874757265120c0a0a7365735f70726f6d70741a0c0a0a7365735f70726f6d707422070a057368656c6c2a0032003a0a120800d83dd800deffdf4001"
+    },
+    {
+      "name": "guardrail.asked/present",
+      "type": "guardrail.asked",
+      "event": {
+        "id": "evt_ephemeral_33",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "guardrail.asked",
+        "data": {
+          "id": "grq_fixture",
+          "rootSessionID": "ses_prompt",
+          "sessionID": "ses_prompt",
+          "action": "shell",
+          "resources": [],
+          "ruleIDs": [],
+          "reason": "\ud800😀\udfff",
+          "standard": true,
+          "hardReview": false,
+          "risk": {
+            "level": 1,
+            "label": "",
+            "score": 0.5,
+            "metric": "confidence"
+          },
+          "metadata": {
+            "\ud800": {
+              "text": "\ud800😀\udfff",
+              "zero": 0,
+              "no": false,
+              "empty": [],
+              "value": null
+            }
+          }
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "a204f9020a120a106576745f657068656d6572616c5f33331100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653ac0010a0d0a0b6772715f66697874757265120c0a0a7365735f70726f6d70741a0c0a0a7365735f70726f6d707422070a057368656c6c2a0032003a0a120800d83dd800deffdf400148005211080112020a0019000000000000e03f20015a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a00"
+    },
+    {
+      "name": "guardrail.replied/absent",
+      "type": "guardrail.replied",
+      "event": {
+        "id": "evt_ephemeral_34",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "guardrail.replied",
+        "data": {
+          "rootSessionID": "ses_prompt",
+          "sessionID": "ses_prompt",
+          "requestID": "grq_fixture",
+          "reply": "once"
+        }
+      },
+      "hex": "aa04630a120a106576745f657068656d6572616c5f333411000000000000454022130a11736f757263652d65706f63682d7465737428013a2d0a0c0a0a7365735f70726f6d7074120c0a0a7365735f70726f6d70741a0d0a0b6772715f666978747572652001"
+    },
+    {
+      "name": "guardrail.replied/present",
+      "type": "guardrail.replied",
+      "event": {
+        "id": "evt_ephemeral_35",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "guardrail.replied",
+        "data": {
+          "rootSessionID": "ses_prompt",
+          "sessionID": "ses_prompt",
+          "requestID": "grq_fixture",
+          "reply": "once"
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "aa04e5010a120a106576745f657068656d6572616c5f33351100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a2d0a0c0a0a7365735f70726f6d7074120c0a0a7365735f70726f6d70741a0d0a0b6772715f666978747572652001"
+    },
+    {
+      "name": "guardrail.decided/absent",
+      "type": "guardrail.decided",
+      "event": {
+        "id": "evt_ephemeral_36",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "guardrail.decided",
+        "data": {
+          "rootSessionID": "ses_prompt",
+          "sessionID": "ses_prompt",
+          "action": "shell",
+          "ruleIDs": [],
+          "decision": "allow"
+        }
+      },
+      "hex": "b2045f0a120a106576745f657068656d6572616c5f333611000000000000454022130a11736f757263652d65706f63682d7465737428013a290a0c0a0a7365735f70726f6d7074120c0a0a7365735f70726f6d70741a070a057368656c6c22002801"
+    },
+    {
+      "name": "guardrail.decided/present",
+      "type": "guardrail.decided",
+      "event": {
+        "id": "evt_ephemeral_37",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "guardrail.decided",
+        "data": {
+          "rootSessionID": "ses_prompt",
+          "sessionID": "ses_prompt",
+          "action": "shell",
+          "ruleIDs": [],
+          "decision": "allow"
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "b204e1010a120a106576745f657068656d6572616c5f33371100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a290a0c0a0a7365735f70726f6d7074120c0a0a7365735f70726f6d70741a070a057368656c6c22002801"
+    },
+    {
+      "name": "plugin.added/absent",
+      "type": "plugin.added",
+      "event": {
+        "id": "evt_ephemeral_38",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "plugin.added",
+        "data": {
+          "id": "\ud800😀\udfff"
+        }
+      },
+      "hex": "ba04420a120a106576745f657068656d6572616c5f333811000000000000454022130a11736f757263652d65706f63682d7465737428013a0c0a0a120800d83dd800deffdf"
+    },
+    {
+      "name": "plugin.added/present",
+      "type": "plugin.added",
+      "event": {
+        "id": "evt_ephemeral_39",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "plugin.added",
+        "data": {
+          "id": "\ud800😀\udfff"
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "ba04c4010a120a106576745f657068656d6572616c5f33391100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a0c0a0a120800d83dd800deffdf"
+    },
+    {
+      "name": "plugin.updated/absent",
+      "type": "plugin.updated",
+      "event": {
+        "id": "evt_ephemeral_40",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "plugin.updated",
+        "data": {}
+      },
+      "hex": "c204360a120a106576745f657068656d6572616c5f343011000000000000454022130a11736f757263652d65706f63682d7465737428013a00"
+    },
+    {
+      "name": "plugin.updated/present",
+      "type": "plugin.updated",
+      "event": {
+        "id": "evt_ephemeral_41",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "plugin.updated",
+        "data": {},
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "c204b8010a120a106576745f657068656d6572616c5f34311100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a00"
+    },
+    {
+      "name": "project.directories.updated/absent",
+      "type": "project.directories.updated",
+      "event": {
+        "id": "evt_ephemeral_42",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "project.directories.updated",
+        "data": {
+          "projectID": "prj_one"
+        }
+      },
+      "hex": "ca04410a120a106576745f657068656d6572616c5f343211000000000000454022130a11736f757263652d65706f63682d7465737428013a0b0a090a0770726a5f6f6e65"
+    },
+    {
+      "name": "project.directories.updated/present",
+      "type": "project.directories.updated",
+      "event": {
+        "id": "evt_ephemeral_43",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "project.directories.updated",
+        "data": {
+          "projectID": "prj_one"
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "ca04c3010a120a106576745f657068656d6572616c5f34331100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a0b0a090a0770726a5f6f6e65"
+    },
+    {
+      "name": "command.updated/absent",
+      "type": "command.updated",
+      "event": {
+        "id": "evt_ephemeral_44",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "command.updated",
+        "data": {}
+      },
+      "hex": "d204360a120a106576745f657068656d6572616c5f343411000000000000454022130a11736f757263652d65706f63682d7465737428013a00"
+    },
+    {
+      "name": "command.updated/present",
+      "type": "command.updated",
+      "event": {
+        "id": "evt_ephemeral_45",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "command.updated",
+        "data": {},
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "d204b8010a120a106576745f657068656d6572616c5f34351100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a00"
+    },
+    {
+      "name": "config.updated/absent",
+      "type": "config.updated",
+      "event": {
+        "id": "evt_ephemeral_46",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "config.updated",
+        "data": {}
+      },
+      "hex": "da04360a120a106576745f657068656d6572616c5f343611000000000000454022130a11736f757263652d65706f63682d7465737428013a00"
+    },
+    {
+      "name": "config.updated/present",
+      "type": "config.updated",
+      "event": {
+        "id": "evt_ephemeral_47",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "config.updated",
+        "data": {},
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "da04b8010a120a106576745f657068656d6572616c5f34371100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a00"
+    },
+    {
+      "name": "skill.updated/absent",
+      "type": "skill.updated",
+      "event": {
+        "id": "evt_ephemeral_48",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "skill.updated",
+        "data": {}
+      },
+      "hex": "e204360a120a106576745f657068656d6572616c5f343811000000000000454022130a11736f757263652d65706f63682d7465737428013a00"
+    },
+    {
+      "name": "skill.updated/present",
+      "type": "skill.updated",
+      "event": {
+        "id": "evt_ephemeral_49",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "skill.updated",
+        "data": {},
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "e204b8010a120a106576745f657068656d6572616c5f34391100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a00"
+    },
+    {
+      "name": "pty.created/absent",
+      "type": "pty.created",
+      "event": {
+        "id": "evt_ephemeral_50",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "pty.created",
+        "data": {
+          "info": {
+            "id": "pty_fixture",
+            "title": "\ud800😀\udfff",
+            "command": "sh",
+            "args": [],
+            "cwd": "/project",
+            "sessionID": "ses_prompt",
+            "status": "running",
+            "pid": 1,
+            "generation": 1,
+            "size": {
+              "rows": 1,
+              "cols": 1
+            },
+            "control": {
+              "owner": "agent",
+              "fence": 1
+            },
+            "output": {
+              "startOffset": 0,
+              "endOffset": 0,
+              "truncated": false
+            },
+            "limits": {
+              "maxRuntimeSeconds": 10,
+              "maxRetainedBytes": 65536,
+              "maxInputBytes": 4096
+            }
+          }
+        }
+      },
+      "hex": "ea049a010a120a106576745f657068656d6572616c5f353011000000000000454022130a11736f757263652d65706f63682d7465737428013a640a620a0d0a0b7074795f66697874757265120a120800d83dd800deffdf1a040a02736822002a0a0a082f70726f6a656374320c0a0a7365735f70726f6d70743801400158016204080110016a040801100172060800100018007a09080a10808004188020"
+    },
+    {
+      "name": "pty.created/present",
+      "type": "pty.created",
+      "event": {
+        "id": "evt_ephemeral_51",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "pty.created",
+        "data": {
+          "info": {
+            "id": "pty_fixture",
+            "title": "",
+            "command": "sh",
+            "args": [
+              "\ud800😀\udfff"
+            ],
+            "cwd": "/project",
+            "sessionID": "ses_prompt",
+            "status": "exited",
+            "pid": 1,
+            "generation": 1,
+            "size": {
+              "rows": 1,
+              "cols": 1
+            },
+            "control": {
+              "owner": "agent",
+              "fence": 1
+            },
+            "output": {
+              "startOffset": 0,
+              "endOffset": 0,
+              "truncated": false
+            },
+            "limits": {
+              "maxRuntimeSeconds": 10,
+              "maxRetainedBytes": 65536,
+              "maxInputBytes": 4096
+            },
+            "exitCode": 0,
+            "exitReason": "exit"
+          }
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "ea04a4020a120a106576745f657068656d6572616c5f35311100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a6c0a6a0a0d0a0b7074795f6669787475726512020a001a040a027368220c0a0a120800d83dd800deffdf2a0a0a082f70726f6a656374320c0a0a7365735f70726f6d7074380240014800500158016204080110016a040801100172060800100018007a09080a10808004188020"
+    },
+    {
+      "name": "pty.updated/absent",
+      "type": "pty.updated",
+      "event": {
+        "id": "evt_ephemeral_52",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "pty.updated",
+        "data": {
+          "info": {
+            "id": "pty_fixture",
+            "title": "\ud800😀\udfff",
+            "command": "sh",
+            "args": [],
+            "cwd": "/project",
+            "sessionID": "ses_prompt",
+            "status": "running",
+            "pid": 1,
+            "generation": 1,
+            "size": {
+              "rows": 1,
+              "cols": 1
+            },
+            "control": {
+              "owner": "agent",
+              "fence": 1
+            },
+            "output": {
+              "startOffset": 0,
+              "endOffset": 0,
+              "truncated": false
+            },
+            "limits": {
+              "maxRuntimeSeconds": 10,
+              "maxRetainedBytes": 65536,
+              "maxInputBytes": 4096
+            }
+          }
+        }
+      },
+      "hex": "f2049a010a120a106576745f657068656d6572616c5f353211000000000000454022130a11736f757263652d65706f63682d7465737428013a640a620a0d0a0b7074795f66697874757265120a120800d83dd800deffdf1a040a02736822002a0a0a082f70726f6a656374320c0a0a7365735f70726f6d70743801400158016204080110016a040801100172060800100018007a09080a10808004188020"
+    },
+    {
+      "name": "pty.updated/present",
+      "type": "pty.updated",
+      "event": {
+        "id": "evt_ephemeral_53",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "pty.updated",
+        "data": {
+          "info": {
+            "id": "pty_fixture",
+            "title": "\ud800😀\udfff",
+            "command": "sh",
+            "args": [],
+            "cwd": "/project",
+            "sessionID": "ses_prompt",
+            "status": "exited",
+            "pid": 1,
+            "generation": 1,
+            "size": {
+              "rows": 1,
+              "cols": 1
+            },
+            "control": {
+              "owner": "agent",
+              "fence": 1
+            },
+            "output": {
+              "startOffset": 0,
+              "endOffset": 0,
+              "truncated": false
+            },
+            "limits": {
+              "maxRuntimeSeconds": 10,
+              "maxRetainedBytes": 65536,
+              "maxInputBytes": 4096
+            },
+            "exitCode": 1,
+            "exitReason": "timeout"
+          }
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "f204a0020a120a106576745f657068656d6572616c5f35331100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a680a660a0d0a0b7074795f66697874757265120a120800d83dd800deffdf1a040a02736822002a0a0a082f70726f6a656374320c0a0a7365735f70726f6d7074380240014801500258016204080110016a040801100172060800100018007a09080a10808004188020"
+    },
+    {
+      "name": "pty.exited/absent",
+      "type": "pty.exited",
+      "event": {
+        "id": "evt_ephemeral_54",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "pty.exited",
+        "data": {
+          "id": "pty_fixture",
+          "exitCode": 0,
+          "reason": "exit"
+        }
+      },
+      "hex": "fa04490a120a106576745f657068656d6572616c5f353411000000000000454022130a11736f757263652d65706f63682d7465737428013a130a0d0a0b7074795f6669787475726510001801"
+    },
+    {
+      "name": "pty.exited/present",
+      "type": "pty.exited",
+      "event": {
+        "id": "evt_ephemeral_55",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "pty.exited",
+        "data": {
+          "id": "pty_fixture",
+          "exitCode": 0,
+          "reason": "exit"
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "fa04cb010a120a106576745f657068656d6572616c5f35351100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a130a0d0a0b7074795f6669787475726510001801"
+    },
+    {
+      "name": "pty.deleted/absent",
+      "type": "pty.deleted",
+      "event": {
+        "id": "evt_ephemeral_56",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "pty.deleted",
+        "data": {
+          "id": "pty_fixture"
+        }
+      },
+      "hex": "8205450a120a106576745f657068656d6572616c5f353611000000000000454022130a11736f757263652d65706f63682d7465737428013a0f0a0d0a0b7074795f66697874757265"
+    },
+    {
+      "name": "pty.deleted/present",
+      "type": "pty.deleted",
+      "event": {
+        "id": "evt_ephemeral_57",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "pty.deleted",
+        "data": {
+          "id": "pty_fixture"
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "8205c7010a120a106576745f657068656d6572616c5f35371100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a0f0a0d0a0b7074795f66697874757265"
+    },
+    {
+      "name": "shell.created/absent",
+      "type": "shell.created",
+      "event": {
+        "id": "evt_ephemeral_58",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "shell.created",
+        "data": {
+          "info": {
+            "id": "sh_fixture",
+            "status": "running",
+            "command": "\ud800😀\udfff",
+            "cwd": "/project",
+            "shell": "/bin/sh",
+            "file": "/project/output",
+            "metadata": {},
+            "time": {
+              "started": 0
+            }
+          }
+        }
+      },
+      "hex": "8a058b010a120a106576745f657068656d6572616c5f353811000000000000454022130a11736f757263652d65706f63682d7465737428013a550a530a0c0a0a73685f6669787475726510011a0a120800d83dd800deffdf220a0a082f70726f6a6563742a090a072f62696e2f736832110a0f2f70726f6a6563742f6f75747075744a005a09090000000000000000"
+    },
+    {
+      "name": "shell.created/present",
+      "type": "shell.created",
+      "event": {
+        "id": "evt_ephemeral_59",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "shell.created",
+        "data": {
+          "info": {
+            "id": "sh_fixture",
+            "status": "exited",
+            "command": "\ud800😀\udfff",
+            "cwd": "/project",
+            "shell": "/bin/sh",
+            "file": "/project/output",
+            "metadata": {
+              "\ud800": {
+                "text": "\ud800😀\udfff",
+                "zero": 0,
+                "no": false,
+                "empty": [],
+                "value": null
+              }
+            },
+            "time": {
+              "started": 0,
+              "completed": 1
+            },
+            "pid": 0,
+            "exit": 0,
+            "toolCallID": "call_fixture"
+          }
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "8a0596030a120a106576745f657068656d6572616c5f35391100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653add010ada010a0c0a0a73685f6669787475726510021a0a120800d83dd800deffdf220a0a082f70726f6a6563742a090a072f62696e2f736832110a0f2f70726f6a6563742f6f757470757438004100000000000000004a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a00520e0a0c63616c6c5f666978747572655a1209000000000000000011000000000000f03f"
+    },
+    {
+      "name": "shell.exited/absent",
+      "type": "shell.exited",
+      "event": {
+        "id": "evt_ephemeral_60",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "shell.exited",
+        "data": {
+          "id": "sh_fixture",
+          "status": "exited"
+        }
+      },
+      "hex": "9205460a120a106576745f657068656d6572616c5f363011000000000000454022130a11736f757263652d65706f63682d7465737428013a100a0c0a0a73685f666978747572651802"
+    },
+    {
+      "name": "shell.exited/present",
+      "type": "shell.exited",
+      "event": {
+        "id": "evt_ephemeral_61",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "shell.exited",
+        "data": {
+          "id": "sh_fixture",
+          "status": "killed",
+          "exit": 0
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "9205d1010a120a106576745f657068656d6572616c5f36311100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a190a0c0a0a73685f666978747572651100000000000000001805"
+    },
+    {
+      "name": "shell.deleted/absent",
+      "type": "shell.deleted",
+      "event": {
+        "id": "evt_ephemeral_62",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "shell.deleted",
+        "data": {
+          "id": "sh_fixture"
+        }
+      },
+      "hex": "9a05440a120a106576745f657068656d6572616c5f363211000000000000454022130a11736f757263652d65706f63682d7465737428013a0e0a0c0a0a73685f66697874757265"
+    },
+    {
+      "name": "shell.deleted/present",
+      "type": "shell.deleted",
+      "event": {
+        "id": "evt_ephemeral_63",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "shell.deleted",
+        "data": {
+          "id": "sh_fixture"
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "9a05c6010a120a106576745f657068656d6572616c5f36331100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a0e0a0c0a0a73685f66697874757265"
+    },
+    {
+      "name": "question.asked/absent",
+      "type": "question.asked",
+      "event": {
+        "id": "evt_ephemeral_64",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "question.asked",
+        "data": {
+          "id": "que_fixture",
+          "sessionID": "ses_prompt",
+          "questions": [
+            {
+              "question": "\ud800😀\udfff",
+              "header": "",
+              "options": []
+            }
+          ]
+        }
+      },
+      "hex": "a205690a120a106576745f657068656d6572616c5f363411000000000000454022130a11736f757263652d65706f63682d7465737428013a330a0d0a0b7175655f66697874757265120c0a0a7365735f70726f6d70741a140a120a0a120800d83dd800deffdf12020a001a00"
+    },
+    {
+      "name": "question.asked/present",
+      "type": "question.asked",
+      "event": {
+        "id": "evt_ephemeral_65",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "question.asked",
+        "data": {
+          "id": "que_fixture",
+          "sessionID": "ses_prompt",
+          "questions": [
+            {
+              "question": "",
+              "header": "\ud800😀\udfff",
+              "options": [
+                {
+                  "label": "",
+                  "description": "\ud800😀\udfff"
+                }
+              ],
+              "multiple": false,
+              "custom": false
+            }
+          ],
+          "tool": {
+            "messageID": "msg_fixture",
+            "callID": "\ud800😀\udfff"
+          }
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "a2059e020a120a106576745f657068656d6572616c5f36351100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a660a0d0a0b7175655f66697874757265120c0a0a7365735f70726f6d70741a2a0a280a020a00120a120800d83dd800deffdf1a120a100a020a00120a120800d83dd800deffdf20002800221b0a0d0a0b6d73675f66697874757265120a120800d83dd800deffdf"
+    },
+    {
+      "name": "question.replied/absent",
+      "type": "question.replied",
+      "event": {
+        "id": "evt_ephemeral_66",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "question.replied",
+        "data": {
+          "sessionID": "ses_prompt",
+          "requestID": "que_fixture",
+          "answers": [
+            []
+          ]
+        }
+      },
+      "hex": "aa05570a120a106576745f657068656d6572616c5f363611000000000000454022130a11736f757263652d65706f63682d7465737428013a210a0c0a0a7365735f70726f6d7074120d0a0b7175655f666978747572651a020a00"
+    },
+    {
+      "name": "question.replied/present",
+      "type": "question.replied",
+      "event": {
+        "id": "evt_ephemeral_67",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "question.replied",
+        "data": {
+          "sessionID": "ses_prompt",
+          "requestID": "que_fixture",
+          "answers": [
+            [
+              "",
+              "\ud800😀\udfff"
+            ],
+            []
+          ]
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "aa05eb010a120a106576745f657068656d6572616c5f36371100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a330a0c0a0a7365735f70726f6d7074120d0a0b7175655f666978747572651a140a100a020a000a0a120800d83dd800deffdf0a00"
+    },
+    {
+      "name": "question.rejected/absent",
+      "type": "question.rejected",
+      "event": {
+        "id": "evt_ephemeral_68",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "question.rejected",
+        "data": {
+          "sessionID": "ses_prompt",
+          "requestID": "que_fixture"
+        }
+      },
+      "hex": "b205530a120a106576745f657068656d6572616c5f363811000000000000454022130a11736f757263652d65706f63682d7465737428013a1d0a0c0a0a7365735f70726f6d7074120d0a0b7175655f66697874757265"
+    },
+    {
+      "name": "question.rejected/present",
+      "type": "question.rejected",
+      "event": {
+        "id": "evt_ephemeral_69",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "question.rejected",
+        "data": {
+          "sessionID": "ses_prompt",
+          "requestID": "que_fixture"
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "b205d5010a120a106576745f657068656d6572616c5f36391100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a1d0a0c0a0a7365735f70726f6d7074120d0a0b7175655f66697874757265"
+    },
+    {
+      "name": "form.created/absent",
+      "type": "form.created",
+      "event": {
+        "id": "evt_ephemeral_70",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "form.created",
+        "data": {
+          "form": {
+            "id": "frm_fixture",
+            "sessionID": "ses_prompt",
+            "title": "\ud800😀\udfff",
+            "fields": [
+              {
+                "key": "ok",
+                "type": "boolean"
+              }
+            ]
+          }
+        }
+      },
+      "hex": "ba056f0a120a106576745f657068656d6572616c5f373011000000000000454022130a11736f757263652d65706f63682d7465737428013a390a370a0d0a0b66726d5f66697874757265120c0a0a7365735f70726f6d70741a0a120800d83dd800deffdf2a0c0a0a22080a040a026f6b3001"
+    },
+    {
+      "name": "form.created/present",
+      "type": "form.created",
+      "event": {
+        "id": "evt_ephemeral_71",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "form.created",
+        "data": {
+          "form": {
+            "id": "frm_fixture",
+            "sessionID": "ses_prompt",
+            "title": "",
+            "metadata": {
+              "\ud800": {
+                "text": "\ud800😀\udfff",
+                "zero": 0,
+                "no": false,
+                "empty": [],
+                "value": null
+              }
+            },
+            "fields": [
+              {
+                "key": "ok",
+                "type": "boolean",
+                "required": false
+              }
+            ]
+          }
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "ba05d2020a120a106576745f657068656d6572616c5f37311100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a99010a96010a0d0a0b66726d5f66697874757265120c0a0a7365735f70726f6d70741a020a0022630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a002a0e0a0c220a0a040a026f6b20003001"
+    },
+    {
+      "name": "form.replied/absent",
+      "type": "form.replied",
+      "event": {
+        "id": "evt_ephemeral_72",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "form.replied",
+        "data": {
+          "id": "frm_fixture",
+          "sessionID": "ses_prompt",
+          "answer": {}
+        }
+      },
+      "hex": "c205550a120a106576745f657068656d6572616c5f373211000000000000454022130a11736f757263652d65706f63682d7465737428013a1f0a0d0a0b66726d5f66697874757265120c0a0a7365735f70726f6d70741a00"
+    },
+    {
+      "name": "form.replied/present",
+      "type": "form.replied",
+      "event": {
+        "id": "evt_ephemeral_73",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "form.replied",
+        "data": {
+          "id": "frm_fixture",
+          "sessionID": "ses_prompt",
+          "answer": {
+            "text": "\ud800😀\udfff",
+            "number": 0,
+            "no": false,
+            "list": [
+              "",
+              "\ud800😀\udfff"
+            ],
+            "empty": []
+          }
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "c205c0020a120a106576745f657068656d6572616c5f37331100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a87010a0d0a0b66726d5f66697874757265120c0a0a7365735f70726f6d70741a680a160a060a0474657874120c0a0a120800d83dd800deffdf0a150a080a066e756d62657212091100000000000000000a0a0a040a026e6f120218000a1c0a060a046c697374121222100a020a000a0a120800d83dd800deffdf0a0d0a070a05656d70747912022200"
+    },
+    {
+      "name": "form.cancelled/absent",
+      "type": "form.cancelled",
+      "event": {
+        "id": "evt_ephemeral_74",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "form.cancelled",
+        "data": {
+          "id": "frm_fixture",
+          "sessionID": "ses_prompt"
+        }
+      },
+      "hex": "ca05530a120a106576745f657068656d6572616c5f373411000000000000454022130a11736f757263652d65706f63682d7465737428013a1d0a0d0a0b66726d5f66697874757265120c0a0a7365735f70726f6d7074"
+    },
+    {
+      "name": "form.cancelled/present",
+      "type": "form.cancelled",
+      "event": {
+        "id": "evt_ephemeral_75",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "form.cancelled",
+        "data": {
+          "id": "frm_fixture",
+          "sessionID": "ses_prompt"
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "ca05d5010a120a106576745f657068656d6572616c5f37351100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a1d0a0d0a0b66726d5f66697874757265120c0a0a7365735f70726f6d7074"
+    },
+    {
+      "name": "todo.updated/absent",
+      "type": "todo.updated",
+      "event": {
+        "id": "evt_ephemeral_76",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "todo.updated",
+        "data": {
+          "sessionID": "ses_prompt",
+          "todos": []
+        }
+      },
+      "hex": "d205460a120a106576745f657068656d6572616c5f373611000000000000454022130a11736f757263652d65706f63682d7465737428013a100a0c0a0a7365735f70726f6d70741200"
+    },
+    {
+      "name": "todo.updated/present",
+      "type": "todo.updated",
+      "event": {
+        "id": "evt_ephemeral_77",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "todo.updated",
+        "data": {
+          "sessionID": "ses_prompt",
+          "todos": [
+            {
+              "content": "\ud800😀\udfff",
+              "priority": "low",
+              "status": "in_progress"
+            }
+          ]
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "d205da010a120a106576745f657068656d6572616c5f37371100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a220a0c0a0a7365735f70726f6d707412120a100a0a120800d83dd800deffdf10021803"
+    },
+    {
+      "name": "session.status/absent",
+      "type": "session.status",
+      "event": {
+        "id": "evt_ephemeral_78",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.status",
+        "data": {
+          "sessionID": "ses_prompt",
+          "status": {
+            "type": "idle"
+          }
+        }
+      },
+      "hex": "da054a0a120a106576745f657068656d6572616c5f373811000000000000454022130a11736f757263652d65706f63682d7465737428013a140a0c0a0a7365735f70726f6d707412040a020801"
+    },
+    {
+      "name": "session.status/present",
+      "type": "session.status",
+      "event": {
+        "id": "evt_ephemeral_79",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.status",
+        "data": {
+          "sessionID": "ses_prompt",
+          "status": {
+            "type": "retry",
+            "attempt": 0,
+            "message": "\ud800😀\udfff",
+            "next": 0,
+            "action": {
+              "reason": "",
+              "provider": "",
+              "title": "",
+              "message": "\ud800😀\udfff",
+              "label": "",
+              "link": ""
+            }
+          }
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "da05fe010a120a106576745f657068656d6572616c5f37391100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a460a0c0a0a7365735f70726f6d707412361234080110001a0a120800d83dd800deffdf22200a020a0012020a001a020a00220a120800d83dd800deffdf2a020a0032020a002800"
+    },
+    {
+      "name": "session.idle/absent",
+      "type": "session.idle",
+      "event": {
+        "id": "evt_ephemeral_80",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.idle",
+        "data": {
+          "sessionID": "ses_prompt"
+        }
+      },
+      "hex": "e205440a120a106576745f657068656d6572616c5f383011000000000000454022130a11736f757263652d65706f63682d7465737428013a0e0a0c0a0a7365735f70726f6d7074"
+    },
+    {
+      "name": "session.idle/present",
+      "type": "session.idle",
+      "event": {
+        "id": "evt_ephemeral_81",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.idle",
+        "data": {
+          "sessionID": "ses_prompt"
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "e205c6010a120a106576745f657068656d6572616c5f38311100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a0e0a0c0a0a7365735f70726f6d7074"
+    },
+    {
+      "name": "tui.prompt.append/absent",
+      "type": "tui.prompt.append",
+      "event": {
+        "id": "evt_ephemeral_82",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "tui.prompt.append",
+        "data": {
+          "text": "\ud800😀\udfff"
+        }
+      },
+      "hex": "ea05420a120a106576745f657068656d6572616c5f383211000000000000454022130a11736f757263652d65706f63682d7465737428013a0c0a0a120800d83dd800deffdf"
+    },
+    {
+      "name": "tui.prompt.append/present",
+      "type": "tui.prompt.append",
+      "event": {
+        "id": "evt_ephemeral_83",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "tui.prompt.append",
+        "data": {
+          "text": "\ud800😀\udfff"
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "ea05c4010a120a106576745f657068656d6572616c5f38331100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a0c0a0a120800d83dd800deffdf"
+    },
+    {
+      "name": "tui.command.execute/absent",
+      "type": "tui.command.execute",
+      "event": {
+        "id": "evt_ephemeral_84",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "tui.command.execute",
+        "data": {
+          "command": "session.list"
+        }
+      },
+      "hex": "f2053a0a120a106576745f657068656d6572616c5f383411000000000000454022130a11736f757263652d65706f63682d7465737428013a040a020801"
+    },
+    {
+      "name": "tui.command.execute/present",
+      "type": "tui.command.execute",
+      "event": {
+        "id": "evt_ephemeral_85",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "tui.command.execute",
+        "data": {
+          "command": "\ud800😀\udfff"
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "f205c6010a120a106576745f657068656d6572616c5f38351100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a0e0a0c120a120800d83dd800deffdf"
+    },
+    {
+      "name": "tui.toast.show/absent",
+      "type": "tui.toast.show",
+      "event": {
+        "id": "evt_ephemeral_86",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "tui.toast.show",
+        "data": {
+          "message": "\ud800😀\udfff",
+          "variant": "info",
+          "duration": 1
+        }
+      },
+      "hex": "fa05460a120a106576745f657068656d6572616c5f383611000000000000454022130a11736f757263652d65706f63682d7465737428013a10120a120800d83dd800deffdf18012001"
+    },
+    {
+      "name": "tui.toast.show/present",
+      "type": "tui.toast.show",
+      "event": {
+        "id": "evt_ephemeral_87",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "tui.toast.show",
+        "data": {
+          "message": "\ud800😀\udfff",
+          "variant": "error",
+          "duration": 9007199254740991,
+          "title": ""
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "fa05d3010a120a106576745f657068656d6572616c5f38371100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a1b0a020a00120a120800d83dd800deffdf180420ffffffffffffff0f"
+    },
+    {
+      "name": "tui.session.select/absent",
+      "type": "tui.session.select",
+      "event": {
+        "id": "evt_ephemeral_88",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "tui.session.select",
+        "data": {
+          "sessionID": "ses_prompt"
+        }
+      },
+      "hex": "8206440a120a106576745f657068656d6572616c5f383811000000000000454022130a11736f757263652d65706f63682d7465737428013a0e0a0c0a0a7365735f70726f6d7074"
+    },
+    {
+      "name": "tui.session.select/present",
+      "type": "tui.session.select",
+      "event": {
+        "id": "evt_ephemeral_89",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "tui.session.select",
+        "data": {
+          "sessionID": "ses_prompt"
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "8206c6010a120a106576745f657068656d6572616c5f38391100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a0e0a0c0a0a7365735f70726f6d7074"
+    },
+    {
+      "name": "installation.updated/absent",
+      "type": "installation.updated",
+      "event": {
+        "id": "evt_ephemeral_90",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "installation.updated",
+        "data": {
+          "version": "\ud800😀\udfff"
+        }
+      },
+      "hex": "8a06420a120a106576745f657068656d6572616c5f393011000000000000454022130a11736f757263652d65706f63682d7465737428013a0c0a0a120800d83dd800deffdf"
+    },
+    {
+      "name": "installation.updated/present",
+      "type": "installation.updated",
+      "event": {
+        "id": "evt_ephemeral_91",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "installation.updated",
+        "data": {
+          "version": "\ud800😀\udfff"
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "8a06c4010a120a106576745f657068656d6572616c5f39311100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a0c0a0a120800d83dd800deffdf"
+    },
+    {
+      "name": "installation.update-available/absent",
+      "type": "installation.update-available",
+      "event": {
+        "id": "evt_ephemeral_92",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "installation.update-available",
+        "data": {
+          "version": "\ud800😀\udfff"
+        }
+      },
+      "hex": "9206420a120a106576745f657068656d6572616c5f393211000000000000454022130a11736f757263652d65706f63682d7465737428013a0c0a0a120800d83dd800deffdf"
+    },
+    {
+      "name": "installation.update-available/present",
+      "type": "installation.update-available",
+      "event": {
+        "id": "evt_ephemeral_93",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "installation.update-available",
+        "data": {
+          "version": "\ud800😀\udfff"
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "9206c4010a120a106576745f657068656d6572616c5f39331100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a0c0a0a120800d83dd800deffdf"
+    },
+    {
+      "name": "vcs.branch.updated/absent",
+      "type": "vcs.branch.updated",
+      "event": {
+        "id": "evt_ephemeral_94",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "vcs.branch.updated",
+        "data": {}
+      },
+      "hex": "9a06360a120a106576745f657068656d6572616c5f393411000000000000454022130a11736f757263652d65706f63682d7465737428013a00"
+    },
+    {
+      "name": "vcs.branch.updated/present",
+      "type": "vcs.branch.updated",
+      "event": {
+        "id": "evt_ephemeral_95",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "vcs.branch.updated",
+        "data": {
+          "branch": ""
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "9a06bc010a120a106576745f657068656d6572616c5f39351100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a040a020a00"
+    },
+    {
+      "name": "mcp.status.changed/absent",
+      "type": "mcp.status.changed",
+      "event": {
+        "id": "evt_ephemeral_96",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "mcp.status.changed",
+        "data": {
+          "server": "\ud800😀\udfff"
+        }
+      },
+      "hex": "a206420a120a106576745f657068656d6572616c5f393611000000000000454022130a11736f757263652d65706f63682d7465737428013a0c0a0a120800d83dd800deffdf"
+    },
+    {
+      "name": "mcp.status.changed/present",
+      "type": "mcp.status.changed",
+      "event": {
+        "id": "evt_ephemeral_97",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "mcp.status.changed",
+        "data": {
+          "server": "\ud800😀\udfff"
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "a206c4010a120a106576745f657068656d6572616c5f39371100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a0c0a0a120800d83dd800deffdf"
+    },
+    {
+      "name": "mcp.resources.changed/absent",
+      "type": "mcp.resources.changed",
+      "event": {
+        "id": "evt_ephemeral_98",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "mcp.resources.changed",
+        "data": {
+          "server": "\ud800😀\udfff"
+        }
+      },
+      "hex": "aa06420a120a106576745f657068656d6572616c5f393811000000000000454022130a11736f757263652d65706f63682d7465737428013a0c0a0a120800d83dd800deffdf"
+    },
+    {
+      "name": "mcp.resources.changed/present",
+      "type": "mcp.resources.changed",
+      "event": {
+        "id": "evt_ephemeral_99",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "mcp.resources.changed",
+        "data": {
+          "server": "\ud800😀\udfff"
+        },
+        "location": {
+          "directory": "/project",
+          "workspaceID": "wrk_fixture"
+        },
+        "metadata": {
+          "\ud800": {
+            "text": "\ud800😀\udfff",
+            "zero": 0,
+            "no": false,
+            "empty": [],
+            "value": null
+          }
+        }
+      },
+      "hex": "aa06c4010a120a106576745f657068656d6572616c5f39391100000000000045401a630a610a04120200d812593a570a160a060a0474657874120c220a120800d83dd800deffdf0a130a060a047a65726f12091900000000000000000a0a0a040a026e6f120210000a0d0a070a05656d707479120232000a0d0a070a0576616c756512020a0022130a11736f757263652d65706f63682d746573742801321b0a0a0a082f70726f6a656374120d0a0b77726b5f666978747572653a0c0a0a120800d83dd800deffdf"
+    },
+    {
+      "name": "session.status/busy",
+      "type": "session.status",
+      "event": {
+        "id": "evt_ephemeral_100",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "session.status",
+        "data": {
+          "sessionID": "ses_prompt",
+          "status": {
+            "type": "busy"
+          }
+        }
+      },
+      "hex": "da054b0a130a116576745f657068656d6572616c5f31303011000000000000454022130a11736f757263652d65706f63682d7465737428013a140a0c0a0a7365735f70726f6d707412041a020801"
+    },
+    {
+      "name": "form.replied/global",
+      "type": "form.replied",
+      "event": {
+        "id": "evt_ephemeral_101",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "form.replied",
+        "data": {
+          "id": "frm_fixture",
+          "sessionID": "global",
+          "answer": {}
+        }
+      },
+      "hex": "c205520a130a116576745f657068656d6572616c5f31303111000000000000454022130a11736f757263652d65706f63682d7465737428013a1b0a0d0a0b66726d5f6669787475726512080a06676c6f62616c1a00"
+    },
+    {
+      "name": "form.cancelled/global",
+      "type": "form.cancelled",
+      "event": {
+        "id": "evt_ephemeral_102",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "form.cancelled",
+        "data": {
+          "id": "frm_fixture",
+          "sessionID": "global"
+        }
+      },
+      "hex": "ca05500a130a116576745f657068656d6572616c5f31303211000000000000454022130a11736f757263652d65706f63682d7465737428013a190a0d0a0b66726d5f6669787475726512080a06676c6f62616c"
+    },
+    {
+      "name": "form.created/global",
+      "type": "form.created",
+      "event": {
+        "id": "evt_ephemeral_103",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "form.created",
+        "data": {
+          "form": {
+            "id": "frm_fixture",
+            "sessionID": "global",
+            "title": "",
+            "fields": [
+              {
+                "key": "ok",
+                "type": "boolean"
+              }
+            ]
+          }
+        }
+      },
+      "hex": "ba05640a130a116576745f657068656d6572616c5f31303311000000000000454022130a11736f757263652d65706f63682d7465737428013a2d0a2b0a0d0a0b66726d5f6669787475726512080a06676c6f62616c1a020a002a0c0a0a22080a040a026f6b3001"
+    },
+    {
+      "name": "filesystem.changed/change",
+      "type": "filesystem.changed",
+      "event": {
+        "id": "evt_ephemeral_104",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "filesystem.changed",
+        "data": {
+          "file": "",
+          "event": "change"
+        }
+      },
+      "hex": "82043d0a130a116576745f657068656d6572616c5f31303411000000000000454022130a11736f757263652d65706f63682d7465737428013a060a020a001002"
+    },
+    {
+      "name": "filesystem.changed/unlink",
+      "type": "filesystem.changed",
+      "event": {
+        "id": "evt_ephemeral_105",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "filesystem.changed",
+        "data": {
+          "file": "",
+          "event": "unlink"
+        }
+      },
+      "hex": "82043d0a130a116576745f657068656d6572616c5f31303511000000000000454022130a11736f757263652d65706f63682d7465737428013a060a020a001003"
+    },
+    {
+      "name": "permission.replied/always",
+      "type": "permission.replied",
+      "event": {
+        "id": "evt_ephemeral_106",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "permission.replied",
+        "data": {
+          "sessionID": "ses_prompt",
+          "requestID": "per_fixture",
+          "reply": "always"
+        }
+      },
+      "hex": "9a04560a130a116576745f657068656d6572616c5f31303611000000000000454022130a11736f757263652d65706f63682d7465737428013a1f0a0c0a0a7365735f70726f6d7074120d0a0b7065725f666978747572651802"
+    },
+    {
+      "name": "permission.replied/reject",
+      "type": "permission.replied",
+      "event": {
+        "id": "evt_ephemeral_107",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "permission.replied",
+        "data": {
+          "sessionID": "ses_prompt",
+          "requestID": "per_fixture",
+          "reply": "reject"
+        }
+      },
+      "hex": "9a04560a130a116576745f657068656d6572616c5f31303711000000000000454022130a11736f757263652d65706f63682d7465737428013a1f0a0c0a0a7365735f70726f6d7074120d0a0b7065725f666978747572651803"
+    },
+    {
+      "name": "guardrail.replied/always",
+      "type": "guardrail.replied",
+      "event": {
+        "id": "evt_ephemeral_108",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "guardrail.replied",
+        "data": {
+          "rootSessionID": "ses_prompt",
+          "sessionID": "ses_prompt",
+          "requestID": "grq_fixture",
+          "reply": "always"
+        }
+      },
+      "hex": "aa04640a130a116576745f657068656d6572616c5f31303811000000000000454022130a11736f757263652d65706f63682d7465737428013a2d0a0c0a0a7365735f70726f6d7074120c0a0a7365735f70726f6d70741a0d0a0b6772715f666978747572652002"
+    },
+    {
+      "name": "guardrail.replied/reject",
+      "type": "guardrail.replied",
+      "event": {
+        "id": "evt_ephemeral_109",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "guardrail.replied",
+        "data": {
+          "rootSessionID": "ses_prompt",
+          "sessionID": "ses_prompt",
+          "requestID": "grq_fixture",
+          "reply": "reject"
+        }
+      },
+      "hex": "aa04640a130a116576745f657068656d6572616c5f31303911000000000000454022130a11736f757263652d65706f63682d7465737428013a2d0a0c0a0a7365735f70726f6d7074120c0a0a7365735f70726f6d70741a0d0a0b6772715f666978747572652003"
+    },
+    {
+      "name": "guardrail.decided/deny",
+      "type": "guardrail.decided",
+      "event": {
+        "id": "evt_ephemeral_110",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "guardrail.decided",
+        "data": {
+          "rootSessionID": "ses_prompt",
+          "sessionID": "ses_prompt",
+          "action": "",
+          "ruleIDs": [],
+          "decision": "deny"
+        }
+      },
+      "hex": "b2045b0a130a116576745f657068656d6572616c5f31313011000000000000454022130a11736f757263652d65706f63682d7465737428013a240a0c0a0a7365735f70726f6d7074120c0a0a7365735f70726f6d70741a020a0022002803"
+    },
+    {
+      "name": "guardrail.decided/ask",
+      "type": "guardrail.decided",
+      "event": {
+        "id": "evt_ephemeral_111",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "guardrail.decided",
+        "data": {
+          "rootSessionID": "ses_prompt",
+          "sessionID": "ses_prompt",
+          "action": "",
+          "ruleIDs": [],
+          "decision": "ask"
+        }
+      },
+      "hex": "b2045b0a130a116576745f657068656d6572616c5f31313111000000000000454022130a11736f757263652d65706f63682d7465737428013a240a0c0a0a7365735f70726f6d7074120c0a0a7365735f70726f6d70741a020a0022002802"
+    },
+    {
+      "name": "guardrail.decided/cap_exceeded",
+      "type": "guardrail.decided",
+      "event": {
+        "id": "evt_ephemeral_112",
+        "created": 42,
+        "sourceEpoch": "source-epoch-test",
+        "type": "guardrail.decided",
+        "data": {
+          "rootSessionID": "ses_prompt",
+          "sessionID": "ses_prompt",
+          "action": "",
+          "ruleIDs": [],
+          "decision": "cap_exceeded"
+        }
+      },
+      "hex": "b2045b0a130a116576745f657068656d6572616c5f31313211000000000000454022130a11736f757263652d65706f63682d7465737428013a240a0c0a0a7365735f70726f6d7074120c0a0a7365735f70726f6d70741a020a0022002804"
+    }
+  ]
+}

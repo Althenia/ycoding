@@ -178,6 +178,7 @@ fn local_with_resolver(
     catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"openai","model":"gpt-reasoning"}},"providers":{{"openai":{{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
     Local::new(Services {
         store: Service::new(store.client()),
+        events: ycoding_core::event_feed::Feed::attach(&store.client()),
         location: ycoding_schema::location::Ref::decode(
             &parse_json(r#"{"directory":"/project"}"#).unwrap(),
         )

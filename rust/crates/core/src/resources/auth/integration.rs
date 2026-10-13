@@ -210,6 +210,7 @@ struct State {
     scrubber: Option<JoinHandle<()>>,
 }
 struct Inner {
+    event_source: crate::event_feed::EventSource,
     credentials: Service,
     env: BTreeMap<String, String>,
     state: Mutex<State>,
@@ -217,6 +218,26 @@ struct Inner {
 }
 #[derive(Clone)]
 pub struct Registry(Arc<Inner>);
+
+impl Inner {
+    fn publish(&self, event: Event) {
+        let data = match &event {
+            Event::Updated => crate::event_feed::Data::IntegrationUpdated(Box::new(
+                ycoding_schema::integration::Empty,
+            )),
+            Event::ConnectionUpdated(id) => crate::event_feed::Data::IntegrationConnectionUpdated(
+                Box::new(ycoding_schema::integration::ConnectionUpdatedData {
+                    integration_id: ycoding_schema::integration::Id::new(id.clone())
+                        .expect("registry connection IDs are Integration IDs"),
+                }),
+            ),
+        };
+        if self.event_source.emit(data).is_err() {
+            eprintln!("Integration event publication failed");
+        }
+        let _ = self.events.send(event);
+    }
+}
 
 pub struct WellKnown {
     discovery: tokio::sync::Mutex<crate::resources::discovery::wellknown::Service>,
@@ -285,6 +306,7 @@ impl WellKnown {
 impl Registry {
     pub fn new(credentials: Service, env: BTreeMap<String, String>) -> Self {
         let registry = Self(Arc::new(Inner {
+            event_source: Default::default(),
             credentials,
             env,
             state: Mutex::new(State {
@@ -321,6 +343,13 @@ impl Registry {
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.0.events.subscribe()
     }
+    pub fn bind_events(
+        &self,
+        feed: crate::event_feed::Feed,
+        location: Option<ycoding_schema::location::Ref>,
+    ) -> Result<(), String> {
+        self.0.event_source.bind(feed, location)
+    }
     pub fn transform(
         &self,
         update: impl Fn(&mut Draft) + Send + Sync + 'static,
@@ -333,7 +362,7 @@ impl Registry {
         state.next_transform = id.checked_add(1).ok_or(Error::Closed)?;
         state.transforms.insert(id, Arc::new(update));
         materialize(&mut state);
-        let _ = self.0.events.send(Event::Updated);
+        self.0.publish(Event::Updated);
         Ok(Registration {
             registry: Arc::downgrade(&self.0),
             id,
@@ -342,7 +371,7 @@ impl Registry {
     pub fn reload(&self) -> Result<(), Error> {
         let mut state = self.0.state.lock().map_err(|_| Error::Closed)?;
         materialize(&mut state);
-        let _ = self.0.events.send(Event::Updated);
+        self.0.publish(Event::Updated);
         Ok(())
     }
     pub fn wellknown(
@@ -368,7 +397,7 @@ impl Registry {
         }
         state.wellknown = entries;
         materialize(&mut state);
-        let _ = self.0.events.send(Event::Updated);
+        self.0.publish(Event::Updated);
         Ok(())
     }
     pub fn get(&self, id: &LosslessString) -> Result<Option<integration::Info>, Error> {
@@ -533,8 +562,8 @@ impl Registry {
         })
     }
     fn publish_connection(&self, integration: LosslessString) {
-        let _ = self.0.events.send(Event::ConnectionUpdated(integration));
-        let _ = self.0.events.send(Event::Updated);
+        self.0.publish(Event::ConnectionUpdated(integration));
+        self.0.publish(Event::Updated);
     }
     pub async fn login_key(
         &self,
@@ -582,7 +611,7 @@ impl Registry {
             self.publish_connection(stored.integration_id().clone());
             return Ok(());
         }
-        let _ = self.0.events.send(Event::Updated);
+        self.0.publish(Event::Updated);
         Ok(())
     }
     pub async fn activate(&self, id: LosslessString, time: i64) -> Result<(), Error> {
@@ -600,7 +629,7 @@ impl Registry {
             self.publish_connection(stored.integration_id().clone());
             return Ok(());
         }
-        let _ = self.0.events.send(Event::Updated);
+        self.0.publish(Event::Updated);
         Ok(())
     }
     pub async fn connect(
@@ -1265,7 +1294,7 @@ impl Registration {
         let mut state = registry.state.lock().map_err(|_| Error::Closed)?;
         if state.transforms.remove(&self.id).is_some() {
             materialize(&mut state);
-            let _ = registry.events.send(Event::Updated);
+            registry.publish(Event::Updated);
         }
         Ok(())
     }

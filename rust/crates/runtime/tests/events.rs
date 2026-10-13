@@ -1,6 +1,6 @@
 mod support;
 
-use prost::Message;
+use prost::{Message, Name};
 use std::time::{Duration, Instant};
 use support::*;
 use tokio::{
@@ -80,10 +80,23 @@ fn seen(client: &Client, prefix: &str) -> Vec<Seen> {
         .iter()
         .flat_map(|batch| batch.events.iter())
         .filter_map(|record| {
-            let record = session_log_record(record);
-            let item = v5::SessionLogItem::decode(record.event.payload.as_slice()).unwrap();
-            let Some(v5::session_log_item::Kind::Value15(admitted)) = item.kind else {
-                return None;
+            let admitted = match record.event.type_name.as_str() {
+                name if name == v5::PublicEvent::full_name() => {
+                    let item = v5::PublicEvent::decode(record.event.payload.as_slice()).unwrap();
+                    let Some(v5::public_event::Kind::SessionInputAdmitted(admitted)) = item.kind
+                    else {
+                        return None;
+                    };
+                    admitted
+                }
+                name if name == v5::SessionLogItem::full_name() => {
+                    let item = v5::SessionLogItem::decode(record.event.payload.as_slice()).unwrap();
+                    let Some(v5::session_log_item::Kind::Value15(admitted)) = item.kind else {
+                        return None;
+                    };
+                    admitted
+                }
+                name => panic!("unexpected subscribed payload {name}"),
             };
             let input = units(&admitted.data.input_id);
             let durable = record.durable.as_ref().unwrap();

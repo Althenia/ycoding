@@ -232,6 +232,7 @@ fn local_hosted_with_skill_resolver(
 ) -> Local {
     Local::new(Services {
         store: Service::new(store.client()),
+        events: ycoding_core::event_feed::Feed::attach(&store.client()),
         location: ycoding_schema::location::Ref::decode(
             &parse_json(r#"{"directory":"/project"}"#).unwrap(),
         )
@@ -2403,7 +2404,7 @@ async fn prompt_cache_options_follow_the_model_family_and_anthropic_policy() {
 }
 
 #[tokio::test]
-async fn request_timing_is_recorded_only_after_telemetry_consent() {
+async fn request_latency_requires_consent_while_generation_counts_are_always_reported() {
     let store = support::store();
     let service = Service::new(store.client());
     admit(&service).await;
@@ -2429,7 +2430,11 @@ async fn request_timing_is_recorded_only_after_telemetry_consent() {
     admit_input(&service, "second", "Again", "steer").await;
     coordinator.run(&id).await.unwrap();
     let rows = provider_requests(&store);
-    assert!(rows[0].timing.is_none());
+    let first = rows[0].timing.as_ref().unwrap().domain().unwrap();
+    assert_eq!(first.generated_tokens.unwrap().get(), 2);
+    assert!(first.first_output_ms.is_none());
+    assert!(first.total_ms.is_none());
+    assert!(first.retry_wait_ms.is_none());
     let timing = rows[1].timing.as_ref().unwrap().domain().unwrap();
     assert!(timing.first_output_ms.is_some());
     assert!(timing.total_ms.is_some());
@@ -2503,6 +2508,7 @@ fn analysis_local(
     catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"openai","model":"gpt-reasoning"}},"providers":{{"openai":{{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
     Local::new(Services {
         store: Service::new(store.client()),
+        events: ycoding_core::event_feed::Feed::attach(&store.client()),
         location: ycoding_schema::location::Ref::decode(
             &parse_json(r#"{"directory":"/project"}"#).unwrap(),
         )

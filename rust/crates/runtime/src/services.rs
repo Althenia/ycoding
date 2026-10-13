@@ -17,7 +17,6 @@ use ycoding_core::session::{
     store::Service as SessionStore,
 };
 use ycoding_core::tools::policy;
-use ycoding_core::ycoding_schema::{JsonPath, LosslessString, ObjectDecoder};
 use ycoding_core::ycoding_schema::{location, session};
 use ycoding_core::ycoding_store::Client;
 use ycoding_protocol::connection::Budgets;
@@ -115,14 +114,26 @@ impl Core {
     pub fn new(
         client: Client,
         execution: &'static Execution,
-        mut configuration: Configuration,
+        configuration: Configuration,
     ) -> Self {
         let sessions = SessionStore::new(client.clone());
         let events = Feed::attach(&client);
         let sink = configuration.publisher.clone();
         let feed = events.clone();
-        configuration.publisher = Arc::new(move |event| {
-            let ephemeral = ephemeral(&event)?;
+        let source_sessions = sessions.clone();
+        let publisher = Arc::new(move |event| {
+            let mut ephemeral = ephemeral(&event)?;
+            ephemeral.location = ephemeral
+                .session
+                .as_ref()
+                .map(|id| {
+                    source_sessions
+                        .get(id)
+                        .map(|session| session.map(|session| session.location))
+                })
+                .transpose()
+                .map_err(|error| error.to_string())?
+                .flatten();
             sink(event)?;
             feed.publish(ephemeral);
             Ok(())
@@ -130,7 +141,7 @@ impl Core {
         let autonomy = autonomy::Service::new(client.clone());
         let credentials = credential::Service::new(client.clone());
         Self {
-            publisher: configuration.publisher.clone(),
+            publisher,
             integrations: None,
             mcp: None,
             catalogs: None,
@@ -185,30 +196,18 @@ pub type CatalogProvider =
     Arc<dyn Fn(&location::Info) -> Result<CatalogServices, String> + Send + Sync>;
 
 pub(crate) fn ephemeral(event: &policy::Event) -> Result<Ephemeral, String> {
-    let path = JsonPath::default();
-    let object = ObjectDecoder::new(&event.data, &path).map_err(|error| error.to_string())?;
-    let session = match object
-        .optional::<LosslessString>("sessionID")
-        .map_err(|error| error.to_string())?
-    {
-        Some(id)
-            if ["form.replied", "form.cancelled"].contains(&event.type_)
-                && id.as_str() == Some("global") =>
-        {
-            None
-        }
-        Some(id) => Some(session::Id::new(id).map_err(|error| error.to_string())?),
-        None => None,
-    };
+    let data = ycoding_core::event_feed::Data::decode(event.type_, &event.data)?;
+    let session = data.session()?;
     Ok(Ephemeral {
         id: ids::event_id()
             .map_err(|error| error.to_string())?
             .as_lossless()
             .clone(),
         created: ids::now_millis(),
-        event_type: event.type_.into(),
         session,
-        data: event.data.clone(),
+        metadata: None,
+        location: None,
+        data,
     })
 }
 

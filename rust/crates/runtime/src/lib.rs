@@ -10,6 +10,7 @@ mod convert;
 mod credential;
 mod cursor;
 mod dispatch;
+mod ephemeral;
 mod event_subscribe;
 mod form;
 mod fs;

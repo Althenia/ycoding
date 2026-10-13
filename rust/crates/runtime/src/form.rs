@@ -222,7 +222,7 @@ fn invalid_fields(message: &str) -> Failure {
     }
 }
 
-fn info_wire(info: &form::Info) -> Result<v5::FormInfo, Failure> {
+pub(crate) fn info_wire(info: &form::Info) -> Result<v5::FormInfo, Failure> {
     Ok(v5::FormInfo {
         id: convert::identity(&info.id)?,
         session_id: convert::wire(&info.session_id),
@@ -267,7 +267,7 @@ fn state_wire(state: &form::State) -> Result<v5::FormState, Failure> {
     })
 }
 
-fn value_wire(value: &JsonValue) -> Result<v5::FormValue, Failure> {
+pub(crate) fn value_wire(value: &JsonValue) -> Result<v5::FormValue, Failure> {
     use v5::form_value::Kind;
     Ok(v5::FormValue {
         kind: Some(match value {

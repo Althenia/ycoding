@@ -30,6 +30,15 @@ fn resolve(
         .ok_or_else(|| Failure::Unavailable("Location MCP resolver is not composed".into()))?;
     let service = resolver(&location.info)
         .map_err(|_| Failure::Unavailable("Location MCP manager unavailable".into()))?;
+    service
+        .bind_events(
+            invocation.core()?.events.clone(),
+            Some(ycoding_core::ycoding_schema::location::Ref {
+                directory: location.info.directory.clone(),
+                workspace_id: location.info.workspace_id.clone(),
+            }),
+        )
+        .map_err(Failure::Unavailable)?;
     Ok((convert::location_info(&location.info), service))
 }
 

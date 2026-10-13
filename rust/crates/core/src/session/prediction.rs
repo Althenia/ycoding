@@ -191,13 +191,16 @@ impl Service {
         dependencies.feed.publish(Ephemeral {
             id: projector::random_event_id().ok()?.as_lossless().clone(),
             created: chrono::Utc::now().timestamp_millis(),
-            event_type: "session.prediction.updated".into(),
             session: Some(id.clone()),
-            data: ObjectEncoder::new()
-                .field("sessionID", id)
-                .field("sourceMessageID", &context.assistant.id)
-                .field("text", suggestion.as_str())
-                .finish(),
+            metadata: None,
+            location: Some(context.session.location.clone()),
+            data: crate::event_feed::Data::SessionPredictionUpdated(Box::new(
+                crate::event_feed::ephemeral::Prediction {
+                    session_id: id.clone(),
+                    source_message_id: context.assistant.id.clone(),
+                    text: suggestion.as_str().into(),
+                },
+            )),
         });
         Some(suggestion)
     }

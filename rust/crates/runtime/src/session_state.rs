@@ -5,9 +5,7 @@ use crate::{
 };
 use ycoding_core::event_feed::Ephemeral;
 use ycoding_core::session::{lifecycle::Change, revert};
-use ycoding_core::ycoding_schema::{
-    DomainDecode, DomainEncode, JsonValue, event::EventType, session_todo,
-};
+use ycoding_core::ycoding_schema::{DomainDecode, JsonValue, session_todo};
 use ycoding_core::ycoding_store::Error;
 use ycoding_protocol::v5;
 
@@ -145,13 +143,17 @@ pub async fn todo_update(
             .as_lossless()
             .clone(),
         created: ids::now_millis(),
-        event_type: session_todo::Updated::TYPE.into(),
         session: Some(id.clone()),
-        data: session_todo::UpdatedData {
+        metadata: None,
+        location: core
+            .sessions
+            .get(&id)
+            .map_err(|_| Failure::Unavailable("Session store unavailable".into()))?
+            .map(|session| session.location),
+        data: ycoding_core::event_feed::Data::TodoUpdated(Box::new(session_todo::UpdatedData {
             session_id: id,
             todos,
-        }
-        .encode(),
+        })),
     });
     Ok(v5::SessionTodoUpdateResult {
         data: v5::SessionTodoUpdateResultData {

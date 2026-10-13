@@ -1,5 +1,5 @@
 use super::{Driver, Progress};
-use crate::{convert, event_subscribe, log};
+use crate::{convert, ephemeral, event_subscribe, log};
 use prost::{Message, Name};
 use std::sync::Arc;
 use ycoding_core::event_feed::{Item, Payload, Subscriber};
@@ -289,9 +289,11 @@ impl Driver {
 
     fn typed_ephemeral_record(
         &self,
-        _event: &ycoding_core::event_feed::Ephemeral,
+        event: &ycoding_core::event_feed::Ephemeral,
     ) -> Result<Option<v5::EventRecord>, ProtocolError> {
-        Ok(None)
+        ephemeral::record(event, &self.source_epoch())
+            .map(Some)
+            .map_err(|_| ProtocolError::Malformed)
     }
 
     fn enqueue_record(

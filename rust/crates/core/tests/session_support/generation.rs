@@ -436,8 +436,8 @@ pub fn predictions(items: &[Arc<Item>]) -> Vec<JsonValue> {
     items
         .iter()
         .filter_map(|item| match &item.payload {
-            Payload::Ephemeral(event) if event.event_type == "session.prediction.updated" => {
-                Some(event.data.clone())
+            Payload::Ephemeral(event) if event.data.name() == "session.prediction.updated" => {
+                Some(ycoding_schema::DomainEncode::encode(&event.data))
             }
             _ => None,
         })
@@ -705,6 +705,7 @@ pub fn local_with_settings(store: &Store, endpoint: &str, helpers: helper::Setti
         std::env::temp_dir().join(format!("ycoding-generation-scratch-{}", std::process::id()));
     Local::new(Services {
         store: SessionStore::new(store.client()),
+        events: ycoding_core::event_feed::Feed::attach(&store.client()),
         location: ycoding_schema::location::Ref::decode(
             &parse_json(r#"{"directory":"/project"}"#).unwrap(),
         )

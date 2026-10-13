@@ -545,6 +545,7 @@ impl Subscription {
 }
 
 pub struct LocationWatcher {
+    pub event_source: crate::event_feed::EventSource,
     root: Option<Subscription>,
     git: Option<Subscription>,
 }
@@ -611,7 +612,11 @@ impl LocationWatcher {
         } else {
             None
         };
-        Ok(Self { root, git })
+        Ok(Self {
+            root,
+            git,
+            event_source: Default::default(),
+        })
     }
 
     pub async fn recv(&mut self) -> io::Result<ChangedData> {
@@ -628,14 +633,20 @@ impl LocationWatcher {
                 ));
             }
         };
-        Ok(ChangedData {
+        let data = ChangedData {
             file: update.path.to_string_lossy().into_owned().into(),
             event: match update.kind {
                 UpdateKind::Create => ChangedKind::Add,
                 UpdateKind::Update => ChangedKind::Change,
                 UpdateKind::Delete => ChangedKind::Unlink,
             },
-        })
+        };
+        self.event_source
+            .emit(crate::event_feed::Data::FilesystemChanged(Box::new(
+                data.clone(),
+            )))
+            .map_err(io::Error::other)?;
+        Ok(data)
     }
 }
 

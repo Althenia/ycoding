@@ -9,12 +9,16 @@ use ycoding_schema::{
 };
 #[derive(Clone)]
 pub struct Service {
+    pub event_source: crate::event_feed::EventSource,
     references: Vec<Info>,
 }
 pub mod instructions;
 impl Service {
     pub fn from_infos(references: Vec<Info>) -> Self {
-        Self { references }
+        Self {
+            references,
+            event_source: Default::default(),
+        }
     }
     pub fn from_entries(
         entries: &[Entry],
@@ -111,10 +115,17 @@ impl Service {
                 source,
             });
         }
-        Ok(Self { references })
+        Ok(Self::from_infos(references))
     }
     pub fn list(&self) -> &[Info] {
         &self.references
+    }
+    pub fn replace(&mut self, references: Vec<Info>) -> Result<(), String> {
+        self.references = references;
+        self.event_source
+            .emit(crate::event_feed::Data::ReferenceUpdated(Box::new(
+                ycoding_schema::models_dev::Empty,
+            )))
     }
 }
 
