@@ -494,6 +494,21 @@ pub fn location_info(info: &location::Info) -> v5::LocationInfo {
     }
 }
 
+pub fn file_diff_info(info: &ycoding_core::ycoding_schema::file_diff::Info) -> v5::FileDiffInfo {
+    use ycoding_core::ycoding_schema::file_diff::Status;
+    v5::FileDiffInfo {
+        file: wire(&info.file),
+        patch: wire(&info.patch),
+        additions: info.additions.get() as u64,
+        deletions: info.deletions.get() as u64,
+        status: match info.status {
+            Status::Added => v5::FileDiffInfoStatus::FilediffInfoStatusAdded,
+            Status::Deleted => v5::FileDiffInfoStatus::FilediffInfoStatusDeleted,
+            Status::Modified => v5::FileDiffInfoStatus::FilediffInfoStatusModified,
+        } as i32,
+    }
+}
+
 pub fn object_domain<'a>(
     entries: impl IntoIterator<Item = (&'a v5::LosslessString, &'a v5::Value)>,
 ) -> Result<JsonObject, Failure> {

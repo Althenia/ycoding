@@ -68,6 +68,9 @@ pub struct Shell {
     selection: select::Options,
 }
 impl Shell {
+    pub fn directory(&self) -> &std::path::Path {
+        &self.directory
+    }
     pub async fn new(
         roots: &Roots,
         directory: PathBuf,

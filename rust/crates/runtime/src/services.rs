@@ -48,10 +48,13 @@ pub struct Core {
     pub autonomy: autonomy::Service,
     pub orchestration: orchestration::Service,
     pub events: Feed,
+    pub publisher: policy::Publisher,
     pub locations: Locations,
     pub credentials: credential::Service,
     pub browser: Option<Arc<service::Service>>,
     pub isolated_browser: Option<IsolatedBrowserResolver>,
+    pub platform: Option<PlatformResolver>,
+    pub platform_default_location: Option<location::Ref>,
     pub telemetry: ycoding_core::telemetry::Service,
     pub keep_awake: ycoding_core::platform::keep_awake::Service,
     pub provider_usage: Option<ProviderUsageResolver>,
@@ -77,6 +80,20 @@ pub type ProviderUsageResolver =
 pub type IsolatedBrowserResolver =
     Arc<dyn Fn(&location::Ref) -> Result<Arc<isolated::Service>, String> + Send + Sync>;
 
+pub struct PlatformServices {
+    pub shell: Arc<ycoding_core::platform::shell::Shell>,
+    pub pty: Arc<ycoding_core::platform::pty::Pty>,
+    pub tickets: Mutex<ycoding_core::platform::pty::ticket::Tickets>,
+    pub config: Arc<ycoding_core::resources::config::Configuration>,
+    pub filesystem: Arc<ycoding_core::platform::filesystem::Location>,
+    pub search: Arc<ycoding_core::platform::filesystem::search::Service>,
+    pub git: Arc<ycoding_core::platform::git::Service>,
+    pub copies: Arc<ycoding_core::platform::project_copy::Copies>,
+}
+
+pub type PlatformResolver =
+    Arc<dyn Fn(&location::Ref) -> Result<Arc<PlatformServices>, String> + Send + Sync>;
+
 impl Core {
     pub fn new(
         client: Client,
@@ -96,8 +113,11 @@ impl Core {
         let autonomy = autonomy::Service::new(client.clone());
         let credentials = credential::Service::new(client.clone());
         Self {
+            publisher: configuration.publisher.clone(),
             browser: None,
             isolated_browser: None,
+            platform: None,
+            platform_default_location: None,
             telemetry: ycoding_core::telemetry::Service::new(client.clone()),
             keep_awake: ycoding_core::platform::keep_awake::Service::new(),
             artifacts: None,

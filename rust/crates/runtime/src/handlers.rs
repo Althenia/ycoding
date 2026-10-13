@@ -16,6 +16,27 @@ use ycoding_protocol::{OPERATIONS, v5};
 
 pub fn standard() -> Result<Dispatcher, RegistrationError> {
     let mut dispatcher = Dispatcher::new(OPERATIONS.clone());
+    dispatcher.handle("pty.connectToken", crate::pty::connect_token)?;
+    dispatcher.handle("pty.control", crate::pty::control)?;
+    dispatcher.handle("pty.create", crate::pty::create)?;
+    dispatcher.handle("pty.get", crate::pty::get)?;
+    dispatcher.handle("pty.list", crate::pty::list)?;
+    dispatcher.handle("pty.remove", crate::pty::remove)?;
+    dispatcher.handle("pty.update", crate::pty::update)?;
+    dispatcher.handle("shell.create", crate::shell::create)?;
+    dispatcher.handle("shell.get", crate::shell::get)?;
+    dispatcher.handle("shell.list", crate::shell::list)?;
+    dispatcher.handle("shell.output", crate::shell::output)?;
+    dispatcher.handle("shell.remove", crate::shell::remove)?;
+    dispatcher.handle("shell.timeout", crate::shell::timeout)?;
+    dispatcher.handle("vcs.branch", crate::vcs::branch)?;
+    dispatcher.handle("vcs.diff", crate::vcs::diff)?;
+    dispatcher.handle("vcs.status", crate::vcs::status)?;
+    dispatcher.handle("projectCopy.create", crate::project_copy::create)?;
+    dispatcher.handle("projectCopy.refresh", crate::project_copy::refresh)?;
+    dispatcher.handle("projectCopy.remove", crate::project_copy::remove)?;
+    dispatcher.handle("fs.find", crate::fs::find)?;
+    dispatcher.handle("fs.list", crate::fs::list)?;
     dispatcher.handle("telemetry.append", crate::telemetry::append)?;
     dispatcher.handle("telemetry.list", crate::telemetry::list)?;
     dispatcher.handle("telemetry.consent.get", crate::telemetry::consent_get)?;

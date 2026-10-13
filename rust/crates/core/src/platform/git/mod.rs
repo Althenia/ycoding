@@ -1,4 +1,6 @@
 use super::filesystem::{contains, normalize};
+mod hg;
+pub mod vcs;
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -60,6 +62,12 @@ pub(crate) struct Output {
     pub code: i32,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
+    pub truncated: bool,
+}
+
+pub(crate) struct Capture<'a> {
+    pub program: &'a str,
+    pub limit: usize,
 }
 impl Output {
     pub fn text(&self) -> String {
@@ -90,7 +98,51 @@ impl Service {
         stdin: Option<&[u8]>,
         index: Option<&Path>,
     ) -> Result<Output, Error> {
-        let mut command = Command::new("git");
+        self.run_program("git", operation, cwd, args, stdin, index)
+    }
+
+    pub(crate) fn run_program(
+        &self,
+        program: &str,
+        operation: &'static str,
+        cwd: &Path,
+        args: &[&str],
+        stdin: Option<&[u8]>,
+        index: Option<&Path>,
+    ) -> Result<Output, Error> {
+        let output = self.capture(
+            Capture {
+                program,
+                limit: self.output_limit,
+            },
+            operation,
+            cwd,
+            args,
+            stdin,
+            index,
+        )?;
+        if output.truncated {
+            return Err(Error {
+                unknown_outcome: true,
+                ..error(operation, cwd, "Git output limit exceeded")
+            });
+        }
+        Ok(output)
+    }
+
+    pub(crate) fn capture(
+        &self,
+        capture: Capture<'_>,
+        operation: &'static str,
+        cwd: &Path,
+        args: &[&str],
+        stdin: Option<&[u8]>,
+        index: Option<&Path>,
+    ) -> Result<Output, Error> {
+        let mut command = Command::new(capture.program);
+        if capture.program == "hg" {
+            command.env("HGPLAIN", "1");
+        }
         command
             .args(args)
             .current_dir(cwd)
@@ -115,9 +167,8 @@ impl Service {
             .stderr
             .take()
             .ok_or_else(|| error(operation, cwd, "Missing stderr pipe"))?;
-        let limit = self.output_limit;
-        let out = std::thread::spawn(move || bounded(stdout, limit));
-        let err = std::thread::spawn(move || bounded(stderr, limit));
+        let out = std::thread::spawn(move || bounded(stdout, capture.limit));
+        let err = std::thread::spawn(move || bounded(stderr, capture.limit));
         let input = match stdin {
             Some(input) => child
                 .stdin
@@ -151,16 +202,11 @@ impl Service {
                 });
             }
         };
-        if stdout.1 || stderr.1 {
-            return Err(Error {
-                unknown_outcome: true,
-                ..error(operation, cwd, "Git output limit exceeded")
-            });
-        }
         Ok(Output {
             code: status.code().unwrap_or(-1),
             stdout: stdout.0,
             stderr: stderr.0,
+            truncated: stdout.1 || stderr.1,
         })
     }
 

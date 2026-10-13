@@ -64,6 +64,9 @@ pub struct Service {
 }
 
 impl Service {
+    pub fn directory(&self) -> &std::path::Path {
+        self.location.directory()
+    }
     pub fn new(directory: &std::path::Path, backend: Backend) -> io::Result<Self> {
         let location = Location::new(directory)?;
         let backend = match backend {

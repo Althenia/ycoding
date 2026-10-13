@@ -190,6 +190,9 @@ pub struct Pty {
     selection: super::shell::select::Options,
 }
 impl Pty {
+    pub fn directory(&self) -> &std::path::Path {
+        &self.directory
+    }
     pub fn new(directory: PathBuf) -> Self {
         Self {
             directory,

@@ -92,7 +92,10 @@ pub async fn serve_with(
             .map_or(0, |elapsed| elapsed.as_nanos()),
         epochs: AtomicU64::new(1),
     });
-    let router = Router::new().route(ROUTE, get(upgrade)).with_state(shared);
+    let router = Router::new()
+        .route(ROUTE, get(upgrade))
+        .route("/api/pty/{id}/connect", get(crate::pty_stream::upgrade))
+        .with_state(shared);
     let task = tokio::spawn(
         axum::serve(listener, router)
             .with_graceful_shutdown(async move {

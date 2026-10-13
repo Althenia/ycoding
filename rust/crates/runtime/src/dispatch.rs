@@ -96,6 +96,14 @@ enum Body {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Failure {
+    ShellNotFound(String),
+    PtyNotFound(String),
+    PtyConflict(String),
+    PtyResourceLimit(String),
+    ProjectCopy {
+        message: String,
+        force_required: bool,
+    },
     TelemetryDisabled,
     Artifact(ycoding_core::ycoding_schema::project_artifact::ErrorCode),
     Connector {
@@ -426,6 +434,52 @@ impl Failure {
         }
         let declared = |name: String| descriptor.error_types.contains(&name);
         match self {
+            Failure::ShellNotFound(id) if declared(v5::ShellNotFoundError::full_name()) => {
+                encoded(v5::ShellNotFoundError {
+                    tag: 1,
+                    id: convert::text(&id),
+                    message: convert::text(&format!("Shell command not found: {id}")),
+                })
+            }
+            Failure::PtyNotFound(id) if declared(v5::PtyNotFoundError::full_name()) => {
+                encoded(v5::PtyNotFoundError {
+                    tag: 1,
+                    pty_id: convert::text(&id),
+                    message: convert::text(&format!("PTY session not found: {id}")),
+                })
+            }
+            Failure::PtyConflict(id) if declared(v5::PtyConflictError::full_name()) => {
+                encoded(v5::PtyConflictError {
+                    tag: 1,
+                    pty_id: convert::text(&id),
+                    message: convert::text("PTY control generation or writer fence is stale"),
+                })
+            }
+            Failure::PtyResourceLimit(resource)
+                if declared(v5::PtyResourceLimitError::full_name()) =>
+            {
+                encoded(v5::PtyResourceLimitError {
+                    tag: 1,
+                    message: convert::text(&format!("PTY {resource} limit reached")),
+                    resource: convert::text(&resource),
+                })
+            }
+            Failure::ProjectCopy {
+                message,
+                force_required,
+            } if declared(v5::ProjectCopyError::full_name()) => encoded(v5::ProjectCopyError {
+                name: 1,
+                data: v5::ProjectCopyErrorData {
+                    message: convert::text(&message),
+                    force_required: force_required.then_some(true),
+                },
+            }),
+            Failure::ShellNotFound(_) | Failure::PtyNotFound(_) => {
+                invalid("Platform session not found", "not_found")
+            }
+            Failure::PtyConflict(_) => invalid("PTY fence is stale", "conflict"),
+            Failure::PtyResourceLimit(_) => invalid("PTY resource limit reached", "unavailable"),
+            Failure::ProjectCopy { message, .. } => invalid(&message, "invalid"),
             Failure::TelemetryDisabled if declared(v5::TelemetryDisabled::full_name()) => {
                 encoded(v5::TelemetryDisabled { tag: 1 })
             }
