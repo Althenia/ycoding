@@ -9,9 +9,9 @@ const root = path.resolve(import.meta.dir, "../../../..")
 describe("WP-001 / TEST-057 operation coverage", () => {
   test("generates complete live membership and exactly one runtime owner per member", async () => {
     const manifest = await generateManifest(root)
-    expect(manifest.counts).toEqual({ endpoint: 194, connector: 68, notice: 4 })
+    expect(manifest.counts).toEqual({ endpoint: 198, connector: 70, notice: 4 })
     expect(manifest.owners).toEqual({ wire: "WP-003", adapter: "WP-014" })
-    expect(manifest.members).toHaveLength(266)
+    expect(manifest.members).toHaveLength(272)
     expect(manifest.unresolved).toEqual([])
     expect(
       manifest.members.every((member) => member.inventoryEvidence.startsWith("specs/wire-operation-inventory.md#")),
@@ -77,7 +77,7 @@ describe("WP-001 / TEST-057 operation coverage", () => {
           path.join(copy, "packages/protocol/src/groups", file),
           Bun.file(path.join(root, "packages/protocol/src/groups", file)),
         )
-      expect((await generateManifest(copy)).counts).toEqual({ endpoint: 194, connector: 68, notice: 4 })
+      expect((await generateManifest(copy)).counts).toEqual({ endpoint: 198, connector: 70, notice: 4 })
       const file = path.join(copy, "packages/protocol/src/groups/agent.ts")
       const original = await Bun.file(file).text()
       await Bun.write(file, original.replace('HttpApiEndpoint.get("agent.list"', 'HttpApiEndpoint.get("agent.changed"'))
