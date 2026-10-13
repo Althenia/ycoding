@@ -88,6 +88,7 @@ async fn session_calls_stay_inside_the_hosts_location_and_follow_durable_admissi
         sessions.clone(),
         Arc::new(NoPlacement),
         ycoding_core::job::Jobs::new(),
+        None,
     )
     .unwrap();
     let id = |value: &str| session::Id::new(value).unwrap();

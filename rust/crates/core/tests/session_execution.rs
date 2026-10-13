@@ -60,10 +60,11 @@ async fn process_global_execution_routes_session_placement_only_at_drain_and_adv
         runner: runner.clone(),
     });
     let jobs = ycoding_core::job::Jobs::new();
-    let execution = Execution::install(service.clone(), locations.clone(), jobs.clone()).unwrap();
+    let execution =
+        Execution::install(service.clone(), locations.clone(), jobs.clone(), None).unwrap();
     assert!(std::ptr::eq(execution, Execution::global().unwrap()));
     assert!(matches!(
-        Execution::install(service.clone(), locations.clone(), jobs),
+        Execution::install(service.clone(), locations.clone(), jobs, None),
         Err(Error::AlreadyInstalled)
     ));
     let id = session::Id::new("ses_one").unwrap();

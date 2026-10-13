@@ -103,7 +103,8 @@ static WORLD: LazyLock<World> = LazyLock::new(|| {
         scripts: scripts.clone(),
     });
     World {
-        execution: Execution::install(service, Arc::new(Placement(runner)), jobs.clone()).unwrap(),
+        execution: Execution::install(service, Arc::new(Placement(runner)), jobs.clone(), None)
+            .unwrap(),
         client,
         jobs,
         scripts,

@@ -1,7 +1,9 @@
 pub mod interrupted;
 
 use super::{
+    autonomy,
     completion::Completion,
+    orchestration,
     pending::Request,
     run_coordinator::{
         Coordinator, Drain, DrainRequest, Error, InterruptReason, Outcome, RunFuture,
@@ -14,7 +16,7 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 use ycoding_schema::{ObjectEncoder, location, session, session_error, session_message};
-use ycoding_store::session::{NewEvent, Pending};
+use ycoding_store::session::{NewEvent, Pending, TaskTable};
 
 pub trait Runner: Send + Sync + 'static {
     fn drain(&self, request: DrainRequest) -> RunFuture;
@@ -59,11 +61,14 @@ impl Execution {
         store: Service,
         locations: Arc<dyn Locations>,
         jobs: job::Jobs,
+        steer: Option<Arc<dyn autonomy::Steer>>,
     ) -> Result<&'static Self, Error> {
         let coordinator = Coordinator::new(Arc::new(RuntimeDrain {
             store: store.clone(),
             locations,
             jobs: jobs.clone(),
+            steer,
+            orchestration: orchestration::Service::new(store.clone(), Arc::new(ProcessExecution)),
             active: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
         }));
         EXECUTION
@@ -175,6 +180,8 @@ struct RuntimeDrain {
     store: Service,
     locations: Arc<dyn Locations>,
     jobs: job::Jobs,
+    steer: Option<Arc<dyn autonomy::Steer>>,
+    orchestration: orchestration::Service,
     active: Arc<Mutex<std::collections::BTreeMap<session::Id, Arc<dyn Runner>>>>,
 }
 impl Drain for RuntimeDrain {
@@ -189,6 +196,18 @@ impl Drain for RuntimeDrain {
                     message: "Session not found".into(),
                 })
             })?;
+            if let Some(task) = store
+                .client
+                .snapshot()?
+                .get::<TaskTable>(&super::key(request.session_id.as_lossless()))?
+                && task.state.as_str() != Some("running")
+            {
+                eprintln!(
+                    "Session drain skipped for non-running managed task {:?}: {:?}",
+                    request.session_id, task.state
+                );
+                return Ok(());
+            }
             if !request.force && !store.has_eligible_pending(&request.session_id)? {
                 return Ok(());
             }
@@ -203,13 +222,23 @@ impl Drain for RuntimeDrain {
 
     fn started(&self, id: session::Id) -> RunFuture {
         let store = self.store.clone();
-        Box::pin(async move { lifecycle(&store, &id, None).await.map_err(Error::from) })
+        let orchestration = self.orchestration.clone();
+        Box::pin(async move {
+            lifecycle(&store, &id, None).await?;
+            orchestration
+                .dispatch_restart_losses(&id)
+                .await
+                .map_err(orchestration_error)?;
+            Ok(())
+        })
     }
 
     fn settled(&self, id: session::Id, outcome: Outcome) -> RunFuture {
         let store = self.store.clone();
         let jobs = self.jobs.clone();
         let active = self.active.clone();
+        let steer = self.steer.clone();
+        let orchestration = self.orchestration.clone();
         Box::pin(async move {
             let runner = active
                 .lock()
@@ -223,18 +252,170 @@ impl Drain for RuntimeDrain {
                 None => outcome,
             };
             let terminal = terminal(&outcome);
+            let advanced = if terminal == Terminal::Succeeded {
+                match steer {
+                    Some(steer) => {
+                        let result = async {
+                            let text = latest_assistant_text(&store, &id)?;
+                            autonomy::prepare_continuation(
+                                &autonomy::Service::new(store.client.clone()),
+                                &store,
+                                steer.as_ref(),
+                                &id,
+                                text,
+                                jobs.outstanding_sessions().contains(&id),
+                            )
+                            .await
+                        }
+                        .await;
+                        match result {
+                            Ok(advanced) => advanced,
+                            Err(error) => {
+                                eprintln!("Failed to continue the autonomous goal {id:?}: {error}");
+                                None
+                            }
+                        }
+                    }
+                    None => None,
+                }
+            } else {
+                None
+            };
             lifecycle(&store, &id, Some(terminal.clone())).await?;
             if terminal == Terminal::Succeeded {
-                // The coordinator keeps the settling Session active until this settlement returns,
-                // which Completion requires before it records the work.
                 let coordinated =
                     Arc::new(|| Execution::global().map_or_else(Vec::new, Execution::active));
-                Completion::new(store, jobs)
+                Completion::new(store.clone(), jobs)
                     .complete(&id, coordinated)
                     .await?;
             }
+            if let Err(error) = settle_task(&store, &id, &terminal).await {
+                eprintln!("Failed to settle managed child task {id:?}: {error}");
+            }
+            if let Err(error) = orchestration.dispatch_notifications().await {
+                eprintln!("Failed to dispatch subagent notifications {id:?}: {error}");
+            }
+            if let Some(advanced) = advanced {
+                match advanced.admit(&store, &id).await {
+                    Ok(admitted) if admitted.wake => {
+                        orchestration::Execution::wake(&ProcessExecution, &id)?
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        eprintln!("Failed to queue autonomous goal continuation {id:?}: {error}")
+                    }
+                }
+            }
             Ok(())
         })
+    }
+}
+
+struct ProcessExecution;
+
+impl orchestration::Execution for ProcessExecution {
+    fn wake(&self, id: &session::Id) -> Outcome {
+        Execution::global().ok_or(Error::Closed)?.wake(id)
+    }
+
+    fn interrupt(&self, id: &session::Id) -> RunFuture {
+        let id = id.clone();
+        Box::pin(async move {
+            Execution::global()
+                .ok_or(Error::Closed)?
+                .interrupt(&id)
+                .await
+        })
+    }
+}
+
+fn latest_assistant_text(
+    store: &Service,
+    id: &session::Id,
+) -> Result<Option<String>, ycoding_store::Error> {
+    let Some(session_message::Info::Assistant(assistant)) = store.latest(id, "assistant")? else {
+        return Ok(None);
+    };
+    assistant
+        .content
+        .into_iter()
+        .try_fold(String::new(), |mut text, part| {
+            if let session_message::AssistantContent::Text(part) = part {
+                text.push_str(
+                    &part
+                        .text
+                        .to_utf8()
+                        .map_err(|error| ycoding_store::Error::Record(Box::new(error)))?,
+                );
+            }
+            Ok(text)
+        })
+        .map(Some)
+}
+
+async fn settle_task(
+    store: &Service,
+    id: &session::Id,
+    terminal: &Terminal,
+) -> Result<(), ycoding_store::Error> {
+    if !store
+        .client
+        .snapshot()?
+        .get::<TaskTable>(&super::key(id.as_lossless()))?
+        .is_some_and(|task| task.state.as_str() == Some("running"))
+    {
+        return Ok(());
+    }
+    let change = match terminal {
+        Terminal::Interrupted(_) => return Ok(()),
+        Terminal::Succeeded => ycoding_schema::session_orchestration::Change::Completed {
+            excerpt: latest_assistant_text(store, id)?
+                .map(|text| orchestration::truncate_utf8(&text, 16 * 1024).into()),
+        },
+        Terminal::Failed(error) => {
+            let message = error
+                .message
+                .to_utf8()
+                .map_err(|error| ycoding_store::Error::Record(Box::new(error)))?;
+            let error = orchestration::truncate_utf8(&message, 16 * 1024);
+            ycoding_schema::session_orchestration::Change::Failed {
+                error: error.into(),
+                excerpt: Some(error.into()),
+            }
+        }
+    };
+    let event = NewEvent {
+        id: super::projector::random_event_id()?.as_lossless().clone(),
+        aggregate_id: id.as_lossless().clone(),
+        created: chrono::Utc::now().timestamp_millis(),
+        type_: "session.task.updated.1".into(),
+        data: ObjectEncoder::new()
+            .field("sessionID", id)
+            .field("change", &change)
+            .finish(),
+    };
+    store
+        .client
+        .submit(move |tx| {
+            if tx
+                .get::<TaskTable>(&super::key(&event.aggregate_id))?
+                .is_some_and(|task| task.state.as_str() == Some("running"))
+            {
+                super::projector::append(tx, &event)?;
+            }
+            Ok(())
+        })?
+        .await
+}
+
+fn orchestration_error(error: orchestration::Error) -> Error {
+    match error {
+        orchestration::Error::Store(error) => error.into(),
+        orchestration::Error::Execution(error) => error,
+        error => Error::Runner(session_error::Error {
+            r#type: "unknown".into(),
+            message: error.to_string().into(),
+        }),
     }
 }
 

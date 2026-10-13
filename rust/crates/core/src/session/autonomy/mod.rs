@@ -2,6 +2,7 @@ mod continuation;
 mod service;
 mod state;
 
+pub(crate) use continuation::prepare_continuation;
 pub use continuation::{
     Error as ContinuationError, Steer, SteerFuture, SteerRequest, continue_goal,
 };

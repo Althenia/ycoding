@@ -541,8 +541,10 @@ snapshot for Session metadata, chronological message windows, and the durable
 watermark. Backward cursors are Session-bound canonical base64url values; completed
 legacy checkpoints bound history while running checkpoints do not.
 
-`session::execution::Execution::install(store, locations, jobs)` installs the explicit
-process-global owner; `jobs()` returns the shared `job::Jobs` the owner settles against. `Locations::get(&location::Ref)` resolves a Location-owned
+`session::execution::Execution::install(store, locations, jobs, steer)` installs the explicit
+process-global owner. `steer` is an optional `Arc<dyn autonomy::Steer>` supplied
+by the host; without it, settlement skips goal continuation. `jobs()` returns the
+shared `job::Jobs` the owner settles against. `Locations::get(&location::Ref)` resolves a Location-owned
 `Arc<dyn Runner>` only when a drain begins. `Runner::drain(DrainRequest) ->
 RunFuture` receives a typed Session ID, the explicit-resume `force` flag, and a
 watch-backed cancellation signal; its boxed, sendable future returns `Outcome`.
@@ -553,6 +555,33 @@ not resolve a moved Session's Location again during settlement.
 Awaited work can call `request_interrupt` without waiting on its own settlement.
 Runner errors preserve their typed Session error; owner interruption preserves
 its user, shutdown, or superseded reason.
+
+Execution admits no provider work for a managed task unless its state is
+`running`; a waiting or terminal child's pending inputs remain durable. Advisory
+wakes require eligible inbox work. At execution start, retained restart-loss
+notifications are admitted to the parent without a provider wake.
+
+Successful settlement generates and revision-fences an eligible goal steer,
+advancing the goal before publishing `session.execution.succeeded.1`. It then
+runs work Completion, settles a still-running managed child, dispatches ordinary
+subagent notifications, admits the deterministic goal input, and wakes only when
+the admission is eligible. Goal continuation waits for active direct children
+(`starting`, `running`, `waiting`, `cancelling`) and outstanding shell work or
+owed shell notices. Success neither spends nor resets the no-progress budget.
+Goal and child excerpts read the newest assistant through history `latest` and
+concatenate only its text parts, without separators; absent assistant and empty
+assistant text remain distinct.
+
+Failure publishes the execution failure and fails a still-running task with
+error and excerpt bounded to 16 KiB at UTF-8 code point boundaries, without goal
+continuation or Completion. Successful child excerpts use the same bound.
+Interruption preserves suspension and does not settle the child task or continue
+the goal. Task settlement checks the running state in the publication transaction,
+so a cancellation or terminal transition committed first wins. Notifications use
+deterministic parent input identities and durable delivery marking; repeated
+dispatch cannot duplicate an admitted notification. Goal generation, task
+settlement, and notification-dispatch errors are reported without changing a
+successful drain into a false goal completion.
 
 `session::runner::Local` accepts explicit Location services: Session Store, model
 resolver, agents, credentials, tool registry, managed attachments, ordered
@@ -1139,6 +1168,12 @@ it asks the `Steer` seam for the next steer text, advances the iteration only at
 the snapshot revision, and admits one synthetic `steer` input whose identifier is
 `msg_goal_<sha256(sessionID NUL iteration)[..24]>`. The caller supplies the
 helper-model `Steer` implementation and the active-shell fact.
+Execution uses the same continuation stages, separating the fenced advance from
+admission so the terminal execution and child-settlement events precede the new
+goal input. `Steer::steer(SteerRequest) -> SteerFuture<'_>` receives the Session ID,
+current goal and latest assistant text; `SteerFuture` resolves to `Option<String>`.
+`None` leaves the goal unchanged. The host-supplied implementation owns model
+generation, provider settlement validation, and request/usage accounting.
 
 `session::orchestration::Service` owns child Sessions. `launch` derives
 `ses_task_*`, `msg_task_*`, and `evt_task_*` identifiers from parent Session,

@@ -60,6 +60,35 @@ pub async fn continue_goal(
     latest_assistant_text: Option<String>,
     active_shell: bool,
 ) -> Result<Option<Admitted>, Error> {
+    let Some(prepared) = prepare_continuation(
+        autonomy,
+        sessions,
+        steer,
+        session_id,
+        latest_assistant_text,
+        active_shell,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(prepared.admit(sessions, session_id).await?))
+}
+
+pub(crate) struct PreparedContinuation {
+    goal: Goal,
+    yolo: super::YoloLevel,
+    text: String,
+}
+
+pub(crate) async fn prepare_continuation(
+    autonomy: &Service,
+    sessions: &store::Service,
+    steer: &dyn Steer,
+    session_id: &session::Id,
+    latest_assistant_text: Option<String>,
+    active_shell: bool,
+) -> Result<Option<PreparedContinuation>, Error> {
     let snapshot = autonomy.snapshot(session_id)?;
     let Some(goal) = snapshot.state.goal.filter(Goal::is_active) else {
         return Ok(None);
@@ -84,44 +113,52 @@ pub async fn continue_goal(
     let Some(goal) = goal.filter(|goal| advanced.applied && goal.is_active()) else {
         return Ok(None);
     };
-    let id = session_message::Id::new(format!(
-        "msg_goal_{}",
-        &sha256(&format!(
-            "{}\0{}",
-            session_id.as_lossless().as_str().unwrap_or_default(),
-            goal.iteration
-        ))[..24]
-    ))
-    .map_err(|error| ycoding_store::Error::Record(Box::new(error)))?;
-    let input = session_pending::Message::decode(
-        &ObjectEncoder::new()
-            .field("type", "synthetic")
-            .field(
-                "data",
-                &ObjectEncoder::new()
-                    .field("text", text.as_str())
-                    .field("description", "Goal · steer")
-                    .field(
-                        "metadata",
-                        &ObjectEncoder::new()
-                            .field(
-                                "autonomy",
-                                &ObjectEncoder::new()
-                                    .field("yolo", &f64::from(yolo.get()))
-                                    .field("goal", &true)
-                                    .field("iteration", &(goal.iteration as f64))
-                                    .finish(),
-                            )
-                            .finish(),
-                    )
-                    .finish(),
-            )
-            .field("delivery", "steer")
-            .finish(),
-    )
-    .map_err(|error| ycoding_store::Error::Record(Box::new(error)))?;
-    Ok(Some(
-        sessions
+    Ok(Some(PreparedContinuation { goal, yolo, text }))
+}
+
+impl PreparedContinuation {
+    pub(crate) async fn admit(
+        self,
+        sessions: &store::Service,
+        session_id: &session::Id,
+    ) -> Result<Admitted, Error> {
+        let id = session_message::Id::new(format!(
+            "msg_goal_{}",
+            &sha256(&format!(
+                "{}\0{}",
+                session_id.as_lossless().as_str().unwrap_or_default(),
+                self.goal.iteration
+            ))[..24]
+        ))
+        .map_err(|error| ycoding_store::Error::Record(Box::new(error)))?;
+        let input = session_pending::Message::decode(
+            &ObjectEncoder::new()
+                .field("type", "synthetic")
+                .field(
+                    "data",
+                    &ObjectEncoder::new()
+                        .field("text", self.text.as_str())
+                        .field("description", "Goal · steer")
+                        .field(
+                            "metadata",
+                            &ObjectEncoder::new()
+                                .field(
+                                    "autonomy",
+                                    &ObjectEncoder::new()
+                                        .field("yolo", &f64::from(self.yolo.get()))
+                                        .field("goal", &true)
+                                        .field("iteration", &(self.goal.iteration as f64))
+                                        .finish(),
+                                )
+                                .finish(),
+                        )
+                        .finish(),
+                )
+                .field("delivery", "steer")
+                .finish(),
+        )
+        .map_err(|error| ycoding_store::Error::Record(Box::new(error)))?;
+        Ok(sessions
             .admit_input(Request {
                 id,
                 session_id: session_id.clone(),
@@ -129,8 +166,8 @@ pub async fn continue_goal(
                 event_id: random_event_id()?,
                 created: chrono::Utc::now().timestamp_millis(),
             })
-            .await?,
-    ))
+            .await?)
+    }
 }
 
 fn has_active_child(sessions: &store::Service, parent: &session::Id) -> Result<bool, Error> {

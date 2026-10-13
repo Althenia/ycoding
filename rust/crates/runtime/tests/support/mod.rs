@@ -230,6 +230,7 @@ pub fn world() -> &'static World {
             SessionStore::new(client.clone()),
             Arc::new(NoLocations),
             ycoding_core::job::Jobs::new(),
+            None,
         )
         .unwrap();
         World {
