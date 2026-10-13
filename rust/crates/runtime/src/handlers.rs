@@ -23,6 +23,7 @@ pub fn standard() -> Result<Dispatcher, RegistrationError> {
     dispatcher.handle("keepAwake.get", crate::keep_awake::get)?;
     dispatcher.handle("keepAwake.set", crate::keep_awake::set)?;
     artifact::register(&mut dispatcher)?;
+    crate::connector::operations::register(&mut dispatcher)?;
     dispatcher.handle("health.get", health_get)?;
     dispatcher.handle("health.stop", health::stop)?;
     dispatcher.handle("server.get", server)?;

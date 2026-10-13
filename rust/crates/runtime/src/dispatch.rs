@@ -98,6 +98,10 @@ enum Body {
 pub enum Failure {
     TelemetryDisabled,
     Artifact(ycoding_core::ycoding_schema::project_artifact::ErrorCode),
+    Connector {
+        code: i32,
+        message: &'static str,
+    },
     Invalid(String),
     InvalidField {
         message: String,
@@ -263,6 +267,51 @@ impl Dispatcher {
         Some(settle(&entry.descriptor, request_id, outcome))
     }
 
+    pub async fn invoke_remote(
+        &self,
+        environment: Arc<Environment>,
+        connection_id: String,
+        peer: &crate::connector::Peer,
+        request: v5::Request,
+    ) -> Option<Settled> {
+        let entry = self.entries.get(&request.operation_id)?;
+        if !entry
+            .descriptor
+            .roles
+            .contains(&(v5::PeerRole::Relay as i32))
+            || !entry
+                .descriptor
+                .roles
+                .contains(&(v5::PeerRole::RemoteClient as i32))
+        {
+            return None;
+        }
+        let request_id = request.request_id.clone();
+        let authorized = if peer.authorized() {
+            ycoding_protocol::validate_binary(&entry.descriptor.request_type, &request.payload)
+                .map_err(|_| Failure::Invalid("Invalid remote payload".into()))
+                .and_then(|_| {
+                    crate::connector::operations::authorize(
+                        &environment,
+                        &entry.descriptor,
+                        &request,
+                    )
+                })
+        } else {
+            Err(Failure::Unauthorized(
+                "Remote peer is no longer authenticated".into(),
+            ))
+        };
+        let outcome = match authorized {
+            Ok(()) if entry.descriptor.streaming == v5::Streaming::Events as i32 => Err(
+                Failure::Unavailable("Canonical remote stream binding is not ready".into()),
+            ),
+            Ok(()) => run(entry, environment, connection_id, request).await,
+            Err(error) => Err(error),
+        };
+        Some(settle(&entry.descriptor, request_id, outcome))
+    }
+
     fn entry(&mut self, name: &str) -> Result<&mut Entry, RegistrationError> {
         self.entries
             .values_mut()
@@ -353,6 +402,28 @@ fn session_exists(environment: &Environment, request: &v5::Request) -> Result<()
 
 impl Failure {
     fn payload(self, descriptor: &v5::OperationDescriptor) -> v5::TypedPayload {
+        if descriptor
+            .error_types
+            .contains(&v5::ConnectorError::full_name())
+        {
+            let (code, message) = match self {
+                Failure::Connector { code, message } => (code, message),
+                Failure::Unauthorized(_) => (14, "Remote authentication required"),
+                Failure::Forbidden(_) => (12, "Remote operation forbidden"),
+                Failure::SessionNotFound(_) => (5, "Session is not available on this backend"),
+                Failure::Unavailable(_) => (10, "Required backend service unavailable"),
+                Failure::MessageNotFound { .. }
+                | Failure::FormNotFound(_)
+                | Failure::QuestionNotFound(_)
+                | Failure::PermissionNotFound(_)
+                | Failure::GuardrailRequestNotFound(_) => (7, "Requested record not found"),
+                _ => (1, "Invalid remote request"),
+            };
+            return encoded(v5::ConnectorError {
+                code,
+                message: convert::text(message),
+            });
+        }
         let declared = |name: String| descriptor.error_types.contains(&name);
         match self {
             Failure::TelemetryDisabled if declared(v5::TelemetryDisabled::full_name()) => {
@@ -360,6 +431,14 @@ impl Failure {
             }
             Failure::TelemetryDisabled => invalid("Telemetry disabled", "disabled"),
             Failure::Artifact(code) => crate::artifact::error_payload(&code),
+            Failure::Connector { code, message } => invalid(
+                message,
+                if code == 6 {
+                    "subagent_read_only"
+                } else {
+                    "forbidden"
+                },
+            ),
             Failure::Unauthorized(message) => encoded(v5::UnauthorizedError {
                 tag: 1,
                 message: convert::text(&message),

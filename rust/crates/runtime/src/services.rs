@@ -42,6 +42,7 @@ pub struct Identity {
 #[derive(Clone)]
 pub struct Core {
     pub artifacts: Option<ArtifactProvider>,
+    pub remote: Option<crate::connector::Control>,
     pub sessions: SessionStore,
     pub execution: &'static Execution,
     pub autonomy: autonomy::Service,
@@ -102,6 +103,7 @@ impl Core {
             artifacts: None,
             provider_usage: None,
             usage_pricer: None,
+            remote: None,
             locations: Locations::new(
                 client,
                 sessions.clone(),

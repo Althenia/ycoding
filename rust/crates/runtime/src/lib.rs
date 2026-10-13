@@ -3,6 +3,7 @@ mod auth;
 mod browser;
 mod browser_convert;
 mod connection;
+pub mod connector;
 mod convert;
 mod credential;
 mod cursor;
@@ -38,7 +39,7 @@ mod telemetry;
 mod usage;
 
 pub use auth::LocalAuth;
-pub use dispatch::{Bulk, Dispatcher, Failure, Invocation, RegistrationError, Settled};
+pub use dispatch::{Boxed, Bulk, Dispatcher, Failure, Invocation, RegistrationError, Settled};
 pub use handlers::standard;
 pub use locations::{
     Configuration, HelperEnvironment, HelperProvider, LocationServices, Locations, SnapshotSettings,

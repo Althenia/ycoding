@@ -441,7 +441,7 @@ async fn unknown_and_non_local_operations_close_without_dispatch() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unwired_operations_return_typed_unavailable_errors() {
     bounded(async {
-        let server = start(services(LocalAuth::disabled(), true), standard().unwrap()).await;
+        let server = start(services(LocalAuth::disabled(), true), bare_dispatcher()).await;
         let mut client = Client::open(server.address(), &[]).await.unwrap();
         let descriptor = operation("remote.get");
         let payload = rejected(client.call("remote.get", machine(), Vec::new()).await);
@@ -613,6 +613,8 @@ async fn every_local_operation_answers_with_a_declared_typed_outcome() {
                 "providerUsage.get",
                 "providerUsage.list",
                 "question.request.list",
+                "remote.get",
+                "remote.set",
                 "server.get",
                 "session.active",
                 "session.archive",

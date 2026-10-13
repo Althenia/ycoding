@@ -8,8 +8,11 @@ publish.workspace = true
 
 [dependencies]
 axum.workspace = true
+futures-util.workspace = true
 prost.workspace = true
 tokio.workspace = true
+tokio-tungstenite.workspace = true
+url.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 ycoding-core = { path = "../core" }
