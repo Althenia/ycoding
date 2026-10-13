@@ -691,7 +691,7 @@ async fn extension(
             },
             &input.tools,
             fixture.policy.clone(),
-            &fixture.context(),
+            &ycoding_core::extension::Launch::default(),
             Default::default(),
         )
         .await
