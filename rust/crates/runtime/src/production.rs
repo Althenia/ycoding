@@ -630,6 +630,16 @@ impl Factory {
             config::Configuration::load(options)
                 .map_err(|_| unavailable("Location configuration"))?,
         );
+        let reference = location::Ref::decode(
+            &ycoding_core::ycoding_schema::ObjectEncoder::new()
+                .field("directory", directory)
+                .optional("workspaceID", &workspace.cloned())
+                .finish(),
+        )
+        .map_err(|_| unavailable("Location identity"))?;
+        disk.event_source
+            .bind(self.events.clone(), Some(reference.clone()))
+            .map_err(|_| unavailable("Location configuration events"))?;
         let mut catalog = self.globals.composition.run(async {
             let mut accounts = self.globals.accounts.lock().await;
             let documents = disk
@@ -652,6 +662,10 @@ impl Factory {
             .map(|composition| composition.catalog)
             .map_err(|_| unavailable("configured account catalog"))
         })?;
+        catalog
+            .event_source
+            .bind(self.events.clone(), Some(reference.clone()))
+            .map_err(|_| unavailable("Location catalog events"))?;
         for record in &mut catalog.providers {
             if record
                 .provider
@@ -678,6 +692,11 @@ impl Factory {
             }
         }
         let mut configuration = self.configuration(&disk)?;
+        configuration
+            .agents
+            .event_source
+            .bind(self.events.clone(), Some(reference.clone()))
+            .map_err(|_| unavailable("Location agent events"))?;
         let path = |text: &LosslessString| {
             text.to_utf8()
                 .map(std::path::PathBuf::from)
@@ -685,19 +704,30 @@ impl Factory {
         };
         let location_directory = path(directory)?;
         let roots = &self.options.roots;
+        let commands = command::Service::from_entries(&disk.entries, &mut vec![])
+            .map_err(|_| unavailable("command catalog"))?;
+        commands
+            .event_source
+            .bind(self.events.clone(), Some(reference.clone()))
+            .map_err(|_| unavailable("Location command events"))?;
+        let skills = skill::Service::from_entries(
+            &disk.entries,
+            &location_directory,
+            &roots.home,
+            &roots.cache,
+        )
+        .map_err(|_| unavailable("skill catalog"))?;
+        skills
+            .event_source
+            .bind(self.events.clone(), Some(reference.clone()))
+            .map_err(|_| unavailable("Location skill events"))?;
         let source = ycoding_core::resources::project_artifact::source::Service::new(
             ycoding_core::resources::project_artifact::source::Options {
                 client: self.client.clone(),
                 store: self.globals.artifacts.clone(),
                 accounting: self.globals.accounting.clone(),
                 registry: self.globals.sources.clone(),
-                location: location::Ref::decode(
-                    &ycoding_core::ycoding_schema::ObjectEncoder::new()
-                        .field("directory", directory)
-                        .optional("workspaceID", &workspace.cloned())
-                        .finish(),
-                )
-                .map_err(|_| unavailable("Location identity"))?,
+                location: reference,
                 project_id: ycoding_core::ycoding_schema::project::Id::new(project_id.clone())
                     .map_err(|_| unavailable("Project identity"))?,
                 project_directory: path(project_directory)?,
@@ -705,15 +735,8 @@ impl Factory {
             },
             ycoding_core::resources::project_artifact::source::Catalogs {
                 agents: (*configuration.agents).clone(),
-                commands: command::Service::from_entries(&disk.entries, &mut vec![])
-                    .map_err(|_| unavailable("command catalog"))?,
-                skills: skill::Service::from_entries(
-                    &disk.entries,
-                    &location_directory,
-                    &roots.home,
-                    &roots.cache,
-                )
-                .map_err(|_| unavailable("skill catalog"))?,
+                commands,
+                skills,
             },
         );
         let catalogs = self.globals.composition.run(async {
@@ -1001,6 +1024,16 @@ impl Factory {
             )
             .map_err(|_| unavailable("reference catalog"))?,
         );
+        references
+            .event_source
+            .bind(
+                self.events.clone(),
+                Some(location::Ref {
+                    directory: services.info.directory.clone(),
+                    workspace_id: services.info.workspace_id.clone(),
+                }),
+            )
+            .map_err(|_| unavailable("Location reference events"))?;
         for reference in references.list() {
             if let ycoding_core::ycoding_schema::reference::Source::Git(source) = &reference.source
             {

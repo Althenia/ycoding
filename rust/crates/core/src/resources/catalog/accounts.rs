@@ -488,7 +488,10 @@ impl AccountCatalog {
             && now < *deadline
         {
             return Ok(super::Composition {
-                catalog: catalog.clone(),
+                catalog: Catalog {
+                    event_source: Default::default(),
+                    ..catalog.clone()
+                },
                 diagnostics: diagnostics.clone(),
             });
         }
@@ -511,7 +514,10 @@ impl AccountCatalog {
         .await?;
         self.configured = Some((
             source,
-            composition.catalog.clone(),
+            Catalog {
+                event_source: Default::default(),
+                ..composition.catalog.clone()
+            },
             composition.diagnostics.clone(),
             now.saturating_add(60_000),
         ));

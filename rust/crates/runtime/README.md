@@ -6,6 +6,8 @@
 
 Each production Location generation composes its configuration, catalogs, platform services, tools, runner, and process extensions together.
 
+Catalog, agent, command, reference, skill, configuration, integration, MCP, shell and PTY event sources belong to one Location generation and publish into the shared Core feed with that Location reference. The global account-discovery cache retains catalog facts, not a Location's publisher; cache hits return a distinct Catalog event source. Global model-discovery events retain global scope. Reload keeps held generations' publishers scoped to their original Location and gives the replacement generation its own publishers; no source is rebound or shared across Locations.
+
 - **Configuration reload:** the generation watches its configuration directories and files. A debounced change rebuilds the Location only while that generation is current, and publishes `config.updated` after the replacement. Calls holding the earlier generation keep its snapshot. A failed rebuild keeps the current generation, and its watcher keeps watching.
 - **Managed artifacts:** a project-artifact source per Location overlays managed agents, commands, and skills onto the discovered catalogs before permissions and the runner see them. Its governor records terminal accounting against one process-wide accounting service and source registry.
 - **Source ownership:** each generation retains its registry registration. Retired generations update and release only their own registration; closing a failed replacement restores the held predecessor, and closing a predecessor preserves the current snapshot. The shared artifact Store exposes its attached accounting service for Session movement.

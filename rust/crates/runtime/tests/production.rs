@@ -618,6 +618,7 @@ async fn production_flow() {
     host.core = Some(core.clone());
     let server = support::start(host, ycoding_runtime::standard().unwrap()).await;
     let mut wire = support::Client::open(server.address(), &[]).await.unwrap();
+    production_event_sources(&core, &mut wire, &root, &store).await;
     let usage: v5::SessionUsageResult = support::success(
         wire.call(
             "session.usage",
@@ -1337,6 +1338,236 @@ async fn prompt_input(execution: &Execution, session: &str, event: &str, text: &
         )
         .await
         .unwrap();
+}
+
+async fn production_event_sources(
+    core: &Core,
+    wire: &mut support::Client,
+    root: &std::path::Path,
+    store: &Store,
+) {
+    let configuration = format!(
+        r#"{{"mcp":{{"servers":{{"owned":{{"type":"local","disabled":true,"command":["python3","{}","{}"]}}}}}}}}"#,
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../core/tests/mcp_table.py"),
+        root.join("event-mcp.json").display()
+    );
+    let first_directory = root.join("event-first");
+    let second_directory = root.join("event-second");
+    for directory in [&first_directory, &second_directory] {
+        std::fs::create_dir_all(directory).unwrap();
+        std::fs::write(directory.join("ycoding.json"), &configuration).unwrap();
+    }
+    let first = core
+        .locations
+        .location(&first_directory.to_str().unwrap().into(), None)
+        .unwrap();
+    scoped_catalog_queries(wire, first_directory.to_str().unwrap()).await;
+    let second = core
+        .locations
+        .location(&second_directory.to_str().unwrap().into(), None)
+        .unwrap();
+    scoped_catalog_queries(wire, second_directory.to_str().unwrap()).await;
+    assert!(!Arc::ptr_eq(
+        &first.production.as_ref().unwrap().models,
+        &second.production.as_ref().unwrap().models
+    ));
+    core.locations.reload(&first.info).unwrap();
+    let reloaded = core
+        .locations
+        .location(first.info.directory.as_lossless(), None)
+        .unwrap();
+    assert!(!Arc::ptr_eq(
+        &first.production.as_ref().unwrap().models,
+        &reloaded.production.as_ref().unwrap().models
+    ));
+    scoped_catalog_queries(wire, first_directory.to_str().unwrap()).await;
+    scoped_catalog_queries(wire, second_directory.to_str().unwrap()).await;
+
+    let types = [
+        "catalog.updated",
+        "integration.updated",
+        "mcp.status.changed",
+        "shell.created",
+    ];
+    let observed = core
+        .events
+        .subscribe_types(Scope::Global, &types, || {})
+        .unwrap();
+    let foreign = Feed::attach(&store.client());
+    let excluded = foreign
+        .subscribe_types(Scope::Global, &types, || {})
+        .unwrap();
+    for held in [&first, &second, &reloaded] {
+        let composed = held.production.as_ref().unwrap();
+        let mut catalog = composed.models.catalog().as_ref().clone();
+        catalog.set_default(None);
+        composed.integrations.reload().unwrap();
+        composed.mcp.disconnect("owned").await.unwrap();
+        let mut prepared = composed
+            .platform
+            .shell
+            .prepare(
+                ycoding_core::ycoding_schema::shell::CreateInput::decode(
+                    &parse_json(r#"{"command":"printf scoped-event","timeout":1000}"#).unwrap(),
+                )
+                .unwrap(),
+                &composed.configuration,
+            )
+            .unwrap();
+        let shell = composed.platform.shell.create(&mut prepared).await.unwrap();
+        composed.platform.shell.wait(&shell.id).await.unwrap();
+        composed.platform.shell.remove(&shell.id).await.unwrap();
+    }
+    let publications = std::iter::from_fn(|| observed.next().unwrap())
+        .map(|item| {
+            let ycoding_core::event_feed::Payload::Ephemeral(event) = &item.payload else {
+                panic!("scoped ephemeral event expected");
+            };
+            (
+                event.data.name().to_owned(),
+                event.location.as_ref().unwrap().directory.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    for name in types {
+        assert_eq!(
+            publications
+                .iter()
+                .filter(|(kind, directory)| kind == name && directory == &first.info.directory)
+                .count(),
+            2,
+            "held and reloaded first-Location generations retain their own {name} delivery"
+        );
+        assert_eq!(
+            publications
+                .iter()
+                .filter(|(kind, directory)| kind == name && directory == &second.info.directory)
+                .count(),
+            1,
+            "second Location owns its {name} delivery"
+        );
+    }
+    assert!(
+        excluded.next().unwrap().is_none(),
+        "Location services must not publish to another feed attached to the same Store"
+    );
+    drop(first);
+    drop(reloaded);
+    core.locations
+        .evict(&first_directory.to_str().unwrap().into(), None)
+        .unwrap();
+    let reacquired = core
+        .locations
+        .location(&first_directory.to_str().unwrap().into(), None)
+        .unwrap();
+    scoped_catalog_queries(wire, first_directory.to_str().unwrap()).await;
+    assert_eq!(
+        reacquired.info.directory.as_lossless().as_str(),
+        first_directory.to_str()
+    );
+}
+
+async fn scoped_catalog_queries(wire: &mut support::Client, directory: &str) {
+    use support::wire::{location_scope, query};
+    let scope = location_scope(directory);
+    let query = query(directory, None);
+    let models: v5::ModelListResult = support::success(
+        wire.call(
+            "model.list",
+            scope.clone(),
+            v5::ModelListRequest {
+                query: query.clone(),
+            }
+            .encode_to_vec(),
+        )
+        .await,
+    );
+    assert!(!models.data.items.is_empty());
+    let _: v5::ProviderListResult = support::success(
+        wire.call(
+            "provider.list",
+            scope.clone(),
+            v5::ProviderListRequest {
+                query: query.clone(),
+            }
+            .encode_to_vec(),
+        )
+        .await,
+    );
+    let _: v5::AgentListResult = support::success(
+        wire.call(
+            "agent.list",
+            scope.clone(),
+            v5::AgentListRequest {
+                query: query.clone(),
+            }
+            .encode_to_vec(),
+        )
+        .await,
+    );
+    let _: v5::CommandListResult = support::success(
+        wire.call(
+            "command.list",
+            scope.clone(),
+            v5::CommandListRequest {
+                query: query.clone(),
+            }
+            .encode_to_vec(),
+        )
+        .await,
+    );
+    let _: v5::ReferenceListResult = support::success(
+        wire.call(
+            "reference.list",
+            scope.clone(),
+            v5::ReferenceListRequest {
+                query: query.clone(),
+            }
+            .encode_to_vec(),
+        )
+        .await,
+    );
+    let _: v5::SkillListResult = support::success(
+        wire.call(
+            "skill.list",
+            scope.clone(),
+            v5::SkillListRequest {
+                query: query.clone(),
+            }
+            .encode_to_vec(),
+        )
+        .await,
+    );
+    let _: v5::IntegrationListResult = support::success(
+        wire.call(
+            "integration.list",
+            scope.clone(),
+            v5::IntegrationListRequest {
+                query: query.clone(),
+            }
+            .encode_to_vec(),
+        )
+        .await,
+    );
+    let _: v5::McpListResult = support::success(
+        wire.call(
+            "mcp.list",
+            scope.clone(),
+            v5::McpListRequest {
+                query: query.clone(),
+            }
+            .encode_to_vec(),
+        )
+        .await,
+    );
+    let _: v5::ShellListResult = support::success(
+        wire.call(
+            "shell.list",
+            scope,
+            v5::ShellListRequest { query }.encode_to_vec(),
+        )
+        .await,
+    );
 }
 
 fn now() -> i64 {

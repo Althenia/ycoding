@@ -97,7 +97,13 @@ fn resolve(
         .map_err(|_| Failure::Unavailable("Location integration registry unavailable".into()))?;
     services
         .registry
-        .bind_events(invocation.core()?.events.clone(), None)
+        .bind_events(
+            invocation.core()?.events.clone(),
+            Some(ycoding_core::ycoding_schema::location::Ref {
+                directory: location.info.directory.clone(),
+                workspace_id: location.info.workspace_id.clone(),
+            }),
+        )
         .map_err(Failure::Unavailable)?;
     Ok((convert::location_info(&location.info), services))
 }
