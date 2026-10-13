@@ -125,6 +125,10 @@ pub enum Failure {
         message: ycoding_core::ycoding_schema::LosslessString,
     },
     Unavailable(String),
+    ServiceUnavailable {
+        service: &'static str,
+        message: String,
+    },
 }
 
 #[derive(Debug, PartialEq)]
@@ -483,6 +487,18 @@ impl Failure {
                 kind: None,
                 field: None,
             }),
+            Failure::ServiceUnavailable { service, message }
+                if declared(v5::ServiceUnavailableError::full_name()) =>
+            {
+                encoded(v5::ServiceUnavailableError {
+                    tag: 1,
+                    message: convert::text(&message),
+                    service: Some(convert::text(service)),
+                })
+            }
+            Failure::ServiceUnavailable { message, .. } => {
+                Failure::Unavailable(message).payload(descriptor)
+            }
             Failure::Unavailable(message) if declared(v5::ServiceUnavailableError::full_name()) => {
                 encoded(v5::ServiceUnavailableError {
                     tag: 1,

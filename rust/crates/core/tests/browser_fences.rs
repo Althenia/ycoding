@@ -159,3 +159,62 @@ async fn predispatch_rejection_releases_new_lease_and_dispatched_error_remains_u
         );
     }
 }
+
+#[tokio::test]
+async fn group_and_ungroup_claim_all_members_or_none() {
+    for action in [
+        json!({"type":"group","tabIDs":["btab_test","btab_second"],"title":"Docs"}),
+        json!({"type":"ungroup","tabIDs":["btab_test","btab_second"],"groupID":17}),
+    ] {
+        let (bridge, extension) = setup(Duration::from_secs(1));
+        bridge.receive(protocol::decode_client(json!({"type":"shared","mode":"profile","tabID":"btab_second","title":"Second","url":"https://example.test/second","documentGeneration":1,"active":false}).to_string().as_bytes()).unwrap()).unwrap();
+        let observing = tokio::spawn({
+            let bridge = bridge.clone();
+            async move {
+                bridge.observe(decode(json!({"sessionID":"ses_b","tabID":"btab_second","generation":1,"callID":"observe-second"}))).await
+            }
+        });
+        extension.notice.notified().await;
+        bridge.receive(protocol::decode_client(json!({"type":"observation","callID":"observe-second","tabID":"btab_second","generation":1,"documentGeneration":1,"revision":1,"title":"Second","url":"https://example.test/second","elements":[],"truncated":false}).to_string().as_bytes()).unwrap()).unwrap();
+        observing.await.unwrap().unwrap();
+        let input: browser::ActionInput = decode(
+            json!({"sessionID":"ses_a","tabID":"btab_test","generation":1,"documentGeneration":1,"observationRevision":0,"callID":"group","action":action}),
+        );
+        assert!(matches!(
+            bridge.action(input.clone()).await,
+            Err(ycoding_core::platform::browser::bridge::Error::Ownership(_))
+        ));
+        let tabs = bridge.list(&SessionId::new("ses_a").unwrap()).unwrap();
+        assert_eq!(
+            tabs.iter()
+                .find(|tab| tab.id == input.tab_id)
+                .unwrap()
+                .lease,
+            None
+        );
+        assert_eq!(extension.outbox.lock().unwrap().len(), 1);
+        let releasing = tokio::spawn({
+            let bridge = bridge.clone();
+            async move {
+                bridge.release(decode(json!({"sessionID":"ses_b","tabID":"btab_second","generation":1,"callID":"release-second"}))).await
+            }
+        });
+        extension.notice.notified().await;
+        bridge.receive(protocol::decode_client(json!({"type":"relinquished","callID":"release-second","tabID":"btab_second","generation":1}).to_string().as_bytes()).unwrap()).unwrap();
+        releasing.await.unwrap().unwrap();
+        let grouping = tokio::spawn({
+            let bridge = bridge.clone();
+            async move { bridge.action(input).await }
+        });
+        extension.notice.notified().await;
+        assert!(
+            bridge
+                .list(&SessionId::new("ses_b").unwrap())
+                .unwrap()
+                .iter()
+                .all(|tab| tab.lease == Some(browser::Lease::Other))
+        );
+        bridge.receive(protocol::decode_client(json!({"type":"result","callID":"group","tabID":"btab_test","generation":1,"documentGeneration":1,"observationRevision":0,"status":"completed","title":"Fixture","url":"https://example.test/form","groupID":17}).to_string().as_bytes()).unwrap()).unwrap();
+        assert_eq!(grouping.await.unwrap().unwrap().group_id.unwrap().get(), 17);
+    }
+}

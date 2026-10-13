@@ -1,4 +1,6 @@
 mod auth;
+mod browser;
+mod browser_convert;
 mod connection;
 mod convert;
 mod credential;
@@ -10,6 +12,7 @@ mod guardrail;
 mod handlers;
 mod health;
 mod ids;
+mod isolated_browser;
 mod locations;
 mod log;
 mod message;
@@ -36,4 +39,4 @@ pub use locations::{
     Configuration, HelperEnvironment, HelperProvider, LocationServices, Locations, SnapshotSettings,
 };
 pub use server::{Server, serve, serve_with};
-pub use services::{Core, Environment, Identity, Services, Subscriptions};
+pub use services::{Core, Environment, Identity, IsolatedBrowserResolver, Services, Subscriptions};

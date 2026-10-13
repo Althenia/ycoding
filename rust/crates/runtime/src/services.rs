@@ -7,6 +7,7 @@ use std::{
     sync::{Mutex, PoisonError},
 };
 use ycoding_core::event_feed::{Ephemeral, Feed};
+use ycoding_core::platform::browser::{isolated, service};
 use ycoding_core::resources::credential;
 use ycoding_core::session::{
     autonomy,
@@ -16,8 +17,8 @@ use ycoding_core::session::{
     store::Service as SessionStore,
 };
 use ycoding_core::tools::policy;
-use ycoding_core::ycoding_schema::session;
 use ycoding_core::ycoding_schema::{JsonPath, ObjectDecoder};
+use ycoding_core::ycoding_schema::{location, session};
 use ycoding_core::ycoding_store::Client;
 use ycoding_protocol::connection::Budgets;
 
@@ -37,7 +38,12 @@ pub struct Core {
     pub events: Feed,
     pub locations: Locations,
     pub credentials: credential::Service,
+    pub browser: Option<Arc<service::Service>>,
+    pub isolated_browser: Option<IsolatedBrowserResolver>,
 }
+
+pub type IsolatedBrowserResolver =
+    Arc<dyn Fn(&location::Ref) -> Result<Arc<isolated::Service>, String> + Send + Sync>;
 
 impl Core {
     pub fn new(
@@ -58,6 +64,8 @@ impl Core {
         let autonomy = autonomy::Service::new(client.clone());
         let credentials = credential::Service::new(client.clone());
         Self {
+            browser: None,
+            isolated_browser: None,
             locations: Locations::new(
                 client,
                 sessions.clone(),

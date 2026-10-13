@@ -491,3 +491,52 @@ async fn cancellation_before_the_owned_worker_is_polled_never_dispatches_to_the_
     assert_eq!(native.actions.load(Ordering::Relaxed), 0);
     assert_eq!(native.closes.load(Ordering::Relaxed), 1);
 }
+
+#[tokio::test]
+async fn concurrent_starts_launch_one_runtime_and_shutdown_releases_it_once() {
+    let native = setup(256).1;
+    let factory = Arc::new(DelayedFactory {
+        native: native.clone(),
+        entered: tokio::sync::Notify::new(),
+        released: tokio::sync::Notify::new(),
+        available: true,
+        launches: AtomicUsize::new(0),
+    });
+    let admission = Arc::new(Admission::default());
+    let service = Service::new(
+        factory.clone(),
+        admission.clone(),
+        Arc::new(|_| true),
+        Options::default(),
+    );
+    let first = tokio::spawn({
+        let service = service.clone();
+        async move {
+            service
+                .start(
+                    &session(),
+                    decode(json!({"url":"https://example.test/form"})),
+                )
+                .await
+        }
+    });
+    factory.entered.notified().await;
+    assert!(matches!(
+        service
+            .start(
+                &session(),
+                decode(json!({"url":"https://example.test/other"}))
+            )
+            .await,
+        Err(ycoding_core::platform::browser::bridge::Error::Busy(_))
+    ));
+    assert_eq!(factory.launches.load(Ordering::Relaxed), 1);
+    factory.released.notify_one();
+    assert_eq!(
+        first.await.unwrap().unwrap().state,
+        isolated_browser::State::Ready
+    );
+    service.shutdown().await.unwrap();
+    assert_eq!(native.closes.load(Ordering::Relaxed), 1);
+    assert_eq!(admission.current("ses_owner"), None);
+}

@@ -237,6 +237,37 @@ impl Service {
             .map(|connection| connection.bridge.clone())
             .ok_or_else(|| Error::Unavailable("Chrome extension bridge is unavailable".into()))
     }
+    pub async fn observe(
+        &self,
+        input: browser::ObserveInput,
+    ) -> Result<browser::Observation, Error> {
+        self.require_session(&input.session_id)?;
+        self.bridge()?.observe(input).await
+    }
+    pub async fn action(
+        &self,
+        input: browser::ActionInput,
+    ) -> Result<browser::ActionResult, Error> {
+        self.require_session(&input.session_id)?;
+        self.bridge()?.action(input).await
+    }
+    pub async fn open(&self, input: browser::OpenInput) -> Result<browser::Tab, Error> {
+        self.require_session(&input.session_id)?;
+        self.bridge()?.open(input).await
+    }
+    pub async fn close(&self, input: browser::CloseInput) -> Result<(), Error> {
+        self.require_session(&input.session_id)?;
+        self.bridge()?.close(input).await
+    }
+    pub async fn release(&self, input: browser::ReleaseInput) -> Result<(), Error> {
+        self.require_session(&input.session_id)?;
+        self.bridge()?.release(input).await
+    }
+    pub fn control(&self, session: &SessionId, resume: bool) -> Result<browser::Status, Error> {
+        self.require_session(session)?;
+        self.bridge()?.control(session, resume)?;
+        self.status(session)
+    }
     pub fn list(&self, session: &SessionId) -> Result<Vec<browser::Tab>, Error> {
         self.require_session(session)?;
         if self.admission.current(

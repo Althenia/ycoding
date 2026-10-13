@@ -1,8 +1,8 @@
 use crate::{
-    convert, credential,
+    browser, convert, credential,
     dispatch::{Dispatcher, Failure, Invocation, RegistrationError},
-    event_subscribe, form, guardrail, health, ids, message, permission, project, question,
-    session_autonomy, session_create, session_helpers, session_list, session_outstanding,
+    event_subscribe, form, guardrail, health, ids, isolated_browser, message, permission, project,
+    question, session_autonomy, session_create, session_helpers, session_list, session_outstanding,
     session_read_models, session_revert, session_services, session_state, session_subagent,
 };
 use ycoding_core::session::{pending, run_coordinator};
@@ -21,6 +21,24 @@ pub fn standard() -> Result<Dispatcher, RegistrationError> {
     dispatcher.handle("credential.update", credential::update)?;
     dispatcher.handle("credential.activate", credential::activate)?;
     dispatcher.handle("credential.remove", credential::remove)?;
+    dispatcher.handle("browser.status", browser::status)?;
+    dispatcher.handle("browser.tabs", browser::tabs)?;
+    dispatcher.handle("browser.start", browser::start)?;
+    dispatcher.handle("browser.observe", browser::observe)?;
+    dispatcher.handle("browser.action", browser::action)?;
+    dispatcher.handle("browser.control", browser::control)?;
+    dispatcher.handle("browser.open", browser::open)?;
+    dispatcher.handle("browser.close", browser::close)?;
+    dispatcher.handle("browser.release", browser::release)?;
+    dispatcher.handle("browser.stop", browser::stop)?;
+    dispatcher.handle("browser.forget", browser::forget)?;
+    dispatcher.handle("isolatedBrowser.status", isolated_browser::status)?;
+    dispatcher.handle("isolatedBrowser.tabs", isolated_browser::tabs)?;
+    dispatcher.handle("isolatedBrowser.start", isolated_browser::start)?;
+    dispatcher.handle("isolatedBrowser.observe", isolated_browser::observe)?;
+    dispatcher.handle("isolatedBrowser.action", isolated_browser::action)?;
+    dispatcher.handle("isolatedBrowser.control", isolated_browser::control)?;
+    dispatcher.handle("isolatedBrowser.stop", isolated_browser::stop)?;
     dispatcher.handle("project.current", project::current)?;
     dispatcher.handle("project.directories", project::directories)?;
     dispatcher.handle("project.forget", project::forget)?;
