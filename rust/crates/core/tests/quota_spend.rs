@@ -1,5 +1,7 @@
 use ycoding_core::resources::model::quota::{LocalSpendRow, local_spend_snapshots};
 use ycoding_schema::provider;
+#[path = "report_support/mod.rs"]
+mod report_support;
 
 #[test]
 fn local_spend_uses_local_calendar_day_filters_invalid_costs_and_never_invents_totals() {
@@ -99,6 +101,7 @@ fn local_spend_reads_real_request_rows_without_mutating_session_or_request_data(
             128,
         )
         .unwrap();
+    let _reports = report_support::start(store.client());
     let result = ycoding_core::resources::model::quota::local_spend_from_store(
         &store.client(),
         1790598896000,

@@ -1,3 +1,4 @@
+use super::numeric;
 use super::{
     BATCH_SIZE, Cancellation, ColumnType, Command, Delivery, DeliveryTable, Error, Intent,
     IntentTable, Operation, Query, REPORT_BYTES, REPORT_ROWS, ROW_BYTES, ReportRows, Source,
@@ -5,7 +6,7 @@ use super::{
 };
 use crate::{Snapshot, TableSpec};
 use duckdb::types::Value;
-use duckdb::{Config, Connection, appender_params_from_iter, params_from_iter};
+use duckdb::{Connection, appender_params_from_iter, params_from_iter};
 use std::collections::BTreeSet;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
@@ -80,7 +81,7 @@ struct Worker {
     root: PathBuf,
     sources: &'static [Source],
     schema: Vec<u8>,
-    connection: Option<Connection>,
+    connection: Option<numeric::Native>,
     generation: Option<u64>,
     #[cfg(test)]
     before_release: Option<Box<dyn FnOnce() + Send>>,
@@ -758,26 +759,12 @@ fn cleanup(root: &Path, keep: Option<&str>) -> Result<(), Error> {
     }
     Ok(())
 }
-fn open(root: &Path, state: &Delivery) -> Result<Connection, Error> {
+fn open(root: &Path, state: &Delivery) -> Result<numeric::Native, Error> {
     let spill = root.join("spill");
     if !spill.exists() {
         std::fs::create_dir(&spill)?;
     }
-    let config = Config::default()
-        .with(
-            "temp_directory",
-            spill.to_str().ok_or(Error::Configuration)?,
-        )?
-        .threads(2)?
-        .max_memory("256MiB")?
-        .with("max_temp_directory_size", "256MiB")?
-        .enable_autoload_extension(false)?
-        .enable_external_access(false)?
-        .with("lock_configuration", "true")?;
-    Ok(Connection::open_with_flags(
-        root.join(filename(state)),
-        config,
-    )?)
+    numeric::open(&root.join(filename(state)), &spill)
 }
 
 struct DeadlineGuard {

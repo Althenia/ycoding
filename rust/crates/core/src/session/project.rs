@@ -1,5 +1,5 @@
 use super::store::Service;
-use std::{collections::HashMap, ops::Bound, path::Path};
+use std::{cmp::Ordering, collections::HashMap, ops::Bound, path::Path};
 use ycoding_schema::{
     DomainDecode, JsonValue, LosslessString, project as contract, schema::NonNegativeInt,
 };
@@ -42,7 +42,7 @@ impl Service {
             right
                 .time_updated
                 .cmp(&left.time_updated)
-                .then_with(|| left.id.cmp(&right.id))
+                .then_with(|| text_order(&left.id, &right.id))
         });
         rows.iter().map(project_info).collect()
     }
@@ -62,7 +62,7 @@ impl Service {
             right
                 .time_created
                 .cmp(&left.time_created)
-                .then_with(|| left.directory.cmp(&right.directory))
+                .then_with(|| text_order(&left.directory, &right.directory))
         });
         rows.iter().map(project_directory).collect()
     }
@@ -104,7 +104,14 @@ impl Service {
             let key = (project_id.clone(), directory.clone());
             if let Some(index) = indexes.get(&key) {
                 let candidate = &mut candidates[*index];
-                candidate.strategy = candidate.strategy.clone().max(strategy);
+                if strategy.as_ref().is_some_and(|strategy| {
+                    candidate
+                        .strategy
+                        .as_ref()
+                        .is_none_or(|current| text_order(current, strategy).is_lt())
+                }) {
+                    candidate.strategy = strategy;
+                }
                 candidate.sessions += u64::from(is_session);
                 candidate.time_active = candidate.time_active.max(time_active);
                 continue;
@@ -134,22 +141,19 @@ impl Service {
             });
         }
         candidates.sort_by(|left, right| {
-            left.project_worktree
-                .cmp(&right.project_worktree)
-                .then_with(|| left.project_id.cmp(&right.project_id))
-                .then_with(|| left.directory.cmp(&right.directory))
+            text_order(&left.project_worktree, &right.project_worktree)
+                .then_with(|| text_order(&left.project_id, &right.project_id))
+                .then_with(|| text_order(&left.directory, &right.directory))
         });
         if let Some(anchor) = &query.after {
             candidates.retain(|candidate| {
-                (
+                text_order(
                     &candidate.project_worktree,
-                    &candidate.project_id,
-                    &candidate.directory,
-                ) > (
                     anchor.project_worktree.as_lossless(),
-                    anchor.project_id.as_lossless(),
-                    anchor.directory.as_lossless(),
                 )
+                .then_with(|| text_order(&candidate.project_id, anchor.project_id.as_lossless()))
+                .then_with(|| text_order(&candidate.directory, anchor.directory.as_lossless()))
+                    == Ordering::Greater
             });
         }
         let has_more = candidates.len() > query.limit;
@@ -240,6 +244,16 @@ impl Service {
             })?
             .await
     }
+}
+
+fn text_order(left: &LosslessString, right: &LosslessString) -> Ordering {
+    char::decode_utf16(left.code_units())
+        .map(|character| character.unwrap_or(char::REPLACEMENT_CHARACTER))
+        .cmp(
+            char::decode_utf16(right.code_units())
+                .map(|character| character.unwrap_or(char::REPLACEMENT_CHARACTER)),
+        )
+        .then_with(|| left.cmp(right))
 }
 
 fn project_info(row: &Project) -> Result<contract::Info, Error> {

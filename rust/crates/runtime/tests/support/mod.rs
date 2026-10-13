@@ -36,6 +36,8 @@ use ycoding_runtime::{
 };
 
 pub mod catalog;
+#[path = "../../../core/tests/report_support/mod.rs"]
+mod report_support;
 pub mod wire;
 pub use catalog::{CATALOG, record};
 
@@ -125,6 +127,7 @@ impl ActiveChildren {
 }
 
 pub struct World {
+    _reports: report_support::Reports,
     pub core: Core,
     pub store: ycoding_core::ycoding_store::Client,
     pub active_children: Arc<ActiveChildren>,
@@ -220,6 +223,7 @@ pub fn world() -> &'static World {
             .wait()
             .unwrap();
         let client = store.client();
+        let reports = report_support::start(client.clone());
         std::mem::forget(store);
         let active_children = Arc::new(ActiveChildren(tokio::sync::watch::channel(BTreeSet::new()).0));
         let execution = Execution::install(
@@ -230,6 +234,7 @@ pub fn world() -> &'static World {
         )
         .unwrap();
         World {
+            _reports: reports,
             core: Core::new(client.clone(), execution, configuration()),
             store: client,
             active_children,

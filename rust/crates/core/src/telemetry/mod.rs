@@ -3,6 +3,7 @@ use std::ops::Bound;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use ycoding_schema::{DomainDecode, DomainEncode, schema::Int, telemetry};
+use ycoding_store::analytics::{Query, Value, reports};
 use ycoding_store::{Client, KeyPart, TableSpec, Write, resources, session::Document, tuple_key};
 
 pub const RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1000;
@@ -102,6 +103,7 @@ impl Service {
                 Ok(())
             })?
             .await?;
+        purge_pending(&self.store).await?;
         Ok(consent)
     }
     pub async fn append(&self, samples: Vec<telemetry::Sample>) -> Result<usize, Error> {
@@ -120,7 +122,8 @@ impl Service {
             .map(Document::from_domain)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| Error::InvalidSample)?;
-        self.store
+        let accepted = self
+            .store
             .submit(move |tx| {
                 if !allowed(tx)? {
                     return Ok(Err(Error::Disabled));
@@ -129,16 +132,43 @@ impl Service {
                 for sample in &samples {
                     resources::append_latency(tx, received_at, sample)?;
                 }
-                let rows = rows(tx)?;
-                for row in rows.iter().take(rows.len().saturating_sub(MAX_ROWS)) {
-                    resources::LatencyTable::delete(
-                        tx,
-                        &resources::LatencyTable::primary_key(row),
+                let mut count = 0;
+                let mut after = None;
+                loop {
+                    let page = tx.scan::<resources::LatencyTable>(
+                        after.as_deref().map_or(Bound::Unbounded, Bound::Excluded),
+                        Bound::Unbounded,
+                        128,
                     )?;
+                    count += page.len();
+                    if page.len() < 128 {
+                        break;
+                    }
+                    after = page.last().map(resources::LatencyTable::primary_key);
+                }
+                let mut excess = count.saturating_sub(MAX_ROWS);
+                while excess > 0 {
+                    let page = tx.scan::<resources::LatencyTable>(
+                        Bound::Unbounded,
+                        Bound::Unbounded,
+                        excess.min(128),
+                    )?;
+                    for row in &page {
+                        resources::LatencyTable::delete(
+                            tx,
+                            &resources::LatencyTable::primary_key(row),
+                        )?;
+                    }
+                    excess -= page.len();
+                }
+                if count > MAX_ROWS {
+                    ycoding_store::analytics::privacy_changed(tx, Vec::new(), true)?;
                 }
                 Ok(Ok(samples.len()))
             })?
-            .await?
+            .await??;
+        purge_pending(&self.store).await?;
+        Ok(accepted)
     }
     pub async fn list(
         &self,
@@ -150,49 +180,54 @@ impl Service {
             return Err(Error::InvalidLimit);
         }
         let before = before.map(parse_cursor).transpose()?;
+        self.prune().await?;
+        let snapshot = self.store.snapshot()?;
+        if !resources::telemetry_allowed(&snapshot, &[])? {
+            return Ok(telemetry::Page {
+                data: Vec::new(),
+                cursor: telemetry::Cursor { next: None },
+            });
+        }
+        drop(snapshot);
+        let handle = self.store.analytics().map_err(|_| Error::Storage)?;
         let now = (self.clock)();
-        self.store
-            .submit(move |tx| {
-                prune(tx, now)?;
-                if !allowed(tx)? {
-                    return Ok(telemetry::Page {
-                        data: Vec::new(),
-                        cursor: telemetry::Cursor { next: None },
-                    });
-                }
-                let mut selected = rows(tx)?
-                    .into_iter()
-                    .rev()
-                    .filter(|row| before.is_none_or(|id| row.id < id))
-                    .take(limit + 1)
-                    .collect::<Vec<_>>();
-                let next =
-                    (selected.len() > limit).then(|| encode_cursor(selected[limit - 1].id).into());
-                selected.truncate(limit);
-                Ok(telemetry::Page {
-                    data: selected
-                        .into_iter()
-                        .map(|row| {
-                            Ok(telemetry::PageEntry {
-                                received_at: Int::new(row.received_at).map_err(|_| {
-                                    ycoding_store::Error::Rejected("invalid receipt time")
-                                })?,
-                                sample: row.sample.domain()?,
-                            })
-                        })
-                        .collect::<Result<_, ycoding_store::Error>>()?,
-                    cursor: telemetry::Cursor { next },
+        let mut selected = tokio::task::spawn_blocking(move || handle.report(vec![Query {
+            sql: "SELECT id, received_at, kind, sampled_at, operation, outcome, reason, queue_ms, settlement_ms, total_ms, surface, metric, duration_ms FROM web_latency WHERE received_at >= $1 AND ($2 IS NULL OR id < $2) ORDER BY id DESC LIMIT $3",
+            parameters: vec![Value::BigInt(now.saturating_sub(RETENTION_MS)), before.map(Value::BigInt).unwrap_or(Value::Null), Value::BigInt(limit as i64 + 1)],
+            max_rows: limit + 1,
+        }])).await.map_err(|_| Error::Storage)?.map_err(|_| Error::Storage)?.remove(0);
+        let next = if selected.len() > limit {
+            let Value::BigInt(id) = selected[limit - 1][0] else {
+                return Err(Error::Storage);
+            };
+            Some(encode_cursor(id).into())
+        } else {
+            None
+        };
+        selected.truncate(limit);
+        Ok(telemetry::Page {
+            data: selected
+                .into_iter()
+                .map(|row| {
+                    let Value::BigInt(received_at) = row[1] else {
+                        return Err(Error::Storage);
+                    };
+                    Ok(telemetry::PageEntry {
+                        received_at: Int::new(received_at).map_err(|_| Error::Storage)?,
+                        sample: reports::latency_sample(&row[2..])?,
+                    })
                 })
-            })?
-            .await
-            .map_err(Error::from)
+                .collect::<Result<_, Error>>()?,
+            cursor: telemetry::Cursor { next },
+        })
     }
     pub async fn prune(&self) -> Result<(), Error> {
         let now = (self.clock)();
         self.store
             .submit(move |tx| prune(tx, now))?
             .await
-            .map_err(Error::from)
+            .map_err(Error::from)?;
+        purge_pending(&self.store).await
     }
     pub async fn housekeeping(
         &self,
@@ -230,30 +265,52 @@ fn allowed(tx: &mut Write<'_>) -> Result<bool, ycoding_store::Error> {
                 && Int::new(row.decided_at).is_ok()
         }))
 }
-fn rows(tx: &mut Write<'_>) -> Result<Vec<resources::Latency>, ycoding_store::Error> {
-    let mut rows = Vec::new();
-    let mut after = None;
+fn prune(tx: &mut Write<'_>, now: i64) -> Result<(), ycoding_store::Error> {
+    let mut deleted = false;
     loop {
-        let page = tx.scan::<resources::LatencyTable>(
-            after.as_deref().map_or(Bound::Unbounded, Bound::Excluded),
-            Bound::Unbounded,
-            256,
+        let page = tx.index_range::<resources::LatencyTable>(
+            "web_latency_received_at_idx",
+            ycoding_store::IndexQuery {
+                lower: Bound::Unbounded,
+                upper: Bound::Excluded(&tuple_key(&[KeyPart::I64(
+                    now.saturating_sub(RETENTION_MS),
+                )])),
+                prefix: None,
+                order: ycoding_store::IndexOrder::Ascending,
+                after: None,
+                limit: 128,
+            },
         )?;
         if page.is_empty() {
-            return Ok(rows);
+            break;
         }
-        after = page.last().map(resources::LatencyTable::primary_key);
-        rows.extend(page);
+        deleted = true;
+        for row in page {
+            resources::LatencyTable::delete(
+                tx,
+                &resources::LatencyTable::primary_key(&row.record),
+            )?;
+        }
     }
-}
-fn prune(tx: &mut Write<'_>, now: i64) -> Result<(), ycoding_store::Error> {
-    for row in rows(tx)?
-        .into_iter()
-        .filter(|row| row.received_at < now.saturating_sub(RETENTION_MS))
-    {
-        resources::LatencyTable::delete(tx, &resources::LatencyTable::primary_key(&row))?;
+    if deleted {
+        ycoding_store::analytics::privacy_changed(tx, Vec::new(), true)?;
     }
     Ok(())
+}
+
+async fn purge_pending(store: &Client) -> Result<(), Error> {
+    let pending = store
+        .snapshot()?
+        .get::<ycoding_store::analytics::DeliveryTable>(&[])?
+        .is_some_and(|state| state.purge_all || !state.purges.is_empty());
+    if !pending {
+        return Ok(());
+    }
+    let handle = store.analytics().map_err(|_| Error::Storage)?;
+    tokio::task::spawn_blocking(move || handle.purge())
+        .await
+        .map_err(|_| Error::Storage)?
+        .map_err(|_| Error::Storage)
 }
 fn valid_sample(sample: &telemetry::Sample) -> bool {
     let at = match sample {

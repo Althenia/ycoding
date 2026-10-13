@@ -271,6 +271,8 @@ pub fn telemetry_allowed(snapshot: &Snapshot, _: &[u8]) -> Result<bool, Error> {
         .is_some_and(|row| {
             row.enabled == 1
                 && row.notice_version == ycoding_schema::telemetry::CURRENT_NOTICE_VERSION
+                && row.decided_at >= 0
+                && row.decided_at <= 9_007_199_254_740_991
         }))
 }
 pub fn require_telemetry_report(snapshot: &Snapshot) -> Result<(), Error> {
@@ -316,6 +318,9 @@ fn delete_source<T: TableSpec>(
         return Ok(false);
     }
     super::source_changed(tx, source, identity.to_vec(), true)?;
+    if source == "session_provider_request" || source == "session_usage" {
+        analytics::privacy_changed(tx, Vec::new(), true)?;
+    }
     Ok(true)
 }
 impl RequestTable {

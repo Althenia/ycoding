@@ -1,7 +1,10 @@
 use super::{Error, empty, window};
-use std::{collections::BTreeMap, ops::Bound};
+use std::collections::BTreeMap;
 use ycoding_schema::{provider, provider_usage::Snapshot};
-use ycoding_store::{Client, TableSpec, resources::RequestTable};
+use ycoding_store::{
+    Client,
+    analytics::{Query, Value, reports},
+};
 
 pub struct LocalSpendRow {
     pub provider_id: provider::Id,
@@ -47,27 +50,14 @@ pub fn local_spend_snapshots(rows: &[LocalSpendRow], now: i64) -> Result<Vec<Sna
         .collect())
 }
 pub fn local_spend_from_store(store: &Client, now: i64) -> Result<Vec<Snapshot>, Error> {
-    let snapshot = store.snapshot().map_err(|_| Error::Storage)?;
-    let mut cursor = None;
-    let mut rows = Vec::new();
-    loop {
-        let page = snapshot
-            .scan::<RequestTable>(
-                cursor.as_deref().map_or(Bound::Unbounded, Bound::Excluded),
-                Bound::Unbounded,
-                128,
-            )
-            .map_err(|_| Error::Storage)?;
-        cursor = page.last().map(RequestTable::primary_key);
-        for row in page {
-            rows.push(LocalSpendRow {
-                provider_id: row.model.domain().map_err(|_| Error::Storage)?.provider_id,
-                cost: row.cost,
-                time_created: row.time_created,
-            });
-        }
-        if cursor.is_none() {
-            return local_spend_snapshots(&rows, now);
-        }
-    }
+    let (start, end) =
+        crate::resources::catalog::date::day_bounds(now).ok_or(Error::InvalidResponse)?;
+    let rows = store.analytics().map_err(|_| Error::Storage)?.report(vec![Query {
+        sql: "SELECT provider, sum(cost) FROM session_provider_request WHERE time_created >= $1 AND time_created < $2 AND cost >= 0 AND isfinite(cost) AND provider IN ('anthropic', 'openai', 'opencode', 'opencode-go', 'xai') GROUP BY provider ORDER BY provider",
+        parameters: vec![Value::BigInt(start), Value::BigInt(end)], max_rows: 5,
+    }]).map_err(|_| Error::Storage)?.remove(0).into_iter().map(|row| {
+        Ok(LocalSpendRow { provider_id: provider::Id(reports::value_text(&row[0]).map_err(|_| Error::Storage)?.into()),
+            cost: Some(reports::value_number(&row[1]).map_err(|_| Error::Storage)?), time_created: now })
+    }).collect::<Result<Vec<_>, Error>>()?;
+    local_spend_snapshots(&rows, now)
 }

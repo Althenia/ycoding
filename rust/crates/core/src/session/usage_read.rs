@@ -1,5 +1,5 @@
 use super::{key, projector::record_error, store::Service, usage};
-use chrono::{DateTime, Duration, Offset, Utc};
+use chrono::{DateTime, Offset, Utc};
 use std::{
     collections::{BTreeMap, HashMap},
     ops::Bound,
@@ -10,7 +10,7 @@ use ycoding_schema::{
 };
 use ycoding_store::{
     Error, IndexOrder, KeyPart, Snapshot, TableSpec,
-    project::ProjectTable,
+    analytics::{Query, Value, reports},
     resources::{Request, requests},
     session::{Session, SessionTable},
     tuple_key,
@@ -18,8 +18,6 @@ use ycoding_store::{
 
 const PAGE: usize = 128;
 const DEFAULT_LIMIT: usize = 100;
-const MAX_SAFE: f64 = 9_007_199_254_740_991.0;
-const ONE_SECOND_NS: i64 = 1_000_000_000;
 
 pub struct PricingRef {
     pub directory: LosslessString,
@@ -53,24 +51,14 @@ impl Service {
         input: &provider_request::ReportInput,
         pricer: Pricer<'_>,
     ) -> Result<provider_request::Report, Error> {
-        let zone = zone(input)?;
-        let snapshot = self.client.snapshot()?;
-        let (family, samples) = load(
-            &snapshot,
-            Some(id),
-            input.from.map(|from| from.get()),
-            input.to.map(|to| to.get()),
-            pricer,
-        )?;
-        let projects = project_labels(&snapshot, input, &family)?;
-        provider_request::Report::decode(&report(
-            input,
-            zone.as_ref(),
-            &family,
-            &samples,
-            &projects,
-        ))
-        .map_err(record_error)
+        self.client
+            .snapshot()?
+            .get::<SessionTable>(&key(id.as_lossless()))?
+            .ok_or(Error::Domain {
+                kind: "not_found",
+                message: "Session not found",
+            })?;
+        analytics_report(&self.client, Some(id), input, pricer)
     }
 
     pub fn usage_all(&self, pricer: Pricer<'_>) -> Result<provider_request::Summary, Error> {
@@ -84,25 +72,298 @@ impl Service {
         input: &provider_request::ReportInput,
         pricer: Pricer<'_>,
     ) -> Result<provider_request::Report, Error> {
-        let zone = zone(input)?;
-        let snapshot = self.client.snapshot()?;
-        let (sessions, samples) = load(
-            &snapshot,
-            None,
-            input.from.map(|v| v.get()),
-            input.to.map(|v| v.get()),
-            pricer,
-        )?;
-        let projects = project_labels(&snapshot, input, &sessions)?;
-        provider_request::Report::decode(&report(
-            input,
-            zone.as_ref(),
-            &sessions,
-            &samples,
-            &projects,
-        ))
-        .map_err(record_error)
+        analytics_report(&self.client, None, input, pricer)
     }
+}
+
+fn analytics_error(error: ycoding_store::analytics::Error) -> Error {
+    Error::Record(Box::new(error))
+}
+
+const CHECKPOINT: &str = "SELECT source_order FROM analytics_checkpoint";
+const PRICING_REFS: &str = "WITH RECURSIVE family(id) AS (
+    SELECT id FROM session WHERE id = $1 UNION SELECT s.id FROM session s JOIN family f ON s.parent_id = f.id
+    WHERE EXISTS (SELECT 1 FROM session WHERE id = $1 AND parent_id IS NULL))
+    SELECT DISTINCT s.directory, s.workspace_id, r.provider, r.model, r.profile,
+        hex(s.directory) || ':' || coalesce(hex(s.workspace_id), '~') || ':' || hex(r.provider) || ':' || hex(r.model) || ':' || coalesce(hex(r.profile), '~') AS reference
+    FROM session_provider_request r JOIN session s ON s.id = r.session_id
+    WHERE ($1 IS NULL OR s.id IN (SELECT id FROM family)) AND ($2 IS NULL OR r.time_created >= $2) AND ($3 IS NULL OR r.time_created < $3)
+        AND r.cost IS NULL AND r.source <> 'decision'
+    GROUP BY ALL HAVING ($4 IS NULL OR reference > $4) ORDER BY reference LIMIT 200";
+const TIMES: &str = "WITH RECURSIVE family(id) AS (
+    SELECT id FROM session WHERE id = $1 UNION SELECT s.id FROM session s JOIN family f ON s.parent_id = f.id
+    WHERE EXISTS (SELECT 1 FROM session WHERE id = $1 AND parent_id IS NULL))
+    SELECT DISTINCT r.time_created FROM session_provider_request r JOIN session s ON s.id = r.session_id
+    WHERE ($1 IS NULL OR s.id IN (SELECT id FROM family)) AND ($2 IS NULL OR r.time_created >= $2) AND ($3 IS NULL OR r.time_created < $3)
+        AND ($4 IS NULL OR r.time_created > $4) ORDER BY r.time_created LIMIT 200";
+
+fn analytics_report(
+    client: &ycoding_store::Client,
+    id: Option<&session::Id>,
+    input: &provider_request::ReportInput,
+    pricer: Pricer<'_>,
+) -> Result<provider_request::Report, Error> {
+    let zone = zone(input)?;
+    let handle = client.analytics().map_err(analytics_error)?;
+    let selection = vec![
+        id.map(|id| Value::Text(text(id.as_lossless())))
+            .unwrap_or(Value::Null),
+        input
+            .from
+            .map(|value| Value::BigInt(value.get()))
+            .unwrap_or(Value::Null),
+        input
+            .to
+            .map(|value| Value::BigInt(value.get()))
+            .unwrap_or(Value::Null),
+    ];
+    let checkpoint_query = || Query {
+        sql: CHECKPOINT,
+        parameters: Vec::new(),
+        max_rows: 1,
+    };
+    let checkpoint = handle
+        .report(vec![checkpoint_query()])
+        .map_err(analytics_error)?
+        .remove(0)
+        .remove(0)
+        .remove(0);
+    let mut prices = Vec::new();
+    if let Some(pricer) = pricer {
+        let mut after = Value::Null;
+        loop {
+            let mut result = handle
+                .report(vec![
+                    checkpoint_query(),
+                    Query {
+                        sql: PRICING_REFS,
+                        parameters: selection.iter().cloned().chain([after]).collect(),
+                        max_rows: 200,
+                    },
+                ])
+                .map_err(analytics_error)?;
+            if result[0][0][0] != checkpoint {
+                return Err(analytics_error(ycoding_store::analytics::Error::Invalid));
+            }
+            let rows = result.remove(1);
+            for row in &rows {
+                let reference = PricingRef {
+                    directory: reports::value_text(&row[0])?.into(),
+                    workspace_id: (!matches!(row[1], Value::Null))
+                        .then(|| reports::value_text(&row[1]).map(Into::into))
+                        .transpose()?,
+                    provider: reports::value_text(&row[2])?.into(),
+                    model: reports::value_text(&row[3])?.into(),
+                    profile: (!matches!(row[4], Value::Null))
+                        .then(|| reports::value_text(&row[4]).map(Into::into))
+                        .transpose()?,
+                };
+                if let Some(pricing) = pricer(&reference) {
+                    for (priority, costs) in
+                        [pricing.provider, pricing.router].into_iter().enumerate()
+                    {
+                        for (ordinal, cost) in costs.into_iter().enumerate() {
+                            prices.push(format!(
+                                "{}|{priority}|{}|{ordinal}|{}|{}|{}|{}",
+                                reports::value_text(&row[5])?,
+                                cost.tier
+                                    .map_or("~".to_string(), |tier| tier.size.get().to_string()),
+                                cost.input.get(),
+                                cost.output.get(),
+                                cost.cache.read.get(),
+                                cost.cache.write.get()
+                            ));
+                        }
+                    }
+                }
+            }
+            if rows.len() < 200 {
+                break;
+            }
+            after = rows
+                .last()
+                .ok_or(Error::Rejected("missing usage price cursor"))?[5]
+                .clone();
+        }
+    }
+    let mut offsets = Vec::new();
+    if let Some(zone) = &zone {
+        match zone {
+            Zone::Fixed(seconds) => {
+                offsets.push(format!("{}|{seconds}|{}", i64::MIN, offset_label(*seconds)))
+            }
+            Zone::Iana(zone) => {
+                let mut after = Value::Null;
+                let mut previous = None;
+                loop {
+                    let mut result = handle
+                        .report(vec![
+                            checkpoint_query(),
+                            Query {
+                                sql: TIMES,
+                                parameters: selection.iter().cloned().chain([after]).collect(),
+                                max_rows: 200,
+                            },
+                        ])
+                        .map_err(analytics_error)?;
+                    if result[0][0][0] != checkpoint {
+                        return Err(analytics_error(ycoding_store::analytics::Error::Invalid));
+                    }
+                    let rows = result.remove(1);
+                    for row in &rows {
+                        let Value::BigInt(time) = row[0] else {
+                            return Err(Error::Rejected("invalid usage time"));
+                        };
+                        let utc = DateTime::<Utc>::from_timestamp_millis(time)
+                            .ok_or(Error::Rejected("invalid usage time"))?;
+                        let seconds = utc.with_timezone(zone).offset().fix().local_minus_utc();
+                        if previous != Some(seconds) {
+                            offsets.push(format!("{time}|{seconds}|{}", offset_label(seconds)));
+                            previous = Some(seconds);
+                        }
+                    }
+                    if rows.len() < 200 {
+                        break;
+                    }
+                    after = rows
+                        .last()
+                        .ok_or(Error::Rejected("missing usage time cursor"))?[0]
+                        .clone();
+                }
+            }
+        }
+    }
+    let offset = input.offset.map_or(0, |value| value.get());
+    let limit = input
+        .limit
+        .map_or(DEFAULT_LIMIT as i64, |value| value.get());
+    let parameters = selection
+        .into_iter()
+        .chain([
+            Value::Text(text(&input.group.0)),
+            Value::Text(
+                input
+                    .sort
+                    .as_ref()
+                    .map_or("key", |value| sort_name(&value.0))
+                    .into(),
+            ),
+            Value::Boolean(
+                input
+                    .order
+                    .as_ref()
+                    .is_some_and(|value| value.0.as_str() == Some("desc")),
+            ),
+            Value::BigInt(offset),
+            Value::BigInt(limit),
+            Value::Text(offsets.join(";")),
+            Value::Text(prices.join(";")),
+        ])
+        .collect();
+    let mut result = handle
+        .report(vec![
+            checkpoint_query(),
+            Query {
+                sql: include_str!("usage_report.sql"),
+                parameters,
+                max_rows: limit as usize + 1,
+            },
+        ])
+        .map_err(analytics_error)?;
+    if (pricer.is_some() || matches!(zone, Some(Zone::Iana(_)))) && result[0][0][0] != checkpoint {
+        return Err(analytics_error(ycoding_store::analytics::Error::Invalid));
+    }
+    let mut result = result.remove(1).into_iter();
+    let total = result
+        .next()
+        .ok_or(Error::Rejected("missing usage totals"))?;
+    let count = reports::value_number(&total[25])?;
+    let rows = result
+        .map(|row| {
+            let mut object = ObjectEncoder::new()
+                .field("key", &LosslessString::from(reports::value_text(&row[1])?))
+                .field(
+                    "label",
+                    &LosslessString::from(reports::value_text(&row[2])?),
+                );
+            let JsonValue::Object(metrics) = reports::metrics(&row[3..17])? else {
+                return Err(Error::Rejected("invalid usage metrics"));
+            };
+            for (key, value) in metrics.iter() {
+                object = object.field(
+                    key.as_str().ok_or(Error::Rejected("invalid metric key"))?,
+                    value,
+                );
+            }
+            let value = |index| reports::value_number(&row[index]);
+            if value(17)? > 0.0 || value(18)? > 0.0 || value(24)? > 0.0 {
+                object = object.field(
+                    "speed",
+                    &ObjectEncoder::new()
+                        .optional(
+                            "firstOutputP50Ms",
+                            &(!matches!(row[19], Value::Null))
+                                .then(|| value(19))
+                                .transpose()?,
+                        )
+                        .optional(
+                            "firstOutputP95Ms",
+                            &(!matches!(row[20], Value::Null))
+                                .then(|| value(20))
+                                .transpose()?,
+                        )
+                        .optional(
+                            "totalP50Ms",
+                            &(!matches!(row[21], Value::Null))
+                                .then(|| value(21))
+                                .transpose()?,
+                        )
+                        .optional(
+                            "totalP95Ms",
+                            &(!matches!(row[22], Value::Null))
+                                .then(|| value(22))
+                                .transpose()?,
+                        )
+                        .optional(
+                            "outputTokensPerSecond",
+                            &(value(24)? > 0.0)
+                                .then(|| Ok::<_, Error>(value(23)? / (value(24)? / 1e9)))
+                                .transpose()?,
+                        )
+                        .field("samples", &value(17)?)
+                        .finish(),
+                );
+            }
+            Ok(object.finish())
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    let next = (((offset as usize + rows.len()) as f64) < count)
+        .then(|| (offset as usize + rows.len()) as f64);
+    provider_request::Report::decode(
+        &ObjectEncoder::new()
+            .field("group", &input.group)
+            .field("rows", &JsonValue::Array(rows))
+            .field("total", &reports::metrics(&total[3..17])?)
+            .field("rowCount", &count)
+            .optional("nextOffset", &next)
+            .finish(),
+    )
+    .map_err(record_error)
+}
+
+fn offset_label(seconds: i32) -> String {
+    let absolute = seconds.unsigned_abs();
+    format!(
+        "{}{:02}:{:02}{}",
+        if seconds < 0 { '-' } else { '+' },
+        absolute / 3600,
+        absolute / 60 % 60,
+        if absolute % 60 == 0 {
+            String::new()
+        } else {
+            format!(":{:02}", absolute % 60)
+        }
+    )
 }
 
 enum Zone {
@@ -113,7 +374,6 @@ enum Zone {
 struct Sample {
     family: usize,
     model: model::Ref,
-    agent: LosslessString,
     step: bool,
     attempts: i64,
     continued: bool,
@@ -146,10 +406,6 @@ struct Acc {
     priced: u64,
     correction: Option<f64>,
     unreported: bool,
-    first_ms: Vec<i64>,
-    total_ms: Vec<i64>,
-    generated: f64,
-    duration: f64,
 }
 
 impl Acc {
@@ -175,30 +431,6 @@ impl Acc {
             self.correction = Some(self.correction.unwrap_or(0.0) + estimate);
         }
         self.unreported |= !sample.reported;
-        let Some(timing) = &sample.timing else {
-            return;
-        };
-        self.first_ms
-            .extend(timing.first_output_ms.map(|value| value.get()));
-        self.total_ms
-            .extend(timing.total_ms.map(|value| value.get()));
-        let duration = timing
-            .generation_duration_ns
-            .map(|value| value.get())
-            .or_else(|| {
-                timing
-                    .observed_generation_duration_ns
-                    .map(|value| value.get())
-                    .filter(|value| *value >= ONE_SECOND_NS)
-            });
-        if let (Some(duration), Some(tokens)) = (duration, timing.generated_tokens)
-            && duration > 0
-            && duration as f64 <= MAX_SAFE
-            && tokens.get() > 0
-        {
-            self.generated += tokens.get() as f64;
-            self.duration += duration as f64;
-        }
     }
 
     fn priced(&self) -> bool {
@@ -248,40 +480,6 @@ impl Acc {
             .optional("costProvenance", &self.priced().then(|| self.provenance()))
             .optional("cacheReadReported", &self.cache_read_reported())
     }
-
-    fn speed(&self) -> Option<JsonValue> {
-        if self.first_ms.is_empty() && self.total_ms.is_empty() && self.duration == 0.0 {
-            return None;
-        }
-        let first = percentiles(&self.first_ms);
-        let total = percentiles(&self.total_ms);
-        Some(
-            ObjectEncoder::new()
-                .optional("firstOutputP50Ms", &first.map(|(p50, _)| p50 as f64))
-                .optional("firstOutputP95Ms", &first.map(|(_, p95)| p95 as f64))
-                .optional("totalP50Ms", &total.map(|(p50, _)| p50 as f64))
-                .optional("totalP95Ms", &total.map(|(_, p95)| p95 as f64))
-                .optional(
-                    "outputTokensPerSecond",
-                    &(self.duration != 0.0).then(|| self.generated / (self.duration / 1e9)),
-                )
-                .field("samples", &(self.first_ms.len() as f64))
-                .finish(),
-        )
-    }
-}
-
-fn percentiles(values: &[i64]) -> Option<(i64, i64)> {
-    if values.is_empty() {
-        return None;
-    }
-    let mut sorted = values.to_vec();
-    sorted.sort_unstable();
-    let size = sorted.len();
-    Some((
-        sorted[size.div_ceil(2) - 1],
-        sorted[(95 * size).div_ceil(100) - 1],
-    ))
 }
 
 fn load(
@@ -426,7 +624,6 @@ fn sample(
     Ok(Sample {
         family,
         model,
-        agent: row.agent,
         step: row.source.as_str() == Some("step"),
         attempts: row.attempts,
         continued: row.continuation.as_str() == Some("continued"),
@@ -531,99 +728,6 @@ fn model_order(model: &model::Ref) -> (String, String, String, String) {
     )
 }
 
-fn report(
-    input: &provider_request::ReportInput,
-    zone: Option<&Zone>,
-    family: &[Session],
-    samples: &[Sample],
-    projects: &HashMap<String, String>,
-) -> JsonValue {
-    let group = text(&input.group.0);
-    let mut total = Acc::default();
-    let mut groups: BTreeMap<String, (String, Acc)> = BTreeMap::new();
-    for (index, sample) in samples.iter().enumerate() {
-        total.add(index, sample);
-        let (key, label) = group_of(&group, zone, &family[sample.family], sample, projects);
-        groups
-            .entry(key)
-            .or_insert_with(|| (label, Acc::default()))
-            .1
-            .add(index, sample);
-    }
-    let mut rows = groups.into_iter().collect::<Vec<_>>();
-    let sort = input.sort.as_ref().map_or("key", |sort| sort_name(&sort.0));
-    let descending = input
-        .order
-        .as_ref()
-        .is_some_and(|order| order.0.as_str() == Some("desc"));
-    rows.sort_by(|(left_key, (_, left)), (right_key, (_, right))| {
-        let by_key = sort == "key" && !(group == "hour" && zone.is_some());
-        let ordering = if sort == "key" {
-            if by_key {
-                left_key.cmp(right_key)
-            } else {
-                instant(left_key).cmp(&instant(right_key))
-            }
-        } else {
-            metric(sort, left)
-                .partial_cmp(&metric(sort, right))
-                .unwrap_or(std::cmp::Ordering::Equal)
-        };
-        let ordering = if descending {
-            ordering.reverse()
-        } else {
-            ordering
-        };
-        ordering.then_with(|| left_key.cmp(right_key))
-    });
-    let count = rows.len();
-    let offset = input.offset.map_or(0, |offset| offset.get() as usize);
-    let limit = input
-        .limit
-        .map_or(DEFAULT_LIMIT, |limit| limit.get() as usize);
-    let page = rows
-        .into_iter()
-        .skip(offset)
-        .take(limit)
-        .collect::<Vec<_>>();
-    let next = (offset + page.len() < count).then(|| (offset + page.len()) as f64);
-    ObjectEncoder::new()
-        .field("group", &input.group)
-        .field(
-            "rows",
-            &JsonValue::Array(
-                page.iter()
-                    .map(|(key, (label, acc))| {
-                        acc.metrics(
-                            ObjectEncoder::new()
-                                .field("key", &LosslessString::from(key.as_str()))
-                                .field("label", &LosslessString::from(label.as_str())),
-                        )
-                        .optional("speed", &acc.speed())
-                        .finish()
-                    })
-                    .collect(),
-            ),
-        )
-        .field("total", &total.metrics(ObjectEncoder::new()).finish())
-        .field("rowCount", &(count as f64))
-        .optional("nextOffset", &next)
-        .finish()
-}
-
-fn metric(sort: &str, acc: &Acc) -> f64 {
-    match sort {
-        "cost" => acc.cost(),
-        "tokens" => acc.input + acc.output + acc.reasoning + acc.read + acc.write,
-        "steps" => acc.logical as f64,
-        "input" => acc.input,
-        "output" => acc.output,
-        "reasoning" => acc.reasoning,
-        "cacheRead" => acc.read,
-        _ => acc.write,
-    }
-}
-
 fn sort_name(sort: &LosslessString) -> &str {
     match sort.as_str() {
         Some("tokens") => "tokens",
@@ -635,94 +739,6 @@ fn sort_name(sort: &LosslessString) -> &str {
         Some("cacheRead") => "cacheRead",
         Some("cacheWrite") => "cacheWrite",
         _ => "key",
-    }
-}
-
-fn instant(key: &str) -> Option<i64> {
-    DateTime::parse_from_rfc3339(key)
-        .ok()
-        .map(|time| time.timestamp())
-}
-
-fn group_of(
-    group: &str,
-    zone: Option<&Zone>,
-    session: &Session,
-    sample: &Sample,
-    projects: &HashMap<String, String>,
-) -> (String, String) {
-    match group {
-        "model" => {
-            let model = &sample.model;
-            let variant = model.variant.as_ref().map(text);
-            let profile = model.profile.as_ref().map(|profile| text(&profile.0));
-            let key = [
-                Some(text(&model.provider_id.0)),
-                Some(text(&model.id)),
-                variant.clone(),
-                profile.clone(),
-            ]
-            .into_iter()
-            .flatten()
-            .map(|part| encode_uri_component(&part))
-            .collect::<Vec<_>>()
-            .join("/");
-            let label = format!(
-                "{}/{}{}{}",
-                text(&model.provider_id.0),
-                text(&model.id),
-                variant
-                    .filter(|variant| !variant.is_empty())
-                    .map_or(String::new(), |variant| format!(" ({variant})")),
-                profile
-                    .filter(|profile| !profile.is_empty())
-                    .map_or(String::new(), |profile| format!(" · {profile}")),
-            );
-            (key, label)
-        }
-        "session" => (text(&session.id), text(&session.title)),
-        "project" => {
-            let project = text(&session.project_id);
-            let label = projects.get(&project).cloned().unwrap_or(project.clone());
-            (project, label)
-        }
-        "agent" => (text(&sample.agent), text(&sample.agent)),
-        _ => time_group(group, zone, sample.time),
-    }
-}
-
-fn time_group(group: &str, zone: Option<&Zone>, millis: i64) -> (String, String) {
-    let utc = DateTime::<Utc>::from_timestamp_millis(millis).unwrap_or_default();
-    let seconds = match zone {
-        Some(Zone::Fixed(seconds)) => *seconds,
-        Some(Zone::Iana(zone)) => utc.with_timezone(zone).offset().fix().local_minus_utc(),
-        None => 0,
-    };
-    let time = utc + Duration::seconds(i64::from(seconds));
-    let absolute = seconds.unsigned_abs();
-    let label = format!(
-        "{}{:02}:{:02}{}",
-        if seconds < 0 { '-' } else { '+' },
-        absolute / 3600,
-        absolute / 60 % 60,
-        if absolute % 60 == 0 {
-            String::new()
-        } else {
-            format!(":{:02}", absolute % 60)
-        }
-    );
-    let day = time.format("%Y-%m-%d").to_string();
-    match (group, zone) {
-        ("day", _) => (day.clone(), day),
-        ("month", _) => (day[..7].to_string(), day[..7].to_string()),
-        ("hour", Some(_)) => (
-            format!("{}T{}:00:00{}", day, time.format("%H"), label),
-            format!("{}T{}:00 {}", day, time.format("%H"), label),
-        ),
-        _ => (
-            format!("{}T{}:00:00.000Z", day, time.format("%H")),
-            format!("{}T{}:00 UTC", day, time.format("%H")),
-        ),
     }
 }
 
@@ -770,59 +786,6 @@ fn fixed_offset(name: &str) -> Option<Zone> {
     let (hours, minutes) = (hours.parse::<i64>().ok()?, minutes.parse::<i64>().ok()?);
     (hours <= 23 && minutes <= 59)
         .then(|| Zone::Fixed((sign * (hours * 3600 + minutes * 60)) as i32))
-}
-
-fn project_labels(
-    snapshot: &Snapshot,
-    input: &provider_request::ReportInput,
-    family: &[Session],
-) -> Result<HashMap<String, String>, Error> {
-    let mut labels = HashMap::new();
-    if input.group.0.as_str() != Some("project") {
-        return Ok(labels);
-    }
-    for session in family {
-        let id = text(&session.project_id);
-        if labels.contains_key(&id) {
-            continue;
-        }
-        let label = if id == "global" {
-            "Global (no project)".to_string()
-        } else {
-            match snapshot.get::<ProjectTable>(&key(&session.project_id))? {
-                Some(project) => match &project.name {
-                    Some(name) if !name.is_empty() => {
-                        format!("{} · {}", text(name), text(&project.worktree))
-                    }
-                    _ => text(&project.worktree),
-                },
-                None => id.clone(),
-            }
-        };
-        labels.insert(id, label);
-    }
-    Ok(labels)
-}
-
-fn encode_uri_component(value: &str) -> String {
-    value
-        .bytes()
-        .map(|byte| match byte {
-            b'A'..=b'Z'
-            | b'a'..=b'z'
-            | b'0'..=b'9'
-            | b'-'
-            | b'_'
-            | b'.'
-            | b'!'
-            | b'~'
-            | b'*'
-            | b'\''
-            | b'('
-            | b')' => (byte as char).to_string(),
-            _ => format!("%{byte:02X}"),
-        })
-        .collect()
 }
 
 fn text(value: &LosslessString) -> String {

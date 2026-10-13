@@ -21,14 +21,34 @@ const CATALOG: Catalog = Catalog::new(
         TableDeclaration::of::<resources::LatencyTable>(),
         TableDeclaration::of::<resources::SequenceTable>(),
         TableDeclaration::of::<resources::RequestTable>(),
+        TableDeclaration::of::<resources::UsageTable>(),
+        TableDeclaration::of::<ycoding_store::project::ProjectTable>(),
+        TableDeclaration::of::<ycoding_store::session::SessionTable>(),
         TableDeclaration::of::<analytics::DeliveryTable>(),
         TableDeclaration::of::<analytics::IntentTable>(),
     ],
 );
+#[path = "report_support/mod.rs"]
+mod report_support;
+struct ReportStore {
+    _reports: report_support::Reports,
+    store: Option<Store>,
+}
+impl std::ops::Deref for ReportStore {
+    type Target = Store;
+    fn deref(&self) -> &Store {
+        self.store.as_ref().unwrap()
+    }
+}
+impl ReportStore {
+    fn shutdown(mut self) -> Result<(), ycoding_store::Error> {
+        self.store.take().unwrap().shutdown()
+    }
+}
 fn sample() -> telemetry::Sample {
     telemetry::Sample::decode(&parse_json(r#"{"kind":"request","at":"2026-10-04T12:00:00.000Z","operation":"session.list","outcome":"ok","queueMs":5,"settlementMs":20,"totalMs":25}"#).unwrap()).unwrap()
 }
-fn world() -> (Store, Service, Arc<AtomicI64>) {
+fn world() -> (ReportStore, Service, Arc<AtomicI64>) {
     let store = Store::disposable(Options::core(), CATALOG, Metadata::new([1; 16], 1)).unwrap();
     let time = Arc::new(AtomicI64::new(0));
     let clock = time.clone();
@@ -36,7 +56,15 @@ fn world() -> (Store, Service, Arc<AtomicI64>) {
         store.client(),
         Arc::new(move || clock.load(Ordering::SeqCst)),
     );
-    (store, service, time)
+    let reports = report_support::start(store.client());
+    (
+        ReportStore {
+            _reports: reports,
+            store: Some(store),
+        },
+        service,
+        time,
+    )
 }
 async fn consent(service: &Service, enabled: bool) {
     service
@@ -311,10 +339,13 @@ async fn consent_samples_and_sequence_survive_reopen() {
     let store =
         Store::initialize(&path, Options::core(), CATALOG, Metadata::new([2; 16], 1)).unwrap();
     let service = Service::with_clock(store.client(), Arc::new(|| 42));
+    let reports = report_support::start(store.client());
     consent(&service, true).await;
     service.append(vec![sample()]).await.unwrap();
     store.shutdown().unwrap();
+    drop(reports);
     let store = Store::open(&path, Options::core(), CATALOG).unwrap();
+    let reports = report_support::start(store.client());
     let service = Service::with_clock(store.client(), Arc::new(|| 50));
     assert_eq!(
         service.consent().unwrap().consent.unwrap().decided_at.get(),
@@ -339,6 +370,7 @@ async fn consent_samples_and_sequence_survive_reopen() {
         Some("Mw")
     );
     store.shutdown().unwrap();
+    drop(reports);
     std::fs::remove_file(path).unwrap();
 }
 

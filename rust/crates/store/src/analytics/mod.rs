@@ -1,5 +1,5 @@
 use crate::Snapshot;
-use duckdb::types::Value;
+pub use duckdb::types::Value;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::path::Path;
@@ -9,6 +9,8 @@ use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+mod numeric;
+pub mod reports;
 mod state;
 mod worker;
 pub use state::{Change, Delivery, DeliveryTable, Intent, IntentTable, privacy_changed, record};
@@ -226,11 +228,16 @@ impl Engine {
                 return Err(error.into());
             }
         };
+        let handle = Handle(Arc::new(Shared {
+            store,
+            sender: Mutex::new(Some(sender)),
+        }));
+        handle
+            .0
+            .store
+            .attach_analytics(Link(Arc::downgrade(&handle.0)));
         Ok(Self {
-            handle: Handle(Arc::new(Shared {
-                store,
-                sender: Mutex::new(Some(sender)),
-            })),
+            handle,
             writer: Some(writer),
             _owner: PhantomData,
         })
@@ -268,6 +275,13 @@ impl Drop for Engine {
 }
 #[derive(Clone)]
 pub struct Handle(Arc<Shared>);
+#[derive(Clone, Default)]
+pub(crate) struct Link(std::sync::Weak<Shared>);
+impl Link {
+    pub(crate) fn handle(&self) -> Result<Handle, Error> {
+        self.0.upgrade().map(Handle).ok_or(Error::Unavailable)
+    }
+}
 struct Shared {
     store: crate::Client,
     sender: Mutex<Option<mpsc::SyncSender<Command>>>,

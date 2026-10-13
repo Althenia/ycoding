@@ -85,6 +85,7 @@ impl Observers {
 }
 
 struct Shared {
+    analytics: Mutex<crate::analytics::Link>,
     observers: Arc<Observers>,
     database: Mutex<Option<Arc<Database>>>,
     sender: Mutex<Option<mpsc::SyncSender<Request>>>,
@@ -206,6 +207,7 @@ impl Store {
         };
         Ok(Self {
             client: Client(Arc::new(Shared {
+                analytics: Mutex::default(),
                 observers: Arc::default(),
                 database: Mutex::new(Some(database)),
                 sender: Mutex::new(Some(sender)),
@@ -299,6 +301,21 @@ impl Deref for Store {
 }
 
 impl Client {
+    pub(crate) fn attach_analytics(&self, link: crate::analytics::Link) {
+        *self
+            .0
+            .analytics
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = link;
+    }
+
+    pub fn analytics(&self) -> Result<crate::analytics::Handle, crate::analytics::Error> {
+        self.0
+            .analytics
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .handle()
+    }
     pub fn submit_with_snapshot<R, F>(&self, operation: F) -> Result<Receipt<(R, Snapshot)>, Error>
     where
         R: Send + 'static,

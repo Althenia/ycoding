@@ -14,8 +14,22 @@ use ycoding_store::{
     session::{Document, SessionTable},
 };
 
+#[path = "report_support/mod.rs"]
+mod report_support;
 #[path = "autonomy_support/mod.rs"]
 mod support;
+
+struct ReportStore {
+    _reports: report_support::Reports,
+    store: Store,
+}
+
+impl std::ops::Deref for ReportStore {
+    type Target = Store;
+    fn deref(&self) -> &Store {
+        &self.store
+    }
+}
 
 fn id(value: &str) -> session::Id {
     session::Id::new(value).unwrap()
@@ -188,10 +202,47 @@ fn report(service: &Service, session: &str, input: &str) -> JsonValue {
         .encode()
 }
 
-fn setup() -> (Store, Service) {
-    let store = support::store();
+fn setup() -> (ReportStore, Service) {
+    let store = Store::disposable(
+        ycoding_store::Options::core(),
+        ycoding_store::import::catalog(ycoding_store::import::DatabaseKind::Core),
+        ycoding_store::Metadata::new([7; 16], 1),
+    )
+    .unwrap();
+    store
+        .submit(|tx| {
+            ProjectTable::insert(
+                tx,
+                &Project {
+                    id: "prj_one".into(),
+                    worktree: "/project".into(),
+                    vcs: None,
+                    name: None,
+                    icon_url: None,
+                    icon_url_override: None,
+                    icon_color: None,
+                    time_created: 1,
+                    time_updated: 1,
+                    time_initialized: None,
+                    sandboxes: Vec::new(),
+                    commands: None,
+                },
+            )?;
+            SessionTable::insert(tx, &support::record("ses_one"))?;
+            SessionTable::insert(tx, &support::record("ses_two"))
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
     let service = Service::new(store.client());
-    (store, service)
+    let reports = report_support::start(store.client());
+    (
+        ReportStore {
+            _reports: reports,
+            store,
+        },
+        service,
+    )
 }
 
 #[test]
@@ -267,6 +318,30 @@ fn a_root_family_pages_high_cardinality_session_groups_with_exact_totals() {
     let own = report(&service, "ses_usage_007", r#"{"group":"session"}"#);
     assert_eq!(number(&own, "total.logical"), 1.0);
     assert_eq!(keys(&own), ["ses_usage_007"]);
+    let global = service
+        .usage_report_all(
+            &report_input(
+                r#"{"group":"session","sort":"steps","order":"desc","offset":300,"limit":3}"#,
+            ),
+            None,
+        )
+        .unwrap()
+        .encode();
+    assert_eq!(global, scoped);
+    for group in ["session", "model"] {
+        let wide = service
+            .usage_report_all(
+                &report_input(&format!(
+                    r#"{{"group":"{group}","offset":100,"limit":100}}"#
+                )),
+                None,
+            )
+            .unwrap()
+            .encode();
+        assert_eq!(keys(&wide).len(), 100);
+        assert_eq!(number(&wide, "total.logical"), 405.0);
+        assert_eq!(number(&wide, "rows.0.speed.samples"), 1.0);
+    }
 }
 
 #[test]
@@ -329,6 +404,96 @@ fn model_keys_use_encode_uri_component_and_sort_bytewise() {
     assert_eq!(utc, ["1969-12-31", "1970-01-01"]);
     let local = report_days(&service, r#"{"group":"day","timeZone":"+05:30"}"#);
     assert_eq!(local, ["1970-01-01"]);
+}
+
+#[test]
+fn ambiguous_model_keys_use_the_first_family_observation_and_global_session_order() {
+    let (store, service) = setup();
+    sessions(&store, vec![("ses_encoded_child", Some("ses_one"), 0)]);
+    let mut root = Spec::new("ses_one", "prq_variant", 1);
+    root.variant = Some("same");
+    let mut child = Spec::new("ses_encoded_child", "prq_profile", 1);
+    child.profile = Some("same");
+    insert(&store, vec![root, child]);
+    let scoped = report(&service, "ses_one", r#"{"group":"model"}"#);
+    assert_eq!(keys(&scoped), ["openai/gpt/same"]);
+    assert_eq!(string(&scoped, "rows.0.label"), "openai/gpt (same)");
+    let global = service
+        .usage_report_all(&report_input(r#"{"group":"model"}"#), None)
+        .unwrap()
+        .encode();
+    assert_eq!(string(&global, "rows.0.label"), "openai/gpt · same");
+}
+
+#[test]
+fn reports_fail_without_an_engine_while_operational_usage_stays_canonical() {
+    let (fixture, service) = setup();
+    insert(&fixture, vec![Spec::new("ses_one", "prq_no_engine", 1)]);
+    let ReportStore { _reports, store } = fixture;
+    drop(_reports);
+    assert_eq!(
+        service.usage(&id("ses_one"), None).unwrap().logical.get(),
+        1
+    );
+    assert!(matches!(
+        service.usage_report(&id("ses_one"), &report_input(r#"{"group":"model"}"#), None),
+        Err(Error::Record(_))
+    ));
+    drop(store);
+}
+
+#[test]
+fn reports_preserve_sqlite_compensated_decimal_cost_totals() {
+    let (store, service) = setup();
+    insert(
+        &store,
+        (0..10)
+            .map(|index| {
+                let mut spec = Spec::new("ses_one", &format!("prq_decimal_{index}"), index);
+                spec.cost = Some(0.1);
+                spec.input = 0.1;
+                spec
+            })
+            .collect(),
+    );
+    let result = report(&service, "ses_one", r#"{"group":"model"}"#);
+    assert_eq!(number(&result, "total.cost"), 1.0);
+    assert_eq!(number(&result, "rows.0.cost"), 1.0);
+    assert_eq!(number(&result, "total.tokens.input"), 1.0);
+    assert_eq!(number(&result, "rows.0.tokens.input"), 1.0);
+}
+
+#[test]
+fn report_pricing_selects_strict_context_tiers_before_base_and_router_prices() {
+    let (store, service) = setup();
+    let mut first = Spec::new("ses_one", "prq_tier_equal", 1);
+    first.cost = None;
+    first.input = 10.0;
+    let mut second = Spec::new("ses_one", "prq_tier_above", 2);
+    second.cost = None;
+    second.input = 11.0;
+    insert(&store, vec![first, second]);
+    let pricer = |_: &PricingRef| {
+        let mut pricing = catalog(2.0);
+        let mut tier = pricing.provider[0].clone();
+        tier.tier = Some(model::Tier {
+            size: ycoding_schema::schema::Int::new(10).unwrap(),
+        });
+        tier.input = UsdPerMillionTokens::new(4.0).unwrap();
+        pricing.provider.push(tier);
+        pricing.router = catalog(100.0).provider;
+        Some(pricing)
+    };
+    let result = service
+        .usage_report(
+            &id("ses_one"),
+            &report_input(r#"{"group":"model"}"#),
+            Some(&pricer),
+        )
+        .unwrap()
+        .encode();
+    assert!((number(&result, "total.cost") - 0.000064).abs() < 1e-12);
+    assert_eq!(string(&result, "rows.0.costProvenance"), "current_catalog");
 }
 
 fn report_days(service: &Service, input: &str) -> Vec<String> {

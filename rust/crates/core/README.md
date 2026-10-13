@@ -1256,21 +1256,35 @@ through unchanged. `next` is the sequence of the last returned record when more
 remain. A record that does not decode as `SessionCapturedChanges.Input` is a
 `Record` error.
 
-`usage(session, pricer)` and `usage_report(session, input, pricer)` aggregate
-`session_provider_request` rows of the root Session family (the Session and its
-descendants found through `session_parent_idx`, children ordered by update time
-then ID descending; a child Session reads only itself) in one snapshot.
+`usage(session, pricer)` retains the canonical redb operational summary.
+`usage_report(session, input, pricer)` and `usage_report_all` read grouped pages,
+full-scope totals/count and selected-row speed through the Store's committed-watermark
+DuckDB engine. A root includes its descendant family once; a child reads only itself.
+These blocking report calls run outside executor threads. Composition owns the Engine
+lifetime through `ycoding_store::analytics::reports::start`; an unavailable engine
+fails explicitly and never changes operational Session diagnostics.
 `usage_report` supports the `model`, `hour`, `day`, `month`, `session`,
 `project`, and `agent` groups, the half-open `from`/`to` range, sorting with
 ascending key tiebreak, `offset`/`limit` paging (default limit 100), and per-row
 `speed` from ranked first-output and total percentiles plus observed generation
-throughput. Hour, day, and month keys use UTC; `timeZone` accepts UTC aliases
-and fixed `±HH:MM` offsets, and any other zone name is `Rejected` because the
-workspace carries no time-zone database. Requests without a recorded cost and
+throughput. Hour, day, and month keys use UTC; `timeZone` accepts UTC aliases,
+fixed offsets and IANA names through the compiled timezone database. Requests without a recorded cost and
 not from the `decision` source are priced through the optional `pricer`, which
 maps a `PricingRef` (Location directory, workspace, provider, model, profile) to
 provider and OpenRouter cost tables; the estimate is added with
-`current_catalog` provenance. Without a `pricer` they carry no cost.
+`current_catalog` provenance. Without a `pricer` they carry no cost. Pricing refs
+and timezone offsets are prepared in 200-row keyset windows; a concurrent source
+change during preparation fails explicitly. Reports never retain all requests or
+percentile vectors in Core. Native totals/grouping still process the complete
+filtered population; pagination bounds decoded results, not all native query work.
+
+Project lists use descending update time then ascending text IDs; directories use
+descending creation time then ascending text paths. Inventory ordering and its
+exclusive keyset compare worktree, project ID and directory with the same comparator.
+Valid text compares by decoded Unicode scalars, equivalent to SQLite BINARY UTF-8.
+Each lone surrogate compares as U+FFFD; equal decoded sequences use the original
+UTF-16 units as a deterministic tie-break. Stored strings and returned paths remain
+lossless, including distinct lone surrogates.
 
 ## Session autonomy, orchestration, and skill status
 
