@@ -22,6 +22,20 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.10.5",
+    date: "2026-10-13",
+    title: "MCP protocol 2026-07-28, lasting MCP sign-ins, and quieter guardrails",
+    tags: ["Changed", "Fixed"],
+    changes: [
+      { tag: "Changed", text: "Tabs controlled by YCoding through the Chrome extension show the Ⓨ mark before the page title instead of the [YCoding] text, and the in-page cursor label shows the YCoding mark." },
+      { tag: "Changed", text: "The worktree tool no longer asks for permission by default; the read-only BTW advisor still asks." },
+      { tag: "Changed", text: "Guardrails review fewer harmless commands: read-only commands (including after cd or || exit), read-only parts of mixed commands, interpreter script paths such as python3 ~/script.py, and program text in python3 heredocs no longer trigger an outside-repository review. Hard reviews and real outside writes are unchanged." },
+      { tag: "Changed", text: "A shell started while the session family already runs its maximum number of shells waits up to 60 seconds for a free slot, in arrival order, instead of failing at once. Change the wait with guardrails.shell_wait_seconds. When the wait ends without a slot, the error names the limit and the running shells." },
+      { tag: "Changed", text: "MCP servers connect with protocol revision 2026-07-28 over stdio and Streamable HTTP when the server supports it, and fall back to the 2025-11-25 handshake otherwise. MCP OAuth sign-in validates the authorization server's issuer, and a stored MCP credential is used only with the authorization server that issued it." },
+      { tag: "Fixed", text: "OAuth-authorized remote MCP servers stay signed in when their authorization server rotates refresh tokens, including when several connections or Locations share the same sign-in." },
+    ],
+  },
+  {
     version: "0.10.4",
     date: "2026-10-12",
     title: "Automatic Session retention and directory-wide guardrail approvals",
