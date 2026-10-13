@@ -1,4 +1,4 @@
-pub(super) const PRE: &[&str] = &[
+pub const PRE: &[&str] = &[
     "ycoding.agent",
     "ycoding.tool.conversation-compact",
     "ycoding.tool.computer",
@@ -40,7 +40,7 @@ pub(super) const PRE: &[&str] = &[
     "ycoding.tool.worktree",
 ];
 
-pub(super) const POST: &[&str] = &[
+pub const POST: &[&str] = &[
     "ycoding.config.reference",
     "ycoding.config.agent",
     "ycoding.config.command",

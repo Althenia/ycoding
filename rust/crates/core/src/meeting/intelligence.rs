@@ -63,18 +63,34 @@ pub trait Mcp: Send + Sync {
     ) -> BoxFuture<'_, Result<McpResult, String>>;
 }
 
-pub struct ServiceMcp(pub Service);
+pub struct ServiceMcp(Mutex<Arc<Service>>);
 
 impl ServiceMcp {
     pub fn new(service: Service) -> Self {
-        Self(service)
+        Self::shared(Arc::new(service))
+    }
+
+    pub fn shared(service: Arc<Service>) -> Self {
+        Self(Mutex::new(service))
+    }
+
+    pub fn replace(&self, service: Arc<Service>) {
+        *self.0.lock().unwrap_or_else(|error| error.into_inner()) = service;
+    }
+
+    fn current(&self) -> Arc<Service> {
+        self.0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
     }
 }
 
 impl Mcp for ServiceMcp {
     fn tools(&self) -> BoxFuture<'_, Result<Vec<McpTool>, String>> {
+        let service = self.current();
         Box::pin(async move {
-            let tools = self.0.tools().await.map_err(|error| error.to_string())?;
+            let tools = service.tools().await.map_err(|error| error.to_string())?;
             Ok(tools
                 .into_iter()
                 .filter_map(|tool| {
@@ -95,9 +111,9 @@ impl Mcp for ServiceMcp {
         args: Value,
     ) -> BoxFuture<'_, Result<McpResult, String>> {
         let (server, name) = (server.to_owned(), name.to_owned());
+        let service = self.current();
         Box::pin(async move {
-            let result = self
-                .0
+            let result = service
                 .call_tool(&server, &name, args, None)
                 .await
                 .map_err(|error| error.to_string())?;

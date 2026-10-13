@@ -32,7 +32,7 @@ pub const EXIT_FAILURE: u8 = 1;
 pub const EXIT_USAGE: u8 = 2;
 
 pub const USAGE: &str = "\
-Usage: ycoding-runtime [serve] [--hostname <host>] [--port <port>] [--service | --stdio] [--cors <origin>]
+Usage: ycoding-runtime [serve] [--hostname <host>] [--port <port>] [--service | --stdio] [--cors <origin>] [--meeting]
 
 Options:
   --hostname <host>  Bind hostname or IP address (default 127.0.0.1)
@@ -40,6 +40,7 @@ Options:
   --service          Run as the managed background service
   --stdio            Print one JSON readiness line and stop when stdin closes
   --cors <origin>    Allow one additional WebSocket origin (repeatable)
+  --meeting          Start the Meeting runtime for each Location the server composes
   --paths           Print resolved global paths as JSON without starting
   -h, --help         Print this help
   -V, --version      Print the runtime version
@@ -58,6 +59,7 @@ pub struct LaunchConfig {
     pub hostname: String,
     pub port: Option<u16>,
     pub cors: Vec<String>,
+    pub meeting: bool,
     pub password: String,
     pub password_generated: bool,
     pub version: String,
@@ -113,6 +115,7 @@ pub fn parse_launch(
     let mut service = false;
     let mut stdio = false;
     let mut paths = false;
+    let mut meeting = false;
     while position < args.len() {
         let arg = &args[position];
         let (flag, inline) = match arg.split_once('=') {
@@ -132,7 +135,7 @@ pub fn parse_launch(
         if inline.is_some()
             && matches!(
                 flag,
-                "--service" | "--stdio" | "--paths" | "--help" | "--version"
+                "--service" | "--stdio" | "--meeting" | "--paths" | "--help" | "--version"
             )
         {
             return Err(LaunchError::Usage(format!(
@@ -159,6 +162,7 @@ pub fn parse_launch(
             "--service" => service = true,
             "--stdio" => stdio = true,
             "--paths" => paths = true,
+            "--meeting" => meeting = true,
             _ => return Err(LaunchError::Usage(format!("Unknown argument: {arg}"))),
         }
         position += 1;
@@ -289,6 +293,7 @@ pub fn parse_launch(
         hostname: hostname.unwrap_or_else(|| "127.0.0.1".to_string()),
         port,
         cors,
+        meeting,
         password,
         password_generated,
         version,
@@ -350,6 +355,7 @@ pub async fn build_production_services(
             cursor: None,
             steer: None,
             ripgrep: "rg".into(),
+            meeting: config.meeting,
         },
     )
     .await
@@ -420,7 +426,7 @@ pub async fn run(config: LaunchConfig) -> Result<(), LaunchError> {
         Err(std::fs::TryLockError::WouldBlock) if config.mode == Mode::Service => return Ok(()),
         Err(error) => return Err(message(error)),
     }
-    let _diagnostics =
+    let mut diagnostics =
         ycoding_core::observability::install(ycoding_core::observability::Options::new(
             &config.roots,
             &config.version,
@@ -429,46 +435,101 @@ pub async fn run(config: LaunchConfig) -> Result<(), LaunchError> {
         ))
         .map_err(message)?;
     let store = open_store(&config)?;
-    let services = build_production_services(&config, &store).await?;
+    let services = match diagnostics
+        .attach_events(ycoding_core::event_feed::Feed::attach(&store.client()))
+        .map_err(message)
+    {
+        Ok(()) => build_production_services(&config, &store).await,
+        Err(error) => Err(error),
+    };
+    let services = match services {
+        Ok(services) => services,
+        Err(error) => {
+            if store.shutdown().is_err() {
+                tracing::error!("Store shutdown after a failed start failed");
+            }
+            let _ = diagnostics.close();
+            return Err(error);
+        }
+    };
     let core = services.core.clone();
+    let (result, registration) = serve_until_stopped(&config, services).await;
+    let core_result = match core {
+        Some(core) => core
+            .shutdown()
+            .await
+            .map_err(|_| LaunchError::Message("production shutdown failed".into())),
+        None => Ok(()),
+    };
+    if let Some(registration) = &registration {
+        registration.remove_if_owned();
+    }
+    let diagnostics_result = diagnostics.close().map_err(message);
+    let store_result = store.shutdown().map_err(message);
+    result.and(core_result).and(diagnostics_result).and(store_result)
+}
+
+async fn serve_until_stopped(
+    config: &LaunchConfig,
+    services: Services,
+) -> (Result<(), LaunchError>, Option<Registration>) {
     let identity = services.identity.clone();
-    let listener = match bind(&config).await {
+    let listener = match bind(config).await {
         Ok(listener) => listener,
         Err(error) => {
             if config.mode == Mode::Service
                 && error.kind() == io::ErrorKind::AddrInUse
-                && incumbent(&config).await
+                && incumbent(config).await
             {
-                return Ok(());
+                return (Ok(()), None);
             }
             if config.mode == Mode::Service
                 && config.port.is_some_and(|port| port != 0)
                 && error.kind() == io::ErrorKind::AddrInUse
             {
-                return Err(LaunchError::Message(format!(
+                return (Err(LaunchError::Message(format!(
                     "Managed service port {} on {} is already in use by another process. Set `port` in {} under the YCoding config directory, or start with `--standalone`.",
                     config.port.unwrap_or_default(),
                     config.hostname,
                     service_filename(&config.channel),
-                )));
+                ))), None);
             }
-            return Err(error.into());
+            return (Err(error.into()), None);
         }
+    };
+    // Signal listeners exist before readiness is published, so a stop sent right after the
+    // registration appears still runs graceful shutdown.
+    let signals = match shutdown_signals() {
+        Ok(signals) => signals,
+        Err(error) => return (Err(error.into()), None),
     };
     let stop = Arc::new(Notify::new());
     let control =
-        crate::health::Control::install(config.mode == Mode::Service, &identity, stop.clone())?;
-    let signals = shutdown_signals()?;
-    let server = server::serve(listener, services).await?;
-    let address = server.address();
-    let url = format!("http://{address}");
+        match crate::health::Control::install(config.mode == Mode::Service, &identity, stop.clone()) {
+            Ok(control) => control,
+            Err(error) => return (Err(error.into()), None),
+        };
+    let server = match server::serve(listener, services).await {
+        Ok(server) => server,
+        Err(error) => return (Err(error.into()), None),
+    };
+    let url = format!("http://{}", server.address());
 
     let registration = if config.mode == Mode::Service {
-        if config.password_generated {
-            persist_service_password(&config)?;
+        let registered = (if config.password_generated {
+            persist_service_password(config)
+        } else {
+            Ok(())
+        })
+        .and_then(|()| Registration::write(config, &identity, &url));
+        match registered {
+            Ok(registered) => Some(registered),
+            Err(error) => {
+                drop(control);
+                let stopped = server.shutdown().await.map_err(LaunchError::from);
+                return (Err::<(), _>(error).and(stopped), None);
+            }
         }
-        let registered = Registration::write(&config, &identity, &url)?;
-        Some(registered)
     } else {
         None
     };
@@ -494,19 +555,7 @@ pub async fn run(config: LaunchConfig) -> Result<(), LaunchError> {
         let _ = watcher.await;
     }
     drop(control);
-    let result = server.shutdown().await.map_err(LaunchError::from);
-    let core_result = match core {
-        Some(core) => core
-            .shutdown()
-            .await
-            .map_err(|_| LaunchError::Message("production shutdown failed".into())),
-        None => Ok(()),
-    };
-    if let Some(registration) = &registration {
-        registration.remove_if_owned();
-    }
-    let store_result = store.shutdown().map_err(message);
-    result.and(core_result).and(store_result)
+    (server.shutdown().await.map_err(LaunchError::from), registration)
 }
 
 async fn bind(config: &LaunchConfig) -> io::Result<TcpListener> {
@@ -528,24 +577,19 @@ async fn bind(config: &LaunchConfig) -> io::Result<TcpListener> {
 }
 
 #[cfg(unix)]
-type Signals = [tokio::signal::unix::Signal; 2];
+type Signals = (tokio::signal::unix::Signal, tokio::signal::unix::Signal);
 #[cfg(not(unix))]
-type Signals = ();
+type Signals = tokio::signal::windows::CtrlC;
 
-// Install before the listener serves or registration is published: until then SIGTERM and SIGINT
-// keep their default disposition and end a discoverable process without graceful shutdown.
 #[cfg(unix)]
 fn shutdown_signals() -> io::Result<Signals> {
     use tokio::signal::unix::{SignalKind, signal};
-    Ok([
-        signal(SignalKind::terminate())?,
-        signal(SignalKind::interrupt())?,
-    ])
+    Ok((signal(SignalKind::terminate())?, signal(SignalKind::interrupt())?))
 }
 
 #[cfg(not(unix))]
 fn shutdown_signals() -> io::Result<Signals> {
-    Ok(())
+    tokio::signal::windows::ctrl_c()
 }
 
 async fn wait_for_shutdown(mode: Mode, stop: Arc<Notify>, signals: Signals) {
@@ -571,7 +615,7 @@ async fn wait_for_shutdown(mode: Mode, stop: Arc<Notify>, signals: Signals) {
     };
     #[cfg(unix)]
     {
-        let [mut terminate, mut interrupt] = signals;
+        let (mut terminate, mut interrupt) = signals;
         tokio::select! {
             _ = interrupt.recv() => {}
             _ = terminate.recv() => {}
@@ -581,9 +625,9 @@ async fn wait_for_shutdown(mode: Mode, stop: Arc<Notify>, signals: Signals) {
     }
     #[cfg(not(unix))]
     {
-        let () = signals;
+        let mut interrupt = signals;
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => {}
+            _ = interrupt.recv() => {}
             _ = stop.notified() => {}
             _ = stdin_closed => {}
         }

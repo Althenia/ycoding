@@ -166,30 +166,11 @@ impl Service {
             .map(|secret| secret.domain())
             .transpose()
             .map_err(|_| unavailable("Generation credentials are unavailable"))?;
-        let loaded = if contextual.provider_id.0 == "muse".into() {
-            super::muse::from_catalog_model(
-                &contextual,
-                secret.as_ref(),
-                snapshot
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.credential.as_ref()),
-                ycoding_ai::muse::Runtime::shared()
-                    .map_err(|_| unavailable("Muse provider unavailable"))?,
-            )
-        } else {
-            match (
-                &self.cursor,
-                contextual
-                    .package
-                    .as_ref()
-                    .and_then(|package| package.as_str()),
-            ) {
-                (Some(host), Some("aisdk:cursor-opencode-provider")) => {
-                    cursor::route::model(&contextual, secret.as_ref(), host)
-                }
-                _ => model::from_catalog_model(&contextual, secret.as_ref()),
-            }
-        };
+        let loaded = self.integrations.selected_model(
+            &contextual, secret.as_ref(),
+            snapshot.as_ref().and_then(|snapshot| snapshot.credential.as_ref()),
+            self.cursor.as_deref(),
+        ).await;
         let model = loaded.map_err(|error| {
             let message = if error == model::Error::UnsupportedPackage {
                 format!(

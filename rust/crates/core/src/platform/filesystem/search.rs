@@ -49,6 +49,10 @@ struct Running {
     cancelled: bool,
 }
 enum State {
+    Deferred {
+        backend: Arc<dyn Fn() -> io::Result<Backend> + Send + Sync>,
+        service: std::sync::OnceLock<Result<Box<Service>, String>>,
+    },
     Unavailable,
     Fff(SharedFilePicker),
     Ripgrep {
@@ -64,6 +68,19 @@ pub struct Service {
 }
 
 impl Service {
+    pub fn deferred(directory: &std::path::Path, backend: Arc<dyn Fn() -> io::Result<Backend> + Send + Sync>) -> io::Result<Self> {
+        Ok(Self {
+            location: Location::new(directory)?,
+            state: State::Deferred { backend, service: Default::default() },
+        })
+    }
+    fn initialized(&self) -> io::Result<Option<&Self>> {
+        let State::Deferred { backend, service } = &self.state else {
+            return Ok(None);
+        };
+        service.get_or_init(|| backend().and_then(|backend| Self::new(self.directory(), backend)).map(Box::new).map_err(|error| error.to_string()))
+            .as_ref().map(|service| Some(service.as_ref())).map_err(|error| io::Error::other(error.clone()))
+    }
     pub fn directory(&self) -> &std::path::Path {
         self.location.directory()
     }
@@ -180,7 +197,13 @@ impl Service {
     }
 
     pub fn wait_for_scan(&self, timeout: Duration) -> bool {
+        match self.initialized() {
+            Ok(Some(service)) => return service.wait_for_scan(timeout),
+            Err(_) => return false,
+            Ok(None) => {}
+        }
         match &self.state {
+            State::Deferred { .. } => unreachable!("deferred service was initialized"),
             State::Unavailable => true,
             State::Fff(shared) => shared.wait_for_scan(timeout),
             State::Ripgrep { index, .. } => index
@@ -198,9 +221,13 @@ impl Service {
     }
 
     pub fn find(&self, input: &FindInput) -> io::Result<Vec<Entry>> {
+        if let Some(service) = self.initialized()? {
+            return service.find(input);
+        }
         let query = input.query.to_utf8().map_err(io::Error::other)?;
         let limit = input.limit.map(|value| value.get() as usize).unwrap_or(50);
         match &self.state {
+            State::Deferred { .. } => unreachable!("deferred service was initialized"),
             State::Unavailable => Ok(Vec::new()),
             State::Ripgrep { index, .. } => {
                 let index = index
@@ -322,8 +349,12 @@ impl Service {
     }
 
     pub fn glob(&self, input: &GlobInput) -> io::Result<Vec<Entry>> {
+        if let Some(service) = self.initialized()? {
+            return service.glob(input);
+        }
         let limit = checked_limit(input.limit)?;
         match &self.state {
+            State::Deferred { .. } => unreachable!("deferred service was initialized"),
             State::Unavailable => Ok(Vec::new()),
             State::Fff(shared) => {
                 if let Some(path) = &input.path {
@@ -363,8 +394,12 @@ impl Service {
     }
 
     pub fn grep(&self, input: &GrepInput) -> io::Result<Vec<Match>> {
+        if let Some(service) = self.initialized()? {
+            return service.grep(input);
+        }
         let limit = checked_limit(input.limit)?;
         match &self.state {
+            State::Deferred { .. } => unreachable!("deferred service was initialized"),
             State::Unavailable => Ok(Vec::new()),
             State::Fff(shared) => {
                 if let Some(path) = &input.path {

@@ -13,13 +13,19 @@ use tokio::{
 };
 use ycoding_core::{
     event_feed::{Feed, Scope},
+    meeting::{discovery, store::MeetingDatabase},
     resources::{catalog::models_dev, config},
+    session::{execution::Execution, store::Service as SessionStore},
     tools::context::Context,
-    ycoding_schema::{DomainDecode, model, parse_json, provider, session, session_pending},
+    ycoding_schema::{
+        DomainDecode, JsonValue, location, model, parse_json, provider, session, session_message,
+        session_pending, stringify_json,
+    },
     ycoding_store::{
-        Metadata, Options, Store, project,
+        IndexOrder, IndexQuery, KeyPart, Metadata, Options, Store, project,
         resources::{Request, RequestTable},
-        session::{Document, SessionTable},
+        session::{Document, EventTable, NewEvent, SessionTable},
+        tuple_key,
     },
 };
 use ycoding_protocol::v5;
@@ -40,6 +46,8 @@ async fn production_flow() {
     let (requests, mut received) = mpsc::unbounded_channel();
     let replies = Arc::new(Mutex::new(VecDeque::<(u16, &'static str)>::new()));
     let scripted = replies.clone();
+    let hold = Arc::new(tokio::sync::Mutex::new(None::<oneshot::Receiver<()>>));
+    let held = hold.clone();
     let router = axum::Router::new()
         .route(
             "/fixture",
@@ -51,6 +59,7 @@ async fn production_flow() {
                 move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
                     let requests = requests.clone();
                     let scripted = scripted.clone();
+                    let held = held.clone();
                     async move {
                         assert_eq!(
                             headers.get("authorization").unwrap(),
@@ -70,6 +79,9 @@ async fn production_flow() {
                             );
                         }
                         requests.send(body).unwrap();
+                        if let Some(release) = held.lock().await.take() {
+                            let _ = release.await;
+                        }
                         let (status, reply) =
                             scripted.lock().unwrap().pop_front().unwrap_or((200, REPLY));
                         axum::http::Response::builder()
@@ -128,7 +140,10 @@ async fn production_flow() {
         project: true,
         file: None,
         content: None,
-        env: BTreeMap::from([("OPENAI_API_KEY".into(), "synthetic-key".into())]),
+        env: BTreeMap::from([
+            ("OPENAI_API_KEY".into(), "synthetic-key".into()),
+            ("XDG_DATA_HOME".into(), root.join("xdg-data").to_str().unwrap().into()),
+        ]),
     };
     assert!(
         config::Configuration::load(configuration.clone())
@@ -143,7 +158,7 @@ async fn production_flow() {
     let store = Store::initialize(
         root.join("store.redb"),
         Options::core(),
-        support::CATALOG,
+        ycoding_core::ycoding_store::import::catalog(ycoding_core::ycoding_store::import::DatabaseKind::Core),
         Metadata::new([8; 16], 1),
     )
     .unwrap();
@@ -207,6 +222,13 @@ async fn production_flow() {
                 invalid.agent = Some(agent.into());
                 SessionTable::insert(tx, &invalid)?;
             }
+            let mut interrupted = record.clone();
+            interrupted.id = "ses_interrupted".into();
+            SessionTable::insert(tx, &interrupted)?;
+            let mut analysis = record.clone();
+            analysis.id = "ses_analysis".into();
+            analysis.agent = Some("meeting-intelligence".into());
+            SessionTable::insert(tx, &analysis)?;
             let mut idle = record.clone();
             idle.id = "ses_idle".into();
             idle.time_updated = record.time_updated - 3 * 86400000;
@@ -257,7 +279,22 @@ async fn production_flow() {
         .unwrap()
         .await
         .unwrap();
-    let _reports = support::report_support::start(store.client());
+    let seeded = SessionStore::new(store.client());
+    for (id, type_, data) in [
+        ("evt_interrupted_run", "session.execution.started.1", r#"{"sessionID":"ses_interrupted"}"#),
+        ("evt_interrupted_step", "session.step.started.1", r#"{"sessionID":"ses_interrupted","assistantMessageID":"msg_interrupted","agent":"god","model":{"providerID":"openai","id":"gpt-runtime"}}"#),
+    ] {
+        seeded.publish(NewEvent { id: id.into(), aggregate_id: "ses_interrupted".into(), created: 2, type_: type_.into(), data: parse_json(data).unwrap() }).await.unwrap();
+    }
+    let xdg = root.join("xdg-data");
+    let meeting_directory = discovery::directory(&root.join("project"), Some(&xdg), &roots.home).unwrap();
+    let meetings = MeetingDatabase::open(&meeting_directory.join("meetings.redb")).unwrap();
+    meetings.create_meeting("meeting_seed", "Seeded", "ses_analysis").await.unwrap();
+    meetings.close().await.unwrap();
+    let other_meeting = discovery::directory(&root.join("other"), Some(&xdg), &roots.home).unwrap();
+    std::fs::create_dir_all(&other_meeting).unwrap();
+    let foreign_lock = format!(r#"{{"pid":{}}}"#, std::process::id());
+    std::fs::write(other_meeting.join("runtime.lock"), &foreign_lock).unwrap();
     let retention = Feed::attach(&store.client());
     let notified = Arc::new(Notify::new());
     let wake = notified.clone();
@@ -283,14 +320,76 @@ async fn production_flow() {
             cursor: None,
             steer: None,
             ripgrep: "rg".into(),
+            meeting: true,
         },
     )
     .await
     .unwrap();
+    assert!(
+        core.execution.active().is_empty(),
+        "startup must not wake reconciled or pending Sessions"
+    );
+    assert!(std::ptr::eq(core.execution, Execution::global().unwrap()));
+    let (_, interrupted) = core
+        .sessions
+        .message(&session_message::Id::new("msg_interrupted").unwrap())
+        .unwrap()
+        .unwrap();
+    let session_message::Info::Assistant(interrupted) = interrupted else {
+        panic!("reconciled Step must stay an assistant message")
+    };
+    assert_eq!(
+        interrupted.error.unwrap().r#type.as_str(),
+        Some("interrupted"),
+        "startup must settle the unterminated Step before serving"
+    );
+    assert_eq!(events(&store, "ses_interrupted", "session.execution.failed.1").len(), 1);
+    assert!(core.catalogs.is_some(), "production catalogs must resolve");
+    assert!(core.integrations.is_some(), "production integrations must resolve");
+    assert!(core.provider_usage.is_some(), "production quota must resolve");
+    assert!(core.mcp.is_some(), "production MCP must resolve");
+    assert!(core.artifacts.is_some(), "production artifacts must resolve");
+    assert!(core.browser.is_some(), "production browser must resolve");
+    assert!(core.isolated_browser.is_some(), "production isolated browser must resolve");
+    assert!(core.platform.is_some(), "production platform must resolve");
     let (_, services) = core
         .locations
         .session(&session::Id::new("ses_production").unwrap())
         .unwrap();
+    let info = services.info.clone();
+    let reference = location::Ref {
+        directory: info.directory.clone(),
+        workspace_id: info.workspace_id.clone(),
+    };
+    let composed = services.production.as_ref().unwrap();
+    let catalogs = (core.catalogs.as_ref().unwrap())(&info).unwrap();
+    assert!(Arc::ptr_eq(&catalogs.models, &composed.models));
+    assert!(Arc::ptr_eq(&catalogs.generate, &composed.generate));
+    assert_eq!(
+        (&catalogs.roots.home, &catalogs.roots.config),
+        (&roots.home, &roots.config),
+        "skill scope must classify against the backend roots"
+    );
+    assert!(Arc::ptr_eq(&(core.mcp.as_ref().unwrap())(&info).unwrap(), &composed.mcp));
+    assert!(Arc::ptr_eq(&(core.platform.as_ref().unwrap())(&reference).unwrap(), &composed.platform));
+    assert!(Arc::ptr_eq(&(core.isolated_browser.as_ref().unwrap())(&reference).unwrap(), &composed.isolated));
+    let integrations = (core.integrations.as_ref().unwrap())(&info).unwrap();
+    let usage = (core.provider_usage.as_ref().unwrap())(&info).unwrap();
+    assert!(usage.providers.iter().any(|id| id.0.as_str() == Some("openai")));
+    let artifacts = (core.artifacts.as_ref().unwrap())(&info).unwrap();
+    std::fs::create_dir_all(root.join("unrecorded")).unwrap();
+    let unrecorded = location::Info::decode(&parse_json(&format!(r#"{{"directory":"{0}","project":{{"id":"prj_unrecorded","directory":"{0}"}}}}"#, root.join("unrecorded").to_str().unwrap())).unwrap()).unwrap();
+    let unrecorded_reference = location::Ref { directory: unrecorded.directory.clone(), workspace_id: None };
+    assert!((core.catalogs.as_ref().unwrap())(&unrecorded).is_err(), "registered catalogs must answer unavailable for an unrecorded Location");
+    assert!((core.integrations.as_ref().unwrap())(&unrecorded).is_err());
+    assert!((core.mcp.as_ref().unwrap())(&unrecorded).is_err());
+    assert!((core.provider_usage.as_ref().unwrap())(&unrecorded).is_err());
+    assert!((core.artifacts.as_ref().unwrap())(&unrecorded).is_none());
+    assert!((core.platform.as_ref().unwrap())(&unrecorded_reference).is_err());
+    assert!((core.isolated_browser.as_ref().unwrap())(&unrecorded_reference).is_err());
+    assert!(services.agents.get(&"meeting-intelligence".into()).is_some());
+    let descriptor = std::fs::read_to_string(meeting_directory.join("bridge.json")).unwrap();
+    assert!(!other_meeting.join("bridge.json").exists());
     assert!(
         services.prediction.is_some(),
         "disk-composed Locations must provide prediction"
@@ -351,6 +450,16 @@ async fn production_flow() {
         .locations
         .session(&session::Id::new("ses_other_location").unwrap())
         .unwrap();
+    let other_info = other.info.clone();
+    assert!(
+        !other.production.as_ref().unwrap().tools.materialize(&other.agents.default().unwrap().permissions).definitions.iter().any(|tool| tool.name.as_str() == Some("meeting_history")),
+        "a Location whose Meeting runtime failed to start keeps working without it"
+    );
+    assert_eq!(std::fs::read_to_string(other_meeting.join("runtime.lock")).unwrap(), foreign_lock);
+    let other_integrations = (core.integrations.as_ref().unwrap())(&other_info).unwrap();
+    assert!(Arc::ptr_eq(integrations.wellknown.as_ref().unwrap(), other_integrations.wellknown.as_ref().unwrap()));
+    assert!(Arc::ptr_eq(&usage.quota, &(core.provider_usage.as_ref().unwrap())(&other_info).unwrap().quota));
+    let other_artifacts = (core.artifacts.as_ref().unwrap())(&other_info).unwrap();
     assert_eq!(
         other
             .agents
@@ -544,6 +653,7 @@ async fn production_flow() {
             "edit",
             "glob",
             "grep",
+            "meeting_history",
             "memory",
             "patch",
             "project_artifact",
@@ -570,6 +680,25 @@ async fn production_flow() {
         core.execution.jobs().get("call_shell").unwrap().kind,
         "shell",
         "factory shell must use Execution's Jobs"
+    );
+    let other_shell = other
+        .production
+        .as_ref()
+        .unwrap()
+        .tools
+        .materialize(&other.agents.default().unwrap().permissions)
+        .invoke(
+            "shell",
+            parse_json(r#"{"command":"printf other-shell"}"#).unwrap(),
+            Context::new("ses_other_location", "god", "msg_other", "call_other_shell").unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(other_shell.error.is_none());
+    assert_eq!(
+        core.execution.jobs().get("call_other_shell").unwrap().kind,
+        "shell",
+        "every Location must share the one process-global Jobs owner"
     );
     let fetched = tools
         .invoke(
@@ -652,10 +781,162 @@ async fn production_flow() {
         assert!(received.try_recv().is_err());
         assert!(core.sessions.model_history(&invalid).unwrap().is_empty());
     }
+    let definition = ycoding_core::ycoding_schema::project_artifact::Definition::decode(&parse_json(r#"{"kind":"skill","name":"Review","description":"Reusable review","content":"Review the current change."}"#).unwrap()).unwrap();
+    let preview = artifacts
+        .store
+        .preview_manual(ycoding_core::resources::project_artifact::store::ManualPreviewInput {
+            id: "review",
+            definition: &definition,
+            expected: None,
+            now: now(),
+        })
+        .unwrap();
+    assert!(
+        other_artifacts.store.confirm_manual(&preview.token, now()).is_ok(),
+        "every Location must share one artifact source and confirmation owner"
+    );
+    core.locations.reload(&info).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(meeting_directory.join("bridge.json")).unwrap(),
+        descriptor,
+        "the Meeting runtime must survive a Location reload"
+    );
+    let (_, reloaded) = core
+        .locations
+        .session(&session::Id::new("ses_production").unwrap())
+        .unwrap();
+    assert!(!Arc::ptr_eq(&reloaded.production.as_ref().unwrap().tools, &services.production.as_ref().unwrap().tools));
+    assert!(reloaded.production.as_ref().unwrap().tools.materialize(&reloaded.agents.default().unwrap().permissions).definitions.iter().any(|tool| tool.name.as_str() == Some("meeting_history")));
+    prompt_input(core.execution, "ses_analysis", "evt_analysis_prompt", "Summarize the seeded meeting").await;
+    core.execution
+        .resume(&session::Id::new("ses_analysis").unwrap())
+        .await
+        .unwrap();
+    let request = received.recv().await.unwrap();
+    let encoded = stringify_json(&request);
+    assert!(encoded.contains("You analyze meetings and propose engineering plans"));
+    assert!(encoded.contains("Summarize the seeded meeting"));
+    assert!(!encoded.contains("\"tools\""), "analysis requests must carry no tools");
+    let JsonValue::Object(body) = &request else {
+        panic!("provider request must be an object");
+    };
+    let Some(JsonValue::Array(messages)) = body.get(&"messages".into()) else {
+        panic!("provider request must carry messages");
+    };
+    assert_eq!(messages.len(), 2, "analysis keeps only its system prompt and the bounded input");
+
+    let platform = composed.platform.clone();
+    let background = tools
+        .invoke(
+            "shell",
+            parse_json(r#"{"command":"sleep 30","background":true}"#).unwrap(),
+            Context::new("ses_production", "god", "msg_tool", "call_background").unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(background.error.is_none());
+    let pid = platform
+        .shell
+        .list()
+        .into_iter()
+        .find(|shell| shell.command.as_str() == Some("sleep 30"))
+        .and_then(|shell| shell.pid)
+        .unwrap()
+        .get();
+    let (release_held, held_reply) = oneshot::channel();
+    *hold.lock().await = Some(held_reply);
+    prompt_input(core.execution, "ses_production", "evt_inflight_prompt", "Keep working until shutdown").await;
+    core.execution
+        .wake(&session::Id::new("ses_production").unwrap())
+        .unwrap();
+    assert!(stringify_json(&received.recv().await.unwrap()).contains("Keep working until shutdown"));
     server.shutdown().await.unwrap();
     core.shutdown().await.unwrap();
+    assert!(core.execution.active().is_empty());
+    assert!(
+        events(&store, "ses_production", "session.execution.interrupted.1")
+            .last()
+            .is_some_and(|event| stringify_json(&event.data).contains(r#""reason":"shutdown""#)),
+        "the in-flight drain must settle durably before the Store closes"
+    );
+    assert_eq!(
+        events(&store, "ses_production", "session.step.started.1").len(),
+        events(&store, "ses_production", "session.step.ended.1").len()
+            + events(&store, "ses_production", "session.step.failed.1").len(),
+        "every started Step must settle before the Store closes"
+    );
+    assert!(platform.shell.list().is_empty());
+    assert!(
+        !std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .status()
+            .unwrap()
+            .success(),
+        "a background shell must not outlive shutdown"
+    );
+    assert!(!meeting_directory.join("bridge.json").exists());
+    assert!(!meeting_directory.join("runtime.lock").exists());
+    assert_eq!(std::fs::read_to_string(other_meeting.join("runtime.lock")).unwrap(), foreign_lock);
+    assert!(core.locations.location(&directory.clone().into(), None).is_err());
+    assert_eq!(
+        events(&store, "ses_interrupted", "session.step.started.1").len(),
+        1,
+        "restart must never replay the interrupted provider attempt"
+    );
+    drop(release_held);
     stop_model.send(()).unwrap();
     model_server.await.unwrap();
+    store.shutdown().unwrap();
+}
+
+async fn prompt_input(execution: &Execution, session: &str, event: &str, text: &str) {
+    let event = ycoding_core::ycoding_schema::event::Id::new(event).unwrap();
+    execution
+        .prompt(
+            ycoding_core::session::pending::Request {
+                id: session_message::Id::from_event(&event),
+                session_id: session::Id::new(session).unwrap(),
+                input: session_pending::Message::decode(&parse_json(&format!(r#"{{"type":"user","delivery":"steer","data":{{"text":"{text}"}}}}"#)).unwrap()).unwrap(),
+                event_id: event,
+                created: now(),
+            },
+            Some(false),
+        )
+        .await
+        .unwrap();
+}
+
+fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+}
+
+fn events(store: &Store, session: &str, type_: &str) -> Vec<ycoding_core::ycoding_store::session::Event> {
+    let prefix = tuple_key(&[
+        KeyPart::String(&session.into()),
+        KeyPart::String(&type_.into()),
+    ]);
+    store
+        .client()
+        .snapshot()
+        .unwrap()
+        .index_range::<EventTable>(
+            "event_aggregate_type_seq_idx",
+            IndexQuery {
+                lower: std::ops::Bound::Unbounded,
+                upper: std::ops::Bound::Unbounded,
+                prefix: Some(&prefix),
+                order: IndexOrder::Ascending,
+                after: None,
+                limit: 1000,
+            },
+        )
+        .unwrap()
+        .into_iter()
+        .map(|entry| entry.record)
+        .collect()
 }
 
 fn prompt(session: &str) -> Vec<u8> {

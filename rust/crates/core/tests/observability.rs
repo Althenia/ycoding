@@ -64,6 +64,18 @@ fn bootstrap_child() {
     let roots =
         Roots::development(&PathBuf::from(std::env::var("OBSERVABILITY_ROOT").unwrap())).unwrap();
     let mut options = Options::new(&roots, "fixture-version", "next /β", case == "local");
+    if case == "attach" {
+        let mut guard = observability::install(options).unwrap();
+        tracing::info!("before Store open");
+        let store = Store::disposable(ycoding_store::Options::core(), Catalog::new(1, &[]), Metadata::new([7; 16], 1)).unwrap();
+        let feed = Feed::attach(&store.client());
+        guard.attach_events(feed.clone()).unwrap();
+        assert!(guard.attach_events(feed.clone()).is_err());
+        feed.emit(Data::ConfigUpdated(Box::new(ycoding_schema::config::Empty)), None).unwrap();
+        guard.close().unwrap();
+        store.shutdown().unwrap();
+        return;
+    }
     if case == "file-error" {
         fs::create_dir_all(&roots.log).unwrap();
         options.log_directory = roots.log.join("not-a-directory");
@@ -194,6 +206,16 @@ fn bootstrap_child() {
     if case == "events" {
         assert_eq!(feed.subscribers(), 0);
     }
+}
+
+#[test]
+fn diagnostics_precede_store_and_event_logger_attaches_after_open() {
+    let directory = Directory::new();
+    directory.run("attach", &[]);
+    let content = fs::read_dir(directory.0.join("data/ycoding/log")).unwrap()
+        .flat_map(|entry| fs::read_to_string(entry.unwrap().path()).unwrap().lines().map(str::to_owned).collect::<Vec<_>>()).collect::<Vec<_>>().join("\n");
+    assert!(content.contains("before Store open"), "{content}");
+    assert!(content.contains("config.updated"), "{content}");
 }
 
 #[test]

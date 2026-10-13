@@ -68,6 +68,8 @@ struct Inner {
     feed: Feed,
     autonomy: autonomy::Service,
     services: Mutex<BTreeMap<Key, Cached>>,
+    retired: Mutex<Vec<Arc<ServiceSet>>>,
+    closed: std::sync::atomic::AtomicBool,
 }
 
 struct Cached {
@@ -144,6 +146,8 @@ impl Locations {
             feed,
             autonomy,
             services: Mutex::new(BTreeMap::new()),
+            retired: Mutex::new(Vec::new()),
+            closed: std::sync::atomic::AtomicBool::new(false),
         }))
     }
 
@@ -179,23 +183,75 @@ impl Locations {
         })
     }
 
-    pub(crate) fn evict_idle(&self, now: Instant) -> usize {
+    pub(crate) fn evict_idle(&self, now: Instant) -> Result<usize, Failure> {
         let mut cache = self
             .0
             .services
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         let before = cache.len();
-        cache.retain(|_, cached| {
+        let evicted = cache.keys().filter(|key| {
+            let cached = &cache[*key];
+            !(
             Arc::strong_count(&cached.services) > 1
+                || cached.services.production.as_ref().is_some_and(|composed| composed.in_use())
                 || now.saturating_duration_since(
                     *cached
                         .released
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner),
-                ) < Duration::from_secs(60 * 60)
-        });
-        before - cache.len()
+                ) < Duration::from_secs(60 * 60))
+        }).cloned().collect::<Vec<_>>();
+        let mut removed = evicted.iter().filter_map(|key| cache.remove(key)).map(|cached| cached.services).collect::<Vec<_>>();
+        let count = before - cache.len();
+        drop(cache);
+        let mut retired = self.0.retired.lock().unwrap_or_else(PoisonError::into_inner);
+        removed.extend(retired.extract_if(.., |services| Arc::strong_count(services) == 1 && !services.production.as_ref().is_some_and(|composed| composed.in_use())));
+        drop(retired);
+        self.close_sets(removed)?;
+        Ok(count)
+    }
+
+    pub fn reload(&self, info: &location::Info) -> Result<(), Failure> {
+        if self.0.closed.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(Failure::Unavailable("Location map is closed".into()));
+        }
+        let directory = canonical(info.directory.as_lossless())?;
+        let key = (directory.clone(), info.workspace_id.as_ref().map(|id| id.as_lossless().clone()));
+        let mut cache = self.0.services.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(current) = cache.get_mut(&key) else {
+            return Err(Failure::Unavailable("Location is not acquired".into()));
+        };
+        let built = Arc::new(self.build(&directory, key.1.as_ref(), Project {
+            id: current.services.info.project.id.clone(),
+            directory: current.services.info.project.directory.as_lossless().clone(),
+        })?);
+        let old = std::mem::replace(&mut current.services, built);
+        self.0.retired.lock().unwrap_or_else(PoisonError::into_inner).push(old);
+        drop(cache);
+        self.0.feed.emit(ycoding_core::event_feed::Data::ConfigUpdated(Box::new(ycoding_core::ycoding_schema::config::Empty)), Some(location::Ref {
+            directory: info.directory.clone(), workspace_id: info.workspace_id.clone(),
+        })).map_err(|_| Failure::Unavailable("configuration update publication failed".into()))
+    }
+
+    pub(crate) fn close(&self) -> Result<(), Failure> {
+        self.0.closed.store(true, std::sync::atomic::Ordering::Release);
+        let cache = std::mem::take(&mut *self.0.services.lock().unwrap_or_else(PoisonError::into_inner));
+        let mut removed = cache.into_values().map(|cached| cached.services).collect::<Vec<_>>();
+        removed.extend(std::mem::take(&mut *self.0.retired.lock().unwrap_or_else(PoisonError::into_inner)));
+        self.close_sets(removed)
+    }
+
+    fn close_sets(&self, removed: Vec<Arc<ServiceSet>>) -> Result<(), Failure> {
+        let mut failure = None;
+        if let Some(factory) = &self.0.factory {
+            for services in removed {
+                if let Err(error) = factory.close(&services) {
+                    failure.get_or_insert(error);
+                }
+            }
+        }
+        failure.map_or(Ok(()), Err)
     }
 
     pub fn session(
@@ -261,6 +317,9 @@ impl Locations {
         workspace: Option<&LosslessString>,
         project: impl FnOnce(&LosslessString) -> Result<Project, Failure>,
     ) -> Result<Arc<LocationServices>, Failure> {
+        if self.0.closed.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(Failure::Unavailable("Location map is closed".into()));
+        }
         let directory = canonical(directory)?;
         let key = (directory.clone(), workspace.cloned());
         let mut cache = self
@@ -670,18 +729,18 @@ mod tests {
         );
         let lease = locations.location(&path, None).unwrap();
         assert_eq!(
-            locations.evict_idle(Instant::now() + Duration::from_secs(7200)),
+            locations.evict_idle(Instant::now() + Duration::from_secs(7200)).unwrap(),
             0,
             "leased services cannot be evicted"
         );
         drop(lease);
         let released = Instant::now();
         assert_eq!(
-            locations.evict_idle(released + Duration::from_secs(3599)),
+            locations.evict_idle(released + Duration::from_secs(3599)).unwrap(),
             0
         );
         assert_eq!(
-            locations.evict_idle(released + Duration::from_secs(3601)),
+            locations.evict_idle(released + Duration::from_secs(3601)).unwrap(),
             1,
             "TTL must start at release, not at the next sweep"
         );

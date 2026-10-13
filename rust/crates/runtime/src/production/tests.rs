@@ -20,6 +20,7 @@ use ycoding_core::{
 };
 
 #[path = "../../tests/support/catalog.rs"]
+#[allow(dead_code)]
 mod catalog_fixture;
 
 const MODELS: &str = r#"{"openai":{"id":"openai","name":"OpenAI","api":"http://127.0.0.1:1","env":["OPENAI_API_KEY"],"npm":"@ai-sdk/openai-compatible","models":{"gpt-runtime":{"id":"gpt-runtime","name":"Runtime","release_date":"2026-01-01","attachment":false,"reasoning":false,"tool_call":true,"limit":{"context":128000,"output":8192},"cost":{"input":2,"output":3}},"gpt-helper":{"id":"gpt-helper","name":"Helper","release_date":"2026-01-01","attachment":false,"reasoning":false,"tool_call":false,"limit":{"context":64000,"output":4096},"cost":{"input":1,"output":2}}}}}"#;
@@ -62,6 +63,14 @@ struct Fixture {
 }
 
 fn fixture(global: &str, project_configuration: &str) -> Fixture {
+    fixture_with(
+        global,
+        project_configuration,
+        BTreeMap::from([("OPENAI_API_KEY".into(), "environment-key".into())]),
+    )
+}
+
+fn fixture_with(global: &str, project_configuration: &str, env: BTreeMap<String, String>) -> Fixture {
     let root = std::env::temp_dir().join(format!(
         "composition-cases-{}-{}-{}",
         std::process::id(),
@@ -80,7 +89,7 @@ fn fixture(global: &str, project_configuration: &str) -> Fixture {
     let store = Store::initialize(
         root.join("store.redb"),
         Options::core(),
-        catalog_fixture::CATALOG,
+        ycoding_core::ycoding_store::import::catalog(ycoding_core::ycoding_store::import::DatabaseKind::Core),
         Metadata::new([3; 16], 1),
     )
     .unwrap();
@@ -115,6 +124,17 @@ fn fixture(global: &str, project_configuration: &str) -> Fixture {
     let client = store.client();
     let feed = Feed::attach(&client);
     let publisher = feed.clone();
+    let options = config::LoadOptions {
+        directory: directory.clone(), roots: roots.clone(), project: true, file: None, content: None,
+        env: env.clone(),
+    };
+    let credentials = credential::Service::new(client.clone());
+    let git = Arc::new(git::Service::new(16 * 1024 * 1024));
+    let globals = globals::Globals::start(client.clone(), &Production {
+        configuration: options,
+        catalog: models_dev::Options { source: "https://models.dev".into(), cache: roots.cache.join("models.json"), file: None, bundled: Some(parse_json(MODELS).unwrap()), fetch: false, user_agent: "ycoding-test".into() },
+        cursor: None, steer: None, ripgrep: "rg".into(), meeting: false,
+    }, credentials.clone(), feed.clone(), git.clone(), false).unwrap();
     Fixture {
         factory: Arc::new(Factory {
             options: config::LoadOptions {
@@ -123,17 +143,14 @@ fn fixture(global: &str, project_configuration: &str) -> Fixture {
                 project: true,
                 file: None,
                 content: None,
-                env: BTreeMap::from([
-                    ("OPENAI_API_KEY".into(), "environment-key".into()),
-                    ("CURSOR_API_KEY".into(), "cursor-key".into()),
-                ]),
+                env,
             },
             snapshots: models_dev::normalize(&parse_json(MODELS).unwrap()).unwrap(),
             client: client.clone(),
             events: feed.clone(),
-            credentials: credential::Service::new(client),
+            credentials,
             executor: Arc::new(Executor::new(Executor::http_client().unwrap())),
-            git: Arc::new(git::Service::new(16 * 1024 * 1024)),
+            git,
             publisher: Arc::new(move |event| {
                 publisher.publish(crate::services::ephemeral(&event)?);
                 Ok(())
@@ -141,6 +158,7 @@ fn fixture(global: &str, project_configuration: &str) -> Fixture {
             cursor: None,
             steer: None,
             ripgrep: "rg".into(),
+            globals,
         }),
         store,
         roots,
@@ -533,13 +551,13 @@ fn eviction_pins_leases_resets_the_deadline_and_reloads_configuration() {
     let tools = lease.production.as_ref().unwrap().tools.clone();
     drop(lease);
     assert_eq!(
-        locations.evict_idle(Instant::now() + Duration::from_secs(7200)),
+        locations.evict_idle(Instant::now() + Duration::from_secs(7200)).unwrap(),
         0
     );
     drop(cloned);
     let released = Instant::now();
     assert_eq!(
-        locations.evict_idle(released + Duration::from_secs(3599)),
+        locations.evict_idle(released + Duration::from_secs(3599)).unwrap(),
         0
     );
     let reacquired = f.services(&locations);
@@ -560,12 +578,12 @@ fn eviction_pins_leases_resets_the_deadline_and_reloads_configuration() {
         Some("first")
     );
     assert_eq!(
-        locations.evict_idle(released + Duration::from_secs(7200)),
+        locations.evict_idle(released + Duration::from_secs(7200)).unwrap(),
         0
     );
     drop(reacquired);
     assert_eq!(
-        locations.evict_idle(Instant::now() + Duration::from_secs(3601)),
+        locations.evict_idle(Instant::now() + Duration::from_secs(3601)).unwrap(),
         1
     );
     let fresh = f.services(&locations);
@@ -1006,7 +1024,7 @@ async fn snapshot_configuration_controls_real_git_capture() {
         .unwrap();
     assert!(services.snapshots(&info).capture().is_none());
     drop(services);
-    locations.evict_idle(Instant::now() + Duration::from_secs(3601));
+    locations.evict_idle(Instant::now() + Duration::from_secs(3601)).unwrap();
     std::fs::write(f.directory().join("ycoding.json"), r#"{"snapshots":true}"#).unwrap();
     let services = f.services(&locations);
     assert!(services.snapshots(&info).capture().is_some());
@@ -1119,12 +1137,41 @@ fn helper_model_priority_keeps_explicit_unavailable_selections_closed() {
     }
 }
 
-#[test]
-fn cursor_models_require_and_use_a_location_owned_host_context() {
-    let mut f = fixture(
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cursor_models_require_and_use_a_location_owned_host_context() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let discovery = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            axum::Router::new().route(
+                "/aiserver.v1.AiService/AvailableModels",
+                axum::routing::post(|| async {
+                    (
+                        [("content-type", "application/json")],
+                        r#"{"models":[{"name":"cursor-model"}]}"#,
+                    )
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    let mut f = fixture_with(
         r#"{"model":{"providerID":"cursor","model":"cursor-model"}}"#,
         "{}",
+        BTreeMap::from([
+            ("OPENAI_API_KEY".into(), "environment-key".into()),
+            ("CURSOR_API_KEY".into(), "cursor-key".into()),
+        ]),
     );
+    f.factory
+        .globals
+        .accounts
+        .lock()
+        .await
+        .endpoints
+        .insert("cursor".into(), endpoint);
     Arc::get_mut(&mut f.factory).unwrap().snapshots = models_dev::normalize(&parse_json(r#"{"cursor":{"id":"cursor","name":"Cursor","env":["CURSOR_API_KEY"],"npm":"cursor-opencode-provider","models":{"cursor-model":{"id":"cursor-model","name":"Cursor model","release_date":"2026-01-01","attachment":false,"reasoning":false,"tool_call":true,"limit":{"context":128000,"output":8192}}}}}"#).unwrap()).unwrap();
     {
         let locations = f.locations();
@@ -1156,6 +1203,7 @@ fn cursor_models_require_and_use_a_location_owned_host_context() {
         Role::Prompt,
         services.agents.get(&"prompt".into()).unwrap()
     ));
+    discovery.abort();
 }
 
 #[tokio::test]
@@ -1174,6 +1222,7 @@ async fn bootstrap_rejects_invalid_roots_and_unavailable_catalog_without_install
         cursor: None,
         steer: None,
         ripgrep: "rg".into(),
+        meeting: false,
     };
     let mut configuration = f.factory.options.clone();
     configuration.roots.data = PathBuf::from("/outside-development-root");
@@ -1189,6 +1238,30 @@ async fn bootstrap_rejects_invalid_roots_and_unavailable_catalog_without_install
         .await,
         Err(Failure::Unavailable(_))
     ));
+    let mut configuration = f.factory.options.clone();
+    configuration.roots.home = f.roots.home.join("missing");
+    for _ in 0..2 {
+        let failed = Core::production(
+            f.store.client(),
+            Production {
+                catalog: models_dev::Options {
+                    source: "https://models.dev".into(),
+                    cache: f.roots.cache.join("catalog.json"),
+                    file: None,
+                    bundled: Some(parse_json(MODELS).unwrap()),
+                    fetch: false,
+                    user_agent: "test".into(),
+                },
+                ..production(configuration.clone(), None)
+            },
+        )
+        .await;
+        assert!(
+            matches!(&failed, Err(Failure::Unavailable(message)) if message == "Location guardrail directory is unavailable"),
+            "a failure after the globals started must release the process-wide analytics owner and keep its own error: {:?}",
+            failed.err()
+        );
+    }
     assert!(execution::Execution::global().is_none());
 }
 
@@ -1285,7 +1358,8 @@ async fn retention_runs_at_boot_waits_an_hour_after_settlement_reloads_global_an
     });
     let active = Arc::new(Mutex::new(vec![session::Id::new("ses_active").unwrap()]));
     let runtime_active = active.clone();
-    let maintenance = Maintenance::start_owned(
+    let maintenance = Maintenance::new(&f.factory);
+    maintenance.spawn(
         f.sessions(),
         f.locations(),
         f.factory.clone(),
@@ -1332,7 +1406,7 @@ async fn retention_runs_at_boot_waits_an_hour_after_settlement_reloads_global_an
     );
     assert_eq!(second.milliseconds, 3_600_000);
     assert!(held.iter().any(|sleep| sleep.milliseconds == 60_000));
-    maintenance.shutdown().await.unwrap();
+    release(&maintenance.globals, &maintenance.credentials, None, None, Some(&maintenance)).await.unwrap();
     assert!(maintenance.task.lock().unwrap().is_none());
 }
 
@@ -1360,7 +1434,8 @@ async fn retention_configuration_failure_preserves_data_and_recovers_on_the_next
         now: AtomicI64::new(now),
         sleeps,
     });
-    let maintenance = Maintenance::start_owned(
+    let maintenance = Maintenance::new(&f.factory);
+    maintenance.spawn(
         f.sessions(),
         locations,
         f.factory.clone(),
@@ -1385,5 +1460,5 @@ async fn retention_configuration_failure_preserves_data_and_recovers_on_the_next
             .unwrap()
             .is_none()
     );
-    maintenance.shutdown().await.unwrap();
+    release(&maintenance.globals, &maintenance.credentials, None, None, Some(&maintenance)).await.unwrap();
 }

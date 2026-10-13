@@ -2,15 +2,15 @@ use super::{Factory, unavailable};
 use crate::{dispatch::Failure, locations::ServiceSet};
 use std::{
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 use ycoding_core::{
     platform::{
-        filesystem::{collation, mutation, search},
+        filesystem::{collation, mutation},
         shell,
     },
     process::guardrails::{CustomLayer, CustomLayers},
-    resources::{config, discovery::markdown, image, memory, project_artifact, tool_output_store},
+    resources::{config, discovery::markdown, image, memory, tool_output_store},
     tools::{
         builtin::{
             edit::Edit,
@@ -38,6 +38,7 @@ pub(super) fn compose(
     services: &ServiceSet,
     configuration: Arc<config::Configuration>,
     memory: Arc<memory::Service>,
+    platform: &crate::services::PlatformServices,
 ) -> Result<(Arc<Registry>, Registration), Failure> {
     let directory = std::fs::canonicalize(PathBuf::from(
         services
@@ -65,34 +66,12 @@ pub(super) fn compose(
         image::Limits::from_configuration(&configuration),
         collator.clone(),
     ));
-    let search = Arc::new(
-        search::Service::new(
-            &directory,
-            search::Backend::Automatic {
-                vcs: factory
-                    .git
-                    .discover(&directory)
-                    .map_err(|_| unavailable("Location repository"))?
-                    .is_some(),
-                binary: factory.ripgrep.clone(),
-            },
-        )
-        .map_err(|_| unavailable("filesystem search"))?,
-    );
+    let search = platform.search.clone();
     let entries: Vec<(String, Arc<dyn Tool>)> = vec![
         (
             "shell".into(),
             Arc::new(Shell {
-                roots: factory.options.roots.clone(),
-                directory,
-                project: services
-                    .info
-                    .project
-                    .id
-                    .as_lossless()
-                    .to_utf8()
-                    .map_err(|_| unavailable("Project identity"))?,
-                client: factory.client.clone(),
+                shell: platform.shell.clone(),
                 configuration: configuration.clone(),
                 paths: paths.clone(),
                 policy: policy.clone(),
@@ -161,25 +140,25 @@ pub(super) fn compose(
         ),
         (
             "glob".into(),
-            Arc::new(Search {
+            Arc::new(AcquiredSearch { binary: factory.globals.ripgrep.clone(), tool: Search {
                 kind: Kind::Glob,
                 directory: paths.directory.clone(),
                 data: paths.data.clone(),
                 service: search.clone(),
                 ripgrep: factory.ripgrep.clone(),
                 policy: policy.clone(),
-            }),
+            }}),
         ),
         (
             "grep".into(),
-            Arc::new(Search {
+            Arc::new(AcquiredSearch { binary: factory.globals.ripgrep.clone(), tool: Search {
                 kind: Kind::Grep,
                 directory: paths.directory.clone(),
                 data: paths.data.clone(),
                 service: search,
                 ripgrep: factory.ripgrep.clone(),
                 policy: policy.clone(),
-            }),
+            }}),
         ),
         (
             "webfetch".into(),
@@ -201,17 +180,7 @@ pub(super) fn compose(
         (
             "project_artifact".into(),
             Arc::new(ProjectArtifact {
-                store: Arc::new(project_artifact::store::Service::new(
-                    factory.client.clone(),
-                    project_artifact::store::Paths {
-                        data: factory.options.roots.data.clone(),
-                        home: factory.options.roots.home.clone(),
-                        config: factory.options.roots.config.clone(),
-                    },
-                    Arc::new(Mutex::new(
-                        project_artifact::source_registry::Registry::default(),
-                    )),
-                )),
+                store: Arc::new(factory.globals.artifacts.clone()),
                 project_id: ycoding_core::ycoding_schema::project::Id::new(
                     services.info.project.id.as_lossless().clone(),
                 )
@@ -227,14 +196,26 @@ pub(super) fn compose(
 }
 
 struct Shell {
-    roots: config::Roots,
-    directory: PathBuf,
-    project: String,
-    client: ycoding_core::ycoding_store::Client,
+    shell: Arc<shell::Shell>,
     configuration: Arc<config::Configuration>,
     paths: Arc<Paths>,
     policy: Arc<LeafPolicy>,
     tool: tokio::sync::OnceCell<ShellTool>,
+}
+
+struct AcquiredSearch {
+    binary: Arc<ycoding_core::platform::ripgrep_binary::Service>,
+    tool: Search,
+}
+impl Tool for AcquiredSearch {
+    fn definition(&self, name: &str) -> ToolDefinition { self.tool.definition(name) }
+    fn permission(&self) -> Option<&str> { self.tool.permission() }
+    fn settle(&self, input: JsonValue, context: Context) -> ToolFuture<'_> {
+        Box::pin(async move {
+            let ripgrep = self.binary.filepath().await.map_err(|_| registry::Failure::message("ripgrep acquisition failed"))?;
+            Search { kind: self.tool.kind, directory: self.tool.directory.clone(), data: self.tool.data.clone(), service: self.tool.service.clone(), ripgrep, policy: self.tool.policy.clone() }.settle(input, context).await
+        })
+    }
 }
 
 impl Tool for Shell {
@@ -254,18 +235,7 @@ impl Tool for Shell {
                             registry::Failure::Defect("Session execution is not installed".into())
                         })?;
                     Ok::<_, registry::Failure>(ShellTool {
-                        shell: Arc::new(
-                            shell::Shell::new(
-                                &self.roots,
-                                self.directory.clone(),
-                                &self.project,
-                                self.client.clone(),
-                            )
-                            .await
-                            .map_err(|_| {
-                                registry::Failure::message("Location shell unavailable")
-                            })?,
-                        ),
+                        shell: self.shell.clone(),
                         configuration: self.configuration.clone(),
                         paths: self.paths.clone(),
                         policy: self.policy.clone(),

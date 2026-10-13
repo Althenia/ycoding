@@ -304,7 +304,10 @@ async fn expire(
     }
 }
 
-fn saved_config(directory: &Path, fallback: MeetingConfig) -> Result<MeetingConfig, ServiceError> {
+pub fn saved_config(
+    directory: &Path,
+    fallback: MeetingConfig,
+) -> Result<MeetingConfig, ServiceError> {
     match std::fs::read_to_string(directory.join(SETTINGS)) {
         Ok(text) => {
             let value = serde_json::from_str(&text)

@@ -1,5 +1,5 @@
 mod activation;
-mod capabilities;
+pub mod capabilities;
 pub mod context;
 mod families;
 pub mod provider;

@@ -349,6 +349,18 @@ impl Jobs {
     pub fn close(&self) {
         self.0.abort_all();
     }
+    pub async fn shutdown(&self) -> std::io::Result<()> {
+        let tasks = self.0.lock().jobs.values_mut().filter_map(|job| job.task.take()).collect::<Vec<_>>();
+        for task in &tasks {
+            task.abort();
+        }
+        for task in tasks {
+            if task.await.is_err_and(|error| !error.is_cancelled()) {
+                return Err(std::io::Error::other("Job shutdown failed"));
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Inner {

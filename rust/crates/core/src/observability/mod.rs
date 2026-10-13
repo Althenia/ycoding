@@ -72,6 +72,7 @@ impl std::error::Error for Error {}
 pub struct Guard {
     shared: Arc<Shared>,
     worker: Option<JoinHandle<Result<(), Error>>>,
+    attached: bool,
 }
 
 pub fn install(options: Options) -> Result<Guard, Error> {
@@ -138,6 +139,7 @@ fn start(options: Options) -> Result<Guard, Error> {
             .map_err(|_| Error::Worker)
         })
         .transpose()?;
+    let attached = subscriber.is_some();
     let worker_shared = shared.clone();
     let worker = thread::Builder::new()
         .name("ycoding-diagnostics".into())
@@ -176,6 +178,7 @@ fn start(options: Options) -> Result<Guard, Error> {
                             return Ok(());
                         }
                         Ok(Command::Wake) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                        Ok(Command::Attach(subscriber)) => worker.subscriber = Some(subscriber),
                     }
                     worker.events()?;
                     if let Some(exporter) = &mut worker.exporter {
@@ -188,6 +191,7 @@ fn start(options: Options) -> Result<Guard, Error> {
     let mut guard = Guard {
         shared: shared.clone(),
         worker: Some(worker),
+        attached,
     };
     if tracing::subscriber::set_global_default(
         tracing_subscriber::registry().with(layer::Diagnostics { shared }),
@@ -201,6 +205,23 @@ fn start(options: Options) -> Result<Guard, Error> {
 }
 
 impl Guard {
+    pub fn attach_events(&mut self, feed: Feed) -> Result<(), Error> {
+        if self.attached {
+            return Err(Error::AlreadyInstalled);
+        }
+        let shared = Arc::downgrade(&self.shared);
+        let subscriber = feed.subscribe(Scope::Global, None, move || {
+            if let Some(shared) = shared.upgrade()
+                && let Some(sender) = lock(&shared.sender).as_ref()
+            {
+                let _ = sender.try_send(Command::Wake);
+            }
+        }).map_err(|_| Error::Worker)?;
+        lock(&self.shared.sender).as_ref().ok_or(Error::Worker)?
+            .send(Command::Attach(subscriber)).map_err(|_| Error::Worker)?;
+        self.attached = true;
+        Ok(())
+    }
     pub fn close(&mut self) -> Result<(), Error> {
         if let Some(sender) = lock(&self.shared.sender).take() {
             let _ = sender.send(Command::Stop);
@@ -229,6 +250,7 @@ impl Shared {
     }
 }
 enum Command {
+    Attach(Subscriber),
     Log(Record),
     Span(Value),
     Wake,

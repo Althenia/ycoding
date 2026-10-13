@@ -193,7 +193,7 @@ async fn the_core_mcp_service_drives_retrieval_review_and_revision_aware_writes_
         let server = Server::new().await;
         let service = Service::new(&[], root.clone(), "1".into(), BTreeMap::new(), Hooks::default()).unwrap();
         service.add("wiki", server.config()).await.unwrap();
-        let mcp = Arc::new(ServiceMcp(service));
+        let mcp = Arc::new(ServiceMcp::new(service));
 
         let tools = mcp.tools().await.unwrap();
         let write = tools.iter().find(|tool| tool.name == "write").unwrap();

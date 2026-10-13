@@ -88,6 +88,7 @@ fn parses_modes_flags_paths_and_channel_hashes() {
         vec!["--port", "-1"],
         vec!["--unknown"],
         vec!["--hostname"],
+        vec!["--meeting=yes"],
     ] {
         let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
         assert!(matches!(
@@ -116,6 +117,14 @@ fn parses_modes_flags_paths_and_channel_hashes() {
     };
     assert_eq!(config.port, Some(0));
     assert_eq!(config.password, "secret");
+    assert!(!config.meeting, "Meeting stays off unless requested");
+    let Parsed::Run(meeting) = parse_launch(&["serve".into(), "--meeting".into()], |key| {
+        (key == "HOME").then(|| "/synthetic".into())
+    })
+    .unwrap() else {
+        panic!()
+    };
+    assert!(meeting.meeting);
 }
 
 #[test]

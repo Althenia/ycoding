@@ -728,7 +728,9 @@ provider and closes the database; later controls other than `status` and
 `intelligence::Intelligence` analyzes finalized evidence through two seams that
 the host supplies in `RuntimeOptions` and `ServiceOptions`. `Generate` maps a
 Session id and a prompt to text; `Mcp` lists tools and calls one, and
-`ServiceMcp::new` adapts the live Core MCP `Service`.
+`ServiceMcp::new` adapts the live Core MCP `Service`. `ServiceMcp::shared`
+adapts a shared `Arc<Service>`, and `replace` points later calls at a
+replacement service while calls already started keep theirs.
 `intelligence::from_generator` builds that `Generate` from a Session-backed
 `session::analysis::Generator`; `ServiceOptions.generator` applies it when
 `ServiceOptions.generate` is absent. Summary, plan, reconciliation, incremental

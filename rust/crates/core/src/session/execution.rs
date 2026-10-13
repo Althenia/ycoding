@@ -100,6 +100,10 @@ impl Execution {
         &self.jobs
     }
 
+    pub fn coordinator(&self) -> &Coordinator {
+        &self.coordinator
+    }
+
     pub fn job_shells(&'static self) -> JobShells {
         JobShells::new(
             self.jobs.clone(),

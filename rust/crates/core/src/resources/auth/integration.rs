@@ -92,6 +92,16 @@ pub struct Draft {
     order: Vec<LosslessString>,
 }
 impl Draft {
+    pub fn extend(&mut self, other: &Self) {
+        for id in &other.order {
+            if !self.entries.contains_key(id) {
+                self.order.push(id.clone());
+            }
+            if let Some(entry) = other.entries.get(id) {
+                self.entries.insert(id.clone(), entry.clone());
+            }
+        }
+    }
     fn entry(&mut self, id: LosslessString) -> &mut Entry {
         if !self.entries.contains_key(&id) {
             self.order.push(id.clone());
@@ -213,6 +223,8 @@ struct Inner {
     event_source: crate::event_feed::EventSource,
     credentials: Service,
     env: BTreeMap<String, String>,
+    preparation: super::Preparation,
+    claude: Option<crate::resources::model::ClaudeHost>,
     state: Mutex<State>,
     events: broadcast::Sender<Event>,
 }
@@ -305,10 +317,20 @@ impl WellKnown {
 
 impl Registry {
     pub fn new(credentials: Service, env: BTreeMap<String, String>) -> Self {
+        Self::prepared(credentials, env, Default::default(), None)
+    }
+    pub fn prepared(
+        credentials: Service,
+        env: BTreeMap<String, String>,
+        preparation: super::Preparation,
+        claude: Option<crate::resources::model::ClaudeHost>,
+    ) -> Self {
         let registry = Self(Arc::new(Inner {
             event_source: Default::default(),
             credentials,
             env,
+            preparation,
+            claude,
             state: Mutex::new(State {
                 closed: false,
                 next_transform: 0,
@@ -555,11 +577,24 @@ impl Registry {
                     .ok_or(Error::ProfileUnavailable)?;
             }
         }
+        let value = self.0.preparation.prepare_value(&self.0.credentials, stored.clone(), time, self.0.claude.as_ref().map(|host| &host.accounts)).await?;
         Ok(Snapshot {
             connection,
-            value: Some(stored.secret().clone()),
+            value: Some(value),
             credential: Some(stored),
         })
+    }
+    pub async fn selected_model(
+        &self,
+        info: &ycoding_schema::model::Info,
+        value: Option<&ycoding_schema::credential::Value>,
+        selected: Option<&Info>,
+        cursor: Option<&crate::resources::cursor::route::Host>,
+    ) -> Result<ycoding_ai::llm::Model, crate::resources::model::Error> {
+        if let Some(providers) = &self.0.preparation.providers {
+            return providers.selected_model(info, value, selected, self.0.claude.as_ref(), cursor, self.0.preparation.cursor.as_ref()).await;
+        }
+        crate::resources::model::from_catalog_model_with_claude(info, value, selected, self.0.claude.as_ref())
     }
     fn publish_connection(&self, integration: LosslessString) {
         self.0.publish(Event::ConnectionUpdated(integration));
