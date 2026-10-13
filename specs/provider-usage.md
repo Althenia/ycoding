@@ -42,6 +42,7 @@ Provider usage errors never block Session startup or model execution.
 | `provider_api` | `stable` | Documented provider HTTP API. |
 | `local_client_rpc` | `client_contract` | Documented local client/app-server contract. |
 | `response_headers` | `observed` | Recognized fields observed on normal provider responses. |
+| `response_stream` | `observed` | Recognized quota fields reported in a provider's streamed response body, such as an SSE event. |
 | `provider_internal_api` | `best_effort` | Provider-owned but undocumented account endpoint. |
 | `local_session` | source-dependent | Locally accumulated Session evidence. |
 

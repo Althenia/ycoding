@@ -226,7 +226,7 @@ test("provider usage methods use the public HTTP contract", async () => {
     providerID: "openai",
     label: "Codex",
     status: "available" as const,
-    source: "provider_internal_api" as const,
+    source: "response_stream" as const,
     stability: "best_effort" as const,
     updatedAt: 100,
     windows: [{ id: "codex-primary", label: "5-hour", unit: "percent" as const, used: 25 }],

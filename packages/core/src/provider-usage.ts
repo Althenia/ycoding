@@ -20,6 +20,7 @@ import { CopilotUsage } from "./provider-usage/copilot"
 import { ClaudeUsage } from "./provider-usage/claude"
 import { CodexUsage } from "./provider-usage/codex"
 import { MetaUsage } from "./provider-usage/meta"
+import { MuseUsage } from "./provider-usage/muse"
 import { OpenAIUsage } from "./provider-usage/openai"
 import { OpenRouterUsage } from "./provider-usage/openrouter"
 import { GrokUsage } from "./provider-usage/grok"
@@ -162,9 +163,11 @@ export function make(input: MakeInput): Interface {
     const primary = candidates.find((item) => item.active) ?? candidates[0]
     const selected = credentialID ? candidates.find((item) => item.id === credentialID) : primary
     const profileSource =
-      selected?.value.type === "oauth" &&
-      selected.value.metadata?.managed === true &&
-      typeof selected.value.metadata.source === "string"
+      selected &&
+      (providerID === "muse" ||
+        (selected.value.type === "oauth" &&
+          selected.value.metadata?.managed === true &&
+          typeof selected.value.metadata.source === "string"))
         ? SessionRunnerModel.accountIdentityDigest(selected)
         : undefined
     const observed = () =>
@@ -203,7 +206,10 @@ export function make(input: MakeInput): Interface {
 
     const adapter = input.adapters[providerID]
     if (!adapter) return unavailable(providerID, "unsupported", "Provider usage is unsupported")
-    if (!selected) return unavailable(providerID, "unsupported", "No supported credential is configured")
+    if (!selected)
+      return providerID === "muse" && credentialID === undefined
+        ? MuseUsage.unreported(now())
+        : unavailable(providerID, "unsupported", "No supported credential is configured")
 
     const updatedAt = Math.max(0, Math.trunc(now()))
     const snapshot = yield* cache
@@ -334,6 +340,7 @@ const layer = Layer.effect(
           openrouter: (input) => openRouter(http, input),
           openai: (input) => openAI(http, input, integrations.connection),
           meta: (input) => meta(http, input),
+          muse,
           "github-copilot": (input) => githubCopilot(http, input),
           xai: (input) => grok(http, input),
           zai: (input) => zai(http, input),
@@ -389,6 +396,8 @@ export const node = makeLocationNode({
   layer,
   deps: [Catalog.node, Config.node, Credential.node, Integration.node, Database.node, Global.node, httpClient],
 })
+
+export const muse: Adapter = (input) => Effect.succeed(MuseUsage.unreported(input.updatedAt))
 
 const claudeOAuth = (
   http: HttpClient.HttpClient,

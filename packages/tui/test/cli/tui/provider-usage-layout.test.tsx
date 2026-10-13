@@ -246,6 +246,15 @@ test("preserves reported account tiers and renders each reported reset without i
       ],
     },
     {
+      providerID: "xai",
+      label: "Stream quota",
+      status: "available",
+      source: "response_stream",
+      stability: "observed",
+      updatedAt: now,
+      windows: [{ id: "session", label: "Stream session", unit: "percent", used: 18 }],
+    },
+    {
       providerID: "github-copilot",
       label: "GitHub Copilot",
       status: "available",
@@ -278,11 +287,12 @@ test("preserves reported account tiers and renders each reported reset without i
     { width: 80, height: 60 },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("Claude Max") && frame.includes("Codex Pro"))
+  await app.waitForFrame((frame) => frame.includes("Claude Max") && frame.includes("Codex Pro") && frame.includes("Stream quota"))
 
   try {
     const rows = app.captureCharFrame().split("\n")
     expect(rows.find((row) => row.includes("Claude Max"))).toContain("live")
+    expect(rows.find((row) => row.includes("Stream quota"))).toContain("live")
     expect(rows.find((row) => /^\s*Session\s/.test(row))).toContain("resets in 1h")
     expect(rows.find((row) => row.includes("Weekly all models"))).toContain("resets in 2h")
     expect(rows.find((row) => row.includes("Experimental lane"))).toContain("resets in 3h")

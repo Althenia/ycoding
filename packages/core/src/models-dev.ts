@@ -460,7 +460,7 @@ function reasoningVariants(provider: SourceProvider, model: SourceModel): NonNul
   return []
 }
 
-function settingsForEffort(npm: string, modelID: string, effort: string): Provider.Settings | undefined {
+export function settingsForEffort(npm: string, modelID: string, effort: string): Provider.Settings | undefined {
   // DeepSeek's OpenAI-format API accepts the requested effort and maps it
   // server-side; Chat lowering reads `reasoningEffort` and `thinking`.
   if (npm === "@ai-sdk/openai-compatible" && modelID.includes("deepseek")) {

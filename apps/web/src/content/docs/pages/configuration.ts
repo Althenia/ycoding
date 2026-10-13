@@ -658,6 +658,23 @@ Report concrete defects with file and symbol evidence.`,
     description: "Provider entries, credential variable names, request overlays, custom endpoints, and named profiles.",
     sections: [
       {
+        heading: "Muse (Meta)",
+        blocks: [
+          {
+            kind: "paragraph",
+            text: "The builtin `muse` provider supports a Meta Muse Code account through Meta's OAuth device flow. Run `ycoding`, open `/connect`, choose Muse (Meta), and name the profile. Follow the displayed verification link and code. A Meta Model API key profile or `META_API_KEY` in the server environment uses the direct API and skips account key minting.",
+          },
+          {
+            kind: "paragraph",
+            text: "Account connections lazily mint an inference key and require an active Muse subscription/payment setup; failures include the setup link when supplied. Keys stay in memory per credential generation. Model discovery reads the Muse catalog's metadata[\"muse-code\"] for names, release dates, modalities and integer context/output limits. It skips hidden, non-tool, non-text and unbounded models. Effort choices follow catalog variants in catalog order, including minimal, low, medium, high, xhigh and max when advertised. The default effort comes from catalog options and is omitted when absent; temperature and top-p hints are not sent. Requests use streaming Responses, encrypted reasoning, automatic summaries, full-input replay, and YCoding's Session-scoped prompt cache key.",
+          },
+          {
+            kind: "paragraph",
+            text: "Account token refresh is unsupported: expired or rejected tokens require re-login through `/connect` → Muse (Meta). Minted key lifetime is unknown; an inference HTTP 401 remints once and retries once, then reports a re-login error if rejected again. Direct keys do not remint. Model cost is unreported. Subscription quota comes from response stream observations after inference: the duration-labeled window (for example, a 5-hour window) and Weekly percentages and reset times are reported when present, per credential profile. Missing metrics stay unreported and zero remains zero. Quota reads do not mint keys or call a separate usage endpoint; observations stay in memory until the local service restarts.",
+          },
+        ],
+      },
+      {
         heading: "What it controls",
         blocks: [
           {

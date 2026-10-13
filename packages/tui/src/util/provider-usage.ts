@@ -77,7 +77,7 @@ export function formatWindowValue(window: ProviderUsageWindow) {
 export function freshnessLabel(snapshot: ProviderUsageSnapshot, now = Date.now()) {
   if (snapshot.status === "stale") return "stale"
   if (snapshot.status !== "available") return snapshot.status
-  if (snapshot.source === "response_headers") return "live"
+  if (snapshot.source === "response_headers" || snapshot.source === "response_stream") return "live"
   const age = Math.max(0, now - snapshot.updatedAt)
   if (age < 60_000) return "updated now"
   return `updated ${Math.floor(age / 60_000)}m`

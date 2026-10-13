@@ -272,7 +272,7 @@ export const fromCatalogModel = (
     return Effect.succeed(codexModel(resolved, credential, key))
   }
 
-  if (Provider.isAISDK(resolved.package) && packageName === "@ai-sdk/openai") {
+  if (Provider.isAISDK(resolved.package) && packageName === "@ai-sdk/openai" && resolved.providerID !== "muse") {
     if (OpenAICodex.isChatGPT(credential)) return Effect.succeed(codexModel(resolved, credential, key))
     return Effect.succeed(
       withDefaults(resolved, OpenAIResponses.route)

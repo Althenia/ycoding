@@ -384,6 +384,7 @@ export type ProviderUsageSource =
   | "provider_api"
   | "local_client_rpc"
   | "response_headers"
+  | "response_stream"
   | "provider_internal_api"
   | "local_session"
 

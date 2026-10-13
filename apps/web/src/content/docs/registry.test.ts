@@ -45,6 +45,13 @@ const INTERNAL_DOC_SLUGS = [
 ] as const
 
 describe("public docs allowlist", () => {
+  test("documents Muse account and key setup with current authentication limits", () => {
+    const section = findDocPage("configuration/providers")?.sections.find((section) => section.heading === "Muse (Meta)")
+    const text = section?.blocks.flatMap((block) => block.kind === "paragraph" ? [block.text] : []).join(" ") ?? ""
+    for (const required of ["muse", "Meta Muse Code account", "Meta Model API key", "META_API_KEY", "minimal", "max", "metadata", "catalog", "hidden", "non-tool", "re-login", "unknown", "response stream observations", "Weekly", "Quota reads do not mint keys"])
+      expect(text).toContain(required)
+  })
+
   test("publishes exactly the approved routes", () => {
     expect([...PUBLIC_DOC_PATHS].sort()).toEqual([...APPROVED_DOC_ROUTES].sort())
     expect(DOC_PAGES.map((page) => `/docs/${page.slug}`).sort()).toEqual([...APPROVED_DOC_ROUTES].sort())

@@ -15,6 +15,7 @@ export const Source = Schema.Literals([
   "provider_api",
   "local_client_rpc",
   "response_headers",
+  "response_stream",
   "provider_internal_api",
   "local_session",
 ]).annotate({ identifier: "ProviderUsage.Source" })
