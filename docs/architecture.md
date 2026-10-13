@@ -60,6 +60,32 @@ Rules:
 
 Client, TUI, and Web code must not import Core or Server implementation modules to mutate durable state.
 
+### Rust backend
+
+The Rust workspace under `rust/` contains six library crates: `ycoding-schema`, `ycoding-store`, `ycoding-protocol`, `ycoding-ai`, `ycoding-core`, and `ycoding-runtime`. Their crate manifests fix this dependency direction:
+
+```text
+ycoding-schema ─> ycoding-ai ────┐
+ycoding-schema ─> ycoding-store ─┴─> ycoding-core ─┐
+ycoding-protocol ──────────────────────────────────┴─> ycoding-runtime
+```
+
+- `ycoding-schema` owns the lossless string and JSON codec and the typed domain contract: branded IDs, durable and ephemeral event payloads, Session and orchestration shapes, and validation shared across process boundaries. It depends on no other workspace crate.
+- `ycoding-store` owns the redb storage engine and its transaction, snapshot, catalog, and ordered-key boundary. Domain owners supply compiled table declarations and Schema-owned record codecs; the engine supplies no foreign-key or cascade framework. It depends only on `ycoding-schema`.
+- `ycoding-protocol` owns the revision 5 wire contract described below. Its manifest depends on no other workspace crate; its build generates the Rust operation table from the canonical protobuf descriptors.
+- `ycoding-ai` owns provider-native request lowering and incremental response settlement. It performs exactly one physical attempt per route execution and does not own Sessions, permissions, provider discovery, configuration, credential storage, quota refresh, or durable events. It depends only on `ycoding-schema`.
+- `ycoding-core` owns the Rust runtime behavior built on Schema, Store, and AI: Session creation, prompt admission, execution, history, compaction, and retention; configuration, resources, instructions, permissions, guardrails, forms, and questions; models, providers, and credentials; durable subagent orchestration and autonomy; skill and project-artifact handling; MCP; shell, PTY, browser, computer, meeting, and tool execution boundaries; and the event feed.
+- `ycoding-runtime` maps revision 5 operations onto Core. It owns the Sans-IO connection's socket adapter, dispatch, local authentication boundary, per-Location service construction, and the server entry points `serve` and `serve_with`, which serve one WebSocket route, `/ws/v5/local`, on a caller-supplied multi-thread Tokio listener.
+
+The revision 5 wire contract is declared in `protocol/ycoding/v5/` (`foundation.proto`, `operations.proto`, `shared.proto`, `session.proto`, `resources.proto`, `platform.proto`, and `connector.proto`). Each file declares one protobuf service per operation group and one RPC per operation with an explicit operation ID, diagnostic name, typed errors, roles, scope, mutation, settlement, paging, streaming, and sensitivity annotations; these declarations describe binary WebSocket operations and do not enable gRPC. Field constraints and `domain_obligations` are generated metadata: structural validators enforce the bounds, while wire-to-domain conversion in `ycoding-schema` must enforce the obligations before a handler runs. The TypeScript generation owner is `bun run --cwd packages/protocol generate:v5`; the Rust protocol build generates the matching `OPERATIONS` table and `DOMAIN_OBLIGATIONS` from the same descriptors. Neither generated table grants permission or implements dispatch. Exact operation shapes and coverage rules are specified in [`specs/wire-resources.md`](../specs/wire-resources.md) and the sibling wire contracts.
+
+The standard runtime dispatcher registers the health, server, Session, event-subscription, permission, question, form, and guardrail operations implemented in `ycoding-runtime`; a descriptor without a registered handler is not a served operation.
+
+Two limits bound this backend:
+
+- The Rust workspace ships no executable or launcher. No crate declares a binary target, so the terminal executable and managed-service lifecycle remain owned by `packages/cli`; a Rust caller must construct `ycoding_runtime::Services`, bind a listener, and call `serve` or `serve_with` itself.
+- Production per-Location composition is incomplete. `ycoding-runtime` builds `LocationServices` (permissions, saved permissions, questions, forms, guardrails, and optional prediction and prompt-generation helpers) for a recorded Project Location when a supplied `Core` is present, and dispatch reports Core as not ready when it is absent. No shipped entry point assembles that `Core`, its helper provider, or its Location set for production use.
+
 ### Remote presentation boundary
 
 The local CLI connects outbound to the relay and maps a fixed operation set onto the existing authenticated local service. An enrolled machine's authenticated owner can access every Session in that backend. The bridge derives each Location from the paginated backend inventory; a browser cannot supply an arbitrary local URL, HTTP method, filesystem path, or Location header.
