@@ -6,6 +6,7 @@ pub mod extension;
 pub mod instructions;
 pub mod job;
 pub mod meeting;
+pub mod observability;
 pub mod platform;
 pub mod process;
 pub mod regexp;

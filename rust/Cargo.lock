@@ -5233,6 +5233,8 @@ dependencies = [
  "tar",
  "tokio",
  "tokio-tungstenite 0.30.0",
+ "tracing",
+ "tracing-subscriber",
  "url",
  "windows-sys 0.61.2",
  "yaml-rust2",

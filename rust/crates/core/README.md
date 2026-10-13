@@ -79,6 +79,45 @@ injected clocks, interleaved writes, startup/hourly ownership, failure continuit
 held outputs and close/drain. Store boundary checks reside in
 `tests/session_tables.rs`.
 
+## Diagnostics and OTLP
+
+The launcher calls `observability::install(Options::new(&roots, version, channel,
+local)) -> Result<Guard, Error>` once and retains the guard. This module does not
+install itself at runtime startup. `Guard::close(&mut self)` stops intake, drains
+accepted diagnostics, flushes the file and OTLP batches, joins the worker and
+releases the optional event-feed subscription; Drop performs the same cleanup.
+Close is idempotent. File and worker failures return safe categories; exporter
+failures leave local logging available without recording transport errors.
+
+Files append under `Roots.log` (`$XDG_DATA_HOME/ycoding/log`): `ycoding.log`, or
+`ycoding-<sanitized-channel>.log` for local installs. Unix files are created and
+tightened to 0600 and the log directory to 0700. Records use timestamp/level/run
+key-value text, flattened structured fields and span annotations, JSON quoting
+where needed, and one shared eight-hex-digit run identity. `YCODING_LOG_LEVEL`
+accepts DEBUG, INFO, WARN or ERROR case-insensitively, otherwise INFO;
+`YCODING_PRINT_LOGS=1` mirrors the same filtered records to stderr.
+
+`Options.environment` captures process environment and may be supplied explicitly.
+`OTEL_EXPORTER_OTLP_ENDPOINT` enables HTTP JSON logs at `<endpoint>/v1/logs` and
+traces at `<endpoint>/v1/traces`; `OTEL_EXPORTER_OTLP_HEADERS` supplies comma-separated
+headers, splitting on the first equals sign. Percent-decoded
+`OTEL_RESOURCE_ATTRIBUTES` are accepted only when every entry is valid. Service
+name/version, deployment channel, `YCODING_CLIENT` (default `cli`), run and instance
+identity override conflicting resource entries. Native tracing parents and links
+preserve trace/span correlation, independently of the diagnostic level threshold.
+The bounded worker batches logs each second and traces each five seconds, also
+flushing at batch capacity and shutdown. HTTP requests time out after three seconds;
+a failed signal export pauses that signal for sixty seconds. No metrics or global
+OpenTelemetry context manager is installed.
+
+Set `Options.events` to the shared `event_feed::Feed` to log only `agent.updated`,
+`catalog.updated`, `command.updated` and `config.updated` ephemeral events. Credentials,
+auth/header fields, raw provider payload fields and configured OTLP header values
+are redacted before every sink, including span fields and resource attributes.
+Callers must still keep sensitive data out of free-form diagnostic messages and
+unclassified fields; the sink cannot identify arbitrary secret text. Export HTTP
+instrumentation is suppressed to prevent recursion and header/error disclosure.
+
 ## Process extensions
 
 `extension::{Configuration, Extension}` resolves explicit trusted executable

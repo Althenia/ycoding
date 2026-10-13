@@ -32,6 +32,8 @@ ring = { workspace = true, features = ["alloc"] }
 serde_json.workspace = true
 url.workspace = true
 tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 tokio-tungstenite.workspace = true
 yaml-rust2.workspace = true
 ycoding-ai = { path = "../ai" }
