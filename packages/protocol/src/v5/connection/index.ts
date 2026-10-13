@@ -255,6 +255,7 @@ export class Connection {
     scope: Scope,
     now: number,
     direction: "send" | "receive" = "receive",
+    canonicalSourceEpoch?: string,
   ): Decision[] {
     const decisions = this.check(now)
     if (this.phase === "closed") return decisions
@@ -264,7 +265,6 @@ export class Connection {
     if (
       !pending ||
       !subscriptionID ||
-      subscriptions.has(subscriptionID) ||
       !(scope.target.case === "session" || scope.target.case === "global") ||
       (pending.scope.target.case === "session" && !sameScope(pending.scope, scope))
     )
@@ -274,12 +274,28 @@ export class Connection {
       scope.target.case !== "session"
     )
       return this.close(FailureCategory.DIRECTION)
+    if (this.options.role === PeerRole.RELAY && !canonicalSourceEpoch) return this.close(FailureCategory.DIRECTION)
+    const existing = subscriptions.get(subscriptionID)
+    if (existing) {
+      if (
+        !canonicalSourceEpoch ||
+        !(this.options.role === PeerRole.RELAY || (this.options.role === PeerRole.AGENT && direction === "send")) ||
+        !sameScope(existing.scope, scope) ||
+        existing.sourceEpoch !== canonicalSourceEpoch ||
+        existing.eventTypes.length !== pending.operation.eventTypes.length ||
+        !existing.eventTypes.every((type) => pending.operation.eventTypes.includes(type))
+      )
+        return this.close(FailureCategory.MALFORMED)
+      this.awaitingSubscription.delete(key)
+      return decisions
+    }
     if (subscriptions.size >= this.budgets.subscriptions) return this.close(FailureCategory.LIMIT)
     this.awaitingSubscription.delete(key)
     subscriptions.set(subscriptionID, {
       scope,
       eventTypes: pending.operation.eventTypes,
-      sourceEpoch: this.sourceEpoch,
+      sourceEpoch:
+        this.options.role === PeerRole.RELAY ? canonicalSourceEpoch! : (canonicalSourceEpoch ?? this.sourceEpoch),
       hydrating: false,
       invalidated: false,
       ending: false,
@@ -1183,7 +1199,7 @@ export class Connection {
       const subscription = this.subscriptions.get(subscriptionID)
       if (!subscription || subscription.hydrating || subscription.invalidated || subscription.resyncRequired)
         return this.close(FailureCategory.MALFORMED)
-      const decisions = this.consume(kind, frame.deliveryOrdinal, now)
+      const decisions = this.options.role === PeerRole.RELAY ? [] : this.consume(kind, frame.deliveryOrdinal, now)
       if (this.state === "closed") return decisions
       return [...decisions, ...this.releaseSubscription(subscriptionID, now), { type: "streamEnded", subscriptionID }]
     }

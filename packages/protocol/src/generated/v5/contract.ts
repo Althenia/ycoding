@@ -1,4 +1,4 @@
-export const CONTRACT_DIGEST = "f3a49172ff88798c61c8801cbc68d9c9922691c920aa7d28c2f105cb2cd563d8"
+export const CONTRACT_DIGEST = "26b6041e6d89ee3033ca8d7df0e72fd15eb521785142b4ddc60642c37a58ae4f"
 export const messages = {
   "ycoding.v5.Empty": {
     oneofs: 0,
@@ -30346,7 +30346,7 @@ export const messages = {
         constraints: {
           utf16Min: 0,
           utf16Max: 512,
-          domainObligations: ["packages/remote/src/index.ts#parseResponse"],
+          domainObligations: ["packages/protocol/src/v5/connection/index.ts#validResult"],
         },
       },
     ],
@@ -30372,7 +30372,7 @@ export const messages = {
         constraints: {
           utf16Min: 1,
           utf16Max: 128,
-          domainObligations: ["packages/remote/src/index.ts#validOperationInput"],
+          domainObligations: ["packages/protocol/src/v5/connection/index.ts#validRequest"],
         },
       },
       {
@@ -30385,7 +30385,7 @@ export const messages = {
         constraints: {
           utf16Min: 1,
           utf16Max: 128,
-          domainObligations: ["packages/remote/src/index.ts#validOperationInput"],
+          domainObligations: ["packages/protocol/src/v5/connection/index.ts#validRequest"],
         },
       },
       {
@@ -30398,7 +30398,7 @@ export const messages = {
         constraints: {
           utf16Min: 1,
           utf16Max: 8192,
-          domainObligations: ["packages/remote/src/index.ts#validOperationInput"],
+          domainObligations: ["packages/protocol/src/v5/connection/index.ts#validRequest"],
         },
       },
     ],
@@ -30463,7 +30463,7 @@ export const messages = {
         constraints: {
           utf16Min: 1,
           utf16Max: 128,
-          domainObligations: ["packages/remote/src/index.ts#validOperationInput"],
+          domainObligations: ["packages/protocol/src/v5/connection/index.ts#validRequest"],
         },
       },
       {
@@ -30476,7 +30476,7 @@ export const messages = {
         constraints: {
           utf16Min: 1,
           utf16Max: 128,
-          domainObligations: ["packages/remote/src/index.ts#validOperationInput"],
+          domainObligations: ["packages/protocol/src/v5/connection/index.ts#validRequest"],
         },
       },
       {
@@ -30489,7 +30489,7 @@ export const messages = {
         constraints: {
           utf16Min: 1,
           utf16Max: 128,
-          domainObligations: ["packages/remote/src/index.ts#validOperationInput"],
+          domainObligations: ["packages/protocol/src/v5/connection/index.ts#validRequest"],
         },
       },
       {
@@ -30528,7 +30528,7 @@ export const messages = {
         constraints: {
           utf16Min: 1,
           utf16Max: 128,
-          domainObligations: ["packages/remote/src/index.ts#validOperationInput"],
+          domainObligations: ["packages/protocol/src/v5/connection/index.ts#validRequest"],
         },
       },
       {
@@ -30541,7 +30541,7 @@ export const messages = {
         constraints: {
           utf16Min: 0,
           utf16Max: 2048,
-          domainObligations: ["packages/remote/src/index.ts#validOperationInput"],
+          domainObligations: ["packages/protocol/src/v5/connection/index.ts#validRequest"],
         },
       },
     ],
@@ -30696,7 +30696,7 @@ export const messages = {
         constraints: {
           utf16Min: 1,
           utf16Max: 128,
-          domainObligations: ["packages/remote/src/index.ts#validOperationInput"],
+          domainObligations: ["packages/protocol/src/v5/connection/index.ts#validRequest"],
         },
       },
       {
@@ -30709,7 +30709,7 @@ export const messages = {
         constraints: {
           utf16Min: 1,
           utf16Max: 128,
-          domainObligations: ["packages/remote/src/index.ts#validOperationInput"],
+          domainObligations: ["packages/protocol/src/v5/connection/index.ts#validRequest"],
         },
       },
     ],
@@ -30795,7 +30795,7 @@ export const messages = {
         constraints: {
           utf16Min: 1,
           utf16Max: 128,
-          domainObligations: ["packages/remote/src/index.ts#validOperationInput"],
+          domainObligations: ["packages/protocol/src/v5/connection/index.ts#validRequest"],
         },
       },
       {
@@ -30808,7 +30808,7 @@ export const messages = {
         constraints: {
           utf16Min: 1,
           utf16Max: 128,
-          domainObligations: ["packages/remote/src/index.ts#validOperationInput"],
+          domainObligations: ["packages/protocol/src/v5/connection/index.ts#validRequest"],
         },
       },
       {
@@ -30821,7 +30821,7 @@ export const messages = {
         constraints: {
           utf16Min: 1,
           utf16Max: 2048,
-          domainObligations: ["packages/remote/src/index.ts#validOperationInput"],
+          domainObligations: ["packages/protocol/src/v5/connection/index.ts#validRequest"],
         },
       },
     ],
@@ -30886,7 +30886,7 @@ export const messages = {
         constraints: {
           utf16Min: 1,
           utf16Max: 128,
-          domainObligations: ["packages/remote/src/index.ts#validOperationInput"],
+          domainObligations: ["packages/protocol/src/v5/connection/index.ts#validRequest"],
         },
       },
       {
@@ -30899,7 +30899,7 @@ export const messages = {
         constraints: {
           utf16Min: 1,
           utf16Max: 128,
-          domainObligations: ["packages/remote/src/index.ts#validOperationInput"],
+          domainObligations: ["packages/protocol/src/v5/connection/index.ts#validRequest"],
         },
       },
     ],
@@ -31078,7 +31078,7 @@ export const messages = {
         constraints: {
           utf16Min: 1,
           utf16Max: 256,
-          domainObligations: ["packages/remote/src/index.ts#validOperationInput"],
+          domainObligations: ["packages/protocol/src/v5/connection/index.ts#validRequest"],
         },
       },
     ],
@@ -31318,7 +31318,7 @@ export const messages = {
         repeated: false,
         target: "ycoding.v5.session_team_economics_Request_payload_sessionIDs",
         constraints: {
-          domainObligations: ["packages/remote/src/index.ts#validOperationInput"],
+          domainObligations: ["packages/protocol/src/v5/connection/index.ts#validRequest"],
         },
       },
     ],
@@ -31338,7 +31338,7 @@ export const messages = {
           utf16Max: 128,
           countMin: 1,
           countMax: 128,
-          domainObligations: ["packages/remote/src/index.ts#validOperationInput"],
+          domainObligations: ["packages/protocol/src/v5/connection/index.ts#validRequest"],
         },
       },
     ],
@@ -31604,7 +31604,7 @@ export const messages = {
         constraints: {
           utf16Min: 1,
           utf16Max: 128,
-          domainObligations: ["packages/remote/src/index.ts#validOperationInput"],
+          domainObligations: ["packages/protocol/src/v5/connection/index.ts#validRequest"],
         },
       },
     ],
@@ -31648,7 +31648,7 @@ export const messages = {
         constraints: {
           utf16Min: 1,
           utf16Max: 1024,
-          domainObligations: ["packages/remote/src/index.ts#validOperationInput"],
+          domainObligations: ["packages/protocol/src/v5/connection/index.ts#validRequest"],
         },
       },
     ],
@@ -31786,7 +31786,7 @@ export const messages = {
         constraints: {
           utf16Min: 1,
           utf16Max: 128,
-          domainObligations: ["packages/remote/src/index.ts#validOperationInput"],
+          domainObligations: ["packages/protocol/src/v5/connection/index.ts#validRequest"],
         },
       },
     ],
@@ -31828,7 +31828,7 @@ export const messages = {
         repeated: false,
         target: "ycoding.v5.session_family_activity_Request_payload_sessionIDs",
         constraints: {
-          domainObligations: ["packages/remote/src/index.ts#validOperationInput"],
+          domainObligations: ["packages/protocol/src/v5/connection/index.ts#validRequest"],
         },
       },
     ],
@@ -31848,7 +31848,7 @@ export const messages = {
           utf16Max: 128,
           countMin: 0,
           countMax: 128,
-          domainObligations: ["packages/remote/src/index.ts#validOperationInput"],
+          domainObligations: ["packages/protocol/src/v5/connection/index.ts#validRequest"],
         },
       },
     ],
@@ -31972,7 +31972,7 @@ export const messages = {
         constraints: {
           utf16Min: 0,
           utf16Max: 9007199254740991,
-          domainObligations: ["packages/remote/src/index.ts#validOperationInput"],
+          domainObligations: ["packages/protocol/src/v5/connection/index.ts#validRequest"],
         },
       },
       {
@@ -31985,7 +31985,7 @@ export const messages = {
         constraints: {
           integerMin: "0",
           integerMax: "1023",
-          domainObligations: ["packages/remote/src/index.ts#validOperationInput"],
+          domainObligations: ["packages/protocol/src/v5/connection/index.ts#validRequest"],
         },
       },
       {
@@ -57104,7 +57104,7 @@ export const enums = {
   "ycoding.v5.TextPredicate": [1, 2, 4],
   "ycoding.v5.FieldTextPolicy": [7, 7, 7, 7],
   "ycoding.v5.PeerRole": [1, 2, 3, 4, 5],
-  "ycoding.v5.SenderMask": [11, 20, 7, 28, 28, 16, 31, 31, 31, 31, 4, 7, 28, 28, 24, 24, 4, 28, 31, 31, 31, 31],
+  "ycoding.v5.SenderMask": [11, 20, 7, 28, 28, 28, 31, 31, 31, 31, 4, 7, 28, 28, 24, 24, 4, 28, 31, 31, 31, 31],
   "ycoding.v5.ScopeKind": [1, 2, 3, 4, 5, 6, 7],
   "ycoding.v5.MutationClass": [1, 2],
   "ycoding.v5.Settlement": [1, 2],

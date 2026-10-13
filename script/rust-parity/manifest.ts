@@ -1,4 +1,5 @@
 import path from "node:path"
+import { operations, PeerRole, Streaming } from "../../packages/protocol/src/generated/v5/index.js"
 
 export type Kind = "endpoint" | "connector" | "notice"
 export type Disposition = "RPC" | "STREAM" | "EXTERNAL" | "HTTP" | "REPLACE" | "DERIVED"
@@ -36,14 +37,14 @@ const groups: Record<string, string> = {
 const connectorRules = [
   { prefix: "provider.auth.", owner: "WP-005" },
   { prefix: "workspace.list", owner: "WP-009" },
-  { prefix: "workspace.catalog", owner: "WP-005" },
-  { prefix: "workspace.file.find", owner: "WP-009" },
-  { prefix: "usage.providers", owner: "WP-006" },
-  { prefix: "usage.summary", owner: "WP-004" },
+  { prefix: "catalog.get", owner: "WP-005" },
+  { prefix: "fs.find", owner: "WP-009" },
+  { prefix: "providerUsage.list", owner: "WP-006" },
+  { prefix: "usage.get", owner: "WP-004" },
   { prefix: "usage.report", owner: "WP-004" },
-  { prefix: "machine.keepAwake.", owner: "WP-010" },
-  { prefix: "machine.telemetry.", owner: "WP-004" },
-  { prefix: "machine.latency.", owner: "WP-004" },
+  { prefix: "keepAwake.", owner: "WP-010" },
+  { prefix: "telemetry.", owner: "WP-004" },
+  { prefix: "shell.output", owner: "WP-009" },
   { prefix: "session.attachment.", owner: "WP-013" },
   { prefix: "session.autonomy.", owner: "WP-008" },
   { prefix: "session.goal.", owner: "WP-008" },
@@ -130,6 +131,13 @@ export const ownerRules: readonly OwnerRule[] = [
     evidence: `${ownership}; packages/cli/src/remote-operations.ts#run; packages/cli/src/remote-local.ts`,
   },
   {
+    kind: "connector",
+    group: "remote",
+    prefix: "event.",
+    owner: "WP-014",
+    evidence: `${workPackage("WP-014")}; packages/protocol/src/v5/connection/index.ts; infra/cloudflare/src/relay/core.ts`,
+  },
+  {
     kind: "notice",
     group: "remote",
     owner: "WP-014",
@@ -179,14 +187,6 @@ function table(text: string) {
     )
 }
 
-function array(text: string, name: string) {
-  const body = text.match(new RegExp(`export const ${name} = \\[([\\s\\S]*?)\\] as const`))?.[1]
-  if (body === undefined) throw new Error(`Missing live array ${name}`)
-  const spreads = [...body.matchAll(/\.\.\.(\w+)/g)].map((match) => match[1])
-  if (spreads.some((spread) => spread !== "providerAuthOperations")) throw new Error(`Unresolved ${name} spread`)
-  return { names: [...body.matchAll(/"([^"]+)"/g)].map((match) => match[1]), spreads }
-}
-
 export async function generateManifest(root: string) {
   const inventoryPath = "specs/wire-operation-inventory.md"
   const inventory = await Bun.file(path.join(root, inventoryPath)).text()
@@ -226,21 +226,13 @@ export async function generateManifest(root: string) {
         source: `${source}:${text.slice(0, match.index).split("\n").length}`,
       })
   }
-  const remoteSource = await Bun.file(path.join(root, "packages/remote/src/index.ts")).text()
-  const providerSource = await Bun.file(path.join(root, "packages/remote/src/provider-auth.ts")).text()
-  const operations = array(remoteSource, "remoteOperations")
-  const auth = array(providerSource, "providerAuthOperations").names
-  const connector = [...operations.spreads.flatMap(() => auth), ...operations.names]
-  const notices = array(remoteSource, "remoteNoticeOperations").names
+  const remoteOperations = operations.filter((operation) => operation.roles.includes(PeerRole.REMOTE_CLIENT))
+  const connector = remoteOperations.filter((operation) => !operation.diagnosticName.startsWith("notice.")).map((operation) => operation.diagnosticName)
+  const notices = remoteOperations.filter((operation) => operation.diagnosticName.startsWith("notice.")).map((operation) => operation.diagnosticName)
   reconcileMembers(
     sourceMembers.map((member) => member.name),
     expected,
     "endpoint",
-  )
-  reconcileMembers(
-    connector,
-    remote.flatMap((row) => expand(row[0])),
-    "connector",
   )
   reconcileMembers(
     notices,
@@ -248,20 +240,20 @@ export async function generateManifest(root: string) {
     "notice",
   )
   const counts = { endpoint: sourceMembers.length, connector: connector.length, notice: notices.length }
-  if (counts.endpoint !== 198 || counts.connector !== 70 || counts.notice !== 4)
+  if (counts.endpoint !== 198 || counts.connector !== 66 || counts.notice !== 4 || new Set(connector).size !== connector.length)
     throw new Error(`Baseline counts disagree: ${JSON.stringify(counts)}`)
   sourceMembers.push(
     ...connector.map((name) => ({
       kind: "connector" as const,
       name,
       group: "remote",
-      source: `packages/remote/src/${auth.includes(name) ? "provider-auth.ts" : "index.ts"}`,
+      source: "packages/protocol/src/generated/v5/operations.ts",
     })),
     ...notices.map((name) => ({
       kind: "notice" as const,
       name,
       group: "remote",
-      source: "packages/remote/src/index.ts#remoteNoticeOperations",
+      source: "packages/protocol/src/generated/v5/operations.ts",
     })),
   )
   const localDisposition = (name: string): Disposition => {
@@ -275,6 +267,8 @@ export async function generateManifest(root: string) {
       const disposition: Disposition =
         member.kind === "endpoint"
           ? localDisposition(member.name)
+          : remoteOperations.find((operation) => operation.diagnosticName === member.name)?.streaming === Streaming.EVENTS || remoteOperations.find((operation) => operation.diagnosticName === member.name)?.streaming === Streaming.ASSET_BULK
+            ? "STREAM"
           : member.kind === "notice"
             ? member.name === "notice.subscribe"
               ? "STREAM"

@@ -1,48 +1,54 @@
-/**
- * Relay core: the transport state machine that both WebSocket peers are routed
- * through.
- *
- * It is deliberately free of Cloudflare imports so the security-relevant behavior
- * (role separation, correlation translation, device ownership, limits,
- * chunk validation, disconnect and revocation semantics) is exercised directly.
- * The Durable Object adapter in `relay/durable-object.ts` supplies socket, storage,
- * and authority ports.
- *
- * The relay never interprets session payloads, never executes sessions, and never
- * persists transcripts.
- */
-
 import {
-  RemoteCloseCode,
+  create,
+  encodeStrict,
+  decodeStrict,
+  decodeLossless,
+  encodeLossless,
+  FrameSchema,
+  ControlSchema,
+  ResultSchema,
+  TypedPayloadSchema,
+  Connector_ErrorSchema,
+  Connector_Error_code,
+  ConnectorNoticeBeforeSchema,
+  ConnectorNoticeIDsSchema,
+  ConnectorNoticePageSchema,
+  ConnectorNoticeSettlementSchema,
+  NoticeSchema,
+  NoticeRecordSchema,
+  PresentationSchema,
+  NoticeCategory,
+  MutationClass,
+  LedgerClass,
+  FailureCategory,
+  PeerRole,
+  ContentKind,
+  AttentionNeed,
+  Streaming,
+  WireLimit,
+  SubscriptionSnapshotSchema,
+  event_subscribe_RequestSchema,
+  event_subscribe_ResultSchema,
+  event_unsubscribe_RequestSchema,
+  event_unsubscribe_ResultSchema,
+  session_log_ResultSchema,
+} from "../../../../packages/protocol/src/v5"
+import type { Frame, Notice, Presentation, Scope, OperationDescriptor } from "../../../../packages/protocol/src/v5"
+import type { Connection, Decision } from "../../../../packages/protocol/src/v5/connection"
+import { ReservationBudget } from "../../../../packages/protocol/src/v5/connection"
+import {
+  RelayLimits,
   RemoteLimits,
-  isNoticeRequest,
-  remoteOperationAccess,
-  isSessionID,
-  noticePageValue,
   noticeSequence,
-  parseAgentMessage,
-  parseClientMessage,
-  serializeError,
-  serializeNoticeFrame,
-  serializeRequest,
-  serializeResponse,
-  serializeCancel,
-  serializePriority,
-  serializeSessions,
-  serializeSubscriptions,
-  type RemoteAlertDetail,
-  type RemoteErrorCode,
-  type RemoteNotice,
-  type RemoteNoticeCategory,
-  type RemoteNoticePresentation,
-  type RemoteNoticeRequest,
-  type RemotePriorityMode,
-  type RemoteOperation,
-  type RemoteResponse,
-  type RemoteStatus,
+  createRelayConnection,
+  receiveBinary,
+  frameReservation,
+  handoffBinary,
 } from "../../../../packages/remote/src/index"
+import type { RemoteNotice, RemoteAlertDetail } from "../../../../packages/remote/src/index"
 import type { NoticeEvent, NoticeStore } from "./notice-store"
 import type { PushEvent, PushOutcome } from "../push/send"
+
 export type RelayConnection = {
   readonly connectionID: string
   readonly role: "agent" | "client"
@@ -50,879 +56,1273 @@ export type RelayConnection = {
   readonly deviceID: string
   readonly browserSessionID: string
   readonly credentialExpiresAt: number
-  readonly subscriptions: readonly string[]
-  readonly noticesSubscribed: boolean
-  readonly priority?: RemotePriorityMode
-  readonly pending: readonly { readonly relayID: string; readonly clientID: string }[]
 }
-
 export type OfflineCheck = { readonly ownerID: string; readonly deviceID: string; readonly closedAt: number }
-
-export type RelayAuthority = { readonly ok: true } | { readonly ok: false; readonly reason: string }
-
+export type RelayAuthority =
+  | { readonly ok: true; readonly ownerID: string }
+  | { readonly ok: false; readonly reason: string }
 export type RelayDeps = {
   readonly now: () => number
+  readonly monotonic: () => number
   readonly newID: () => string
-  readonly send: (connectionID: string, message: string) => void
+  readonly send: (connectionID: string, message: Uint8Array) => void
   readonly close: (connectionID: string, code: number, reason: string) => void
-  readonly saveSubscriptions: (connectionID: string, subscriptions: readonly string[]) => void
-  readonly savePending: (connectionID: string, pending: readonly { relayID: string; clientID: string }[]) => void
-  readonly loadStatus: () => Promise<RemoteStatus | undefined>
-  readonly saveStatus: (status: RemoteStatus) => Promise<void>
-  readonly loadOfflineCheck: () => Promise<OfflineCheck | undefined>
-  readonly saveOfflineCheck: (check: OfflineCheck | undefined) => Promise<void>
-  readonly savePriority: (connectionID: string, mode: RemotePriorityMode) => void
   readonly notices: NoticeStore
-  readonly saveNoticeSubscription: (connectionID: string, subscribed: boolean) => void
   readonly authorizeClientCommand: (sessionID: string, deviceID: string) => Promise<RelayAuthority>
   readonly authorizeAgentCommand: (deviceID: string) => Promise<RelayAuthority>
-  /**
-   * How long a successful authority check may be reused before a client is
-   * re-validated. Bounds D1 reads while still failing closed on revocation and
-   * expiry during event delivery.
-   */
-  readonly authorityTtlMs: number
-  readonly notifyPush?: (accountID: string, event: PushEvent) => Promise<readonly PushOutcome[]>
-  readonly agentHeartbeatAt?: (connectionID: string) => number | undefined
+  readonly loadOfflineCheck: () => Promise<OfflineCheck | undefined>
+  readonly saveOfflineCheck: (check: OfflineCheck | undefined) => Promise<void>
+  readonly notifyPush?: (ownerID: string, event: PushEvent) => Promise<readonly PushOutcome[]>
 }
-
-type ClientState = {
-  readonly connectionID: string
-  readonly deviceID: string
-  readonly browserSessionID: string
-  readonly credentialExpiresAt: number
-  subscriptions: string[]
-  noticesSubscribed: boolean
-  priority: RemotePriorityMode
-  windowStart: number
-  windowCount: number
-  authorityCheckedAt: number
-}
-
-type AgentState = {
-  readonly connectionID: string
-  readonly ownerID: string
-  readonly deviceID: string
-  readonly credentialExpiresAt: number
-  violations: number
-  windowStart: number
-  windowCount: number
+type Peer = {
+  identity: RelayConnection
+  connection: Connection
+  checkedAt: number
   seenAt: number
+  notices: boolean
+  requests: Map<string, Admission>
+  subscriptions: Map<string, { scope: Scope; epoch: string; operation: OperationDescriptor; requestID: string }>
 }
-
-type PendingRequest = {
-  readonly connectionID: string
-  readonly clientID: string
-  readonly operation: RemoteOperation
-  readonly sessionID?: string
-  chunkIndex: number
-  chunks: number
+type Admission = {
+  peer: Peer
+  dispatch: Extract<Decision, { type: "dispatch" }>
+  cancelled: boolean
+  agentID?: string
+  agent?: Peer
+  transferID?: string
+  clientTransferID?: string
+  interest?: boolean
+  subscription?: { id: string; scope: Scope; epoch: string }
 }
-const outcomeUnknownMessage = "Agent disconnected before settling this request"
-const forbiddenClientMessage = "Connection is not permitted"
-
-function closeCodeFor(reason: string): number {
-  if (reason === "revoked_session" || reason === "expired_session") return RemoteCloseCode.unauthorized
-  return RemoteCloseCode.forbidden
+type Forward = {
+  from: Peer
+  ledger: LedgerClass
+  ordinal: bigint
+  to: Peer
+  key: string
+  requestID?: string
+  handed?: bigint
+  handedLedger?: LedgerClass
+  ticket?: bigint
 }
-
-function closeReasonFor(reason: string): string {
-  if (reason === "revoked_session" || reason === "expired_session") return sessionUnauthorizedMessage
-  if (reason === "not_owner") return forbiddenClientMessage
-  return deviceUnauthorizedMessage
-}
-const sessionUnauthorizedMessage = "Session is no longer authorized"
-const deviceUnauthorizedMessage = "Device is no longer authorized"
-const agentConflictMessage = "Another YCoding connector is connected for this device"
-const forbiddenMessage = "Connection is not permitted"
-const noticeStorageMessage = "Notification storage is unavailable"
-const invalidFrameMessage = "Frame is not valid for this connection"
-const sizeMessage = "Frame exceeds the size bound"
-const policyMessage = "Agent violated the relay policy"
 
 export function createRelay(deps: RelayDeps) {
-  const clients = new Map<string, ClientState>()
-  let latestStatus: string | undefined
-  let previousStatus: RemoteStatus | undefined
-  let pushWindowStart = deps.now()
-  let pushWindowCount = 0
-  const summarized = new Set<RemoteNoticeCategory>()
-  let noticeFault = deps.notices.unavailable()
-  let offlineCheck: OfflineCheck | undefined
+  const budget = new ReservationBudget(RelayLimits.applicationBytes)
+  const sourceEpoch = deps.newID()
+  const peers = new Map<string, Peer>()
+  const agentRequests = new Map<string, Admission>()
+  const forwards = new Set<Forward>()
+  const heldInputs = new Set<string>()
+  const lanes = new Map<string, Promise<void>>()
+  const deliveries = new Set<Promise<void>>()
+  const backendEpochs = new Map<string, { epoch: string; bytes: number }>()
+  const acceptedInterests = new Map<string, Scope>()
+  let agent: Peer | undefined
+  let identity: { ownerID: string; deviceID: string } | undefined
+  let statusBytes: Uint8Array | undefined
+  let offline: OfflineCheck | undefined
   let offlineLoaded = false
-  const pending = new Map<string, PendingRequest>()
-  let agent: AgentState | undefined
+  let noticeFault = deps.notices.unavailable()
+  let pushWindow = deps.monotonic()
+  let pushCount = 0
+  const summarized = new Set<PushEvent["category"]>()
 
-  /**
-   * Ordered frame lanes. Frames in one lane are processed strictly in arrival
-   * order, so a frame that awaits authority can never let a later frame from the
-   * same lane overtake it. Lanes drain concurrently: a connection's agent frames
-   * other than responses share one lane, a browser's mutations share a lane per
-   * Session (or per connection when sessionless), its notice requests share one
-   * lane, and reads take no lane, so independent work never waits on another's
-   * authorization.
-   *
-   * The lane entry lives exactly as long as the queued frames: it is released
-   * when the lane drains, and a frame that fails does not poison later frames.
-   */
-  const frameQueues = new Map<string, Promise<void>>()
-  const admissions = new Map<string, Promise<void>>()
-
-  const inArrivalOrder = (lane: string, process: () => Promise<void>): Promise<void> => {
-    const previous = frameQueues.get(lane) ?? Promise.resolve()
-    const current = previous.then(process, process)
-    const drained = current.then(
+  function alive(peer: Peer) {
+    return peers.get(peer.identity.connectionID) === peer && peer.connection.state !== "closed"
+  }
+  function decisions(peer: Peer, entries: readonly Decision[]) {
+    for (const entry of entries) {
+      if (entry.type === "eventBatchReleased") {
+        for (const forward of forwards)
+          if (forward.to === peer && forward.ticket === entry.ticket) releaseForward(forward)
+      }
+      if (entry.type === "closed") drop(peer, entry.code, FailureCategory[entry.category])
+    }
+  }
+  function consume(peer: Peer, ledger: LedgerClass, ordinal: bigint) {
+    if (alive(peer)) decisions(peer, peer.connection.consume(ledger, ordinal, deps.monotonic()))
+  }
+  function releaseForward(forward: Forward) {
+    if (!forwards.delete(forward)) return
+    budget.release(RelayLimits.forwardingMetadataBytes)
+    if (
+      !heldInputs.has(inputKey(forward.from, forward.ledger, forward.ordinal)) &&
+      ![...forwards].some(
+        (item) => item.from === forward.from && item.ledger === forward.ledger && item.ordinal === forward.ordinal,
+      )
+    )
+      consume(forward.from, forward.ledger, forward.ordinal)
+  }
+  function receipts() {
+    for (const forward of forwards) {
+      if (!alive(forward.to)) {
+        releaseForward(forward)
+        continue
+      }
+      if (forward.handed === undefined || forward.handedLedger === undefined) continue
+      if (forward.ticket !== undefined) continue
+      const ledger = forward.to.connection.ledger(forward.handedLedger)
+      if (forward.handed <= ledger.sentOrdinal - BigInt(ledger.handedCount)) releaseForward(forward)
+    }
+  }
+  function flush(peer: Peer) {
+    if (!alive(peer)) return
+    decisions(
+      peer,
+      handoffBinary(
+        peer.connection,
+        (bytes, frame) => {
+          const key = frameKey(frame)
+          const forward = [...forwards].find(
+            (item) => item.to === peer && item.key === key && item.handed === undefined,
+          )
+          if (forward) {
+            forward.handed = frame.deliveryOrdinal
+            forward.handedLedger = frame.ledger
+          }
+          if (frame.body.case === "result" && frame.body.value.outcome.case === "success") {
+            const requestID = frame.body.value.requestId
+            const subscription = [...peer.subscriptions].find(
+              ([, item]) => item.requestID === requestID,
+            )
+            if (subscription)
+              decisions(
+                peer,
+                peer.connection.acceptSubscription(
+                  frame.body.value.requestId,
+                  subscription[0],
+                  subscription[1].scope,
+                  deps.monotonic(),
+                  "send",
+                  subscription[1].epoch,
+                ),
+              )
+          }
+          deps.send(peer.identity.connectionID, bytes)
+        },
+        deps.monotonic(),
+      ),
+    )
+  }
+  function flushAll() {
+    receipts()
+    for (const peer of peers.values()) flush(peer)
+  }
+  function finish(admission: Admission) {
+    if (!admission.peer.requests.delete(admission.dispatch.requestID)) return
+    if (admission.agentID !== undefined) agentRequests.delete(admission.agentID)
+    budget.release(RelayLimits.forwardingMetadataBytes)
+  }
+  function interestSessions(peer: Peer) {
+    return [
+      ...new Set([
+        ...[...peer.subscriptions.values()].flatMap((item) =>
+          item.scope.target.case === "session" ? [item.scope.target.value] : [],
+        ),
+        ...[...peer.requests.values()].flatMap((item) =>
+          item.interest && !item.cancelled && item.dispatch.request.scope?.target.case === "session"
+            ? [item.dispatch.request.scope.target.value]
+            : [],
+        ),
+      ]),
+    ]
+  }
+  function sendInterestSnapshot(peer: Peer, released = false) {
+    const current = agent
+    if (!current || !alive(current) || current.connection.state !== "established") return
+    const sessionIds = released ? [] : interestSessions(peer)
+    const union = new Set(
+      [...peers.values()]
+        .filter((item) => item.identity.role === "client" && item !== peer)
+        .flatMap(interestSessions)
+        .concat(sessionIds),
+    )
+    if (sessionIds.length > WireLimit.SUBSCRIPTIONS || union.size > WireLimit.SUBSCRIPTIONS) {
+      drop(peer, 1009, "LIMIT")
+      return
+    }
+    queued(current, {
+      case: "control",
+      value: create(ControlSchema, {
+        kind: {
+          case: "subscriptionSnapshot",
+          value: create(SubscriptionSnapshotSchema, { clientId: peer.identity.connectionID, sessionIds }),
+        },
+      }),
+    })
+    for (const [id, entry] of backendEpochs) {
+      if (union.has(id)) continue
+      budget.release(entry.bytes)
+      backendEpochs.delete(id)
+    }
+    for (const [id, scope] of acceptedInterests) {
+      if (scope.target.case === "session" && union.has(scope.target.value)) continue
+      decisions(current, current.connection.releaseSubscription(id, deps.monotonic()))
+      acceptedInterests.delete(id)
+      budget.release(RelayLimits.forwardingMetadataBytes)
+    }
+  }
+  function drop(peer: Peer, code: number, reason: string) {
+    if (peers.get(peer.identity.connectionID) !== peer) return
+    if (peer.identity.role === "client") sendInterestSnapshot(peer, true)
+    budget.release(peer.subscriptions.size * RelayLimits.forwardingMetadataBytes)
+    peer.subscriptions.clear()
+    peers.delete(peer.identity.connectionID)
+    peer.connection.close(FailureCategory.EPOCH, code)
+    budget.release(RelayLimits.peerMetadataBytes)
+    for (const admission of peer.requests.values()) {
+      admission.cancelled = true
+      if (admission.agent && alive(admission.agent) && admission.agentID !== undefined)
+        decisions(admission.agent, admission.agent.connection.cancel(admission.agentID, deps.monotonic()))
+      finish(admission)
+    }
+    for (const forward of forwards) if (forward.from === peer || forward.to === peer) releaseForward(forward)
+    deps.close(peer.identity.connectionID, code, reason)
+    if (agent === peer) {
+      agent = undefined
+      for (const admission of [...agentRequests.values()]) drop(admission.peer, 1012, "EPOCH")
+      agentRequests.clear()
+      for (const entry of backendEpochs.values()) budget.release(entry.bytes)
+      backendEpochs.clear()
+      budget.release(acceptedInterests.size * RelayLimits.forwardingMetadataBytes)
+      acceptedInterests.clear()
+    }
+  }
+  async function authorize(peer: Peer, fresh = true) {
+    if (!alive(peer)) return false
+    if (deps.now() >= peer.identity.credentialExpiresAt) {
+      drop(peer, 4401, "DIRECTION")
+      return false
+    }
+    if (!fresh && deps.monotonic() - peer.checkedAt < 5_000) return true
+    const authority =
+      peer.identity.role === "agent"
+        ? await deps.authorizeAgentCommand(peer.identity.deviceID)
+        : await deps.authorizeClientCommand(peer.identity.browserSessionID, peer.identity.deviceID)
+    if (!alive(peer)) return false
+    if (deps.now() >= peer.identity.credentialExpiresAt) {
+      drop(peer, 4401, "DIRECTION")
+      return false
+    }
+    if (!authority.ok || authority.ownerID !== peer.identity.ownerID) {
+      drop(
+        peer,
+        !authority.ok && ["revoked_session", "expired_session"].includes(authority.reason) ? 4401 : 4403,
+        "DIRECTION",
+      )
+      return false
+    }
+    peer.checkedAt = deps.monotonic()
+    return true
+  }
+  function queued(peer: Peer, body: Frame["body"]) {
+    if (!alive(peer)) return false
+    const copyReservation = WireLimit.SERVER_FRAME_BYTES + 256
+    if (!budget.reserve(copyReservation)) {
+      drop(peer, 1009, "LIMIT")
+      return false
+    }
+    try {
+      decisions(peer, peer.connection.enqueue(body, frameReservation(body), deps.monotonic()))
+    } finally {
+      budget.release(copyReservation)
+    }
+    return alive(peer)
+  }
+  function forward(from: Peer, frame: Frame, to: Peer, body: Frame["body"], requestID?: string) {
+    if (!budget.reserve(RelayLimits.forwardingMetadataBytes)) {
+      drop(to, 1009, "LIMIT")
+      if (
+        !heldInputs.has(inputKey(from, frame.ledger, frame.deliveryOrdinal)) &&
+        ![...forwards].some(
+          (item) => item.from === from && item.ledger === frame.ledger && item.ordinal === frame.deliveryOrdinal,
+        )
+      )
+        consume(from, frame.ledger, frame.deliveryOrdinal)
+      return false
+    }
+    const record: Forward = {
+      from,
+      ledger: frame.ledger,
+      ordinal: frame.deliveryOrdinal,
+      to,
+      key: frameKey(create(FrameSchema, { body })),
+      requestID: requestID ?? (body.case === "result" ? body.value.requestId : undefined),
+    }
+    forwards.add(record)
+    if (!queued(to, body)) {
+      releaseForward(record)
+      return false
+    }
+    return true
+  }
+  function reply(admission: Admission, typeName: string, payload: Uint8Array, error = false) {
+    const operation = admission.dispatch.operation
+    queued(admission.peer, {
+      case: "result",
+      value: create(ResultSchema, {
+        requestId: admission.dispatch.requestID,
+        operationId: operation.operationId,
+        settlement: operation.settlement,
+        outcome: { case: error ? "error" : "success", value: create(TypedPayloadSchema, { typeName, payload }) },
+      }),
+    })
+    consume(admission.peer, LedgerClass.NORMAL, admission.dispatch.ordinal)
+    finish(admission)
+  }
+  function noticeError(admission: Admission) {
+    reply(
+      admission,
+      Connector_ErrorSchema.typeName,
+      encodeStrict(
+        Connector_ErrorSchema,
+        create(Connector_ErrorSchema, {
+          code: Connector_Error_code.CONNECTOR_ERROR_CODE_INTERNAL_ERROR,
+          message: encodeLossless("Notification storage is unavailable"),
+        }),
+      ),
+      true,
+    )
+  }
+  function inLane(key: string, operation: () => Promise<void>) {
+    const current = (lanes.get(key) ?? Promise.resolve()).then(operation, operation)
+    const settled = current.then(
       () => undefined,
       () => undefined,
     )
-    frameQueues.set(lane, drained)
-    void drained.then(() => {
-      if (frameQueues.get(lane) === drained) frameQueues.delete(lane)
+    lanes.set(key, settled)
+    void settled.then(() => {
+      if (lanes.get(key) === settled) lanes.delete(key)
     })
     return current
   }
-
-  const mutationLane = (connectionID: string, message: { readonly sessionID?: string }) =>
-    message.sessionID === undefined ? `${connectionID}\0mutation` : `${connectionID}\0session\0${message.sessionID}`
-
-  const sendToClients = async (frame: string, noticesOnly = false) => {
-    await Promise.all(Array.from(clients.values()).filter((client) => !noticesOnly || client.noticesSubscribed).map(async (client) => {
-      if (await authorizeRecipient(client)) deps.send(client.connectionID, frame)
-    }))
+  async function noticeToClients(notice: Notice) {
+    await Promise.all(
+      [...peers.values()]
+        .filter((peer) => peer.notices)
+        .map(async (peer) => {
+          if (await authorize(peer))
+            queued(peer, { case: "control", value: create(ControlSchema, { kind: { case: "notice", value: notice } }) })
+        }),
+    )
+    flushAll()
   }
-
-  const recordNotices = async (operation: () => { readonly notices: readonly RemoteNotice[]; readonly total: number }): Promise<readonly RemoteNotice[] | undefined> => {
-    try {
-      const recorded = operation()
-      for (let start = 0; start < recorded.notices.length; start += RemoteLimits.maxNoticeBatch)
-        await sendToClients(serializeNoticeFrame({ type: "notice.added", notices: recorded.notices.slice(start, start + RemoteLimits.maxNoticeBatch), total: recorded.total }), true)
-      return recorded.notices
-    } catch {
-      if (noticeFault) return undefined
-      noticeFault = true
-      try { deps.notices.markUnavailable() } catch { console.warn("Notification sync failure marker could not be stored") }
-      await sendToClients(serializeNoticeFrame({ type: "notice.unavailable" }), true)
-      return undefined
-    }
-  }
-
-  const repeatNotices = (events: readonly NoticeEvent[]): readonly RemoteNotice[] => {
-    if (events.length === 0) return []
-    try {
-      return deps.notices.repeat(events)
-    } catch {
-      console.warn("Repeated attention alert could not be recorded")
-      return []
-    }
-  }
-
-  const presenters = () => {
-    const chosen = new Map<string, ClientState>()
-    for (const client of clients.values()) if (client.noticesSubscribed && !chosen.has(client.browserSessionID)) chosen.set(client.browserSessionID, client)
-    return chosen
-  }
-
-  const present = async (browserSessionID: string, items: readonly RemoteNoticePresentation[]) => {
-    for (;;) {
-      const client = presenters().get(browserSessionID)
-      if (client === undefined) return
-      if (!await authorizeRecipient(client)) continue
-      for (let start = 0; start < items.length; start += RemoteLimits.maxNoticeBatch)
-        deps.send(client.connectionID, serializeNoticeFrame({ type: "notice.present", items: items.slice(start, start + RemoteLimits.maxNoticeBatch) }))
+  async function answerNotice(admission: Admission) {
+    if (!budget.reserve(32 * 1024)) {
+      drop(admission.peer, 1009, "LIMIT")
       return
     }
-  }
-
-  const deliveries = new Set<Promise<void>>()
-
-  const deliverAlerts = async (ownerID: string, alerts: readonly { readonly event: PushEvent; readonly item?: RemoteNoticePresentation }[]) => {
-    if (deps.now() - pushWindowStart >= 60_000) { pushWindowStart = deps.now(); pushWindowCount = 0; summarized.clear() }
-    const admitted = Math.max(0, 20 - pushWindowCount)
-    const notify = deps.notifyPush
-    const immediate = new Map<string, RemoteNoticePresentation[]>()
-    const overflow = new Map<RemoteNoticeCategory, { readonly deviceID: string; readonly items: readonly RemoteNoticePresentation[] }>()
-    const dispatch = (send: NonNullable<RelayDeps["notifyPush"]>, event: PushEvent, items: readonly RemoteNoticePresentation[]) => {
-      const browsers = Array.from(presenters().keys())
-      const settle = async (outcomes: readonly PushOutcome[]) => {
-        if (items.length === 0) return
-        await Promise.all(browsers.filter((browserSessionID) => !outcomes.some((entry) => entry.owner === browserSessionID &&
-          entry.outcome === "accepted")).map((browserSessionID) => present(browserSessionID, items)))
+    try {
+      const name = admission.dispatch.operation.diagnosticName
+      if (name === "notice.list" || name === "notice.subscribe") {
+        const before =
+          name === "notice.list"
+            ? decodeLossless(decodeStrict(ConnectorNoticeBeforeSchema, admission.dispatch.request.payload).before!)
+            : undefined
+        const page = deps.notices.page(before ? noticeSequence(before) : undefined)
+        if (name === "notice.subscribe") admission.peer.notices = true
+        reply(
+          admission,
+          ConnectorNoticePageSchema.typeName,
+          encodeStrict(
+            ConnectorNoticePageSchema,
+            create(ConnectorNoticePageSchema, {
+              notice: added(page.notices, page.total),
+              next: page.next,
+              unavailable: noticeFault,
+            }),
+          ),
+        )
+        return
       }
-      const delivery: Promise<void> = Promise.resolve().then(() => send(ownerID, event)).then(settle, () => settle([]))
-        .finally(() => { deliveries.delete(delivery) })
+      const notification =
+        name === "notice.readAll"
+          ? create(NoticeSchema, { kind: { case: "cleared", value: {} } })
+          : (() => {
+              const input = decodeStrict(ConnectorNoticeIDsSchema, admission.dispatch.request.payload)
+              const removed = deps.notices.remove(input.ids.flatMap((id) => noticeSequence(id) ?? []))
+              return create(NoticeSchema, {
+                kind: { case: "removed", value: { ids: [...removed.ids], total: BigInt(removed.total) } },
+              })
+            })()
+      if (name === "notice.readAll") {
+        deps.notices.clear()
+        noticeFault = false
+      }
+      reply(
+        admission,
+        ConnectorNoticeSettlementSchema.typeName,
+        encodeStrict(
+          ConnectorNoticeSettlementSchema,
+          create(ConnectorNoticeSettlementSchema, { data: {}, notification }),
+        ),
+      )
+      await noticeToClients(notification)
+    } catch {
+      noticeFault = true
+      noticeError(admission)
+    } finally {
+      budget.release(32 * 1024)
+    }
+  }
+  async function admit(admission: Admission) {
+    const peer = admission.peer
+    if (!(await authorize(peer)) || admission.cancelled || !alive(peer)) {
+      finish(admission)
+      return
+    }
+    const operation = admission.dispatch.operation
+    if (operation.diagnosticName.startsWith("notice.")) {
+      await answerNotice(admission)
+      return
+    }
+    const current = agent
+    if (!current || current.connection.state !== "established") {
+      drop(peer, 1012, "EPOCH")
+      return
+    }
+    if (!(await authorize(current)) || agent !== current) {
+      if (alive(peer) && !admission.cancelled) drop(peer, 1012, "EPOCH")
+      finish(admission)
+      return
+    }
+    if (!alive(peer) || admission.cancelled) {
+      finish(admission)
+      return
+    }
+    if (operation.diagnosticName === "event.unsubscribe") {
+      const id = decodeStrict(event_unsubscribe_RequestSchema, admission.dispatch.request.payload).subscriptionId
+      const subscription = peer.subscriptions.get(id)
+      if (
+        !subscription ||
+        subscription.scope.target.case !== "session" ||
+        admission.dispatch.request.scope?.target.case !== "session" ||
+        subscription.scope.target.value !== admission.dispatch.request.scope.target.value
+      ) {
+        drop(peer, 4403, "DIRECTION")
+        return
+      }
+      peer.subscriptions.delete(id)
+      budget.release(RelayLimits.forwardingMetadataBytes)
+      decisions(peer, peer.connection.releaseSubscription(id, deps.monotonic(), "send"))
+      decisions(peer, peer.connection.takeDecisions())
+      sendInterestSnapshot(peer)
+      reply(
+        admission,
+        event_unsubscribe_ResultSchema.typeName,
+        encodeStrict(event_unsubscribe_ResultSchema, create(event_unsubscribe_ResultSchema, { data: {} })),
+      )
+      return
+    }
+    if (operation.streaming === Streaming.EVENTS) {
+      const scope = admission.dispatch.request.scope
+      if (scope?.target.case !== "session") {
+        drop(peer, 4403, "DIRECTION")
+        return
+      }
+      if (operation.diagnosticName === "event.subscribe") {
+        const target = decodeStrict(event_subscribe_RequestSchema, admission.dispatch.request.payload).scope
+        if (target?.target.case !== "session" || target.target.value !== scope.target.value) {
+          drop(peer, 4403, "DIRECTION")
+          return
+        }
+      }
+      admission.interest = true
+      sendInterestSnapshot(peer)
+      if (!alive(peer)) return
+    }
+    if (!budget.reserve(RelayLimits.forwardingMetadataBytes)) {
+      drop(peer, 1009, "LIMIT")
+      return
+    }
+    const request = admission.dispatch.request
+    const record: Forward = {
+      from: peer,
+      ledger: LedgerClass.NORMAL,
+      ordinal: admission.dispatch.ordinal,
+      to: current,
+      key: "",
+    }
+    forwards.add(record)
+    const copyReservation = WireLimit.CLIENT_FRAME_BYTES + 256
+    if (!budget.reserve(copyReservation)) {
+      releaseForward(record)
+      drop(peer, 1009, "LIMIT")
+      return
+    }
+    const reserved = frameReservation({ case: "request", value: { ...request, requestId: "18446744073709551615" } })
+    budget.release(copyReservation)
+    const outgoing = current.connection.request(
+      request.operationId,
+      request.scope!,
+      request.payload,
+      reserved,
+      deps.monotonic(),
+    )
+    decisions(current, outgoing.decisions)
+    if (!outgoing.requestID || !alive(current)) {
+      releaseForward(record)
+      drop(peer, 1012, "EPOCH")
+      return
+    }
+    admission.agentID = outgoing.requestID
+    admission.agent = current
+    record.key = `request:${outgoing.requestID}`
+    agentRequests.set(outgoing.requestID, admission)
+    flushAll()
+  }
+  async function alerts(ownerID: string, events: readonly { event: PushEvent; presentation: Presentation }[]) {
+    if (deps.monotonic() - pushWindow >= 60_000) {
+      pushWindow = deps.monotonic()
+      pushCount = 0
+      summarized.clear()
+    }
+    for (const item of events) {
+      const bounded = pushCount < 20
+      const overflow = !bounded && !summarized.has(item.event.category)
+      if (overflow) summarized.add(item.event.category)
+      if (bounded) pushCount++
+      const event: PushEvent =
+        bounded || item.event.category === "machine-offline"
+          ? item.event
+          : { category: item.event.category, deviceID: item.event.deviceID, overflow: events.length }
+      const reservation = 32 * 1024
+      if (!budget.reserve(reservation)) {
+        for (const peer of peers.values())
+          if (peer.notices && peer.identity.ownerID === ownerID) drop(peer, 1009, "LIMIT")
+        continue
+      }
+      const delivery = Promise.resolve()
+        .then(async () => {
+          const outcomes =
+            deps.notifyPush && (bounded || overflow) ? await deps.notifyPush(ownerID, event).catch(() => []) : []
+          const presented = new Set<string>()
+          for (const peer of peers.values()) {
+            if (
+              !peer.notices ||
+              presented.has(peer.identity.browserSessionID) ||
+              outcomes.some(
+                (outcome) => outcome.owner === peer.identity.browserSessionID && outcome.outcome === "accepted",
+              )
+            )
+              continue
+            if (!(await authorize(peer))) continue
+            presented.add(peer.identity.browserSessionID)
+            queued(peer, {
+              case: "control",
+              value: create(ControlSchema, {
+                kind: { case: "notice", value: { kind: { case: "present", value: { items: [item.presentation] } } } },
+              }),
+            })
+          }
+          flushAll()
+        })
+        .finally(() => {
+          deliveries.delete(delivery)
+          budget.release(reservation)
+        })
       deliveries.add(delivery)
     }
-    alerts.forEach((alert, index) => {
-      const item = alert.item
-      const category = alert.event.category
-      if (notify !== undefined && index < admitted) {
-        pushWindowCount += 1
-        dispatch(notify, alert.event, item === undefined ? [] : [item])
-        return
-      }
-      if (notify !== undefined && item !== undefined && category !== "machine-offline" && !summarized.has(category)) {
-        overflow.set(category, { deviceID: alert.event.deviceID, items: [...overflow.get(category)?.items ?? [], item] })
-        return
-      }
-      if (item !== undefined) for (const browserSessionID of presenters().keys()) immediate.set(browserSessionID, [...immediate.get(browserSessionID) ?? [], item])
-    })
-    for (const [category, entry] of overflow) {
-      summarized.add(category)
-      if (notify !== undefined) dispatch(notify, { category, deviceID: entry.deviceID, overflow: entry.items.length }, entry.items)
-    }
-    await Promise.all(Array.from(immediate, ([browserSessionID, items]) => present(browserSessionID, items)))
   }
-
-  const readOfflineCheck = async () => {
-    if (!offlineLoaded) {
-      offlineCheck = await deps.loadOfflineCheck()
-      offlineLoaded = true
-    }
-    return offlineCheck
-  }
-
-  const writeOfflineCheck = async (check: OfflineCheck | undefined) => {
-    offlineCheck = check
-    offlineLoaded = true
-    await deps.saveOfflineCheck(check)
-  }
-
-  const dropPendingForConnection = (connectionID: string) => {
-    for (const [relayID, entry] of Array.from(pending)) if (entry.connectionID === connectionID) {
-      pending.delete(relayID)
-      if (agent) deps.send(agent.connectionID, serializeCancel(relayID))
-    }
-  }
-
-  const failPendingForConnection = (connectionID: string, code: RemoteErrorCode, message: string) => {
-    for (const [relayID, entry] of Array.from(pending)) {
-      if (entry.connectionID !== connectionID) continue
-      pending.delete(relayID)
-      deps.send(entry.connectionID, serializeError(entry.clientID, code, message))
-    }
-    const client = clients.get(connectionID)
-    if (client) savePending(client)
-  }
-
-  const failAllPending = (code: RemoteErrorCode, message: string) => {
-    const affected = new Set<string>()
-    for (const [relayID, entry] of Array.from(pending)) {
-      pending.delete(relayID)
-      affected.add(entry.connectionID)
-      deps.send(entry.connectionID, serializeError(entry.clientID, code, message))
-    }
-    for (const connectionID of affected) {
-      const client = clients.get(connectionID)
-      if (client) savePending(client)
-    }
-  }
-
-  const savePending = (client: ClientState) => {
-    deps.savePending(client.connectionID, pendingEntriesFor(client.connectionID))
-  }
-
-  const pendingEntriesFor = (connectionID: string) =>
-    Array.from(pending).flatMap(([relayID, entry]) =>
-      entry.connectionID === connectionID ? [{ relayID, clientID: entry.clientID }] : [],
+  async function recordNotices(
+    owner: Peer,
+    events: readonly NoticeEvent[],
+    detailOf?: (sessionID: string) => RemoteAlertDetail,
+  ) {
+    const appended = deps.notices.append(events)
+    const repeated = deps.notices.repeat(
+      events.filter((event) => !appended.notices.some((notice) => notice.sessionID === event.sessionID)),
     )
-
-  const removeClient = (connectionID: string, code: number, reason: string) => {
-    sendSubscriptionSnapshot(connectionID, [])
-    clients.delete(connectionID)
-    failPendingForConnection(connectionID, "outcome_unknown", outcomeUnknownMessage)
-    deps.close(connectionID, code, reason)
-  }
-
-  const agentLive = (current: AgentState) =>
-    Math.max(current.seenAt, deps.agentHeartbeatAt?.(current.connectionID) ?? 0) > deps.now() - RemoteLimits.agentOfflineConfirmMs
-
-  const detachAgent = (code: number, reason: string) => {
-    if (!agent) return
-    const connectionID = agent.connectionID
-    agent = undefined
-    latestStatus = undefined
-    previousStatus = undefined
-    failAllPending("outcome_unknown", outcomeUnknownMessage)
-    deps.close(connectionID, code, reason)
-  }
-
-  const allow = (state: { windowStart: number; windowCount: number }, limit: number, windowMs: number) => {
-    const current = deps.now()
-    if (current - state.windowStart >= windowMs) {
-      state.windowStart = current
-      state.windowCount = 0
-    }
-    state.windowCount += 1
-    return state.windowCount <= limit
-  }
-
-  const respond = (connectionID: string, clientID: string, code: RemoteErrorCode, message: string) => {
-    deps.send(connectionID, serializeError(clientID, code, message))
-  }
-
-  const forwardsRequest = (connectionID: string, request: { readonly id: string; readonly operation: RemoteOperation; readonly sessionID?: string; readonly input?: Readonly<Record<string, unknown>> }) => {
-    if (!agent) return false
-    const relayID = deps.newID()
-    pending.set(relayID, {
-      connectionID,
-      clientID: request.id,
-      operation: request.operation,
-      ...(request.sessionID === undefined ? {} : { sessionID: request.sessionID }),
-      chunkIndex: 0,
-      chunks: 0,
-    })
-    const client = clients.get(connectionID)
-    if (client) savePending(client)
-    deps.send(
-      agent.connectionID,
-      serializeRequest({
-        type: "request",
-        id: relayID,
-        operation: request.operation,
-        ...(request.sessionID === undefined ? {} : { sessionID: request.sessionID }),
-        ...(request.input === undefined ? {} : { input: request.input }),
+    for (let start = 0; start < appended.notices.length; start += RemoteLimits.maxNoticeBatch)
+      await noticeToClients(added(appended.notices.slice(start, start + RemoteLimits.maxNoticeBatch), appended.total))
+    await alerts(
+      owner.identity.ownerID,
+      [...appended.notices, ...repeated].map((notice) => {
+        const need = events.find((event) => event.sessionID === notice.sessionID)?.need
+        const detail = {
+          ...detailOf?.(notice.sessionID),
+          ...(need === undefined ? {} : { need }),
+          ...(repeated.includes(notice) ? { repeat: true as const } : {}),
+        }
+        return {
+          event: {
+            category: notice.category,
+            sessionID: notice.sessionID,
+            deviceID: owner.identity.deviceID,
+            noticeID: notice.id,
+            ...detail,
+          },
+          presentation: create(PresentationSchema, {
+            kind: { case: "notice", value: { notice: noticeRecord(notice), detail: wireDetail(detail) } },
+          }),
+        }
       }),
     )
-    return true
   }
-
-  const sendSubscriptionSnapshot = (clientID: string, sessionIDs: readonly string[]) => {
-    if (!agent) return
-    deps.send(agent.connectionID, serializeSubscriptions({ type: "subscriptions", clientID, sessionIDs }))
-  }
-
-  const sendPriority = (client: ClientState) => {
-    if (!agent) return
-    deps.send(agent.connectionID, serializePriority({ type: "priority", clientID: client.connectionID, mode: client.priority }))
-  }
-
-  const announceClient = (client: ClientState) => {
-    sendSubscriptionSnapshot(client.connectionID, client.subscriptions)
-    if (client.priority === "background") sendPriority(client)
-  }
-
-  const relay = {
-    agentConnected: () => agent !== undefined,
-
-    async restore(connections: readonly RelayConnection[]) {
-      await readOfflineCheck()
-      for (const connection of connections.toSorted((a, b) => Number(b.role === "agent") - Number(a.role === "agent"))) {
-        await relay.attach(connection)
-        if (agent?.connectionID === connection.connectionID) agent.seenAt = 0
-      }
-    },
-
-    nextDeadline: () => {
-      const deadlines = Array.from(clients.values()).map((client) => client.credentialExpiresAt)
-      if (agent) deadlines.push(agent.credentialExpiresAt)
-      if (offlineCheck) deadlines.push(offlineCheck.closedAt + RemoteLimits.agentOfflineConfirmMs)
-      return deadlines.length === 0 ? undefined : Math.min(...deadlines)
-    },
-
-    async attach(connection: RelayConnection) {
-      if (deps.now() >= connection.credentialExpiresAt) {
-        if (connection.role === "client") sendSubscriptionSnapshot(connection.connectionID, [])
-        deps.close(
-          connection.connectionID,
-          RemoteCloseCode.unauthorized,
-          connection.role === "agent" ? deviceUnauthorizedMessage : sessionUnauthorizedMessage,
-        )
-        return
-      }
-      if (connection.role === "agent") {
-        const authority = await deps.authorizeAgentCommand(connection.deviceID)
-        if (!authority.ok) {
-          deps.close(connection.connectionID, RemoteCloseCode.unauthorized, deviceUnauthorizedMessage)
+  async function agentControl(peer: Peer, frame: Frame, byteLength: number) {
+    if (frame.body.case !== "control" || !(await authorize(peer))) return
+    const control = frame.body.value.kind
+    const key = inputKey(peer, frame.ledger, frame.deliveryOrdinal)
+    heldInputs.add(key)
+    const materializationBytes =
+      (control.case === "status"
+        ? control.value.attention.length
+        : control.case === "completions"
+          ? control.value.items.length
+          : control.case === "blocked"
+            ? 1
+            : 0) * 1024
+    if (!budget.reserve(materializationBytes)) {
+      heldInputs.delete(key)
+      drop(peer, 1009, "LIMIT")
+      return
+    }
+    try {
+      if (control.case === "status") {
+        const status = control.value
+        if (!budget.reserve(byteLength)) {
+          heldInputs.delete(key)
+          drop(peer, 1009, "LIMIT")
           return
         }
-        if (agent && agent.connectionID !== connection.connectionID) {
-          if (agentLive(agent)) {
-            deps.close(connection.connectionID, RemoteCloseCode.agentConflict, agentConflictMessage)
-            return
-          }
-          detachAgent(RemoteCloseCode.serviceRestart, "Agent connection replaced")
-        }
-        agent = {
-          connectionID: connection.connectionID,
-          ownerID: connection.ownerID,
-          deviceID: connection.deviceID,
-          credentialExpiresAt: connection.credentialExpiresAt,
-          violations: 0,
-          windowStart: deps.now(),
-          windowCount: 0,
-          seenAt: deps.now(),
-        }
-        latestStatus = undefined
-        if (await readOfflineCheck() !== undefined && agent?.connectionID === connection.connectionID) await writeOfflineCheck(undefined)
-        const storedStatus = await deps.loadStatus()
-        if (agent?.connectionID !== connection.connectionID) return
-        previousStatus = storedStatus
-        for (const client of Array.from(clients.values())) {
-          if (deps.now() >= client.credentialExpiresAt) {
-            removeClient(client.connectionID, RemoteCloseCode.unauthorized, sessionUnauthorizedMessage)
-            continue
-          }
-          const clientAuthority = await checkClientAuthority(client)
-          if (agent?.connectionID !== connection.connectionID) return
-          if (clients.get(client.connectionID) !== client) continue
-          if (!clientAuthority.ok) {
-            removeClient(client.connectionID, closeCodeFor(clientAuthority.reason), closeReasonFor(clientAuthority.reason))
-            continue
-          }
-          announceClient(client)
-        }
+        const prior = statusBytes ? decodeStrict(ControlSchema, statusBytes).kind : undefined
+        const oldAttention = prior?.case === "status" ? new Set(prior.value.attention) : undefined
+        const bytes = encodeStrict(ControlSchema, frame.body.value)
+        budget.release(byteLength - bytes.length)
+        if (statusBytes) budget.release(statusBytes.length)
+        statusBytes = bytes
+        await Promise.all(
+          [...peers.values()]
+            .filter((client) => client.identity.role === "client")
+            .map(async (client) => {
+              if (await authorize(client, false)) forward(peer, frame, client, frame.body)
+            }),
+        )
+        flushAll()
+        if (oldAttention)
+          await recordNotices(
+            peer,
+            status.attention
+              .filter((sessionID) => !oldAttention.has(sessionID))
+              .map((sessionID): NoticeEvent => {
+                const detail = status.details?.items.find((item) => item.sessionId === sessionID)
+                return {
+                  category: "approval-requested",
+                  sessionID,
+                  createdAt: deps.now(),
+                  need: status.failed?.items.includes(sessionID) ? "failed" : attentionNeed(detail?.need),
+                }
+              }),
+            (sessionID) => {
+              const title = status.details?.items.find((item) => item.sessionId === sessionID)?.title
+              return title === undefined ? {} : { title: decodeLossless(title) }
+            },
+          )
+        heldInputs.delete(key)
+        if (![...forwards].some((entry) => entry.from === peer && entry.ordinal === frame.deliveryOrdinal))
+          consume(peer, frame.ledger, frame.deliveryOrdinal)
         return
       }
-
-      const authority = await deps.authorizeClientCommand(connection.browserSessionID, connection.deviceID)
-      if (!authority.ok) {
-        sendSubscriptionSnapshot(connection.connectionID, [])
-        if (connection.pending.length > 0) {
-          for (const entry of connection.pending)
-            deps.send(connection.connectionID, serializeError(entry.clientID, "outcome_unknown", outcomeUnknownMessage))
-          deps.savePending(connection.connectionID, [])
+      if (control.case === "completions") {
+        if (
+          control.value.items.some(
+            (item) =>
+              item.sequence > BigInt(Number.MAX_SAFE_INTEGER) ||
+              item.createdMs > BigInt(Number.MAX_SAFE_INTEGER) ||
+              item.createdMs < BigInt(Number.MIN_SAFE_INTEGER),
+          )
+        ) {
+          heldInputs.delete(key)
+          drop(peer, 1009, "LIMIT")
+          return
         }
-        deps.close(connection.connectionID, closeCodeFor(authority.reason), closeReasonFor(authority.reason))
+        const recorded = deps.notices.complete(
+          control.value.items.map((item) => ({
+            id: item.id,
+            seq: Number(item.sequence),
+            created: Number(item.createdMs),
+            sessionID: item.sessionId,
+          })),
+          control.value.more,
+        )
+        for (let start = 0; start < recorded.notices.length; start += RemoteLimits.maxNoticeBatch)
+          await noticeToClients(
+            added(recorded.notices.slice(start, start + RemoteLimits.maxNoticeBatch), recorded.total),
+          )
+        await alerts(
+          peer.identity.ownerID,
+          recorded.notices.map((notice) => {
+            const title = control.value.items.find((item) => item.sessionId === notice.sessionID)?.title
+            const detail = title === undefined ? {} : { title: decodeLossless(title) }
+            return {
+              event: {
+                category: notice.category,
+                sessionID: notice.sessionID,
+                deviceID: peer.identity.deviceID,
+                noticeID: notice.id,
+                ...detail,
+              },
+              presentation: create(PresentationSchema, {
+                kind: { case: "notice", value: { notice: noticeRecord(notice), detail: wireDetail(detail) } },
+              }),
+            }
+          }),
+        )
+      }
+      if (control.case === "blocked")
+        await recordNotices(
+          peer,
+          [
+            {
+              category: "approval-requested",
+              sessionID: control.value.sessionId,
+              createdAt: deps.now(),
+              need: "blocked",
+            },
+          ],
+          () => (control.value.title === undefined ? {} : { title: decodeLossless(control.value.title) }),
+        )
+      if (control.case === "inventoryInvalidated")
+        await Promise.all(
+          [...peers.values()]
+            .filter((client) => client.identity.role === "client")
+            .map(async (client) => {
+              if (await authorize(client, false)) forward(peer, frame, client, frame.body)
+            }),
+        )
+    } catch {
+      noticeFault = true
+      deps.notices.markUnavailable()
+      await noticeToClients(create(NoticeSchema, { kind: { case: "unavailable", value: {} } }))
+    } finally {
+      budget.release(materializationBytes)
+    }
+    heldInputs.delete(key)
+    if (![...forwards].some((entry) => entry.from === peer && entry.ordinal === frame.deliveryOrdinal))
+      consume(peer, frame.ledger, frame.deliveryOrdinal)
+  }
+  async function forwardBulk(peer: Peer, frame: Frame, admission: Admission) {
+    if (
+      admission.cancelled ||
+      admission.agent !== peer ||
+      !(await authorize(peer)) ||
+      !(await authorize(admission.peer))
+    ) {
+      consume(peer, frame.ledger, frame.deliveryOrdinal)
+      return
+    }
+    if (!alive(peer) || !alive(admission.peer)) return
+    if (frame.body.case === "bulkStart") {
+      forward(
+        peer,
+        frame,
+        admission.peer,
+        {
+          case: "bulkStart",
+          value: {
+            ...frame.body.value,
+            requestId: admission.dispatch.requestID,
+            transferId: admission.clientTransferID!,
+          },
+        },
+        admission.dispatch.requestID,
+      )
+    }
+    if (frame.body.case === "bulkPiece")
+      forward(
+        peer,
+        frame,
+        admission.peer,
+        { case: "bulkPiece", value: { ...frame.body.value, transferId: admission.clientTransferID! } },
+        admission.dispatch.requestID,
+      )
+    if (frame.body.case === "bulkEnd") {
+      forward(
+        peer,
+        frame,
+        admission.peer,
+        { case: "bulkEnd", value: { ...frame.body.value, transferId: admission.clientTransferID! } },
+        admission.dispatch.requestID,
+      )
+      finish(admission)
+    }
+    flushAll()
+  }
+  function registerResult(peer: Peer, frame: Frame, admission: Admission) {
+    const operation = admission.dispatch.operation
+    if (
+      frame.body.case === "result" &&
+      operation.streaming === Streaming.EVENTS &&
+      frame.body.value.outcome.case === "success"
+    ) {
+      const scope = admission.dispatch.request.scope!
+      if (scope.target.case !== "session") {
+        drop(admission.peer, 4403, "DIRECTION")
         return
       }
-
-      const subscriptions = [...new Set(connection.subscriptions)]
+      const epoch = backendEpochs.get(scope.target.value)?.epoch
+      if (!epoch) {
+        drop(admission.peer, 1012, "EPOCH")
+        consume(peer, frame.ledger, frame.deliveryOrdinal)
+        return
+      }
+      const payload = frame.body.value.outcome.value.payload
+      const id = decodeLossless(
+        operation.diagnosticName === "session.log"
+          ? decodeStrict(session_log_ResultSchema, payload).subscriptionId!
+          : decodeStrict(event_subscribe_ResultSchema, payload).subscriptionId!,
+      )
+      const charge = acceptedInterests.has(id) ? 0 : RelayLimits.forwardingMetadataBytes
+      if (!budget.reserve(charge)) {
+        drop(admission.peer, 1009, "LIMIT")
+        consume(peer, frame.ledger, frame.deliveryOrdinal)
+        return
+      }
+      decisions(
+        peer,
+        peer.connection.acceptSubscription(admission.agentID!, id, scope, deps.monotonic(), "receive", epoch),
+      )
+      if (!alive(peer)) {
+        budget.release(charge)
+        return
+      }
+      acceptedInterests.set(id, scope)
+      admission.subscription = { id, scope, epoch }
+    }
+  }
+  async function result(peer: Peer, frame: Frame, admission: Admission) {
+    if (
+      !(await authorize(peer)) ||
+      !(await authorize(admission.peer)) ||
+      admission.cancelled ||
+      admission.peer.requests.get(admission.dispatch.requestID) !== admission ||
+      frame.body.case !== "result"
+    ) {
+      consume(peer, frame.ledger, frame.deliveryOrdinal)
+      return
+    }
+    const subscription = admission.subscription
+    if (subscription) {
+      if (!admission.peer.subscriptions.has(subscription.id) && !budget.reserve(RelayLimits.forwardingMetadataBytes)) {
+        drop(admission.peer, 1009, "LIMIT")
+        consume(peer, frame.ledger, frame.deliveryOrdinal)
+        return
+      }
+      admission.peer.subscriptions.set(subscription.id, {
+        scope: subscription.scope,
+        epoch: subscription.epoch,
+        operation: admission.dispatch.operation,
+        requestID: admission.dispatch.requestID,
+      })
+    }
+    forward(peer, frame, admission.peer, {
+      case: "result",
+      value: { ...frame.body.value, requestId: admission.dispatch.requestID },
+    })
+    finish(admission)
+    sendInterestSnapshot(admission.peer)
+    flushAll()
+  }
+  function canonicalEpoch(peer: Peer, scope: Scope, epoch: string) {
+    if (peer.identity.role !== "agent" || !alive(peer) || scope.target.case !== "session") return
+    const sessionID = scope.target.value
+    if (![...peers.values()].some((item) => interestSessions(item).includes(sessionID))) {
+      drop(peer, 1002, "DIRECTION")
+      return
+    }
+    const previous = backendEpochs.get(scope.target.value)
+    if (previous && (previous.epoch !== epoch || [...acceptedInterests.values()].some((accepted) => accepted.target.case === "session" && accepted.target.value === sessionID))) {
+      for (const client of [...peers.values()])
+        if (client.identity.role === "client" && interestSessions(client).includes(scope.target.value))
+          drop(client, 1012, "EPOCH")
+      return
+    }
+    const bytes = epoch.length * 3 + RelayLimits.forwardingMetadataBytes
+    if (!budget.reserve(bytes)) {
+      drop(peer, 1009, "LIMIT")
+      return
+    }
+    if (previous) budget.release(previous.bytes)
+    backendEpochs.set(scope.target.value, { epoch, bytes })
+  }
+  async function events(peer: Peer, entry: Extract<Decision, { type: "events" }>) {
+    if (!(await authorize(peer)) || entry.ordinal === undefined) return
+    const key = inputKey(peer, LedgerClass.EVENT, entry.ordinal)
+    heldInputs.add(key)
+    for (const client of peers.values()) {
+      const accepted = client.subscriptions.get(entry.subscriptionID)
+      if (!accepted || accepted.epoch !== entry.batch.sourceEpoch || !(await authorize(client, false))) continue
+      if (!budget.reserve(RelayLimits.forwardingMetadataBytes)) {
+        drop(client, 1009, "LIMIT")
+        continue
+      }
+      const record: Forward = {
+        from: peer,
+        ledger: LedgerClass.EVENT,
+        ordinal: entry.ordinal,
+        to: client,
+        key: `events:${entry.subscriptionID}`,
+      }
+      forwards.add(record)
+      const forwarded = client.connection.forwardEventBatch(entry.batch, deps.monotonic())
+      record.ticket = forwarded.ticket
+      decisions(client, forwarded.decisions)
+      if (forwarded.ticket === undefined) releaseForward(record)
+    }
+    heldInputs.delete(key)
+    if (
+      ![...forwards].some(
+        (item) => item.from === peer && item.ledger === LedgerClass.EVENT && item.ordinal === entry.ordinal,
+      )
+    )
+      consume(peer, LedgerClass.EVENT, entry.ordinal)
+    flushAll()
+  }
+  async function message(connectionID: string, data: string | ArrayBuffer) {
+    const peer = peers.get(connectionID)
+    if (!peer) return
+    peer.seenAt = deps.monotonic()
+    const received = receiveBinary(peer.connection, data, deps.monotonic())
+    decisions(peer, received.decisions)
+    receipts()
+    const tasks: Promise<void>[] = []
+    for (const entry of received.decisions) {
+      if (!alive(peer)) break
+      if (entry.type === "dispatch") {
+        if (peer.identity.role !== "client" || !budget.reserve(RelayLimits.forwardingMetadataBytes)) {
+          drop(peer, 1009, "LIMIT")
+          break
+        }
+        const admission: Admission = { peer, dispatch: entry, cancelled: false }
+        peer.requests.set(entry.requestID, admission)
+        const scope = entry.request.scope?.target
+        const lane = entry.operation.diagnosticName.startsWith("notice.")
+          ? `${connectionID}:notice`
+          : entry.operation.mutation === MutationClass.MUTATION
+            ? scope?.case === "session"
+              ? `session:${scope.value}`
+              : `${connectionID}:mutation`
+            : undefined
+        tasks.push(lane === undefined ? admit(admission) : inLane(lane, () => admit(admission)))
+      }
+      if (entry.type === "cancelled") {
+        for (const item of forwards)
+          if (item.to === peer && item.requestID === entry.requestID && item.handed === undefined) releaseForward(item)
+        const admission = peer.requests.get(entry.requestID)
+        if (!admission) continue
+        admission.cancelled = true
+        if (admission.agent && admission.agentID !== undefined && (await authorize(peer)))
+          decisions(admission.agent, admission.agent.connection.cancel(admission.agentID, deps.monotonic()))
+        const forwarded = [...forwards].filter(
+          (item) =>
+            item.from === peer && item.ledger === LedgerClass.NORMAL && item.ordinal === admission.dispatch.ordinal,
+        )
+        if (!forwarded.length) consume(peer, LedgerClass.NORMAL, admission.dispatch.ordinal)
+        for (const item of forwarded) if (item.handed === undefined) releaseForward(item)
+        finish(admission)
+        sendInterestSnapshot(peer)
+      }
+      if (entry.type === "settled" && peer.identity.role === "agent" && received.frame?.body.case === "result") {
+        const admission = agentRequests.get(entry.requestID)
+        if (!admission || admission.agent !== peer) {
+          consume(peer, received.frame.ledger, received.frame.deliveryOrdinal)
+          continue
+        }
+        if (
+          admission.cancelled ||
+          !alive(peer) ||
+          admission.peer.requests.get(admission.dispatch.requestID) !== admission
+        ) {
+          consume(peer, received.frame.ledger, received.frame.deliveryOrdinal)
+          continue
+        }
+        const frame = received.frame
+        const scope = admission.dispatch.request.scope?.target
+        registerResult(peer, frame, admission)
+        tasks.push(
+          admission.dispatch.operation.streaming === Streaming.EVENTS && scope?.case === "session"
+            ? inLane(`${connectionID}:events:${scope.value}`, () => result(peer, frame, admission))
+            : result(peer, frame, admission),
+        )
+      }
+      if (entry.type === "assetMetadata") {
+        const admission = agentRequests.get(entry.requestID)
+        if (!admission || admission.agent !== peer) {
+          consume(peer, entry.frame.ledger, entry.ordinal)
+          continue
+        }
+        tasks.push(
+          inLane(`${connectionID}:asset:${entry.requestID}`, async () => {
+            if (!(await authorize(peer)) || !(await authorize(admission.peer)) || admission.cancelled) {
+              consume(peer, entry.frame.ledger, entry.ordinal)
+              return
+            }
+            if (entry.frame.body.case === "result")
+              forward(peer, entry.frame, admission.peer, {
+                case: "result",
+                value: { ...entry.frame.body.value, requestId: admission.dispatch.requestID },
+              })
+            flushAll()
+          }),
+        )
+      }
       if (
-        subscriptions.length > RemoteLimits.maxSubscriptionsPerClient ||
-        subscriptions.some((sessionID) => !isSessionID(sessionID))
+        entry.type === "resync" &&
+        received.frame?.body.case === "control" &&
+        received.frame.body.value.kind.case === "resyncRequired" &&
+        entry.scope.target.case === "session"
       ) {
-        sendSubscriptionSnapshot(connection.connectionID, [])
-        deps.close(connection.connectionID, RemoteCloseCode.policyViolation, "Stored subscriptions exceed the limit")
-        return
+        const scope = entry.scope
+        const target = scope.target
+        canonicalEpoch(peer, scope, entry.sourceEpoch)
+        if (target.case === "session")
+          tasks.push(
+            inLane(`${connectionID}:events:${target.value}`, async () => {
+              await authorize(peer)
+            }),
+          )
       }
-      const client: ClientState = {
-        connectionID: connection.connectionID,
-        deviceID: connection.deviceID,
-        browserSessionID: connection.browserSessionID,
-        credentialExpiresAt: connection.credentialExpiresAt,
-        subscriptions,
-        noticesSubscribed: connection.noticesSubscribed,
-        priority: connection.priority ?? "interactive",
-        windowStart: deps.now(),
-        windowCount: 0,
-        authorityCheckedAt: deps.now(),
+      if (entry.type === "events") {
+        const target = entry.batch.scope?.target
+        if (target?.case === "session")
+          tasks.push(inLane(`${connectionID}:events:${target.value}`, () => events(peer, entry)))
       }
-      clients.set(client.connectionID, client)
-      deps.send(client.connectionID, serializeSessions({ type: "sessions" }))
-      if (latestStatus !== undefined) deps.send(client.connectionID, latestStatus)
-      announceClient(client)
-      if (connection.pending.length > 0) {
-        for (const entry of connection.pending)
-          deps.send(client.connectionID, serializeError(entry.clientID, "outcome_unknown", outcomeUnknownMessage))
-        deps.savePending(client.connectionID, [])
-      }
-    },
-
-    async agentClosed(connection: RelayConnection) {
-      const current = agent?.connectionID === connection.connectionID
-      if (current) {
-        agent = undefined
-        failAllPending("outcome_unknown", outcomeUnknownMessage)
-      }
-      if (agent !== undefined || await readOfflineCheck() !== undefined) return
-      await writeOfflineCheck({ ownerID: connection.ownerID, deviceID: connection.deviceID, closedAt: deps.now() })
-    },
-
-    async confirmOffline() {
-      const check = await readOfflineCheck()
-      if (check === undefined || deps.now() < check.closedAt + RemoteLimits.agentOfflineConfirmMs) return
-      if (agent !== undefined) {
-        await writeOfflineCheck(undefined)
-        return
-      }
-      const authority = await deps.authorizeAgentCommand(check.deviceID)
-      if (offlineCheck !== check || relay.agentConnected()) return
-      await writeOfflineCheck(undefined)
-      if (!authority.ok) return
-      await sendToClients(serializeNoticeFrame({ type: "notice.offline", at: check.closedAt }), true)
-      await deliverAlerts(check.ownerID, [{ event: { category: "machine-offline", deviceID: check.deviceID, offlineAt: check.closedAt }, item: { kind: "offline", at: check.closedAt } }])
-    },
-
-    detach(connectionID: string) {
-      if (clients.has(connectionID)) {
-        sendSubscriptionSnapshot(connectionID, [])
-        clients.delete(connectionID)
-        dropPendingForConnection(connectionID)
-      }
-    },
-
-    async handleClientMessage(connectionID: string, raw: string) {
-      const client = clients.get(connectionID)
-      if (!client) return
-      if (!allow(client, RemoteLimits.maxClientRequestsPerWindow, RemoteLimits.clientRateWindowMs)) {
-        removeClient(connectionID, RemoteCloseCode.policyViolation, "Client request rate exceeded")
-        return
-      }
-      if (deps.now() >= client.credentialExpiresAt) {
-        removeClient(connectionID, RemoteCloseCode.unauthorized, sessionUnauthorizedMessage)
-        return
-      }
-
-      const parsed = parseClientMessage(raw)
-      if (!parsed.ok) {
-        if (parsed.error.code === "message_too_large") {
-          deps.close(connectionID, RemoteCloseCode.tooLarge, sizeMessage)
-          return
-        }
-        if (parsed.id !== undefined) {
-          respond(connectionID, parsed.id, parsed.error.code, parsed.error.message)
-          return
-        }
-        deps.close(connectionID, RemoteCloseCode.unsupported, invalidFrameMessage)
-        return
-      }
-      const message = parsed.value
-      if (message.type === "ping") {
-        deps.send(connectionID, '{"type":"pong"}')
-        return
-      }
-      if (message.type === "pong") return
-      if (message.type === "cancel") {
-        await admissions.get(`${connectionID}\0${message.id}`)
-        if (clients.get(connectionID) !== client) return
-        const relayID = Array.from(pending).find(([, entry]) => entry.connectionID === connectionID && entry.clientID === message.id)?.[0]
-        if (relayID === undefined) return
-        pending.delete(relayID)
-        savePending(client)
-        if (agent) deps.send(agent.connectionID, serializeCancel(relayID))
-        return
-      }
-      if (message.type === "priority") {
-        client.priority = message.mode
-        deps.savePriority(connectionID, message.mode)
-        sendPriority(client)
-        return
-      }
-      if (isNoticeRequest(message)) {
-        await inArrivalOrder(`${connectionID}\0notice`, () => admitNoticeRequest(client, message))
-        return
-      }
-      const lane = remoteOperationAccess[message.operation] === "mutation" ? mutationLane(connectionID, message) : undefined
-      const key = `${connectionID}\0${message.id}`
-      const admitted = lane === undefined ? admitRequest(client, message) : inArrivalOrder(lane, () => admitRequest(client, message))
-      const settled = admitted.then(() => undefined, () => undefined)
-      admissions.set(key, settled)
-      void settled.then(() => {
-        if (admissions.get(key) === settled) admissions.delete(key)
-      })
-      await admitted
-    },
-
-    async handleAgentMessage(connectionID: string, raw: string) {
-      const current = agent
-      if (!current || current.connectionID !== connectionID) {
-        deps.close(connectionID, RemoteCloseCode.unsupported, invalidFrameMessage)
-        return
-      }
-      current.seenAt = deps.now()
-      if (!allow(current, RemoteLimits.maxAgentMessagesPerWindow, RemoteLimits.agentRateWindowMs)) {
-        detachAgent(RemoteCloseCode.policyViolation, "Agent message rate exceeded")
-        return
-      }
-
-      const parsed = parseAgentMessage(raw)
-      if (!parsed.ok) {
-        deps.close(
-          connectionID,
-          parsed.error.code === "message_too_large" ? RemoteCloseCode.tooLarge : RemoteCloseCode.unsupported,
-          parsed.error.code === "message_too_large" ? sizeMessage : invalidFrameMessage,
-        )
-        return
-      }
-      const message = parsed.value
-      if (message.type === "ping") {
-        deps.send(connectionID, '{"type":"pong"}')
-        return
-      }
-      if (message.type === "pong") return
-      if (message.type === "sessions") {
-        for (const client of clients.values())
-          deps.send(client.connectionID, serializeSessions({ type: "sessions" }))
-        return
-      }
-      if (message.type === "response") {
-        deliverResponse(current.connectionID, message)
-        return
-      }
-      return inArrivalOrder(connectionID, async () => {
-        if (message.type === "completions") {
-          const recorded = await recordNotices(() => deps.notices.complete(message.data, message.more))
-          await deliverAlerts(current.ownerID, (recorded ?? []).map((notice) => {
-            const title = message.data.find((item) => item.sessionID === notice.sessionID)?.title
-            const detail = title === undefined ? {} : { title }
-            return { event: { category: "agent-completed", sessionID: notice.sessionID, deviceID: current.deviceID, noticeID: notice.id, ...detail },
-              item: { kind: "notice", notice, ...(title === undefined ? {} : { detail }) } }
-          }))
-          return
-        }
-        if (message.type === "blocked") {
-          const event = { category: "approval-requested" as const, sessionID: message.sessionID, createdAt: deps.now(), need: "blocked" as const }
-          const appended = await recordNotices(() => deps.notices.append([event]))
-          const detail = { ...(message.title === undefined ? {} : { title: message.title }), need: "blocked" as const }
-          if (appended === undefined) {
-            await deliverAlerts(current.ownerID, [{ event: { category: event.category, sessionID: event.sessionID, deviceID: current.deviceID, ...detail } }])
-            return
+      if (entry.type === "resync" && received.frame?.body.case === "eventBatch") drop(peer, 1002, "EPOCH")
+      if (entry.type === "streamEnded" && received.frame?.body.case === "streamEnd") {
+        const frame = received.frame
+        const scope = acceptedInterests.get(entry.subscriptionID)
+        const target = scope?.target
+        if (target?.case === "session") tasks.push(inLane(`${connectionID}:events:${target.value}`, async () => {
+          if (!await authorize(peer)) return
+          const key = inputKey(peer, LedgerClass.EVENT, frame.deliveryOrdinal)
+          heldInputs.add(key)
+          for (const client of peers.values()) {
+            if (!client.subscriptions.has(entry.subscriptionID) || !await authorize(client, false)) continue
+            forward(peer, frame, client, frame.body)
+            client.subscriptions.delete(entry.subscriptionID)
+            budget.release(RelayLimits.forwardingMetadataBytes)
+            sendInterestSnapshot(client)
           }
-          const repeated = appended.length === 0 ? repeatNotices([event]) : []
-          await deliverAlerts(current.ownerID, [...appended, ...repeated].map((notice) => {
-            const alert = { ...detail, ...(repeated.includes(notice) ? { repeat: true as const } : {}) }
-            return { event: { category: notice.category, sessionID: notice.sessionID, deviceID: current.deviceID, noticeID: notice.id, ...alert },
-              item: { kind: "notice", notice, detail: alert } }
-          }))
-          return
+          heldInputs.delete(key)
+          if (![...forwards].some((item) => item.from === peer && item.ledger === LedgerClass.EVENT && item.ordinal === frame.deliveryOrdinal)) consume(peer, LedgerClass.EVENT, frame.deliveryOrdinal)
+          flushAll()
+        }))
+      }
+      if (entry.type === "bulkForward") {
+        const frame = entry.frame
+        const admission =
+          frame.body.case === "bulkStart"
+            ? agentRequests.get(frame.body.value.requestId)
+            : [...agentRequests.values()].find(
+                (item) =>
+                  item.transferID ===
+                  (frame.body.case === "bulkPiece" || frame.body.case === "bulkEnd"
+                    ? frame.body.value.transferId
+                    : undefined),
+              )
+        if (!admission || admission.agent !== peer) {
+          consume(peer, frame.ledger, frame.deliveryOrdinal)
+          continue
         }
-        if (message.type === "status") {
-          const before = previousStatus
-          await deps.saveStatus(message)
-          latestStatus = raw
-          await sendToClients(raw)
-          previousStatus = message
-          if (before !== undefined) {
-            const oldAttention = new Set(before.attention)
-            const detailOf = (sessionID: string): RemoteAlertDetail => {
-              const detail = message.details?.find((item) => item.sessionID === sessionID)
-              const need = message.failed?.includes(sessionID) ? "failed" : detail?.need
-              return { ...(detail?.title === undefined ? {} : { title: detail.title }), ...(need === undefined ? {} : { need }) }
-            }
-            const events = message.attention.filter((sessionID) => !oldAttention.has(sessionID))
-              .map((sessionID) => ({ category: "approval-requested" as const, sessionID, createdAt: deps.now(), need: detailOf(sessionID).need }))
-            const appended = events.length === 0 ? [] : await recordNotices(() => deps.notices.append(events))
-            const repeated = appended === undefined ? [] : repeatNotices(events.filter((event) => !appended.some((notice) => notice.sessionID === event.sessionID)))
-            const recorded = appended === undefined ? undefined : [...appended, ...repeated]
-            await deliverAlerts(current.ownerID, recorded === undefined
-              ? events.map((event) => ({ event: { category: event.category, sessionID: event.sessionID, deviceID: current.deviceID, ...detailOf(event.sessionID) } }))
-              : recorded.map((notice) => {
-                const detail = { ...detailOf(notice.sessionID), ...(repeated.includes(notice) ? { repeat: true as const } : {}) }
-                return { event: { category: notice.category, sessionID: notice.sessionID, deviceID: current.deviceID, noticeID: notice.id, ...detail },
-                  item: { kind: "notice", notice, ...(Object.keys(detail).length === 0 ? {} : { detail }) } }
-              }))
+        if (frame.body.case === "bulkStart") {
+          admission.transferID = frame.body.value.transferId
+          admission.clientTransferID = deps.newID()
+        }
+        tasks.push(inLane(`${connectionID}:asset:${admission.agentID}`, () => forwardBulk(peer, frame, admission)))
+      }
+      if (entry.type === "control" && received.frame) {
+        if (peer.identity.role === "agent") {
+          if (!budget.reserve(RelayLimits.forwardingMetadataBytes)) {
+            drop(peer, 1009, "LIMIT")
+            continue
           }
-          return
+          const byteLength = typeof data === "string" ? 0 : data.byteLength
+          tasks.push(
+            inLane(`${connectionID}:control`, () => agentControl(peer, received.frame!, byteLength)).finally(() =>
+              budget.release(RelayLimits.forwardingMetadataBytes),
+            ),
+          )
+        } else {
+          if (!(await authorize(peer))) continue
+          consume(peer, received.frame.ledger, received.frame.deliveryOrdinal)
         }
-        if (message.type === "event" || message.type === "events") {
-          for (const client of Array.from(clients.values())) {
-            if (!client.subscriptions.includes(message.sessionID)) continue
-            if (deps.now() >= client.credentialExpiresAt) {
-              removeClient(client.connectionID, RemoteCloseCode.unauthorized, sessionUnauthorizedMessage)
-              continue
-            }
-            // Fail closed: a revoked or expired session never receives an event,
-            // even when the revocation push never reached this object.
-            const authority = await checkClientAuthority(client)
-            if (!authority.ok) {
-              removeClient(client.connectionID, closeCodeFor(authority.reason), closeReasonFor(authority.reason))
-              continue
-            }
-            deps.send(client.connectionID, raw)
-          }
-          return
-        }
-      })
-    },
-
-    async revokeSession(sessionID: string) {
-      for (const client of Array.from(clients.values()))
-        if (client.browserSessionID === sessionID)
-          removeClient(client.connectionID, RemoteCloseCode.unauthorized, sessionUnauthorizedMessage)
-    },
-
-    closeDevice() {
-      noticeFault = false
-      detachAgent(RemoteCloseCode.unauthorized, deviceUnauthorizedMessage)
-      for (const client of Array.from(clients.values()))
-        removeClient(client.connectionID, RemoteCloseCode.unauthorized, deviceUnauthorizedMessage)
-    },
-
-    sweep() {
-      if (agent && deps.now() >= agent.credentialExpiresAt) detachAgent(RemoteCloseCode.unauthorized, deviceUnauthorizedMessage)
-      for (const client of Array.from(clients.values()))
-        if (deps.now() >= client.credentialExpiresAt)
-          removeClient(client.connectionID, RemoteCloseCode.unauthorized, sessionUnauthorizedMessage)
-    },
+      }
+    }
+    flushAll()
+    await Promise.all(tasks)
+    flushAll()
   }
 
   return {
-    ...relay,
-    settleDeliveries: async () => { while (deliveries.size > 0) await Promise.all(deliveries) },
-  }
-
-  async function admitRequest(
-    client: ClientState,
-    request: { readonly id: string; readonly operation: RemoteOperation; readonly sessionID?: string; readonly input?: Readonly<Record<string, unknown>> },
-  ) {
-    if (request.operation === "session.subscribe") {
-      const sessionID = request.sessionID ?? ""
-      if (!client.subscriptions.includes(sessionID) && client.subscriptions.length >= RemoteLimits.maxSubscriptionsPerClient) {
-        respond(client.connectionID, request.id, "rate_limited", "Subscription limit reached")
+    reservation: budget,
+    connection: (connectionID: string) => peers.get(connectionID)?.connection,
+    agentConnected: () => agent?.connection.state === "established",
+    async attach(connection: RelayConnection) {
+      if (identity && (identity.ownerID !== connection.ownerID || identity.deviceID !== connection.deviceID)) {
+        deps.close(connection.connectionID, 4403, "DIRECTION")
         return
       }
-    }
-
-    const authority = await checkClientAuthority(client)
-    if (!authority.ok) {
-      rejectClient(client, request.id, authority.reason)
-      return
-    }
-
-    if (agent) {
-      const agentAuthority = await deps.authorizeAgentCommand(agent.deviceID)
-      if (!agentAuthority.ok) detachAgent(RemoteCloseCode.unauthorized, deviceUnauthorizedMessage)
-    }
-    if (!agent) {
-      respond(client.connectionID, request.id, "agent_unavailable", "No local agent is connected")
-      return
-    }
-    // The connection can detach or be revoked while authority is read; a cancelled
-    // frame must not be forwarded for a client that is no longer attached.
-    if (!clients.has(client.connectionID)) return
-    if (pendingEntriesFor(client.connectionID).length >= RemoteLimits.maxPendingRequestsPerClient) {
-      respond(client.connectionID, request.id, "rate_limited", "Too many in-flight requests")
-      return
-    }
-    forwardsRequest(client.connectionID, request)
-  }
-
-  async function admitNoticeRequest(client: ClientState, request: RemoteNoticeRequest) {
-    const authority = await checkClientAuthority(client)
-    if (!authority.ok) {
-      rejectClient(client, request.id, authority.reason)
-      return
-    }
-    if (clients.get(client.connectionID) !== client) return
-    try {
-      const value = await answerNotice(client, request)
-      if (clients.get(client.connectionID) !== client) return
-      deps.send(client.connectionID, serializeResponse({ type: "response", id: request.id, ok: true, value }))
-    } catch {
-      respond(client.connectionID, request.id, "internal_error", noticeStorageMessage)
-    }
-  }
-
-  async function answerNotice(client: ClientState, request: RemoteNoticeRequest) {
-    if (request.operation === "notice.subscribe") {
-      const page = deps.notices.page()
-      client.noticesSubscribed = true
-      deps.saveNoticeSubscription(client.connectionID, true)
-      return noticePageValue({ ...page, unavailable: noticeFault })
-    }
-    if (request.operation === "notice.list") {
-      const before = request.input !== undefined && "before" in request.input ? noticeSequence(request.input.before) : undefined
-      return noticePageValue({ ...deps.notices.page(before), unavailable: noticeFault })
-    }
-    if (request.operation === "notice.readAll") {
-      deps.notices.clear()
-      noticeFault = false
-      await sendToClients(serializeNoticeFrame({ type: "notice.cleared" }), true)
-      return null
-    }
-    const sequences = request.input !== undefined && "ids" in request.input ? request.input.ids.flatMap((id) => noticeSequence(id) ?? []) : []
-    const removed = deps.notices.remove(sequences)
-    if (removed.ids.length > 0) await sendToClients(serializeNoticeFrame({ type: "notice.removed", ids: removed.ids, total: removed.total }), true)
-    return null
-  }
-
-  function rejectClient(client: ClientState, requestID: string, reason: string) {
-    const unauthorized = reason === "revoked_session" || reason === "expired_session"
-    respond(client.connectionID, requestID, unauthorized ? "unauthorized" : "forbidden", unauthorized ? sessionUnauthorizedMessage : forbiddenMessage)
-    removeClient(
-      client.connectionID,
-      unauthorized ? RemoteCloseCode.unauthorized : RemoteCloseCode.forbidden,
-      unauthorized ? sessionUnauthorizedMessage : forbiddenMessage,
-    )
-  }
-
-  async function authorizeRecipient(client: ClientState): Promise<boolean> {
-    if (deps.now() >= client.credentialExpiresAt) {
-      removeClient(client.connectionID, RemoteCloseCode.unauthorized, sessionUnauthorizedMessage)
-      return false
-    }
-    const authority = await checkClientAuthority(client, true).catch(() => undefined)
-    if (clients.get(client.connectionID) !== client) return false
-    if (authority === undefined) {
-      removeClient(client.connectionID, 1011, "Session authorization is unavailable")
-      return false
-    }
-    if (deps.now() >= client.credentialExpiresAt) {
-      removeClient(client.connectionID, RemoteCloseCode.unauthorized, sessionUnauthorizedMessage)
-      return false
-    }
-    if (!authority.ok) {
-      removeClient(client.connectionID, closeCodeFor(authority.reason), closeReasonFor(authority.reason))
-      return false
-    }
-    return true
-  }
-
-  async function checkClientAuthority(client: ClientState, fresh = false): Promise<RelayAuthority> {
-    const current = deps.now()
-    if (!fresh && current - client.authorityCheckedAt < deps.authorityTtlMs) return { ok: true }
-    const authority = await deps.authorizeClientCommand(client.browserSessionID, client.deviceID)
-    if (authority.ok) client.authorityCheckedAt = current
-    return authority
-  }
-
-  function raiseViolation(connectionID: string): boolean {
-    if (!agent || agent.connectionID !== connectionID) return false
-    agent.violations += 1
-    if (agent.violations >= RemoteLimits.maxAgentViolations) {
-      detachAgent(RemoteCloseCode.policyViolation, policyMessage)
-      return true
-    }
-    return false
-  }
-
-  function deliverResponse(connectionID: string, response: RemoteResponse) {
-    const entry = pending.get(response.id)
-    if (!entry) return
-    if (response.ok && response.chunk !== undefined) {
-      if (response.chunk.index !== entry.chunkIndex || entry.chunks >= RemoteLimits.maxChunksPerResponse) {
-        raiseViolation(connectionID)
+      if (peers.has(connection.connectionID)) return
+      if (
+        (connection.role === "client" &&
+          [...peers.values()].filter((peer) => peer.identity.role === "client").length >= RelayLimits.browserPeers) ||
+        !budget.reserve(RelayLimits.peerMetadataBytes)
+      ) {
+        deps.close(connection.connectionID, 1009, "LIMIT")
         return
       }
-      entry.chunkIndex += 1
-      entry.chunks += 1
-      deps.send(
-        entry.connectionID,
-        JSON.stringify({
-          type: "response",
-          id: entry.clientID,
-          ok: true,
-          value: response.value,
-          chunk: { index: response.chunk.index, last: response.chunk.last },
-        }),
+      identity ??= { ownerID: connection.ownerID, deviceID: connection.deviceID }
+      const peer: Peer = {
+        identity: connection,
+        connection: createRelayConnection(
+          connection.role === "agent" ? PeerRole.AGENT : PeerRole.REMOTE_CLIENT,
+          deps.newID(),
+          sourceEpoch,
+          deps.monotonic(),
+          budget,
+        ),
+        checkedAt: -Infinity,
+        seenAt: deps.monotonic(),
+        notices: false,
+        requests: new Map(),
+        subscriptions: new Map(),
+      }
+      peers.set(connection.connectionID, peer)
+      if (!(await authorize(peer))) return
+      if (connection.role === "agent") {
+        if (agent && deps.monotonic() - agent.seenAt < RemoteLimits.agentOfflineConfirmMs) {
+          drop(peer, 4409, "DIRECTION")
+          return
+        }
+        if (agent) drop(agent, 1012, "EPOCH")
+        agent = peer
+        offline = undefined
+        offlineLoaded = true
+        await deps.saveOfflineCheck(undefined)
+      }
+    },
+    handleClientMessage: message,
+    handleAgentMessage: message,
+    detach(connectionID: string) {
+      const peer = peers.get(connectionID)
+      if (peer) drop(peer, 1000, "EPOCH")
+      flushAll()
+    },
+    async agentClosed(connection: RelayConnection) {
+      const peer = peers.get(connection.connectionID)
+      if (!peer || agent !== peer) return
+      drop(peer, 1012, "EPOCH")
+      offline = { ownerID: connection.ownerID, deviceID: connection.deviceID, closedAt: deps.now() }
+      offlineLoaded = true
+      await deps.saveOfflineCheck(offline)
+    },
+    async restore(connections: readonly RelayConnection[]) {
+      for (const connection of connections) deps.close(connection.connectionID, 1012, "EPOCH")
+    },
+    async revokeSession(sessionID: string) {
+      for (const peer of peers.values()) if (peer.identity.browserSessionID === sessionID) drop(peer, 4401, "DIRECTION")
+      flushAll()
+    },
+    closeDevice() {
+      for (const peer of peers.values()) drop(peer, 4403, "DIRECTION")
+      if (statusBytes) budget.release(statusBytes.length)
+      statusBytes = undefined
+    },
+    sweep() {
+      for (const peer of peers.values()) {
+        if (deps.now() >= peer.identity.credentialExpiresAt) drop(peer, 4401, "DIRECTION")
+        else decisions(peer, peer.connection.advance(deps.monotonic()))
+      }
+      flushAll()
+    },
+    nextDeadline() {
+      return peers.size ? deps.now() + 25 : offline ? offline.closedAt + RemoteLimits.agentOfflineConfirmMs : undefined
+    },
+    async confirmOffline() {
+      if (!offlineLoaded) {
+        offline = await deps.loadOfflineCheck()
+        offlineLoaded = true
+      }
+      const check = offline
+      if (!check || agent || deps.now() < check.closedAt + RemoteLimits.agentOfflineConfirmMs) return
+      const authority = await deps.authorizeAgentCommand(check.deviceID)
+      if (offline !== check || agent) return
+      offline = undefined
+      await deps.saveOfflineCheck(undefined)
+      if (!authority.ok || authority.ownerID !== check.ownerID) return
+      await noticeToClients(
+        create(NoticeSchema, { kind: { case: "offline", value: { atMs: BigInt(check.closedAt) } } }),
       )
-      if (response.chunk.last) settle(entry, response)
-      return
-    }
-    if (entry.chunks !== 0) {
-      raiseViolation(connectionID)
-      return
-    }
-    deps.send(entry.connectionID, JSON.stringify({ ...response, id: entry.clientID }))
-    settle(entry, response)
+      await alerts(check.ownerID, [
+        {
+          event: { category: "machine-offline", deviceID: check.deviceID, offlineAt: check.closedAt },
+          presentation: {
+            $typeName: "ycoding.v5.Presentation",
+            kind: { case: "offline", value: { $typeName: "ycoding.v5.Offline", atMs: BigInt(check.closedAt) } },
+          },
+        },
+      ])
+      flushAll()
+    },
+    async settleDeliveries() {
+      while (deliveries.size) await Promise.all([...deliveries])
+      flushAll()
+    },
   }
+}
 
-  function settle(entry: PendingRequest, response: RemoteResponse) {
-    for (const [relayID, candidate] of Array.from(pending)) if (candidate === entry) pending.delete(relayID)
-    const client = clients.get(entry.connectionID)
-    if (!client) return
-    if (response.ok && entry.sessionID !== undefined) {
-      if (entry.operation === "session.subscribe" && !client.subscriptions.includes(entry.sessionID)) {
-        client.subscriptions = [...client.subscriptions, entry.sessionID]
-        deps.saveSubscriptions(client.connectionID, client.subscriptions)
-        sendSubscriptionSnapshot(client.connectionID, client.subscriptions)
-      }
-      if (entry.operation === "session.unsubscribe") {
-        client.subscriptions = client.subscriptions.filter((sessionID) => sessionID !== entry.sessionID)
-        deps.saveSubscriptions(client.connectionID, client.subscriptions)
-        sendSubscriptionSnapshot(client.connectionID, client.subscriptions)
-      }
-    }
-    savePending(client)
+function frameKey(frame: Frame) {
+  const body = frame.body
+  if (body.case === "request" || body.case === "result") return `${body.case}:${body.value.requestId}`
+  if (body.case === "bulkStart" || body.case === "bulkEnd") return `${body.case}:${body.value.transferId}`
+  if (body.case === "bulkPiece") return `${body.case}:${body.value.transferId}:${body.value.index}`
+  if (body.case === "streamEnd") return `${body.case}:${body.value.subscriptionId}`
+  if (body.case === "control") return `control:${body.value.kind.case}`
+  return body.case ?? ""
+}
+function inputKey(peer: Peer, ledger: LedgerClass, ordinal: bigint) {
+  return `${peer.identity.connectionID}:${ledger}:${ordinal}`
+}
+function noticeRecord(notice: RemoteNotice) {
+  return create(NoticeRecordSchema, {
+    id: notice.id,
+    sessionId: notice.sessionID,
+    createdMs: BigInt(notice.createdAt),
+    category:
+      notice.category === "agent-completed" ? NoticeCategory.AGENT_COMPLETED : NoticeCategory.APPROVAL_REQUESTED,
+  })
+}
+function added(notices: readonly RemoteNotice[], total: number) {
+  return create(NoticeSchema, {
+    kind: { case: "added", value: { notices: notices.map(noticeRecord), total: BigInt(total) } },
+  })
+}
+function attentionNeed(need: AttentionNeed | undefined): RemoteAlertDetail["need"] {
+  return need === undefined
+    ? undefined
+    : (
+        {
+          [AttentionNeed.PERMISSION]: "permission",
+          [AttentionNeed.QUESTION]: "question",
+          [AttentionNeed.REVIEW]: "review",
+          [AttentionNeed.FAILED]: "failed",
+          [AttentionNeed.BLOCKED]: "blocked",
+        } as const
+      )[need]
+}
+function wireDetail(detail: RemoteAlertDetail) {
+  return {
+    title: detail.title === undefined ? undefined : encodeLossless(detail.title),
+    need:
+      detail.need === undefined
+        ? undefined
+        : {
+            permission: AttentionNeed.PERMISSION,
+            question: AttentionNeed.QUESTION,
+            review: AttentionNeed.REVIEW,
+            failed: AttentionNeed.FAILED,
+            blocked: AttentionNeed.BLOCKED,
+          }[detail.need],
+    repeat: detail.repeat,
   }
 }

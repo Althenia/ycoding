@@ -22,39 +22,39 @@ import {
   MutationClass,
   ScopeKind,
 } from "@ycoding-ai/protocol/v5"
-import { remoteOperations, remoteNoticeOperations, remoteOperationAccess, requireSession } from "../src/index.ts"
+import { remoteDescriptors, relayDescriptors } from "../src/index.ts"
 import { connectorOperations, noticeOperations } from "../../protocol/test/connector-source.js"
 
-test("live remote membership equals the frozen connector and relay notice allocations", () => {
-  expect(Object.keys(connectorOperations).sort()).toEqual([...remoteOperations].sort())
-  expect(Object.keys(noticeOperations).sort()).toEqual([...remoteNoticeOperations].sort())
+test("remote membership equals the frozen connector and relay notice operation IDs without runtime aliases", () => {
+  const ids = [
+    ...new Set([...Object.values(connectorOperations), ...Object.values(noticeOperations)].map(([id]) => id)),
+  ].sort((a, b) => a - b)
+  expect(remoteDescriptors.map((item) => item.operationId).sort((a, b) => a - b)).toEqual(ids)
+  expect(new Set(remoteDescriptors.map((item) => item.diagnosticName)).size).toBe(remoteDescriptors.length)
 })
 
 test("session requirement and workspace placement use existing scope metadata", () => {
-  for (const source of remoteOperations) {
-    const [id] = connectorOperations[source]
-    const descriptor = operations.find((item) => item.operationId === id)!
-    const scopes = descriptor.roleScopes.find((rule) => rule.role === PeerRole.REMOTE_CLIENT)?.scopes ?? [
-      descriptor.scope,
-    ]
-    if (requireSession(source))
-      expect(scopes.some((scope) => [ScopeKind.SESSION, ScopeKind.FORM].includes(scope))).toBe(true)
-    if (!requireSession(source))
-      expect(scopes.some((scope) => [ScopeKind.MACHINE, ScopeKind.WORKSPACE, ScopeKind.GLOBAL].includes(scope))).toBe(
-        true,
-      )
-  }
+  expect(remoteDescriptors.find((item) => item.diagnosticName === "session.prompt")!.scope).toBe(ScopeKind.SESSION)
+  expect(
+    remoteDescriptors
+      .find((item) => item.diagnosticName === "fs.find")!
+      .roleScopes.find((rule) => rule.role === PeerRole.REMOTE_CLIENT)!.scopes,
+  ).toEqual([ScopeKind.SESSION, ScopeKind.WORKSPACE])
+  expect(
+    remoteDescriptors.filter((item) => item.diagnosticName.startsWith("notice.")).map((item) => item.scope),
+  ).toEqual([ScopeKind.MACHINE, ScopeKind.MACHINE, ScopeKind.MACHINE, ScopeKind.MACHINE])
 })
 
-test("every generated connector mutation class equals the live ordered-lane classification", () => {
-  const actual = operations.filter((item) => item.roles.includes(PeerRole.RELAY))
-  expect(actual).toHaveLength(66)
-  for (const operation of remoteOperations) {
-    const [id] = connectorOperations[operation]
-    expect(operations.find((item) => item.operationId === id)?.mutation, operation).toBe(
-      remoteOperationAccess[operation] === "read" ? MutationClass.READ : MutationClass.MUTATION,
-    )
-  }
+test("relay descriptors are the canonical ordered-lane authority and exclude relay-owned notices", () => {
+  expect(relayDescriptors).toHaveLength(66)
+  expect(relayDescriptors.every((item) => [MutationClass.READ, MutationClass.MUTATION].includes(item.mutation))).toBe(
+    true,
+  )
+  expect(relayDescriptors.some((item) => item.diagnosticName.startsWith("notice."))).toBe(false)
+  expect(relayDescriptors.find((item) => item.diagnosticName === "session.prompt")!.mutation).toBe(
+    MutationClass.MUTATION,
+  )
+  expect(relayDescriptors.find((item) => item.diagnosticName === "session.get")!.mutation).toBe(MutationClass.READ)
 })
 
 test("Rust/TS remote goal start, resume and stop use the shared autonomy branches", () => {

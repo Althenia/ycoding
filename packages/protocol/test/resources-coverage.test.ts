@@ -9,7 +9,7 @@ import { generateManifest } from "../../../script/rust-parity/manifest.js"
 import { requireConstraintCoverage } from "../src/v5/constraint-coverage.js"
 import type { Constraints } from "../src/v5/constraints.js"
 import { Schema, SchemaAST } from "effect"
-import { operations, Paging } from "../src/generated/v5/index.js"
+import { operations, Paging, PeerRole } from "../src/generated/v5/index.js"
 import { frontendBoundaryBaseline, frontendBoundaryBaselineFields } from "./frontend-boundary-baseline.js"
 
 test("resource RPC membership equals the live 60-operation Protocol slice", async () => {
@@ -19,6 +19,7 @@ test("resource RPC membership equals the live 60-operation Protocol slice", asyn
   const names = Array.from(frontendBoundaryBaseline(proto).matchAll(/rpc (\w+)\(/g), (match) => match[1])
   expect(names.sort()).toEqual(sources.map((source) => source.name.replace(/[^a-zA-Z0-9]/g, "_")).sort())
   const manifest = await generateManifest(path.resolve(import.meta.dir, "../../.."))
+  expect(manifest.members.filter((member) => member.kind === "connector").map((member) => member.name).sort()).toEqual(operations.filter((operation) => operation.roles.includes(PeerRole.RELAY)).map((operation) => operation.diagnosticName).sort())
   const groups = new Set<string>(sources.map((source) => source.group))
   expect(
     manifest.members

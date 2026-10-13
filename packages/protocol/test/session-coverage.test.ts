@@ -32,6 +32,7 @@ import { connectorRoles } from "./connector-source.js"
 
 test("session slice completes the 198 endpoints without overlap and adds only inventory unsubscribe", async () => {
   const manifest = await generateManifest(path.resolve(import.meta.dir, "../../.."))
+  expect(manifest.members.filter((member) => member.kind !== "endpoint").map((member) => member.name).sort()).toEqual(operations.filter((operation) => operation.roles.includes(PeerRole.REMOTE_CLIENT)).map((operation) => operation.diagnosticName).sort())
   const endpoints = manifest.members.filter((member) => member.kind === "endpoint")
   const excluded = [...Object.keys(resourceIDs), ...Object.keys(platformIDs), ...Object.keys(platformExclusions)]
   expect(excluded).toHaveLength(115)

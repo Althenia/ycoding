@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import path from "node:path"
-import { FrameSchema, decodeStrict, PeerRole, WireConnection } from "@ycoding-ai/protocol/v5"
+import { FrameSchema, decodeStrict, encodeStrict, PeerRole, WireConnection } from "@ycoding-ai/protocol/v5"
 
 const vectors = (
   await Bun.file(path.resolve(import.meta.dir, "../../../protocol/ycoding/v5/testdata/manifest.tsv")).text()
@@ -54,4 +54,21 @@ test("StreamEnd negative vectors retain their specific rejection reasons", async
     const bytes = vector(name)
     expect(() => new WireConnection().observe(bytes, sender, 0), name).toThrow(reason)
   }
+})
+
+test.each([
+  [PeerRole.LOCAL_CLIENT, PeerRole.SERVER, PeerRole.SERVER],
+  [PeerRole.AGENT, PeerRole.RELAY, PeerRole.AGENT],
+  [PeerRole.REMOTE_CLIENT, PeerRole.RELAY, PeerRole.RELAY],
+])("finite completion is accepted on the authenticated sender hop %s/%s/%s", async (client, server, sender) => {
+  const connection = new WireConnection(client, server)
+  const hello = decodeStrict(FrameSchema, vector("hello"))
+  const ready = decodeStrict(FrameSchema, vector("ready"))
+  if (hello.body.case !== "hello" || ready.body.case !== "ready") throw new Error("missing handshake fixture")
+  hello.body.value.role = client
+  ready.body.value.role = server
+  connection.observe(encodeStrict(FrameSchema, hello), client, 0)
+  connection.observe(encodeStrict(FrameSchema, ready), server, 0)
+  connection.observe(vector("ping"), client, 0)
+  expect(connection.observe(bytes, sender, 0).body.case).toBe("streamEnd")
 })

@@ -1,771 +1,828 @@
-/**
- * Local Wrangler integration: real worker, real local D1 (with migrations), real
- * Durable Object, real WebSockets, and a local Google OIDC stand-in.
- *
- * This is not a unit test. It starts `wrangler dev` in local mode, drives the full
- * OAuth + enrollment + challenge + relay path, and asserts the relay invariants
- * that unit tests cover in isolation. Run it on its own:
- *
- *   bun infra/cloudflare/test/integration/relay-local.ts
- *
- * Requirements: `wrangler` installed, port freedom on 127.0.0.1, no network access
- * (the Google stand-in is local).
- */
+import { spawn } from "bun"
+import type { Subprocess } from "bun"
+import { mkdtempSync, mkdirSync, rmSync } from "node:fs"
+import path from "node:path"
+import {
+  create,
+  encodeStrict,
+  decodeStrict,
+  encodeLossless,
+  ScopeSchema,
+  PeerRole,
+  ControlSchema,
+  EmptySchema,
+  ConnectorNoticeBeforeSchema,
+  ConnectorNoticeIDsSchema,
+  ConnectorNoticePageSchema,
+  ConnectorNoticeSettlementSchema,
+  session_todo_list_RequestSchema,
+  session_todo_list_ResultSchema,
+  session_interrupt_RequestSchema,
+  ContentKind,
+  BulkStartSchema,
+  BulkPieceSchema,
+  BulkEndSchema,
+  LedgerClass,
+  event_subscribe_RequestSchema,
+  event_subscribe_ResultSchema,
+  event_unsubscribe_RequestSchema,
+  PublicEventSchema,
+  EventRecordSchema,
+  ResultSchema,
+  encodeAssetMetadata,
+  session_attachment_read_RequestSchema,
+  session_attachment_read_ResultSchema,
+} from "../../../../packages/protocol/src/v5"
+import { TestPeer } from "../../../../packages/remote/test/peer"
+import { RemoteWebSocketPath, takeAsset } from "../../../../packages/remote/src/index"
+import { ReservationBudget } from "../../../../packages/protocol/src/v5/connection"
+import { sha256Hex, randomToken } from "../../src/auth/crypto"
 
-import { spawn, type Subprocess } from "bun"
-import { readdirSync } from "node:fs"
-import { RemoteWebSocketPath, deviceSignaturePayload } from "../../../../packages/remote/src/index"
-import { base64UrlEncode, sha256Hex } from "../../src/auth/crypto"
-
-const repositoryRoot = new URL("../../../../", import.meta.url).pathname
-const wranglerBin = `${repositoryRoot}node_modules/.bin/wrangler`
-const configPath = "infra/cloudflare/wrangler.jsonc"
-const workerPort = 8799
-const workerOrigin = `http://127.0.0.1:${workerPort}`
-const socketOrigin = `ws://127.0.0.1:${workerPort}`
-
+const root = path.resolve(import.meta.dir, "../../../..")
+const scratch = mkdtempSync(path.join(root, "infra/cloudflare/.v5-relay-"))
+const configPath = path.join(scratch, "wrangler.json")
+const persist = path.join(scratch, "state")
+const wranglerBin = path.join(root, "node_modules/.bin/wrangler")
+const peers: TestPeer[] = []
 const checks: string[] = []
 let wrangler: Subprocess | undefined
-let google: ReturnType<typeof Bun.serve> | undefined
+const standin = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => Response.json({ keys: [] }) })
+const portReservation = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("reserved") })
+const port = portReservation.port
+portReservation.stop(true)
+const origin = `http://127.0.0.1:${port}`
+const wsOrigin = `ws://127.0.0.1:${port}`
+const cookie = randomToken(32)
+const foreignCookie = randomToken(32)
+const access = randomToken(32)
+const otherAccess = randomToken(32)
+const empty = encodeStrict(EmptySchema, create(EmptySchema))
+const machine = create(ScopeSchema, { target: { case: "machine", value: {} } })
+const session = create(ScopeSchema, { target: { case: "session", value: "ses_remote" } })
+const todo = encodeStrict(
+  session_todo_list_RequestSchema,
+  create(session_todo_list_RequestSchema, { params: { sessionID: encodeLossless("ses_remote") } }),
+)
+const todoResult = encodeStrict(
+  session_todo_list_ResultSchema,
+  create(session_todo_list_ResultSchema, { data: { items: [] } }),
+)
 
-try {
-  const identity = await rsaIdentity()
-  const idTokenHolder: { value: string } = { value: "" }
-  google = Bun.serve({
-    port: 0,
-    fetch: async (request) => {
-      const url = new URL(request.url)
-      console.log(`[google-stub] ${request.method} ${url.pathname}`)
-      if (url.pathname === "/token")
-        return Response.json({ id_token: idTokenHolder.value, access_token: "access-token" })
-      if (url.pathname === "/certs") return Response.json({ keys: [identity.jwk] })
-      return new Response("not found", { status: 404 })
-    },
-  })
-  const googleOrigin = `http://127.0.0.1:${google.port}`
-
-  await run(wranglerBin, ["d1", "migrations", "apply", "ycoding-prod-db", "--local", "--config", configPath])
-  wrangler = spawn(
-    [
-      wranglerBin,
-      "dev",
-      "--config",
-      configPath,
-      "--port",
-      String(workerPort),
-      "--var",
-      "GOOGLE_CLIENT_ID:integration-client",
-      "--var",
-      "GOOGLE_CLIENT_SECRET:integration-secret",
-      "--var",
-      "GOOGLE_ALLOWED_EMAILS:integration@example.invalid",
-      "--var",
-      "CLEANUP_INTERVAL_MS:10000",
-      "--test-scheduled",
-      "--var",
-      `GOOGLE_ISSUER:${googleOrigin}`,
-      "--var",
-      `GOOGLE_AUTHORIZATION_ENDPOINT:${googleOrigin}/authorize`,
-      "--var",
-      `GOOGLE_TOKEN_ENDPOINT:${googleOrigin}/token`,
-      "--var",
-      `GOOGLE_JWKS_URI:${googleOrigin}/certs`,
-    ],
-    { cwd: repositoryRoot, stdout: "inherit", stderr: "inherit" },
-  )
-  await waitForWorker()
-
-  const health = await fetch(`${workerOrigin}/health`)
-  expect(health.status === 200, `health returned ${health.status}`)
-  checks.push("migrated local D1 answers /health")
-
-  /* ----------------------------------------------- public web + API routing */
-
-  const home = await fetch(`${workerOrigin}/`, { headers: { "sec-fetch-mode": "navigate" } })
-  const homeBody = await home.text()
-  expect(home.status === 200, `landing returned ${home.status}`)
-  expect(home.headers.get("content-type")?.includes("text/html") === true, "landing is not HTML")
-  expect(homeBody.includes("<title>YCoding — terminal coding agent</title>"), "landing body is not the built SPA shell")
-  expect(home.headers.get("x-content-type-options") === "nosniff", "landing is missing nosniff")
-  expect(home.headers.get("x-frame-options") === "DENY", "landing is missing frame denial")
-  expect(home.headers.get("referrer-policy") === "strict-origin-when-cross-origin", "landing is missing referrer policy")
-  checks.push("built landing page served with baseline security headers")
-
-  for (const deepLink of ["/remote/session/ses_example", "/docs/configuration/models", "/changelog/0.4.2"]) {
-    const response = await fetch(`${workerOrigin}${deepLink}`, { headers: { "sec-fetch-mode": "navigate" } })
-    expect(response.status === 200, `deep link ${deepLink} returned ${response.status}`)
-    expect(
-      response.headers.get("content-type")?.includes("text/html") === true,
-      `deep link ${deepLink} was not the SPA shell`,
-    )
-    expect(response.headers.get("x-frame-options") === "DENY", `deep link ${deepLink} is missing frame denial`)
-  }
-  checks.push("public deep links fall back to the SPA shell through the asset binding")
-
-  const apiNavigation = await fetch(`${workerOrigin}/api/me`, {
-    headers: { "sec-fetch-mode": "navigate", accept: "text/html" },
-  })
-  expect(apiNavigation.status === 401, `API navigation returned ${apiNavigation.status}`)
-  expect(
-    apiNavigation.headers.get("content-type")?.includes("application/json") === true,
-    "API navigation was masked by the SPA fallback",
-  )
-  const apiChallengeNavigation = await fetch(`${workerOrigin}/api/devices/challenge`, {
-    method: "POST",
-    headers: { "sec-fetch-mode": "navigate", accept: "text/html", "content-type": "application/json" },
-    body: JSON.stringify({ deviceID: "dev_unknown" }),
-  })
-  expect(apiChallengeNavigation.status === 401, `API navigation POST returned ${apiChallengeNavigation.status}`)
-  expect(
-    apiChallengeNavigation.headers.get("content-type")?.includes("application/json") === true,
-    "API navigation POST was masked by the SPA fallback",
-  )
-  const agentSocket = await fetch(`${workerOrigin}${RemoteWebSocketPath.agent}`, { headers: { upgrade: "websocket" } })
-  expect(agentSocket.status === 401, `${RemoteWebSocketPath.agent} returned ${agentSocket.status}`)
-  expect(agentSocket.headers.get("content-type")?.includes("application/json") === true, "relay route returned HTML")
-  checks.push("SPA fallback never masks API, auth, or relay routes")
-
-  const assetFile = readdirSync(`${repositoryRoot}apps/web/dist/assets`).find((name) => name.endsWith(".js"))
-  expect(assetFile !== undefined, "the web build has no JavaScript asset to serve")
-  const asset = await fetch(`${workerOrigin}/assets/${assetFile}`)
-  expect(asset.status === 200, `asset returned ${asset.status}`)
-  expect(asset.headers.get("content-type")?.includes("javascript") === true, "asset content type is wrong")
-  expect(asset.headers.get("x-frame-options") === null, "static sub-resources should bypass the worker")
-  expect(
-    asset.headers.get("cache-control") === "public, max-age=31536000, immutable",
-    `hashed asset cache-control was ${asset.headers.get("cache-control")}`,
-  )
-  for (const page of ["/", "/docs", "/changelog", "/remote"]) {
-    const response = await fetch(`${workerOrigin}${page}`)
-    expect(response.status === 200, `${page} returned ${response.status}`)
-    expect(
-      response.headers.get("cache-control")?.includes("must-revalidate") === true,
-      `${page} cache-control was ${response.headers.get("cache-control")}`,
-    )
-  }
-  checks.push("hashed static assets are served directly by the asset layer and cached as immutable")
-  checks.push("HTML pages revalidate on every load")
-
-  /* ---------------------------------------------------------------- sign in */
-
-  const started = await fetch(`${workerOrigin}/api/auth/google/start?redirect_after=/remote/`, { redirect: "manual" })
-  expect(started.status === 302, `start returned ${started.status}`)
-  const oauthCookie = cookiePair(started, "yc_oauth")
-  const state = new URL(started.headers.get("location") ?? "").searchParams.get("state") ?? ""
-  expect(state.length > 0, "authorization URL carried no state")
-
-  const issuedAt = Math.floor(Date.now() / 1000)
-  const oauthToken = oauthCookie.split("=")[1] ?? ""
-  const nonce = await readNonce(await sha256Hex(oauthToken))
-  expect(nonce.length > 0, "oauth transaction was not persisted in local D1")
-  const claims = (overrides: Record<string, unknown> = {}) => ({
-    iss: googleOrigin,
-    aud: "integration-client",
-    sub: "integration-subject",
-    iat: issuedAt,
-    exp: issuedAt + 3600,
-    nonce,
-    email: "integration@example.invalid",
-    email_verified: true,
-    ...overrides,
-  })
-  idTokenHolder.value = await signedIdToken(identity.pair, claims())
-
-  const callback = await fetch(`${workerOrigin}/api/auth/google/callback?code=integration-code&state=${state}`, {
-    headers: { cookie: oauthCookie },
-    redirect: "manual",
-  })
-  expect(callback.status === 302, `callback returned ${callback.status}`)
-  expect(callback.headers.get("location") === "/remote/", `callback redirected to ${callback.headers.get("location")}`)
-  const sessionCookie = cookiePair(callback, "yc_session")
-  checks.push("Google OIDC callback issued a session cookie against real D1")
-
-  // An unapproved verified account is denied with a generic error.
-  const deniedStart = await fetch(`${workerOrigin}/api/auth/google/start`, { redirect: "manual" })
-  const deniedCookie = cookiePair(deniedStart, "yc_oauth")
-  const deniedState = new URL(deniedStart.headers.get("location") ?? "").searchParams.get("state") ?? ""
-  const deniedNonce = await readNonce(await sha256Hex(deniedCookie.split("=")[1] ?? ""))
-  idTokenHolder.value = await signedIdToken(
-    identity.pair,
-    { ...claims({ nonce: deniedNonce }), email: "stranger@example.invalid" },
-  )
-  const denied = await fetch(
-    `${workerOrigin}/api/auth/google/callback?code=integration-code&state=${deniedState}`,
-    { headers: { cookie: deniedCookie }, redirect: "manual" },
-  )
-  expect(denied.headers.get("location") === "/remote/?auth=error", `unapproved account redirected to ${denied.headers.get("location")}`)
-  expect(!(denied.headers.getSetCookie().some((value) => value.startsWith("yc_session="))), "unapproved account received a session")
-  checks.push("unapproved Google account denied sign-in")
-
-  // The allowlisted account is denied when its email is not verified.
-  const unverifiedStart = await fetch(`${workerOrigin}/api/auth/google/start`, { redirect: "manual" })
-  const unverifiedCookie = cookiePair(unverifiedStart, "yc_oauth")
-  const unverifiedState = new URL(unverifiedStart.headers.get("location") ?? "").searchParams.get("state") ?? ""
-  const unverifiedNonce = await readNonce(await sha256Hex(unverifiedCookie.split("=")[1] ?? ""))
-  idTokenHolder.value = await signedIdToken(identity.pair, claims({ nonce: unverifiedNonce, email_verified: false }))
-  const unverified = await fetch(
-    `${workerOrigin}/api/auth/google/callback?code=integration-code&state=${unverifiedState}`,
-    { headers: { cookie: unverifiedCookie }, redirect: "manual" },
-  )
-  expect(unverified.headers.get("location") === "/remote/?auth=error", "unverified allowlisted email was admitted")
-  checks.push("unverified allowlisted email denied")
-
-  const me = await fetch(`${workerOrigin}/api/me`, { headers: { cookie: sessionCookie } })
-  expect(me.status === 200, `/api/me returned ${me.status} without an Origin header`)
-  const meBody = (await me.json()) as { user: { id: string }; devices: unknown[] }
-  expect(meBody.user.id.startsWith("usr_"), "/api/me did not return an owner")
-  checks.push("GET /api/me works without an Origin header and without writing cookies")
-
-  /* ------------------------------------------------------------ enrollment */
-
-  const enrollment = await fetch(`${workerOrigin}/api/devices/enrollments`, {
-    method: "POST",
-    headers: { cookie: sessionCookie, origin: workerOrigin },
-  })
-  expect(enrollment.status === 200, `enrollment mint returned ${enrollment.status}`)
-  const enrollmentBody = (await enrollment.json()) as { enrollmentID: string; code: string }
-
-  const crossOrigin = await fetch(`${workerOrigin}/api/devices/enrollments`, {
-    method: "POST",
-    headers: { cookie: sessionCookie, origin: "https://evil.example" },
-  })
-  expect(crossOrigin.status === 403, `cross-origin mutation returned ${crossOrigin.status}`)
-  checks.push("same-origin enforcement on cookie mutations")
-
-  const device = await deviceKey()
-  const enrolled = await fetch(`${workerOrigin}/api/devices/enroll`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      enrollmentID: enrollmentBody.enrollmentID,
-      code: enrollmentBody.code,
-      name: "Integration Mac",
-      publicKey: device.publicKey,
-    }),
-  })
-  expect(enrolled.status === 200, `enroll returned ${enrolled.status}`)
-  const deviceID = ((await enrolled.json()) as { deviceID: string }).deviceID
-  checks.push("one-use enrollment persisted a device public key in D1")
-
-  const replay = await fetch(`${workerOrigin}/api/devices/enroll`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      enrollmentID: enrollmentBody.enrollmentID,
-      code: enrollmentBody.code,
-      name: "Replay",
-      publicKey: device.publicKey,
-    }),
-  })
-  expect(replay.status === 400, `replayed enrollment returned ${replay.status}`)
-  checks.push("enrollment replay rejected")
-
-  /* -------------------------------------------------------------- device auth */
-
-  const tokens = await authenticateDevice(deviceID, device.pair)
-  checks.push("challenge signing issued expiring device credentials")
-
-  const replayedChallenge = await fetch(`${workerOrigin}/api/devices/token`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ deviceID, challengeID: tokens.challengeID, signature: tokens.signature }),
-  })
-  expect(replayedChallenge.status === 401, `challenge replay returned ${replayedChallenge.status}`)
-  checks.push("challenge replay rejected")
-
-  /* ----------------------------------------------------------------- relay */
-
-  let agent = connect(`${socketOrigin}${RemoteWebSocketPath.agent}`, { authorization: `Bearer ${tokens.accessToken}` })
-  await agent.opened
-  agent.send({ type: "sessions" })
-
-  const first = connect(`${socketOrigin}${RemoteWebSocketPath.client}?device=${deviceID}`, { cookie: sessionCookie, origin: workerOrigin })
-  await first.opened
-  expect((await first.next()).type === "sessions", "client did not receive the Session invalidation")
-  expect((await agent.next()).type === "subscriptions", "agent did not receive the first client subscription snapshot")
-
-  first.send({ type: "request", id: "1", operation: "session.list" })
-  const relayedFirst = await agent.next()
-  expect(relayedFirst.type === "request", "agent did not receive a relayed request")
-  expect(relayedFirst.id !== "1", "relay did not translate the client correlation id")
-  agent.send({ type: "response", id: relayedFirst.id, ok: true, value: { data: ["first"] } })
-  expect(JSON.stringify(await first.next()) === JSON.stringify({ type: "response", id: "1", ok: true, value: { data: ["first"] } }), "first client response mismatch")
-
-  const second = connect(`${socketOrigin}${RemoteWebSocketPath.client}?device=${deviceID}`, { cookie: sessionCookie, origin: workerOrigin })
-  await second.opened
-  await second.next()
-  expect((await agent.next()).type === "subscriptions", "agent did not receive the second client subscription snapshot")
-  first.send({ type: "request", id: "1", operation: "session.list" })
-  second.send({ type: "request", id: "1", operation: "session.list" })
-  const relayedA = await agent.next()
-  const relayedB = await agent.next()
-  expect(relayedA.id !== relayedB.id, "colliding client ids were not separated")
-  agent.send({ type: "response", id: relayedB.id, ok: true, value: "second" })
-  expect(JSON.stringify(await second.next()) === JSON.stringify({ type: "response", id: "1", ok: true, value: "second" }), "second client response mismatch")
-  agent.send({ type: "response", id: relayedA.id, ok: true, value: "first" })
-  expect(JSON.stringify(await first.next()) === JSON.stringify({ type: "response", id: "1", ok: true, value: "first" }), "first client did not receive its own response")
-  checks.push("two clients with colliding ids routed correctly through a real Durable Object")
-
-  first.send({ type: "request", id: "2", operation: "session.messages", sessionID: "ses_a" })
-  const chunked = await agent.next()
-  const payload = JSON.stringify({ messages: [{ index: 0 }] })
-  agent.send({ type: "response", id: chunked.id, ok: true, value: payload.slice(0, 10), chunk: { index: 0, last: false } })
-  agent.send({ type: "response", id: chunked.id, ok: true, value: payload.slice(10), chunk: { index: 1, last: true } })
-  const chunkOne = await first.next()
-  const chunkTwo = await first.next()
-  expect(chunkOne.chunk?.index === 0 && chunkTwo.chunk?.last === true, "chunked response was not forwarded in order")
-  expect(`${chunkOne.value}${chunkTwo.value}` === payload, "chunked response did not reassemble")
-  checks.push("chunked large responses forwarded without truncation")
-
-  first.send({ type: "request", id: "3", operation: "session.get", sessionID: "ses_secret" })
-  const backendAuthorized = await agent.next()
-  agent.send({ type: "response", id: backendAuthorized.id, ok: true, value: { data: { id: "ses_secret" } } })
-  expect((await first.next()).ok === true, "backend-authorized Session was refused by the relay")
-  checks.push("relay delegates Session authorization to the connected backend")
-
-  first.send({ type: "request", id: "4", operation: "session.subscribe", sessionID: "ses_a" })
-  const subscribe = await agent.next()
-  agent.send({ type: "response", id: subscribe.id, ok: true, value: null })
-  await first.next()
-  const synchronized = await agent.next()
-  expect(
-    synchronized.type === "subscriptions" && JSON.stringify(synchronized.sessionIDs) === '["ses_a"]',
-    "agent did not receive the settled subscription snapshot",
-  )
-  agent.send({ type: "event", sessionID: "ses_a", event: { seq: 1 } })
-  expect(JSON.stringify(await first.next()).includes('"seq":1'), "subscribed client did not receive the event")
-  expect(second.pending() === 0, "unsubscribed client received an event")
-  checks.push("events delivered only to the subscribed client")
-
-  const replacementAgent = connect(`${socketOrigin}${RemoteWebSocketPath.agent}`, {
-    authorization: `Bearer ${tokens.accessToken}`,
-  })
-  await replacementAgent.opened
-  expect((await agent.closed).code === 1012, "replaced agent did not close with service restart")
-  const retained = await replacementAgent.next()
-  expect(
-    retained.type === "subscriptions" && JSON.stringify(retained.sessionIDs) === '["ses_a"]',
-    "fresh agent did not receive retained browser subscriptions",
-  )
-  agent = replacementAgent
-  checks.push("a fresh agent received retained live browser subscription state")
-
-  /* ------------------------------------------------------- revocation closes */
-
-  const revoked = await fetch(`${workerOrigin}/api/devices/${deviceID}/revoke`, {
-    method: "POST",
-    headers: { cookie: sessionCookie, origin: workerOrigin },
-  })
-  expect(revoked.status === 200, `revoke returned ${revoked.status}`)
-  const agentClose = await agent.closed
-  const firstClose = await first.closed
-  const secondClose = await second.closed
-  expect(agentClose.code === 4401, `agent socket closed with ${agentClose.code}`)
-  expect(firstClose.code === 4401, `client socket closed with ${firstClose.code}`)
-  expect(secondClose.code === 4401, `second client socket closed with ${secondClose.code}`)
-  checks.push("revocation closed live agent and client sockets")
-
-  const afterRevoke = await fetch(`${workerOrigin}/api/devices/challenge`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ deviceID }),
-  })
-  expect(afterRevoke.status === 401, `challenge after revoke returned ${afterRevoke.status}`)
-  checks.push("revoked device refused on the credential path")
-
-  /* -------------------------------------------------- rotation and cleanup */
-
-  // Seed real D1 rows so rotation and retention can be exercised without waiting.
-  let sessionPostconditions: Record<string, string> = {}
-  const userID = await queryD1("SELECT id FROM user LIMIT 1")
-  expect(userID.startsWith("usr_"), "no owner row was persisted")
-  const seedToken = `seed-${crypto.randomUUID()}`
-  const seedID = await sha256Hex(seedToken)
-  const expiredToken = `expired-${crypto.randomUUID()}`
-  const expiredID = await sha256Hex(expiredToken)
-  const nowMs = Date.now()
-  await run(wranglerBin, [
-    "d1",
-    "execute",
-    "ycoding-prod-db",
-    "--local",
-    "--config",
-    configPath,
-    "--command",
-    `INSERT INTO browser_session (id, user_id, created_at, expires_at) VALUES ('${seedID}', '${userID}', ${nowMs - 16 * 86_400_000}, ${nowMs + 30 * 86_400_000}), ('${expiredID}', '${userID}', ${nowMs - 60 * 86_400_000}, ${nowMs - 40 * 86_400_000})`,
-  ])
-
-  const races = await Promise.all([
-    fetch(`${workerOrigin}/api/auth/session/refresh`, {
-      method: "POST",
-      headers: { cookie: `yc_session=${seedToken}`, origin: workerOrigin },
-    }),
-    fetch(`${workerOrigin}/api/auth/session/refresh`, {
-      method: "POST",
-      headers: { cookie: `yc_session=${seedToken}`, origin: workerOrigin },
-    }),
-  ])
-  const winners = races.filter((response) => response.status === 200)
-  expect(winners.length === 1, `concurrent session rotation produced ${winners.length} successes`)
-  const winnerToken = cookieValue(winners[0]!, "yc_session")
-  expect(
-    (await fetch(`${workerOrigin}/api/me`, { headers: { cookie: `yc_session=${winnerToken}` } })).status === 200,
-    "rotated session token is not usable",
-  )
-  expect(
-    (await fetch(`${workerOrigin}/api/me`, { headers: { cookie: `yc_session=${seedToken}` } })).status === 401,
-    "replaced session still authenticates",
-  )
-  sessionPostconditions = await queryD1Row(
-    `SELECT (SELECT COUNT(*) FROM browser_session WHERE id = '${seedID}' AND revoked_at IS NULL) AS live, (SELECT COUNT(*) FROM browser_session WHERE id = '${expiredID}') AS expired`,
-  )
-  expect(sessionPostconditions.live === "0", "the rotated session was not revoked in the same transaction")
-  checks.push("concurrent browser-session rotation is atomic in real D1")
-
-  // A second, live device keeps the credential race independent of the revoke check.
-  const enrollment2 = await fetch(`${workerOrigin}/api/devices/enrollments`, {
-    method: "POST",
-    headers: { cookie: sessionCookie, origin: workerOrigin },
-  })
-  const enrollment2Body = (await enrollment2.json()) as { enrollmentID: string; code: string }
-  const secondDevice = await deviceKey()
-  const enrolled2 = await fetch(`${workerOrigin}/api/devices/enroll`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      enrollmentID: enrollment2Body.enrollmentID,
-      code: enrollment2Body.code,
-      name: "Second Mac",
-      publicKey: secondDevice.publicKey,
-    }),
-  })
-  const device2ID = ((await enrolled2.json()) as { deviceID: string }).deviceID
-  const device2Tokens = await authenticateDevice(device2ID, secondDevice.pair)
-  const raced = await Promise.all([
-    fetch(`${workerOrigin}/api/devices/refresh`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ deviceID: device2ID, refreshToken: device2Tokens.refreshToken }),
-    }),
-    fetch(`${workerOrigin}/api/devices/refresh`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ deviceID: device2ID, refreshToken: device2Tokens.refreshToken }),
-    }),
-  ])
-  expect(raced.filter((response) => response.status === 200).length === 1, "concurrent credential rotation was not single-use")
-  checks.push("concurrent device-credential rotation is atomic in real D1")
-
-  // The cron handler and the lazy sweep call the same bounded cleanup; the lazy
-  // path is observable here without waiting for the hourly trigger.
-  await Bun.sleep(10_500)
-  await fetch(`${workerOrigin}/health`)
-  expect(
-    (await queryD1(`SELECT COUNT(*) AS count FROM browser_session WHERE id = '${expiredID}'`)) === "0",
-    "bounded sweep left expired authentication metadata in D1",
-  )
-  checks.push("bounded sweep removed expired metadata from real D1")
-
-  /* --------------------------- multi-device revocation regression */
-
-  const enrollDevice = async (name: string) => {
-    const created = await fetch(`${workerOrigin}/api/devices/enrollments`, {
-      method: "POST",
-      headers: { cookie: sessionCookie, origin: workerOrigin },
-    })
-    const body = (await created.json()) as { enrollmentID: string; code: string }
-    const key = await deviceKey()
-    const enrolled = await fetch(`${workerOrigin}/api/devices/enroll`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ enrollmentID: body.enrollmentID, code: body.code, name, publicKey: key.publicKey }),
-    })
-    const id = ((await enrolled.json()) as { deviceID: string }).deviceID
-    return { key, deviceID: id, tokens: await authenticateDevice(id, key.pair) }
-  }
-
-  const third = await enrollDevice("Third Mac")
-  const secondLive = await authenticateDevice(device2ID, secondDevice.pair)
-  const agentThird = connect(`${socketOrigin}${RemoteWebSocketPath.agent}`, { authorization: `Bearer ${third.tokens.accessToken}` })
-  const agentSecond = connect(`${socketOrigin}${RemoteWebSocketPath.agent}`, { authorization: `Bearer ${secondLive.accessToken}` })
-  await agentThird.opened
-  await agentSecond.opened
-  agentThird.send({ type: "sessions" })
-  agentSecond.send({ type: "sessions" })
-
-  const clientThird = connect(`${socketOrigin}${RemoteWebSocketPath.client}?device=${third.deviceID}`, {
-    cookie: sessionCookie,
-    origin: workerOrigin,
-  })
-  const clientSecond = connect(`${socketOrigin}${RemoteWebSocketPath.client}?device=${device2ID}`, {
-    cookie: sessionCookie,
-    origin: workerOrigin,
-  })
-  await clientThird.opened
-  await clientSecond.opened
-  await clientThird.next()
-  await clientSecond.next()
-  await agentThird.next()
-  await agentSecond.next()
-  for (const pair of [
-    { client: clientThird, agent: agentThird },
-    { client: clientSecond, agent: agentSecond },
-  ]) {
-    pair.client.send({ type: "request", id: "sub", operation: "session.subscribe", sessionID: "ses_a" })
-    const relayed = await pair.agent.next()
-    pair.agent.send({ type: "response", id: relayed.id, ok: true, value: null })
-    await pair.client.next()
-  }
-  agentThird.send({ type: "event", sessionID: "ses_a", event: { seq: 11 } })
-  expect(JSON.stringify(await clientThird.next()).includes('"seq":11'), "third-device event missing")
-  expect(clientSecond.pending() === 0, "second device received another device's event")
-  expect(clientSecond.pending() === 0, "another device received this device's event")
-  const logout = await fetch(`${workerOrigin}/api/auth/logout`, {
-    method: "POST",
-    headers: { cookie: sessionCookie, origin: workerOrigin },
-  })
-  expect(logout.status === 200, `logout returned ${logout.status}`)
-  const thirdClose = await clientThird.closed
-  const secondLiveClose = await clientSecond.closed
-  expect(thirdClose.code === 4401, `third-device socket closed with ${thirdClose.code}`)
-  expect(secondLiveClose.code === 4401, `second-device socket closed with ${secondLiveClose.code}`)
-  // Logging out a browser session must not tear down an enrolled device agent.
-  const agentSurvived = await Promise.race([
-    agentSecond.closed.then(() => false),
-    Bun.sleep(750).then(() => true),
-  ])
-  expect(agentSurvived, "logout closed the device agent connection")
-  checks.push("logout closed every device's browser sockets and kept the agent enrolled")
-
-  for (const line of checks) console.log(`ok - ${line}`)
-  console.log("Local Wrangler auth + relay integration passed")
-} finally {
-  wrangler?.kill()
-  google?.stop(true)
+function expect(condition: unknown, message: string): asserts condition {
+  if (!condition) throw new Error(message)
 }
-
-/* ------------------------------------------------------------------ helpers */
-
-function expect(condition: boolean, message: string): void {
-  if (!condition) throw new Error(`Integration check failed: ${message}`)
-}
-
-async function run(command: string, args: string[]): Promise<string> {
-  const process = spawn([command, ...args], { cwd: repositoryRoot, stdin: "ignore", stdout: "pipe", stderr: "pipe" })
+async function run(args: string[]) {
+  const process = spawn([wranglerBin, ...args], { cwd: root, stdin: "ignore", stdout: "pipe", stderr: "pipe" })
+  const timeout = setTimeout(() => process.kill(), 60_000)
   const [stdout, stderr, code] = await Promise.all([
     new Response(process.stdout).text(),
     new Response(process.stderr).text(),
     process.exited,
   ])
-  if (code !== 0) throw new Error(`${command} ${args.join(" ")} failed (${code})\n${stdout}\n${stderr}`)
+  clearTimeout(timeout)
+  if (code !== 0) throw new Error(`Local Wrangler command failed (${code})\n${stdout}\n${stderr}`)
   return stdout
 }
-
-/** Runs one read query against the local D1 used by `wrangler dev`. */
-async function queryD1(command: string): Promise<string> {
-  const output = await run(wranglerBin, [
+async function sql(command: string) {
+  await run([
     "d1",
     "execute",
     "ycoding-prod-db",
     "--local",
     "--config",
     configPath,
-    "--json",
+    "--persist-to",
+    persist,
     "--command",
     command,
   ])
-  const parsed: unknown = JSON.parse(output)
-  const batches = Array.isArray(parsed) ? parsed : [parsed]
-  for (const batch of batches) {
-    if (typeof batch !== "object" || batch === null) continue
-    const results = (batch as { results?: unknown }).results
-    if (!Array.isArray(results) || results.length === 0) continue
-    const row = results[0]
-    if (typeof row === "object" && row !== null) {
-      const value = Object.values(row as Record<string, unknown>)[0]
-      return String(value)
-    }
-  }
-  return ""
 }
-
-function sleep(milliseconds: number): Promise<void> {
-  return Bun.sleep(milliseconds)
+function peer(
+  role: PeerRole.AGENT | PeerRole.REMOTE_CLIENT,
+  options: {
+    device?: string
+    cookie?: string
+    access?: string
+    budgets?: ConstructorParameters<typeof TestPeer>[3]
+    hello?: ConstructorParameters<typeof TestPeer>[4]
+  } = {},
+) {
+  const url = `${wsOrigin}${role === PeerRole.AGENT ? RemoteWebSocketPath.agent : `${RemoteWebSocketPath.client}?device=${options.device ?? "dev_relay"}`}`
+  const headers =
+    role === PeerRole.AGENT
+      ? { authorization: `Bearer ${options.access ?? access}` }
+      : {
+          cookie: `yc_session=${options.cookie ?? cookie}`,
+          origin,
+          "x-ycoding-owner": "forged",
+          "x-ycoding-device": "dev_other",
+        }
+  const client = new TestPeer(url, headers, role, options.budgets, options.hello)
+  peers.push(client)
+  return client
 }
-
-/** Runs one read query and returns the first row as a string map. */
-async function queryD1Row(command: string): Promise<Record<string, string>> {
-  const output = await run(wranglerBin, [
-    "d1",
-    "execute",
-    "ycoding-prod-db",
-    "--local",
-    "--config",
-    configPath,
-    "--json",
-    "--command",
-    command,
-  ])
-  const parsed: unknown = JSON.parse(output)
-  const batches = Array.isArray(parsed) ? parsed : [parsed]
-  for (const batch of batches) {
-    if (typeof batch !== "object" || batch === null) continue
-    const results = (batch as { results?: unknown }).results
-    if (!Array.isArray(results) || results.length === 0) continue
-    const row = results[0]
-    if (typeof row !== "object" || row === null) continue
-    return Object.fromEntries(
-      Object.entries(row as Record<string, unknown>).map(([key, value]) => [key, String(value)]),
-    )
-  }
-  return {}
-}
-
-/** Reads the one-use OIDC nonce the worker stored, proving the D1 write happened. */
-async function readNonce(transactionID: string): Promise<string> {
-  const output = await run(wranglerBin, [
-    "d1",
-    "execute",
-    "ycoding-prod-db",
-    "--local",
-    "--config",
-    configPath,
-    "--json",
-    "--command",
-    `SELECT nonce FROM oauth_transaction WHERE id = '${transactionID}'`,
-  ])
-  const parsed: unknown = JSON.parse(output)
-  const batches = Array.isArray(parsed) ? parsed : [parsed]
-  for (const batch of batches) {
-    if (typeof batch !== "object" || batch === null) continue
-    const results = (batch as { results?: unknown }).results
-    if (!Array.isArray(results)) continue
-    for (const row of results) if (typeof row === "object" && row !== null) {
-      const value = (row as { nonce?: unknown }).nonce
-      if (typeof value === "string") return value
-    }
-  }
-  return ""
-}
-
-async function waitForWorker(): Promise<void> {
+async function ready() {
   const deadline = Date.now() + 90_000
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`${workerOrigin}/health`)
-      if (response.status === 200) return
-    } catch {
-      // Wrangler is still starting.
-    }
-    await Bun.sleep(500)
+      if ((await fetch(`${origin}/health`)).status === 200) return
+    } catch {}
+    await Bun.sleep(100)
   }
-  throw new Error("wrangler dev did not become ready")
+  throw new Error("Local workerd readiness deadline exceeded")
+}
+async function settled(client: TestPeer, name: string, scope = machine, payload = empty) {
+  const id = client.request(name, scope, payload)
+  return client.next("settled", id)
 }
 
-/** Value only, for building a Cookie request header. */
-function cookieValue(response: Response, name: string): string {
-  for (const value of response.headers.getSetCookie())
-    if (value.startsWith(`${name}=`)) return value.slice(name.length + 1).split(";")[0] ?? ""
-  throw new Error(`response carried no ${name} cookie`)
-}
-
-/** Full `name=value` pair, for building a Cookie request header from a Set-Cookie line. */
-function cookiePair(response: Response, name: string): string {
-  const values = response.headers.getSetCookie()
-  for (const value of values) if (value.startsWith(`${name}=`)) return value.split(";")[0] ?? ""
-  throw new Error(`response carried no ${name} cookie`)
-}
-
-async function rsaIdentity(kid = "integration-kid") {
-  const pair = (await crypto.subtle.generateKey(
-    { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
-    true,
-    ["sign", "verify"],
-  )) as CryptoKeyPair
-  const jwk = { ...(await crypto.subtle.exportKey("jwk", pair.publicKey)), kid, alg: "RS256", use: "sig" }
-  return { pair, jwk }
-}
-
-async function signedIdToken(pair: CryptoKeyPair, claims: Record<string, unknown>) {
-  const header = { alg: "RS256", kid: "integration-kid", typ: "JWT" }
-  const signingInput = `${base64UrlEncode(new TextEncoder().encode(JSON.stringify(header)))}.${base64UrlEncode(new TextEncoder().encode(JSON.stringify(claims)))}`
-  const signature = new Uint8Array(
-    await crypto.subtle.sign("RSASSA-PKCS1-v1_5", pair.privateKey, new TextEncoder().encode(signingInput)),
-  )
-  return `${signingInput}.${base64UrlEncode(signature)}`
-}
-
-async function deviceKey() {
-  const pair = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
-    "sign",
-    "verify",
-  ])) as CryptoKeyPair
-  const jwk = await crypto.subtle.exportKey("jwk", pair.publicKey)
-  return { pair, publicKey: { kty: "EC" as const, crv: "P-256" as const, x: jwk.x ?? "", y: jwk.y ?? "" } }
-}
-
-async function authenticateDevice(deviceID: string, pair: CryptoKeyPair) {
-  const challenge = await fetch(`${workerOrigin}/api/devices/challenge`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ deviceID }),
-  })
-  expect(challenge.status === 200, `challenge returned ${challenge.status}`)
-  const challengeBody = (await challenge.json()) as { challengeID: string; nonce: string }
-  const signature = base64UrlEncode(
-    new Uint8Array(
-      await crypto.subtle.sign(
-        { name: "ECDSA", hash: "SHA-256" },
-        pair.privateKey,
-        new TextEncoder().encode(deviceSignaturePayload(challengeBody.challengeID, challengeBody.nonce)),
+try {
+  mkdirSync(path.join(scratch, "assets"))
+  await Bun.write(path.join(scratch, "assets/index.html"), "<!doctype html><title>Local relay fixture</title>")
+  const config = await Bun.file(path.join(root, "infra/cloudflare/wrangler.jsonc")).json()
+  await Bun.write(
+    configPath,
+    JSON.stringify({
+      ...config,
+      main: path.join(root, "infra/cloudflare/src/index.ts"),
+      routes: [],
+      assets: { ...config.assets, directory: path.join(scratch, "assets") },
+      d1_databases: config.d1_databases.map(
+        (database: { binding: string; database_name: string; database_id: string }) => ({
+          ...database,
+          migrations_dir: path.join(root, "infra/cloudflare/migrations"),
+        }),
       ),
+    }),
+  )
+  await run([
+    "d1",
+    "migrations",
+    "apply",
+    "ycoding-prod-db",
+    "--local",
+    "--config",
+    configPath,
+    "--persist-to",
+    persist,
+  ])
+  const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"])
+  const jwk = await crypto.subtle.exportKey("jwk", pair.publicKey)
+  const publicKey = JSON.stringify({ kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y })
+  const now = Date.now()
+  const expires = now + 600_000
+  await sql(`INSERT INTO "user" VALUES ('usr_owner', ${now}), ('usr_foreign', ${now});
+    INSERT INTO browser_session (id,user_id,created_at,expires_at) VALUES ('${await sha256Hex(cookie)}','usr_owner',${now},${expires}), ('${await sha256Hex(foreignCookie)}','usr_foreign',${now},${expires});
+    INSERT INTO device (id,user_id,name,public_key_jwk,key_algorithm,created_at) VALUES ('dev_relay','usr_owner','Relay fixture','${publicKey}','ES256',${now}), ('dev_other','usr_owner','Other fixture','${publicKey}','ES256',${now}), ('dev_foreign','usr_foreign','Foreign fixture','${publicKey}','ES256',${now});
+    INSERT INTO device_credential (id,device_id,kind,created_at,expires_at) VALUES ('${await sha256Hex(access)}','dev_relay','access',${now},${expires}), ('${await sha256Hex(otherAccess)}','dev_other','access',${now},${expires});`)
+  wrangler = spawn(
+    [
+      wranglerBin,
+      "dev",
+      "--local",
+      "--config",
+      configPath,
+      "--persist-to",
+      persist,
+      "--port",
+      String(port),
+      "--var",
+      "GOOGLE_CLIENT_ID:local-relay",
+      "--var",
+      "GOOGLE_CLIENT_SECRET:synthetic",
+      "--var",
+      "GOOGLE_ALLOWED_EMAILS:relay@example.invalid",
+      "--var",
+      `GOOGLE_ISSUER:http://127.0.0.1:${standin.port}`,
+      "--var",
+      `GOOGLE_TOKEN_ENDPOINT:http://127.0.0.1:${standin.port}/token`,
+      "--var",
+      `GOOGLE_JWKS_URI:http://127.0.0.1:${standin.port}/certs`,
+    ],
+    { cwd: root, stdout: "inherit", stderr: "inherit" },
+  )
+  await ready()
+
+  for (const version of [3, 4, 6])
+    for (const role of ["client", "agent"])
+      expect(
+        (await fetch(`${origin}/ws/v${version}/${role}`, { headers: { upgrade: "websocket" } })).status === 404,
+        "Non-v5 route was admitted",
+      )
+  expect(
+    (
+      await fetch(`${origin}${RemoteWebSocketPath.client}?device=dev_relay`, {
+        headers: { upgrade: "websocket", origin, cookie: `yc_session=${foreignCookie}` },
+      })
+    ).status === 403,
+    "Cross-owner device was admitted",
+  )
+  expect(
+    (
+      await fetch(`${origin}${RemoteWebSocketPath.client}?device=dev_foreign`, {
+        headers: { upgrade: "websocket", origin, cookie: `yc_session=${cookie}` },
+      })
+    ).status === 403,
+    "Foreign device was admitted",
+  )
+  expect(
+    (
+      await fetch(`${origin}${RemoteWebSocketPath.client}?device=dev_relay`, {
+        headers: { upgrade: "websocket", origin: "https://other.example.invalid", cookie: `yc_session=${cookie}` },
+      })
+    ).status === 403,
+    "Cross-origin browser was admitted",
+  )
+  expect(
+    (await fetch(`${origin}${RemoteWebSocketPath.agent}`, { headers: { upgrade: "websocket" } })).status === 401,
+    "Missing agent credential was admitted",
+  )
+  checks.push("exact version, cookie/bearer, cross-origin, owner/device isolation")
+
+  for (const change of ["revision", "digest", "role", "epoch"] as const) {
+    const invalid = peer(PeerRole.REMOTE_CLIENT, {
+      hello: (frame) => {
+        if (frame.body.case !== "hello") throw new Error("Missing Hello")
+        if (change === "revision") frame.body.value.revision = 4
+        if (change === "digest") frame.body.value.contractDigest = new Uint8Array(32)
+        if (change === "role") frame.body.value.role = PeerRole.AGENT
+        if (change === "epoch") frame.connectionEpoch = "forged"
+        return frame
+      },
+    })
+    expect((await invalid.closed).code === 1008, `Mismatched Hello ${change} did not reject with 1008`)
+  }
+  const text = new WebSocket(`${wsOrigin}${RemoteWebSocketPath.client}?device=dev_relay`, {
+    headers: { cookie: `yc_session=${cookie}`, origin },
+  })
+  const textClosed = new Promise<number>((resolve) =>
+    text.addEventListener("close", (event) => resolve(event.code), { once: true }),
+  )
+  await new Promise<void>((resolve) => text.addEventListener("open", () => resolve(), { once: true }))
+  text.send('{"type":"request"}')
+  expect((await textClosed) === 1008, "Text socket did not reject before handshake")
+  checks.push("binary-only handshake rejects mismatched revision/digest/role and fabricated epoch")
+
+  const agent = peer(PeerRole.AGENT, { budgets: { deliveryTimeoutMs: 60_000 } })
+  const first = peer(PeerRole.REMOTE_CLIENT)
+  const second = peer(PeerRole.REMOTE_CLIENT)
+  await Promise.all([agent.ready, first.ready, second.ready])
+  expect(
+    first.connection.state === "established" && agent.connection.state === "established",
+    "Role handshake did not establish",
+  )
+  const a = first.request("session.todo.list", session, todo)
+  const b = second.request("session.todo.list", session, todo)
+  expect(a === "1" && b === "1", "Peer request IDs are not connection-local")
+  const dispatches = [await agent.next("dispatch"), await agent.next("dispatch")]
+  expect(dispatches[0].requestID !== dispatches[1].requestID, "Relay correlation IDs collided")
+  expect(
+    dispatches.every((item) => Buffer.from(item.request.payload).equals(Buffer.from(todo))),
+    "Relay re-encoded the domain request",
+  )
+  for (const dispatch of dispatches) agent.result(dispatch, todoResult)
+  expect(
+    (await first.next("settled", a)).status === "success" && (await second.next("settled", b)).status === "success",
+    "Result forwarding failed",
+  )
+  checks.push("real Connection peers handshake and forward opaque RPCs with per-browser correlation")
+
+  const notice = await settled(first, "notice.subscribe")
+  const page = decodeStrict(ConnectorNoticePageSchema, notice.payload!.payload)
+  expect(page.notice?.kind.case === "added" && page.unavailable === false, "Notice subscribe result is not typed")
+  agent.send({
+    case: "control",
+    value: create(ControlSchema, { kind: { case: "completions", value: { items: [], more: false } } }),
+  })
+  agent.send({
+    case: "control",
+    value: create(ControlSchema, {
+      kind: {
+        case: "completions",
+        value: {
+          items: [{ id: "evt_complete", sequence: 1n, createdMs: BigInt(now), sessionId: "ses_remote" }],
+          more: false,
+        },
+      },
+    }),
+  })
+  await first
+    .wait(() =>
+      first.raw.some(
+        (frame) =>
+          frame.body.case === "control" &&
+          frame.body.value.kind.case === "notice" &&
+          frame.body.value.kind.value.kind.case === "added",
+      ),
+    )
+    .catch((cause: unknown) => {
+      throw new Error("Waiting for the persisted notice notification", { cause })
+    })
+  const listed = decodeStrict(
+    ConnectorNoticePageSchema,
+    (
+      await settled(
+        first,
+        "notice.list",
+        machine,
+        encodeStrict(ConnectorNoticeBeforeSchema, create(ConnectorNoticeBeforeSchema, { before: encodeLossless("") })),
+      )
+    ).payload!.payload,
+  )
+  expect(
+    listed.notice!.kind.case === "added" && listed.notice!.kind.value.total === 1n,
+    "Completion notice was not persisted",
+  )
+  const read = decodeStrict(
+    ConnectorNoticeSettlementSchema,
+    (
+      await settled(
+        first,
+        "notice.read",
+        machine,
+        encodeStrict(ConnectorNoticeIDsSchema, create(ConnectorNoticeIDsSchema, { ids: ["ntc_1"] })),
+      )
+    ).payload!.payload,
+  )
+  expect(read.notification?.kind.case === "removed", "Notice read did not remove the selected item")
+  expect((await settled(first, "notice.readAll")).status === "success", "Notice readAll failed")
+  expect(
+    agent.queue.every((entry) => entry.decision.type !== "dispatch"),
+    "A notice RPC was forwarded to the agent",
+  )
+  checks.push("relay-owned subscribe/list/read/readAll and completion notice persistence")
+
+  const bulkID = second.request("session.todo.list", session, todo)
+  const bulkRequest = await agent.next("dispatch")
+  const bulkPayload = encodeStrict(
+    session_todo_list_ResultSchema,
+    create(session_todo_list_ResultSchema, { data: { items: [] } }),
+  )
+  const start = create(BulkStartSchema, {
+    requestId: bulkRequest.requestID,
+    transferId: "typed-bulk",
+    operationId: bulkRequest.operation.operationId,
+    typeName: bulkRequest.operation.resultType,
+    contentKind: ContentKind.TYPED_MESSAGE,
+    byteCount: BigInt(bulkPayload.length),
+    chunkCount: 1,
+  })
+  agent.send({ case: "bulkStart", value: start })
+  agent.send({
+    case: "bulkPiece",
+    value: create(BulkPieceSchema, { transferId: start.transferId, index: 0, offset: 0n, data: bulkPayload }),
+  })
+  agent.send({
+    case: "bulkEnd",
+    value: create(BulkEndSchema, {
+      transferId: start.transferId,
+      byteCount: start.byteCount,
+      outcome: { case: "success", value: {} },
+    }),
+  })
+  expect((await second.next("settled", bulkID)).status === "success", "Typed bulk did not settle")
+  const complete = await second.next("bulkComplete")
+  expect(Buffer.from(complete.data).equals(Buffer.from(bulkPayload)), "Typed bulk changed bytes")
+  second.connection.releaseBulk(complete.transferID)
+  checks.push("typed bulk forwards without relay reassembly and completes at the endpoint")
+
+  const subscriptionID = "accepted-backend-observer"
+  const backendEpoch = "canonical-backend-source"
+  const subscriber = peer(PeerRole.REMOTE_CLIENT)
+  await subscriber.ready
+  const registeredClients = new Set<string>()
+  async function backendSubscribe(client: TestPeer) {
+    const requestID = client.request(
+      "event.subscribe",
+      session,
+      encodeStrict(event_subscribe_RequestSchema, create(event_subscribe_RequestSchema, { scope: session })),
+    )
+    const dispatch = await agent.next("dispatch")
+    await agent.wait(() =>
+      agent.queue.some(
+        (item) =>
+          item.frame?.body.case === "control" &&
+          item.frame.body.value.kind.case === "subscriptionSnapshot" &&
+          !registeredClients.has(item.frame.body.value.kind.value.clientId) &&
+          item.frame.body.value.kind.value.sessionIds.includes("ses_remote"),
+      ),
+    )
+    const index = agent.queue.findIndex(
+      (item) =>
+        item.frame?.body.case === "control" &&
+        item.frame.body.value.kind.case === "subscriptionSnapshot" &&
+        !registeredClients.has(item.frame.body.value.kind.value.clientId) &&
+        item.frame.body.value.kind.value.sessionIds.includes("ses_remote"),
+    )
+    const frame = agent.queue.splice(index, 1)[0]!.frame!
+    if (frame.body.case !== "control" || frame.body.value.kind.case !== "subscriptionSnapshot")
+      throw new Error("Missing full snapshot")
+    registeredClients.add(frame.body.value.kind.value.clientId)
+    const interests = agent.connection.updateRelayInterests(frame.body.value.kind.value, performance.now())
+    expect(!interests.decisions.some((item) => item.type === "closed"), "Snapshot closed the shared observer")
+    if (interests.added.includes("ses_remote"))
+      expect(
+        agent.connection.registerRelayInterest("ses_remote", subscriptionID, backendEpoch, performance.now()).length ===
+          0,
+        "Backend-accepted observer registration failed",
+      )
+    if (interests.added.includes("ses_remote")) agent.send({
+      case: "control",
+      value: create(ControlSchema, {
+        kind: { case: "resyncRequired", value: { scope: session, sourceEpoch: backendEpoch } },
+      }),
+    })
+    agent.result(
+      dispatch,
+      encodeStrict(
+        event_subscribe_ResultSchema,
+        create(event_subscribe_ResultSchema, { subscriptionId: encodeLossless(subscriptionID) }),
+      ),
+    )
+    expect(
+      agent.connection.acceptSubscription(
+        dispatch.requestID,
+        subscriptionID,
+        session,
+        performance.now(),
+        "send",
+        backendEpoch,
+      ).length === 0,
+      "RPC association replaced or rejected the union observer",
+    )
+    const settled = await client.next("settled", requestID)
+    expect(settled.status === "success", "Subscription Result did not reach the browser")
+    expect(
+      client.connection.acceptSubscription(
+        requestID!,
+        subscriptionID,
+        session,
+        performance.now(),
+        "receive",
+        backendEpoch,
+      ).length === 0,
+      "Browser registration failed",
+    )
+    return frame.body.value.kind.value.clientId
+  }
+  const firstClientID = await backendSubscribe(first)
+  const otherClientID = await backendSubscribe(subscriber)
+  expect(
+    firstClientID !== otherClientID && agent.connection.relaySubscriptionID("ses_remote") === subscriptionID,
+    "Clients did not share the accepted backend identity",
+  )
+  const event = create(EventRecordSchema, {
+    eventId: "evt_live",
+    createdMs: BigInt(now),
+    event: {
+      typeName: PublicEventSchema.typeName,
+      payload: encodeStrict(
+        PublicEventSchema,
+        create(PublicEventSchema, {
+          kind: {
+            case: "sessionStatus",
+            value: {
+              id: encodeLossless("evt_live"),
+              created: now,
+              type: 1,
+              data: {
+                sessionID: encodeLossless("ses_remote"),
+                status: { kind: { case: "value1", value: { type: 1 } } },
+              },
+            },
+          },
+        }),
+      ),
+    },
+  })
+  agent.connection.enqueueEvent(event, { subscriptionID, scope: session, sourceEpoch: backendEpoch }, performance.now())
+  const deliveries = await Promise.all([first.next("events"), subscriber.next("events")]).catch((cause) => { throw new Error(`Fanout: agent=${JSON.stringify(agent.connection.counters)}, first=${JSON.stringify(first.connection.counters)}, second=${JSON.stringify(subscriber.connection.counters)}, agent-event-bytes=${agent.connection.ledger(LedgerClass.EVENT).handedBytes}, first-frames=${first.raw.slice(-6).map((frame) => frame.body.case)}, second-frames=${subscriber.raw.slice(-6).map((frame) => frame.body.case)}`, { cause }) })
+  expect(
+    deliveries.every(
+      (item) =>
+        item.batch.subscriptionId === subscriptionID &&
+        item.batch.sourceEpoch === backendEpoch &&
+        item.batch.events.length === 1 &&
+        item.batch.events[0]!.eventId === event.eventId &&
+        Buffer.from(item.batch.events[0]!.event!.payload).equals(Buffer.from(event.event!.payload)),
+    ),
+    "Forwarding rewrote the backend batch",
+  )
+  expect(
+    first.raw.some((frame) => frame.body.case === "ready" && frame.body.value.sourceEpoch !== backendEpoch),
+    "Fixture collapsed relay and backend epochs",
+  )
+  const retained = agent.connection.ledger(LedgerClass.EVENT).handedBytes
+  expect(retained > 0, "Upstream event was consumed on native handoff")
+  first.connection.consume(LedgerClass.EVENT, deliveries[0]!.ordinal!, performance.now())
+  first.flush()
+  subscriber.connection.consume(LedgerClass.EVENT, deliveries[1]!.ordinal!, performance.now())
+  subscriber.flush()
+  await agent.wait(() => agent.connection.ledger(LedgerClass.EVENT).handedBytes === 0)
+  checks.push("whole EventBatch identity and bytes survive fanout; upstream credit waits for every downstream ticket")
+  subscriber.stop()
+  await agent.wait(() =>
+    agent.queue.some(
+      (item) =>
+        item.frame?.body.case === "control" &&
+        item.frame.body.value.kind.case === "subscriptionSnapshot" &&
+        item.frame.body.value.kind.value.clientId === otherClientID &&
+        item.frame.body.value.kind.value.sessionIds.length === 0,
     ),
   )
-  const token = await fetch(`${workerOrigin}/api/devices/token`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ deviceID, challengeID: challengeBody.challengeID, signature }),
-  })
-  expect(token.status === 200, `token returned ${token.status}`)
-  const issued = (await token.json()) as { accessToken: string; refreshToken: string }
-  return { ...issued, challengeID: challengeBody.challengeID, signature }
-}
+  expect(
+    agent.connection.releaseRelayClient(otherClientID, performance.now()).removed.length === 0 &&
+      agent.connection.relaySubscriptionID("ses_remote") === subscriptionID,
+    "Disconnect revoked another client's interest",
+  )
+  const unsubscription = first.request(
+    "event.unsubscribe",
+    session,
+    encodeStrict(
+      event_unsubscribe_RequestSchema,
+      create(event_unsubscribe_RequestSchema, { subscriptionId: subscriptionID }),
+    ),
+  )
+  expect((await first.next("settled", unsubscription)).status === "success", "Unsubscribe did not settle locally")
+  first.connection.releaseSubscription(subscriptionID, performance.now())
+  expect(
+    agent.connection.releaseRelayClient(firstClientID, performance.now()).removed.includes("ses_remote"),
+    "Last client did not release the backend observer",
+  )
+  checks.push(
+    "immutable client snapshots register one shared observer and disconnect/unsubscribe release only their membership",
+  )
 
-type Frame = Record<string, unknown>
+  registeredClients.delete(firstClientID)
+  await backendSubscribe(first)
+  agent.send({ case: "streamEnd", value: { $typeName: "ycoding.v5.StreamEnd", subscriptionId: subscriptionID } })
+  expect((await first.next("streamEnded")).subscriptionID === subscriptionID, "Finite StreamEnd did not reach its accepted browser subscription")
+  await agent.wait(() => agent.connection.ledger(LedgerClass.EVENT).handedBytes === 0)
+  agent.connection.releaseRelayClient(firstClientID, performance.now())
+  checks.push("AGENT and RELAY carry finite StreamEnd on the event ledger after prior responsibility and return upstream credit")
 
-function connect(url: string, headers: Record<string, string>) {
-  const queue: Frame[] = []
-  const waiters: ((frame: Frame) => void)[] = []
-  let resolveClosed: (value: { code: number; reason: string }) => void = () => {}
-  const closed = new Promise<{ code: number; reason: string }>((resolve) => {
-    resolveClosed = resolve
-  })
-  const socket = new WebSocket(url, { headers })
-  const opened = new Promise<void>((resolve, reject) => {
-    socket.addEventListener("open", () => resolve(), { once: true })
-    socket.addEventListener("error", () => reject(new Error(`WebSocket failed: ${url}`)), { once: true })
-  })
-  socket.addEventListener("message", (event) => {
-    const frame = JSON.parse(String(event.data)) as Frame
-    const waiter = waiters.shift()
-    if (waiter) waiter(frame)
-    else queue.push(frame)
-  })
-  socket.addEventListener("close", (event) => resolveClosed({ code: event.code, reason: event.reason }))
-  return {
-    opened,
-    closed,
-    pending: () => queue.length,
-    send: (frame: unknown) => socket.send(JSON.stringify(frame)),
-    next: (timeoutMs = 10_000) =>
-      queue.length > 0
-        ? Promise.resolve(queue.shift()!)
-        : new Promise<Frame>((resolve, reject) => {
-            const timer = setTimeout(() => reject(new Error(`timed out waiting for a frame from ${url}`)), timeoutMs)
-            waiters.push((frame) => {
-              clearTimeout(timer)
-              resolve(frame)
-            })
-          }),
+  for (const length of [0, 65537]) {
+    const requestID = second.request(
+      "session.attachment.read",
+      session,
+      encodeStrict(
+        session_attachment_read_RequestSchema,
+        create(session_attachment_read_RequestSchema, {
+          params: { sessionID: encodeLossless("ses_remote"), digest: encodeLossless("a".repeat(64)) },
+        }),
+      ),
+    )
+    const dispatch = await agent.next("dispatch")
+    const metadata = encodeAssetMetadata(
+      session_attachment_read_ResultSchema,
+      create(session_attachment_read_ResultSchema, {
+        data: { mime: encodeLossless("image/png"), bytes: BigInt(length) },
+      }),
+    )
+    agent.send({
+      case: "result",
+      value: create(ResultSchema, {
+        requestId: dispatch.requestID,
+        operationId: dispatch.operation.operationId,
+        settlement: dispatch.operation.settlement,
+        outcome: { case: "assetMetadata", value: metadata },
+      }),
+    })
+    const declaration = await second.next("assetMetadata", requestID)
+    expect(
+      declaration.metadata.byteCount === BigInt(length) &&
+        !second.queue.some((item) => item.decision.type === "settled" && item.decision.requestID === requestID),
+      `Metadata settled the asset before its raw body: expected=${length}, declared=${declaration.metadata.byteCount}, id=${requestID}, settlements=${JSON.stringify(second.queue.flatMap((item) => item.decision.type === "settled" ? [{ id: item.decision.requestID, status: item.decision.status }] : []))}`,
+    )
+    const transferId = `asset-${length}`
+    agent.send({
+      case: "bulkStart",
+      value: create(BulkStartSchema, {
+        requestId: dispatch.requestID,
+        transferId,
+        operationId: dispatch.operation.operationId,
+        typeName: dispatch.operation.resultType,
+        contentKind: ContentKind.ASSET,
+        byteCount: BigInt(length),
+        chunkCount: Math.ceil(length / 65536),
+      }),
+    })
+    const data = new Uint8Array(length).fill(173)
+    for (let offset = 0, index = 0; offset < length; offset += 65536, index++)
+      agent.send({
+        case: "bulkPiece",
+        value: create(BulkPieceSchema, {
+          transferId,
+          index,
+          offset: BigInt(offset),
+          data: data.subarray(offset, offset + 65536),
+        }),
+      })
+    agent.send({
+      case: "bulkEnd",
+      value: create(BulkEndSchema, { transferId, byteCount: BigInt(length), outcome: { case: "success", value: {} } }),
+    })
+    expect((await second.next("settled", requestID)).status === "success", "Asset BulkEnd did not settle successfully")
+    const complete = await second.next("bulkComplete")
+    if (!complete.metadata) throw new Error("Missing completed asset metadata")
+    expect(
+      takeAsset(second.connection, complete, new ReservationBudget(1)) === undefined &&
+        second.connection.assetMetadataRetainedBytes > 0,
+      "Failed owner reservation released the live connection's asset",
+    )
+    const owner = new ReservationBudget(2 * 1024 * 1024)
+    const asset = takeAsset(second.connection, complete, owner)
+    expect(
+      asset !== undefined &&
+        Buffer.from(asset.data).equals(Buffer.from(data)) &&
+        Buffer.from(asset.result.payload).equals(Buffer.from(metadata.metadata!.payload)),
+      "Ownership handoff changed the asset or its canonical typed Result",
+    )
+    expect(
+      second.connection.assetMetadataRetainedBytes === 0 && owner.used > 0,
+      "Completed asset was released without a charged consumer owner",
+    )
+    asset!.release()
+    asset!.release()
+    expect(owner.used === 0, "Asset owner release leaked or double-refunded its charge")
   }
+  checks.push(
+    "nonterminal asset metadata, empty and multi-piece raw delivery, canonical Result and reserve-before-release ownership",
+  )
+  const cancelledAssetID = second.request(
+    "session.attachment.read",
+    session,
+    encodeStrict(
+      session_attachment_read_RequestSchema,
+      create(session_attachment_read_RequestSchema, {
+        params: { sessionID: encodeLossless("ses_remote"), digest: encodeLossless("b".repeat(64)) },
+      }),
+    ),
+  )
+  const cancelledAsset = await agent.next("dispatch")
+  agent.send({
+    case: "result",
+    value: create(ResultSchema, {
+      requestId: cancelledAsset.requestID,
+      operationId: cancelledAsset.operation.operationId,
+      settlement: cancelledAsset.operation.settlement,
+      outcome: {
+        case: "assetMetadata",
+        value: encodeAssetMetadata(
+          session_attachment_read_ResultSchema,
+          create(session_attachment_read_ResultSchema, { data: { mime: encodeLossless("image/png"), bytes: 1n } }),
+        ),
+      },
+    }),
+  })
+  await second.next("assetMetadata", cancelledAssetID)
+  second.connection.cancel(cancelledAssetID!, performance.now())
+  second.flush()
+  expect(
+    second.connection.assetMetadataRetainedBytes === 0 &&
+      (await agent.next("cancelled")).requestID === cancelledAsset.requestID,
+    "Cancellation retained metadata or failed to stop delivery",
+  )
+  checks.push("cancelling a declared but incomplete asset releases endpoint metadata and forwards cancellation")
+
+  const cancelID = first.request(
+    "session.interrupt",
+    session,
+    encodeStrict(
+      session_interrupt_RequestSchema,
+      create(session_interrupt_RequestSchema, { params: { sessionID: encodeLossless("ses_remote") } }),
+    ),
+  )
+  const cancelled = await agent.next("dispatch")
+  const cancellation = first.connection.cancel(cancelID, performance.now())
+  expect(
+    cancellation.some((entry) => entry.type === "settled" && entry.status === "unknown"),
+    "Transmitted mutation cancellation invented rollback",
+  )
+  first.flush()
+  expect(
+    (await agent.next("cancelled", cancelled.requestID)).mutation,
+    "Cancel was not forwarded to the mutation owner",
+  )
+  checks.push("transmitted cancellation settles unknown and forwards once without rollback")
+
+  const other = peer(PeerRole.AGENT, { access: otherAccess })
+  const otherBrowser = peer(PeerRole.REMOTE_CLIENT, { device: "dev_other" })
+  await Promise.all([other.ready, otherBrowser.ready])
+  const otherID = otherBrowser.request("session.todo.list", session, todo)
+  const isolated = await other.next("dispatch")
+  other.result(isolated, todoResult)
+  expect((await otherBrowser.next("settled", otherID)).status === "success", "Second owned device did not progress")
+  expect(
+    agent.queue.every((entry) => entry.decision.type !== "dispatch"),
+    "Request crossed devices",
+  )
+  checks.push("forged routing headers are stripped and separate device Durable Objects stay isolated")
+
+  const rate = peer(PeerRole.REMOTE_CLIENT, { budgets: { clientRate: 1000 } })
+  await rate.ready
+  for (let index = 0; index < 120; index++) {
+    const result = await settled(
+      rate,
+      "notice.list",
+      machine,
+      encodeStrict(ConnectorNoticeBeforeSchema, create(ConnectorNoticeBeforeSchema, { before: encodeLossless("") })),
+    )
+    expect(result.status === "success", `Request budget rejected valid frame ${index}`)
+  }
+  rate.request(
+    "notice.list",
+    machine,
+    encodeStrict(ConnectorNoticeBeforeSchema, create(ConnectorNoticeBeforeSchema, { before: encodeLossless("") })),
+  )
+  expect((await rate.closed).reason === "LIMIT", "Real relay did not enforce the 120-frame receive rate")
+  checks.push("real workerd normal-frame receive rate limit (Connection peer with a higher local sender budget)")
+
+  const stalled = peer(PeerRole.REMOTE_CLIENT)
+  stalled.autoConsume = false
+  await stalled.ready
+  for (let index = 0; index < 4; index++)
+    agent.send({
+      case: "control",
+      value: create(ControlSchema, {
+        kind: {
+          case: "status",
+          value: {
+            running: Array.from({ length: 500 }, (_, item) => `ses_${index}_${item}_${"x".repeat(100)}`),
+            attention: [],
+          },
+        },
+      }),
+    })
+  await second.wait(
+    () =>
+      second.raw.filter((frame) => frame.body.case === "control" && frame.body.value.kind.case === "status").length >=
+      4,
+  )
+  expect(
+    agent.connection.ledger(LedgerClass.NORMAL).handedBytes > 0,
+    "send refunded upstream status ownership before stalled-recipient consumption",
+  )
+  const healthyID = second.request("session.todo.list", session, todo)
+  agent.result(await agent.next("dispatch"), todoResult)
+  expect((await second.next("settled", healthyID)).status === "success", "Stalled peer blocked a healthy peer")
+  const stalledClose = await Promise.race([
+    stalled.closed,
+    new Promise<never>((_, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error("Stalled recipient consumption deadline was not enforced")),
+        35_000,
+      )
+      void stalled.closed.finally(() => clearTimeout(timer))
+    }),
+  ])
+  expect(stalledClose.reason === "LIMIT", "Stalled recipient escaped the handed-consumption deadline")
+  checks.push("handed status accounting survives native send and isolates a stalled recipient")
+
+  const survivor = peer(PeerRole.REMOTE_CLIENT)
+  await survivor.ready
+  const pending = survivor.request("session.todo.list", session, todo)
+  await agent.next("dispatch")
+  agent.stop()
+  expect((await survivor.closed).code === 1012, "Agent loss did not reconstruct transmitted work")
+  expect(
+    survivor.queue.some(
+      (entry) =>
+        entry.decision.type === "settled" &&
+        entry.decision.requestID === pending &&
+        entry.decision.status === "unknown",
+    ),
+    "Disconnect lost unknown settlement",
+  )
+  const replacement = peer(PeerRole.AGENT)
+  await replacement.ready
+  const reopened = peer(PeerRole.REMOTE_CLIENT)
+  await reopened.ready
+  const post = reopened.request("session.todo.list", session, todo)
+  const postDispatch = await replacement.next("dispatch")
+  replacement.result(postDispatch, todoResult)
+  expect(
+    (await reopened.next("settled", post)).status === "success" &&
+      replacement.queue.every((entry) => entry.decision.type !== "dispatch"),
+    "Replacement replayed old work",
+  )
+  checks.push("agent disconnect/replacement settles unknown, creates fresh epochs and never replays")
+
+  await sql(`UPDATE browser_session SET revoked_at=${Date.now()} WHERE id='${await sha256Hex(cookie)}'`)
+  reopened.request("session.todo.list", session, todo)
+  expect((await reopened.closed).code === 4401, "Fresh D1 authorization did not enforce revocation")
+  expect(
+    replacement.queue.every((entry) => entry.decision.type !== "dispatch"),
+    "Revoked owner forwarded a control",
+  )
+  checks.push("fresh local D1 revocation blocks forwarding after socket authentication")
+  for (const client of peers) expect(client.failures.length === 0, "Protocol-conformant peer failed")
+  for (const check of checks) console.log(`PASS ${check}`)
+  console.log(`${checks.length} passed, 0 failed (real local workerd, D1, Durable Object, binary Connection peers)`)
+} finally {
+  for (const client of peers) client.stop()
+  wrangler?.kill()
+  if (wrangler) await wrangler.exited
+  standin.stop(true)
+  rmSync(scratch, { recursive: true, force: true })
 }

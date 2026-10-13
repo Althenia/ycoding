@@ -40,6 +40,7 @@ test("platform slice exactly matches all 55 baseline and live endpoint declarati
   const live = platformEndpoints().map(({ endpoint }) => endpoint.identifier)
   expect(live).toHaveLength(55)
   const manifest = await generateManifest(path.resolve(import.meta.dir, "../../.."))
+  expect(manifest.counts).toEqual({ endpoint: 198, connector: 66, notice: 4 })
   const baseline = manifest.members.filter((member) => member.kind === "endpoint" && platformGroups.has(member.group))
   expect(baseline.map((member) => member.name).sort()).toEqual([...live].sort())
   expect(

@@ -427,10 +427,9 @@ pub(super) fn allowed(body: &v5::frame::Body, sender: v5::PeerRole) -> Result<bo
         v5::frame::Body::Hello(_) => v5::SenderMask::HelloSenders,
         v5::frame::Body::Ready(_) => v5::SenderMask::ReadySenders,
         v5::frame::Body::Request(_) => v5::SenderMask::RequestSenders,
-        v5::frame::Body::Result(_) | v5::frame::Body::EventBatch(_) => {
-            v5::SenderMask::ResultSenders
-        }
-        v5::frame::Body::StreamEnd(_) => v5::SenderMask::StreamEndSenders,
+        v5::frame::Body::Result(_)
+        | v5::frame::Body::EventBatch(_)
+        | v5::frame::Body::StreamEnd(_) => v5::SenderMask::ResultSenders,
         v5::frame::Body::BulkStart(_)
         | v5::frame::Body::BulkPiece(_)
         | v5::frame::Body::BulkEnd(_) => v5::SenderMask::PingSenders,

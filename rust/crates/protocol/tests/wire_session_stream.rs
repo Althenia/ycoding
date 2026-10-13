@@ -1,3 +1,4 @@
+use prost::Message;
 use std::{fs, path::PathBuf};
 use ycoding_protocol::{WireConnection, WireError, decode_strict, v5};
 
@@ -90,6 +91,56 @@ fn stream_end_negatives_retain_their_specific_rejection_reasons() {
                 .unwrap_err(),
             WireError(reason),
             "{name}"
+        );
+    }
+}
+
+#[test]
+fn stream_end_sender_set_is_exactly_server_agent_and_relay() {
+    for (client, server, sender) in [
+        (
+            v5::PeerRole::LocalClient,
+            v5::PeerRole::Server,
+            v5::PeerRole::Server,
+        ),
+        (
+            v5::PeerRole::Agent,
+            v5::PeerRole::Relay,
+            v5::PeerRole::Agent,
+        ),
+        (
+            v5::PeerRole::RemoteClient,
+            v5::PeerRole::Relay,
+            v5::PeerRole::Relay,
+        ),
+    ] {
+        let mut connection = WireConnection::new(client, server).unwrap();
+        let mut hello = decode_strict::<v5::Frame>(&vector("hello")).unwrap();
+        if let Some(v5::frame::Body::Hello(value)) = &mut hello.body {
+            value.role = client as i32;
+        }
+        connection
+            .observe(&hello.encode_to_vec(), client, 0)
+            .unwrap();
+        let mut ready = decode_strict::<v5::Frame>(&vector("ready")).unwrap();
+        if let Some(v5::frame::Body::Ready(value)) = &mut ready.body {
+            value.role = server as i32;
+        }
+        connection
+            .observe(&ready.encode_to_vec(), server, 0)
+            .unwrap();
+        connection.observe(&vector("ping"), client, 0).unwrap();
+        assert!(connection.observe(&bytes(), sender, 0).is_ok());
+    }
+    for sender in [v5::PeerRole::LocalClient, v5::PeerRole::RemoteClient] {
+        let mut connection = if sender == v5::PeerRole::LocalClient {
+            WireConnection::default()
+        } else {
+            WireConnection::new(sender, v5::PeerRole::Relay).unwrap()
+        };
+        assert_eq!(
+            connection.observe(&bytes(), sender, 0).unwrap_err(),
+            WireError("direction")
         );
     }
 }

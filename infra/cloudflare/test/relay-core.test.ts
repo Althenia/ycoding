@@ -1,2443 +1,385 @@
-import { Database } from "bun:sqlite"
-import { describe, expect, test } from "bun:test"
-import { RemoteCloseCode, RemoteLimits, RemoteProtocolVersion, parseNoticePage, type RemoteNotice, type RemoteStatus } from "../../../packages/remote/src/index"
-import { createRelay, type OfflineCheck, type RelayConnection, type RelayDeps } from "../src/relay/core"
-import type { PushEvent, PushOutcome } from "../src/push/send"
-import { attentionRepeatMs, createNoticeStore, type NoticeStore } from "../src/relay/notice-store"
-import { createNoticeStorage } from "./notice-storage"
-import { createD1AuthStore } from "../src/auth/d1-store"
-import { createAuthService } from "../src/auth/service"
-import { createD1PushStore } from "../src/push/d1-store"
-import { migratedDatabase, sqliteD1 } from "./support/d1-sqlite"
+import { expect, test } from "bun:test"
+import {
+  create,
+  encodeStrict,
+  decodeStrict,
+  encodeLossless,
+  LedgerClass,
+  session_todo_list_ResultSchema,
+  ConnectorNoticePageSchema,
+  ControlSchema,
+  BulkStartSchema,
+  BulkPieceSchema,
+  BulkEndSchema,
+  ContentKind,
+  ScopeSchema,
+  ResultSchema,
+  operations,
+  event_subscribe_RequestSchema,
+  event_subscribe_ResultSchema,
+} from "../../../packages/protocol/src/v5"
+import type { Frame } from "../../../packages/protocol/src/v5"
+import { frameReservation } from "../../../packages/remote/src/index"
+import { harness } from "./support/relay"
 
-type Sent = { readonly connectionID: string; readonly message: string }
-type Closed = { readonly connectionID: string; readonly code: number; readonly reason: string }
-type Authority = { ok: true } | { ok: false; reason: string }
+test("a subscription without an authenticated backend epoch fails closed instead of borrowing Ready", async () => {
+  const h = await harness()
+  const agent = await h.attach("agent", "agent")
+  const client = await h.attach("client")
+  const scope = create(ScopeSchema, { target: { case: "session", value: "ses_1" } })
+  const operation = operations.find((item) => item.diagnosticName === "event.subscribe")!
+  client.request(
+    operation.operationId,
+    scope,
+    encodeStrict(event_subscribe_RequestSchema, create(event_subscribe_RequestSchema, { scope })),
+    512,
+    0,
+  )
+  await h.send("client")
+  const input = h
+    .receive("agent")
+    .flatMap((item) => item.decisions)
+    .find((item) => item.type === "dispatch")!
+  if (input.type !== "dispatch") throw new Error("missing dispatch")
+  agent.enqueue(
+    {
+      case: "result",
+      value: create(ResultSchema, {
+        requestId: input.requestID,
+        operationId: operation.operationId,
+        settlement: operation.settlement,
+        outcome: {
+          case: "success",
+          value: {
+            typeName: operation.resultType,
+            payload: encodeStrict(
+              event_subscribe_ResultSchema,
+              create(event_subscribe_ResultSchema, { subscriptionId: encodeLossless("accepted") }),
+            ),
+          },
+        },
+      }),
+    },
+    512,
+    0,
+  )
+  await h.send("agent")
+  expect(h.close).toContainEqual({ id: "client", code: 1012, reason: "EPOCH" })
+  expect(
+    h
+      .receive("client")
+      .flatMap((item) => item.decisions)
+      .some((item) => item.type === "settled" && item.status === "success"),
+  ).toBe(false)
+})
 
-function harness(options: { readonly sessions?: readonly string[]; readonly authorityTtlMs?: number; readonly statusStore?: { value?: RemoteStatus }; readonly database?: Database; readonly noticeStore?: (store: NoticeStore) => NoticeStore; readonly withoutPush?: boolean; readonly offlineStore?: { value?: OfflineCheck }; readonly beforeCommit?: () => void; readonly pushOutcomes?: (event: PushEvent) => Promise<readonly PushOutcome[]>; readonly agentHeartbeatAt?: () => number | undefined } = {}) {
-  let now = 1_000_000
-  let idSequence = 0
-  const sent: Sent[] = []
-  const closed: Closed[] = []
-  const pushed: ({ accountID: string } & Record<string, string>)[] = []
-  const offlineStore = options.offlineStore ?? {}
-  const storedSubscriptions = new Map<string, readonly string[]>()
-  const storedPending = new Map<string, readonly { relayID: string; clientID: string }[]>()
-  const storedPriorities = new Map<string, "interactive" | "background">()
-  const statusStore = options.statusStore ?? {}
-  const database = options.database ?? new Database(":memory:")
-  const storage = createNoticeStorage(database)
-  const baseNotices = createNoticeStore({ ...storage, transactionSync: (operation) => storage.transactionSync(() => {
-    const result = operation()
-    options.beforeCommit?.()
-    return result
-  }) })
-  const notices = options.noticeStore?.(baseNotices) ?? baseNotices
-  const storedNoticeSubscriptions = new Map<string, boolean>()
-  let advertisement: readonly string[] = options.sessions ?? ["ses_a"]
-  let clientAuthority: Authority = { ok: true }
-  let agentAuthority: Authority = { ok: true }
-  let authorityReads = 0
-  let readAgentAuthority: () => Promise<Authority> = async () => agentAuthority
-  let readClientAuthority: (call: number, sessionID: string, deviceID: string) => Promise<Authority> = async () => clientAuthority
+test("remote subscription payloads cannot select a different Session than their authenticated outer scope", async () => {
+  const h = await harness()
+  await h.attach("agent", "agent")
+  const client = await h.attach("client")
+  const operation = operations.find((item) => item.diagnosticName === "event.subscribe")!
+  client.request(
+    operation.operationId,
+    create(ScopeSchema, { target: { case: "session", value: "ses_1" } }),
+    encodeStrict(
+      event_subscribe_RequestSchema,
+      create(event_subscribe_RequestSchema, { scope: { target: { case: "session", value: "ses_other" } } }),
+    ),
+    512,
+    0,
+  )
+  await h.send("client")
+  expect(h.close).toContainEqual({ id: "client", code: 4403, reason: "DIRECTION" })
+  expect(
+    h
+      .receive("agent")
+      .flatMap((item) => item.decisions)
+      .some((item) => item.type === "dispatch"),
+  ).toBe(false)
+})
 
-  const deps: RelayDeps = {
-    now: () => now,
-    newID: () => `r${(idSequence += 1)}`,
-    send: (connectionID, message) => sent.push({ connectionID, message }),
-    close: (connectionID, code, reason) => closed.push({ connectionID, code, reason }),
-    saveSubscriptions: (connectionID, values) => storedSubscriptions.set(connectionID, values),
-    savePending: (connectionID, values) => storedPending.set(connectionID, values),
-    savePriority: (connectionID, mode) => storedPriorities.set(connectionID, mode),
-    loadStatus: async () => statusStore.value,
-    saveStatus: async (status) => { statusStore.value = status },
-    loadOfflineCheck: async () => offlineStore.value,
-    saveOfflineCheck: async (check) => { offlineStore.value = check },
-    notices,
-    saveNoticeSubscription: (connectionID, subscribed) => { storedNoticeSubscriptions.set(connectionID, subscribed) },
-    authorizeClientCommand: async (sessionID, deviceID) => {
-      authorityReads += 1
-      return readClientAuthority(authorityReads, sessionID, deviceID)
-    },
-    authorizeAgentCommand: () => readAgentAuthority(),
-    authorityTtlMs: options.authorityTtlMs ?? 0,
-    ...(options.agentHeartbeatAt === undefined ? {} : { agentHeartbeatAt: options.agentHeartbeatAt }),
-    ...(options.withoutPush ? {} : { notifyPush: (accountID: string, event: PushEvent) => {
-      pushed.push({ accountID, ...event } as { accountID: string } & Record<string, string>)
-      return options.pushOutcomes?.(event) ?? Promise.resolve([])
-    } }),
-  }
+test("opaque RPC correlation is per browser, and upstream input waits for downstream consumption", async () => {
+  const h = await harness()
+  const agent = await h.attach("agent", "agent")
+  const first = await h.attach("first")
+  const second = await h.attach("second")
+  expect(h.request(first)).toBe("1")
+  expect(h.request(second)).toBe("1")
+  await h.send("first")
+  await h.send("second")
+  const frames = h.receive("agent")
+  const requests = frames.flatMap((entry) => entry.decisions).filter((item) => item.type === "dispatch")
+  expect(requests.map((item) => item.requestID)).toEqual(["1", "2"])
+  expect(requests[0].request.payload).toEqual(requests[1].request.payload)
+  expect(h.relay.connection("first")!.ledger(LedgerClass.NORMAL).receivedBytes).toBeGreaterThan(0)
+  const charge = h.relay.connection("agent")!.ledger(LedgerClass.NORMAL).handedBytes
+  expect(charge).toBeGreaterThan(0)
+  agent.consume(LedgerClass.NORMAL, frames[0].frame!.deliveryOrdinal, 0)
+  expect(h.relay.connection("agent")!.ledger(LedgerClass.NORMAL).handedBytes).toBe(charge)
+  h.at(25)
+  agent.advance(25)
+  await h.send("agent")
+  expect(h.relay.connection("first")!.ledger(LedgerClass.NORMAL).receivedBytes).toBe(0)
+  expect(h.relay.connection("second")!.ledger(LedgerClass.NORMAL).receivedBytes).toBeGreaterThan(0)
+  for (const dispatch of requests) agent.enqueue(h.result(dispatch), 512, 25)
+  await h.send("agent")
+  expect(h.receive("first").flatMap((entry) => entry.decisions)).toContainEqual(
+    expect.objectContaining({ type: "settled", requestID: "1", status: "success" }),
+  )
+  expect(h.receive("second").flatMap((entry) => entry.decisions)).toContainEqual(
+    expect.objectContaining({ type: "settled", requestID: "1", status: "success" }),
+  )
+  expect(h.relay.connection("agent")!.ledger(LedgerClass.NORMAL).receivedBytes).toBeGreaterThan(0)
+})
 
-  const relay = createRelay(deps)
-  return {
-    relay,
-    sent,
-    closed,
-    pushed,
-    storedSubscriptions,
-    storedPending,
-    storedPriorities,
-    storedStatus: () => statusStore.value,
-    storedOffline: () => offlineStore.value,
-    database,
-    storedNotices: () => (database.query("SELECT seq, category, session_id, created_at FROM notice ORDER BY seq").all() as { seq: number; category: RemoteNotice["category"]; session_id: string; created_at: number }[])
-      .map((row) => ({ id: `ntc_${row.seq}`, category: row.category, sessionID: row.session_id, createdAt: row.created_at })),
-    storedNoticeSubscriptions,
-    noticeFramesTo: (connectionID: string) =>
-      sent
-        .filter((entry) => entry.connectionID === connectionID)
-        .map((entry) => JSON.parse(entry.message) as Record<string, unknown>)
-        .filter((message) => typeof message.type === "string" && message.type.startsWith("notice.") && message.type !== "notice.present"),
-    presentedTo: (connectionID: string) =>
-      sent
-        .filter((entry) => entry.connectionID === connectionID)
-        .map((entry) => JSON.parse(entry.message) as { type: string; items?: ({ kind: "notice"; notice: RemoteNotice } | { kind: "offline"; at: number })[] })
-        .filter((message) => message.type === "notice.present")
-        .flatMap((message) => message.items ?? [])
-        .map((item) => item.kind === "notice" ? item.notice.id : `offline@${item.at}`),
-    advance: (milliseconds: number) => {
-      now += milliseconds
-    },
-    at: () => now,
-    setClientAuthority: (value: Authority) => {
-      clientAuthority = value
-    },
-    setClientAuthorityRead: (read: (call: number, sessionID: string, deviceID: string) => Promise<Authority>) => {
-      readClientAuthority = read
-    },
-    authorityReads: () => authorityReads,
-    setAgentAuthorityRead: (read: () => Promise<Authority>) => {
-      readAgentAuthority = read
-    },
-    setAgentAuthority: (value: Authority) => {
-      agentAuthority = value
-    },
-    advertised: () => advertisement,
-    messagesTo: (connectionID: string) =>
-      sent
-        .filter((entry) => entry.connectionID === connectionID)
-        .map((entry) => JSON.parse(entry.message) as Record<string, unknown>),
-    requestsTo: (connectionID: string) =>
-      sent
-        .filter((entry) => entry.connectionID === connectionID)
-        .map((entry) => JSON.parse(entry.message) as Record<string, unknown>)
-        .filter((message) => message.type === "request"),
-    reset: () => {
-      sent.length = 0
-      closed.length = 0
-    },
-  }
-}
+test("owner/device isolation fails before receiving any application frame", async () => {
+  const h = await harness()
+  await h.attach("agent", "agent")
+  await h.attach("foreign", "client", { ownerID: "other" })
+  await h.attach("device", "client", { deviceID: "other" })
+  expect(h.close).toEqual([
+    { id: "foreign", code: 4403, reason: "DIRECTION" },
+    { id: "device", code: 4403, reason: "DIRECTION" },
+  ])
+})
 
-function client(connectionID: string, browserSessionID = "sess-1", noticesSubscribed = false, priority: RelayConnection["priority"] = "interactive"): RelayConnection {
-  return {
-    priority,
-    connectionID,
-    role: "client",
-    ownerID: "usr_1",
-    deviceID: "dev_1",
-    browserSessionID,
-    credentialExpiresAt: 10_000_000,
-    subscriptions: [],
-    noticesSubscribed,
-    pending: [],
-  }
-}
+test("notices are relay-local typed RPCs and survive reconstruction without restored ledgers", async () => {
+  const h = await harness()
+  await h.attach("agent", "agent")
+  const browser = await h.attach("browser")
+  h.notices.append([{ category: "agent-completed", sessionID: "ses_1", createdAt: 1 }])
+  const id = h.request(browser, "notice.subscribe")
+  await h.send("browser")
+  const result = h
+    .receive("browser")
+    .flatMap((entry) => entry.decisions)
+    .find((item) => item.type === "settled")!
+  expect(result.type).toBe("settled")
+  if (result.type !== "settled") throw new Error("result")
+  const page = decodeStrict(ConnectorNoticePageSchema, result.payload!.payload)
+  expect(page.notice!.kind.case).toBe("added")
+  if (page.notice!.kind.case === "added") expect(page.notice!.kind.value.notices[0].id).toBe("ntc_1")
+  expect(result.requestID).toBe(id)
+  expect(
+    h
+      .receive("agent")
+      .flatMap((entry) => entry.decisions)
+      .some((item) => item.type === "dispatch"),
+  ).toBe(false)
+  await h.relay.restore([
+    {
+      connectionID: "restored",
+      role: "client",
+      ownerID: "owner",
+      deviceID: "device",
+      browserSessionID: "browser",
+      credentialExpiresAt: 1_000_000,
+    },
+  ])
+  expect(h.close.at(-1)).toEqual({ id: "restored", code: 1012, reason: "EPOCH" })
+  expect(h.notices.page().total).toBe(1)
+})
 
-function agent(connectionID: string): RelayConnection {
-  return {
-    connectionID,
+test("agent disconnection closes transmitted pending work as unknown and reconnect does not replay", async () => {
+  const h = await harness()
+  await h.attach("agent", "agent")
+  const browser = await h.attach("browser")
+  const requestID = h.request(browser)
+  await h.send("browser")
+  await h.relay.agentClosed({
+    connectionID: "agent",
     role: "agent",
-    ownerID: "usr_1",
-    deviceID: "dev_1",
-    browserSessionID: "dev_1",
-    credentialExpiresAt: 10_000_000,
-    subscriptions: [],
-    noticesSubscribed: false,
-    pending: [],
+    ownerID: "owner",
+    deviceID: "device",
+    browserSessionID: "agent",
+    credentialExpiresAt: 1_000_000,
+  })
+  expect(h.close).toContainEqual({ id: "browser", code: 1012, reason: "EPOCH" })
+  expect(browser.restart(0)).toContainEqual(expect.objectContaining({ type: "settled", requestID, status: "unknown" }))
+  await h.attach("replacement", "agent")
+  expect(
+    h
+      .receive("replacement")
+      .flatMap((entry) => entry.decisions)
+      .some((item) => item.type === "dispatch"),
+  ).toBe(false)
+})
+
+test("typed bulk is forwarded without endpoint reassembly and stays charged through recipient credit", async () => {
+  const h = await harness()
+  const agent = await h.attach("agent", "agent")
+  const browser = await h.attach("browser")
+  h.request(browser)
+  await h.send("browser")
+  const request = h
+    .receive("agent")
+    .flatMap((entry) => entry.decisions)
+    .find((item) => item.type === "dispatch")!
+  if (request.type !== "dispatch") throw new Error("request")
+  const payload = encodeStrict(
+    session_todo_list_ResultSchema,
+    create(session_todo_list_ResultSchema, { data: { items: [] } }),
+  )
+  const start = create(BulkStartSchema, {
+    requestId: request.requestID,
+    transferId: "bulk",
+    operationId: request.operation.operationId,
+    typeName: request.operation.resultType,
+    contentKind: ContentKind.TYPED_MESSAGE,
+    byteCount: BigInt(payload.length),
+    chunkCount: 1,
+  })
+  for (const body of [
+    { case: "bulkStart", value: start },
+    { case: "bulkPiece", value: create(BulkPieceSchema, { transferId: "bulk", index: 0, offset: 0n, data: payload }) },
+    {
+      case: "bulkEnd",
+      value: create(BulkEndSchema, {
+        transferId: "bulk",
+        byteCount: BigInt(payload.length),
+        outcome: { case: "success", value: {} },
+      }),
+    },
+  ] as Frame["body"][]) {
+    agent.enqueue(body, frameReservation(body), 0)
+    await h.send("agent")
   }
-}
-
-const request = (id: string, operation: string, sessionID?: string, input?: unknown) =>
-  JSON.stringify({
-    type: "request",
-    id,
-    operation,
-    ...(sessionID === undefined ? {} : { sessionID }),
-    ...(input === undefined ? {} : { input }),
-  })
-
-const response = (id: string, value: unknown, chunk?: { index: number; last: boolean }) =>
-  JSON.stringify({ type: "response", id, ok: true, value, ...(chunk === undefined ? {} : { chunk }) })
-
-function deferred() {
-  let resolve: () => void = () => {}
-  const promise = new Promise<void>((settle) => {
-    resolve = settle
-  })
-  return { promise, resolve }
-}
-
-async function flushMicrotasks() {
-  for (let index = 0; index < 50; index++) await Promise.resolve()
-}
-
-async function attachBoth(h: ReturnType<typeof harness>) {
-  await h.relay.attach(agent("agent-1"))
-  await h.relay.attach(client("client-1"))
-  h.reset()
-}
-
-const receipt = (sessionID: string, seq: number) => ({ id: `evt_${sessionID}_${seq}`, sessionID, seq, created: 20_000 + seq })
-const completions = (h: ReturnType<typeof harness>, data: ReturnType<typeof receipt>[], more = false, connectionID = "agent-1") =>
-  h.relay.handleAgentMessage(connectionID, JSON.stringify({ type: "completions", data, more }))
-
-describe("relay core: explicit completion receipts", () => {
-  test("baseline pages stay silent and later explicit receipts alone create durable completion notices and pushes", async () => {
-    const h = harness()
-    await attachBoth(h)
-    await h.relay.handleClientMessage("client-1", request("sub", "notice.subscribe"))
-    h.reset()
-    await completions(h, Array.from({ length: 200 }, (_, index) => receipt(`ses_${index}`, 10)), true)
-    await completions(h, [], true)
-    await completions(h, [receipt("ses_last", 40)])
-    expect(h.storedNotices()).toEqual([])
-    expect(h.noticeFramesTo("client-1")).toEqual([])
-    expect(h.pushed).toEqual([])
-    await completions(h, [receipt("ses_0", 11), receipt("ses_new", 1)])
-    expect(h.storedNotices()).toEqual([
-      { id: "ntc_1", category: "agent-completed", sessionID: "ses_0", createdAt: 20_011 },
-      { id: "ntc_2", category: "agent-completed", sessionID: "ses_new", createdAt: 20_001 },
-    ])
-    expect(h.noticeFramesTo("client-1")).toEqual([{ type: "notice.added", notices: h.storedNotices(), total: 2 }])
-    expect(h.pushed).toEqual([
-      { accountID: "usr_1", category: "agent-completed", sessionID: "ses_0", deviceID: "dev_1", noticeID: "ntc_1" },
-      { accountID: "usr_1", category: "agent-completed", sessionID: "ses_new", deviceID: "dev_1", noticeID: "ntc_2" },
-    ])
-    await completions(h, [receipt("ses_0", 11), receipt("ses_last", 39), receipt("ses_new", 1)])
-    expect(h.storedNotices()).toHaveLength(2)
-    expect(h.pushed).toHaveLength(2)
-  })
-
-  test("receipt high-water survives reads, readAll, reconnect and reconstruction, with bounded notice frames", async () => {
-    const database = new Database(":memory:")
-    const h = harness({ database })
-    await attachBoth(h)
-    await completions(h, [])
-    await h.relay.handleClientMessage("client-1", request("sub", "notice.subscribe"))
-    await completions(h, Array.from({ length: 200 }, (_, index) => receipt(`ses_${index}`, index + 1)))
-    expect(h.storedNotices()).toHaveLength(200)
-    expect(h.noticeFramesTo("client-1").filter((frame) => frame.type === "notice.added").map((frame) => (frame.notices as RemoteNotice[]).length)).toEqual([100, 100])
-    expect(h.pushed.filter((event) => "noticeID" in event)).toHaveLength(20)
-    expect(h.pushed.filter((event) => "overflow" in event)).toEqual([{ accountID: "usr_1", category: "agent-completed", deviceID: "dev_1", overflow: 180 }])
-    await h.relay.handleClientMessage("client-1", request("read", "notice.read", undefined, { ids: ["ntc_1"] }))
-    await h.relay.handleClientMessage("client-1", request("all", "notice.readAll"))
-    await h.relay.agentClosed(agent("agent-1"))
-    await h.relay.attach(agent("agent-2"))
-    await completions(h, [receipt("ses_0", 1)], false, "agent-2")
-    expect(h.storedNotices()).toEqual([])
-    const restarted = harness({ database })
-    await attachBoth(restarted)
-    await completions(restarted, [receipt("ses_0", 1), receipt("ses_199", 199)])
-    expect(restarted.pushed).toEqual([])
-    await completions(restarted, [receipt("ses_0", 2)])
-    expect(restarted.storedNotices()).toEqual([{ id: "ntc_201", category: "agent-completed", sessionID: "ses_0", createdAt: 20_002 }])
-    expect(restarted.pushed).toHaveLength(1)
-  })
-
-  test("a rolled-back receipt publishes only unavailable, preserves totals, and retry notifies exactly once", async () => {
-    let fail = false
-    const h = harness({ beforeCommit: () => { if (fail) throw new Error("SQLITE_FULL after insert") } })
-    await attachBoth(h)
-    await h.relay.handleClientMessage("client-1", request("sub", "notice.subscribe"))
-    await completions(h, [])
-    fail = true
-    h.reset()
-    await completions(h, [receipt("ses_a", 1)])
-    expect(h.storedNotices()).toEqual([])
-    expect(h.pushed).toEqual([])
-    expect(h.noticeFramesTo("client-1")).toEqual([{ type: "notice.unavailable" }])
-    await h.relay.handleClientMessage("client-1", request("later", "notice.subscribe"))
-    expect(h.messagesTo("client-1").at(-1)).toMatchObject({ value: { total: 0, unavailable: true } })
-    fail = false
-    h.reset()
-    await completions(h, [receipt("ses_a", 1)])
-    await completions(h, [receipt("ses_a", 1)])
-    expect(h.storedNotices()).toHaveLength(1)
-    expect(h.pushed).toHaveLength(1)
-    expect(h.noticeFramesTo("client-1")).toEqual([{ type: "notice.added", notices: h.storedNotices(), total: 1 }])
-  })
+  expect(h.relay.connection("agent")!.bulkRetainedBytes).toBe(0)
+  const received = h.receive("browser").flatMap((entry) => entry.decisions)
+  expect(received).toContainEqual(expect.objectContaining({ type: "bulkComplete", data: payload }))
+  expect(h.relay.connection("browser")!.ledger(LedgerClass.BULK).handedBytes).toBeGreaterThan(0)
+  expect(h.relay.connection("agent")!.ledger(LedgerClass.BULK).receivedBytes).toBeGreaterThan(0)
+  h.at(25)
+  browser.advance(25)
+  await h.send("browser")
+  expect(h.relay.connection("agent")!.ledger(LedgerClass.BULK).receivedBytes).toBe(0)
 })
 
-test("detaching a streaming client cancels its in-flight agent request", async () => {
-  const h = harness()
-  await attachBoth(h)
-  await h.relay.handleClientMessage("client-1", JSON.stringify({ type: "request", id: "stream", operation: "session.message.stream", sessionID: "ses_a", input: { messageID: "msg_large" } }))
-  const request = h.requestsTo("agent-1").at(-1)
-  expect(request?.type).toBe("request")
-  h.relay.detach("client-1")
-  expect(h.messagesTo("agent-1").at(-1)).toEqual({ type: "cancel", id: request?.id })
-})
-
-describe("relay core: role separation", () => {
-  test("an idle family without explicit work-completion evidence never emits Work finished", async () => {
-    const h = harness()
-    await attachBoth(h)
-    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: ["ses_a"], attention: [], outstanding: [] }))
-    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: [], outstanding: ["ses_a"] }))
-    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: [], outstanding: [] }))
-    expect(h.pushed).toEqual([])
-  })
-
-  test("status diff emits only new decisions after a silent baseline, capped per minute", async () => {
-    const h = harness()
-    await attachBoth(h)
-    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: ["ses_a"], attention: [] }))
-    expect(h.pushed).toEqual([])
-    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: ["ses_b"] }))
-    expect(h.pushed).toEqual([
-      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_b", deviceID: "dev_1", noticeID: "ntc_1" },
-    ])
-    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: ["ses_b"] }))
-    expect(h.pushed).toHaveLength(1)
-    for (let index = 0; index < 30; index += 1)
-      await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: ["ses_b", `ses_${index}`] }))
-    expect(h.pushed).toHaveLength(21)
-    expect(h.pushed.at(-1)).toEqual({ accountID: "usr_1", category: "approval-requested", deviceID: "dev_1", overflow: 1 })
-    h.advance(60_001)
-    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: ["ses_new"] }))
-    expect(h.pushed).toHaveLength(22)
-  })
-
-  test("a burst beyond the push budget sends one overflow summary instead of dropping it, and only a browser the summary missed presents each overflowed notice", async () => {
-    for (const accepted of [false, true]) {
-      const h = harness({ pushOutcomes: async (event) => accepted && "overflow" in event ? [{ owner: "sess-1", outcome: "accepted" }] : [] })
-      await attachBoth(h)
-      await h.relay.handleClientMessage("client-1", request("sub", "notice.subscribe"))
-      await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: [] }))
-      const burst = Array.from({ length: 25 }, (_, index) => `ses_${String(index).padStart(2, "0")}`)
-      await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: burst }))
-      await h.relay.settleDeliveries()
-      expect(h.storedNotices()).toHaveLength(25)
-      expect(h.pushed.filter((event) => "noticeID" in event).map((event) => event.noticeID)).toEqual(Array.from({ length: 20 }, (_, index) => `ntc_${index + 1}`))
-      expect(h.pushed.filter((event) => "overflow" in event)).toEqual([{ accountID: "usr_1", category: "approval-requested", deviceID: "dev_1", overflow: 5 }])
-      const overflowed = Array.from({ length: 5 }, (_, index) => `ntc_${index + 21}`)
-      expect(h.presentedTo("client-1").filter((id) => overflowed.includes(id))).toEqual(accepted ? [] : overflowed)
-    }
-  })
-
-  test("a guardrail block from the agent stores one attention notice and alerts with its Session title, re-alerting an unread notice only for a new need", async () => {
-    const h = harness()
-    await attachBoth(h)
-    await h.relay.handleClientMessage("client-1", request("sub", "notice.subscribe"))
-    const blocked = (sessionID: string) => h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "blocked", sessionID, title: "Fix login" }))
-    await blocked("ses_a")
-    await blocked("ses_a")
-    await h.relay.settleDeliveries()
-    expect(h.storedNotices().map((notice) => [notice.id, notice.category, notice.sessionID])).toEqual([["ntc_1", "approval-requested", "ses_a"]])
-    expect(h.pushed).toEqual([{ accountID: "usr_1", category: "approval-requested", sessionID: "ses_a", deviceID: "dev_1", noticeID: "ntc_1", title: "Fix login", need: "blocked" }])
-    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: [] }))
-    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: ["ses_a"], details: [{ sessionID: "ses_a", need: "permission" }] }))
-    await blocked("ses_a")
-    expect(h.pushed.map((event) => [event.noticeID, event.need, event.repeat])).toEqual([["ntc_1", "blocked", undefined], ["ntc_1", "permission", true], ["ntc_1", "blocked", true]])
-    expect(h.storedNotices()).toHaveLength(1)
-    expect(h.relay.agentConnected()).toBe(true)
-  })
-
-  test("a Session that needs attention again while its notice is unread alerts again on a new need or after the repeat interval, without a second row", async () => {
-    const h = harness()
-    await attachBoth(h)
-    const status = (attention: string[], details: unknown[] = [], failed?: string[]) =>
-      h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention, details, ...(failed === undefined ? {} : { failed }) }))
-    await status([])
-    await status(["ses_a"], [{ sessionID: "ses_a", need: "permission" }])
-    await status([])
-    await status(["ses_a"], [{ sessionID: "ses_a", need: "permission" }])
-    expect(h.pushed.map((event) => [event.noticeID, event.need])).toEqual([["ntc_1", "permission"]])
-    await status([])
-    await status(["ses_a"], [{ sessionID: "ses_a", need: "question" }])
-    await status([])
-    await status(["ses_a"], [], ["ses_a"])
-    expect(h.pushed.map((event) => [event.noticeID, event.need])).toEqual([["ntc_1", "permission"], ["ntc_1", "question"], ["ntc_1", "failed"]])
-    await status([])
-    await status(["ses_a"], [], ["ses_a"])
-    expect(h.pushed).toHaveLength(3)
-    h.advance(attentionRepeatMs)
-    await status([])
-    await status(["ses_a"], [], ["ses_a"])
-    expect(h.pushed.map((event) => event.noticeID)).toEqual(["ntc_1", "ntc_1", "ntc_1", "ntc_1"])
-    expect(h.pushed.map((event) => event.repeat)).toEqual([undefined, true, true, true])
-    expect(h.storedNotices().map((notice) => notice.id)).toEqual(["ntc_1"])
-  })
-
-  test("a status frame with failed roots is stored and broadcast unchanged and a newly failed root still pushes approval-requested", async () => {
-    const h = harness()
-    await attachBoth(h)
-    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: [] }))
-    const frame = { type: "status", running: [], attention: ["ses_b", "ses_c"], failed: ["ses_c"] }
-    await h.relay.handleAgentMessage("agent-1", JSON.stringify(frame))
-    expect(h.messagesTo("client-1").at(-1)).toEqual(frame)
-    expect(h.storedStatus()).toEqual(frame)
-    expect(h.pushed).toEqual([
-      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_b", deviceID: "dev_1", noticeID: "ntc_1" },
-      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_c", deviceID: "dev_1", noticeID: "ntc_2", need: "failed" },
-    ])
-  })
-
-  test("alerts carry the Session title and what each Session needs from the frame that admitted them", async () => {
-    const h = harness({ withoutPush: true })
-    await attachBoth(h)
-    await h.relay.handleClientMessage("client-1", request("sub", "notice.subscribe"))
-    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: [] }))
-    await completions(h, [])
-    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: ["ses_a", "ses_b", "ses_c"], failed: ["ses_c"],
-      details: [{ sessionID: "ses_a", title: "Fix login", need: "question" }, { sessionID: "ses_c", title: "Ship release" }] }))
-    await completions(h, [{ ...receipt("ses_d", 1), title: "Write docs" }, receipt("ses_e", 1)])
-    expect(h.sent.filter((entry) => entry.connectionID === "client-1").map((entry) => JSON.parse(entry.message) as { type: string; items?: unknown[] })
-      .filter((message) => message.type === "notice.present").flatMap((message) => message.items ?? [])).toEqual([
-      { kind: "notice", notice: { id: "ntc_1", category: "approval-requested", sessionID: "ses_a", createdAt: expect.any(Number) }, detail: { title: "Fix login", need: "question" } },
-      { kind: "notice", notice: { id: "ntc_2", category: "approval-requested", sessionID: "ses_b", createdAt: expect.any(Number) } },
-      { kind: "notice", notice: { id: "ntc_3", category: "approval-requested", sessionID: "ses_c", createdAt: expect.any(Number) }, detail: { title: "Ship release", need: "failed" } },
-      { kind: "notice", notice: { id: "ntc_4", category: "agent-completed", sessionID: "ses_d", createdAt: 20_001 }, detail: { title: "Write docs" } },
-      { kind: "notice", notice: { id: "ntc_5", category: "agent-completed", sessionID: "ses_e", createdAt: 20_001 } },
-    ])
-    const pushed = harness()
-    await attachBoth(pushed)
-    await pushed.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: [] }))
-    await pushed.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: ["ses_a"],
-      details: [{ sessionID: "ses_a", title: "Fix login", need: "review" }] }))
-    expect(pushed.pushed).toEqual([{ accountID: "usr_1", category: "approval-requested", sessionID: "ses_a", deviceID: "dev_1", noticeID: "ntc_1", title: "Fix login", need: "review" }])
-  })
-
-  test("clearing outstanding work never implies completion and new attention still notifies", async () => {
-    const h = harness()
-    await attachBoth(h)
-    const status = (running: string[], attention: string[], outstanding: string[] = []) =>
-      h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running, attention, outstanding }))
-    await status(["ses_a"], [])
-    await status([], [], ["ses_a"])
-    expect(h.pushed).toEqual([])
-    await status(["ses_a"], [], ["ses_a"])
-    await status([], [], ["ses_a"])
-    expect(h.pushed).toEqual([])
-    await status([], ["ses_a"], [])
-    expect(h.pushed.map((event) => event.category)).toEqual(["approval-requested"])
-    await status(["ses_a"], [], [])
-    await status([], [], [])
-    expect(h.pushed.map((event) => event.category)).toEqual(["approval-requested"])
-    await status([], [], [])
-    expect(h.pushed).toHaveLength(1)
-  })
-
-  test("a reattached agent diffs against the stored status, while unchanged and first-ever frames stay silent", async () => {
-    const h = harness()
-    await h.relay.attach(agent("agent-1"))
-    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: ["ses_a"], attention: [] }))
-    expect(h.pushed).toEqual([])
-    expect(h.storedStatus()).toEqual({ type: "status", running: ["ses_a"], attention: [] })
-    await h.relay.agentClosed(agent("agent-1"))
-    await h.relay.attach(agent("agent-2"))
-    await h.relay.handleAgentMessage("agent-2", JSON.stringify({ type: "status", running: ["ses_a"], attention: [] }))
-    expect(h.pushed).toEqual([])
-    await h.relay.agentClosed(agent("agent-2"))
-    await h.relay.attach(agent("agent-3"))
-    await h.relay.handleAgentMessage("agent-3", JSON.stringify({ type: "status", running: [], attention: ["ses_b"] }))
-    expect(h.pushed).toEqual([
-      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_b", deviceID: "dev_1", noticeID: "ntc_1" },
-    ])
-  })
-
-  test("a new relay instance reads the stored device baseline after hibernation", async () => {
-    const statusStore: { value?: RemoteStatus } = {}
-    const first = harness({ statusStore })
-    await first.relay.attach(agent("agent-1"))
-    await first.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: ["ses_a"], attention: [] }))
-    expect(first.pushed).toEqual([])
-    const restored = harness({ statusStore })
-    await restored.relay.attach(agent("agent-2"))
-    await restored.relay.handleAgentMessage("agent-2", JSON.stringify({ type: "status", running: [], attention: ["ses_a"] }))
-    expect(restored.pushed).toEqual([{ accountID: "usr_1", category: "approval-requested", sessionID: "ses_a", deviceID: "dev_1", noticeID: "ntc_1" }])
-  })
-
-  test("validates and broadcasts complete status to each device client and a late joiner", async () => {
-    const h = harness()
-    await attachBoth(h)
-    await h.relay.attach(client("client-2"))
-    h.reset()
-    const frame = JSON.stringify({ type: "status", running: ["ses_a"], attention: ["ses_other"] })
-    await h.relay.handleAgentMessage("agent-1", frame)
-    expect(h.sent).toEqual([
-      { connectionID: "client-1", message: frame },
-      { connectionID: "client-2", message: frame },
-    ])
-    await h.relay.attach(client("client-3"))
-    expect(h.messagesTo("client-3")).toContainEqual({ type: "status", running: ["ses_a"], attention: ["ses_other"] })
-    h.reset()
-    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: ["ses_a", "ses_a"], attention: [] }))
-    expect(h.sent).toEqual([])
-    expect(h.closed).toEqual([{ connectionID: "agent-1", code: 1003, reason: "Frame is not valid for this connection" }])
-  })
-
-  test("closes a client that sends agent-only frames and an agent that sends requests", async () => {
-    const h = harness()
-    await attachBoth(h)
-
-    await h.relay.handleClientMessage("client-1", JSON.stringify({ type: "event", sessionID: "ses_a", event: {} }))
-    expect(h.closed).toEqual([{ connectionID: "client-1", code: 1003, reason: "Frame is not valid for this connection" }])
-
-    await h.relay.handleAgentMessage("agent-1", request("1", "session.list"))
-    expect(h.closed[1]).toEqual({ connectionID: "agent-1", code: 1003, reason: "Frame is not valid for this connection" })
-    expect(h.sent).toEqual([])
-  })
-
-  test("rejects browser attempts to inject relay subscription controls", async () => {
-    const h = harness()
-    await attachBoth(h)
-    await h.relay.handleClientMessage(
-      "client-1",
-      JSON.stringify({ type: "subscriptions", clientID: "client-1", sessionIDs: ["ses_a"] }),
-    )
-    expect(h.closed).toEqual([{ connectionID: "client-1", code: 1003, reason: "Frame is not valid for this connection" }])
-    expect(h.storedSubscriptions.get("client-1")).toBeUndefined()
-  })
-
-  test("answers heartbeats in both directions", async () => {
-    const h = harness()
-    await attachBoth(h)
-    await h.relay.handleClientMessage("client-1", '{"type":"ping"}')
-    await h.relay.handleAgentMessage("agent-1", '{"type":"ping"}')
-    expect(h.messagesTo("client-1")).toEqual([{ type: "pong" }])
-    expect(h.messagesTo("agent-1")).toEqual([{ type: "pong" }])
-    expect(h.closed).toEqual([])
-  })
-})
-
-describe("relay core: request admission", () => {
-  test("forwards only Session-scoped bounded captured-change pages to the local agent", async () => {
-    const h = harness()
-    await attachBoth(h)
-    h.reset()
-    await h.relay.handleClientMessage("client-1", request("1", "session.capturedChanges.list", "ses_a", { cursor: "opaque" }))
-    expect(h.requestsTo("agent-1")).toMatchObject([{ operation: "session.capturedChanges.list", sessionID: "ses_a", input: { cursor: "opaque" } }])
-    await h.relay.handleClientMessage("client-1", request("2", "session.capturedChanges.list"))
-    await h.relay.handleClientMessage("client-1", request("3", "session.capturedChanges.list", "ses_a", { directory: "/private" }))
-    expect(h.requestsTo("agent-1")).toHaveLength(1)
-    expect(h.messagesTo("client-1").filter((item) => item.type === "response")).toHaveLength(2)
-  })
-  test("reports an unavailable agent, then forwards any scoped Session for local authorization", async () => {
-    const h = harness()
-    await h.relay.attach(client("client-1"))
-    h.reset()
-
-    await h.relay.handleClientMessage("client-1", request("1", "session.list"))
-    await h.relay.handleClientMessage("client-1", request("2", "session.prompt", "ses_a"))
-    expect(h.messagesTo("client-1")).toEqual([
-      { type: "response", id: "1", ok: false, error: { code: "agent_unavailable", message: "No local agent is connected" } },
-      { type: "response", id: "2", ok: false, error: { code: "agent_unavailable", message: "No local agent is connected" } },
-    ])
-
-    await h.relay.attach(agent("agent-1"))
-    await h.relay.handleClientMessage("client-1", request("3", "session.prompt", "ses_other"))
-    expect(h.requestsTo("agent-1")).toHaveLength(1)
-    expect(h.requestsTo("agent-1")[0]).toMatchObject({ operation: "session.prompt", sessionID: "ses_other" })
-  })
-
-  test("forwards owned machine latency without storing samples in relay D1", async () => {
-    const h = harness()
-    await attachBoth(h)
-    h.reset()
-    const sample = { kind: "request", at: "2026-10-04T12:00:00.000Z", operation: "session.list", outcome: "ok", queueMs: 2, settlementMs: 8, totalMs: 10 }
-    await h.relay.handleClientMessage("client-1", request("latency_1", "machine.latency.append", undefined, { samples: [sample] }))
-    expect(h.requestsTo("agent-1")).toMatchObject([{ operation: "machine.latency.append", input: { samples: [sample] } }])
-    expect(h.database.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%latency%'").all()).toEqual([])
-    h.setClientAuthority({ ok: false, reason: "Browser session is not authorized" })
-    await h.relay.handleClientMessage("client-1", request("latency_2", "machine.latency.list"))
-    expect(h.requestsTo("agent-1")).toHaveLength(1)
-  })
-
-  test("forwards machine telemetry consent operations without retaining a consent decision", async () => {
-    const h = harness()
-    await attachBoth(h)
-    h.reset()
-    await h.relay.handleClientMessage("client-1", request("consent_get", "machine.telemetry.consent.get"))
-    await h.relay.handleClientMessage("client-1", request("consent_set", "machine.telemetry.consent.set", undefined, { enabled: true, noticeVersion: 1 }))
-    expect(h.requestsTo("agent-1")).toMatchObject([
-      { operation: "machine.telemetry.consent.get" },
-      { operation: "machine.telemetry.consent.set", input: { enabled: true, noticeVersion: 1 } },
-    ])
-    expect(h.database.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%telemetry%'").all()).toEqual([])
-  })
-
-  test("reports malformed frames with the client id and closes frames without one", async () => {
-    const h = harness()
-    await attachBoth(h)
-
-    await h.relay.handleClientMessage("client-1", '{"type":"request","id":"1","operation":"session.evil","sessionID":"ses_a"}')
-    expect(h.messagesTo("client-1")[0]).toEqual({
-      type: "response",
-      id: "1",
-      ok: false,
-      error: { code: "unknown_operation", message: "Unknown operation" },
-    })
-    await h.relay.handleClientMessage("client-1", '{"type":"request","id":"2","operation":"session.get"}')
-    expect(h.messagesTo("client-1")[1]).toEqual({
-      type: "response",
-      id: "2",
-      ok: false,
-      error: { code: "session_required", message: "Operation requires a session" },
-    })
-    await h.relay.handleClientMessage("client-1", "not json")
-    expect(h.closed).toEqual([{ connectionID: "client-1", code: 1003, reason: "Frame is not valid for this connection" }])
-  })
-
-  test("closes oversized frames with the size code", async () => {
-    const h = harness()
-    await attachBoth(h)
-    await h.relay.handleClientMessage(
-      "client-1",
-      request("1", "session.list", undefined, { padding: "x".repeat(RemoteLimits.maxClientMessageChars) }),
-    )
-    expect(h.closed).toEqual([{ connectionID: "client-1", code: 1009, reason: "Frame exceeds the size bound" }])
-  })
-
-  test("enforces the client request rate limit and admits requests after the window", async () => {
-    const h = harness()
-    await attachBoth(h)
-    const admitted = RemoteLimits.maxPendingRequestsPerClient - 1
-    for (let index = 0; index < admitted; index += 1)
-      await h.relay.handleClientMessage("client-1", request(String(index), "session.list"))
-    for (let index = admitted; index <= RemoteLimits.maxClientRequestsPerWindow; index += 1)
-      await h.relay.handleClientMessage("client-1", JSON.stringify({ type: "cancel", id: `unknown-${index}` }))
-    expect(h.closed).toEqual([{ connectionID: "client-1", code: 1008, reason: "Client request rate exceeded" }])
-    expect(h.requestsTo("agent-1")).toHaveLength(admitted)
-
-    h.reset()
-    h.advance(RemoteLimits.clientRateWindowMs + 1)
-    await h.relay.attach(client("client-1"))
-    h.reset()
-    await h.relay.handleClientMessage("client-1", request("again", "session.list"))
-    expect(h.messagesTo("agent-1")).toHaveLength(1)
-  })
-
-  test("bounds in-flight requests per client", async () => {
-    const h = harness()
-    await attachBoth(h)
-    for (let index = 0; index < RemoteLimits.maxPendingRequestsPerClient; index += 1) {
-      if (index > 0 && index % 20 === 0) h.advance(RemoteLimits.clientRateWindowMs + 1)
-      await h.relay.handleClientMessage("client-1", request(String(index), "session.list"))
-    }
-    h.advance(RemoteLimits.clientRateWindowMs + 1)
-    await h.relay.handleClientMessage("client-1", request("overflow", "session.list"))
-    expect(h.messagesTo("client-1").at(-1)).toMatchObject({
-      type: "response",
-      id: "overflow",
-      ok: false,
-      error: { code: "rate_limited" },
-    })
-    expect(h.messagesTo("agent-1")).toHaveLength(RemoteLimits.maxPendingRequestsPerClient)
-  })
-})
-
-describe("relay core: correlation integrity", () => {
-  test("translates colliding client ids so responses reach the right socket", async () => {
-    const h = harness()
-    await h.relay.attach(agent("agent-1"))
-    await h.relay.attach(client("client-1"))
-    await h.relay.attach(client("client-2"))
-    h.reset()
-
-    await h.relay.handleClientMessage("client-1", request("1", "session.list"))
-    await h.relay.handleClientMessage("client-2", request("1", "session.list"))
-    const forwarded = h.messagesTo("agent-1")
-    expect(forwarded).toHaveLength(2)
-    expect(forwarded[0]!.id).not.toBe(forwarded[1]!.id)
-
-    await h.relay.handleAgentMessage("agent-1", response(forwarded[1]!.id as string, { for: "client-2" }))
-    expect(h.messagesTo("client-2")).toEqual([{ type: "response", id: "1", ok: true, value: { for: "client-2" } }])
-    expect(h.messagesTo("client-1")).toEqual([])
-
-    await h.relay.handleAgentMessage("agent-1", response(forwarded[0]!.id as string, { for: "client-1" }))
-    expect(h.messagesTo("client-1")).toEqual([{ type: "response", id: "1", ok: true, value: { for: "client-1" } }])
-  })
-
-  test("drops responses for unknown or already-settled ids", async () => {
-    const h = harness()
-    await attachBoth(h)
-    await h.relay.handleClientMessage("client-1", request("1", "session.list"))
-    const forwarded = h.messagesTo("agent-1")[0]!
-    await h.relay.handleAgentMessage("agent-1", response(forwarded.id as string, "first"))
-    await h.relay.handleAgentMessage("agent-1", response(forwarded.id as string, "second"))
-    await h.relay.handleAgentMessage("agent-1", response("r-unknown", "third"))
-    expect(h.messagesTo("client-1")).toEqual([{ type: "response", id: "1", ok: true, value: "first" }])
-  })
-
-  test("forwards ordered chunks and closes an agent that breaks chunk order", async () => {
-    const h = harness()
-    await attachBoth(h)
-    await h.relay.handleClientMessage("client-1", request("1", "session.messages", "ses_a"))
-    const forwarded = h.messagesTo("agent-1")[0]!
-
-    await h.relay.handleAgentMessage("agent-1", response(forwarded.id as string, '{"messages":[', { index: 0, last: false }))
-    await h.relay.handleAgentMessage("agent-1", response(forwarded.id as string, "]}", { index: 1, last: true }))
-    expect(h.messagesTo("client-1")).toEqual([
-      { type: "response", id: "1", ok: true, value: '{"messages":[', chunk: { index: 0, last: false } },
-      { type: "response", id: "1", ok: true, value: "]}", chunk: { index: 1, last: true } },
-    ])
-
-    await h.relay.handleClientMessage("client-1", request("2", "session.messages", "ses_a"))
-    const second = h.messagesTo("agent-1")[1]!
-    for (let index = 0; index < RemoteLimits.maxAgentViolations; index += 1)
-      await h.relay.handleAgentMessage("agent-1", response(second.id as string, "out-of-order", { index: 5, last: false }))
-    expect(h.closed).toEqual([{ connectionID: "agent-1", code: 1008, reason: "Agent violated the relay policy" }])
-  })
-})
-
-describe("relay core: subscriptions and events", () => {
-  for (const agentFirst of [false, true])
-    test(`restores the surviving agent before clearing rejected clients (agent first: ${agentFirst})`, async () => {
-      const h = harness()
-      h.setClientAuthorityRead(async (call) => call === 1 ? { ok: false, reason: "session_revoked" } : { ok: true })
-      const browsers = [
-        { ...client("client-rejected"), subscriptions: ["ses_a"] },
-        { ...client("client-retained"), subscriptions: ["ses_a", "ses_b"] },
-      ]
-      await h.relay.restore(agentFirst ? [agent("agent-1"), ...browsers] : [...browsers, agent("agent-1")])
-      expect(h.messagesTo("agent-1")).toEqual([
-        { type: "subscriptions", clientID: "client-rejected", sessionIDs: [] },
-        { type: "subscriptions", clientID: "client-retained", sessionIDs: ["ses_a", "ses_b"] },
-      ])
-      expect(h.closed.map((entry) => entry.connectionID)).toEqual(["client-rejected"])
-      h.advance(RemoteLimits.agentOfflineConfirmMs)
-      await h.relay.attach(agent("agent-2"))
-      expect(h.closed.map((entry) => entry.connectionID)).toEqual(["client-rejected", "agent-1"])
-      expect(h.messagesTo("agent-2")).toEqual([
-        { type: "subscriptions", clientID: "client-retained", sessionIDs: ["ses_a", "ses_b"] },
-      ])
-    })
-
-  for (const reason of ["expired", "session_revoked", "session_missing", "invalid_snapshot"])
-    test(`clears a rejected restored client's subscription after ${reason}`, async () => {
-      const h = harness()
-      await h.relay.attach(agent("agent-1"))
-      if (reason === "session_revoked" || reason === "session_missing")
-        h.setClientAuthority({ ok: false, reason })
-      await h.relay.attach({
-        ...client("client-1"),
-        credentialExpiresAt: reason === "expired" ? h.at() : 10_000_000,
-        subscriptions: reason === "invalid_snapshot" ? ["not-a-session"] : ["ses_a"],
-      })
-      expect(h.messagesTo("agent-1")).toEqual([
-        { type: "subscriptions", clientID: "client-1", sessionIDs: [] },
-      ])
-      expect(h.closed.map((entry) => entry.connectionID)).toEqual(["client-1"])
-      expect(h.messagesTo("client-1")).toEqual([])
-    })
-
-  test("a client detached during agent attachment is not resubscribed by a late authority read", async () => {
-    const test = harness()
-    await test.relay.attach({ ...client("client-1"), subscriptions: ["ses_a"] })
-    const entered = deferred()
-    const gate = deferred()
-    test.setClientAuthorityRead(async () => { entered.resolve(); await gate.promise; return { ok: true } })
-    const attaching = test.relay.attach(agent("agent-1"))
-    await entered.promise
-    test.relay.detach("client-1")
-    gate.resolve()
-    await attaching
-    expect(test.messagesTo("agent-1")).toEqual([{ type: "subscriptions", clientID: "client-1", sessionIDs: [] }])
-  })
-
-  test("a replaced agent attachment cannot resynchronize its successor after a late authority read", async () => {
-    const test = harness()
-    await test.relay.attach({ ...client("client-1"), subscriptions: ["ses_a"] })
-    const entered = deferred()
-    const gate = deferred()
-    let reads = 0
-    test.setClientAuthorityRead(async () => {
-      if (++reads === 1) { entered.resolve(); await gate.promise }
-      return { ok: true }
-    })
-    const attaching = test.relay.attach(agent("agent-1"))
-    await entered.promise
-    test.advance(RemoteLimits.agentOfflineConfirmMs)
-    await test.relay.attach(agent("agent-2"))
-    gate.resolve()
-    await attaching
-    expect(test.messagesTo("agent-2")).toEqual([{ type: "subscriptions", clientID: "client-1", sessionIDs: ["ses_a"] }])
-  })
-
-  test("synchronizes retained browser subscriptions to a fresh agent", async () => {
-    const h = harness()
-    await h.relay.attach({ ...client("client-1"), subscriptions: ["ses_a", "ses_b"] })
-    h.reset()
-
-    await h.relay.attach(agent("agent-1"))
-    expect(h.messagesTo("agent-1")).toEqual([
-      { type: "subscriptions", clientID: "client-1", sessionIDs: ["ses_a", "ses_b"] },
-    ])
-  })
-
-  test("synchronizes a restored browser attachment when the agent is already live", async () => {
-    const h = harness()
-    await h.relay.attach(agent("agent-1"))
-    h.reset()
-    await h.relay.attach({ ...client("client-1"), subscriptions: ["ses_a"] })
-    expect(h.messagesTo("agent-1")).toEqual([
-      { type: "subscriptions", clientID: "client-1", sessionIDs: ["ses_a"] },
-    ])
-  })
-
-  test("keeps shared Session interest until the last client disconnects", async () => {
-    const h = harness()
-    await h.relay.attach(agent("agent-1"))
-    await h.relay.attach({ ...client("client-1"), subscriptions: ["ses_a"] })
-    await h.relay.attach({ ...client("client-2"), subscriptions: ["ses_a"] })
-    h.reset()
-
-    h.relay.detach("client-1")
-    h.relay.detach("client-2")
-    expect(h.messagesTo("agent-1")).toEqual([
-      { type: "subscriptions", clientID: "client-1", sessionIDs: [] },
-      { type: "subscriptions", clientID: "client-2", sessionIDs: [] },
-    ])
-  })
-
-  test("does not resurrect a detached client from a late subscribe acknowledgement", async () => {
-    const h = harness()
-    await attachBoth(h)
-    await h.relay.handleClientMessage("client-1", request("1", "session.subscribe", "ses_a"))
-    const subscribe = h.messagesTo("agent-1").at(-1)!
-    h.reset()
-
-    h.relay.detach("client-1")
-    await h.relay.handleAgentMessage("agent-1", response(subscribe.id as string, null))
-    expect(h.storedSubscriptions.get("client-1")).toBeUndefined()
-    expect(h.messagesTo("agent-1")).toEqual([
-      { type: "subscriptions", clientID: "client-1", sessionIDs: [] },
-      { type: "cancel", id: subscribe.id },
-    ])
-  })
-
-  test("delivers events only to subscribed clients of advertised sessions", async () => {
-    const h = harness({ sessions: ["ses_a", "ses_b"] })
-    await attachBoth(h)
-
-    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "event", sessionID: "ses_a", event: { seq: 1 } }))
-    expect(h.messagesTo("client-1")).toEqual([])
-
-    await h.relay.handleClientMessage("client-1", request("1", "session.subscribe", "ses_a"))
-    const subscribe = h.messagesTo("agent-1").at(-1)!
-    await h.relay.handleAgentMessage("agent-1", response(subscribe.id as string, null))
-    expect(h.storedSubscriptions.get("client-1")).toEqual(["ses_a"])
-
-    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "event", sessionID: "ses_a", event: { seq: 2 } }))
-    expect(h.messagesTo("client-1")).toEqual([
-      { type: "response", id: "1", ok: true, value: null },
-      { type: "event", sessionID: "ses_a", event: { seq: 2 } },
-    ])
-
-    await h.relay.handleClientMessage("client-1", request("2", "session.unsubscribe", "ses_a"))
-    const unsubscribe = h.messagesTo("agent-1").at(-1)!
-    await h.relay.handleAgentMessage("agent-1", response(unsubscribe.id as string, null))
-    expect(h.storedSubscriptions.get("client-1")).toEqual([])
-  })
-
-  test("does not deliver a subscription's events to an unsubscribed client", async () => {
-    const h = harness({ sessions: ["ses_a"] })
-    await h.relay.attach(agent("agent-1"))
-    await h.relay.attach(client("client-1"))
-    await h.relay.attach(client("client-2"))
-    h.reset()
-    await h.relay.handleClientMessage("client-1", request("1", "session.subscribe", "ses_a"))
-    const subscribe = h.messagesTo("agent-1").at(-1)!
-    await h.relay.handleAgentMessage("agent-1", response(subscribe.id as string, null))
-    h.reset()
-    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "event", sessionID: "ses_a", event: { seq: 2 } }))
-    expect(h.messagesTo("client-1")).toHaveLength(1)
-    expect(h.messagesTo("client-2")).toEqual([])
-  })
-
-  test("delivers events only when a client subscribed to that Session", async () => {
-    const h = harness({ sessions: ["ses_a"] })
-    await h.relay.attach(agent("agent-1"))
-    await h.relay.attach(client("client-1"))
-    await h.relay.handleClientMessage("client-1", request("1", "session.subscribe", "ses_a"))
-    const subscribe = h.messagesTo("agent-1").at(-1)!
-    await h.relay.handleAgentMessage("agent-1", response(subscribe.id as string, null))
-    h.reset()
-
-    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "event", sessionID: "ses_secret", event: { seq: 1 } }))
-    expect(h.messagesTo("client-1")).toEqual([])
-    expect(h.closed).toEqual([])
-  })
-
-  test("broadcasts bounded Session invalidations", async () => {
-    const h = harness({ sessions: ["ses_a"] })
-    await h.relay.attach(agent("agent-1"))
-    await h.relay.attach(client("client-1"))
-    expect(h.messagesTo("client-1")).toEqual([{ type: "sessions" }])
-
-    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "sessions" }))
-    expect(h.messagesTo("client-1")).toEqual([
-      { type: "sessions" },
-      { type: "sessions" },
-    ])
-
-    await h.relay.attach(client("client-2"))
-    expect(h.messagesTo("client-2")).toEqual([{ type: "sessions" }])
-  })
-
-  test("bounds subscriptions per client", async () => {
-    const sessions = Array.from({ length: RemoteLimits.maxSubscriptionsPerClient + 1 }, (_, index) => `ses_s${index}`)
-    const h = harness({ sessions })
-    await attachBoth(h)
-    for (let index = 0; index < RemoteLimits.maxSubscriptionsPerClient; index += 1) {
-      if (index > 0 && index % 20 === 0) h.advance(RemoteLimits.clientRateWindowMs + 1)
-      await h.relay.handleClientMessage("client-1", request(`s${index}`, "session.subscribe", sessions[index]!))
-      const forwarded = h.messagesTo("agent-1").at(-1)!
-      await h.relay.handleAgentMessage("agent-1", response(forwarded.id as string, null))
-    }
-    expect(h.storedSubscriptions.get("client-1")).toHaveLength(RemoteLimits.maxSubscriptionsPerClient)
-    h.advance(RemoteLimits.clientRateWindowMs + 1)
-    await h.relay.handleClientMessage(
-      "client-1",
-      request("overflow", "session.subscribe", sessions[RemoteLimits.maxSubscriptionsPerClient]),
-    )
-    expect(h.messagesTo("client-1").at(-1)).toMatchObject({ ok: false, error: { code: "rate_limited" } })
-  })
-
-  test("bounds restored snapshots before they reach the agent", async () => {
-    const h = harness()
-    await h.relay.attach({
-      ...client("client-1"),
-      subscriptions: Array.from({ length: RemoteLimits.maxSubscriptionsPerClient + 1 }, (_, index) => `ses_${index}`),
-    })
-    await h.relay.attach(agent("agent-1"))
-    expect(h.closed).toContainEqual({
-      connectionID: "client-1",
-      code: 1008,
-      reason: "Stored subscriptions exceed the limit",
-    })
-    expect(h.requestsTo("agent-1")).toEqual([])
-  })
-})
-
-describe("relay core: disconnects, revocation, and expiry", () => {
-  test("fails in-flight requests with outcome_unknown when the agent disconnects", async () => {
-    const h = harness()
-    await attachBoth(h)
-    await h.relay.handleClientMessage("client-1", request("1", "session.prompt", "ses_a", { id: "msg_1" }))
-    await h.relay.agentClosed(agent("agent-1"))
-    expect(h.messagesTo("client-1")).toEqual([
-      {
-        type: "response",
-        id: "1",
-        ok: false,
-        error: { code: "outcome_unknown", message: "Agent disconnected before settling this request" },
-      },
-    ])
-    expect(h.storedPending.get("client-1")).toEqual([])
-  })
-
-  test("replacing the agent fails in-flight requests and closes the previous socket", async () => {
-    const h = harness()
-    await attachBoth(h)
-    await h.relay.handleClientMessage("client-1", request("1", "session.prompt", "ses_a", { id: "msg_1" }))
-    h.advance(RemoteLimits.agentOfflineConfirmMs)
-    await h.relay.attach(agent("agent-2"))
-    expect(h.closed).toEqual([{ connectionID: "agent-1", code: 1012, reason: "Agent connection replaced" }])
-    expect(h.messagesTo("client-1")[0]).toMatchObject({ ok: false, error: { code: "outcome_unknown" } })
-    await h.relay.handleClientMessage("client-1", request("2", "session.list"))
-    expect(h.requestsTo("agent-2")).toHaveLength(1)
-  })
-
-  test("a disconnected client never receives a late response meant for another client", async () => {
-    const h = harness()
-    await h.relay.attach(agent("agent-1"))
-    await h.relay.attach(client("client-1"))
-    await h.relay.attach(client("client-2"))
-    h.reset()
-    await h.relay.handleClientMessage("client-1", request("1", "session.list"))
-    const forwarded = h.messagesTo("agent-1")[0]!
-    h.relay.detach("client-1")
-    await h.relay.handleAgentMessage("agent-1", response(forwarded.id as string, "late"))
-    expect(h.messagesTo("client-2")).toEqual([])
-    expect(h.messagesTo("client-1")).toEqual([])
-  })
-
-  test("fails restored in-flight requests with outcome_unknown after a Durable Object restart", async () => {
-    const h = harness()
-    await h.relay.attach({ ...client("client-1"), pending: [{ relayID: "r9", clientID: "1" }] })
-    expect(h.messagesTo("client-1")).toEqual([
-      { type: "sessions" },
-      {
-        type: "response",
-        id: "1",
-        ok: false,
-        error: { code: "outcome_unknown", message: "Agent disconnected before settling this request" },
-      },
-    ])
-    expect(h.storedPending.get("client-1")).toEqual([])
-  })
-
-  test("closes a revoked browser session and stops delivering its events", async () => {
-    const h = harness()
-    await h.relay.attach(agent("agent-1"))
-    await h.relay.attach(client("client-1", "sess-1"))
-    await h.relay.attach(client("client-2", "sess-2"))
-    await h.relay.handleClientMessage("client-1", request("1", "session.subscribe", "ses_a"))
-    const subscribe = h.messagesTo("agent-1").at(-1)!
-    await h.relay.handleAgentMessage("agent-1", response(subscribe.id as string, null))
-    h.reset()
-
-    await h.relay.revokeSession("sess-1")
-    expect(h.closed).toEqual([{ connectionID: "client-1", code: 4401, reason: "Session is no longer authorized" }])
-    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "event", sessionID: "ses_a", event: { seq: 1 } }))
-    expect(h.messagesTo("client-1")).toEqual([])
-    expect(h.messagesTo("client-2")).toEqual([])
-  })
-
-  test("re-checks authority on every command and closes the socket when refused", async () => {
-    const h = harness()
-    await attachBoth(h)
-    h.setClientAuthority({ ok: false, reason: "revoked_session" })
-    await h.relay.handleClientMessage("client-1", request("1", "session.prompt", "ses_a", { id: "msg_1" }))
-    expect(h.messagesTo("client-1")).toEqual([
-      {
-        type: "response",
-        id: "1",
-        ok: false,
-        error: { code: "unauthorized", message: "Session is no longer authorized" },
-      },
-    ])
-    expect(h.closed).toEqual([{ connectionID: "client-1", code: 4401, reason: "Session is no longer authorized" }])
-    expect(h.requestsTo("agent-1")).toEqual([])
-
-    h.reset()
-    h.setClientAuthority({ ok: false, reason: "not_owner" })
-    await h.relay.attach(client("client-2"))
-    expect(h.closed).toEqual([{ connectionID: "client-2", code: 4403, reason: "Connection is not permitted" }])
-    await h.relay.handleClientMessage("client-2", request("2", "session.list"))
-    expect(h.closed).toHaveLength(1)
-    expect(h.requestsTo("agent-1")).toEqual([])
-  })
-
-  test("refuses a client whose authority lapsed while the object was hibernating", async () => {
-    const h = harness()
-    h.setClientAuthority({ ok: false, reason: "revoked_session" })
-    await h.relay.attach({ ...client("client-1"), pending: [{ relayID: "r9", clientID: "7" }] })
-    expect(h.closed).toEqual([{ connectionID: "client-1", code: 4401, reason: "Session is no longer authorized" }])
-    expect(h.messagesTo("client-1")).toEqual([
-      {
-        type: "response",
-        id: "7",
-        ok: false,
-        error: { code: "outcome_unknown", message: "Agent disconnected before settling this request" },
-      },
-    ])
-    expect(h.storedPending.get("client-1")).toEqual([])
-  })
-
-  test("stops delivering events when authority lapses without a revocation push", async () => {
-    const h = harness()
-    await attachBoth(h)
-    await h.relay.handleClientMessage("client-1", request("1", "session.subscribe", "ses_a"))
-    const subscribe = h.messagesTo("agent-1").at(-1)!
-    await h.relay.handleAgentMessage("agent-1", response(subscribe.id as string, null))
-    h.reset()
-
-    h.setClientAuthority({ ok: false, reason: "revoked_session" })
-    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "event", sessionID: "ses_a", event: { seq: 9 } }))
-    expect(h.messagesTo("client-1")).toEqual([])
-    expect(h.closed).toEqual([{ connectionID: "client-1", code: 4401, reason: "Session is no longer authorized" }])
-  })
-
-  test("closes a device whose agent authorization lapsed while the client keeps working", async () => {
-    const h = harness()
-    await attachBoth(h)
-    h.setAgentAuthority({ ok: false, reason: "revoked_device" })
-    await h.relay.handleClientMessage("client-1", request("1", "session.list"))
-    expect(h.closed).toEqual([{ connectionID: "agent-1", code: 4401, reason: "Device is no longer authorized" }])
-    expect(h.messagesTo("client-1")).toEqual([
-      { type: "response", id: "1", ok: false, error: { code: "agent_unavailable", message: "No local agent is connected" } },
-    ])
-  })
-
-  test("closes the device, expires connections, and reports the sweep deadline", async () => {
-    const h = harness()
-    await h.relay.attach(agent("agent-1"))
-    await h.relay.attach({ ...client("client-1"), credentialExpiresAt: h.at() + 5_000 })
-    expect(h.relay.nextDeadline()).toBe(h.at() + 5_000)
-
-    h.advance(6_000)
-    h.relay.sweep()
-    expect(h.closed).toEqual([{ connectionID: "client-1", code: 4401, reason: "Session is no longer authorized" }])
-    expect(h.relay.nextDeadline()).toBe(10_000_000)
-
-    h.reset()
-    await h.relay.attach(client("client-3"))
-    h.reset()
-    h.relay.closeDevice()
-    expect(h.closed).toEqual([
-      { connectionID: "agent-1", code: 4401, reason: "Device is no longer authorized" },
-      { connectionID: "client-3", code: 4401, reason: "Device is no longer authorized" },
-    ])
-    await h.relay.handleClientMessage("client-3", request("3", "session.list"))
-    expect(h.messagesTo("agent-1")).toEqual([])
-  })
-
-  test("refuses a device whose agent credentials were revoked at attach time", async () => {
-    const h = harness()
-    h.setAgentAuthority({ ok: false, reason: "revoked_device" })
-    await h.relay.attach(agent("agent-1"))
-    expect(h.closed).toEqual([{ connectionID: "agent-1", code: 4401, reason: "Device is no longer authorized" }])
-    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "sessions", sessionIDs: ["ses_secret"] }))
-    expect(h.advertised()).toEqual(["ses_a"])
-    expect(h.closed).toHaveLength(2)
-  })
-
-  test("refuses an agent connection whose credential already expired", async () => {
-    const h = harness()
-    await h.relay.attach({ ...agent("agent-1"), credentialExpiresAt: 1 })
-    expect(h.closed).toEqual([{ connectionID: "agent-1", code: 4401, reason: "Device is no longer authorized" }])
-    expect(h.relay.nextDeadline()).toBeUndefined()
-  })
-})
-
-describe("relay core: per-connection frame order and authority windows", () => {
-  async function subscribed(h: ReturnType<typeof harness>) {
-    await attachBoth(h)
-    await h.relay.handleClientMessage("client-1", request("1", "session.subscribe", "ses_a"))
-    const subscribe = h.messagesTo("agent-1").at(-1)!
-    await h.relay.handleAgentMessage("agent-1", response(subscribe.id as string, null))
-    h.reset()
+test("fanout does not credit a status until every authorized recipient consumes it", async () => {
+  const h = await harness()
+  const agent = await h.attach("agent", "agent")
+  const first = await h.attach("first")
+  const second = await h.attach("second")
+  const body: Frame["body"] = {
+    case: "control",
+    value: create(ControlSchema, { kind: { case: "status", value: { running: ["ses_1"], attention: [] } } }),
   }
+  agent.enqueue(body, frameReservation(body), 0)
+  await h.send("agent")
+  const one = h.receive("first").find((item) => item.frame?.ledger === LedgerClass.NORMAL)!.frame!
+  const two = h.receive("second").find((item) => item.frame?.ledger === LedgerClass.NORMAL)!.frame!
+  first.consume(LedgerClass.NORMAL, one.deliveryOrdinal, 0)
+  h.at(25)
+  first.advance(25)
+  await h.send("first")
+  expect(h.relay.connection("agent")!.ledger(LedgerClass.NORMAL).receivedBytes).toBeGreaterThan(0)
+  second.consume(LedgerClass.NORMAL, two.deliveryOrdinal, 25)
+  h.at(50)
+  second.advance(50)
+  await h.send("second")
+  expect(h.relay.connection("agent")!.ledger(LedgerClass.NORMAL).receivedBytes).toBe(0)
+})
 
-  const event = (seq: number) => JSON.stringify({ type: "event", sessionID: "ses_a", event: { seq } })
-  const frame = (seq: number) => ({ type: "event", sessionID: "ses_a", event: { seq } })
+test("aggregate reservation caps retained input and every socket-handed fanout frame before per-peer windows exhaust", async () => {
+  const h = await harness()
+  const agent = await h.attach("agent", "agent")
+  for (let index = 0; index < 64; index++) await h.attach(`browser-${index}`)
+  await h.attach("excess")
+  expect(h.close).toContainEqual({ id: "excess", code: 1009, reason: "LIMIT" })
+  for (let index = 0; index < 14; index++) {
+    const body: Frame["body"] = {
+      case: "control",
+      value: create(ControlSchema, {
+        kind: {
+          case: "status",
+          value: { running: Array.from({ length: 500 }, (_, item) => `ses_${item}_${"x".repeat(100)}`), attention: [] },
+        },
+      }),
+    }
+    agent.enqueue(body, frameReservation(body), 0)
+    await h.send("agent")
+    expect(h.relay.reservation.used).toBeLessThanOrEqual(32 * 1024 * 1024)
+  }
+  expect(h.close.some((entry) => entry.id !== "excess" && entry.reason === "LIMIT")).toBe(true)
+  expect(h.close.filter((entry) => entry.id !== "excess").every((entry) => entry.reason === "LIMIT")).toBe(true)
+  h.relay.closeDevice()
+  expect(h.relay.reservation.used).toBe(0)
+})
 
-  test("keeps event frames in arrival order while an authority read is pending", async () => {
-    const h = harness({ authorityTtlMs: 5_000 })
-    await subscribed(h)
-    h.advance(6_000)
-    const gate = deferred()
-    let gated = false
-    h.setClientAuthorityRead(async () => {
-      if (!gated) {
-        gated = true
-        await gate.promise
-      }
-      return { ok: true }
-    })
-
-    const first = h.relay.handleAgentMessage("agent-1", event(1))
-    const second = h.relay.handleAgentMessage("agent-1", event(2))
-    gate.resolve()
-    await Promise.all([first, second])
-
-    expect(h.messagesTo("client-1")).toEqual([frame(1), frame(2)])
-  })
-
-  test("re-validates a subscribed recipient once per authority window and fails closed past it", async () => {
-    const h = harness({ authorityTtlMs: 5_000 })
-    await subscribed(h)
-    expect(h.authorityReads()).toBe(1)
-
-    h.advance(1_000)
-    await h.relay.handleAgentMessage("agent-1", event(1))
-    expect(h.authorityReads()).toBe(1)
-    expect(h.messagesTo("client-1")).toEqual([frame(1)])
-
-    h.advance(4_000)
-    await h.relay.handleAgentMessage("agent-1", event(2))
-    expect(h.authorityReads()).toBe(2)
-    expect(h.messagesTo("client-1")).toEqual([frame(1), frame(2)])
-
-    h.reset()
-    h.setClientAuthority({ ok: false, reason: "revoked_session" })
-    h.advance(5_000)
-    await h.relay.handleAgentMessage("agent-1", event(3))
-    expect(h.authorityReads()).toBe(3)
-    expect(h.messagesTo("client-1")).toEqual([])
-    expect(h.closed).toEqual([{ connectionID: "client-1", code: 4401, reason: "Session is no longer authorized" }])
-  })
-
-  test("keeps a connection usable after one frame's authority read fails", async () => {
-    const h = harness()
-    await h.relay.attach(agent("agent-1"))
-    await h.relay.attach(client("client-1"))
-    h.reset()
-    let failed = false
-    h.setClientAuthorityRead(async () => {
-      if (!failed) {
-        failed = true
-        throw new Error("authority store unavailable")
-      }
-      return { ok: true }
-    })
-
-    await expect(h.relay.handleClientMessage("client-1", request("1", "session.list"))).rejects.toThrow(
-      "authority store unavailable",
+test("cancellation releases a queued-unsent result without refunding another socket-handed result", async () => {
+  const h = await harness()
+  const agent = await h.attach("agent", "agent")
+  const browser = await h.attach("browser", "client", {}, { normalWindowBytes: 1024 })
+  h.request(browser)
+  const secondID = h.request(browser)
+  await h.send("browser")
+  const requests = h
+    .receive("agent")
+    .flatMap((entry) => entry.decisions)
+    .filter((entry) => entry.type === "dispatch")
+  for (const request of requests) {
+    const body = h.result(request)
+    if (body.case !== "result" || body.value.outcome.case !== "success") throw new Error("fixture")
+    body.value.outcome.value.payload = encodeStrict(
+      session_todo_list_ResultSchema,
+      create(session_todo_list_ResultSchema, {
+        data: { items: [{ content: encodeLossless("x".repeat(500)), status: 1, priority: 1 }] },
+      }),
     )
-    await h.relay.handleClientMessage("client-1", request("2", "session.list"))
-    expect(h.messagesTo("agent-1").map((message) => message.id)).toEqual(["r1"])
-  })
-
-  test("does not serialize frames from different connections", async () => {
-    const h = harness()
-    await h.relay.attach(agent("agent-1"))
-    await h.relay.attach(client("client-1"))
-    await h.relay.attach(client("client-2"))
-    h.reset()
-    const gate = deferred()
-    let gated = false
-    h.setClientAuthorityRead(async () => {
-      if (!gated) {
-        gated = true
-        await gate.promise
-      }
-      return { ok: true }
-    })
-
-    const paused = h.relay.handleClientMessage("client-1", request("1", "session.list"))
-    await h.relay.handleClientMessage("client-2", request("2", "session.list"))
-    expect(h.messagesTo("agent-1").map((message) => message.id)).toEqual(["r1"])
-
-    gate.resolve()
-    await paused
-    expect(h.messagesTo("agent-1").map((message) => message.id)).toEqual(["r1", "r2"])
-  })
-
-  test("admits an independent request while another request's authority read is stalled", async () => {
-    const h = harness()
-    await attachBoth(h)
-    const gate = deferred()
-    let gated = false
-    h.setClientAuthorityRead(async () => {
-      if (!gated) {
-        gated = true
-        await gate.promise
-      }
-      return { ok: true }
-    })
-
-    const stalled = h.relay.handleClientMessage("client-1", request("1", "session.list"))
-    const independent = h.relay.handleClientMessage("client-1", request("2", "session.list"))
-    await flushMicrotasks()
-    expect(h.requestsTo("agent-1")).toHaveLength(1)
-
-    gate.resolve()
-    await Promise.all([stalled, independent])
-    expect(h.requestsTo("agent-1")).toHaveLength(2)
-  })
-
-  test("forwards a cancel only after its own stalled request is admitted", async () => {
-    const h = harness()
-    await attachBoth(h)
-    const gate = deferred()
-    let gated = false
-    h.setClientAuthorityRead(async () => {
-      if (!gated) {
-        gated = true
-        await gate.promise
-      }
-      return { ok: true }
-    })
-
-    const stalled = h.relay.handleClientMessage("client-1", request("1", "session.list"))
-    const cancelled = h.relay.handleClientMessage("client-1", JSON.stringify({ type: "cancel", id: "1" }))
-    await flushMicrotasks()
-    expect(h.messagesTo("agent-1")).toEqual([])
-
-    gate.resolve()
-    await Promise.all([stalled, cancelled])
-    expect(h.messagesTo("agent-1").map((message) => message.type)).toEqual(["request", "cancel"])
-  })
-
-  test("admits a read of one Session without waiting on a sibling read's stalled authorization", async () => {
-    const h = harness()
-    await attachBoth(h)
-    const gate = deferred()
-    let gated = false
-    h.setClientAuthorityRead(async () => {
-      if (!gated) {
-        gated = true
-        await gate.promise
-      }
-      return { ok: true }
-    })
-
-    const stalled = h.relay.handleClientMessage("client-1", request("1", "session.snapshot", "ses_a"))
-    const sibling = h.relay.handleClientMessage("client-1", request("2", "session.messages", "ses_a"))
-    await flushMicrotasks()
-    expect(h.requestsTo("agent-1").map((message) => message.operation)).toEqual(["session.messages"])
-
-    gate.resolve()
-    await Promise.all([stalled, sibling])
-    expect(h.requestsTo("agent-1").map((message) => message.operation)).toEqual(["session.messages", "session.snapshot"])
-  })
-
-  test("forwards two mutations of one Session in arrival order while the first authorization is stalled", async () => {
-    const h = harness()
-    await attachBoth(h)
-    const gate = deferred()
-    let gated = false
-    h.setClientAuthorityRead(async () => {
-      if (!gated) {
-        gated = true
-        await gate.promise
-      }
-      return { ok: true }
-    })
-
-    const first = h.relay.handleClientMessage("client-1", request("1", "session.interrupt", "ses_a"))
-    const second = h.relay.handleClientMessage("client-1", request("2", "session.prompt", "ses_a"))
-    await flushMicrotasks()
-    expect(h.requestsTo("agent-1")).toEqual([])
-
-    gate.resolve()
-    await Promise.all([first, second])
-    expect(h.requestsTo("agent-1").map((message) => message.operation)).toEqual(["session.interrupt", "session.prompt"])
-  })
-
-  test("delivers an agent response while a status frame waits on a client authority read", async () => {
-    const h = harness()
-    await attachBoth(h)
-    await h.relay.handleClientMessage("client-1", request("1", "session.list"))
-    h.reset()
-    const gate = deferred()
-    let gated = false
-    h.setClientAuthorityRead(async () => {
-      if (!gated) {
-        gated = true
-        await gate.promise
-      }
-      return { ok: true }
-    })
-
-    const status = h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: [] }))
-    const answered = h.relay.handleAgentMessage("agent-1", response("r1", { data: [] }))
-    await flushMicrotasks()
-    expect(h.messagesTo("client-1").filter((item) => item.type === "response")).toHaveLength(1)
-
-    gate.resolve()
-    await Promise.all([status, answered])
-  })
-
-  test("drops a queued frame whose connection detached while it waited", async () => {
-    const h = harness()
-    await h.relay.attach(agent("agent-1"))
-    await h.relay.attach(client("client-1"))
-    h.reset()
-    const gate = deferred()
-    let gated = false
-    h.setClientAuthorityRead(async () => {
-      if (!gated) {
-        gated = true
-        await gate.promise
-      }
-      return { ok: true }
-    })
-
-    const paused = h.relay.handleClientMessage("client-1", request("1", "session.list"))
-    h.relay.detach("client-1")
-    gate.resolve()
-    await paused
-    expect(h.requestsTo("agent-1")).toEqual([])
-  })
-})
-
-describe("relay core: protocol metadata", () => {
-  test("reports the contract revision it speaks", () => {
-    expect(RemoteProtocolVersion).toBe(4)
-  })
-})
-
-describe("relay core: notice log", () => {
-  type Harness = ReturnType<typeof harness>
-  const status = (h: Harness, running: string[], attention: string[], outstanding?: string[]) =>
-    h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running, attention, ...(outstanding === undefined ? {} : { outstanding }) }))
-  const subscribe = (h: Harness, connectionID: string) =>
-    h.relay.handleClientMessage(connectionID, request(`sub_${connectionID}`, "notice.subscribe"))
-  const list = (h: Harness, connectionID: string, before: string, id = `list_${before}`) =>
-    h.relay.handleClientMessage(connectionID, request(id, "notice.list", undefined, { before }))
-  const readIDs = (h: Harness, connectionID: string, ids: readonly string[], id = "read") =>
-    h.relay.handleClientMessage(connectionID, request(id, "notice.read", undefined, { ids }))
-  const responseTo = (h: Harness, connectionID: string, id: string) =>
-    h.messagesTo(connectionID).find((message) => message.type === "response" && message.id === id)
-  const pageOf = (h: Harness, connectionID: string, id: string) => {
-    const reply = responseTo(h, connectionID, id) as { ok: true; value: unknown }
-    const parsed = parseNoticePage(reply.value)
-    if (!parsed.ok) throw new Error("response is not a notice page")
-    return parsed.value
+    agent.enqueue(body, frameReservation(body), 0)
+    await h.send("agent")
   }
-  const added = (h: Harness, connectionID: string) =>
-    h.noticeFramesTo(connectionID).filter((frame) => frame.type === "notice.added").flatMap((frame) => frame.notices as RemoteNotice[])
-  const attention = (count: number, prefix = "ses_n") => Array.from({ length: count }, (_, index) => `${prefix}${index}`)
-
-  test("repeated failure transitions keep one unread notice and one alert, while a changed need alerts again on the same notice", async () => {
-    const h = harness()
-    await attachBoth(h)
-    await subscribe(h, "client-1")
-    await status(h, ["ses_a"], [])
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      await status(h, ["ses_a"], [])
-      await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: ["ses_a"], failed: ["ses_a"] }))
-    }
-    await h.relay.settleDeliveries()
-    expect(h.storedNotices()).toEqual([
-      { id: "ntc_1", category: "approval-requested", sessionID: "ses_a", createdAt: h.at() },
-    ])
-    expect(h.pushed).toEqual([
-      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_a", deviceID: "dev_1", noticeID: "ntc_1", need: "failed" },
-    ])
-    expect(added(h, "client-1")).toEqual(h.storedNotices())
-    expect(h.presentedTo("client-1")).toEqual(["ntc_1"])
-
-    await status(h, ["ses_a"], [])
-    await status(h, [], ["ses_a", "ses_b"])
-    await h.relay.settleDeliveries()
-    expect(h.storedNotices().map((notice) => notice.sessionID)).toEqual(["ses_a", "ses_b"])
-    expect(h.pushed.slice(1)).toEqual([
-      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_b", deviceID: "dev_1", noticeID: "ntc_2" },
-      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_a", deviceID: "dev_1", noticeID: "ntc_1", repeat: true },
-    ])
-    expect(h.presentedTo("client-1")).toEqual(["ntc_1", "ntc_2", "ntc_1"])
-
-    await readIDs(h, "client-1", ["ntc_1"])
-    await status(h, ["ses_a"], ["ses_b"])
-    await status(h, [], ["ses_a", "ses_b"])
-    await h.relay.settleDeliveries()
-    expect(h.pushed.at(-1)).toEqual({ accountID: "usr_1", category: "approval-requested", sessionID: "ses_a", deviceID: "dev_1", noticeID: "ntc_3" })
-    expect(h.pushed).toHaveLength(4)
-    expect(h.presentedTo("client-1")).toEqual(["ntc_1", "ntc_2", "ntc_1", "ntc_3"])
-  })
-
-  test("an unread attention notice prevents repeat alerts after a relay restart", async () => {
-    const database = new Database(":memory:")
-    const statusStore: { value?: RemoteStatus } = {}
-    const first = harness({ database, statusStore })
-    await attachBoth(first)
-    await status(first, ["ses_a"], [])
-    await status(first, [], ["ses_a"])
-    await status(first, ["ses_a"], [])
-    const restored = harness({ database, statusStore })
-    await attachBoth(restored)
-    await subscribe(restored, "client-1")
-    await status(restored, [], ["ses_a"])
-    await restored.relay.settleDeliveries()
-    expect(restored.storedNotices()).toEqual(first.storedNotices())
-    expect(restored.storedNotices()).toHaveLength(1)
-    expect(restored.pushed).toEqual([])
-    expect(restored.presentedTo("client-1")).toEqual([])
-    expect(added(restored, "client-1")).toEqual([])
-  })
-
-  test("records attention transitions and explicit completions, broadcasting to subscribed clients only", async () => {
-    const h = harness({ withoutPush: true })
-    await attachBoth(h)
-    await h.relay.attach(client("client-2"))
-    await subscribe(h, "client-1")
-    h.reset()
-    await status(h, ["ses_a"], [])
-    expect(h.storedNotices()).toEqual([])
-    await status(h, [], ["ses_b"])
-    await completions(h, [])
-    await completions(h, [receipt("ses_a", 1)])
-    expect(h.storedNotices()).toEqual([
-      { id: "ntc_1", category: "approval-requested", sessionID: "ses_b", createdAt: h.at() },
-      { id: "ntc_2", category: "agent-completed", sessionID: "ses_a", createdAt: 20_001 },
-    ])
-    expect(h.noticeFramesTo("client-1")).toEqual([
-      { type: "notice.added", notices: h.storedNotices().slice(0, 1), total: 1 },
-      { type: "notice.added", notices: h.storedNotices().slice(1), total: 2 },
-    ])
-    expect(h.noticeFramesTo("client-2")).toEqual([])
-    await status(h, [], ["ses_b"])
-    expect(h.storedNotices()).toHaveLength(2)
-  })
-
-  test("subscribing answers with the newest page and total, persists the opt-in, and needs no agent", async () => {
-    const h = harness()
-    await attachBoth(h)
-    await status(h, ["ses_a"], [])
-    await status(h, [], [])
-    await completions(h, [])
-    await completions(h, [receipt("ses_a", 1)])
-    await h.relay.agentClosed(agent("agent-1"))
-    h.reset()
-    await subscribe(h, "client-1")
-    expect(pageOf(h, "client-1", "sub_client-1")).toEqual({ notices: [...h.storedNotices()].reverse(), total: 1, unavailable: false })
-    expect(h.noticeFramesTo("client-1")).toEqual([])
-    expect(h.storedNoticeSubscriptions.get("client-1")).toBe(true)
-    expect(h.messagesTo("agent-1")).toEqual([])
-    expect(h.closed).toEqual([])
-  })
-
-  test("pages older notices by cursor until none remain", async () => {
-    const h = harness({ withoutPush: true })
-    await attachBoth(h)
-    await status(h, ["ses_a"], [])
-    await status(h, [], attention(120))
-    await completions(h, [])
-    await completions(h, [receipt("ses_a", 1)])
-    await subscribe(h, "client-1")
-    const seen = pageOf(h, "client-1", "sub_client-1")
-    expect(seen.notices).toHaveLength(RemoteLimits.noticePageSize)
-    expect(seen.total).toBe(121)
-    const ids = seen.notices.map((notice) => notice.id)
-    let cursor = seen.next
-    while (cursor !== undefined) {
-      await list(h, "client-1", cursor)
-      const page = pageOf(h, "client-1", `list_${cursor}`)
-      expect(page.total).toBe(121)
-      ids.push(...page.notices.map((notice) => notice.id))
-      cursor = page.next
-    }
-    expect(ids).toHaveLength(121)
-    expect(new Set(ids).size).toBe(121)
-    expect(ids[0]).toBe("ntc_121")
-    expect(ids.at(-1)).toBe("ntc_1")
-  })
-
-  test("retains every notice through a burst beyond the push window and beyond a hundred stored", async () => {
-    const h = harness()
-    await attachBoth(h)
-    await subscribe(h, "client-1")
-    await status(h, [], [])
-    h.reset()
-    await status(h, [], attention(300))
-    expect(h.pushed.filter((event) => "noticeID" in event)).toHaveLength(20)
-    expect(h.pushed.filter((event) => "overflow" in event)).toEqual([{ accountID: "usr_1", category: "approval-requested", deviceID: "dev_1", overflow: 280 }])
-    expect(h.storedNotices()).toHaveLength(300)
-    const frames = h.noticeFramesTo("client-1")
-    expect(frames.map((frame) => (frame.notices as RemoteNotice[]).length)).toEqual([100, 100, 100])
-    expect(frames.every((frame) => frame.total === 300)).toBe(true)
-    for (let index = 0; index < 5; index += 1) {
-      h.advance(61_000)
-      await status(h, [], attention(1, `ses_w${index}_`))
-      await status(h, [], [])
-    }
-    expect(h.storedNotices().length).toBeGreaterThanOrEqual(300)
-    expect(h.pushed.length).toBeGreaterThan(21)
-  })
-
-  test("push stays limited to twenty a minute while every transition is recorded", async () => {
-    const h = harness()
-    await attachBoth(h)
-    await status(h, [], [])
-    for (let index = 0; index < 30; index += 1) await status(h, [], attention(index + 1))
-    expect(h.pushed.filter((event) => "noticeID" in event)).toHaveLength(20)
-    expect(h.pushed.filter((event) => "overflow" in event)).toEqual([{ accountID: "usr_1", category: "approval-requested", deviceID: "dev_1", overflow: 1 }])
-    expect(h.storedNotices()).toHaveLength(30)
-    h.advance(60_001)
-    await status(h, [], attention(31))
-    expect(h.pushed).toHaveLength(22)
-    expect(h.storedNotices()).toHaveLength(31)
-  })
-
-  test("a client that never subscribes receives no notice frame from attach, additions, reads, or clears", async () => {
-    const h = harness()
-    await attachBoth(h)
-    await h.relay.attach(client("client-2"))
-    await subscribe(h, "client-2")
-    await status(h, ["ses_a"], [])
-    await status(h, [], ["ses_b"])
-    await readIDs(h, "client-2", ["ntc_1"])
-    await h.relay.handleClientMessage("client-2", request("all", "notice.readAll"))
-    expect(h.noticeFramesTo("client-2").map((frame) => frame.type)).toEqual(["notice.added", "notice.removed", "notice.cleared"])
-    expect(h.noticeFramesTo("client-1")).toEqual([])
-    await h.relay.attach(client("client-3"))
-    expect(h.noticeFramesTo("client-3")).toEqual([])
-  })
-
-  test("a read removes exactly the existing notices for every subscribed client and is idempotent", async () => {
-    const h = harness()
-    await attachBoth(h)
-    await h.relay.attach(client("client-2", "sess-2"))
-    await status(h, ["ses_a", "ses_c"], [])
-    await status(h, [], ["ses_b"])
-    await completions(h, [])
-    await completions(h, [receipt("ses_a", 1), receipt("ses_c", 1)])
-    await subscribe(h, "client-1")
-    await subscribe(h, "client-2")
-    h.reset()
-    await readIDs(h, "client-1", ["ntc_2", "ntc_99"], "read_1")
-    expect(h.storedNotices().map((notice) => notice.id)).toEqual(["ntc_1", "ntc_3"])
-    expect(h.noticeFramesTo("client-1")).toEqual([{ type: "notice.removed", ids: ["ntc_2"], total: 2 }])
-    expect(h.noticeFramesTo("client-2")).toEqual([{ type: "notice.removed", ids: ["ntc_2"], total: 2 }])
-    expect(responseTo(h, "client-1", "read_1")).toEqual({ type: "response", id: "read_1", ok: true, value: null })
-    h.reset()
-    await readIDs(h, "client-2", ["ntc_2"], "read_2")
-    expect(h.noticeFramesTo("client-1")).toEqual([])
-    expect(h.noticeFramesTo("client-2")).toEqual([])
-    expect(responseTo(h, "client-2", "read_2")).toMatchObject({ ok: true })
-    expect(h.messagesTo("agent-1")).toEqual([])
-  })
-
-  test("read all clears the log for every subscribed client with one frame however many notices exist", async () => {
-    const h = harness({ withoutPush: true })
-    await attachBoth(h)
-    await h.relay.attach(client("client-2", "sess-2"))
-    await status(h, [], [])
-    await status(h, [], attention(400))
-    await subscribe(h, "client-1")
-    await subscribe(h, "client-2")
-    h.reset()
-    await h.relay.handleClientMessage("client-2", request("all", "notice.readAll"))
-    expect(h.storedNotices()).toEqual([])
-    expect(h.noticeFramesTo("client-1")).toEqual([{ type: "notice.cleared" }])
-    expect(h.noticeFramesTo("client-2")).toEqual([{ type: "notice.cleared" }])
-    expect(responseTo(h, "client-2", "all")).toEqual({ type: "response", id: "all", ok: true, value: null })
-    await h.relay.handleClientMessage("client-1", request("again", "notice.readAll"))
-    expect(responseTo(h, "client-1", "again")).toMatchObject({ ok: true })
-    await status(h, [], ["ses_fresh"])
-    expect(h.storedNotices().map((notice) => notice.id)).toEqual(["ntc_401"])
-  })
-
-  test("a client whose authority lapsed cannot subscribe, list, or read, and is closed", async () => {
-    const h = harness()
-    await attachBoth(h)
-    await status(h, ["ses_a"], [])
-    await status(h, [], [])
-    const before = h.storedNotices()
-    h.setClientAuthority({ ok: false, reason: "revoked_session" })
-    h.reset()
-    await subscribe(h, "client-1")
-    expect(h.noticeFramesTo("client-1")).toEqual([])
-    expect(responseTo(h, "client-1", "sub_client-1")).toMatchObject({ ok: false, error: { code: "unauthorized" } })
-    expect(h.closed).toEqual([{ connectionID: "client-1", code: 4401, reason: "Session is no longer authorized" }])
-    expect(h.storedNoticeSubscriptions.get("client-1")).toBeUndefined()
-    h.setClientAuthority({ ok: true })
-    await h.relay.attach(client("client-2", "sess-2"))
-    h.setClientAuthority({ ok: false, reason: "not_owner" })
-    await h.relay.handleClientMessage("client-2", request("read", "notice.readAll"))
-    await list(h, "client-2", "ntc_9", "listed")
-    expect(h.storedNotices()).toEqual(before)
-    expect(responseTo(h, "client-2", "read")).toMatchObject({ ok: false, error: { code: "forbidden" } })
-    expect(responseTo(h, "client-2", "listed")).toBeUndefined()
-  })
-
-  test("a restored subscribed client keeps receiving additions without a replayed list", async () => {
-    const h = harness()
-    await h.relay.attach(agent("agent-1"))
-    await status(h, ["ses_a"], [])
-    await status(h, [], [])
-    h.reset()
-    await h.relay.restore([client("client-1", "sess-1", true), client("client-2")])
-    expect(h.noticeFramesTo("client-1")).toEqual([])
-    expect(h.noticeFramesTo("client-2")).toEqual([])
-    await status(h, [], ["ses_b"])
-    expect(added(h, "client-1").map((notice) => notice.sessionID)).toEqual(["ses_b"])
-    expect(h.noticeFramesTo("client-2")).toEqual([])
-  })
-
-  test("a storage failure keeps stored notices, tells subscribed clients once, and marks later pages unavailable until read all", async () => {
-    let failing = false
-    const h = harness({ noticeStore: (store) => ({ ...store, append: (events) => {
-      if (failing) throw new Error("database or disk is full: SQLITE_FULL")
-      return store.append(events)
-    } }) })
-    await attachBoth(h)
-    await h.relay.attach(client("client-2", "sess-2"))
-    await subscribe(h, "client-1")
-    await status(h, ["ses_a", "ses_b"], [])
-    await status(h, ["ses_a"], ["ses_b"])
-    expect(h.storedNotices()).toHaveLength(1)
-    failing = true
-    h.reset()
-    await status(h, [], ["ses_c"])
-    await status(h, [], [])
-    expect(h.storedNotices()).toHaveLength(1)
-    expect(h.noticeFramesTo("client-1")).toEqual([{ type: "notice.unavailable" }])
-    expect(h.pushed).toEqual([
-      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_b", deviceID: "dev_1", noticeID: "ntc_1" },
-      { accountID: "usr_1", category: "approval-requested", sessionID: "ses_c", deviceID: "dev_1" },
-    ])
-    await subscribe(h, "client-2")
-    expect(pageOf(h, "client-2", "sub_client-2")).toMatchObject({ total: 1, unavailable: true })
-    failing = false
-    await status(h, [], ["ses_d"])
-    expect(h.storedNotices()).toHaveLength(2)
-    await list(h, "client-2", "ntc_9", "later")
-    expect(pageOf(h, "client-2", "later").unavailable).toBe(true)
-    await readIDs(h, "client-2", ["ntc_1"])
-    await list(h, "client-2", "ntc_9", "after_read")
-    expect(pageOf(h, "client-2", "after_read").unavailable).toBe(true)
-    h.reset()
-    await h.relay.handleClientMessage("client-2", request("all", "notice.readAll"))
-    expect(h.noticeFramesTo("client-1")).toEqual([{ type: "notice.cleared" }])
-    await subscribe(h, "client-2")
-    expect(pageOf(h, "client-2", "sub_client-2")).toEqual({ notices: [], total: 0, unavailable: false })
-  })
-
-  test("a storage failure remains visible after the relay is rebuilt over its stored notices", async () => {
-    const database = new Database(":memory:")
-    const previous = harness({ database, noticeStore: (store) => ({ ...store, append: () => { throw new Error("SQLITE_FULL") } }) })
-    await attachBoth(previous)
-    await status(previous, ["ses_a"], [])
-    await status(previous, [], ["ses_a"])
-    const restored = harness({ database })
-    await attachBoth(restored)
-    await subscribe(restored, "client-1")
-    expect(pageOf(restored, "client-1", "sub_client-1")).toMatchObject({ unavailable: true })
-  })
-
-  test("a full store that also rejects its failure marker still warns connected readers without clearing unread rows", async () => {
-    const h = harness({ noticeStore: (store) => ({ ...store,
-      append: (events) => {
-        if (events.some((event) => event.sessionID === "ses_fail")) throw new Error("SQLITE_FULL")
-        return store.append(events)
-      },
-      markUnavailable: () => { throw new Error("SQLITE_FULL") },
-    }) })
-    await attachBoth(h)
-    await subscribe(h, "client-1")
-    await status(h, ["ses_keep"], [])
-    await status(h, [], ["ses_keep"])
-    h.reset()
-    await status(h, [], ["ses_fail"])
-    expect(h.noticeFramesTo("client-1")).toEqual([{ type: "notice.unavailable" }])
-    await subscribe(h, "client-1")
-    expect(pageOf(h, "client-1", "sub_client-1")).toMatchObject({ total: 1, unavailable: true })
-    expect(h.storedNotices().map((notice) => notice.sessionID)).toEqual(["ses_keep"])
-  })
-
-  test("a failing read of the store answers internal_error, leaves the opt-in unset, and never claims a page", async () => {
-    const h = harness({ noticeStore: (store) => ({ ...store, page: () => { throw new Error("storage unavailable") } }) })
-    await attachBoth(h)
-    await subscribe(h, "client-1")
-    expect(responseTo(h, "client-1", "sub_client-1")).toEqual({
-      type: "response", id: "sub_client-1", ok: false, error: { code: "internal_error", message: "Notification storage is unavailable" },
-    })
-    expect(h.storedNoticeSubscriptions.get("client-1")).toBeUndefined()
-    await list(h, "client-1", "ntc_5", "listed")
-    expect(responseTo(h, "client-1", "listed")).toMatchObject({ ok: false, error: { code: "internal_error" } })
-    expect(h.closed).toEqual([])
-  })
-
-  test("read and clear failures answer internal_error without removing or announcing anything", async () => {
-    const h = harness({ noticeStore: (store) => ({ ...store,
-      remove: () => { throw new Error("storage unavailable") },
-      clear: () => { throw new Error("storage unavailable") } }) })
-    await attachBoth(h)
-    await h.relay.attach(client("client-2", "sess-2"))
-    await status(h, ["ses_a"], [])
-    await status(h, [], ["ses_a"])
-    await subscribe(h, "client-2")
-    h.reset()
-    await readIDs(h, "client-1", ["ntc_1"], "read")
-    await h.relay.handleClientMessage("client-1", request("all", "notice.readAll"))
-    expect(responseTo(h, "client-1", "read")).toMatchObject({ ok: false, error: { code: "internal_error" } })
-    expect(responseTo(h, "client-1", "all")).toMatchObject({ ok: false, error: { code: "internal_error" } })
-    expect(h.noticeFramesTo("client-2")).toEqual([])
-    expect(h.storedNotices()).toHaveLength(1)
-  })
-
-  test("a subscribe page read while other clients mutate the log reflects one consistent state", async () => {
-    const h = harness({ withoutPush: true })
-    await attachBoth(h)
-    await h.relay.attach(client("client-2", "sess-2"))
-    await status(h, [], [])
-    await status(h, [], attention(3))
-    const gate = deferred()
-    let gated = true
-    h.setClientAuthorityRead(async () => {
-      if (gated) {
-        gated = false
-        await gate.promise
-      }
-      return { ok: true }
-    })
-    const pending = subscribe(h, "client-1")
-    await status(h, [], [...attention(3), "ses_late"])
-    await readIDs(h, "client-2", ["ntc_1"])
-    await h.relay.handleClientMessage("client-2", request("all", "notice.readAll"))
-    await status(h, [], [])
-    await status(h, [], ["ses_after"])
-    gate.resolve()
-    await pending
-    const page = pageOf(h, "client-1", "sub_client-1")
-    expect(page.notices.map((notice) => notice.sessionID)).toEqual(["ses_after"])
-    expect(page.total).toBe(1)
-    expect(h.noticeFramesTo("client-1")).toEqual([])
-    await status(h, [], [])
-    await status(h, [], ["ses_next"])
-    expect(added(h, "client-1").map((notice) => notice.sessionID)).toEqual(["ses_next"])
-    expect(h.noticeFramesTo("client-1").at(-1)).toMatchObject({ total: 2 })
-  })
-
-  test("an in-flight page read on one client cannot see a removal or clear that ran before it and is followed by the frames that ran after it", async () => {
-    const h = harness({ withoutPush: true })
-    await attachBoth(h)
-    await h.relay.attach(client("client-2", "sess-2"))
-    await status(h, [], [])
-    await status(h, [], attention(60))
-    await subscribe(h, "client-1")
-    const first = pageOf(h, "client-1", "sub_client-1")
-    h.reset()
-    const gate = deferred()
-    let gated = true
-    h.setClientAuthorityRead(async () => {
-      if (gated) {
-        gated = false
-        await gate.promise
-      }
-      return { ok: true }
-    })
-    const pending = list(h, "client-1", first.next ?? "", "older")
-    await readIDs(h, "client-2", ["ntc_5", "ntc_6"])
-    gate.resolve()
-    await pending
-    const page = pageOf(h, "client-1", "older")
-    expect(page.notices.map((notice) => notice.id)).not.toContain("ntc_5")
-    expect(page.notices.map((notice) => notice.id)).not.toContain("ntc_6")
-    expect(page.total).toBe(58)
-    const order = h.messagesTo("client-1").map((message) => (message.type === "response" ? "response" : message.type))
-    expect(order).toEqual(["notice.removed", "response"])
-    await h.relay.handleClientMessage("client-2", request("all", "notice.readAll"))
-    expect(h.messagesTo("client-1").at(-1)).toEqual({ type: "notice.cleared" })
-  })
+  const before = h.relay.connection("agent")!.ledger(LedgerClass.NORMAL).receivedBytes
+  expect(h.relay.connection("browser")!.ledger(LedgerClass.NORMAL).queuedBytes).toBeGreaterThan(0)
+  const first = h.receive("browser").find((entry) => entry.frame?.body.case === "result")!.frame!
+  expect(browser.cancel(secondID, 0)).toContainEqual(expect.objectContaining({ type: "settled", status: "unknown" }))
+  await h.send("browser")
+  expect(h.relay.connection("browser")!.ledger(LedgerClass.NORMAL).queuedBytes).toBe(0)
+  expect(h.relay.connection("agent")!.ledger(LedgerClass.NORMAL).receivedBytes).toBeGreaterThan(0)
+  expect(h.relay.connection("agent")!.ledger(LedgerClass.NORMAL).receivedBytes).toBeLessThan(before)
+  browser.consume(LedgerClass.NORMAL, first.deliveryOrdinal, 0)
+  h.at(25)
+  browser.advance(25)
+  await h.send("browser")
+  expect(h.relay.connection("agent")!.ledger(LedgerClass.NORMAL).receivedBytes).toBe(0)
+  expect(h.close).toEqual([])
 })
 
-describe("relay core: machine offline confirmation", () => {
-  const offline = (offlineAt: number) => ({ accountID: "usr_1", category: "machine-offline", deviceID: "dev_1", offlineAt })
-
-  test("an agent absent for the whole confirmation window raises one Machine offline push; a browser leaving raises none", async () => {
-    const h = harness()
-    await attachBoth(h)
-    h.relay.detach("client-1")
-    h.advance(RemoteLimits.agentOfflineConfirmMs)
-    await h.relay.confirmOffline()
-    expect(h.pushed).toEqual([])
-    const closedAt = h.at()
-    await h.relay.agentClosed(agent("agent-1"))
-    expect(h.relay.nextDeadline()).toBe(closedAt + RemoteLimits.agentOfflineConfirmMs)
-    h.advance(RemoteLimits.agentOfflineConfirmMs - 1)
-    await h.relay.confirmOffline()
-    expect(h.pushed).toEqual([])
-    h.advance(1)
-    await h.relay.confirmOffline()
-    expect(h.pushed).toEqual([offline(closedAt)])
-    expect(h.storedOffline()).toBeUndefined()
-    h.advance(RemoteLimits.agentOfflineConfirmMs)
-    await h.relay.confirmOffline()
-    expect(h.pushed).toEqual([offline(closedAt)])
+test("a result cancelled during fresh awaited authority is a late drop, not delivery or replay", async () => {
+  const entered = Promise.withResolvers<void>()
+  const authority = Promise.withResolvers<{ ok: true; ownerID: string }>()
+  let hold = false
+  const h = await harness({
+    authorize: async () => {
+      if (!hold) return { ok: true, ownerID: "owner" }
+      entered.resolve()
+      return authority.promise
+    },
   })
-
-  test("each confirmed outage reaches notice-subscribed browsers and the push with the same persisted close time", async () => {
-    const h = harness()
-    await h.relay.attach(agent("agent-1"))
-    await h.relay.attach(client("client-1", "sess-1", true))
-    await h.relay.attach(client("client-2", "sess-2"))
-    const firstClose = h.at()
-    await h.relay.agentClosed(agent("agent-1"))
-    h.advance(RemoteLimits.agentOfflineConfirmMs)
-    await h.relay.confirmOffline()
-    await h.relay.attach(agent("agent-2"))
-    h.advance(1_000)
-    const secondClose = h.at()
-    await h.relay.agentClosed(agent("agent-2"))
-    h.advance(RemoteLimits.agentOfflineConfirmMs)
-    await h.relay.confirmOffline()
-    expect(h.pushed).toEqual([offline(firstClose), offline(secondClose)])
-    expect(h.noticeFramesTo("client-1")).toEqual([{ type: "notice.offline", at: firstClose }, { type: "notice.offline", at: secondClose }])
-    expect(h.noticeFramesTo("client-2")).toEqual([])
-  })
-
-  test("a reconnect inside the window, like a routine credential rotation, cancels the pending alert", async () => {
-    const h = harness()
-    await h.relay.attach(agent("agent-1"))
-    await h.relay.agentClosed(agent("agent-1"))
-    h.advance(5_000)
-    await h.relay.attach(agent("agent-2"))
-    expect(h.storedOffline()).toBeUndefined()
-    h.advance(RemoteLimits.agentOfflineConfirmMs)
-    await h.relay.confirmOffline()
-    expect(h.pushed).toEqual([])
-  })
-
-  test("a second connector cannot take over a device whose connector is live, and takes over once the first goes silent", async () => {
-    let heartbeat: number | undefined
-    const h = harness({ agentHeartbeatAt: () => heartbeat })
-    await attachBoth(h)
-    await h.relay.attach(agent("agent-2"))
-    expect(h.closed).toEqual([{ connectionID: "agent-2", code: RemoteCloseCode.agentConflict, reason: "Another YCoding connector is connected for this device" }])
-    await h.relay.agentClosed(agent("agent-2"))
-    expect(h.storedOffline()).toBeUndefined()
-    await h.relay.handleClientMessage("client-1", request("1", "session.list"))
-    expect(h.requestsTo("agent-1")).toHaveLength(1)
-    h.advance(RemoteLimits.agentOfflineConfirmMs - 1)
-    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: [] }))
-    h.advance(RemoteLimits.agentOfflineConfirmMs - 1)
-    heartbeat = h.at()
-    h.advance(RemoteLimits.agentOfflineConfirmMs - 1)
-    await h.relay.attach(agent("agent-3"))
-    expect(h.closed.at(-1)).toEqual({ connectionID: "agent-3", code: RemoteCloseCode.agentConflict, reason: "Another YCoding connector is connected for this device" })
-    h.advance(1)
-    await h.relay.attach(agent("agent-4"))
-    expect(h.closed.at(-1)).toEqual({ connectionID: "agent-1", code: RemoteCloseCode.serviceRestart, reason: "Agent connection replaced" })
-    await h.relay.handleClientMessage("client-1", request("2", "session.list"))
-    expect(h.requestsTo("agent-4")).toHaveLength(1)
-  })
-
-  test("after a wake, a restored agent socket counts as live only from its own heartbeat", async () => {
-    let heartbeat: number | undefined
-    const silent = harness({ agentHeartbeatAt: () => heartbeat })
-    await silent.relay.restore([agent("agent-1")])
-    await silent.relay.attach(agent("agent-2"))
-    expect(silent.closed).toEqual([{ connectionID: "agent-1", code: RemoteCloseCode.serviceRestart, reason: "Agent connection replaced" }])
-    const pinging = harness({ agentHeartbeatAt: () => heartbeat })
-    heartbeat = pinging.at()
-    await pinging.relay.restore([agent("agent-1")])
-    await pinging.relay.attach(agent("agent-2"))
-    expect(pinging.closed).toEqual([{ connectionID: "agent-2", code: RemoteCloseCode.agentConflict, reason: "Another YCoding connector is connected for this device" }])
-  })
-
-  test("a replaced agent's late close never counts as the machine going offline", async () => {
-    const h = harness()
-    await h.relay.attach(agent("agent-1"))
-    h.advance(RemoteLimits.agentOfflineConfirmMs)
-    await h.relay.attach(agent("agent-2"))
-    await h.relay.agentClosed(agent("agent-1"))
-    expect(h.storedOffline()).toBeUndefined()
-    h.advance(RemoteLimits.agentOfflineConfirmMs)
-    await h.relay.confirmOffline()
-    expect(h.pushed).toEqual([])
-  })
-
-  test("the pending check survives hibernation, and a close delivered after a wake still counts", async () => {
-    const offlineStore: { value?: OfflineCheck } = {}
-    const first = harness({ offlineStore })
-    await first.relay.attach(agent("agent-1"))
-    const closedAt = first.at()
-    await first.relay.agentClosed(agent("agent-1"))
-    const woken = harness({ offlineStore })
-    await woken.relay.restore([])
-    expect(woken.relay.nextDeadline()).toBe(closedAt + RemoteLimits.agentOfflineConfirmMs)
-    woken.advance(RemoteLimits.agentOfflineConfirmMs)
-    await woken.relay.confirmOffline()
-    expect(woken.pushed).toEqual([offline(closedAt)])
-
-    const later = harness({ offlineStore })
-    await later.relay.restore([])
-    await later.relay.agentClosed(agent("agent-9"))
-    later.advance(RemoteLimits.agentOfflineConfirmMs)
-    await later.relay.confirmOffline()
-    expect(later.pushed).toEqual([offline(closedAt)])
-  })
-
-  test("a revoked device never reports offline even after its agent socket closes", async () => {
-    const h = harness()
-    await h.relay.attach(agent("agent-1"))
-    h.relay.closeDevice()
-    await h.relay.agentClosed(agent("agent-1"))
-    h.setAgentAuthority({ ok: false, reason: "revoked_device" })
-    h.advance(RemoteLimits.agentOfflineConfirmMs)
-    await h.relay.confirmOffline()
-    expect(h.pushed).toEqual([])
-    expect(h.storedOffline()).toBeUndefined()
-  })
-
-  test("a failed authority read keeps the pending check, so the alarm retry still alerts exactly once", async () => {
-    const h = harness()
-    await h.relay.attach(agent("agent-1"))
-    const closedAt = h.at()
-    await h.relay.agentClosed(agent("agent-1"))
-    let reads = 0
-    h.setAgentAuthorityRead(async () => {
-      reads += 1
-      if (reads === 1) throw new Error("D1 unavailable")
-      return { ok: true }
-    })
-    h.advance(RemoteLimits.agentOfflineConfirmMs)
-    await expect(h.relay.confirmOffline()).rejects.toThrow("D1 unavailable")
-    expect(h.storedOffline()).toMatchObject({ deviceID: "dev_1", closedAt })
-    expect(h.relay.nextDeadline()).toBe(closedAt + RemoteLimits.agentOfflineConfirmMs)
-    await h.relay.confirmOffline()
-    await h.relay.confirmOffline()
-    expect(h.pushed).toEqual([offline(closedAt)])
-    expect(h.storedOffline()).toBeUndefined()
-  })
-
-  test("an agent that attaches while the authority read is pending cancels the alert, and overlapping confirmations alert once", async () => {
-    const h = harness()
-    await h.relay.attach(agent("agent-1"))
-    await h.relay.agentClosed(agent("agent-1"))
-    h.advance(RemoteLimits.agentOfflineConfirmMs)
-    const gate = Promise.withResolvers<Authority>()
-    h.setAgentAuthorityRead(() => gate.promise)
-    const pending = h.relay.confirmOffline()
-    h.setAgentAuthorityRead(async () => ({ ok: true }))
-    await h.relay.attach(agent("agent-2"))
-    gate.resolve({ ok: true })
-    await pending
-    expect(h.pushed).toEqual([])
-    expect(h.storedOffline()).toBeUndefined()
-
-    const closedAt = h.at()
-    await h.relay.agentClosed(agent("agent-2"))
-    h.advance(RemoteLimits.agentOfflineConfirmMs)
-    const slow = Promise.withResolvers<Authority>()
-    h.setAgentAuthorityRead(() => slow.promise)
-    const overlapping = [h.relay.confirmOffline(), h.relay.confirmOffline()]
-    slow.resolve({ ok: true })
-    await Promise.all(overlapping)
-    expect(h.pushed).toEqual([offline(closedAt)])
-  })
-})
-
-describe("relay core: one System alert owner per browser", () => {
-  type Harness = ReturnType<typeof harness>
-  const status = (h: Harness, attention: string[]) => h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention }))
-  const subscribe = (h: Harness, connectionID: string) =>
-    h.relay.handleClientMessage(connectionID, request(`sub_${connectionID}`, "notice.subscribe"))
-  const settle = () => Bun.sleep(0)
-  const open = async (h: Harness, tabs: readonly (readonly [string, string])[]) => {
-    await h.relay.attach(agent("agent-1"))
-    for (const [connectionID, browserSessionID] of tabs) {
-      await h.relay.attach(client(connectionID, browserSessionID))
-      await subscribe(h, connectionID)
-    }
-    await status(h, [])
-  }
-
-  test("an atomic browser rotation inside the authority TTL cannot deliver status, notices or page fallback to the revoked presenter", async () => {
-    const database = await migratedDatabase()
-    try {
-      const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"])
-      const jwk = await crypto.subtle.exportKey("jwk", pair.publicKey)
-      database.prepare('INSERT INTO "user" (id, created_at) VALUES (?, ?)').run("usr_1", 1)
-      database.prepare("INSERT INTO browser_session (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)").run("browser-1", "usr_1", 1, 10_000_000)
-      database.prepare("INSERT INTO device (id, user_id, name, public_key_jwk, key_algorithm, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-        .run("dev_1", "usr_1", "synthetic", JSON.stringify({ kty: "EC", crv: "P-256", x: jwk.x, y: jwk.y }), "ES256", 1)
-      const auth = createD1AuthStore(sqliteD1(database))
-      const push = createD1PushStore(sqliteD1(database))
-      await push.upsert("usr_1", "browser-1", { endpoint: "https://fcm.googleapis.com/send/synthetic", keys: { p256dh: "synthetic", auth: "synthetic" },
-        categories: { "agent-completed": true, "approval-requested": true, "machine-offline": true } }, 1)
-      const h = harness({ database, authorityTtlMs: 5_000, pushOutcomes: async () => (await push.list("usr_1")).map((row) => ({ owner: row.browserSessionID, outcome: "accepted" })) })
-      const service = createAuthService(auth, { now: h.at })
-      h.setClientAuthorityRead(() => service.authorizeClientCommand("browser-1", "dev_1"))
-      await open(h, [["tab-1", "browser-1"]])
-      h.reset()
-      h.advance(1)
-      expect(await auth.rotateBrowserSession("browser-1", { id: "browser-new", userID: "usr_1", createdAt: h.at(), expiresAt: 20_000_000 }, h.at())).toBe(true)
-      expect((await push.list("usr_1"))[0]?.browserSessionID).toBe("browser-new")
-      expect(await service.authorizeClientCommand("browser-1", "dev_1")).toMatchObject({ ok: false, reason: "revoked_session" })
-      await status(h, ["ses_a"])
-      await h.relay.settleDeliveries()
-      expect(h.messagesTo("tab-1")).toEqual([])
-      expect(h.closed).toEqual([{ connectionID: "tab-1", code: 4401, reason: "Session is no longer authorized" }])
-      expect(h.pushed).toHaveLength(1)
-    } finally { database.close() }
-  })
-
-  test("a revoked or expired notice recipient gets no offline fanout", async () => {
-    for (const expired of [false, true]) {
-      const h = harness({ authorityTtlMs: 5_000, withoutPush: true })
-      await open(h, [["tab-1", "browser-1"], ["tab-2", "browser-2"]])
-      if (expired) h.advance(9_000_000)
-      else h.setClientAuthorityRead(async () => ({ ok: false, reason: "revoked_session" }))
-      h.reset()
-      await h.relay.agentClosed(agent("agent-1"))
-      h.advance(RemoteLimits.agentOfflineConfirmMs)
-      await h.relay.confirmOffline()
-      expect(h.noticeFramesTo("tab-1")).toEqual([])
-      expect(h.presentedTo("tab-1")).toEqual([])
-      expect(h.closed.some((entry) => entry.connectionID === "tab-1" && entry.code === 4401)).toBe(true)
-    }
-  })
-
-  test("dismissal fanout freshly rejects a revoked peer without losing the valid browser's removal", async () => {
-    for (const operation of ["notice.read", "notice.readAll"] as const) {
-      const h = harness({ authorityTtlMs: 5_000, withoutPush: true })
-      await open(h, [["tab-1", "browser-1"], ["tab-2", "browser-2"]])
-      await status(h, ["ses_a"])
-      h.setClientAuthorityRead(async (_call, sessionID) => sessionID === "browser-1" ? { ok: true } : { ok: false, reason: "revoked_session" })
-      h.advance(1)
-      h.reset()
-      await h.relay.handleClientMessage("tab-1", request("dismiss", operation, undefined, operation === "notice.read" ? { ids: ["ntc_1"] } : undefined))
-      expect(h.messagesTo("tab-2")).toEqual([])
-      expect(h.closed).toEqual([{ connectionID: "tab-2", code: 4401, reason: "Session is no longer authorized" }])
-      expect(h.storedNotices()).toEqual([])
-      expect(h.messagesTo("tab-1")).toContainEqual({ type: "response", id: "dismiss", ok: true, value: null })
-    }
-  })
-
-  test("a recipient expiring during its fresh authority read receives no status or notice", async () => {
-    const h = harness({ authorityTtlMs: 5_000, withoutPush: true })
-    await open(h, [["tab-1", "browser-1"]])
-    let resume: () => void = () => { throw new Error("Authority read was not started") }
-    let entered: () => void = () => {}
-    const reading = new Promise<void>((resolve) => { entered = resolve })
-    h.setClientAuthorityRead(async () => {
-      entered()
-      await new Promise<void>((resolve) => { resume = resolve })
-      return { ok: true }
-    })
-    h.reset()
-    const delivering = status(h, ["ses_a"])
-    await reading
-    h.advance(9_000_000)
-    resume()
-    await delivering
-    expect(h.messagesTo("tab-1")).toEqual([])
-    expect(h.closed).toEqual([{ connectionID: "tab-1", code: 4401, reason: "Session is no longer authorized" }])
-  })
-
-  test("an unavailable recipient authority fails closed without declaring notice storage unavailable", async () => {
-    const h = harness({ authorityTtlMs: 5_000 })
-    await open(h, [["tab-1", "browser-1"]])
-    h.setClientAuthorityRead(async () => { throw new Error("synthetic authority failure") })
-    h.reset()
-    await status(h, ["ses_a"])
-    await h.relay.settleDeliveries()
-    expect(h.messagesTo("tab-1")).toEqual([])
-    expect(h.closed).toEqual([{ connectionID: "tab-1", code: 1011, reason: "Session authorization is unavailable" }])
-    expect(h.storedNotices()).toHaveLength(1)
-    expect(h.database.query("SELECT unavailable FROM notice_sync").get()).toEqual({ unavailable: 0 })
-    expect(h.pushed).toHaveLength(1)
-  })
-
-  test("a notice requester detached during peer fanout gets no late response", async () => {
-    const h = harness({ authorityTtlMs: 5_000, withoutPush: true })
-    await open(h, [["tab-1", "browser-1"], ["tab-2", "browser-2"]])
-    let resume: () => void = () => { throw new Error("Peer authority read was not started") }
-    let entered: () => void = () => {}
-    const reading = new Promise<void>((resolve) => { entered = resolve })
-    h.setClientAuthorityRead(async (_call, sessionID) => {
-      if (sessionID === "browser-2") {
-        entered()
-        await new Promise<void>((resolve) => { resume = resolve })
-      }
-      return { ok: true }
-    })
-    const dismissing = h.relay.handleClientMessage("tab-1", request("dismiss", "notice.readAll"))
-    await reading
-    h.relay.detach("tab-1")
-    h.reset()
-    resume()
-    await dismissing
-    expect(h.messagesTo("tab-1")).toEqual([])
-    expect(h.noticeFramesTo("tab-2")).toEqual([{ type: "notice.cleared" }])
-  })
-
-  test("revocation while a push settles prevents a late page fallback even inside the authority TTL", async () => {
-    let settlePush: (outcomes: readonly PushOutcome[]) => void = () => { throw new Error("Push was not admitted") }
-    const h = harness({ authorityTtlMs: 5_000, pushOutcomes: () => new Promise((resolve) => { settlePush = resolve }) })
-    await open(h, [["tab-1", "browser-1"]])
-    await status(h, ["ses_a"])
-    h.setClientAuthority({ ok: false, reason: "revoked_session" })
-    h.advance(1)
-    h.reset()
-    settlePush([{ owner: "browser-1", outcome: "rejected" }])
-    await h.relay.settleDeliveries()
-    expect(h.presentedTo("tab-1")).toEqual([])
-    expect(h.closed).toEqual([{ connectionID: "tab-1", code: 4401, reason: "Session is no longer authorized" }])
-  })
-
-  test("a presenter detached during its fresh authority read cannot receive fallback intended for its successor", async () => {
-    const h = harness({ authorityTtlMs: 5_000, withoutPush: true })
-    await open(h, [["tab-1", "browser-1"], ["tab-2", "browser-1"]])
-    let resume: () => void = () => { throw new Error("Authority read was not started") }
-    let entered: () => void = () => {}
-    const reading = new Promise<void>((resolve) => { entered = resolve })
-    let reads = 0
-    h.setClientAuthorityRead(async () => {
-      if (++reads === 1) {
-        entered()
-        await new Promise<void>((resolve) => { resume = resolve })
-      }
-      return { ok: true }
-    })
-    h.reset()
-    const delivering = status(h, ["ses_a"])
-    await Promise.race([reading, delivering.then(() => { throw new Error("Fresh authority read was bypassed") })])
-    h.relay.detach("tab-1")
-    resume()
-    await delivering
-    expect(h.messagesTo("tab-1")).toEqual([])
-    expect(h.presentedTo("tab-2")).toEqual(["ntc_1"])
-  })
-
-  test("only the first notice-subscribed tab of each browser presents, and each browser presents every distinct notice", async () => {
-    const h = harness({ withoutPush: true })
-    await open(h, [["tab-1", "browser-1"], ["tab-2", "browser-1"], ["tab-3", "browser-2"]])
-    await status(h, ["ses_a", "ses_b", "ses_c"])
-    expect(h.presentedTo("tab-1")).toEqual(["ntc_1", "ntc_2", "ntc_3"])
-    expect(h.presentedTo("tab-2")).toEqual([])
-    expect(h.presentedTo("tab-3")).toEqual(["ntc_1", "ntc_2", "ntc_3"])
-    expect(h.noticeFramesTo("tab-2").filter((frame) => frame.type === "notice.added")).toHaveLength(1)
-  })
-
-  test("each browser is judged only by the push outcomes of the subscriptions it owns, and only an accepted push spares its page", async () => {
-    const answers: (readonly PushOutcome[])[] = [
-      [{ owner: "browser-1", outcome: "accepted" }, { owner: "browser-2", outcome: "rejected" }],
-      [{ owner: "browser-1", outcome: "unreachable" }, { owner: "browser-2", outcome: "expired" }, { owner: "browser-2", outcome: "accepted" }],
-    ]
-    const h = harness({ pushOutcomes: async () => answers.shift() ?? [] })
-    await open(h, [["tab-1", "browser-1"], ["tab-2", "browser-1"], ["tab-3", "browser-2"], ["tab-4", "browser-3"]])
-    await status(h, ["ses_a"])
-    await status(h, ["ses_a", "ses_b"])
-    await settle()
-    expect(h.pushed.map((event) => event.noticeID)).toEqual(["ntc_1", "ntc_2"])
-    expect([h.presentedTo("tab-1"), h.presentedTo("tab-2"), h.presentedTo("tab-3"), h.presentedTo("tab-4")]).toEqual([["ntc_2"], [], ["ntc_1"], ["ntc_1", "ntc_2"]])
-  })
-
-  test("a push the browser's subscriptions definitely did not deliver hands the alert to its page once", async () => {
-    const results: (() => Promise<readonly PushOutcome[]>)[] = [
-      async () => [{ owner: "browser-1", outcome: "rejected" }],
-      async () => [{ owner: "browser-1", outcome: "expired" }],
-      async () => [{ owner: "browser-1", outcome: "unsent" }],
-      async () => [],
-      async () => { throw new Error("subscription list unavailable") },
-    ]
-    const h = harness({ pushOutcomes: () => (results.shift() ?? (async () => []))() })
-    await open(h, [["tab-1", "browser-1"]])
-    for (let index = 1; index <= 5; index += 1) await status(h, Array.from({ length: index }, (_, item) => `ses_${item}`))
-    await settle()
-    expect(h.presentedTo("tab-1")).toEqual(["ntc_1", "ntc_2", "ntc_3", "ntc_4", "ntc_5"])
-  })
-
-  test("notices beyond the push window reach a browser with push as one summary, and any later overflow in that window is presented at once", async () => {
-    const h = harness({ pushOutcomes: async () => [{ owner: "browser-1", outcome: "accepted" }] })
-    await open(h, [["tab-1", "browser-1"]])
-    await status(h, Array.from({ length: 22 }, (_, index) => `ses_${index}`))
-    await settle()
-    expect(h.pushed).toHaveLength(21)
-    expect(h.pushed.at(-1)).toEqual({ accountID: "usr_1", category: "approval-requested", deviceID: "dev_1", overflow: 2 })
-    expect(h.presentedTo("tab-1")).toEqual([])
-    await status(h, Array.from({ length: 23 }, (_, index) => `ses_${index}`))
-    await settle()
-    expect(h.pushed).toHaveLength(21)
-    expect(h.presentedTo("tab-1")).toEqual(["ntc_23"])
-  })
-
-  test("a late push failure goes to the browser's current presenter, never to a closed tab or one opened after every tab closed", async () => {
-    const gates: ((outcomes: readonly PushOutcome[]) => void)[] = []
-    const h = harness({ pushOutcomes: () => new Promise((resolve) => { gates.push(resolve) }) })
-    await open(h, [["tab-1", "browser-1"], ["tab-2", "browser-1"]])
-    await status(h, ["ses_a"])
-    await status(h, ["ses_a", "ses_b"])
-    h.relay.detach("tab-1")
-    gates[0]?.([{ owner: "browser-1", outcome: "rejected" }])
-    await settle()
-    expect(h.presentedTo("tab-1")).toEqual([])
-    expect(h.presentedTo("tab-2")).toEqual(["ntc_1"])
-    h.relay.detach("tab-2")
-    await h.relay.attach(client("tab-3", "browser-1"))
-    await subscribe(h, "tab-3")
-    gates[1]?.([{ owner: "browser-1", outcome: "rejected" }])
-    await settle()
-    expect(h.presentedTo("tab-3")).toEqual(["ntc_2"])
-  })
-
-  test("a push accepted for the browser while none of its tabs could answer anything still leaves the alert to the service worker", async () => {
-    const gates: ((outcomes: readonly PushOutcome[]) => void)[] = []
-    const h = harness({ pushOutcomes: () => new Promise((resolve) => { gates.push(resolve) }) })
-    await open(h, [["tab-1", "browser-1"], ["tab-2", "browser-1"]])
-    await status(h, ["ses_a"])
-    gates[0]?.([{ owner: "browser-1", outcome: "accepted" }])
-    await settle()
-    expect(h.presentedTo("tab-1")).toEqual([])
-    expect(h.presentedTo("tab-2")).toEqual([])
-    expect(h.sent.filter((entry) => entry.connectionID.startsWith("tab-") && !entry.message.includes("notice.added") && !entry.message.includes("notice.present")).map((entry) => JSON.parse(entry.message).type)).not.toContain("request")
-  })
-
-  test("waiting for deliveries ends only after every admitted push has settled and its page fallback was sent", async () => {
-    const gates: ((outcomes: readonly PushOutcome[]) => void)[] = []
-    const h = harness({ pushOutcomes: () => new Promise((resolve) => { gates.push(resolve) }) })
-    await open(h, [["tab-1", "browser-1"]])
-    await status(h, ["ses_a"])
-    let done = false
-    const waiting = h.relay.settleDeliveries().then(() => { done = true })
-    await settle()
-    expect(done).toBe(false)
-    await status(h, ["ses_a", "ses_b"])
-    gates[0]?.([{ owner: "browser-1", outcome: "rejected" }])
-    await settle()
-    expect(done).toBe(false)
-    gates[1]?.([{ owner: "browser-1", outcome: "expired" }])
-    await waiting
-    expect(h.presentedTo("tab-1")).toEqual(["ntc_1", "ntc_2"])
-    await h.relay.settleDeliveries()
-  })
-
-  test("a confirmed outage follows the same owner rule as a stored notice", async () => {
-    const h = harness({ pushOutcomes: async () => [{ owner: "browser-1", outcome: "accepted" }] })
-    await open(h, [["tab-1", "browser-1"], ["tab-2", "browser-2"]])
-    const closedAt = h.at()
-    await h.relay.agentClosed(agent("agent-1"))
-    h.advance(RemoteLimits.agentOfflineConfirmMs)
-    await h.relay.confirmOffline()
-    await settle()
-    expect(h.presentedTo("tab-1")).toEqual([])
-    expect(h.presentedTo("tab-2")).toEqual([`offline@${closedAt}`])
-  })
-
-  test("a tab restored after hibernation keeps its verified browser, so the push outcomes for that browser still decide its alert", async () => {
-    const answers: (readonly PushOutcome[])[] = [[{ owner: "browser-1", outcome: "accepted" }], [{ owner: "browser-1", outcome: "rejected" }]]
-    const h = harness({ pushOutcomes: async () => answers.shift() ?? [] })
-    await h.relay.restore([agent("agent-1"), client("tab-1", "browser-1", true), client("tab-2", "browser-2", true)])
-    await status(h, [])
-    await status(h, ["ses_a"])
-    await status(h, ["ses_a", "ses_b"])
-    await settle()
-    expect(h.presentedTo("tab-1")).toEqual(["ntc_2"])
-    expect(h.presentedTo("tab-2")).toEqual(["ntc_1", "ntc_2"])
-  })
-})
-
-describe("relay core: multiplexed streams", () => {
-  const events = (sessionID: string) => JSON.stringify({ type: "events", sessionID, events: [{ seq: 1 }, { seq: 2 }] })
-
-  test("delivers an events batch verbatim to clients subscribed to that session only", async () => {
-    const h = harness({ sessions: ["ses_a", "ses_b"] })
-    await h.relay.attach(agent("agent-1"))
-    await h.relay.attach({ ...client("client-1"), subscriptions: ["ses_a"] })
-    await h.relay.attach({ ...client("client-2"), subscriptions: ["ses_b"] })
-    await h.relay.attach(client("client-3"))
-    h.reset()
-
-    await h.relay.handleAgentMessage("agent-1", events("ses_a"))
-
-    expect(h.messagesTo("client-1")).toEqual([{ type: "events", sessionID: "ses_a", events: [{ seq: 1 }, { seq: 2 }] }])
-    expect(h.messagesTo("client-2")).toEqual([])
-    expect(h.messagesTo("client-3")).toEqual([])
-  })
-
-  test("closes a subscribed client whose authority was revoked instead of delivering events", async () => {
-    const h = harness()
-    await h.relay.attach(agent("agent-1"))
-    await h.relay.attach({ ...client("client-1"), subscriptions: ["ses_a"] })
-    h.reset()
-    h.setClientAuthority({ ok: false, reason: "revoked_session" })
-
-    await h.relay.handleAgentMessage("agent-1", events("ses_a"))
-
-    expect(h.messagesTo("client-1")).toEqual([])
-    expect(h.closed.map((entry) => entry.connectionID)).toEqual(["client-1"])
-  })
-
-  test("rejects events frames from a client with the unsupported close", async () => {
-    const h = harness()
-    await attachBoth(h)
-    await h.relay.handleClientMessage("client-1", events("ses_a"))
-    expect(h.closed).toEqual([{ connectionID: "client-1", code: 1003, reason: "Frame is not valid for this connection" }])
-  })
-
-  test("cancel forwards the relay ID to the agent, drops the pending entry, and discards the late response", async () => {
-    const h = harness()
-    await attachBoth(h)
-    await h.relay.handleClientMessage("client-1", request("7", "session.list"))
-    const forwarded = h.messagesTo("agent-1").at(-1)!
-    expect(h.storedPending.get("client-1")).toEqual([{ relayID: forwarded.id as string, clientID: "7" }])
-    h.reset()
-
-    await h.relay.handleClientMessage("client-1", JSON.stringify({ type: "cancel", id: "7" }))
-
-    expect(h.messagesTo("agent-1")).toEqual([{ type: "cancel", id: forwarded.id }])
-    expect(h.messagesTo("client-1")).toEqual([])
-    expect(h.storedPending.get("client-1")).toEqual([])
-
-    await h.relay.handleAgentMessage("agent-1", response(forwarded.id as string, []))
-    expect(h.messagesTo("client-1")).toEqual([])
-  })
-
-  test("ignores a cancel for an unknown or settled request", async () => {
-    const h = harness()
-    await attachBoth(h)
-    await h.relay.handleClientMessage("client-1", request("7", "session.list"))
-    const forwarded = h.messagesTo("agent-1").at(-1)!
-    await h.relay.handleAgentMessage("agent-1", response(forwarded.id as string, []))
-    h.reset()
-
-    await h.relay.handleClientMessage("client-1", JSON.stringify({ type: "cancel", id: "7" }))
-    await h.relay.handleClientMessage("client-1", JSON.stringify({ type: "cancel", id: "missing" }))
-
-    expect(h.messagesTo("agent-1")).toEqual([])
-    expect(h.messagesTo("client-1")).toEqual([])
-    expect(h.closed).toEqual([])
-  })
-
-  test("a client can never cancel another client's request that shares its id", async () => {
-    const h = harness()
-    await attachBoth(h)
-    await h.relay.attach(client("client-2"))
-    await h.relay.handleClientMessage("client-1", request("1", "session.list"))
-    const first = h.messagesTo("agent-1").at(-1)!
-    await h.relay.handleClientMessage("client-2", request("1", "session.list"))
-    const second = h.messagesTo("agent-1").at(-1)!
-    h.reset()
-
-    await h.relay.handleClientMessage("client-1", JSON.stringify({ type: "cancel", id: "1" }))
-
-    expect(h.messagesTo("agent-1")).toEqual([{ type: "cancel", id: first.id }])
-    expect(h.storedPending.get("client-2")).toEqual([{ relayID: second.id as string, clientID: "1" }])
-    await h.relay.handleAgentMessage("agent-1", response(second.id as string, ["ok"]))
-    expect(h.messagesTo("client-2")).toEqual([{ type: "response", id: "1", ok: true, value: ["ok"] }])
-  })
-
-  test("cancel frames count against the client rate window", async () => {
-    const h = harness()
-    await attachBoth(h)
-    for (let index = 0; index <= RemoteLimits.maxClientRequestsPerWindow; index += 1)
-      await h.relay.handleClientMessage("client-1", JSON.stringify({ type: "cancel", id: "none" }))
-    expect(h.closed).toEqual([{ connectionID: "client-1", code: 1008, reason: "Client request rate exceeded" }])
-  })
-
-  test("a priority hint is persisted and forwarded to the agent with the client identity", async () => {
-    const h = harness()
-    await attachBoth(h)
-
-    await h.relay.handleClientMessage("client-1", JSON.stringify({ type: "priority", mode: "background" }))
-
-    expect(h.storedPriorities.get("client-1")).toBe("background")
-    expect(h.messagesTo("agent-1")).toEqual([{ type: "priority", clientID: "client-1", mode: "background" }])
-    await h.relay.handleClientMessage("client-1", JSON.stringify({ type: "priority", mode: "interactive" }))
-    expect(h.storedPriorities.get("client-1")).toBe("interactive")
-    expect(h.messagesTo("agent-1").at(-1)).toEqual({ type: "priority", clientID: "client-1", mode: "interactive" })
-  })
-
-  test("rejects priority frames from the agent with the unsupported close", async () => {
-    const h = harness()
-    await attachBoth(h)
-    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "priority", clientID: "client-1", mode: "background" }))
-    expect(h.closed).toEqual([{ connectionID: "agent-1", code: 1003, reason: "Frame is not valid for this connection" }])
-  })
-
-  test("a restored background client re-sends its priority after its subscriptions when the agent attaches", async () => {
-    const h = harness()
-    await h.relay.restore([client("client-1", "sess-1", false, "background"), client("client-2"), agent("agent-1")])
-
-    expect(h.messagesTo("agent-1")).toEqual([
-      { type: "subscriptions", clientID: "client-1", sessionIDs: [] },
-      { type: "priority", clientID: "client-1", mode: "background" },
-      { type: "subscriptions", clientID: "client-2", sessionIDs: [] },
-    ])
-  })
-
-  test("a background client that attaches while the agent is connected announces its priority after its subscriptions", async () => {
-    const h = harness()
-    await h.relay.attach(agent("agent-1"))
-    h.reset()
-    await h.relay.attach(client("client-1", "sess-1", false, "background"))
-
-    expect(h.messagesTo("agent-1")).toEqual([
-      { type: "subscriptions", clientID: "client-1", sessionIDs: [] },
-      { type: "priority", clientID: "client-1", mode: "background" },
-    ])
-  })
-
-  test("a detached client's priority is never forwarded and detaching only sends the empty snapshot", async () => {
-    const h = harness()
-    await attachBoth(h)
-    await h.relay.handleClientMessage("client-1", JSON.stringify({ type: "priority", mode: "background" }))
-    h.reset()
-
-    h.relay.detach("client-1")
-    await h.relay.handleClientMessage("client-1", JSON.stringify({ type: "priority", mode: "interactive" }))
-
-    expect(h.messagesTo("agent-1")).toEqual([{ type: "subscriptions", clientID: "client-1", sessionIDs: [] }])
-  })
+  const agent = await h.attach("agent", "agent")
+  const browser = await h.attach("browser")
+  const id = h.request(browser)
+  await h.send("browser")
+  const dispatch = h
+    .receive("agent")
+    .flatMap((entry) => entry.decisions)
+    .find((entry) => entry.type === "dispatch")!
+  if (dispatch.type !== "dispatch") throw new Error("dispatch")
+  hold = true
+  agent.enqueue(h.result(dispatch), 512, 0)
+  const delivery = h.send("agent")
+  await entered.promise
+  hold = false
+  expect(browser.cancel(id, 0)).toContainEqual(expect.objectContaining({ type: "settled", status: "unknown" }))
+  await h.send("browser")
+  authority.resolve({ ok: true, ownerID: "owner" })
+  await delivery
+  expect(
+    h
+      .receive("browser")
+      .flatMap((entry) => entry.decisions)
+      .some((entry) => entry.type === "settled"),
+  ).toBe(false)
+  expect(h.relay.connection("agent")!.ledger(LedgerClass.NORMAL).receivedBytes).toBe(0)
+  expect(h.close).toEqual([])
 })

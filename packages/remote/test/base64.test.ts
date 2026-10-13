@@ -1,9 +1,8 @@
 import { expect, test } from "bun:test"
-import { isWellFormedBase64 } from "../src"
+import { create, encodeStrict, decodeStrict, BulkPieceSchema } from "@ycoding-ai/protocol/v5"
 
-test("accepts the existing base64 grammar without checking canonical trailing bits", () => {
-  for (const value of ["", "AAAA", "AA==", "AAA=", "////", "AQ==", "AR=="])
-    expect(isWellFormedBase64(value)).toBe(true)
-  for (const value of ["A", "AAA", "AA!A", "AA=A", "A===", "AAAA=", "AAA==", "AAAA\n"])
-    expect(isWellFormedBase64(value)).toBe(false)
+test("bulk content is arbitrary raw bytes rather than base64 strings", () => {
+  const bytes = new Uint8Array([0, 255, 128, 13, 10])
+  const piece = create(BulkPieceSchema, { transferId: "transfer", index: 0, offset: 0n, data: bytes })
+  expect(decodeStrict(BulkPieceSchema, encodeStrict(BulkPieceSchema, piece)).data).toEqual(bytes)
 })

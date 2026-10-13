@@ -121,7 +121,7 @@ test("AC-WIRE-011 reconstruction clears connection-owned client snapshots and ac
   expect(agent.relaySubscriptionID("ses_a")).toBeUndefined()
   expect(agent.reservation.used).toBe(0)
 })
-function forwarding() {
+function forwarding(canonical = true) {
   const client = new Connection({
     role: PeerRole.REMOTE_CLIENT,
     peer: PeerRole.RELAY,
@@ -136,7 +136,7 @@ function forwarding() {
     eventTypes: [PublicEventSchema.typeName],
     now: 0,
     epoch: "connection-1",
-    sourceEpoch: "backend-source",
+    sourceEpoch: "relay-process-source",
   })
   client.start(0)
   send(client, relay)
@@ -176,11 +176,19 @@ function forwarding() {
     0,
   )
   send(relay, client)
-  relay.acceptSubscription(request.requestID!, "accepted-a", scope, 0, "send")
-  client.acceptSubscription(request.requestID!, "accepted-a", scope, 0)
+  const registration = relay.acceptSubscription(
+    request.requestID!,
+    "accepted-a",
+    scope,
+    0,
+    "send",
+    canonical ? "backend-source" : undefined,
+  )
+  client.acceptSubscription(request.requestID!, "accepted-a", scope, 0, "receive", "backend-source")
   return {
     relay,
     client,
+    registration,
     batch: create(EventBatchSchema, {
       subscriptionId: "accepted-a",
       scope,
@@ -211,4 +219,65 @@ test.each(["queued", "handed"])("AC-WIRE-011 restart releases %s forwarding tick
   expect(relay.restart(0)).toContainEqual({ type: "eventBatchReleased", ticket: forwarded.ticket, consumed: false })
   expect(relay.restart(0)).toEqual([])
   expect(relay.reservation.used).toBe(0)
+})
+
+test("relay forwarding rejects a noncanonical backend epoch instead of trusting Ready or a batch", () => {
+  const { relay, batch } = forwarding()
+  batch.sourceEpoch = "relay-process-source"
+  expect(relay.forwardEventBatch(batch, 0).decisions).toContainEqual(expect.objectContaining({ type: "closed" }))
+})
+
+test("relay send registration refuses a missing canonical epoch", () => {
+  expect(forwarding(false).registration).toContainEqual(expect.objectContaining({ type: "closed" }))
+})
+
+test("relay receive registration accepts the canonical backend epoch and holds finite completion for forwarding", () => {
+  const { agent, relay } = connected()
+  const scope = create(ScopeSchema, { target: { case: "session", value: "ses_a" } })
+  const operation = operations.find((item) => item.diagnosticName === "event.subscribe")!
+  const request = relay.request(
+    operation.operationId,
+    scope,
+    encodeStrict(event_subscribe_RequestSchema, create(event_subscribe_RequestSchema, { scope })),
+    512,
+    0,
+  )
+  send(relay, agent)
+  agent.updateRelayInterests(snapshot("one", ["ses_a"]), 0)
+  agent.registerRelayInterest("ses_a", "accepted-a", "backend-source", 0)
+  agent.enqueue(
+    {
+      case: "result",
+      value: create(ResultSchema, {
+        requestId: request.requestID,
+        operationId: operation.operationId,
+        settlement: operation.settlement,
+        outcome: {
+          case: "success",
+          value: {
+            typeName: operation.resultType,
+            payload: encodeStrict(
+              event_subscribe_ResultSchema,
+              create(event_subscribe_ResultSchema, { subscriptionId: encodeLossless("accepted-a") }),
+            ),
+          },
+        },
+      }),
+    },
+    512,
+    0,
+  )
+  send(agent, relay)
+  expect(agent.acceptSubscription(request.requestID!, "accepted-a", scope, 0, "send", "backend-source")).toEqual([])
+  expect(relay.acceptSubscription(request.requestID!, "accepted-a", scope, 0, "receive", "backend-source")).toEqual([])
+  agent.enqueue(
+    { case: "streamEnd", value: { $typeName: "ycoding.v5.StreamEnd", subscriptionId: "accepted-a" } },
+    512,
+    0,
+  )
+  const ending = send(agent, relay)
+  expect(ending.decisions).toContainEqual({ type: "streamEnded", subscriptionID: "accepted-a" })
+  expect(relay.ledger(LedgerClass.EVENT).receivedBytes).toBeGreaterThan(0)
+  relay.consume(LedgerClass.EVENT, ending.frame.deliveryOrdinal, 0)
+  expect(relay.ledger(LedgerClass.EVENT).receivedBytes).toBe(0)
 })

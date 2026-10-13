@@ -22,7 +22,7 @@ test("root-only family activity round-trips an explicitly present empty member l
 
 test("family activity retains member text bounds and its structural maximum", () => {
   expect(messages["ycoding.v5.session_family_activity_Request_payload_sessionIDs"].fields[0].constraints).toEqual({
-    domainObligations: ["packages/remote/src/index.ts#validOperationInput"],
+    domainObligations: ["packages/protocol/src/v5/connection/index.ts#validRequest"],
     utf16Min: 1,
     utf16Max: 128,
     countMin: 0,

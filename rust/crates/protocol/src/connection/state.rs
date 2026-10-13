@@ -1630,11 +1630,13 @@ impl Connection {
                 {
                     return Err(ProtocolError::Malformed);
                 }
-                self.consume(
-                    v5::LedgerClass::Event,
-                    frame.delivery_ordinal.ok_or(ProtocolError::Malformed)?,
-                    self.now,
-                )?;
+                if !forwarded {
+                    self.consume(
+                        v5::LedgerClass::Event,
+                        frame.delivery_ordinal.ok_or(ProtocolError::Malformed)?,
+                        self.now,
+                    )?;
+                }
                 self.release_subscription(&end.subscription_id, Direction::Receive)?;
                 Ok(vec![Decision::StreamComplete(end.subscription_id)])
             }

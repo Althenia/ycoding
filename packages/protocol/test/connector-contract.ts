@@ -292,11 +292,11 @@ export function connectorSourceIdentity(ast: SchemaAST.AST, hint: string) {
       ast.checks?.flatMap((check) => (check._tag === "Filter" ? [check.annotations?.identifier] : [])).find(Boolean) ??
       "",
   )
-  if (name === "Connector.AuthTarget") return "packages/remote/src/provider-auth.ts#parseProviderAuthInput"
+  if (name === "Connector.AuthTarget") return "packages/protocol/src/v5/connection/index.ts#validRequest"
   if (name === "Connector.ActivityText") return "packages/cli/src/remote-operations.ts#boundedActivity"
   if (name.startsWith("Connector.Auth")) return "packages/cli/src/remote-provider-auth.ts#executeProviderAuth"
-  if (hint.includes("Request")) return "packages/remote/src/index.ts#validOperationInput"
-  if (hint === "Connector_Error") return "packages/remote/src/index.ts#parseResponse"
+  if (hint.includes("Request")) return "packages/protocol/src/v5/connection/index.ts#validRequest"
+  if (hint === "Connector_Error") return "packages/protocol/src/v5/connection/index.ts#validResult"
   return "packages/cli/src/remote-operations.ts#run"
 }
 

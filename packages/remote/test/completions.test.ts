@@ -1,49 +1,45 @@
 import { expect, test } from "bun:test"
-import { parseAgentMessage, parseClientMessage, parseRelayToClientMessage, serializeBlocked, serializeCompletions } from "../src/index"
+import {
+  create,
+  encodeStrict,
+  decodeStrict,
+  CompletionsSchema,
+  BlockedSchema,
+  encodeLossless,
+  decodeLossless,
+} from "@ycoding-ai/protocol/v5"
 
-const receipt = { id: "evt_complete", seq: 12, created: 1_000, sessionID: "ses_root" }
-const frame = { type: "completions", data: [receipt], more: false } as const
-
-test("accepts bounded explicit completion receipts only from the local agent", () => {
-  expect(parseAgentMessage(JSON.stringify(frame))).toEqual({ ok: true, value: frame })
-  expect(parseAgentMessage(JSON.stringify({ ...frame, data: [], more: false })).ok).toBe(true)
-  expect(parseAgentMessage(JSON.stringify({ ...frame, more: true })).ok).toBe(true)
-  expect(parseClientMessage(JSON.stringify(frame)).ok).toBe(false)
-  expect(parseRelayToClientMessage(JSON.stringify(frame)).ok).toBe(false)
-  const data = Array.from({ length: 200 }, (_, index) => ({ ...receipt, id: `evt_${index}`, sessionID: `ses_${index}` }))
-  expect(parseAgentMessage(JSON.stringify({ ...frame, data })).ok).toBe(true)
-  expect(parseAgentMessage(JSON.stringify({ ...frame, data: [...data, { ...receipt, sessionID: "ses_extra" }] })).ok).toBe(false)
+test("typed completions preserve exact uint64 sequence, title and baseline paging", () => {
+  const value = create(CompletionsSchema, {
+    items: [
+      {
+        id: "evt_1",
+        sequence: 18446744073709551615n,
+        createdMs: 123n,
+        sessionId: "ses_root",
+        title: encodeLossless("Approval"),
+      },
+    ],
+    more: true,
+  })
+  const result = decodeStrict(CompletionsSchema, encodeStrict(CompletionsSchema, value))
+  expect(result.items[0]!.sequence).toBe(18446744073709551615n)
+  expect(decodeLossless(result.items[0]!.title!)).toBe("Approval")
+  expect(result.more).toBe(true)
+  expect(() =>
+    encodeStrict(
+      CompletionsSchema,
+      create(CompletionsSchema, { items: Array.from({ length: 201 }, () => value.items[0]!), more: false }),
+    ),
+  ).toThrow()
 })
 
-test("rejects malformed, duplicate, unbounded, or content-bearing completion receipts", () => {
-  for (const change of [
-    { id: "wrong" }, { id: `evt_${"a".repeat(129)}` }, { seq: 0 }, { seq: 1.5 }, { seq: Number.MAX_SAFE_INTEGER + 1 },
-    { created: -1 }, { created: Number.MAX_SAFE_INTEGER + 1 }, { sessionID: "wrong" }, { sessionID: `ses_${"a".repeat(129)}` },
-    { transcript: "not evidence" }, { inputID: "msg_unneeded" },
-  ]) expect(parseAgentMessage(JSON.stringify({ ...frame, data: [{ ...receipt, ...change }] })).ok).toBe(false)
-  for (const change of [
-    { more: undefined }, { more: "false" }, { data: null }, { data: [null] }, { data: [receipt, receipt] }, { extra: true },
-  ]) expect(parseAgentMessage(JSON.stringify({ ...frame, ...change })).ok).toBe(false)
-})
-
-test("serializes only the completion identity needed by the relay", () => {
-  const data = [{ ...receipt, inputID: "msg_input", assistantMessageID: "msg_final", transcript: "not transmitted" }]
-  expect(JSON.parse(serializeCompletions({ type: "completions", data, more: false }))).toEqual(frame)
-})
-
-test("carries an optional bounded Session title for the completion alert", () => {
-  const titled = { ...frame, data: [{ ...receipt, title: "Ship the release" }] }
-  expect(parseAgentMessage(serializeCompletions(titled))).toEqual({ ok: true, value: titled })
-  for (const title of ["", " padded", "two\nlines", "x".repeat(121), 7])
-    expect(parseAgentMessage(JSON.stringify({ ...frame, data: [{ ...receipt, title }] })).ok).toBe(false)
-})
-
-test("a guardrail block frame names one root Session and an optional bounded title, only from the local agent", () => {
-  const frame = { type: "blocked", sessionID: "ses_root", title: "Fix login" } as const
-  expect(parseAgentMessage(serializeBlocked(frame))).toEqual({ ok: true, value: frame })
-  expect(parseAgentMessage(serializeBlocked({ type: "blocked", sessionID: "ses_root" }))).toEqual({ ok: true, value: { type: "blocked", sessionID: "ses_root" } })
-  expect(parseRelayToClientMessage(JSON.stringify(frame)).ok).toBe(false)
-  expect(parseClientMessage(JSON.stringify(frame)).ok).toBe(false)
-  for (const change of [{ sessionID: "wrong" }, { title: "" }, { title: "two\nlines" }, { action: "shell" }])
-    expect(parseAgentMessage(JSON.stringify({ ...frame, ...change })).ok).toBe(false)
+test("blocked controls retain optional bounded titles and reject controls/bidi", () => {
+  expect(
+    decodeStrict(BlockedSchema, encodeStrict(BlockedSchema, create(BlockedSchema, { sessionId: "ses_root" }))).title,
+  ).toBeUndefined()
+  for (const title of [" ", "x".repeat(121), "unsafe\ntext", "unsafe\u202etext"])
+    expect(() =>
+      encodeStrict(BlockedSchema, create(BlockedSchema, { sessionId: "ses_root", title: encodeLossless(title) })),
+    ).toThrow()
 })
