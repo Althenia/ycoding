@@ -191,19 +191,6 @@ pub(crate) fn fold(
                 .ok_or(Error::Rejected("Session not found"))?;
             let binding: Option<ycoding_schema::session_event::ProfileBinding> =
                 object.optional("binding").map_err(record_error)?;
-            if let Some(binding) = &binding {
-                let credential = tx
-                    .get::<ycoding_store::resources::CredentialTable>(&key(&binding
-                        .credential_id
-                        .0))?
-                    .ok_or(Error::Rejected("Selected profile is unavailable"))?;
-                if credential.integration_id.as_ref() != Some(binding.integration_id.as_lossless())
-                    || credential.label != binding.profile.0
-                    || credential.account_generation != binding.account_generation.get()
-                {
-                    return Err(Error::Rejected("Selected profile is unavailable"));
-                }
-            }
             session.profile_binding = binding.as_ref().map(Document::from_domain).transpose()?;
             SessionTable::put(tx, &session)
         }

@@ -40,6 +40,13 @@ pub fn standard() -> Result<Dispatcher, RegistrationError> {
     dispatcher.handle("session.usageReport", session_read_models::usage_report)?;
     dispatcher.handle("session.completions", session_services::completions)?;
     dispatcher.handle("session.context", session_services::context)?;
+    dispatcher.handle("session.fork", session_services::fork)?;
+    dispatcher.handle("session.synthetic", session_services::synthetic)?;
+    dispatcher.handle("session.daybreak.set", session_services::daybreak_set)?;
+    dispatcher.handle(
+        "session.fileChange.list",
+        session_services::file_change_list,
+    )?;
     dispatcher.handle("session.background", session_services::background)?;
     dispatcher.handle(
         "session.instructions.entry.list",

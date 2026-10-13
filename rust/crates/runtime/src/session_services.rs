@@ -2,16 +2,211 @@ use crate::{
     convert,
     dispatch::{Failure, Invocation},
     ids,
-    message::message,
+    message::{self, message},
 };
 use ycoding_core::{
-    session::{completion, store::Service as SessionStore},
-    ycoding_schema::{DomainDecode, DomainEncode, JsonValue, instruction_entry, session},
+    session::{
+        completion, lifecycle::Change, pending, run_coordinator, store::Service as SessionStore,
+    },
+    ycoding_schema::{
+        DomainDecode, DomainEncode, JsonValue, instruction_entry, model, session, session_delivery,
+        session_message, session_pending,
+    },
     ycoding_store::Error,
 };
 use ycoding_protocol::v5;
 
 const COMPLETIONS_LIMIT: usize = 200;
+
+pub async fn fork(
+    invocation: Invocation,
+    request: v5::SessionForkRequest,
+) -> Result<v5::SessionForkResult, Failure> {
+    let core = invocation.core()?;
+    let id = invocation.session(&request.params.session_id)?;
+    let boundary = request
+        .payload
+        .message_id
+        .as_ref()
+        .map(convert::identifier::<session_message::Id>)
+        .transpose()?;
+    let info = core
+        .sessions
+        .fork(&id, boundary.clone())
+        .await
+        .map_err(|error| match error {
+            Error::Domain {
+                kind: "message_not_found",
+                ..
+            } => Failure::MessageNotFound {
+                session: convert::readable(id.as_lossless()),
+                message: boundary
+                    .as_ref()
+                    .map(|id| convert::readable(id.as_lossless()))
+                    .unwrap_or_default(),
+            },
+            error => failure(error, &id),
+        })?;
+    Ok(v5::SessionForkResult {
+        data: convert::session_info(&info)
+            .map_err(|_| Failure::Unavailable("forked Session is not representable".into()))?,
+    })
+}
+
+pub async fn daybreak_set(
+    invocation: Invocation,
+    request: v5::SessionDaybreakSetRequest,
+) -> Result<v5::SessionDaybreakSetResult, Failure> {
+    use v5::session_daybreak_set_request_payload_daybreak::Kind;
+    let core = invocation.core()?;
+    let id = invocation.session(&request.params.session_id)?;
+    let daybreak = match request.payload.daybreak.kind {
+        Some(Kind::Clear(_)) => None,
+        Some(Kind::Value1(value)) => Some(
+            model::Daybreak::decode(&JsonValue::String(match value {
+                value if value == v5::ModelDaybreak::DaybreakBlue as i32 => "daybreak_blue".into(),
+                value if value == v5::ModelDaybreak::DaybreakRed as i32 => "daybreak_red".into(),
+                _ => return Err(Failure::Invalid("invalid Daybreak program".into())),
+            }))
+            .map_err(|_| Failure::Invalid("invalid Daybreak program".into()))?,
+        ),
+        None => return Err(Failure::Invalid("missing Daybreak program".into())),
+    };
+    if !core
+        .sessions
+        .change(&id, Change::Daybreak(daybreak))
+        .await
+        .map_err(|error| failure(error, &id))?
+    {
+        return Err(Failure::SessionNotFound(convert::readable(
+            id.as_lossless(),
+        )));
+    }
+    let info = core
+        .sessions
+        .get(&id)
+        .map_err(|error| failure(error, &id))?
+        .ok_or_else(|| Failure::SessionNotFound(convert::readable(id.as_lossless())))?;
+    Ok(v5::SessionDaybreakSetResult {
+        data: convert::session_info(&info)
+            .map_err(|_| Failure::Unavailable("Session is not representable".into()))?,
+    })
+}
+
+pub async fn synthetic(
+    invocation: Invocation,
+    request: v5::SessionSyntheticRequest,
+) -> Result<v5::SessionSyntheticResult, Failure> {
+    let core = invocation.core()?;
+    let session_id = invocation.session(&request.params.session_id)?;
+    let payload = request.payload;
+    let event_id =
+        ids::event_id().map_err(|_| Failure::Unavailable("event ID generation failed".into()))?;
+    let id = payload
+        .id
+        .as_ref()
+        .map(convert::identifier::<session_message::Id>)
+        .transpose()?
+        .unwrap_or_else(|| session_message::Id::from_event(&event_id));
+    let input = session_pending::Message::Synthetic(session_pending::SyntheticMessage {
+        data: session_pending::SyntheticData {
+            text: convert::domain(&payload.text)?,
+            description: payload
+                .description
+                .as_ref()
+                .map(convert::domain)
+                .transpose()?,
+            metadata: payload
+                .metadata
+                .as_ref()
+                .map(|metadata| {
+                    let mut object = ycoding_core::ycoding_schema::JsonObject::new();
+                    for entry in &metadata.entries {
+                        object.insert(
+                            convert::domain(&entry.key)?,
+                            convert::value_to_json(&entry.value)?,
+                        );
+                    }
+                    Ok::<_, Failure>(object)
+                })
+                .transpose()?,
+        },
+        delivery: session_delivery::Delivery::decode(&JsonValue::String(
+            if payload.delivery == Some(v5::SessionSyntheticRequestPayloadDelivery::Queue as i32) {
+                "queue"
+            } else {
+                "steer"
+            }
+            .into(),
+        ))
+        .map_err(|_| Failure::Invalid("invalid delivery".into()))?,
+    });
+    let admitted = core
+        .execution
+        .prompt(
+            pending::Request {
+                id,
+                session_id: session_id.clone(),
+                input,
+                event_id,
+                created: ids::now_millis(),
+            },
+            payload.resume,
+        )
+        .await
+        .map_err(|error| match error {
+            run_coordinator::Error::Store(error) => match error.as_ref() {
+                Error::Domain {
+                    kind: "input_identity",
+                    message,
+                } => Failure::Conflict((*message).into()),
+                _ => Failure::Unavailable("Session input admission unavailable".into()),
+            },
+            _ => Failure::Unavailable("Session execution unavailable".into()),
+        })?;
+    let Some(v5::session_pending_info::Kind::Value2(data)) = message::pending(&admitted)
+        .map_err(|_| Failure::Unavailable("admitted synthetic input is not representable".into()))?
+        .kind
+    else {
+        return Err(Failure::Unavailable(
+            "admitted input is not synthetic".into(),
+        ));
+    };
+    Ok(v5::SessionSyntheticResult { data })
+}
+
+pub async fn file_change_list(
+    invocation: Invocation,
+    request: v5::SessionFileChangeListRequest,
+) -> Result<v5::SessionFileChangeListResult, Failure> {
+    let core = invocation.core()?;
+    let id = invocation.session(&request.params.session_id)?;
+    let changes = core
+        .sessions
+        .file_changes(&id)
+        .map_err(|error| failure(error, &id))?;
+    let count = |value| {
+        u64::try_from(value)
+            .ok()
+            .filter(|value| *value <= 9_007_199_254_740_991)
+            .ok_or_else(|| Failure::Unavailable("file change count is not representable".into()))
+    };
+    Ok(v5::SessionFileChangeListResult {
+        data: v5::SessionFileChangeListResultData {
+            items: changes
+                .iter()
+                .map(|change| {
+                    Ok(v5::SessionEventFileChangeInfo {
+                        path: convert::wire(&change.path),
+                        patch: convert::wire(&change.patch),
+                        additions: count(change.additions)?,
+                        deletions: count(change.deletions)?,
+                    })
+                })
+                .collect::<Result<_, Failure>>()?,
+        },
+    })
+}
 
 pub async fn context(
     invocation: Invocation,

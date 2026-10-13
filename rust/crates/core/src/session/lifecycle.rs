@@ -16,6 +16,7 @@ pub enum Change {
     Pin,
     Unpin,
     Rename(LosslessString),
+    Daybreak(Option<ycoding_schema::model::Daybreak>),
 }
 
 impl Service {
@@ -36,6 +37,7 @@ impl Service {
                     Change::Pin if row.time_pinned.is_none() => ("session.pinned.1", None),
                     Change::Unpin if row.time_pinned.is_some() => ("session.unpinned.1", None),
                     Change::Rename(title) => ("session.renamed.1", Some(title)),
+                    Change::Daybreak(_) => ("session.daybreak.set.1", None),
                     _ => return Ok(true),
                 };
                 let encoder = ObjectEncoder::new().field("sessionID", &id);
@@ -48,7 +50,12 @@ impl Service {
                         type_: type_.into(),
                         data: match data {
                             Some(title) => encoder.field("title", title).finish(),
-                            None => encoder.finish(),
+                            None => match &change {
+                                Change::Daybreak(daybreak) => {
+                                    encoder.optional("daybreak", daybreak).finish()
+                                }
+                                _ => encoder.finish(),
+                            },
                         },
                     },
                 )?;

@@ -84,6 +84,8 @@ pub fn fold(tx: &mut Write<'_>, event: &Event) -> Result<(), Error> {
         ));
     }
     match event.type_.as_str() {
+        Some("session.forked.2") => super::fork::apply(tx, event, &object)?,
+        Some("session.file-change.recorded.1") => super::file_change::apply(tx, event, &object)?,
         Some("session.instructions.updated.2") => super::instruction_state::apply(tx, event)?,
         Some("session.created.2") => {
             let location: ycoding_schema::location::Ref =
@@ -255,6 +257,7 @@ pub fn fold(tx: &mut Write<'_>, event: &Event) -> Result<(), Error> {
         }
         Some(
             "session.renamed.1"
+            | "session.daybreak.set.1"
             | "session.archived.2"
             | "session.unarchived.2"
             | "session.pinned.1"
@@ -270,6 +273,13 @@ pub fn fold(tx: &mut Write<'_>, event: &Event) -> Result<(), Error> {
                 .get::<SessionTable>(&key(&event.aggregate_id))?
                 .ok_or(Error::Rejected("Session not found"))?;
             match event.type_.as_str() {
+                Some("session.daybreak.set.1") => {
+                    row.daybreak = object
+                        .optional::<ycoding_schema::model::Daybreak>("daybreak")
+                        .map_err(record_error)?
+                        .map(|daybreak| daybreak.0);
+                    row.time_updated = event.created;
+                }
                 Some("session.renamed.1") => {
                     row.title = object.field("title").map_err(record_error)?;
                     row.time_updated = event.created;
