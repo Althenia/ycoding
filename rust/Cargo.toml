@@ -18,6 +18,7 @@ publish = false
 [workspace.dependencies]
 encoding_rs = "=0.8.35"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+chrono-tz = { version = "=0.10.4", default-features = false }
 fff-search = { version = "=0.9.4", default-features = false }
 notify = { version = "=9.0.0-rc.5", default-features = false, features = ["macos_fsevent"] }
 ring = { version = "0.17.14", default-features = false }

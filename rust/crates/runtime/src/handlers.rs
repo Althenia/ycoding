@@ -2,8 +2,9 @@ use crate::{
     artifact, browser, convert, credential,
     dispatch::{Dispatcher, Failure, Invocation, RegistrationError},
     event_subscribe, form, guardrail, health, ids, isolated_browser, message, permission, project,
-    question, session_autonomy, session_create, session_helpers, session_list, session_outstanding,
-    session_read_models, session_revert, session_services, session_state, session_subagent,
+    provider_usage, question, session_autonomy, session_create, session_helpers, session_list,
+    session_outstanding, session_read_models, session_revert, session_services, session_state,
+    session_subagent, usage,
 };
 use ycoding_core::session::{pending, run_coordinator};
 use ycoding_core::ycoding_schema::{
@@ -25,6 +26,10 @@ pub fn standard() -> Result<Dispatcher, RegistrationError> {
     dispatcher.handle("health.get", health_get)?;
     dispatcher.handle("health.stop", health::stop)?;
     dispatcher.handle("server.get", server)?;
+    dispatcher.handle("usage.get", usage::get)?;
+    dispatcher.handle("usage.report", usage::report)?;
+    dispatcher.handle("providerUsage.get", provider_usage::get)?;
+    dispatcher.handle("providerUsage.list", provider_usage::list)?;
     dispatcher.handle("credential.update", credential::update)?;
     dispatcher.handle("credential.activate", credential::activate)?;
     dispatcher.handle("credential.remove", credential::remove)?;

@@ -383,11 +383,248 @@ fn time_groups_follow_utc_and_fixed_offset_zones_and_reject_unknown_zones() {
     assert!(matches!(
         service.usage_report(
             &id("ses_one"),
-            &report_input(r#"{"group":"hour","timeZone":"Asia/Kolkata"}"#),
+            &report_input(r#"{"group":"hour","timeZone":"Mars/Olympus_Mons"}"#),
             None
         ),
         Err(Error::Rejected(_))
     ));
+}
+
+fn millis(iso: &str) -> i64 {
+    chrono::DateTime::parse_from_rfc3339(iso)
+        .unwrap()
+        .timestamp_millis()
+}
+
+#[test]
+fn iana_reports_match_intl_dst_days_repeated_hours_and_fractional_offset_boundaries() {
+    let (store, service) = setup();
+    let times = [
+        "2026-03-08T04:30:00Z",
+        "2026-03-08T05:30:00Z",
+        "2026-03-09T03:30:00Z",
+        "2026-03-09T04:30:00Z",
+        "2027-03-08T18:14:00Z",
+        "2027-03-08T18:15:00Z",
+        "2027-04-30T18:14:00Z",
+        "2027-04-30T18:15:00Z",
+        "2026-10-25T00:30:00Z",
+        "2026-10-25T01:30:00Z",
+        "2026-03-08T06:30:00Z",
+        "2026-03-08T07:30:00Z",
+    ];
+    insert(
+        &store,
+        times
+            .iter()
+            .enumerate()
+            .map(|(index, time)| {
+                let mut spec = Spec::new("ses_one", &format!("prq_zone_{index}"), index as i64 + 1);
+                spec.time = millis(time);
+                spec
+            })
+            .collect(),
+    );
+    let cases = [
+        (
+            "day",
+            "America/New_York",
+            "2026-03-08T05:00:00Z",
+            "2026-03-09T04:00:00Z",
+            vec!["2026-03-08"],
+        ),
+        (
+            "hour",
+            "Europe/Berlin",
+            "2026-10-25T00:00:00Z",
+            "2026-10-25T02:00:00Z",
+            vec!["2026-10-25T02:00:00+02:00", "2026-10-25T02:00:00+01:00"],
+        ),
+        (
+            "hour",
+            "america/new_york",
+            "2026-03-08T06:00:00Z",
+            "2026-03-08T08:00:00Z",
+            vec!["2026-03-08T01:00:00-05:00", "2026-03-08T03:00:00-04:00"],
+        ),
+        (
+            "day",
+            "Asia/Kathmandu",
+            "2027-03-08T18:14:00Z",
+            "2027-03-08T18:16:00Z",
+            vec!["2027-03-08", "2027-03-09"],
+        ),
+        (
+            "month",
+            "Asia/Kathmandu",
+            "2027-04-30T18:14:00Z",
+            "2027-04-30T18:16:00Z",
+            vec!["2027-04", "2027-05"],
+        ),
+    ];
+    for (group, zone, from, to, expected) in cases {
+        let input = report_input(&format!(
+            r#"{{"group":"{group}","timeZone":"{zone}","from":{},"to":{}}}"#,
+            millis(from),
+            millis(to)
+        ));
+        let local = service.usage_report(&id("ses_one"), &input, None).unwrap();
+        let global = service.usage_report_all(&input, None).unwrap();
+        assert_eq!(local, global);
+        assert_eq!(keys(&global.encode()), expected);
+        if group == "hour" {
+            let descending = service.usage_report_all(&report_input(&format!(r#"{{"group":"{group}","timeZone":"{zone}","from":{},"to":{},"order":"desc","limit":1}}"#, millis(from), millis(to))), None).unwrap();
+            assert_eq!(descending.rows[0].key.as_str(), expected.last().copied());
+            assert_eq!(descending.row_count.get(), 2);
+            assert_eq!(descending.next_offset.unwrap().get(), 1);
+        }
+    }
+    let input = report_input(&format!(
+        r#"{{"group":"day","from":{},"to":{}}}"#,
+        millis("2026-03-08T05:00:00Z"),
+        millis("2026-03-09T04:00:00Z")
+    ));
+    assert_eq!(
+        keys(&service.usage_report_all(&input, None).unwrap().encode()),
+        ["2026-03-08", "2026-03-09"]
+    );
+    assert_eq!(
+        service.usage_all(None).unwrap(),
+        service.usage(&id("ses_one"), None).unwrap()
+    );
+}
+
+#[test]
+fn utc_aliases_and_intl_offset_forms_canonicalize_and_invalid_zones_are_rejected() {
+    let (store, service) = setup();
+    insert(&store, vec![Spec::new("ses_one", "prq_alias", 1)]);
+    for zone in [
+        "UTC", "utc", "Etc/UTC", "GMT", "Etc/GMT", "UCT", "Etc/UCT", "-00:00",
+    ] {
+        assert_eq!(
+            report_days(
+                &service,
+                &format!(r#"{{"group":"hour","timeZone":"{zone}"}}"#)
+            ),
+            ["1970-01-01T00:00:00+00:00"]
+        );
+    }
+    for zone in ["+05:30", "+0530", "Asia/Kolkata"] {
+        assert_eq!(
+            report_days(
+                &service,
+                &format!(r#"{{"group":"hour","timeZone":"{zone}"}}"#)
+            ),
+            ["1970-01-01T05:00:00+05:30"]
+        );
+    }
+    assert_eq!(
+        report_days(&service, r#"{"group":"hour","timeZone":"+05"}"#),
+        ["1970-01-01T05:00:00+05:00"]
+    );
+    for zone in [
+        "Z",
+        "Mars/Olympus_Mons",
+        "+24:00",
+        "+01:60",
+        "+1",
+        " UTC",
+        "CST6CDT",
+        "est5edt",
+        "MST7MDT",
+        "PST8PDT",
+    ] {
+        for group in ["hour", "model"] {
+            assert!(matches!(
+                service.usage_report_all(
+                    &report_input(&format!(r#"{{"group":"{group}","timeZone":"{zone}"}}"#)),
+                    None
+                ),
+                Err(Error::Rejected("Invalid IANA time zone"))
+            ));
+        }
+    }
+}
+
+#[test]
+fn backend_usage_includes_roots_children_archived_locations_once_and_uses_global_latest_order() {
+    let (store, service) = setup();
+    sessions(
+        &store,
+        vec![
+            ("ses_child", Some("ses_one"), 20),
+            ("ses_other_root", None, 30),
+        ],
+    );
+    store
+        .submit(|tx| {
+            let mut row = support::record("ses_archived");
+            row.directory = "/other".into();
+            row.project_id = "global".into();
+            row.time_archived = Some(1);
+            row.time_updated = 40;
+            ProjectTable::insert(
+                tx,
+                &Project {
+                    id: "global".into(),
+                    worktree: "/".into(),
+                    vcs: None,
+                    name: None,
+                    icon_url: None,
+                    icon_url_override: None,
+                    icon_color: None,
+                    time_created: 1,
+                    time_updated: 1,
+                    time_initialized: None,
+                    sandboxes: vec![],
+                    commands: None,
+                },
+            )?;
+            SessionTable::insert(tx, &row)
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    insert(
+        &store,
+        ["ses_one", "ses_child", "ses_other_root", "ses_archived"]
+            .iter()
+            .enumerate()
+            .map(|(index, name)| {
+                let mut spec = Spec::new(name, &format!("prq_all_{index}"), 1);
+                spec.time = 100;
+                spec.cost = if index == 3 { None } else { Some(index as f64) };
+                spec.timing = if index == 3 {
+                    Some(r#"{"firstOutputMs":99}"#)
+                } else {
+                    None
+                };
+                spec
+            })
+            .collect(),
+    );
+    let summary = service.usage_all(None).unwrap();
+    assert_eq!(summary.logical.get(), 4);
+    assert_eq!(summary.cost.unwrap().get(), 3.0);
+    assert_eq!(
+        summary
+            .latest_timing
+            .unwrap()
+            .first_output_ms
+            .unwrap()
+            .get(),
+        99
+    );
+    let pricer = |reference: &PricingRef| {
+        assert_eq!(reference.directory.as_str(), Some("/other"));
+        Some(catalog(2.0))
+    };
+    let report = service.usage_report_all(&report_input(r#"{"group":"session","sort":"cost","order":"desc","offset":1,"limit":2,"from":100,"to":101}"#), Some(&pricer)).unwrap().encode();
+    assert_eq!(number(&report, "total.logical"), 4.0);
+    assert_eq!(number(&report, "rowCount"), 4.0);
+    assert_eq!(keys(&report), ["ses_child", "ses_archived"]);
+    assert_eq!(number(&report, "nextOffset"), 3.0);
+    assert_eq!(string(&report, "rows.1.costProvenance"), "current_catalog");
 }
 
 #[test]

@@ -610,6 +610,8 @@ async fn every_local_operation_answers_with_a_declared_typed_outcome() {
                 "project.forget",
                 "project.inventory",
                 "project.list",
+                "providerUsage.get",
+                "providerUsage.list",
                 "question.request.list",
                 "server.get",
                 "session.active",
@@ -679,7 +681,9 @@ async fn every_local_operation_answers_with_a_declared_typed_outcome() {
                 "telemetry.append",
                 "telemetry.consent.get",
                 "telemetry.consent.set",
-                "telemetry.list"
+                "telemetry.list",
+                "usage.get",
+                "usage.report"
             ]
         );
         let environment = Arc::new(ycoding_runtime::Environment {

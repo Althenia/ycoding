@@ -61,7 +61,7 @@ pub async fn usage(
     let id = invocation.session(&request.params.session_id)?;
     let summary = core
         .sessions
-        .usage(&id, None)
+        .usage(&id, core.usage_pricer.as_deref().map(|pricer| pricer as &_))
         .map_err(|error| failure(error, &id))?;
     Ok(v5::SessionUsageResult {
         data: wire_summary(&summary)?,
@@ -77,7 +77,11 @@ pub async fn usage_report(
     let input = report_input(&request.query)?;
     let report = core
         .sessions
-        .usage_report(&id, &input, None)
+        .usage_report(
+            &id,
+            &input,
+            core.usage_pricer.as_deref().map(|pricer| pricer as &_),
+        )
         .map_err(|error| failure(error, &id))?;
     Ok(v5::SessionUsageReportResult {
         data: wire_report(&report)?,
@@ -127,7 +131,10 @@ fn failure(error: Error, id: &session::Id) -> Failure {
         Error::Domain {
             kind: "not_found", ..
         } => Failure::SessionNotFound(convert::readable(id.as_lossless())),
-        Error::Rejected(message) => Failure::Invalid(message.into()),
+        Error::Rejected(message) => Failure::InvalidField {
+            message: message.into(),
+            field: "timeZone",
+        },
         _ => Failure::Unavailable("Session store unavailable".into()),
     }
 }
@@ -155,7 +162,7 @@ fn literal(value: &LosslessString) -> Result<&str, Failure> {
     value.as_str().ok_or_else(unrepresentable)
 }
 
-fn report_input(
+pub(crate) fn report_input(
     query: &v5::SessionUsageReportRequestQuery,
 ) -> Result<provider_request::ReportInput, Failure> {
     let time_zone = query.time_zone.as_ref().map(convert::domain).transpose()?;
@@ -216,7 +223,7 @@ fn provenance(value: &provider_request::CostProvenance) -> Result<i32, Failure> 
     tag(&PROVENANCES, literal(&value.0)?)
 }
 
-fn wire_summary(
+pub(crate) fn wire_summary(
     summary: &provider_request::Summary,
 ) -> Result<v5::ProviderRequestSummary, Failure> {
     let models = summary
@@ -264,7 +271,9 @@ fn wire_summary(
     })
 }
 
-fn wire_report(report: &provider_request::Report) -> Result<v5::ProviderRequestReport, Failure> {
+pub(crate) fn wire_report(
+    report: &provider_request::Report,
+) -> Result<v5::ProviderRequestReport, Failure> {
     let rows = report
         .rows
         .iter()

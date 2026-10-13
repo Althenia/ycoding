@@ -10,6 +10,7 @@ publish.workspace = true
 prost.workspace = true
 axum.workspace = true
 chrono.workspace = true
+chrono-tz.workspace = true
 fff-search.workspace = true
 notify.workspace = true
 icu_properties.workspace = true

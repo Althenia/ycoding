@@ -1,12 +1,15 @@
 use super::{key, projector::record_error, store::Service, usage};
-use chrono::{DateTime, Duration, Utc};
-use std::collections::{BTreeMap, HashMap};
+use chrono::{DateTime, Duration, Offset, Utc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    ops::Bound,
+};
 use ycoding_schema::{
     DomainDecode, DomainEncode, JsonValue, LosslessString, ObjectEncoder, model, provider_request,
     session, token_usage,
 };
 use ycoding_store::{
-    Error, IndexOrder, KeyPart, Snapshot,
+    Error, IndexOrder, KeyPart, Snapshot, TableSpec,
     project::ProjectTable,
     resources::{Request, requests},
     session::{Session, SessionTable},
@@ -17,7 +20,6 @@ const PAGE: usize = 128;
 const DEFAULT_LIMIT: usize = 100;
 const MAX_SAFE: f64 = 9_007_199_254_740_991.0;
 const ONE_SECOND_NS: i64 = 1_000_000_000;
-const UTC_ZONES: [&str; 7] = ["utc", "etc/utc", "gmt", "etc/gmt", "uct", "etc/uct", "z"];
 
 pub struct PricingRef {
     pub directory: LosslessString,
@@ -41,7 +43,7 @@ impl Service {
         pricer: Pricer<'_>,
     ) -> Result<provider_request::Summary, Error> {
         let snapshot = self.client.snapshot()?;
-        let (_, samples) = load(&snapshot, id, None, None, pricer)?;
+        let (_, samples) = load(&snapshot, Some(id), None, None, pricer)?;
         provider_request::Summary::decode(&summary(&samples)).map_err(record_error)
     }
 
@@ -55,7 +57,7 @@ impl Service {
         let snapshot = self.client.snapshot()?;
         let (family, samples) = load(
             &snapshot,
-            id,
+            Some(id),
             input.from.map(|from| from.get()),
             input.to.map(|to| to.get()),
             pricer,
@@ -70,11 +72,42 @@ impl Service {
         ))
         .map_err(record_error)
     }
+
+    pub fn usage_all(&self, pricer: Pricer<'_>) -> Result<provider_request::Summary, Error> {
+        let snapshot = self.client.snapshot()?;
+        let (_, samples) = load(&snapshot, None, None, None, pricer)?;
+        provider_request::Summary::decode(&summary(&samples)).map_err(record_error)
+    }
+
+    pub fn usage_report_all(
+        &self,
+        input: &provider_request::ReportInput,
+        pricer: Pricer<'_>,
+    ) -> Result<provider_request::Report, Error> {
+        let zone = zone(input)?;
+        let snapshot = self.client.snapshot()?;
+        let (sessions, samples) = load(
+            &snapshot,
+            None,
+            input.from.map(|v| v.get()),
+            input.to.map(|v| v.get()),
+            pricer,
+        )?;
+        let projects = project_labels(&snapshot, input, &sessions)?;
+        provider_request::Report::decode(&report(
+            input,
+            zone.as_ref(),
+            &sessions,
+            &samples,
+            &projects,
+        ))
+        .map_err(record_error)
+    }
 }
 
-struct Zone {
-    seconds: i64,
-    label: String,
+enum Zone {
+    Fixed(i32),
+    Iana(chrono_tz::Tz),
 }
 
 struct Sample {
@@ -253,12 +286,15 @@ fn percentiles(values: &[i64]) -> Option<(i64, i64)> {
 
 fn load(
     snapshot: &Snapshot,
-    id: &session::Id,
+    id: Option<&session::Id>,
     from: Option<i64>,
     to: Option<i64>,
     pricer: Pricer<'_>,
 ) -> Result<(Vec<Session>, Vec<Sample>), Error> {
-    let family = family(snapshot, id)?;
+    let family = match id {
+        Some(id) => family(snapshot, id)?,
+        None => all_sessions(snapshot)?,
+    };
     let mut prices: HashMap<String, Option<Pricing>> = HashMap::new();
     let mut samples = Vec::new();
     for (index, session) in family.iter().enumerate() {
@@ -287,6 +323,29 @@ fn load(
         }
     }
     Ok((family, samples))
+}
+
+fn all_sessions(snapshot: &Snapshot) -> Result<Vec<Session>, Error> {
+    let mut sessions = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = snapshot.scan::<SessionTable>(
+            cursor.as_deref().map_or(Bound::Unbounded, Bound::Excluded),
+            Bound::Unbounded,
+            PAGE,
+        )?;
+        let Some(last) = page.last() else {
+            break;
+        };
+        cursor = Some(SessionTable::primary_key(last));
+        sessions.extend(page);
+    }
+    sessions.sort_by(|left, right| {
+        left.time_updated
+            .cmp(&right.time_updated)
+            .then_with(|| text(&left.id).cmp(&text(&right.id)))
+    });
+    Ok(sessions)
 }
 
 fn family(snapshot: &Snapshot, id: &session::Id) -> Result<Vec<Session>, Error> {
@@ -633,15 +692,32 @@ fn group_of(
 }
 
 fn time_group(group: &str, zone: Option<&Zone>, millis: i64) -> (String, String) {
-    let time = DateTime::<Utc>::from_timestamp_millis(millis).unwrap_or_default()
-        + Duration::seconds(zone.map_or(0, |zone| zone.seconds));
+    let utc = DateTime::<Utc>::from_timestamp_millis(millis).unwrap_or_default();
+    let seconds = match zone {
+        Some(Zone::Fixed(seconds)) => *seconds,
+        Some(Zone::Iana(zone)) => utc.with_timezone(zone).offset().fix().local_minus_utc(),
+        None => 0,
+    };
+    let time = utc + Duration::seconds(i64::from(seconds));
+    let absolute = seconds.unsigned_abs();
+    let label = format!(
+        "{}{:02}:{:02}{}",
+        if seconds < 0 { '-' } else { '+' },
+        absolute / 3600,
+        absolute / 60 % 60,
+        if absolute % 60 == 0 {
+            String::new()
+        } else {
+            format!(":{:02}", absolute % 60)
+        }
+    );
     let day = time.format("%Y-%m-%d").to_string();
     match (group, zone) {
         ("day", _) => (day.clone(), day),
         ("month", _) => (day[..7].to_string(), day[..7].to_string()),
-        ("hour", Some(zone)) => (
-            format!("{}T{}:00:00{}", day, time.format("%H"), zone.label),
-            format!("{}T{}:00 {}", day, time.format("%H"), zone.label),
+        ("hour", Some(_)) => (
+            format!("{}T{}:00:00{}", day, time.format("%H"), label),
+            format!("{}T{}:00 {}", day, time.format("%H"), label),
         ),
         _ => (
             format!("{}T{}:00:00.000Z", day, time.format("%H")),
@@ -655,15 +731,22 @@ fn zone(input: &provider_request::ReportInput) -> Result<Option<Zone>, Error> {
         return Ok(None);
     };
     let name = text(requested);
-    if UTC_ZONES.contains(&name.to_lowercase().as_str()) {
-        return Ok(Some(Zone {
-            seconds: 0,
-            label: "+00:00".into(),
-        }));
+    if ["CST6CDT", "EST5EDT", "MST7MDT", "PST8PDT"]
+        .iter()
+        .any(|zone| zone.eq_ignore_ascii_case(&name))
+    {
+        return Err(Error::Rejected("Invalid IANA time zone"));
     }
     fixed_offset(&name)
+        .or_else(|| {
+            chrono_tz::TZ_VARIANTS
+                .iter()
+                .find(|zone| zone.name().eq_ignore_ascii_case(&name))
+                .copied()
+                .map(Zone::Iana)
+        })
         .map(Some)
-        .ok_or(Error::Rejected("Unsupported time zone"))
+        .ok_or(Error::Rejected("Invalid IANA time zone"))
 }
 
 fn fixed_offset(name: &str) -> Option<Zone> {
@@ -672,19 +755,21 @@ fn fixed_offset(name: &str) -> Option<Zone> {
         '-' => -1,
         _ => return None,
     };
-    let (hours, minutes) = name[1..].split_once(':').unwrap_or((&name[1..], "00"));
+    let offset = &name[1..];
+    let (hours, minutes) = offset.split_once(':').unwrap_or_else(|| {
+        if offset.len() == 4 && offset.is_ascii() {
+            (&offset[..2], &offset[2..])
+        } else {
+            (offset, "00")
+        }
+    });
     let valid = |part: &str| part.len() == 2 && part.chars().all(|digit| digit.is_ascii_digit());
     if !valid(hours) || !valid(minutes) {
         return None;
     }
     let (hours, minutes) = (hours.parse::<i64>().ok()?, minutes.parse::<i64>().ok()?);
-    (hours <= 23 && minutes <= 59).then(|| Zone {
-        seconds: sign * (hours * 3600 + minutes * 60),
-        label: format!(
-            "{}{hours:02}:{minutes:02}",
-            if sign < 0 { '-' } else { '+' }
-        ),
-    })
+    (hours <= 23 && minutes <= 59)
+        .then(|| Zone::Fixed((sign * (hours * 3600 + minutes * 60)) as i32))
 }
 
 fn project_labels(

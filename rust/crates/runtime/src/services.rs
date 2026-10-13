@@ -53,7 +53,25 @@ pub struct Core {
     pub isolated_browser: Option<IsolatedBrowserResolver>,
     pub telemetry: ycoding_core::telemetry::Service,
     pub keep_awake: ycoding_core::platform::keep_awake::Service,
+    pub provider_usage: Option<ProviderUsageResolver>,
+    pub usage_pricer: Option<UsagePricer>,
 }
+
+pub type UsagePricer = Arc<
+    dyn Fn(
+            &ycoding_core::session::usage_read::PricingRef,
+        ) -> Option<ycoding_core::session::usage_read::Pricing>
+        + Send
+        + Sync,
+>;
+
+pub struct ProviderUsageServices {
+    pub quota: Arc<ycoding_core::resources::model::quota::Service>,
+    pub providers: Vec<ycoding_core::ycoding_schema::provider::Id>,
+}
+
+pub type ProviderUsageResolver =
+    Arc<dyn Fn(&location::Info) -> Result<ProviderUsageServices, String> + Send + Sync>;
 
 pub type IsolatedBrowserResolver =
     Arc<dyn Fn(&location::Ref) -> Result<Arc<isolated::Service>, String> + Send + Sync>;
@@ -82,6 +100,8 @@ impl Core {
             telemetry: ycoding_core::telemetry::Service::new(client.clone()),
             keep_awake: ycoding_core::platform::keep_awake::Service::new(),
             artifacts: None,
+            provider_usage: None,
+            usage_pricer: None,
             locations: Locations::new(
                 client,
                 sessions.clone(),

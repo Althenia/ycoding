@@ -365,10 +365,11 @@ impl Service {
                     continue;
                 }
             };
-            if self
-                .endpoints
-                .0
-                .contains_key(provider.0.as_str().unwrap_or(""))
+            if (provider.0.as_str() == Some("muse")
+                || self
+                    .endpoints
+                    .0
+                    .contains_key(provider.0.as_str().unwrap_or("")))
                 && saved.len() > 1
             {
                 let mut saved = saved;
@@ -421,6 +422,21 @@ impl Service {
             }
             results.sort_by_key(|(index, _)| *index);
             snapshots.extend(results.into_iter().map(|(_, snapshot)| snapshot));
+        }
+        if let Ok(observations) = self.observations.lock() {
+            snapshots.extend(
+                observations
+                    .iter()
+                    .filter_map(|((provider, source), snapshot)| {
+                        (source.is_none()
+                            && available.contains(provider)
+                            && self
+                                .credentials
+                                .list(&provider.0)
+                                .is_ok_and(|saved| saved.len() > 1))
+                        .then(|| snapshot.clone())
+                    }),
+            );
         }
         if let Some(command) = &self.app_server {
             let command = command.clone();

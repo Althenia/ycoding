@@ -261,7 +261,7 @@ async fn usage_summarizes_the_root_family_and_scopes_a_child_to_itself() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn usage_report_groups_sorts_pages_and_rejects_unsupported_zones() {
+async fn usage_report_groups_sorts_pages_and_rejects_invalid_zones() {
     bounded(async {
         seed_sessions(vec![
             session_row("ses_wire_report_root", None),
@@ -374,7 +374,7 @@ async fn usage_report_groups_sorts_pages_and_rejects_unsupported_zones() {
                     report_request(
                         "ses_wire_report_root",
                         v5::SessionUsageReportRequestQuery {
-                            time_zone: Some(text("Asia/Kolkata")),
+                            time_zone: Some(text("Mars/Olympus_Mons")),
                             ..report_query(v5::SessionUsageReportRequestQueryGroup::SessionUsagereportRequestQueryGroupHour)
                         },
                     ),
