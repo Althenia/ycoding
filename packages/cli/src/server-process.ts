@@ -1,21 +1,8 @@
 export * as ServerProcess from "./server-process"
 
-import { NodeServices } from "@effect/platform-node"
-import { Service, type DiscoverOptions, type Info } from "@ycoding-ai/client/effect/service"
-import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { Database } from "@ycoding-ai/core/database/database"
-import { Global } from "@ycoding-ai/core/global"
-import { InstallationVersion } from "@ycoding-ai/core/installation/version"
-import type { SdkPlugins } from "@ycoding-ai/core/plugin/sdk"
-import { AppProcess } from "@ycoding-ai/core/process"
-import { ProcessLock } from "@ycoding-ai/core/util/process-lock"
-import { randomBytes, randomUUID } from "node:crypto"
-import path from "node:path"
-import { Effect, FiberSet, FileSystem, Option, Redacted, Schedule, Schema } from "effect"
-import { HttpServer } from "effect/unstable/http"
-import { Env } from "./env"
-import { DatabaseRecovery } from "./services/database-recovery"
-import { ServiceConfig } from "./services/service-config"
+import { spawn } from "node:child_process"
+import { Effect } from "effect"
+import { runtimeEnvironment, runtimeExecutable } from "./runtime-executable"
 
 export type Mode = "default" | "service" | "stdio"
 
@@ -23,253 +10,41 @@ export type Options = {
   readonly mode: Mode
   readonly hostname?: string
   readonly port?: number
-  readonly plugins?: ReadonlyArray<Parameters<SdkPlugins.Interface["register"]>[0]>
+  readonly meeting?: boolean
 }
 
-// The process effect lives until server shutdown; tracing it would parent every request to one process-lifetime trace.
 export const run = Effect.fnUntraced(function* (options: Options) {
-  const providedRaw = processEffect(options).pipe(
-    Effect.provide(
-      LayerNode.compile(LayerNode.group([Global.node, AppProcess.node]), [
-        [
-          Global.node,
-          Global.layerWith(process.env.YCODING_CONFIG_DIR ? { config: process.env.YCODING_CONFIG_DIR } : {}),
-        ],
-      ]),
-    ),
-    Effect.provide(NodeServices.layer),
-  )
-  // `start()` still carries per-request `Request<"Requires", ...>` markers from its internal
-  // HttpRouter layer composition (see @ycoding-ai/server/process, createRoutes). They are resolved
-  // once the router dispatches a real HTTP request, not by this generator's static requirements
-  // channel, so narrow them away here the same way the SDK's embedded runtime construction does.
-  const provided = providedRaw as Effect.Effect<Effect.Success<typeof providedRaw>, Effect.Error<typeof providedRaw>>
-  return yield* provided
-})
-
-const processEffect = Effect.fnUntraced(function* (options: Options) {
-  if (options.mode === "service") yield* Effect.sync(() => process.chdir(Global.Path.home))
-  return yield* Effect.scoped(
-    Effect.gen(function* () {
-      const serviceOptions = options.mode === "service" ? yield* ServiceConfig.options() : undefined
-      const config = options.mode === "service" ? yield* ServiceConfig.read() : {}
-      const hostname = options.hostname ?? config.hostname ?? "127.0.0.1"
-      const port = options.port ?? config.port ?? (options.mode === "service" ? ServiceConfig.defaultPort() : undefined)
-      if (
-        serviceOptions !== undefined &&
-        port !== undefined &&
-        (yield* Service.incumbent({ ...serviceOptions, url: serviceURL(hostname, port) })) !== undefined
-      )
-        return
-      const { start } = yield* Effect.promise(() => import("@ycoding-ai/server/process"))
-      const environmentPassword = yield* Env.password
-      // Keep the lease credential out of the environment inherited by tools.
-      if (options.mode === "stdio") {
-        delete process.env.YCODING_PASSWORD
-        delete process.env.YCODING_SERVER_PASSWORD
-      }
-      const password =
-        options.mode === "service"
-          ? config.password || randomBytes(32).toString("base64url")
-          : environmentPassword
-            ? Redacted.value(environmentPassword)
-            : randomBytes(32).toString("base64url")
-      if (!password) return yield* Effect.fail(new Error("Missing server password"))
-      const instanceID = randomUUID()
-      const global = yield* Global.Service
-      const services = yield* Effect.context<FileSystem.FileSystem | Global.Service>()
-      const logRemoteDiagnostic = yield* FiberSet.makeRuntime()
-      const server = yield* start(
-        {
-          client: process.env.YCODING_CLIENT ?? "cli",
-          hostname,
-          port,
-          password,
-          simulation: truthy(process.env.YCODING_SIMULATE),
-          database: {
-            path: process.env.YCODING_DB,
-          },
-          models: {
-            url: process.env.YCODING_MODELS_URL,
-            file: process.env.YCODING_MODELS_PATH,
-            fetch: !truthy(process.env.YCODING_DISABLE_MODELS_FETCH),
-          },
-          observability: {
-            endpoint: process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
-            headers: process.env.OTEL_EXPORTER_OTLP_HEADERS,
-          },
-          config: {
-            directory: process.env.YCODING_CONFIG_DIR,
-            project: !truthy(process.env.YCODING_CONFIG_PROJECT_DISABLE ?? process.env.YCODING_DISABLE_PROJECT_CONFIG),
-            file: process.env.YCODING_CONFIG,
-            content: process.env.YCODING_CONFIG_CONTENT,
-          },
-          windows: {
-            gitbash: process.env.YCODING_GIT_BASH_PATH,
-          },
-          fs: {
-            filewatcher: !truthy(process.env.YCODING_FILEWATCHER_DISABLE ?? process.env.YCODING_DISABLE_FILEWATCHER),
-            fff:
-              process.env.YCODING_DISABLE_FFF === undefined
-                ? process.platform !== "win32"
-                : !truthy(process.env.YCODING_DISABLE_FFF),
-          },
-        },
-        serviceOptions === undefined
-          ? undefined
-          : {
-              instanceID,
-              onListen: (address, shutdown) =>
-                Effect.gen(function* () {
-                  const database = Database.filename({ path: process.env.YCODING_DB })
-                  if (database !== ":memory:") yield* ProcessLock.acquire(database + ".service.lock")
-                  if (!process.env.YCODING_DB) {
-                    const backup = yield* Effect.tryPromise(() => DatabaseRecovery.backupUnsupported())
-                    if (backup) yield* Effect.logWarning("backed up unsupported pre-current database", { backup })
-                  }
-                  if (!config.password) yield* ServiceConfig.password(password)
-                  return yield* register(address, password, instanceID, serviceOptions.file, shutdown)
-                }),
-            },
-        async (address, password) => {
-          const { createRemoteHost } = await import("./remote-host")
-          return createRemoteHost({
-            file: path.join(global.state, "remote.json"),
-            create: async () => {
-              const { makeRemoteConnector } = await import("./commands/handlers/remote/connect")
-              const url = new URL(HttpServer.formatAddress(address))
-              if (url.hostname === "0.0.0.0") url.hostname = "127.0.0.1"
-              if (url.hostname === "[::]") url.hostname = "[::1]"
-              return Effect.runPromise(
-                makeRemoteConnector({
-                  endpoint: { url: url.toString(), auth: { type: "basic", username: "ycoding", password } },
-                  onDiagnostic: (message, fields) => {
-                    logRemoteDiagnostic(
-                      Effect.logWarning("remote connector diagnostic", {
-                        ...fields,
-                        component: "remote-connector",
-                        detail: message,
-                      }),
-                    )
-                  },
-                }).pipe(Effect.provide(services)),
-              )
-            },
-          })
-        },
-        options.plugins,
-      ).pipe(
-        Effect.catch((error) => {
-          if (serviceOptions === undefined || port === undefined || !addressInUse(error)) return Effect.fail(error)
-          return recognizeIncumbent(serviceOptions, hostname, port).pipe(
-            Effect.flatMap((found) =>
-              found
-                ? Effect.void
-                : Effect.fail(
-                    new Error(
-                      `Managed service port ${port} on ${hostname} is already in use by another process. ` +
-                        `Set \`port\` in ${ServiceConfig.filename()} under the YCoding config directory, ` +
-                        "or start with `ycoding --standalone`.",
-                      { cause: error },
-                    ),
-                  ),
-            ),
-          )
-        }),
-      )
-      if (server === undefined) return
-      const url = HttpServer.formatAddress(server.address)
-      console.log(options.mode === "stdio" ? JSON.stringify({ url }) : `server listening on ${url}`)
-      if (options.mode === "default" && !environmentPassword) console.log(`server password ${password}`)
-      return yield* options.mode === "service"
-        ? server.shutdown
-        : options.mode === "stdio"
-          ? waitForStdinClose()
-          : Effect.never
-    }).pipe(Effect.annotateLogs({ role: "server" })),
-  )
-})
-
-const infoJson = Schema.fromJsonString(Service.Info)
-const encodeInfo = Schema.encodeEffect(infoJson)
-const decodeInfo = Schema.decodeUnknownEffect(infoJson)
-
-const register = Effect.fnUntraced(function* (
-  address: HttpServer.Address,
-  password: string,
-  id: string,
-  file: string,
-  shutdown: Effect.Effect<void>,
-) {
-  const fs = yield* FileSystem.FileSystem
-  const temp = file + "." + id + ".tmp"
-  yield* fs.makeDirectory(path.dirname(file), { recursive: true })
-  const info = {
-    id,
-    version: InstallationVersion,
-    url: HttpServer.formatAddress(address),
-    pid: process.pid,
-    password,
-  }
-  const encoded = yield* encodeInfo(info)
-  const current = fs.readFileString(file).pipe(
-    Effect.flatMap(decodeInfo),
-    Effect.orElseSucceed(() => undefined),
-  )
-  const owns = (found: Info | undefined) =>
-    found?.id === info.id &&
-    found.version === info.version &&
-    found.url === info.url &&
-    found.pid === info.pid &&
-    found.password === info.password
-  yield* fs.writeFileString(temp, encoded, { mode: 0o600 }).pipe(Effect.andThen(fs.rename(temp, file)))
-  yield* current.pipe(
-    Effect.filterOrFail(owns),
-    Effect.repeat(Schedule.spaced("5 seconds")),
-    Effect.ignore,
-    Effect.andThen(shutdown),
-    Effect.forkScoped,
-  )
-  return current.pipe(
-    Effect.flatMap((found) => (owns(found) ? fs.remove(file) : Effect.void)),
-    Effect.ignore,
-  )
-})
-
-const recognizeIncumbent = Effect.fnUntraced(function* (options: DiscoverOptions, hostname: string, port: number) {
-  const found = yield* Service.incumbent({ ...options, url: serviceURL(hostname, port) }).pipe(
-    Effect.filterOrFail((value) => value !== undefined),
-    Effect.retry(Schedule.spaced("100 millis")),
-    Effect.timeoutOption("15 seconds"),
-  )
-  return Option.isSome(found)
-})
-
-function serviceURL(hostname: string, port: number) {
-  return `http://${hostname.includes(":") ? `[${hostname}]` : hostname}:${port}`
-}
-
-function truthy(value?: string) {
-  return value === "1" || value?.toLowerCase() === "true"
-}
-
-function addressInUse(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false
-  if ("code" in error && error.code === "EADDRINUSE") return true
-  return "cause" in error && addressInUse(error.cause)
-}
-
-function waitForStdinClose() {
-  return Effect.callback<void>((resume) => {
-    const close = () => resume(Effect.void)
-    process.stdin.once("end", close)
-    process.stdin.once("close", close)
-    process.stdin.resume()
-    if (process.stdin.readableEnded || process.stdin.destroyed) close()
-    return Effect.sync(() => {
-      process.stdin.off("end", close)
-      process.stdin.off("close", close)
-      process.stdin.pause()
+  const executable = yield* Effect.tryPromise(runtimeExecutable)
+  const args = [
+    ...(options.mode === "default" ? [] : [options.mode === "service" ? "--service" : "--stdio"]),
+    ...(options.hostname === undefined ? [] : ["--hostname", options.hostname]),
+    ...(options.port === undefined ? [] : ["--port", String(options.port)]),
+    ...(options.meeting ? ["--meeting"] : []),
+  ]
+  return yield* Effect.callback<void, Error>((resume) => {
+    const child = spawn(executable, args, { stdio: "inherit", env: runtimeEnvironment() })
+    const interrupt = () => child.kill("SIGINT")
+    const terminate = () => child.kill("SIGTERM")
+    process.on("SIGINT", interrupt)
+    process.on("SIGTERM", terminate)
+    child.once("error", (error) => resume(Effect.fail(error)))
+    child.once("exit", (code, signal) => {
+      if (code === 0) return resume(Effect.void)
+      process.exitCode = code ?? 1
+      resume(Effect.fail(new Error(`Rust runtime exited ${signal ? `on ${signal}` : `with code ${code}`}`)))
+    })
+    return Effect.promise(async () => {
+      process.off("SIGINT", interrupt)
+      process.off("SIGTERM", terminate)
+      if (child.exitCode !== null || child.signalCode !== null) return
+      await new Promise<void>((resolve) => {
+        const timeout = setTimeout(() => child.kill("SIGKILL"), 3_000)
+        child.once("exit", () => {
+          clearTimeout(timeout)
+          resolve()
+        })
+        child.kill("SIGTERM")
+      })
     })
   })
-}
+})

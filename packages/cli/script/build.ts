@@ -9,6 +9,7 @@ import { modelsData } from "./generate"
 import { BUN_BINARY } from "../src/binary"
 import { buildComputerHelper, computerHelperBuildAvailable } from "./computer-use"
 import { copyChromeExtension } from "./chrome-extension"
+import { buildRuntime } from "./runtime"
 
 const dir = path.resolve(import.meta.dirname, "..")
 const binary = BUN_BINARY
@@ -79,6 +80,7 @@ for (const item of targets) {
     .join("-")
   const name = target.replace(binary, artifact)
   console.log(`building ${name}`)
+  const runtimePayload = await buildRuntime(item)
   const result = await Bun.build({
     entrypoints: [entrypoint],
     tsconfig: "./tsconfig.json",
@@ -100,6 +102,7 @@ for (const item of targets) {
       windows: {},
     },
     define: {
+      YCODING_RUNTIME_PAYLOAD: JSON.stringify(runtimePayload),
       YCODING_VERSION: `'${Script.version}'`,
       YCODING_CLI_NAME: `'${binary}'`,
       YCODING_MODELS_DEV: modelsData,
@@ -134,6 +137,8 @@ for (const item of targets) {
     ),
   )
   await Promise.all(
-    ["LICENSE", "NOTICE"].map((file) => Bun.write(path.join(outdir, name, file), Bun.file(path.join(dir, "../..", file)))),
+    ["LICENSE", "NOTICE"].map((file) =>
+      Bun.write(path.join(outdir, name, file), Bun.file(path.join(dir, "../..", file))),
+    ),
   )
 }

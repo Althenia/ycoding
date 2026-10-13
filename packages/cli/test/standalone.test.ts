@@ -11,6 +11,8 @@ test("standalone server exits when its owner is killed", async () => {
       ...process.env,
       YCODING_DB: path.join(directory, "ycoding.db"),
       YCODING_SERVER_USERNAME: "custom",
+      YCODING_DISABLE_MODELS_FETCH: "1",
+      YCODING_CONFIG_PROJECT_DISABLE: "1",
       XDG_CACHE_HOME: path.join(directory, "cache"),
       XDG_CONFIG_HOME: path.join(directory, "config"),
       XDG_DATA_HOME: path.join(directory, "data"),
@@ -29,7 +31,7 @@ test("standalone server exits when its owner is killed", async () => {
     if (!line) {
       owner.kill("SIGKILL")
       await owner.exited
-      throw new Error(`Standalone owner exited before readiness (${(await stderr).length} stderr characters captured)`)
+      throw new Error(`Standalone owner exited before readiness: ${await stderr}`)
     }
     expect(pid).toBeGreaterThan(0)
     expect(url).toStartWith("http://127.0.0.1:")
