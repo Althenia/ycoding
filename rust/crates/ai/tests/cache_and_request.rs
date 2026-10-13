@@ -123,6 +123,10 @@ fn profiles_model_gating_and_defaults() {
         ("us.anthropic.claude-opus-4-7-v2:0", 2048),
         ("claude-haiku-4-5-20251001", 4096),
         ("anthropic--claude-opus-5", 512),
+        ("claude-sonnet-5-5", 512),
+        ("claude-haiku-5-5", 512),
+        ("claude-sonnet-5.5", 512),
+        ("claude-haiku-5.5", 512),
         ("claude-4-sonnet", 1024),
     ] {
         assert_eq!(

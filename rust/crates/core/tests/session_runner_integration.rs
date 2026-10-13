@@ -28,6 +28,11 @@ mod guardrails;
 #[path = "session_support/mod.rs"]
 mod support;
 
+#[path = "session_support/request_assembly.rs"]
+mod request_assembly;
+
+include!("tool_fixture.rs");
+
 async fn server(
     replies: Vec<&'static str>,
 ) -> (
@@ -243,6 +248,9 @@ fn fixture_services(
         cursor: None,
         skill_resolver: None,
         snapshots: None,
+        configuration: None,
+        image_analyzer: None,
+        extensions: Vec::new(),
         claude: None,
         auth: None,
     }
@@ -3064,6 +3072,9 @@ fn analysis_local(
         cursor: None,
         skill_resolver: None,
         snapshots: None,
+        configuration: None,
+        image_analyzer: None,
+        extensions: Vec::new(),
         claude: None,
         auth: None,
     })

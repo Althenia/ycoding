@@ -491,6 +491,7 @@ pub fn request(
             provider_id: &resolved.selection.provider_id.0,
             baseline_key: &namespace,
             interactive: false,
+            settings: &crate::session::prompt_cache::Settings::default(),
         },
     );
     request.provider_options = Some(cache.provider_options);

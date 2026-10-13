@@ -18,7 +18,7 @@ pub async fn prepare(
     context: &Context,
     extensions: &[&Extension],
 ) -> Result<llm::Request, Error> {
-    if request.model.id != model.id || request.model.provider != model.provider_id {
+    if request.model.provider != model.provider_id {
         return Err(Error::Unauthorized);
     }
     let mut output = request.clone();
@@ -32,6 +32,7 @@ pub async fn prepare(
         v5::TransformStage::ToolDefinitions,
         v5::TransformStage::SessionContext,
     ] {
+        let advertised = output.tools.clone();
         for extension in &extensions {
             for registration in &extension.declarations {
                 let stage = v5::TransformStage::try_from(registration.stage)
@@ -91,7 +92,12 @@ pub async fn prepare(
                     .await;
                 let response = match response {
                     Ok(response) => response,
-                    Err(Error::UnknownOutcome | Error::Protocol | Error::Stopped) => {
+                    Err(
+                        Error::UnknownOutcome
+                        | Error::Protocol
+                        | Error::Stopped
+                        | Error::ExecutionFailed,
+                    ) => {
                         output.messages.push(llm::Message::user(
                             "Session context hook failed; its changes may be incomplete.",
                         ));
@@ -132,10 +138,7 @@ pub async fn prepare(
                     .collect::<Result<Vec<_>, _>>()?;
                 let tools = next
                     .field::<Vec<JsonValue>>("tools")
-                    .map_err(|_| Error::Schema)?
-                    .iter()
-                    .map(read_tool)
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .map_err(|_| Error::Schema)?;
                 let mut origins = BTreeSet::new();
                 for (message, value) in messages.iter().zip(&message_values) {
                     let origin: f64 = decoder(value)?
@@ -159,14 +162,30 @@ pub async fn prepare(
                         return Err(Error::Unauthorized);
                     }
                 }
-                if tools.len() != output.tools.len()
-                    || tools
-                        .iter()
-                        .zip(&output.tools)
-                        .any(|(next, old)| !same_tool_owner(next, old))
-                {
-                    return Err(Error::Unauthorized);
-                }
+                let mut names = BTreeSet::new();
+                let tools = tools
+                    .iter()
+                    .filter_map(|value| {
+                        let next = match decoder(value).and_then(|value| {
+                            value
+                                .field::<LosslessString>("name")
+                                .map_err(|_| Error::Schema)
+                        }) {
+                            Ok(name) => name,
+                            Err(error) => return Some(Err(error)),
+                        };
+                        let old = advertised.iter().find(|old| old.name == next)?;
+                        if !names.insert(next) {
+                            return None;
+                        }
+                        Some(read_tool(value).map(|next| {
+                            let mut tool = old.clone();
+                            tool.description = next.description;
+                            tool.input_schema = next.input_schema;
+                            tool
+                        }))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
                 output.system = system;
                 output.messages = messages;
                 output.tools = tools;

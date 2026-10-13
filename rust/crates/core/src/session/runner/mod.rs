@@ -83,6 +83,9 @@ pub struct Services {
     pub auth: Option<crate::resources::auth::Preparation>,
     pub skill_resolver: Option<Arc<dyn skill::Resolver>>,
     pub snapshots: Option<Arc<dyn super::revert::Snapshots + Send + Sync>>,
+    pub configuration: Option<Arc<crate::resources::config::Configuration>>,
+    pub image_analyzer: Option<super::image_analyzer::Service>,
+    pub extensions: Vec<Arc<crate::extension::Extension>>,
 }
 
 struct Work {
@@ -782,11 +785,20 @@ impl Local {
                 .unwrap_or_else(|| prepared.model.provider.0.to_utf8().unwrap_or_default());
             let direct_responses = prepared.model.provider.0.as_str() == Some("openai")
                 && continuation::is_responses_route(&prepared.model.route.id);
+            let efficiency = prompt_cache::Settings::read(services.configuration.as_deref());
+            if direct_responses {
+                prepared.provider_options = Some(with_openai(
+                    ObjectEncoder::new()
+                        .field("openai", &JsonObject::new())
+                        .finish(),
+                    &[("store", JsonValue::Bool(efficiency.responses_stored))],
+                ));
+            }
             let accounts = match &account_identity {
                 Some(digest) => services.store.provider_accounts(&session.id, digest)?,
                 None => Default::default(),
             };
-            let states = if stateless(&prepared, direct_responses) {
+            let states = if stateless(&prepared) {
                 services.store.provider_states(
                     &session.id,
                     &prepared.model.provider.0,
@@ -802,6 +814,58 @@ impl Local {
                 accounts,
                 states,
             };
+            let descriptions =
+                if super::image_analyzer::is_multimodal(Some(&resolved.info.capabilities)) {
+                    None
+                } else if let Some(analyzer) = &services.image_analyzer {
+                    let mut image_session = session.clone();
+                    image_session.model = Some(selection.clone());
+                    analyzer
+                        .descriptions_for_history(
+                            &loaded,
+                            &services.attachments,
+                            &image_session,
+                            Some(&resolved.info.capabilities),
+                            &code_mode::Cancellation::default(),
+                        )
+                        .await
+                        .map_err(|_| error("image.analysis", "Image analysis cancelled"))?
+                } else {
+                    let collected = super::image_analyzer::collect(&loaded, &services.attachments);
+                    let reason = if services
+                        .configuration
+                        .as_ref()
+                        .and_then(|config| config.latest("image_analyzer"))
+                        .is_none()
+                    {
+                        "image analyzer not configured"
+                    } else {
+                        "vision analyzer unavailable"
+                    };
+                    let descriptions = collected
+                        .inputs
+                        .iter()
+                        .map(|input| {
+                            (
+                                input.file.digest.clone(),
+                                super::image_analyzer::failure_block(&input.file, reason),
+                            )
+                        })
+                        .collect::<BTreeMap<_, _>>();
+                    let tools = collected
+                        .tool_uris
+                        .into_iter()
+                        .filter_map(|(uri, digest)| {
+                            descriptions
+                                .get(&digest)
+                                .map(|description| (uri, description.clone()))
+                        })
+                        .collect();
+                    Some(super::image_analyzer::Descriptions {
+                        attachments: descriptions,
+                        tools,
+                    })
+                };
             let lowered = loaded
                 .iter()
                 .map(|message| {
@@ -809,6 +873,7 @@ impl Local {
                         std::slice::from_ref(message),
                         &services.attachments,
                         &replay,
+                        descriptions.as_ref(),
                     )
                 })
                 .collect::<Vec<_>>();
@@ -826,6 +891,33 @@ impl Local {
             if text_only {
                 prepared.tool_choice = Some(llm::ToolChoice::None);
             }
+            if !services.extensions.is_empty() {
+                let context = Context {
+                    session_id: session.id.clone(),
+                    agent: agent.id.clone(),
+                    message_id: match inputs.last() {
+                        Some(message) => message.clone(),
+                        None => session_message::Id::from_event(&projector::random_event_id()?),
+                    },
+                    call_id: "session.context".into(),
+                    progress: None,
+                    cancellation: code_mode::Cancellation::default(),
+                };
+                prepared = crate::extension::context::prepare(
+                    &prepared,
+                    &selection,
+                    Some(&prepared.model.route.id),
+                    &context,
+                    &services
+                        .extensions
+                        .iter()
+                        .map(Arc::as_ref)
+                        .collect::<Vec<_>>(),
+                )
+                .await
+                .map_err(|error_| error("extension.context", &error_.to_string()))?;
+            }
+            prompt_cache::canonical_tools(&mut prepared.tools);
             if let Some(analysis) = &services.analysis {
                 analysis.restrict(&session.id, &mut prepared)?;
             }
@@ -886,10 +978,11 @@ impl Local {
                 provider_id: &provider_id,
                 baseline_key: &begin.prompt_cache_key,
                 interactive: session.parent_id.is_none(),
+                settings: &efficiency,
             });
             let mut openai_options = vec![];
             if direct_responses {
-                openai_options.push(("store", JsonValue::Bool(true)));
+                openai_options.push(("store", JsonValue::Bool(efficiency.responses_stored)));
             }
             prepared.provider_options =
                 Some(with_openai(cache.provider_options.clone(), &openai_options));
@@ -938,6 +1031,9 @@ impl Local {
             };
             let eligible = direct_responses
                 && account_identity.is_some()
+                && efficiency.responses_stored
+                && efficiency.responses_continuation
+                && !stateless(&prepared)
                 && !recovery
                 && !services
                     .analysis
@@ -2257,10 +2353,7 @@ fn message_id(message: &session_message::Info) -> Option<ycoding_schema::Lossles
         _ => None,
     }
 }
-fn stateless(request: &llm::Request, direct_responses: bool) -> bool {
-    if direct_responses {
-        return false;
-    }
+fn stateless(request: &llm::Request) -> bool {
     let key = if request.model.route.id == "ai-sdk:@ai-sdk/github-copilot" {
         "copilot"
     } else {

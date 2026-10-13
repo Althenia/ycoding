@@ -108,6 +108,8 @@ pub fn profile(model: &str) -> Option<Profile> {
     let id = normalize_model_id(model);
     const PROFILES: &[(&str, u32, bool)] = &[
         ("claude-opus-5", 512, true),
+        ("claude-sonnet-5-5", 512, true),
+        ("claude-haiku-5-5", 512, true),
         ("claude-opus-5-5", 512, true),
         ("claude-fable-5", 512, true),
         ("claude-fable-5-1", 512, true),

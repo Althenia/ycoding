@@ -214,3 +214,32 @@ fn reports_provider_cache_mechanism_hit_ratio_and_minimum() {
     assert!(info.cache.write_reported);
     assert!(info.cache.minimum_tokens.is_none());
 }
+
+#[test]
+fn claude_55_cache_minimum_distinguishes_511_from_512_tokens() {
+    for model in ["claude-sonnet-5-5", "claude-haiku-5-5"] {
+        for (input, below) in [(511, true), (512, false)] {
+            let (store, service) = setup();
+            put(
+                &store,
+                "msg_claude_55",
+                "assistant",
+                0,
+                &assistant(
+                    &format!(
+                        r#","tokens":{{"input":{input},"output":20,"reasoning":0,"cache":{{"read":0,"write":0}}}}"#
+                    ),
+                    "anthropic",
+                    model,
+                ),
+            );
+            let info = service.diagnostics(&id("ses_one"), None).unwrap().unwrap();
+            assert_eq!(
+                info.cache.minimum_tokens.unwrap().get(),
+                512,
+                "{model}/{input}"
+            );
+            assert_eq!(info.cache.below_minimum, Some(below), "{model}/{input}");
+        }
+    }
+}

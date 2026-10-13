@@ -879,6 +879,9 @@ fn runner(
         helpers: Default::default(),
         cursor: None,
         skill_resolver: None,
+        configuration: None,
+        image_analyzer: None,
+        extensions: Vec::new(),
         auth: preparation,
         claude,
     })

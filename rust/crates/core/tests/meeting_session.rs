@@ -174,6 +174,9 @@ fn local(
         helpers: Default::default(),
         cursor: None,
         skill_resolver: None,
+        configuration: None,
+        image_analyzer: None,
+        extensions: Vec::new(),
         claude: None,
         auth: None,
     })

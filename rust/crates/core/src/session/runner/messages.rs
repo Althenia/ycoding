@@ -13,6 +13,7 @@ pub fn convert(
     messages: &[session_message::Info],
     attachments: &attachment_store::Store,
     replay: &Replay,
+    descriptions: Option<&crate::session::image_analyzer::Descriptions>,
 ) -> Vec<llm::Message> {
     messages.iter().flat_map(|message| {
         let JsonValue::Object(encoded) = message.encode() else { unreachable!("typed message is an object") };
@@ -23,7 +24,12 @@ pub fn convert(
                 for file in user.files.as_deref().unwrap_or_default() {
                     let name = file.name.as_ref().unwrap_or(&file.content.digest.0);
                     match attachments.read(&file.content) {
-                        Ok(bytes) if file.mime.as_str().is_some_and(|mime| ["image/png", "image/jpeg", "image/webp", "image/gif"].contains(&mime)) => content.push(llm::Part::Media(llm::Media { mime: file.mime.clone(), data: llm::MediaData::Bytes(bytes), filename: file.name.clone() })),
+                        Ok(bytes) if file.mime.as_str().is_some_and(|mime| ["image/png", "image/jpeg", "image/webp", "image/gif"].contains(&mime)) => {
+                            match descriptions.and_then(|descriptions| file.content.digest.0.as_str().and_then(|digest| descriptions.attachments.get(digest))) {
+                                Some(description) => content.push(llm::Part::Text(format!("\n\n{description}").as_str().into())),
+                                None => content.push(llm::Part::Media(llm::Media { mime: file.mime.clone(), data: llm::MediaData::Bytes(bytes), filename: file.name.clone() })),
+                            }
+                        },
                         Ok(_) => {
                             let path = attachments.absolute_path(&file.content).expect("verified attachment has a valid managed path");
                             content.push(llm::Part::Text(join(&["\n\nAttached managed file: ".into(), name.clone(), "\nMIME: ".into(), file.mime.clone(), "\nPath: ".into(), path.display().to_string().into(), "\nThe path is a read-only snapshot of the attachment; apply requested changes to the original file instead.\nSHA-256: ".into(), file.content.digest.0.clone(), "\nBytes: ".into(), file.content.bytes.get().to_string().into()], "").into()));
@@ -90,7 +96,15 @@ pub fn convert(
                             let call_state = merged(tool.provider_state.as_ref(), call_item);
                             parts.push(llm::Part::ToolCall(llm::ToolCall { id: tool.id.clone(), name: tool.name.clone(), input, provider_executed: tool.executed, provider_metadata: if reuse_tool { metadata(call_state.as_ref()) } else { None } }));
                             let result = match &tool.state {
-                                session_message::ToolState::Completed(state) => Some(llm::ToolOutput { structured: JsonValue::Object(state.structured.clone()), content: state.content.clone() }.result()),
+                                session_message::ToolState::Completed(state) => Some(llm::ToolOutput { structured: JsonValue::Object(state.structured.clone()), content: state.content.iter().map(|part| {
+                                    if tool.executed != Some(true)
+                                        && let ycoding_schema::llm::ToolContent::File(file) = part
+                                        && let Some(description) = descriptions.and_then(|descriptions| file.uri.as_str().and_then(|uri| descriptions.tools.get(uri)))
+                                    {
+                                        return ycoding_schema::llm::ToolContent::Text(ycoding_schema::llm::ToolTextContent { text: description.as_str().into() });
+                                    }
+                                    part.clone()
+                                }).collect() }.result()),
                                 session_message::ToolState::Error(state) => Some(llm::ToolResultValue::Error(ycoding_schema::ObjectEncoder::new().field("error", &state.error).field("structured", &state.structured).field("content", &state.content).finish())),
                                 _ => None,
                             };

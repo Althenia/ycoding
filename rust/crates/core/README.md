@@ -856,7 +856,8 @@ successful drain into a false goal completion.
 
 `session::runner::Local` accepts explicit Location services: Session Store, model
 resolver, agents, credentials, tool registry, managed attachments, ordered
-instruction sources, AI executor, and clock. It implements both the execution
+instruction sources, optional loaded configuration and image-analyzer service,
+active process extensions, AI executor, and clock. It implements both the execution
 Runner and coordinator Drain boundaries. It promotes steers at step boundaries
 and one queued input when the Session would otherwise become idle, reloads
 projected history for each continuation, holds the advertised materialization
@@ -885,6 +886,32 @@ Revert stages, clears and commits those paths through the same snapshot provider
 The production constructor leaves `Services::snapshots` unset. Composition must
 supply the Location's `GitSnapshots` shared with revert; the runner does not
 discover a repository or construct snapshot storage.
+
+Request assembly verifies managed image attachments before lowering history.
+Vision-capable running models receive image media. Non-vision models receive
+TOON analysis from the supplied `image_analyzer::Service`, or an explicit
+failure description when the analyzer is absent, disabled, unavailable, or
+limited. The same policy applies to completed local-tool inline images;
+provider-executed tool results retain provider ownership. Analysis changes only
+the outgoing request, not durable attachment or tool output records.
+
+`Services::extensions` supplies the Location's active `Vec<Arc<Extension>>`.
+Assembly runs ordered tool-definition transforms before ordered Session-context
+hooks, then computes canonical tools and cache fingerprints from the hooked
+request. Context hooks may change system/history content and the descriptions
+and input schemas of advertised tools, or omit advertised tools; unregistered,
+denied, step-limited and recovery-disabled tools cannot be introduced. Registered
+handlers and provider-native tool ownership remain captured. Context execution
+failures append a model-visible warning and allow later hooks to run; permission
+and identity violations fail before provider execution. Catalog aliases retain
+their selected model reference while the request uses the resolved API model ID.
+
+Location composition supplies `Services::configuration`, `image_analyzer`, and
+`extensions` from its loaded configuration, analyzer owner, and extension
+activation owner's `extensions()` result. A `None` configuration uses efficiency
+defaults; a `None` analyzer still produces non-vision image failure descriptions;
+an empty extension list runs no hooks. The production construction site currently
+supplies those disabled inputs and requires the composition owner to wire them.
 
 Before each Step the runner records the trusted Session state (todos, autonomy,
 permission ceiling, goal reminder) as a System `session-state` observation, the
@@ -960,7 +987,7 @@ stored state only when the current model matches, the message has no error, and
 one of its provider request records carries the current account identity digest.
 Otherwise reasoning is sent as plain text and tool metadata is omitted. When the
 effective request options set `store` to false (`openai.store`, or `copilot.store`
-on the GitHub Copilot SDK route; direct OpenAI Responses requests are stored),
+on the GitHub Copilot SDK route),
 `provider_states` materializes the captured items of the account-matched messages
 for the current provider and model, and the replay merges each item into the
 matching part's state as `opaqueCompactionItem`.
@@ -968,15 +995,25 @@ matching part's state as `opaqueCompactionItem`.
 Requests carry the session prompt-cache options. The wire prompt-cache key is a
 per-generation hash of the Session, the namespace and generation 0; routes that
 do not wire the key receive the namespace itself. GPT-5.6 and later on public
-OpenAI routes receive implicit prompt-cache options with a 30-minute TTL and
-explicit system and tail-message breakpoints; Anthropic-family routes receive
-explicit tool, system and two-message tail placement with a five-minute TTL, or
-one hour for interactive Sessions on models whose profile supports it. Extended
-retention and the TTL, mode and continuation settings are fixed at their
-defaults because the runner has no efficiency configuration.
+OpenAI routes use `efficiency.prompt_cache.openai_mode`: `auto` sends implicit
+prompt-cache options with a 30-minute TTL and system/tail-message breakpoints;
+`explicit` uses explicit mode with the same placement; `implicit` leaves
+provider-native caching uncontrolled. Earlier public OpenAI models receive
+`prompt_cache_retention: "24h"` only when `openai_extended_retention` is enabled
+and the API model supports it. Copilot GPT-5.6 routes remain key-only.
+Anthropic-family routes keep tool, system and two-message tail placement;
+`anthropic_ttl` selects `5m`, `1h`, or `adaptive`. Adaptive uses one hour for
+root Sessions and five minutes for children. Models without extended-TTL
+capability always use five minutes. Claude Sonnet 5.5 and Haiku 5.5 have a
+512-token cache minimum and support the one-hour TTL; diagnostics distinguish
+a 511-token prefix from one at the 512-token minimum. Canonical cache keys compare Unicode code
+points while preserving lone UTF-16 surrogates and the original JSON key text.
 
-Direct OpenAI Responses requests are stored and continue from the last remembered
-response. The runner captures the Session's continuation authority (generation
+Direct OpenAI Responses requests honor `efficiency.openai_responses_state`
+(`stored` by default, or `stateless`) and `openai_responses_continuation`
+(`auto`/`on`, or `off`). Stateless requests set `store: false`, materialize
+account-matched private provider state, and never use a stored-response
+continuation. The runner captures the Session's continuation authority (generation
 and context revision), fingerprints the request (Session, route, model, variant,
 connection identity, represented message boundary, prompt-cache namespace,
 instruction, tool and option digests), and sends `previous_response_id` with

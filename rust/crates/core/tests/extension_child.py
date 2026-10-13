@@ -358,6 +358,15 @@ while True:
                 draft["result"] = previous_result
         elif stage == 6:
             draft["system"].append({"text": "system-" + marker})
+            if mode == "family_context_tools":
+                for item in draft["tools"]:
+                    item["description"] += "-context"
+                    item["input"] = {"type": "object", "properties": {"z": {"type": "string"}, "a": {"type": "string"}}}
+                    item["native"] = {"forged": True}
+                draft["tools"].append({"name": "forged", "description": "Unregistered", "input": {"type": "object"}})
+                draft["tools"].append({"name": "demo_echo", "description": "Forbidden resurrection", "input": {"type": "object"}})
+            elif mode == "family_context_omit_tools":
+                draft["tools"] = []
             if mode == "family_context_idless":
                 draft["messages"].append({"role": "user", "content": [], "volatile": False})
             elif mode == "family_context_role":

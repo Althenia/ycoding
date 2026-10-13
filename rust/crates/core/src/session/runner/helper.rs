@@ -82,6 +82,7 @@ impl Local {
             provider_id: &provider,
             baseline_key: &begin.prompt_cache_key,
             interactive: false,
+            settings: &prompt_cache::Settings::read(services.configuration.as_deref()),
         });
         request.provider_options = Some(cache.provider_options);
         if let Some(policy) = cache.cache {

@@ -218,6 +218,9 @@ fn local_with_resolver(
         helpers,
         cursor: None,
         skill_resolver,
+        configuration: None,
+        image_analyzer: None,
+        extensions: Vec::new(),
         claude: None,
         auth: None,
     })

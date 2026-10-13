@@ -452,6 +452,9 @@ fn runner_services(
             ..Default::default()
         }),
         skill_resolver: None,
+        configuration: None,
+        image_analyzer: None,
+        extensions: Vec::new(),
     }
 }
 #[tokio::test]

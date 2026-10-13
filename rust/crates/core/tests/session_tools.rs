@@ -338,6 +338,9 @@ impl Harness {
             claude: None,
             auth: None,
             skill_resolver: None,
+            configuration: None,
+            image_analyzer: None,
+            extensions: Vec::new(),
         });
         let execution = Arc::new(Execution {
             coordinator: Coordinator::new(Arc::new(local)),
@@ -2404,6 +2407,9 @@ async fn task_complete_real_registry_runner_and_execution_publish_one_receipt_af
         claude: None,
         auth: None,
         skill_resolver: None,
+        configuration: None,
+        image_analyzer: None,
+        extensions: Vec::new(),
     });
     let execution = ycoding_core::session::execution::Execution::install(
         h.store.clone(),
