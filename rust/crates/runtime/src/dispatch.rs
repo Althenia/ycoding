@@ -391,9 +391,14 @@ impl Dispatcher {
             ))
         };
         let outcome = match authorized {
-            Ok(()) if entry.descriptor.streaming == v5::Streaming::Events as i32 => Err(
-                Failure::Unavailable("Canonical remote stream binding is not ready".into()),
-            ),
+            Ok(())
+                if entry.descriptor.streaming == v5::Streaming::Events as i32
+                    && entry.descriptor.diagnostic_name != "event.subscribe" =>
+            {
+                Err(Failure::Unavailable(
+                    "Canonical remote stream binding is not ready".into(),
+                ))
+            }
             Ok(()) => run(entry, environment, connection_id, request, true).await,
             Err(error) => Err(error),
         };

@@ -251,6 +251,215 @@ fn ac_wire_011_relay_union_owns_shared_backend_identity_until_last_client_releas
     assert_eq!(agent.relay_subscription_id("ses_a"), None);
     assert_eq!(agent.relay_interest_retained_bytes(), 0);
 }
+
+#[test]
+fn relay_subscription_settlement_reuses_only_matching_canonical_owners() {
+    for change in [
+        "matching",
+        "scope",
+        "epoch",
+        "types",
+        "missing",
+        "relay-missing",
+    ] {
+        let mut agent_config = config(v5::PeerRole::Agent, v5::PeerRole::Relay);
+        agent_config.event_types = BTreeSet::from([
+            v5::PublicEvent::full_name(),
+            v5::SessionLogItem::full_name(),
+        ]);
+        let mut relay_config = config(v5::PeerRole::Relay, v5::PeerRole::Agent);
+        relay_config.event_types = agent_config.event_types.clone();
+        let mut agent = Binding::new(agent_config, OPERATIONS.clone(), 0).unwrap();
+        let mut relay = Binding::new(relay_config, OPERATIONS.clone(), 0).unwrap();
+        let hello = send(agent.start(0).unwrap());
+        let ready = send(relay.receive(hello.clone(), hello.encoded_len() as u64, 1));
+        let ping = send(agent.receive(ready.clone(), ready.encoded_len() as u64, 2));
+        relay.receive(ping.clone(), ping.encoded_len() as u64, 3);
+        let pong = send(relay.poll(3));
+        agent.receive(pong.clone(), pong.encoded_len() as u64, 3);
+        let scope = batch("one").scope;
+        agent
+            .update_relay_interests(
+                v5::SubscriptionSnapshot {
+                    client_id: "client".into(),
+                    session_ids: vec!["session".into()],
+                },
+                4,
+            )
+            .unwrap();
+        agent
+            .register_relay_interest("session".into(), "sub".into(), "backend".into(), 4)
+            .unwrap();
+        let id = if change == "types" {
+            relay
+                .request(
+                    4039,
+                    scope.clone(),
+                    v5::SessionLogRequest {
+                        params: v5::SessionLogRequestParams {
+                            session_id: ycoding_protocol::encode_lossless(
+                                &"session".encode_utf16().collect::<Vec<_>>(),
+                            ),
+                        },
+                        query: Default::default(),
+                    }
+                    .encode_to_vec(),
+                    4,
+                )
+                .unwrap()
+        } else {
+            relay
+                .request(
+                    4000,
+                    scope.clone(),
+                    v5::EventSubscribeRequest {
+                        scope: scope.clone(),
+                    }
+                    .encode_to_vec(),
+                    4,
+                )
+                .unwrap()
+        };
+        let request = send(relay.poll(4));
+        agent.receive(request.clone(), request.encoded_len() as u64, 4);
+        let operation = if change == "types" {
+            OPERATIONS
+                .iter()
+                .find(|operation| operation.diagnostic_name == "session.log")
+                .unwrap()
+        } else {
+            OPERATIONS
+                .iter()
+                .find(|operation| operation.diagnostic_name == "event.subscribe")
+                .unwrap()
+        };
+        let response = v5::Result {
+            request_id: id.clone(),
+            operation_id: operation.operation_id,
+            settlement: operation.settlement,
+            outcome: Some(v5::result::Outcome::Success(v5::TypedPayload {
+                type_name: operation.result_type.clone(),
+                payload: if change == "types" {
+                    v5::SessionLogResult {
+                        subscription_id: ycoding_protocol::encode_lossless(
+                            &"sub".encode_utf16().collect::<Vec<_>>(),
+                        ),
+                    }
+                    .encode_to_vec()
+                } else {
+                    v5::EventSubscribeResult {
+                        subscription_id: ycoding_protocol::encode_lossless(
+                            &"sub".encode_utf16().collect::<Vec<_>>(),
+                        ),
+                    }
+                    .encode_to_vec()
+                },
+            })),
+        };
+        agent.respond(response, 5).unwrap();
+        let frame = send(agent.poll(5));
+        relay.receive(frame.clone(), frame.encoded_len() as u64, 5);
+        let accepted_scope = if change == "scope" {
+            v5::Scope {
+                target: Some(v5::scope::Target::Session("other".into())),
+            }
+        } else {
+            scope.clone()
+        };
+        let canonical = if change == "missing" {
+            None
+        } else {
+            Some(
+                if change == "epoch" {
+                    "wrong"
+                } else {
+                    "backend"
+                }
+                .into(),
+            )
+        };
+        let accepted = agent.machine.accept_subscription(
+            &id,
+            "sub".into(),
+            accepted_scope,
+            6,
+            Direction::Send,
+            canonical,
+        );
+        if change != "matching" && change != "relay-missing" {
+            assert_eq!(accepted, Err(ProtocolError::Malformed), "{change}");
+            assert!(
+                agent
+                    .machine
+                    .take_decisions()
+                    .iter()
+                    .any(|decision| matches!(decision, Decision::Closed(_)))
+            );
+            continue;
+        }
+        accepted.unwrap();
+        assert_eq!(agent.machine.stats().pending_requests, 0);
+        assert_eq!(agent.relay_subscription_id("session"), Some("sub"));
+        let accepted = relay.machine.accept_subscription(
+            &id,
+            "sub".into(),
+            scope.clone(),
+            6,
+            Direction::Receive,
+            (change != "relay-missing").then(|| "backend".into()),
+        );
+        if change == "relay-missing" {
+            assert_eq!(accepted, Err(ProtocolError::Direction));
+        }
+        if change == "matching" {
+            accepted.unwrap();
+            let retained = agent.relay_interest_retained_bytes();
+            let next = relay
+                .request(
+                    4000,
+                    scope.clone(),
+                    v5::EventSubscribeRequest {
+                        scope: scope.clone(),
+                    }
+                    .encode_to_vec(),
+                    7,
+                )
+                .unwrap();
+            let frame = send(relay.poll(7));
+            agent.receive(frame.clone(), frame.encoded_len() as u64, 7);
+            agent
+                .respond(subscription_result(next.clone(), "sub"), 8)
+                .unwrap();
+            let frame = send(agent.poll(8));
+            relay.receive(frame.clone(), frame.encoded_len() as u64, 8);
+            agent
+                .machine
+                .accept_subscription(
+                    &next,
+                    "sub".into(),
+                    scope.clone(),
+                    8,
+                    Direction::Send,
+                    Some("backend".into()),
+                )
+                .unwrap();
+            relay
+                .machine
+                .accept_subscription(
+                    &next,
+                    "sub".into(),
+                    scope,
+                    8,
+                    Direction::Receive,
+                    Some("backend".into()),
+                )
+                .unwrap();
+            assert_eq!(agent.relay_interest_retained_bytes(), retained);
+            assert_eq!(agent.machine.stats().pending_requests, 0);
+            assert_eq!(relay.machine.stats().pending_requests, 0);
+        }
+    }
+}
 #[test]
 fn ac_wire_011_forwarded_batch_preserves_identity_and_releases_only_on_credit_or_teardown() {
     for handed in [false, true] {
@@ -303,11 +512,18 @@ fn ac_wire_011_forwarded_batch_preserves_identity_and_releases_only_on_credit_or
         client.receive(frame.clone(), frame.encoded_len() as u64, 5);
         relay
             .machine
-            .accept_subscription(&id, "sub".into(), scope.clone(), 6, Direction::Send)
+            .accept_subscription(
+                &id,
+                "sub".into(),
+                scope.clone(),
+                6,
+                Direction::Send,
+                Some("source".into()),
+            )
             .unwrap();
         client
             .machine
-            .accept_subscription(&id, "sub".into(), scope, 6, Direction::Receive)
+            .accept_subscription(&id, "sub".into(), scope, 6, Direction::Receive, None)
             .unwrap();
         client.begin_hydration("sub").unwrap();
         client
@@ -540,6 +756,7 @@ impl Binding {
             scope,
             self.now,
             Direction::Receive,
+            (self.role == v5::PeerRole::Relay).then(|| source.clone()),
         )?;
         self.machine.begin_hydration(&subscription_id)?;
         self.machine
@@ -907,7 +1124,7 @@ fn subscribe_target(
         .unwrap();
     server
         .machine
-        .accept_subscription(&id, decoded_id, scope, now, Direction::Send)
+        .accept_subscription(&id, decoded_id, scope, now, Direction::Send, None)
         .unwrap();
 }
 
@@ -958,7 +1175,7 @@ fn ac_wire_011_subscription_identity_and_bounded_hydration() {
         .unwrap();
     server
         .machine
-        .accept_subscription(&id, "sub".into(), scope.clone(), 5, Direction::Send)
+        .accept_subscription(&id, "sub".into(), scope.clone(), 5, Direction::Send, None)
         .unwrap();
     client.begin_hydration("sub").unwrap();
     let batch = v5::EventBatch {
@@ -1347,7 +1564,14 @@ fn subscribed_pair(budgets: Budgets) -> (Binding, Binding) {
         .unwrap();
     server
         .machine
-        .accept_subscription(&id, "sub".into(), batch("a").scope, 3, Direction::Send)
+        .accept_subscription(
+            &id,
+            "sub".into(),
+            batch("a").scope,
+            3,
+            Direction::Send,
+            None,
+        )
         .unwrap();
     (client, server)
 }
@@ -2466,7 +2690,8 @@ fn parity_session_events_target_mismatch_is_a_malformed_close() {
                     target: Some(target)
                 },
                 4,
-                Direction::Receive
+                Direction::Receive,
+                None
             ),
             Err(ProtocolError::Malformed)
         );

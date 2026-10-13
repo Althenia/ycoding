@@ -1,4 +1,4 @@
-mod event_streams;
+pub(crate) mod event_streams;
 
 use crate::{
     convert,

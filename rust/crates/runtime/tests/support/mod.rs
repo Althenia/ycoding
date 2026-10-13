@@ -827,6 +827,7 @@ impl Client {
                 scope,
                 now,
                 ycoding_protocol::connection::Direction::Receive,
+                None,
             )
             .unwrap();
         self.connection.begin_hydration(&sub).unwrap();
@@ -860,6 +861,7 @@ impl Client {
                 scope,
                 now,
                 ycoding_protocol::connection::Direction::Receive,
+                None,
             )
             .unwrap();
         self.connection.begin_hydration(&sub).unwrap();

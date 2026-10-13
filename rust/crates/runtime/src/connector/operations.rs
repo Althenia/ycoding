@@ -73,6 +73,11 @@ pub(crate) fn authorize(
     let event_scope = if descriptor.diagnostic_name == "event.subscribe" {
         let query = decode_strict::<v5::EventSubscribeRequest>(&request.payload)
             .map_err(|_| Failure::Invalid("Invalid event subscription".into()))?;
+        if query.scope != request.scope {
+            return Err(Failure::Forbidden(
+                "Remote event target must match its Session scope".into(),
+            ));
+        }
         match query.scope.target {
             Some(v5::scope::Target::Session(id)) => Some(id),
             _ => {

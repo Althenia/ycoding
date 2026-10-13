@@ -781,9 +781,16 @@ impl Connection {
         scope: v5::Scope,
         now_ms: u64,
         direction: Direction,
+        canonical_source_epoch: Option<String>,
     ) -> Result<(), ProtocolError> {
-        let result =
-            self.register_subscription(request_id, subscription_id, scope, now_ms, direction);
+        let result = self.register_subscription(
+            request_id,
+            subscription_id,
+            scope,
+            now_ms,
+            direction,
+            canonical_source_epoch,
+        );
         if let Err(error) = result {
             let category = if error == ProtocolError::Unknown {
                 ProtocolError::Malformed
@@ -804,6 +811,7 @@ impl Connection {
         scope: v5::Scope,
         now_ms: u64,
         direction: Direction,
+        canonical_source_epoch: Option<String>,
     ) -> Result<(), ProtocolError> {
         self.time(now_ms)?;
         if self.phase != Phase::Established {
@@ -824,7 +832,6 @@ impl Connection {
             &self.sending_subscriptions
         };
         if subscription_id.is_empty()
-            || subscriptions.contains_key(&subscription_id)
             || !matches!(
                 scope.target,
                 Some(v5::scope::Target::Session(_) | v5::scope::Target::Global(_))
@@ -840,16 +847,36 @@ impl Connection {
         {
             return Err(ProtocolError::Direction);
         }
+        if self.config.local_role == v5::PeerRole::Relay
+            && canonical_source_epoch.as_ref().is_none_or(String::is_empty)
+        {
+            return Err(ProtocolError::Direction);
+        }
+        let event_types = self.descriptor(pending.operation_id)?.event_types.clone();
+        if let Some(existing) = subscriptions.get(&subscription_id) {
+            if canonical_source_epoch.as_ref().is_none_or(String::is_empty)
+                || !(self.config.local_role == v5::PeerRole::Relay
+                    || self.config.local_role == v5::PeerRole::Agent
+                        && direction == Direction::Send)
+                || existing.scope != scope
+                || existing.source_epoch != canonical_source_epoch
+                || existing.event_types.len() != event_types.len()
+                || !existing
+                    .event_types
+                    .iter()
+                    .all(|kind| event_types.contains(kind))
+            {
+                return Err(ProtocolError::Malformed);
+            }
+            self.awaiting_subscription.remove(&key);
+            return Ok(());
+        }
         if subscriptions.len() >= limits::SUBSCRIPTIONS as usize {
             return Err(ProtocolError::Limit);
         }
-        let event_types = self.descriptor(pending.operation_id)?.event_types.clone();
         self.awaiting_subscription.remove(&key);
-        let source_epoch = if direction == Direction::Send {
-            Some(self.source_epoch.clone())
-        } else {
-            None
-        };
+        let source_epoch =
+            Some(canonical_source_epoch.unwrap_or_else(|| self.source_epoch.clone()));
         let subscriptions = if direction == Direction::Receive {
             &mut self.subscriptions
         } else {

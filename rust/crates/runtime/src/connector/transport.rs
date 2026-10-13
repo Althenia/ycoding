@@ -26,6 +26,9 @@ use ycoding_protocol::{
     decode_strict, limits, v5,
 };
 
+#[path = "events.rs"]
+mod events;
+
 pub struct Settings {
     pub credentials: Arc<dyn Credentials>,
     pub reconnect_initial: Duration,
@@ -127,6 +130,7 @@ async fn supervise(
         if opened.load(Ordering::Acquire) {
             attempt = 0;
         }
+        tracing::debug!(?result, "remote connection attempt ended");
         reap(&mut tasks.jobs).await?;
         match result {
             Err(Error::Unauthorized | Error::Forbidden | Error::Setup | Error::Incompatible) => {
@@ -208,6 +212,7 @@ struct DispatchTasks {
 struct Work {
     cancelled: Arc<AtomicBool>,
     read: Option<tokio::task::AbortHandle>,
+    scope: v5::Scope,
 }
 
 struct Transfer {
@@ -227,10 +232,12 @@ struct Driver {
     transfers: VecDeque<Transfer>,
     next_transfer: u64,
     established: bool,
+    events: events::Interests,
 }
 
 impl Drop for Driver {
     fn drop(&mut self) {
+        self.events.environment.subscriptions.release(&self.epoch);
         self.peer.revoke();
         for work in self.work.values() {
             work.cancelled.store(true, Ordering::Release);
@@ -314,7 +321,10 @@ async fn connect(
             authorized_sessions: BTreeSet::new(),
             authorized_workspaces: BTreeSet::new(),
             reservation: None,
-            event_types: BTreeSet::from(["ycoding.v5.SessionLogItem".into()]),
+            event_types: BTreeSet::from([
+                "ycoding.v5.SessionLogItem".into(),
+                "ycoding.v5.PublicEvent".into(),
+            ]),
         },
         dispatcher.descriptors(),
         0,
@@ -329,10 +339,19 @@ async fn connect(
         transfers: VecDeque::new(),
         next_transfer: 1,
         established: false,
+        events: events::Interests::new(environment.clone()),
     };
     let subscriber = core
         .events
-        .subscribe(Scope::Global, None, || {})
+        .subscribe_types(
+            Scope::Global,
+            &[
+                "session.created.2",
+                "session.deleted.2",
+                "session.updated.1",
+            ],
+            || {},
+        )
         .map_err(|_| Error::Transport)?;
     driver.machine.start(0).map_err(|_| Error::Incompatible)?;
     let (completed, mut results) =
@@ -373,14 +392,19 @@ async fn connect(
             }
         }
         driver.feed_transfers()?;
+        driver.feed_events()?;
         if Instant::now() >= next_send
             && let Some(prepared) = driver.machine.prepare_handoff(driver.now())
         {
             let bytes = prepared.frame().encode_to_vec();
+            let association = match &prepared.frame().body {
+                Some(v5::frame::Body::Result(result)) => Some(result.request_id.clone()),
+                _ => None,
+            };
             let length = bytes.len() as u64;
             tokio::time::timeout(
                 Duration::from_millis(environment.services.budgets.delivery_timeout_ms),
-                socket.send(tungstenite::Message::Binary(bytes.into())),
+                std::future::poll_fn(|context| socket.poll_ready_unpin(context)),
             )
             .await
             .map_err(|_| Error::Transport)?
@@ -391,17 +415,42 @@ async fn connect(
                 .map_err(protocol_error)?;
             if decisions
                 .iter()
-                .any(|decision| matches!(decision, Decision::Closed(_)))
+                .any(|decision| {
+                    if let Decision::Closed(close) = decision {
+                        tracing::debug!(category = ?close.category, code = close.code, length, "remote connection closed at handoff");
+                        return true;
+                    }
+                    false
+                })
             {
                 return Err(Error::Incompatible);
             }
+            socket
+                .start_send_unpin(tungstenite::Message::Binary(bytes.into()))
+                .map_err(|_| Error::Transport)?;
+            if let Some(id) = association {
+                driver.settle_subscription(&id)?;
+            }
+            tokio::time::timeout(
+                Duration::from_millis(environment.services.budgets.delivery_timeout_ms),
+                socket.flush(),
+            )
+            .await
+            .map_err(|_| Error::Transport)?
+            .map_err(|_| Error::Transport)?;
             next_send = Instant::now() + Duration::from_millis(25);
         }
         if driver
             .machine
             .take_decisions()
             .iter()
-            .any(|decision| matches!(decision, Decision::Closed(_)))
+            .any(|decision| {
+                if let Decision::Closed(close) = decision {
+                    tracing::debug!(category = ?close.category, code = close.code, "remote connection closed while scheduling");
+                    return true;
+                }
+                false
+            })
         {
             return Err(Error::Incompatible);
         }
@@ -410,7 +459,10 @@ async fn connect(
             _ = ticker.tick() => {},
             result = results.recv() => {
                 let Some((id, settled)) = result else { return Err(Error::Transport); };
-                if driver.work.remove(&id).is_some() { driver.complete(settled)?; }
+                if let Some(work) = driver.work.remove(&id) {
+                    let settled = driver.subscription_result(settled, work.scope)?;
+                    driver.complete(settled)?;
+                }
             },
             incoming = socket.next() => {
                 let bytes = match incoming {
@@ -418,11 +470,24 @@ async fn connect(
                     Some(Ok(tungstenite::Message::Ping(_) | tungstenite::Message::Pong(_))) => continue,
                     Some(Ok(tungstenite::Message::Close(Some(close)))) => return Err(match u16::from(close.code) { 4401 => Error::Unauthorized, 4403 => Error::Forbidden, 4409 => Error::Conflict, _ => Error::Transport }),
                     Some(Ok(tungstenite::Message::Text(_))) => return Err(Error::Incompatible),
-                    Some(Err(tungstenite::Error::Capacity(_) | tungstenite::Error::Protocol(_))) => return Err(Error::Incompatible),
+                    Some(Err(tungstenite::Error::Capacity(error))) => {
+                        tracing::debug!(?error, "remote websocket capacity failed");
+                        return Err(Error::Incompatible);
+                    },
+                    Some(Err(tungstenite::Error::Protocol(error))) => {
+                        tracing::debug!(?error, "remote websocket protocol failed");
+                        return Err(Error::Incompatible);
+                    },
                     _ => return Err(Error::Transport),
                 };
-                let token = driver.machine.admit_incoming(bytes.len() as u64).ok_or(Error::Incompatible)?;
-                let frame = decode_strict::<v5::Frame>(&bytes).map_err(|_| Error::Incompatible)?;
+                let token = driver.machine.admit_incoming(bytes.len() as u64).ok_or_else(|| {
+                    tracing::debug!("remote frame admission failed");
+                    Error::Incompatible
+                })?;
+                let frame = decode_strict::<v5::Frame>(&bytes).map_err(|_| {
+                    tracing::debug!("remote frame failed strict decoding");
+                    Error::Incompatible
+                })?;
                 if let Some(v5::frame::Body::Ready(ready)) = &frame.body { driver.epoch = ready.connection_epoch.clone(); }
                 let ordinal = frame.delivery_ordinal;
                 let decisions = driver.machine.accept_incoming(&token, frame, driver.now()).map_err(protocol_error)?;
@@ -443,6 +508,7 @@ async fn connect(
                             let cancellation = cancelled.clone();
                             let id = request.request_id.clone();
                             let request_id = id.clone();
+                            let scope = request.scope.clone();
                             let peer = driver.peer.clone();
                             let connection_id = driver.epoch.clone();
                             let environment = environment.clone();
@@ -463,23 +529,31 @@ async fn connect(
                                 let settled = dispatcher.invoke_remote(environment, connection_id, &peer, request).await;
                                 let _ = completed.send((id, settled)).await;
                             });
-                            driver.work.insert(request_id, Work { cancelled, read: (!mutation).then(|| job.abort_handle()) });
+                            driver.work.insert(request_id, Work { cancelled, read: (!mutation).then(|| job.abort_handle()), scope });
                             tasks.jobs.push(job);
                         },
                         Decision::Control(control) => {
-                            driver.consume(ordinal)?;
                             match control.kind {
                                 Some(v5::control::Kind::Priority(_)) => {},
-                                _ => return Err(Error::Incompatible),
+                                Some(v5::control::Kind::SubscriptionSnapshot(snapshot)) => driver.snapshot(snapshot, &dispatcher).await?,
+                                _ => {
+                                    tracing::debug!("remote control has no connector handler");
+                                    return Err(Error::Incompatible);
+                                },
                             }
+                            driver.consume(ordinal)?;
                         },
                         Decision::CancelWork { target, mutation: _ } => driver.cancel(&target),
                         Decision::Closed(close) => {
+                            tracing::debug!(category = ?close.category, code = close.code, "remote connection closed while receiving");
                             let _ = tokio::time::timeout(Duration::from_secs(1), socket.close(Some(tungstenite::protocol::CloseFrame { code: close.code.into(), reason: close.reason().into() }))).await;
                             return Err(Error::Incompatible);
                         },
                         Decision::Send(_) => {},
-                        _ => return Err(Error::Incompatible),
+                        _ => {
+                            tracing::debug!("remote decision has no connector handler");
+                            return Err(Error::Incompatible);
+                        },
                     }
                 }
             }
@@ -488,6 +562,7 @@ async fn connect(
 }
 
 fn protocol_error(error: ProtocolError) -> Error {
+    tracing::debug!(?error, "remote protocol operation failed");
     match error {
         ProtocolError::Limit | ProtocolError::Closed => Error::Transport,
         _ => Error::Incompatible,
@@ -569,6 +644,9 @@ impl Driver {
     }
 
     fn cancel(&mut self, target: &v5::cancel::Target) {
+        if let v5::cancel::Target::RequestId(id) = target {
+            self.events.associations.remove(id);
+        }
         self.transfers.retain(|transfer| match target {
             v5::cancel::Target::RequestId(id) => &transfer.bulk.request_id != id,
             v5::cancel::Target::TransferId(id) => &transfer.id != id,

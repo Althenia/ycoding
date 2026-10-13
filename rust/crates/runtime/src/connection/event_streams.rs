@@ -4,7 +4,9 @@ use prost::{Message, Name};
 use std::sync::Arc;
 use ycoding_core::event_feed::{Item, Payload, Subscriber};
 use ycoding_core::session::log::Entry;
-use ycoding_core::ycoding_schema::{DomainDecode, JsonValue, session, session_message};
+use ycoding_core::ycoding_schema::{
+    DomainDecode, JsonValue, LosslessString, session, session_message,
+};
 use ycoding_protocol::{
     connection::{Direction, EventMetadata, ProtocolError},
     v5,
@@ -163,6 +165,7 @@ impl Driver {
             scope.clone(),
             now,
             Direction::Send,
+            None,
         ) {
             Ok(()) => Ok(true),
             Err(ProtocolError::Unknown) => Ok(false),
@@ -226,7 +229,11 @@ impl Driver {
                     Err(_) => return Progress::Failed(ProtocolError::Limit),
                 },
             };
-            let record = match self.event_record(&item) {
+            let record = match event_record(
+                &item,
+                &self.source_epoch(),
+                self.shared.environment.services.core.as_ref(),
+            ) {
                 Ok(Some(record)) => record,
                 Ok(None) => continue,
                 Err(error) => return Progress::Failed(error),
@@ -241,78 +248,71 @@ impl Driver {
             }
         }
     }
+}
 
-    fn event_record(&self, item: &Item) -> Result<Option<v5::EventRecord>, ProtocolError> {
-        let event = match &item.payload {
-            Payload::Durable(event) => event,
-            Payload::Ephemeral(event) => return self.typed_ephemeral_record(event),
-        };
-        let Some(type_) = event.type_.as_str() else {
-            return Err(ProtocolError::Malformed);
-        };
-        if !type_.starts_with("session.") || log::excluded(type_) {
-            return Ok(None);
+pub(crate) fn event_record(
+    item: &Item,
+    source_epoch: &LosslessString,
+    core: Option<&crate::Core>,
+) -> Result<Option<v5::EventRecord>, ProtocolError> {
+    let event = match &item.payload {
+        Payload::Durable(event) => event,
+        Payload::Ephemeral(event) => {
+            return ephemeral::record(event, source_epoch)
+                .map(Some)
+                .map_err(|_| ProtocolError::Malformed);
         }
-        let session = session::Id::decode(&JsonValue::String(event.aggregate_id.clone()))
-            .map_err(|_| ProtocolError::Malformed)?;
-        let mut entry = Entry::from_event(event)
-            .inspect_err(|_| {
-                tracing::warn!(position = item.position, "feed event is not decodable")
-            })
-            .map_err(|_| ProtocolError::Malformed)?;
-        if type_ == "session.shell.started.1" {
-            let core = self
-                .shared
-                .environment
-                .services
-                .core
-                .as_ref()
-                .ok_or(ProtocolError::Malformed)?;
-            if let Some((owner, session_message::Info::Shell(shell))) = core
-                .sessions
-                .message(&session_message::Id::from_event(&entry.event.0.id))
-                .map_err(|_| ProtocolError::Malformed)?
-                && owner == session
-            {
-                entry.event.0.metadata = shell.metadata;
-            }
+    };
+    let Some(type_) = event.type_.as_str() else {
+        return Err(ProtocolError::Malformed);
+    };
+    if !type_.starts_with("session.") || log::excluded(type_) {
+        return Ok(None);
+    }
+    let session = session::Id::decode(&JsonValue::String(event.aggregate_id.clone()))
+        .map_err(|_| ProtocolError::Malformed)?;
+    let mut entry = Entry::from_event(event)
+        .inspect_err(|_| tracing::warn!(position = item.position, "feed event is not decodable"))
+        .map_err(|_| ProtocolError::Malformed)?;
+    if type_ == "session.shell.started.1" {
+        let core = core.ok_or(ProtocolError::Malformed)?;
+        if let Some((owner, session_message::Info::Shell(shell))) = core
+            .sessions
+            .message(&session_message::Id::from_event(&entry.event.0.id))
+            .map_err(|_| ProtocolError::Malformed)?
+            && owner == session
+        {
+            entry.event.0.metadata = shell.metadata;
         }
-        let record = log::record(&entry, &session, &self.source_epoch())
-            .inspect_err(|error| {
-                tracing::debug!(
-                    event_type = ?event.type_.as_str(),
-                    reason = error.0,
-                    "feed event has no v5 wire shape"
-                );
-            })
-            .map_err(|_| ProtocolError::Malformed)?;
-        Ok(Some(v5::EventRecord {
-            event_id: record.event_id,
-            created_ms: record.created_ms,
-            durable: Some(v5::DurablePosition {
-                aggregate_id: event
-                    .aggregate_id
-                    .to_utf8()
-                    .map_err(|_| ProtocolError::Malformed)?,
-                sequence: record.seq,
-                version: record.version,
-            }),
-            event: v5::TypedPayload {
-                type_name: v5::PublicEvent::full_name(),
-                payload: public_event(record.item)?.encode_to_vec(),
-            },
-        }))
     }
+    let record = log::record(&entry, &session, source_epoch)
+        .inspect_err(|error| {
+            tracing::debug!(
+                event_type = ?event.type_.as_str(),
+                reason = error.0,
+                "feed event has no v5 wire shape"
+            );
+        })
+        .map_err(|_| ProtocolError::Malformed)?;
+    Ok(Some(v5::EventRecord {
+        event_id: record.event_id,
+        created_ms: record.created_ms,
+        durable: Some(v5::DurablePosition {
+            aggregate_id: event
+                .aggregate_id
+                .to_utf8()
+                .map_err(|_| ProtocolError::Malformed)?,
+            sequence: record.seq,
+            version: record.version,
+        }),
+        event: v5::TypedPayload {
+            type_name: v5::PublicEvent::full_name(),
+            payload: public_event(record.item)?.encode_to_vec(),
+        },
+    }))
+}
 
-    fn typed_ephemeral_record(
-        &self,
-        event: &ycoding_core::event_feed::Ephemeral,
-    ) -> Result<Option<v5::EventRecord>, ProtocolError> {
-        ephemeral::record(event, &self.source_epoch())
-            .map(Some)
-            .map_err(|_| ProtocolError::Malformed)
-    }
-
+impl Driver {
     fn enqueue_record(
         &mut self,
         scope: &v5::Scope,

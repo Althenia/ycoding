@@ -302,6 +302,35 @@ async fn remote_global_form_selection_is_rejected_before_backend_resolution() {
     assert_eq!(error.type_name, v5::InvalidRequestError::full_name());
 }
 
+#[tokio::test]
+async fn remote_event_target_must_match_the_authorized_outer_session() {
+    let rejected = failure(
+        standard()
+            .unwrap()
+            .invoke_remote(
+                environment(None),
+                "scope-mismatch".into(),
+                &peer(),
+                request(
+                    "event.subscribe",
+                    session_scope("ses_rich"),
+                    v5::EventSubscribeRequest {
+                        scope: session_scope("ses_other"),
+                    }
+                    .encode_to_vec(),
+                ),
+            )
+            .await,
+    );
+    assert_eq!(rejected.type_name, v5::InvalidRequestError::full_name());
+    let rejected = decode_strict::<v5::InvalidRequestError>(&rejected.payload).unwrap();
+    assert_eq!(units(rejected.kind.as_ref().unwrap()), "forbidden");
+    assert_eq!(
+        units(&rejected.message),
+        "Remote event target must match its Session scope"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn connector_assets_deliver_metadata_then_exact_raw_bytes_and_empty_body() {
     let directory = std::env::temp_dir().join(format!("connector-assets-{}", std::process::id()));

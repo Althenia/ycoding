@@ -149,6 +149,16 @@ cargo test --locked -p ycoding-runtime --test config_ops
 
 Relay refusal of a credential (401, 403 or 410) maps to `Unauthorized`, which stops the connector until the next enable; `remote.get` reports `credentialState` revoked for that device until a new enrollment. Store and enrollment-state failures map to `Setup`; other relay failures map to `Transport` and back off.
 
+The binary v5 connector derives Session interest from relay-owned `SubscriptionSnapshot` controls. It accepts each typed Session target through the backend before registering its subscription identity, shares one bounded global event observer across the union, and releases that observer when the last accepted interest leaves or the connection ends. Repeated clients use the same accepted identity without replacing its queued events. Remote `event.subscribe` requires identical Session targets in the outer scope and typed payload; unknown Sessions return a typed failure without registering interest.
+
+Each new union interest advertises the backend process source epoch with `ResyncRequired` before its subscription Result. Successful Result handoff settles that RPC against the registered identity using the explicit canonical epoch. Public durable and ephemeral events use the same encoder as the local event stream; events wait for subscription settlement, remain ordered, and retain protocol delivery charges until relay consumption. Queue pressure retains one held feed item and stops draining the bounded observer; observer overflow ends the connection for reconciliation. Inventory invalidation has a separate filtered observer. Remote finite `session.log` streams are unavailable.
+
+`tests/connector_relay.rs` starts disposable workerd/D1 through the connector-specific Bun harness, enrolls the real Rust device through `/api/devices`, and verifies the Rust AGENT connection, shared subscriptions, canonical epochs, ordered live/durable delivery and release with REMOTE_CLIENT peers. Install tooling in this checkout with `bun install --frozen-lockfile`; the harness stops its Worker on exit and retains diagnostics in its worktree-owned scratch directory. It waits for the relay's `/api/devices` online state, which proves receipt confirmation beyond the initiator's local `State::On`.
+
+```sh
+~/.cache/ycoding/cargo-gate.sh cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-runtime --test connector --test connector_events --test connector_relay --test remote_derived --test remote_enroll
+```
+
 ## Session ingress
 
 `session.autonomy.set` accepts YOLO 0–3 by the selected double's value,

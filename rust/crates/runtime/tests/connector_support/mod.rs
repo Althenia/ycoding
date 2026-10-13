@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use axum::{
     Router,
     extract::{State, WebSocketUpgrade, ws},
@@ -33,6 +35,8 @@ pub enum Command {
     Cancel(String, oneshot::Sender<u64>),
     Close(u16),
     Raw(v5::Frame),
+    Body(v5::frame::Body),
+    ConsumeEvent(u64),
 }
 
 pub struct Opening {
@@ -244,7 +248,10 @@ async fn drive(mut socket: ws::WebSocket, shared: Arc<Shared>) {
             authorized_sessions: BTreeSet::new(),
             authorized_workspaces: BTreeSet::new(),
             reservation: None,
-            event_types: BTreeSet::from(["ycoding.v5.SessionLogItem".into()]),
+            event_types: BTreeSet::from([
+                "ycoding.v5.SessionLogItem".into(),
+                "ycoding.v5.PublicEvent".into(),
+            ]),
         },
         OPERATIONS.clone(),
         0,
@@ -262,6 +269,8 @@ async fn drive(mut socket: ws::WebSocket, shared: Arc<Shared>) {
     let started = Instant::now();
     let mut ticker = tokio::time::interval(Duration::from_millis(5));
     let mut requests = BTreeMap::new();
+    let mut scopes = BTreeMap::new();
+    let mut epochs: BTreeMap<String, String> = BTreeMap::new();
     let mut cancels = BTreeMap::new();
     loop {
         let now = started.elapsed().as_millis() as u64;
@@ -313,8 +322,10 @@ async fn drive(mut socket: ws::WebSocket, shared: Arc<Shared>) {
             _ = ticker.tick() => {},
             next = command.recv() => match next {
                 Some(Command::Request(request, reply)) => {
+                    let scope = request.scope.clone();
                     let reserved = reserve(&epoch, v5::frame::Body::Request(v5::Request { request_id: u64::MAX.to_string(), ..request.clone() }));
                     let id = machine.request(request.operation_id, request.scope, request.payload, reserved, started.elapsed().as_millis() as u64).unwrap();
+                    scopes.insert(id.clone(), scope);
                     requests.insert(id, reply);
                 },
                 Some(Command::Cancel(id, reply)) => {
@@ -326,6 +337,13 @@ async fn drive(mut socket: ws::WebSocket, shared: Arc<Shared>) {
                     break;
                 },
                 Some(Command::Raw(frame)) => { socket.send(ws::Message::Binary(frame.encode_to_vec().into())).await.unwrap(); },
+                Some(Command::Body(body)) => {
+                    let reserved = reserve(&epoch, body.clone());
+                    machine.enqueue(body, reserved, started.elapsed().as_millis() as u64).unwrap();
+                },
+                Some(Command::ConsumeEvent(ordinal)) => {
+                    machine.consume(v5::LedgerClass::Event, ordinal, started.elapsed().as_millis() as u64).unwrap();
+                },
                 None => break,
             },
             next = socket.recv() => {
@@ -339,7 +357,25 @@ async fn drive(mut socket: ws::WebSocket, shared: Arc<Shared>) {
                 let mut closed = false;
                 for decision in decisions {
                     match decision {
-                        Decision::Forward(_) | Decision::Control(_) => {
+                        Decision::Forward(frame) => {
+                            if let Some(v5::frame::Body::Result(result)) = &frame.body
+                                && result.operation_id == 4000
+                                && let Some(v5::result::Outcome::Success(payload)) = &result.outcome {
+                                let accepted = decode_strict::<v5::EventSubscribeResult>(&payload.payload).unwrap();
+                                let id = String::from_utf16(&ycoding_protocol::decode_lossless(&accepted.subscription_id, 1024).unwrap()).unwrap();
+                                let scope = scopes.get(&result.request_id).unwrap().clone();
+                                let session = match &scope.target { Some(v5::scope::Target::Session(id)) => id, _ => panic!("Session subscription") };
+                                machine.accept_subscription(&result.request_id, id, scope.clone(), started.elapsed().as_millis() as u64, ycoding_protocol::connection::Direction::Receive, Some(epochs.get(session).unwrap().clone())).unwrap();
+                            }
+                            if ledger != Some(v5::LedgerClass::Event as i32) {
+                                machine.consume(v5::LedgerClass::try_from(ledger.unwrap()).unwrap(), ordinal.unwrap(), started.elapsed().as_millis() as u64).unwrap();
+                            }
+                        },
+                        Decision::Resync(resync) => {
+                            if let Some(v5::scope::Target::Session(id)) = resync.scope.target { epochs.insert(id, resync.source_epoch); }
+                            assert_eq!(ledger, Some(v5::LedgerClass::Normal as i32), "Unexpected event epoch invalidation");
+                        },
+                        Decision::Control(_) => {
                             machine.consume(v5::LedgerClass::try_from(ledger.unwrap()).unwrap(), ordinal.unwrap(), started.elapsed().as_millis() as u64).unwrap();
                         },
                         Decision::Closed(_) => closed = true,
