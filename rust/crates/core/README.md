@@ -2274,7 +2274,7 @@ variant overlays merge recursively; arrays replace and header names merge
 case-insensitively. Disabled/denied providers, unavailable profiles, model defaults,
 release ordering, and small-model selection remain catalog-owned.
 
-Muse (Meta) uses `auth::muse::register` (or `builtin` with a version) for remote-capable Meta device login, direct Meta Model API keys and `META_API_KEY`. Device polling starts immediately, respects pending/slow-down intervals and stops at authorization expiry. Optional refresh tokens are stored without enabling a refresh grant; missing expiry is zero (unknown). `resources::muse::Service::reconcile` discovers credential-specific `/muse-code/models` inventories and republishes them through Catalog account-generation fences. Retain the service, call `refresh` on connection updates and `reconcile` on sixty-second boundaries to preserve same-account inventory on transient discovery failures; failed reconciliation does not settle its hashed source fingerprint. `Catalog::compose` runs initial Muse reconciliation, and an unconnected provider has no models.
+Muse (Meta) uses `auth::muse::register` (or `builtin` with a version) for remote-capable Meta device login, direct Meta Model API keys and `META_API_KEY`. Device polling starts immediately, respects pending/slow-down intervals and stops at authorization expiry. Optional refresh tokens are stored without enabling a refresh grant; missing expiry is zero (unknown). `resources::muse::Service::reconcile` discovers credential-specific `/muse-code/models` inventories and republishes them through Catalog account-generation fences. Retain the service, call `refresh` on connection updates and `reconcile` on sixty-second boundaries to preserve same-account inventory on transient discovery failures; failed reconciliation does not settle its hashed source fingerprint. `Catalog::compose_with_accounts` retains the Muse owner across reconciliation, and an unconnected provider has no models.
 
 Muse catalog rows require integer context/output limits and text output, and exclude hidden or explicitly non-tool models. Names, families, release dates, modalities and supported effort variants are preserved; sampling metadata and prices are not invented. The Session runner routes Muse through `resources::muse::from_catalog_model` with its stored connection, preserving profile-bound minting, Responses reasoning metadata and full encrypted replay. Direct-key resolution is also available through `model::from_catalog_model`.
 
@@ -2287,7 +2287,8 @@ return typed errors. `account_identity` hashes non-secret account identity using
 the TypeScript field order; resolved-model Debug output is redacted.
 
 `model::quota::Service` performs separate best-effort HTTP reads with supplied
-credential storage and endpoints. It never writes credentials or Session state.
+credential storage and endpoints. Selected authentication preparation can refresh
+credentials through their owner; quota reads do not write Session state.
 Same-account refreshes coalesce; failures return safe status/message snapshots,
 and cached values remain available as stale data. Account replacement invalidates
 a refresh result. Unknown values remain absent and reported zero remains zero;
@@ -2317,8 +2318,9 @@ negative, and nonfinite costs contribute no total; a reported zero remains zero.
 Store reads run off the async runtime workers. `auxiliary_errors` exposes optional
 app-server or local-spend failures while the rest of the usage list remains usable.
 
-These resources do not execute npm/JS provider packages, discover Google ADC/AWS
-credentials, or resolve managed Claude credentials or Cursor API-key exchanges.
+These resources do not execute npm/JS provider packages. `ProviderContext` owns
+Google ADC/AWS resolution and prepared native model construction; authentication
+preparation resolves managed Claude sources and Cursor API-key exchanges.
 Calendar parsing covers ISO, numeric, English month-name/RFC, and local-time forms,
 with Bun-pinned vectors for
 UTC, America/New_York, and Asia/Bangkok. Local conversion uses Chrono and the OS
@@ -2333,6 +2335,92 @@ Run focused catalog/model/quota checks from `rust`:
 ```sh
 cargo test --locked -p ycoding-core --test 'catalog_*' --test 'model_*' --test 'quota_*'
 ```
+
+### Provider account composition
+
+Keep one `ProviderContext`, `auth::Preparation`, shared Claude source Store,
+shared Cursor auth Store, `catalog::AccountCatalog`, and `Arc<model::Resolver>`
+for the owning Location. Cloning the context shares ADC and Cursor runtime
+ownership. The Cursor auth Store exchanges `crsr_` keys; Cursor inference
+runtimes are separate and keyed by credential/account generation or exact
+unmanaged authentication identity.
+
+Share the source/auth Stores across Location owners that use the same backend
+profiles. Independent Claude Stores have independent refresh deduplication maps;
+cloning one shared Store preserves token-rotation ownership.
+
+`ProviderContext::new(environment: BTreeMap<String, String>, version: &str)`
+returns `Result<ProviderContext, model::Error>`. Assign its clone to
+`Preparation.providers`; assign the shared `auth::cursor::Store` to
+`Preparation.cursor`. `Preparation::register(&mut Draft, &environment,
+Option<&claude::Store>)` registers the built-in account methods without network
+traffic. Call `claude::Store::accounts(now).await` to seed source labels.
+
+`AccountCatalog::new(preparation, environment)` returns a retained account owner.
+Assign the same Claude Store to `AccountCatalog.claude`. `seed(&mut Catalog,
+&credential::Service)` is network-free. Seed a configured baseline before
+publishing initial model availability; it does not borrow disk Claude accounts.
+
+`Catalog::compose_with_accounts(snapshots, documents, &credentials, &mut accounts,
+now, force).await` returns `Result<Composition, models_dev::Error>`. It retains
+configured OpenAI-model discovery and provider account inventories, performs
+credential preparation before discovery, applies provider transforms to public
+and account models, then applies project configuration to both. Remote OpenCode
+accounts start from the provider baseline, never another account's models.
+Same-account discovery failures retain inventories except Copilot; a Copilot
+failure clears that account's inventory. Removed/replaced accounts cannot select
+retained models. Unknown Daybreak programs are excluded.
+
+Serialize connection-change and timer reconciles through this owner. Compose on
+every connection/configuration change; use a 60-second timer for refresh and
+`force: true` for an explicit refresh. Ordinary reconciles cache the same source
+and credential generation until the deadline, including failed discovery. Publish
+only complete catalogs with `Resolver::replace(catalog)`. `Resolver::catalog()`
+returns an `Arc<Catalog>`; hold one snapshot for the entire selection operation.
+
+Prepare a selected credential with
+`Preparation::prepare_value(&credentials, selected.clone(), now,
+Option<&claude::Store>).await`. It returns a secret snapshot and enforces current
+account identity. Call
+`ProviderContext::selected_model(&model::Info, Option<&credential::Value>,
+Option<&credential::Info>, Option<&ClaudeHost>, Option<&cursor::route::Host>,
+Option<&auth::cursor::Store>).await`
+to construct the native model. The runner's `Local::resolve_model` uses this path;
+its helper-generation path uses the same resolver. An async generation factory
+must await these calls rather than use the synchronous `from_catalog_model` for
+account-backed models. The factory itself belongs to composition.
+
+The selected factory exchanges env/configured Cursor API keys even without a
+stored credential. Unmanaged runtime identity follows the original key, not a
+rotating exchanged token. A `crsr_` key without its shared auth Store fails before
+native transport.
+
+Supply Cursor model/image/planning/observation/persistence hosts through
+`cursor::route::Host.extensions`; those hosts retain their permission and storage
+authority. Account discovery supplies raw model metadata to the shared context's
+Cursor runtimes. Session affinity remains request-owned.
+
+GitLab/SAP exchange routes are reconstructed for each logical request. DWS
+workflow models are rejected before exchange. Vertex ADC is resolved before
+construction and refreshed again at dispatch. Bedrock resolves the AWS chain at
+each signing operation; Mantle signs with `bedrock-mantle`. Credential metadata
+overrides settings, never request bodies; resolved auth replaces conflicting auth
+settings. `ProviderContext.endpoints` is an owner-supplied route-ID transport
+override for controlled endpoints; model settings cannot replace the canonical
+Codex endpoint.
+
+Construct quota with `quota::Service::with_auth(preparation.clone(),
+Some(claude.clone()))`. Managed Claude cold loads use the selected source at
+`/api/oauth/usage`, refresh once after 401 when the token changes, and use a
+five-minute TTL. Response observations retain exact account identity. Numeric
+Retry-After deadlines apply to cold errors and stale snapshots even on forced
+refresh. Unknown values remain absent; reported zero remains zero. Quota failures
+remain independent from inference.
+
+On Location shutdown, stop reconcile intake, finish runners, shut down quota and
+the shared source/auth Stores, then call `ProviderContext::shutdown().await`.
+AccountCatalog owns retained discovery state, not a background task or another
+model authority. Shared owners must be shut down once, not by each clone.
 
 ### Cursor
 

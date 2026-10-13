@@ -28,6 +28,144 @@ pub struct Host {
     pub context: RequestContext,
     pub runtime: Arc<Runtime>,
     pub known_mcp_servers: Vec<String>,
+    pub extensions: Extensions,
+}
+
+#[derive(Clone, Default)]
+pub struct Extensions {
+    pub agent: Option<ycoding_ai::cursor::transport::Endpoint>,
+    pub models: Vec<ycoding_ai::cursor::models::Info>,
+    pub image_host: Option<Arc<dyn ycoding_ai::cursor::images::Host>>,
+    pub image_environment: Option<ycoding_ai::cursor::images::Environment>,
+    pub planning_host: Option<Arc<dyn ycoding_ai::cursor::planning::Host>>,
+    pub observations: Option<Arc<dyn ycoding_ai::cursor::observations::Host>>,
+    pub persistence: Option<Arc<dyn ycoding_ai::cursor::persistence::Store>>,
+}
+
+#[derive(Clone)]
+pub struct Runtimes {
+    options: ycoding_ai::cursor::transport::Options,
+    accounts: Arc<tokio::sync::Mutex<BTreeMap<String, AccountRuntime>>>,
+    models: Arc<tokio::sync::Mutex<BTreeMap<String, Vec<ycoding_ai::cursor::models::Info>>>>,
+}
+struct AccountRuntime {
+    runtime: Arc<Runtime>,
+    credential: bool,
+}
+impl Runtimes {
+    pub fn new(options: ycoding_ai::cursor::transport::Options) -> Self {
+        Self {
+            options,
+            accounts: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+            models: Default::default(),
+        }
+    }
+    pub async fn set_models(
+        &self,
+        selected: &crate::resources::credential::Info,
+        models: Vec<ycoding_ai::cursor::models::Info>,
+    ) -> Result<(), Error> {
+        self.models.lock().await.insert(
+            crate::resources::model::account_identity(selected)
+                .to_utf8()
+                .map_err(|_| Error::InvalidSettings)?,
+            models,
+        );
+        Ok(())
+    }
+    pub async fn retain_accounts(&self, identities: &[String]) {
+        self.models
+            .lock()
+            .await
+            .retain(|identity, _| identities.contains(identity));
+        let removed = self
+            .accounts
+            .lock()
+            .await
+            .extract_if(.., |identity, account| {
+                account.credential && !identities.contains(identity)
+            })
+            .map(|(_, account)| account.runtime)
+            .collect::<Vec<_>>();
+        for runtime in removed {
+            runtime.shutdown().await;
+        }
+    }
+    pub async fn model(
+        &self,
+        info: &model::Info,
+        value: Option<&credential::Value>,
+        selected: Option<&crate::resources::credential::Info>,
+        identity_source: Option<&credential::Value>,
+        host: &Host,
+    ) -> Result<Model, Error> {
+        let identity = match selected {
+            Some(selected) => crate::resources::model::account_identity(selected)
+                .to_utf8()
+                .map_err(|_| Error::InvalidSettings)?,
+            None => {
+                let material = match identity_source.or(value) {
+                    Some(credential::Value::Key(value)) => value.key.encode(),
+                    Some(credential::Value::OAuth(value)) => value.access.encode(),
+                    None => info
+                        .settings
+                        .as_ref()
+                        .and_then(|s| s.0.get(&"apiKey".into()))
+                        .cloned()
+                        .ok_or(Error::ProfileUnavailable)?,
+                };
+                ring::digest::digest(
+                    &ring::digest::SHA256,
+                    ycoding_schema::stringify_json(&material).as_bytes(),
+                )
+                .as_ref()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect()
+            }
+        };
+        let runtime = {
+            let mut accounts = self.accounts.lock().await;
+            if !accounts.contains_key(&identity) {
+                accounts.insert(
+                    identity.clone(),
+                    AccountRuntime {
+                        runtime: Arc::new(
+                            Runtime::new(self.options.clone())
+                                .map_err(|_| Error::InvalidSettings)?,
+                        ),
+                        credential: selected.is_some(),
+                    },
+                );
+            }
+            accounts
+                .get(&identity)
+                .map(|account| account.runtime.clone())
+                .ok_or(Error::InvalidSettings)?
+        };
+        let mut extensions = host.extensions.clone();
+        if let Some(models) = self.models.lock().await.get(&identity) {
+            extensions.models = models.clone();
+        }
+        model(
+            info,
+            value,
+            &Host {
+                identity: host.identity.clone(),
+                context: host.context.clone(),
+                runtime,
+                known_mcp_servers: host.known_mcp_servers.clone(),
+                extensions,
+            },
+        )
+    }
+    pub async fn shutdown(&self) {
+        let accounts = std::mem::take(&mut *self.accounts.lock().await);
+        self.models.lock().await.clear();
+        for account in accounts.into_values() {
+            account.runtime.shutdown().await;
+        }
+    }
 }
 
 pub fn model(
@@ -108,6 +246,13 @@ pub fn model(
         .map(str::to_owned);
     config.common.defaults = defaults;
     config.known_mcp_servers = host.known_mcp_servers.clone();
+    config.agent = host.extensions.agent.clone();
+    config.models = host.extensions.models.clone();
+    config.image_host = host.extensions.image_host.clone();
+    config.image_environment = host.extensions.image_environment.clone();
+    config.planning_host = host.extensions.planning_host.clone();
+    config.observations = host.extensions.observations.clone();
+    config.persistence = host.extensions.persistence.clone();
     let mut model = ycoding_ai::cursor::provider::model(info.model_id.clone(), config)
         .map_err(|_| Error::InvalidSettings)?;
     model.provider = info.provider_id.clone();

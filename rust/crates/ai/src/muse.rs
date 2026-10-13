@@ -79,6 +79,13 @@ impl Runtime {
             .get(&profile.map(str::to_owned))
             .cloned()
     }
+    pub fn retain_accounts(&self, identities: &[String]) -> Result<(), Error> {
+        self.keys
+            .lock()
+            .map_err(|_| Error::invalid("Muse key cache unavailable"))?
+            .retain(|identity, _| identities.contains(identity));
+        Ok(())
+    }
     pub fn observe(&self, event: &JsonValue, profile: Option<&str>, now: i64) {
         let Some(snapshot) = normalize_usage(event, now) else {
             tracing::warn!("invalid Muse subscription usage event");

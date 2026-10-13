@@ -416,6 +416,7 @@ impl Factory {
                     .map_err(|_| unavailable("Cursor context"))?,
                     runtime: cursor.runtime.clone(),
                     known_mcp_servers: context.known_mcp_servers,
+                    extensions: Default::default(),
                 })
             })
             .transpose()?;

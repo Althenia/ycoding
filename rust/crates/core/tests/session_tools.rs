@@ -2731,6 +2731,7 @@ async fn helper_model_resolution_cancels_decision_title_image_and_generate_befor
                     ycoding_core::resources::auth::Client::new(&h.server.url, "fixture").unwrap(),
                 )]),
                 cursor: None,
+                providers: None,
             },
             cursor: None,
             claude: None,

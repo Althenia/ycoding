@@ -298,6 +298,8 @@ async fn text_generation(session_headers: bool) {
         request.messages.push(Message::user("Hello"));
         let response = Executor::new(Executor::http_client().unwrap()).generate(&request).await.unwrap();
         assert_eq!(response.text(), "answer!".into());
+        assert!(matches!(response.events.first(), Some(ycoding_ai::llm::Event::StepStart { index: 0.0 })));
+        assert_eq!(response.events.iter().filter(|event| matches!(event, ycoding_ai::llm::Event::StepFinish { index: 0.0, finish } if finish.reason == FinishReason::Stop)).count(), 1);
         assert_eq!(response.finish_reason, FinishReason::Stop);
         assert_eq!(response.usage, None);
         server.await.unwrap();
@@ -389,6 +391,7 @@ async fn tool_continuation(retain_finished_stream: bool, session_headers: bool) 
         } else {
             let response = executor.generate(&request).await.unwrap();
             assert_eq!(response.finish_reason, FinishReason::ToolCalls);
+            assert_eq!(response.events.iter().filter(|event| matches!(event, ycoding_ai::llm::Event::StepFinish { index: 0.0, finish } if finish.reason == FinishReason::ToolCalls)).count(), 1);
             response.message
         };
         let call = first.content.iter().find_map(|part| if let Part::ToolCall(call) = part { Some(call.clone()) } else { None }).unwrap();
@@ -397,6 +400,7 @@ async fn tool_continuation(retain_finished_stream: bool, session_headers: bool) 
         request.messages.push(Message::new(ycoding_ai::llm::Role::Tool, vec![Part::ToolResult(ToolResult { id: call.id.clone(), name: call.name.clone(), result: ToolResultValue::Text(ycoding_schema::JsonValue::String("done".into())), cache: None, provider_executed: None, provider_metadata: None, output: None })]));
         let second = executor.generate(&request).await.unwrap();
         assert_eq!(second.finish_reason, FinishReason::Stop);
+        assert_eq!(second.events.iter().filter(|event| matches!(event, ycoding_ai::llm::Event::StepFinish { index: 0.0, finish } if finish.reason == FinishReason::Stop)).count(), 1);
         assert_eq!(second.usage, None);
         if let Some(mut stream) = held_stream {
             assert!(stream.next().await.unwrap().is_none());

@@ -14,10 +14,47 @@ pub struct DiscoveryDiagnostic {
     pub provider_id: provider::Id,
 }
 impl Catalog {
+    pub async fn compose_with_accounts(
+        snapshots: Vec<models_dev::Snapshot>,
+        documents: &[JsonValue],
+        credentials: &credential::Service,
+        accounts: &mut super::AccountCatalog,
+        now: i64,
+        force: bool,
+    ) -> Result<Composition, models_dev::Error> {
+        let mut composition = accounts
+            .configured(snapshots, documents, credentials, now, force)
+            .await?;
+        composition.diagnostics.extend(
+            accounts
+                .reconcile(&mut composition.catalog, credentials, now, force)
+                .await?,
+        );
+        composition.catalog.configure(documents)?;
+        Ok(composition)
+    }
     pub async fn compose(
         snapshots: Vec<models_dev::Snapshot>,
         documents: &[JsonValue],
         credentials: &credential::Service,
+    ) -> Result<Composition, models_dev::Error> {
+        Self::compose_prepared(
+            snapshots,
+            documents,
+            credentials,
+            &Default::default(),
+            None,
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .await
+    }
+    pub(crate) async fn compose_prepared(
+        snapshots: Vec<models_dev::Snapshot>,
+        documents: &[JsonValue],
+        credentials: &credential::Service,
+        preparation: &crate::resources::auth::Preparation,
+        claude: Option<&crate::resources::auth::claude::Store>,
+        now: i64,
     ) -> Result<Composition, models_dev::Error> {
         let mut catalog = Catalog::new(snapshots);
         let base = catalog.clone();
@@ -111,19 +148,33 @@ impl Catalog {
                 .flatten()
                 .collect::<Vec<_>>();
             for credential in selections {
-                let discovered = match discover(
-                    if credential.is_some() {
-                        &managed
-                    } else {
-                        &unmanaged
-                    },
-                    &configuration,
-                    credential,
-                )
-                .await
-                {
+                let prepared = match credential {
+                    Some(credential) => preparation
+                        .prepare_value(credentials, credential.clone(), now, claude)
+                        .await
+                        .map_err(|_| models_dev::Error::Request)
+                        .and_then(|secret| secret.domain().map_err(|_| models_dev::Error::Storage))
+                        .map(Some),
+                    None => Ok(None),
+                };
+                let discovered = match prepared {
+                    Ok(input) => {
+                        discover(
+                            if credential.is_some() {
+                                &managed
+                            } else {
+                                &unmanaged
+                            },
+                            &configuration,
+                            input.as_ref(),
+                        )
+                        .await
+                    }
+                    Err(error) => Err(error),
+                };
+                let discovered = match discovered {
                     Ok(discovered) => discovered,
-                    Err(_) => {
+                    _ => {
                         diagnostics.push(DiscoveryDiagnostic {
                             provider_id: provider_id.clone(),
                         });
@@ -181,21 +232,6 @@ impl Catalog {
                 }
             }
         }
-        let mut muse = crate::resources::muse::Service::new(
-            ycoding_ai::muse::Runtime::shared().map_err(|_| models_dev::Error::Request)?,
-        );
-        muse.reconcile(
-            &mut catalog,
-            credentials,
-            &std::env::vars().collect(),
-            chrono::Utc::now().timestamp_millis(),
-        )
-        .await?;
-        if muse.source().is_none() {
-            diagnostics.push(DiscoveryDiagnostic {
-                provider_id: provider::Id("muse".into()),
-            });
-        }
         catalog.configure(documents)?;
         Ok(Composition {
             catalog,
@@ -206,7 +242,7 @@ impl Catalog {
 async fn discover(
     client: &reqwest::Client,
     configuration: &JsonValue,
-    credential: Option<&credential::Info>,
+    credential: Option<&ycoding_schema::credential::Value>,
 ) -> Result<Vec<JsonValue>, models_dev::Error> {
     let settings = field(configuration, "settings").ok_or(models_dev::Error::InvalidSource)?;
     let base = field(settings, "baseURL")
@@ -244,13 +280,9 @@ async fn discover(
         }
     }
     if let Some(credential) = credential {
-        let value = credential
-            .secret()
-            .domain()
-            .map_err(|_| models_dev::Error::InvalidSource)?;
-        let token = match value {
-            ycoding_schema::credential::Value::Key(key) => key.key,
-            ycoding_schema::credential::Value::OAuth(oauth) => oauth.access,
+        let token = match credential {
+            ycoding_schema::credential::Value::Key(key) => &key.key,
+            ycoding_schema::credential::Value::OAuth(oauth) => &oauth.access,
         };
         headers.insert(
             "authorization",

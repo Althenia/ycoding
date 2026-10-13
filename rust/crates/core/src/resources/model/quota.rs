@@ -29,6 +29,7 @@ pub use spend::{LocalSpendRow, local_spend_from_store, local_spend_snapshots};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
     Request(Option<u16>),
+    RequestWithRetry { status: u16, retry_after_ms: u64 },
     InvalidResponse,
     Closed,
     Worker,
@@ -40,7 +41,7 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::Request(_) => "Provider usage refresh failed",
+            Self::Request(_) | Self::RequestWithRetry { .. } => "Provider usage refresh failed",
             Self::InvalidResponse => "Invalid provider usage response",
             Self::Closed => "Provider usage cache closed",
             Self::Worker => "Provider usage worker failed",
@@ -55,6 +56,7 @@ impl std::error::Error for Error {}
 type Pending = watch::Receiver<Option<Result<Snapshot, Error>>>;
 struct Entry {
     value: Option<Snapshot>,
+    retry: Option<(i64, Error)>,
     expires_at: i64,
     pending: Option<Pending>,
 }
@@ -88,6 +90,12 @@ impl Cache {
                 return Err(Error::Closed);
             }
             let current = state.entries.get(&key);
+            if let Some(current) = current
+                && let Some((deadline, error)) = current.retry
+                && deadline > now
+            {
+                return current.value.clone().map(Ok).unwrap_or(Err(error));
+            }
             if !refresh
                 && let Some(current) = current
                 && current.expires_at > now
@@ -104,6 +112,7 @@ impl Cache {
                     key.clone(),
                     Entry {
                         value: previous.clone(),
+                        retry: None,
                         expires_at: 0,
                         pending: Some(receiver.clone()),
                     },
@@ -127,6 +136,7 @@ impl Cache {
                                 key,
                                 Entry {
                                     value: Some(snapshot.clone()),
+                                    retry: None,
                                     expires_at: completed.saturating_add(ttl),
                                     pending: None,
                                 },
@@ -134,6 +144,17 @@ impl Cache {
                             Ok(snapshot)
                         }
                         Err(error) => {
+                            let retry = if let Error::RequestWithRetry { retry_after_ms, .. } =
+                                error
+                            {
+                                Some((
+                                    completed
+                                        .saturating_add(retry_after_ms.min(i64::MAX as u64) as i64),
+                                    error,
+                                ))
+                            } else {
+                                None
+                            };
                             if let Some(previous) = previous {
                                 let mut stale = previous.clone();
                                 stale.status = "stale".into();
@@ -142,14 +163,27 @@ impl Cache {
                                 state.entries.insert(
                                     key,
                                     Entry {
-                                        value: Some(previous),
+                                        value: Some(stale.clone()),
+                                        retry,
                                         expires_at: completed.saturating_add(ttl.min(30_000)),
                                         pending: None,
                                     },
                                 );
                                 Ok(stale)
                             } else {
-                                state.entries.remove(&key);
+                                if retry.is_some() {
+                                    state.entries.insert(
+                                        key,
+                                        Entry {
+                                            value: None,
+                                            retry,
+                                            expires_at: completed,
+                                            pending: None,
+                                        },
+                                    );
+                                } else {
+                                    state.entries.remove(&key);
+                                }
                                 Err(error)
                             }
                         }
@@ -176,6 +210,7 @@ impl Cache {
             key,
             Entry {
                 value: Some(snapshot),
+                retry: None,
                 expires_at: now.saturating_add(ttl),
                 pending: None,
             },

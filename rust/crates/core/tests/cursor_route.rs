@@ -31,6 +31,7 @@ fn host() -> Host {
         context: RequestContext::new(vec![0x22, 0x00]).unwrap(),
         runtime: Arc::new(Runtime::new(Options::default()).unwrap()),
         known_mcp_servers: vec![],
+        extensions: Default::default(),
     }
 }
 

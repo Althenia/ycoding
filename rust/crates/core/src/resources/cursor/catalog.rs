@@ -128,7 +128,7 @@ pub fn sync(catalog: &mut Catalog, models: Vec<model::Info>) {
         None => catalog.providers.push(ProviderRecord {
             provider: info,
             models,
-            environment: vec![],
+            environment: vec!["CURSOR_API_KEY".into()],
         }),
     }
 }

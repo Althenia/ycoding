@@ -137,12 +137,15 @@ struct Fixture {
 }
 impl Fixture {
     async fn new(responses: Vec<(u16, &'static str, &'static str)>) -> Self {
+        Self::with_headers(responses.into_iter().map(|(status,usage,body)| (status,format!("Content-Type: text/event-stream\r\nanthropic-ratelimit-unified-5h-utilization: {usage}\r\n"),body)).collect()).await
+    }
+    async fn with_headers(responses: Vec<(u16, String, &'static str)>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         let requests = Arc::new(Mutex::new(Vec::new()));
         let captured = requests.clone();
         let task = tokio::spawn(async move {
-            for (status, usage, body) in responses {
+            for (status, headers, body) in responses {
                 let (mut socket, _) =
                     tokio::time::timeout(Duration::from_secs(10), listener.accept())
                         .await
@@ -150,7 +153,7 @@ impl Fixture {
                         .unwrap();
                 let request = read_request(&mut socket).await;
                 captured.lock().unwrap().push(request);
-                socket.write_all(format!("HTTP/1.1 {status} Fixture\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nanthropic-ratelimit-unified-5h-utilization: {usage}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+                socket.write_all(format!("HTTP/1.1 {status} Fixture\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
             }
         });
         Self {
@@ -196,6 +199,238 @@ async fn read_request(socket: &mut tokio::net::TcpStream) -> String {
     })
     .await
     .unwrap()
+}
+
+#[tokio::test]
+async fn cold_quota_uses_selected_claude_source_preserves_zero_and_omits_absent_private_values() {
+    let profiles = Profiles::new();
+    profiles.write(A, "private-selected", FRESH);
+    profiles.write(B, "private-active", FRESH);
+    let mut fixture=Fixture::with_headers(vec![(200,"Content-Type: application/json\r\n".into(),r#"{"five_hour":{"utilization":0},"seven_day":null,"extra_usage":{"is_enabled":true,"monthly_limit":1000},"email":"private-email","accessToken":"private-payload"}"#)]).await;
+    let store = support::store();
+    let credentials = credential::Service::new(store.client());
+    let first = selected(&credentials, A, "selected").await;
+    selected(&credentials, B, "active").await;
+    let accounts = profiles.store(&fixture.endpoint);
+    let service = quota::Service::new(
+        credentials.clone(),
+        quota::Endpoints(BTreeMap::from([(
+            "anthropic".into(),
+            fixture.endpoint.clone(),
+        )])),
+    )
+    .unwrap()
+    .with_auth(Default::default(), Some(accounts.clone()));
+    let result = service
+        .get(
+            provider::Id("anthropic".into()),
+            Some(first.id()),
+            false,
+            100,
+        )
+        .await;
+    assert_eq!(result.status, "available".into());
+    assert_eq!(result.source, "provider_internal_api".into());
+    assert_eq!(result.stability, "best_effort".into());
+    assert_eq!(result.label, "Claude Max".into());
+    assert_eq!(result.profile, Some("selected".into()));
+    assert_eq!(result.windows.len(), 2);
+    assert_eq!(result.windows[0].used, Some(0.0));
+    assert_eq!(result.windows[1].used, None);
+    assert_eq!(result.windows[1].remaining, None);
+    assert_eq!(result.windows[1].limit, Some(10.0));
+    let public = stringify_json(&result.encode());
+    for private in [
+        A,
+        B,
+        "private-selected",
+        "private-active",
+        "private-email",
+        "private-payload",
+    ] {
+        assert!(!public.contains(private), "{private}");
+    }
+    fixture.finish().await;
+    let requests = fixture.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].starts_with("GET /api/oauth/usage "));
+    assert!(requests[0].contains("authorization: Bearer private-selected"));
+    assert!(requests[0].contains("anthropic-beta: oauth-2025-04-20"));
+    drop(requests);
+    service.shutdown().await.unwrap();
+    accounts.shutdown().await.unwrap();
+    credentials.shutdown().await.unwrap();
+    store.shutdown().unwrap();
+}
+
+#[tokio::test]
+async fn cold_claude_quota_retries_401_once_after_selected_source_refresh() {
+    let profiles = Profiles::new();
+    profiles.write(A, "expired-selected", FRESH);
+    profiles.write(B, "active-untouched", FRESH);
+    let mut fixture=Fixture::with_headers(vec![(401,"".into(),"private rejected token"),(200,"Content-Type: application/json\r\n".into(),r#"{"access_token":"rotated-selected","refresh_token":"rotated-refresh","expires_in":3600}"#),(200,"Content-Type: application/json\r\n".into(),r#"{"five_hour":{"utilization":42}}"#)]).await;
+    let store = support::store();
+    let credentials = credential::Service::new(store.client());
+    let first = selected(&credentials, A, "selected").await;
+    selected(&credentials, B, "active").await;
+    let accounts = profiles.store(&fixture.endpoint);
+    let service = quota::Service::new(
+        credentials.clone(),
+        quota::Endpoints(BTreeMap::from([(
+            "anthropic".into(),
+            fixture.endpoint.clone(),
+        )])),
+    )
+    .unwrap()
+    .with_auth(Default::default(), Some(accounts.clone()));
+    let result = service
+        .get(
+            provider::Id("anthropic".into()),
+            Some(first.id()),
+            true,
+            100,
+        )
+        .await;
+    assert_eq!(result.status, "available".into());
+    assert_eq!(result.windows[0].used, Some(42.0));
+    fixture.finish().await;
+    let requests = fixture.requests.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    assert!(requests[0].contains("authorization: Bearer expired-selected"));
+    assert!(requests[1].starts_with("POST /v1/oauth/token "));
+    assert!(requests[1].contains("refresh-expired-selected"));
+    assert!(requests[2].contains("authorization: Bearer rotated-selected"));
+    assert!(
+        !requests
+            .iter()
+            .any(|request| request.contains("active-untouched"))
+    );
+    drop(requests);
+    service.shutdown().await.unwrap();
+    accounts.shutdown().await.unwrap();
+    credentials.shutdown().await.unwrap();
+    store.shutdown().unwrap();
+}
+
+#[tokio::test]
+async fn claude_quota_retry_after_preserves_stale_zero_and_blocks_forced_refresh_until_expiry() {
+    let profiles = Profiles::new();
+    profiles.write(A, "private-selected", FRESH);
+    let mut fixture = Fixture::with_headers(vec![
+        (200, "".into(), r#"{"five_hour":{"utilization":0}}"#),
+        (429, "Retry-After: 60\r\n".into(), "private-secret-upstream"),
+        (200, "".into(), r#"{"five_hour":{"utilization":42}}"#),
+    ])
+    .await;
+    let store = support::store();
+    let credentials = credential::Service::new(store.client());
+    let first = selected(&credentials, A, "selected").await;
+    let accounts = profiles.store(&fixture.endpoint);
+    let service = quota::Service::new(
+        credentials.clone(),
+        quota::Endpoints(BTreeMap::from([(
+            "anthropic".into(),
+            fixture.endpoint.clone(),
+        )])),
+    )
+    .unwrap()
+    .with_auth(Default::default(), Some(accounts.clone()));
+    let provider = provider::Id("anthropic".into());
+    assert_eq!(
+        service
+            .get(provider.clone(), Some(first.id()), false, 100)
+            .await
+            .status,
+        "available".into()
+    );
+    let stale = service
+        .get(provider.clone(), Some(first.id()), true, 200)
+        .await;
+    assert_eq!(stale.status, "stale".into());
+    assert_eq!(stale.windows[0].used, Some(0.0));
+    assert_eq!(stale.message, Some("Provider usage refresh failed".into()));
+    assert!(!stringify_json(&stale.encode()).contains("private-secret"));
+    let held = service
+        .get(provider.clone(), Some(first.id()), true, 1000)
+        .await;
+    assert_eq!(held.status, "stale".into());
+    assert_eq!(held.windows[0].used, Some(0.0));
+    assert_eq!(fixture.requests.lock().unwrap().len(), 2);
+    assert_eq!(
+        service
+            .get(provider, Some(first.id()), true, 100_000)
+            .await
+            .windows[0]
+            .used,
+        Some(42.0)
+    );
+    fixture.finish().await;
+    service.shutdown().await.unwrap();
+    accounts.shutdown().await.unwrap();
+    credentials.shutdown().await.unwrap();
+    store.shutdown().unwrap();
+}
+
+#[tokio::test]
+async fn cold_claude_quota_retry_headers_distinguish_fractional_zero_invalid_and_absent_delay() {
+    for (header, holds) in [
+        ("Retry-After: 1.5\r\n", true),
+        ("Retry-After: 0\r\n", false),
+        ("Retry-After: -1\r\n", false),
+        ("Retry-After: invalid\r\n", false),
+        ("", false),
+    ] {
+        let profiles = Profiles::new();
+        profiles.write(A, "private-selected", FRESH);
+        let mut fixture = Fixture::with_headers(vec![
+            (429, header.into(), "private-upstream-secret"),
+            (
+                200,
+                "".into(),
+                r#"{"five_hour":{"utilization":0},"seven_day":null}"#,
+            ),
+        ])
+        .await;
+        let store = support::store();
+        let credentials = credential::Service::new(store.client());
+        let selected = selected(&credentials, A, "selected").await;
+        let accounts = profiles.store(&fixture.endpoint);
+        let service = quota::Service::new(
+            credentials.clone(),
+            quota::Endpoints(BTreeMap::from([(
+                "anthropic".into(),
+                fixture.endpoint.clone(),
+            )])),
+        )
+        .unwrap()
+        .with_auth(Default::default(), Some(accounts.clone()));
+        let provider = provider::Id("anthropic".into());
+        let failed = service
+            .get(provider.clone(), Some(selected.id()), true, 100)
+            .await;
+        assert_eq!(failed.status, "error".into());
+        assert!(failed.windows.is_empty());
+        assert!(!stringify_json(&failed.encode()).contains("private-upstream"));
+        assert_eq!(failed.source, "provider_internal_api".into());
+        assert_eq!(failed.stability, "best_effort".into());
+        if holds {
+            let held = service
+                .get(provider.clone(), Some(selected.id()), true, 1000)
+                .await;
+            assert_eq!(held.status, "error".into());
+            assert!(held.windows.is_empty());
+            assert_eq!(fixture.requests.lock().unwrap().len(), 1);
+        }
+        let next = service.get(provider, Some(selected.id()), true, 4000).await;
+        assert_eq!(next.status, "available".into());
+        assert_eq!(next.windows.len(), 1);
+        assert_eq!(next.windows[0].used, Some(0.0));
+        fixture.finish().await;
+        service.shutdown().await.unwrap();
+        accounts.shutdown().await.unwrap();
+        credentials.shutdown().await.unwrap();
+        store.shutdown().unwrap();
+    }
 }
 
 #[test]
@@ -696,6 +931,7 @@ async fn runner_prepares_expired_openai_and_xai_oauth_before_native_request_cons
                 Client::new(&fixture.endpoint, "fixture").unwrap(),
             )]),
             cursor: None,
+            providers: None,
         };
         admit(&store).await;
         let coordinator =
@@ -763,6 +999,7 @@ async fn runner_exchanges_stored_cursor_api_key_before_route_authentication() {
     let preparation = ycoding_core::resources::auth::Preparation {
         clients: BTreeMap::from([("cursor".into(), client)]),
         cursor: Some(cursor.clone()),
+        providers: None,
     };
     admit(&store).await;
     let coordinator = ycoding_core::session::run_coordinator::Coordinator::new(Arc::new(runner(

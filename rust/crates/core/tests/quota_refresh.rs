@@ -10,6 +10,70 @@ fn snapshot() -> ycoding_schema::provider_usage::Snapshot {
     normalize_openrouter(provider::Id("openrouter".into()), "OpenRouter", 100, &parse_json(r#"{"data":{"usage_daily":0,"limit":null,"limit_remaining":null,"is_free_tier":false}}"#).unwrap(), None).unwrap()
 }
 
+#[tokio::test]
+async fn quota_cold_retry_backoff_retains_error_without_inventing_values_and_zero_does_not_hold() {
+    let cache = Cache::new();
+    let calls = Arc::new(AtomicUsize::new(0));
+    for (key, error, holds) in [
+        (
+            "delay",
+            Error::RequestWithRetry {
+                status: 429,
+                retry_after_ms: 90_000,
+            },
+            true,
+        ),
+        (
+            "zero",
+            Error::RequestWithRetry {
+                status: 429,
+                retry_after_ms: 0,
+            },
+            false,
+        ),
+        ("absent", Error::Request(Some(429)), false),
+    ] {
+        let observed = calls.clone();
+        assert_eq!(
+            cache
+                .get(key.into(), 100, 60_000, true, move || async move {
+                    observed.fetch_add(1, Ordering::SeqCst);
+                    Err(error)
+                })
+                .await
+                .unwrap_err(),
+            error
+        );
+        let observed = calls.clone();
+        let before = calls.load(Ordering::SeqCst);
+        let result = cache
+            .get(key.into(), 1000, 60_000, true, move || async move {
+                observed.fetch_add(1, Ordering::SeqCst);
+                Ok(snapshot())
+            })
+            .await;
+        if holds {
+            assert_eq!(result.unwrap_err(), error);
+            assert_eq!(calls.load(Ordering::SeqCst), before);
+            assert_eq!(
+                cache
+                    .get(key.into(), 100_000, 60_000, true, || async {
+                        Ok(snapshot())
+                    })
+                    .await
+                    .unwrap()
+                    .windows[0]
+                    .used,
+                Some(0.0)
+            );
+            continue;
+        }
+        assert_eq!(result.unwrap().windows[0].used, Some(0.0));
+        assert_eq!(calls.load(Ordering::SeqCst), before + 1);
+    }
+    cache.shutdown().await.unwrap();
+}
+
 #[test]
 fn quota_absent_is_not_zero_and_payload_is_not_exposed() {
     let result = snapshot();

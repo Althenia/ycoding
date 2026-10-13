@@ -126,6 +126,7 @@ struct ContinuationPlan {
 }
 struct Inner {
     services: Services,
+    providers: Result<model::ProviderContext, model::Error>,
     active: Mutex<BTreeMap<session::Id, Arc<Work>>>,
 }
 #[derive(Clone)]
@@ -162,8 +163,17 @@ struct SelectedModel {
 
 impl Local {
     pub fn new(services: Services) -> Self {
+        let providers = services
+            .auth
+            .as_ref()
+            .and_then(|auth| auth.providers.clone())
+            .map(Ok)
+            .unwrap_or_else(|| {
+                model::ProviderContext::new(std::env::vars().collect(), env!("CARGO_PKG_VERSION"))
+            });
         Self(Arc::new(Inner {
             services,
+            providers,
             active: Mutex::new(BTreeMap::new()),
         }))
     }
@@ -175,9 +185,8 @@ impl Local {
         saved_binding: Option<&ycoding_schema::session_event::ProfileBinding>,
     ) -> Result<SelectedModel, Error> {
         let services = &self.0.services;
-        let provider = services
-            .models
-            .catalog()
+        let catalog = services.models.catalog();
+        let provider = catalog
             .provider(&selection.provider_id)
             .ok_or_else(|| error("model.unavailable", "Selected provider is unavailable"))?;
         let integration = provider
@@ -225,9 +234,7 @@ impl Local {
                 .active(integration)
                 .map_err(|_| error("provider.auth", "Provider account is unavailable"))?
         };
-        let resolved = services
-            .models
-            .resolve(selection, saved, connection.as_ref())
+        let resolved = model::resolve_catalog(&catalog, selection, saved, connection.as_ref())
             .map_err(|_| {
                 error(
                     "model.unavailable",
@@ -286,32 +293,28 @@ impl Local {
             }
             None => None,
         };
-        let model = if resolved.info.provider_id.0 == "muse".into() {
-            crate::resources::muse::from_catalog_model(
+        let context = self
+            .0
+            .providers
+            .as_ref()
+            .map_err(|_| error("provider.auth", "Provider context is unavailable"))?;
+        let model = context
+            .selected_model(
                 &resolved.info,
                 secret.as_ref(),
                 connection.as_ref(),
-                ycoding_ai::muse::Runtime::shared()
-                    .map_err(|_| error("provider.auth", "Muse provider unavailable"))?,
+                services.claude.as_ref(),
+                services.cursor.as_ref(),
+                preparation.cursor.as_ref(),
             )
-        } else {
-            match (&services.cursor, cursor_package(&resolved.info)) {
-                (Some(host), true) => cursor::route::model(&resolved.info, secret.as_ref(), host),
-                _ => model::from_catalog_model_with_claude(
-                    &resolved.info,
-                    secret.as_ref(),
-                    connection.as_ref(),
-                    services.claude.as_ref(),
+            .await
+            .map_err(|cause| match cause {
+                model::Error::ProfileUnavailable => error(
+                    "model.profile",
+                    "Selected profile requires reconnect. Sign in to this profile again.",
                 ),
-            }
-        }
-        .map_err(|cause| match cause {
-            model::Error::ProfileUnavailable => error(
-                "model.profile",
-                "Selected profile requires reconnect. Sign in to this profile again.",
-            ),
-            _ => error("model.unavailable", "Selected model route is unavailable"),
-        })?;
+                _ => error("model.unavailable", "Selected model route is unavailable"),
+            })?;
         Ok(Resolution {
             resolved,
             model,
@@ -505,13 +508,43 @@ impl Local {
             let saved_binding = services.store.profile_binding(&session.id)?;
             let Resolution {
                 resolved,
-                model,
+                mut model,
                 account_identity,
                 connection,
                 binding,
             } = self
                 .resolve_model(&selection, &saved, saved_binding.as_ref())
                 .await?;
+            if let Some(daybreak) = &session.daybreak
+                && resolved.info.provider_id.0 == "openai".into()
+                && matches!(
+                    model.route.id.as_str(),
+                    ycoding_ai::openai_codex::ROUTE_ID
+                        | ycoding_ai::openai_codex::WEBSOCKET_ROUTE_ID
+                )
+                && resolved
+                    .info
+                    .daybreak
+                    .as_ref()
+                    .is_some_and(|programs| programs.contains(daybreak))
+            {
+                let route = Arc::make_mut(&mut model.route);
+                route.defaults.http.body = Some(crate::resources::catalog::merge_json(
+                    route
+                        .defaults
+                        .http
+                        .body
+                        .as_ref()
+                        .unwrap_or(&crate::resources::catalog::object(&[])),
+                    &crate::resources::catalog::object(&[(
+                        "access_programs",
+                        crate::resources::catalog::object(&[(
+                            "cyber",
+                            JsonValue::String(daybreak.0.clone()),
+                        )]),
+                    )]),
+                ));
+            }
             let mut prepared = llm::Request::new(model);
             for (name, value) in agent.request.headers.iter() {
                 let invalid = || {

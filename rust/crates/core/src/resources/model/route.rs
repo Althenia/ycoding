@@ -1,5 +1,5 @@
 use super::super::auth::bedrock;
-use super::super::catalog::{field, merge_headers, merge_json, models_dev::text, object};
+use super::super::catalog::{field, merge_headers, models_dev::text, object};
 use super::{Error, ProviderFamily, family};
 use std::{collections::BTreeMap, sync::Arc};
 use ycoding_ai::{
@@ -192,8 +192,28 @@ pub(crate) fn from_catalog_model_base(
     info: &model::Info,
     credential: Option<&credential::Value>,
 ) -> Result<Model, Error> {
+    from_catalog_model_environment(
+        info,
+        credential,
+        &std::env::vars().collect(),
+        env!("CARGO_PKG_VERSION"),
+    )
+}
+
+pub(super) fn from_catalog_model_environment(
+    info: &model::Info,
+    credential: Option<&credential::Value>,
+    environment: &BTreeMap<String, String>,
+    version: &str,
+) -> Result<Model, Error> {
     let package = info.package.as_ref().ok_or(Error::UnsupportedPackage)?;
     let family = family(package)?;
+    let family =
+        if family == ProviderFamily::Anthropic && info.provider_id.0 == "github-copilot".into() {
+            ProviderFamily::Copilot
+        } else {
+            family
+        };
     let native = package.as_str().is_some_and(|p| !p.starts_with("aisdk:"));
     let settings = info
         .settings
@@ -229,6 +249,19 @@ pub(crate) fn from_catalog_model_base(
             Some(value.access.to_utf8().map_err(|_| Error::InvalidSettings)?)
         }
         None => field(&settings, "apiKey")
+            .or_else(|| {
+                field(
+                    &settings,
+                    if matches!(
+                        family,
+                        ProviderFamily::Vertex | ProviderFamily::VertexAnthropic
+                    ) {
+                        "accessToken"
+                    } else {
+                        "authToken"
+                    },
+                )
+            })
             .and_then(text)
             .filter(|s| !s.is_empty())
             .map(str::to_owned),
@@ -248,6 +281,13 @@ pub(crate) fn from_catalog_model_base(
         ProviderFamily::Google | ProviderFamily::Vertex => "google",
         ProviderFamily::Bedrock => "bedrock",
         ProviderFamily::OpenRouter => "openrouter",
+        ProviderFamily::Alibaba => "alibaba",
+        ProviderFamily::Cohere => "cohere",
+        ProviderFamily::Mistral => "mistral",
+        ProviderFamily::Perplexity => "perplexity",
+        ProviderFamily::Venice => "venice",
+        ProviderFamily::Gateway => "gateway",
+        ProviderFamily::Compatible => "openai",
         _ => "openai",
     };
     let options = if native {
@@ -312,6 +352,17 @@ pub(crate) fn from_catalog_model_base(
         ..Defaults::default()
     };
     defaults.http.headers = headers;
+    if family == ProviderFamily::Compatible
+        && let Some(usage) = field(&settings, "includeUsage")
+    {
+        defaults.provider_options = Some(super::super::catalog::merge_json(
+            defaults.provider_options.as_ref().unwrap_or(&object(&[])),
+            &object(&[(
+                "openai-compatible",
+                object(&[("includeUsage", usage.clone())]),
+            )]),
+        ));
+    }
     if family == ProviderFamily::Anthropic && !native {
         let existing = defaults
             .http
@@ -334,18 +385,6 @@ pub(crate) fn from_catalog_model_base(
         );
     }
     defaults.http.body = info.body.as_ref().map(DomainEncode::encode);
-    if let Some(credential::Value::Key(value)) = credential
-        && let Some(metadata) = &value.metadata
-    {
-        defaults.http.body = Some(
-            defaults
-                .http
-                .body
-                .as_ref()
-                .map(|body| merge_json(body, &metadata.encode()))
-                .unwrap_or_else(|| metadata.encode()),
-        );
-    }
     let mut common = Config::new(auth.clone());
     common.base_url = field(&settings, "baseURL")
         .and_then(text)
@@ -397,6 +436,25 @@ pub(crate) fn from_catalog_model_base(
         Api::Chat
     };
     let mut model = match family {
+        ProviderFamily::OpenAI if matches!(credential, Some(credential::Value::OAuth(value)) if matches!(value.method_id.as_lossless().as_str(),Some("chatgpt-browser"|"chatgpt-headless"))) =>
+        {
+            let mut config = ycoding_ai::openai_codex::Config::new(Credential::value(
+                key.as_ref().ok_or(Error::ProfileUnavailable)?,
+            ));
+            config.account_id = credential.and_then(|value| match value {
+                credential::Value::OAuth(value) => value
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get(&"accountID".into()))
+                    .and_then(text)
+                    .map(str::to_owned),
+                _ => None,
+            });
+            config.websocket = field(&settings, "transport").and_then(text) == Some("websocket");
+            config.defaults = defaults;
+            ycoding_ai::openai_codex::model(info.model_id.clone(), config)
+                .map_err(|_| Error::InvalidSettings)?
+        }
         ProviderFamily::OpenAI if native => providers::openai(
             info.model_id.clone(),
             OpenAIConfig {
@@ -427,9 +485,7 @@ pub(crate) fn from_catalog_model_base(
         ProviderFamily::Anthropic => {
             let provider_auth = if native && matches!(credential, Some(credential::Value::OAuth(_)))
             {
-                key.as_ref()
-                    .map(|key| ProviderAuth::Bearer(Credential::value(key)))
-                    .unwrap_or(ProviderAuth::Override(Auth::None))
+                ProviderAuth::Override(Auth::None)
             } else {
                 key.as_ref()
                     .map(|key| ProviderAuth::ApiKey(Credential::value(key)))
@@ -454,6 +510,7 @@ pub(crate) fn from_catalog_model_base(
             let config = ycoding_ai::google_vertex_shared::Config {
                 api_key: if matches!(credential, Some(credential::Value::OAuth(_)))
                     || family == ProviderFamily::VertexAnthropic
+                    || field(&settings, "accessToken").is_some()
                 {
                     None
                 } else {
@@ -461,8 +518,12 @@ pub(crate) fn from_catalog_model_base(
                 },
                 access_token: if matches!(credential, Some(credential::Value::OAuth(_)))
                     || family == ProviderFamily::VertexAnthropic
+                    || field(&settings, "accessToken").is_some()
                 {
-                    key.map(Credential::value)
+                    field(&settings, "accessToken")
+                        .and_then(text)
+                        .map(Credential::value)
+                        .or_else(|| key.map(Credential::value))
                 } else {
                     None
                 },
@@ -486,8 +547,48 @@ pub(crate) fn from_catalog_model_base(
             }
         }
         ProviderFamily::Compatible => {
-            providers::compatible(info.model_id.clone(), info.provider_id.clone(), common, api)
+            if info.provider_id.0 == "cloudflare-workers-ai".into() {
+                ycoding_ai::cloudflare::workers(
+                    info.model_id.clone(),
+                    ycoding_ai::cloudflare::WorkersConfig {
+                        account_id: field(&settings, "accountId")
+                            .and_then(text)
+                            .map(str::to_owned),
+                        common,
+                        environment: environment.clone(),
+                        user_agent: format!(
+                            "ycoding/{version} cloudflare-workers-ai ({}; {})",
+                            std::env::consts::OS,
+                            std::env::consts::ARCH
+                        ),
+                    },
+                )
                 .map_err(|_| Error::InvalidSettings)?
+            } else if info.provider_id.0 == "snowflake-cortex".into() {
+                ycoding_ai::snowflake_cortex::model(
+                    info.model_id.clone(),
+                    common,
+                    field(&settings, "token")
+                        .and_then(text)
+                        .map(Credential::value),
+                    environment,
+                )
+                .map_err(|_| Error::InvalidSettings)?
+            } else {
+                if info
+                    .provider_id
+                    .0
+                    .as_str()
+                    .is_some_and(|id| id.contains("azure-cognitive-services"))
+                {
+                    common.base_url = providers::azure_cognitive_endpoint(
+                        common.base_url.as_deref(),
+                        environment,
+                    );
+                }
+                providers::compatible(info.model_id.clone(), info.provider_id.clone(), common, api)
+                    .map_err(|_| Error::InvalidSettings)?
+            }
         }
         ProviderFamily::Xai => providers::xai(info.model_id.clone(), common, api),
         ProviderFamily::OpenRouter => providers::openrouter(
@@ -498,40 +599,86 @@ pub(crate) fn from_catalog_model_base(
             },
         ),
         ProviderFamily::Azure => {
-            let endpoint = common
-                .base_url
-                .map(providers::AzureEndpoint::BaseUrl)
-                .or_else(|| {
-                    field(&settings, "resourceName")
-                        .and_then(text)
-                        .map(|s| providers::AzureEndpoint::Resource(s.into()))
-                })
-                .ok_or(Error::InvalidSettings)?;
-            providers::azure(
-                info.model_id.clone(),
-                providers::AzureConfig {
+            let endpoint = providers::azure_endpoint(
+                common.base_url.as_deref(),
+                field(&settings, "resourceName").and_then(text),
+                environment,
+            )
+            .map_err(|_| Error::InvalidSettings)?;
+            let config = providers::AzureConfig {
+                endpoint,
+                auth: key
+                    .map(|key| {
+                        if matches!(credential, Some(credential::Value::OAuth(_)))
+                            || field(&settings, "authToken").is_some()
+                            || field(&settings, "accessToken").is_some()
+                        {
+                            providers::AzureAuth::Override(Auth::bearer(Credential::value(key)))
+                        } else {
+                            providers::AzureAuth::Key(Credential::value(key))
+                        }
+                    })
+                    .unwrap_or(providers::AzureAuth::Override(Auth::None)),
+                api_version: field(&settings, "apiVersion")
+                    .and_then(text)
+                    .map(str::to_owned),
+                query: common.query,
+                defaults,
+            };
+            if native {
+                providers::azure(info.model_id.clone(), config, api)
+            } else {
+                providers::azure_sdk(
+                    info.model_id.clone(),
+                    providers::AzureSdkConfig {
+                        common: config,
+                        use_completion_urls: field(&settings, "useCompletionUrls")
+                            == Some(&JsonValue::Bool(true)),
+                        use_deployment_based_urls: field(&settings, "useDeploymentBasedUrls")
+                            == Some(&JsonValue::Bool(true)),
+                    },
+                )
+            }
+        }
+        ProviderFamily::Bedrock | ProviderFamily::Mantle => {
+            let endpoint = field(&settings, "endpoint")
+                .and_then(text)
+                .or(common.base_url.as_deref())
+                .unwrap_or("");
+            let bearer = field(&settings, "bearerToken")
+                .and_then(text)
+                .or(key.as_deref());
+            let auth = if environment.contains_key("AWS_BEARER_TOKEN_BEDROCK") || bearer.is_some() {
+                Auth::None
+            } else {
+                bedrock_auth(
+                    &settings,
+                    environment,
                     endpoint,
-                    auth: key
-                        .map(|key| providers::AzureAuth::Key(Credential::value(key)))
-                        .unwrap_or(providers::AzureAuth::Override(Auth::None)),
-                    api_version: field(&settings, "apiVersion")
+                    if family == ProviderFamily::Mantle {
+                        "bedrock-mantle"
+                    } else {
+                        "bedrock"
+                    },
+                )?
+            };
+            ycoding_ai::bedrock::model(
+                info.model_id.clone(),
+                ycoding_ai::bedrock::HostedConfig {
+                    endpoint: field(&settings, "endpoint")
                         .and_then(text)
                         .map(str::to_owned),
-                    query: common.query,
+                    base_url: common.base_url,
+                    region: field(&settings, "region").and_then(text).map(str::to_owned),
+                    bearer_token: bearer.map(Credential::value),
+                    auth,
+                    environment: environment.clone(),
                     defaults,
                 },
-                api,
-            )
-        }
-        ProviderFamily::Bedrock => {
-            let endpoint = common.base_url.ok_or(Error::InvalidSettings)?;
-            let auth = bedrock_auth(&settings, key.as_deref(), &endpoint)?;
-            ycoding_ai::bedrock::amazon_bedrock(
-                info.model_id.clone(),
-                ycoding_ai::bedrock::Config {
-                    endpoint,
-                    auth,
-                    defaults,
+                if family == ProviderFamily::Mantle {
+                    ycoding_ai::bedrock::Api::Mantle
+                } else {
+                    ycoding_ai::bedrock::Api::Converse
                 },
             )
         }
@@ -545,8 +692,135 @@ pub(crate) fn from_catalog_model_base(
                 .map_err(|_| Error::InvalidSettings)?
         }
         ProviderFamily::Copilot => {
-            providers::github_copilot(info.model_id.clone(), common, explicit_api)
+            let mut config = ycoding_ai::github_copilot::SubscriptionConfig::new(
+                auth,
+                format!("ycoding/{version}"),
+            );
+            config.common = common;
+            config.endpoint = match field(&settings, "endpoint").and_then(text) {
+                Some("messages") => Some(ycoding_ai::github_copilot::Endpoint::Messages),
+                Some("chat") => Some(ycoding_ai::github_copilot::Endpoint::Chat),
+                Some("responses") => Some(ycoding_ai::github_copilot::Endpoint::Responses),
+                _ if package
+                    .as_str()
+                    .is_some_and(|package| package.ends_with("@ai-sdk/anthropic")) =>
+                {
+                    Some(ycoding_ai::github_copilot::Endpoint::Messages)
+                }
+                _ => explicit_api.map(|api| {
+                    if api == Api::Chat {
+                        ycoding_ai::github_copilot::Endpoint::Chat
+                    } else {
+                        ycoding_ai::github_copilot::Endpoint::Responses
+                    }
+                }),
+            };
+            config.enterprise_url = credential.and_then(|value| match value {
+                credential::Value::OAuth(value) => value
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.get(&"enterpriseUrl".into()))
+                    .and_then(text)
+                    .map(str::to_owned),
+                _ => None,
+            });
+            ycoding_ai::github_copilot::subscription_model(info.model_id.clone(), config)
                 .map_err(|_| Error::InvalidSettings)?
+        }
+        ProviderFamily::Alibaba
+        | ProviderFamily::Mistral
+        | ProviderFamily::Perplexity
+        | ProviderFamily::Venice
+        | ProviderFamily::Vercel => ycoding_ai::hosted::model(
+            info.model_id.clone(),
+            match family {
+                ProviderFamily::Alibaba => ycoding_ai::hosted::Vendor::Alibaba,
+                ProviderFamily::Mistral => ycoding_ai::hosted::Vendor::Mistral,
+                ProviderFamily::Perplexity => ycoding_ai::hosted::Vendor::Perplexity,
+                ProviderFamily::Venice => ycoding_ai::hosted::Vendor::Venice,
+                _ => ycoding_ai::hosted::Vendor::Vercel,
+            },
+            common,
+        ),
+        ProviderFamily::Cohere => ycoding_ai::cohere::model(info.model_id.clone(), common),
+        ProviderFamily::Gateway => {
+            if key.is_none()
+                && let Some(token) = environment.get("VERCEL_OIDC_TOKEN")
+            {
+                common.auth = Auth::bearer(Credential::value(token));
+                common
+                    .defaults
+                    .http
+                    .headers
+                    .insert("ai-gateway-auth-method".into(), "oidc".into());
+            }
+            ycoding_ai::gateway::model(info.model_id.clone(), common)
+        }
+        ProviderFamily::Cerebras
+        | ProviderFamily::Deepinfra
+        | ProviderFamily::Groq
+        | ProviderFamily::Together => providers::compatible_profile(
+            info.model_id.clone(),
+            match family {
+                ProviderFamily::Cerebras => providers::Profile::Cerebras,
+                ProviderFamily::Deepinfra => providers::Profile::Deepinfra,
+                ProviderFamily::Groq => providers::Profile::Groq,
+                _ => providers::Profile::Togetherai,
+            },
+            common,
+        )
+        .map_err(|_| Error::InvalidSettings)?,
+        ProviderFamily::CloudflareGateway => ycoding_ai::cloudflare::gateway(
+            info.model_id.clone(),
+            ycoding_ai::cloudflare::GatewayConfig {
+                account_id: field(&settings, "accountId")
+                    .and_then(text)
+                    .map(str::to_owned),
+                gateway_id: field(&settings, "gatewayId")
+                    .or_else(|| field(&settings, "gateway"))
+                    .and_then(text)
+                    .map(str::to_owned),
+                api_key: key.map(Credential::value),
+                base_url: common.base_url,
+                environment: environment.clone(),
+                defaults,
+                user_agent: format!(
+                    "ycoding/{version} cloudflare-ai-gateway ({}; {})",
+                    std::env::consts::OS,
+                    std::env::consts::ARCH
+                ),
+                options: ycoding_ai::cloudflare::GatewayOptions {
+                    metadata: field(&settings, "metadata").cloned(),
+                    cache_ttl: field(&settings, "cacheTtl").and_then(|v| {
+                        if let JsonValue::Number(v) = v {
+                            (*v >= 0.0 && v.fract() == 0.0).then_some(*v as u64)
+                        } else {
+                            None
+                        }
+                    }),
+                    cache_key: field(&settings, "cacheKey")
+                        .and_then(text)
+                        .map(str::to_owned),
+                    skip_cache: field(&settings, "skipCache").and_then(|v| {
+                        if let JsonValue::Bool(v) = v {
+                            Some(*v)
+                        } else {
+                            None
+                        }
+                    }),
+                    collect_log: field(&settings, "collectLog").and_then(|v| {
+                        if let JsonValue::Bool(v) = v {
+                            Some(*v)
+                        } else {
+                            None
+                        }
+                    }),
+                },
+            },
+        )
+        .map_err(|_| Error::InvalidSettings)?,
+        ProviderFamily::Gitlab | ProviderFamily::Sap | ProviderFamily::Cursor => {
+            return Err(Error::UnsupportedPackage);
         }
     };
     if !native
@@ -564,37 +838,38 @@ pub(crate) fn from_catalog_model_base(
     Ok(model)
 }
 
-fn bedrock_auth(settings: &JsonValue, key: Option<&str>, endpoint: &str) -> Result<Auth, Error> {
-    if let Some(key) = key.filter(|key| !key.is_empty()) {
-        return Ok(Auth::bearer(Credential::value(key)));
-    }
-    let env: BTreeMap<String, String> = std::env::vars().collect();
-    if let Some(token) = env
-        .get("AWS_BEARER_TOKEN_BEDROCK")
-        .filter(|token| !token.is_empty())
-    {
-        return Ok(Auth::bearer(Credential::value(token)));
-    }
+fn bedrock_auth(
+    settings: &JsonValue,
+    env: &BTreeMap<String, String>,
+    endpoint: &str,
+    service: &'static str,
+) -> Result<Auth, Error> {
     let setting = field(settings, "region").and_then(text);
     let region = bedrock::region(setting, &env, endpoint);
     let options = bedrock::Options {
         profile: field(settings, "profile").and_then(text).map(str::to_owned),
-        home: bedrock::home(),
+        home: env
+            .get("HOME")
+            .or_else(|| env.get("USERPROFILE"))
+            .map(std::path::PathBuf::from),
         region: Some(region.clone()),
         ..bedrock::Options::default()
     };
-    let credentials =
-        bedrock::resolve_blocking(&env, &options).map_err(|_| Error::InvalidSettings)?;
-    let Some(credentials) = credentials else {
-        return Ok(Auth::None);
-    };
-    Ok(ycoding_ai::bedrock_auth::sigv4(
-        Some(ycoding_ai::bedrock_auth::Credentials {
-            region,
-            access_key_id: ycoding_ai::auth::Secret::new(credentials.access_key_id),
-            secret_access_key: ycoding_ai::auth::Secret::new(credentials.secret_access_key),
-            session_token: credentials.session_token.map(ycoding_ai::auth::Secret::new),
-        }),
-        || chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string(),
-    ))
+    let env = env.clone();
+    Ok(Auth::custom(move |input| {
+        let credentials = bedrock::resolve_blocking(&env, &options)
+            .map_err(|_| ycoding_ai::Error::invalid("AWS credential resolution failed"))?
+            .ok_or_else(|| ycoding_ai::Error::invalid("AWS credentials are unavailable"))?;
+        ycoding_ai::bedrock_auth::sigv4_service(
+            Some(ycoding_ai::bedrock_auth::Credentials {
+                region: region.clone(),
+                access_key_id: ycoding_ai::auth::Secret::new(credentials.access_key_id),
+                secret_access_key: ycoding_ai::auth::Secret::new(credentials.secret_access_key),
+                session_token: credentials.session_token.map(ycoding_ai::auth::Secret::new),
+            }),
+            service,
+            || chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string(),
+        )
+        .apply(input)
+    }))
 }

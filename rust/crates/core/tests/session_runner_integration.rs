@@ -2684,6 +2684,7 @@ fn cursor_host() -> ycoding_core::resources::cursor::route::Host {
             .unwrap(),
         ),
         known_mcp_servers: vec![],
+        extensions: Default::default(),
     }
 }
 
@@ -2711,7 +2712,7 @@ fn cursor_catalog(endpoint: &str) -> Catalog {
             variants: vec![],
         }]),
     );
-    catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"cursor","model":"composer-2.5"}},"providers":{{"cursor":{{"settings":{{"apiKey":"crsr_fixture","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
+    catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"cursor","model":"composer-2.5"}},"providers":{{"cursor":{{"settings":{{"apiKey":"cursor-fixture-access","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
     catalog
 }
 

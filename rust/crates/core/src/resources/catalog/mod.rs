@@ -4,8 +4,11 @@ use ycoding_schema::{
     DomainDecode, DomainEncode, JsonObject, JsonValue, LosslessString, model, provider,
 };
 
+mod accounts;
+mod builtin;
 pub(crate) mod date;
 mod discovery;
+pub use accounts::{AccountCatalog, eligible as codex_eligible};
 pub mod models_dev;
 mod variants;
 pub use discovery::{Composition, DiscoveryDiagnostic};
@@ -581,6 +584,15 @@ impl Catalog {
                     &["name", "package", "settings", "headers", "body"],
                 );
                 record.provider = provider::Info::decode(&encoded)?;
+                if record.provider.integration_id.is_none()
+                    && (matches!(
+                        record.provider.package.as_str(),
+                        Some("aisdk:@ai-sdk/openai-compatible" | "@ycoding-ai/ai/providers/runpod")
+                    ) || field(item, "env").is_some())
+                {
+                    record.provider.integration_id =
+                        Some(ycoding_schema::integration::Id::new(id.clone())?);
+                }
                 if let Some(JsonValue::Array(environment)) = field(item, "env") {
                     record.environment = environment
                         .iter()

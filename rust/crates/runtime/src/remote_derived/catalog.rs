@@ -76,16 +76,13 @@ pub async fn get(
     {
         return Err(target::error(2, "Catalog exceeds the bounded list size"));
     }
-    let providers = services
-        .models
-        .catalog()
+    let catalog = services.models.catalog();
+    let providers = catalog
         .available_providers(&saved)
         .into_iter()
         .filter(|provider| provider.disabled != Some(true))
         .collect::<Vec<_>>();
-    let models = services
-        .models
-        .catalog()
+    let models = catalog
         .available(&saved)
         .into_iter()
         .filter_map(|model| {

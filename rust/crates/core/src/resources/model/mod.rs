@@ -5,7 +5,9 @@ use super::{
 use std::fmt;
 use ycoding_schema::{DomainEncode, LosslessString, model, provider};
 
+mod providers;
 pub mod quota;
+pub use providers::ProviderContext;
 mod route;
 pub(crate) use route::from_catalog_model_base;
 pub use route::{ClaudeHost, from_catalog_model, from_catalog_model_with_claude};
@@ -61,14 +63,24 @@ impl fmt::Debug for Resolved {
     }
 }
 pub struct Resolver {
-    catalog: Catalog,
+    catalog: std::sync::RwLock<std::sync::Arc<Catalog>>,
 }
 impl Resolver {
     pub fn new(catalog: Catalog) -> Self {
-        Self { catalog }
+        Self {
+            catalog: std::sync::RwLock::new(std::sync::Arc::new(catalog)),
+        }
     }
-    pub fn catalog(&self) -> &Catalog {
-        &self.catalog
+    pub fn catalog(&self) -> std::sync::Arc<Catalog> {
+        self.catalog
+            .read()
+            .expect("Catalog writers only replace owned snapshots")
+            .clone()
+    }
+    pub fn replace(&self, catalog: Catalog) -> Result<(), Error> {
+        let catalog = std::sync::Arc::new(catalog);
+        *self.catalog.write().map_err(|_| Error::ModelUnavailable)? = catalog;
+        Ok(())
     }
     pub fn resolve(
         &self,
@@ -76,35 +88,40 @@ impl Resolver {
         saved: &[credential::Info],
         connection: Option<&credential::Info>,
     ) -> Result<Resolved, Error> {
-        let provider = self
-            .catalog
-            .provider(&selection.provider_id)
-            .ok_or(Error::ModelUnavailable)?;
-        if !self.catalog.provider_available(provider, saved) {
-            return Err(Error::ModelUnavailable);
-        }
-        let model = self
-            .catalog
-            .get(
-                &selection.provider_id,
-                &selection.id,
-                selection.profile.as_ref(),
-                saved,
-            )
-            .ok_or(if selection.profile.is_some() {
-                Error::ProfileUnavailable
-            } else {
-                Error::ModelUnavailable
-            })?;
-        let info = self
-            .catalog
-            .for_connection(&model, connection)
-            .ok_or(Error::ModelUnavailable)?;
-        Ok(Resolved {
-            info: with_variant(info, selection.variant.as_ref())?,
-            selection: selection.clone(),
-        })
+        resolve_catalog(&self.catalog(), selection, saved, connection)
     }
+}
+pub(crate) fn resolve_catalog(
+    catalog: &Catalog,
+    selection: &model::Ref,
+    saved: &[credential::Info],
+    connection: Option<&credential::Info>,
+) -> Result<Resolved, Error> {
+    let provider = catalog
+        .provider(&selection.provider_id)
+        .ok_or(Error::ModelUnavailable)?;
+    if !catalog.provider_available(provider, saved) {
+        return Err(Error::ModelUnavailable);
+    }
+    let model = catalog
+        .get(
+            &selection.provider_id,
+            &selection.id,
+            selection.profile.as_ref(),
+            saved,
+        )
+        .ok_or(if selection.profile.is_some() {
+            Error::ProfileUnavailable
+        } else {
+            Error::ModelUnavailable
+        })?;
+    let info = catalog
+        .for_connection(&model, connection)
+        .ok_or(Error::ModelUnavailable)?;
+    Ok(Resolved {
+        info: with_variant(info, selection.variant.as_ref())?,
+        selection: selection.clone(),
+    })
 }
 pub fn with_variant(
     mut info: model::Info,
@@ -142,6 +159,22 @@ pub enum ProviderFamily {
     Copilot,
     Vertex,
     VertexAnthropic,
+    Alibaba,
+    Cohere,
+    Cerebras,
+    Deepinfra,
+    Gateway,
+    Groq,
+    Mistral,
+    Perplexity,
+    Venice,
+    Vercel,
+    Together,
+    Gitlab,
+    Sap,
+    CloudflareGateway,
+    Mantle,
+    Cursor,
 }
 pub fn family(package: &provider::Package) -> Result<ProviderFamily, Error> {
     let package = package.as_str().ok_or(Error::UnsupportedPackage)?;
@@ -176,6 +209,22 @@ pub fn family(package: &provider::Package) -> Result<ProviderFamily, Error> {
         }
         "@ycoding-ai/ai/providers/runpod" => Ok(ProviderFamily::RunPod),
         "@ai-sdk/github-copilot" => Ok(ProviderFamily::Copilot),
+        "@ai-sdk/alibaba" => Ok(ProviderFamily::Alibaba),
+        "@ai-sdk/cohere" => Ok(ProviderFamily::Cohere),
+        "@ai-sdk/cerebras" => Ok(ProviderFamily::Cerebras),
+        "@ai-sdk/deepinfra" => Ok(ProviderFamily::Deepinfra),
+        "@ai-sdk/gateway" => Ok(ProviderFamily::Gateway),
+        "@ai-sdk/groq" => Ok(ProviderFamily::Groq),
+        "@ai-sdk/mistral" => Ok(ProviderFamily::Mistral),
+        "@ai-sdk/perplexity" => Ok(ProviderFamily::Perplexity),
+        "venice-ai-sdk-provider" => Ok(ProviderFamily::Venice),
+        "@ai-sdk/vercel" => Ok(ProviderFamily::Vercel),
+        "@ai-sdk/togetherai" => Ok(ProviderFamily::Together),
+        "gitlab-ai-provider" => Ok(ProviderFamily::Gitlab),
+        "@jerome-benoit/sap-ai-provider-v2" => Ok(ProviderFamily::Sap),
+        "ai-gateway-provider" => Ok(ProviderFamily::CloudflareGateway),
+        "@ai-sdk/amazon-bedrock/mantle" => Ok(ProviderFamily::Mantle),
+        "cursor-opencode-provider" => Ok(ProviderFamily::Cursor),
         _ => Err(Error::UnsupportedPackage),
     }
 }

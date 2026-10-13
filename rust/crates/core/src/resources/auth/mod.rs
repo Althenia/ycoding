@@ -18,6 +18,7 @@ use ycoding_schema::{
 use ycoding_store::resources::Secret;
 
 pub mod bedrock;
+mod builtin;
 pub mod claude;
 pub mod cursor;
 pub mod google;
@@ -30,6 +31,7 @@ pub mod page;
 pub struct Preparation {
     pub clients: std::collections::BTreeMap<String, Client>,
     pub cursor: Option<cursor::Store>,
+    pub providers: Option<crate::resources::model::ProviderContext>,
 }
 impl Preparation {
     pub async fn prepare_value(
@@ -44,6 +46,43 @@ impl Preparation {
             .integration_id()
             .as_str()
             .ok_or(Error::InvalidCredential)?;
+        if integration == "opencode" && stored.needs_refresh(time)? {
+            let credential::Value::OAuth(value) = stored
+                .secret()
+                .domain()
+                .map_err(|_| Error::InvalidCredential)?
+            else {
+                return Ok(stored.secret().clone());
+            };
+            let server = value
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get(&"server".into()))
+                .and_then(|value| {
+                    if let JsonValue::String(value) = value {
+                        value.as_str()
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or("https://console.opencode.ai");
+            let console = opencode::Console::new(
+                self.clients
+                    .get("opencode")
+                    .cloned()
+                    .map(Ok)
+                    .unwrap_or_else(|| Client::new(server, env!("CARGO_PKG_VERSION")))?,
+            );
+            return credentials
+                .refresh(
+                    stored,
+                    time,
+                    async move { console.refresh(value, time).await },
+                )
+                .await?
+                .ok_or(Error::ProfileUnavailable)
+                .map(|value| value.secret().clone());
+        }
         let client = self
             .clients
             .get(integration)
@@ -597,10 +636,14 @@ impl Client {
                 credential::Value::Key(value) => (None, value.key.as_str()),
                 credential::Value::OAuth(value) => (value.access.as_str(), None),
             };
-            let token = cursor
-                .ok_or(Error::InvalidCredential)?
-                .resolve(access, key, now)
-                .await?;
+            let token = match cursor {
+                Some(cursor) => cursor.resolve(access, key, now).await?,
+                None => access
+                    .or_else(|| key.filter(|key| !key.starts_with("crsr_")))
+                    .filter(|token| !token.trim().is_empty())
+                    .ok_or(Error::InvalidCredential)?
+                    .to_owned(),
+            };
             service.current_account(&stored)?;
             return Secret::new(
                 credential::Value::Key(credential::Key {

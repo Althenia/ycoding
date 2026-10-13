@@ -23,6 +23,7 @@ impl Endpoints {
     pub fn provider() -> Self {
         Self(BTreeMap::from([
             ("openrouter".into(), "https://openrouter.ai/api/v1".into()),
+            ("anthropic".into(), "https://api.anthropic.com".into()),
             ("opencode-go".into(), "https://opencode.ai/zen/go/v1".into()),
             ("openai".into(), "https://api.openai.com/v1".into()),
             ("codex".into(), "https://chatgpt.com/backend-api".into()),
@@ -50,6 +51,8 @@ pub struct Service {
     app_server: Option<super::AppServerCommand>,
     store: Option<ycoding_store::Client>,
     auxiliary_errors: Arc<Mutex<BTreeMap<&'static str, Error>>>,
+    preparation: crate::resources::auth::Preparation,
+    claude: Option<crate::resources::auth::claude::Store>,
 }
 type Observations = BTreeMap<(provider::Id, Option<LosslessString>), Snapshot>;
 type CopilotAccounts = BTreeMap<(provider::Id, LosslessString, i64), String>;
@@ -74,10 +77,21 @@ impl Service {
             app_server: None,
             store: None,
             auxiliary_errors: Arc::new(Mutex::new(BTreeMap::new())),
+            preparation: Default::default(),
+            claude: None,
         })
     }
     pub fn with_version(mut self, version: &str) -> Self {
         self.user_agent = format!("ycoding/{version}");
+        self
+    }
+    pub fn with_auth(
+        mut self,
+        preparation: crate::resources::auth::Preparation,
+        claude: Option<crate::resources::auth::claude::Store>,
+    ) -> Self {
+        self.preparation = preparation;
+        self.claude = claude;
         self
     }
     pub fn with_store(mut self, store: ycoding_store::Client) -> Self {
@@ -279,26 +293,41 @@ impl Service {
         let label_copy = label.clone();
         let result = self
             .cache
-            .get(key, now, 60_000, refresh, move || async move {
-                service.load(provider_copy, &label_copy, input, now).await
-            })
+            .get(
+                key,
+                now,
+                if provider.0 == "anthropic".into() {
+                    300_000
+                } else {
+                    60_000
+                },
+                refresh,
+                move || async move { service.load(provider_copy, &label_copy, input, now).await },
+            )
             .await;
         let mut snapshot = match result {
             Ok(snapshot) => snapshot,
-            Err(Error::Request(Some(401 | 403))) => unavailable(
+            Err(
+                Error::Request(Some(401 | 403))
+                | Error::RequestWithRetry {
+                    status: 401 | 403, ..
+                },
+            ) => unavailable(
                 provider.clone(),
                 &label,
                 now,
                 "unauthorized",
                 "Provider usage credentials are unauthorized",
             ),
-            Err(Error::Request(Some(404))) => unavailable(
-                provider.clone(),
-                &label,
-                now,
-                "unsupported",
-                "Provider usage refresh failed",
-            ),
+            Err(Error::Request(Some(404)) | Error::RequestWithRetry { status: 404, .. }) => {
+                unavailable(
+                    provider.clone(),
+                    &label,
+                    now,
+                    "unsupported",
+                    "Provider usage refresh failed",
+                )
+            }
             Err(_) => unavailable(
                 provider.clone(),
                 &label,
@@ -307,7 +336,7 @@ impl Service {
                 "Provider usage refresh failed",
             ),
         };
-        if provider.0 == "openai".into() && selected.secret().domain().is_ok_and(|value| matches!(value,credential::Value::OAuth(oauth) if ["chatgpt-browser","chatgpt-headless"].iter().any(|method| oauth.method_id.as_lossless() == &(*method).into()))) { snapshot.source = "provider_internal_api".into(); snapshot.stability = "best_effort".into(); }
+        if provider.0 == "anthropic".into() || provider.0 == "openai".into() && selected.secret().domain().is_ok_and(|value| matches!(value,credential::Value::OAuth(oauth) if ["chatgpt-browser","chatgpt-headless"].iter().any(|method| oauth.method_id.as_lossless() == &(*method).into()))) { snapshot.source = "provider_internal_api".into(); snapshot.stability = "best_effort".into(); }
         let current = self.credentials.list(&provider.0);
         let current = match current {
             Ok(current) => current,
@@ -541,10 +570,17 @@ impl Service {
         credential: Info,
         now: i64,
     ) -> Result<Snapshot, Error> {
-        let value = credential
-            .secret()
-            .domain()
-            .map_err(|_| Error::InvalidResponse)?;
+        let prepared = self
+            .preparation
+            .prepare_value(
+                &self.credentials,
+                credential.clone(),
+                now,
+                self.claude.as_ref(),
+            )
+            .await
+            .map_err(|_| Error::Request(Some(401)))?;
+        let value = prepared.domain().map_err(|_| Error::InvalidResponse)?;
         let key = match &value {
             credential::Value::Key(key) => key.key.to_utf8().map_err(|_| Error::InvalidResponse)?,
             credential::Value::OAuth(oauth) => {
@@ -557,6 +593,71 @@ impl Service {
             .get(provider.0.as_str().ok_or(Error::InvalidResponse)?)
             .ok_or(Error::InvalidResponse)?;
         match provider.0.as_str() {
+            Some("anthropic") => {
+                let stored = credential
+                    .secret()
+                    .domain()
+                    .map_err(|_| Error::InvalidResponse)?;
+                let source = crate::resources::auth::claude::credential_source(&stored);
+                let Some(source) = source else {
+                    let mut snapshot = unavailable(
+                        provider,
+                        "Claude",
+                        now,
+                        "unsupported",
+                        "Claude subscription usage requires a Claude Code OAuth account",
+                    );
+                    snapshot.source = "provider_internal_api".into();
+                    snapshot.stability = "best_effort".into();
+                    return Ok(snapshot);
+                };
+                let store = self.claude.as_ref().ok_or(Error::Request(Some(401)))?;
+                let current = store
+                    .resolve(source, now, false)
+                    .await
+                    .map_err(|_| Error::Request(Some(401)))?
+                    .ok_or(Error::Request(Some(401)))?;
+                let request = |access: &str| {
+                    self.client
+                        .get(format!("{base}/api/oauth/usage"))
+                        .bearer_auth(access)
+                        .header("anthropic-beta", "oauth-2025-04-20")
+                };
+                let first = self.response(request(&current.access_token)).await;
+                let (response, subscription) = if matches!(
+                    first,
+                    Err(Error::Request(Some(401)) | Error::RequestWithRetry { status: 401, .. })
+                ) {
+                    match store.resolve(source, now, true).await {
+                        Ok(Some(rotated)) if rotated.access_token != current.access_token => {
+                            self.credentials
+                                .current_account(&credential)
+                                .map_err(|_| Error::InvalidResponse)?;
+                            (
+                                self.response(request(&rotated.access_token)).await,
+                                rotated.subscription_type,
+                            )
+                        }
+                        _ => (first, current.subscription_type),
+                    }
+                } else {
+                    (first, current.subscription_type)
+                };
+                self.credentials
+                    .current_account(&credential)
+                    .map_err(|_| Error::InvalidResponse)?;
+                let label = match subscription
+                    .as_deref()
+                    .map(str::trim)
+                    .map(str::to_ascii_lowercase)
+                    .as_deref()
+                {
+                    Some("pro") => "Claude Pro",
+                    Some("max") => "Claude Max",
+                    _ => "Claude",
+                };
+                super::normalize_claude(provider, label, now, &response?)
+            }
             Some("openai") => {
                 if let credential::Value::OAuth(oauth) = &value {
                     if ["chatgpt-browser", "chatgpt-headless"]
@@ -776,9 +877,12 @@ impl Service {
                     Ok(response) => {
                         normalize_openrouter(provider.clone(), label, now, response, None)?
                     }
-                    Err(Error::Request(Some(401 | 403))) => {
-                        empty(provider.clone(), label, now, "provider_api", "stable")
-                    }
+                    Err(
+                        Error::Request(Some(401 | 403))
+                        | Error::RequestWithRetry {
+                            status: 401 | 403, ..
+                        },
+                    ) => empty(provider.clone(), label, now, "provider_api", "stable"),
                     Err(error) => return Err(*error),
                 };
                 match self.request(format!("{base}/credits"), &key, false).await {
@@ -835,6 +939,23 @@ impl Service {
             .await
             .map_err(|_| Error::Request(None))?;
         if !response.status().is_success() {
+            if let Some(retry) = response
+                .headers()
+                .get("retry-after")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| {
+                    value
+                        .parse::<f64>()
+                        .ok()
+                        .filter(|value| value.is_finite() && *value >= 0.0)
+                        .map(|value| (value * 1000.0) as u64)
+                })
+            {
+                return Err(Error::RequestWithRetry {
+                    status: response.status().as_u16(),
+                    retry_after_ms: retry,
+                });
+            }
             return Err(Error::Request(Some(response.status().as_u16())));
         }
         ycoding_schema::parse_json(&response.text().await.map_err(|_| Error::InvalidResponse)?)

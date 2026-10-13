@@ -289,9 +289,8 @@ impl Models {
         selected: &model::Ref,
     ) -> Result<Resolved, String> {
         let saved = self.credentials.all().map_err(|error| error.to_string())?;
-        let provider = self
-            .models
-            .catalog()
+        let catalog = self.models.catalog();
+        let provider = catalog
             .provider(&selected.provider_id)
             .ok_or_else(|| "Selected provider is unavailable".to_owned())?;
         let integration = provider

@@ -100,9 +100,8 @@ impl Preflight {
                     text(parent.id.as_lossless())
                 ))
             })?;
-        let provider = self
-            .models
-            .catalog()
+        let catalog = self.models.catalog();
+        let provider = catalog
             .provider(&selection.provider_id)
             .ok_or_else(|| invalid("Selected provider is unavailable".into()))?;
         let integration = provider

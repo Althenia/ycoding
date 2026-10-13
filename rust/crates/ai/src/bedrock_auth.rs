@@ -21,13 +21,26 @@ pub fn sigv4(
     credentials: Option<Credentials>,
     clock: impl Fn() -> String + Send + Sync + 'static,
 ) -> Auth {
+    sigv4_service(credentials, "bedrock", clock)
+}
+
+pub fn sigv4_service(
+    credentials: Option<Credentials>,
+    service: &'static str,
+    clock: impl Fn() -> String + Send + Sync + 'static,
+) -> Auth {
     Auth::custom(move |input| {
         let credentials = credentials.as_ref().ok_or_else(|| Error::invalid("Bedrock Converse requires either route bearer auth or AWS credentials configured on the route"))?;
-        sign(input, credentials, &clock())
+        sign(input, credentials, &clock(), service)
     })
 }
 
-fn sign(input: Input<'_>, credentials: &Credentials, datetime: &str) -> Result<HeaderMap, Error> {
+fn sign(
+    input: Input<'_>,
+    credentials: &Credentials,
+    datetime: &str,
+    service: &str,
+) -> Result<HeaderMap, Error> {
     if datetime.len() != 16
         || !datetime
             .bytes()
@@ -91,12 +104,12 @@ fn sign(input: Input<'_>, credentials: &Credentials, datetime: &str) -> Result<H
     }
     let (canonical, signed_headers) = canonical(input.method, &url, input.body, &headers)?;
     let scope = format!(
-        "{}/{}/bedrock/aws4_request",
+        "{}/{}/{service}/aws4_request",
         &datetime[..8],
         credentials.region
     );
     let string_to_sign = string_to_sign(datetime, &scope, &canonical);
-    let signature = signature(credentials, &datetime[..8], "bedrock", &string_to_sign);
+    let signature = signature(credentials, &datetime[..8], service, &string_to_sign);
     let mut authorization = HeaderValue::from_str(&format!("AWS4-HMAC-SHA256 Credential={}/{scope}, SignedHeaders={signed_headers}, Signature={signature}", credentials.access_key_id.expose())).map_err(|_| Error::invalid("Bedrock Converse SigV4 signing failed: invalid credentials"))?;
     authorization.set_sensitive(true);
     headers.insert("authorization", authorization);
@@ -317,6 +330,7 @@ mod tests {
             },
             &credentials,
             "20150830T123600Z",
+            "bedrock",
         )
         .unwrap();
         let (canonical, _) = canonical(

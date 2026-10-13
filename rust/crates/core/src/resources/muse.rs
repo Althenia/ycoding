@@ -218,9 +218,10 @@ pub struct Account {
 }
 pub struct Service {
     runtime: Arc<Runtime>,
-    base_url: String,
+    pub(crate) base_url: String,
     accounts: Vec<Account>,
     source: Option<String>,
+    next_reconcile: i64,
 }
 impl Service {
     pub fn new(runtime: Arc<Runtime>) -> Self {
@@ -229,6 +230,7 @@ impl Service {
             base_url: BASE_URL.into(),
             accounts: vec![],
             source: None,
+            next_reconcile: 0,
         }
     }
     pub fn with_base_url(mut self, base_url: String) -> Self {
@@ -237,6 +239,30 @@ impl Service {
     }
     pub fn source(&self) -> Option<&str> {
         self.source.as_deref()
+    }
+    pub fn seed(
+        &self,
+        catalog: &mut Catalog,
+        credentials: &credential::Service,
+        env: &BTreeMap<String, String>,
+    ) -> Result<(), models_dev::Error> {
+        let saved = credentials
+            .list(&"muse".into())
+            .map_err(|_| models_dev::Error::Storage)?;
+        let accounts = self
+            .accounts
+            .iter()
+            .filter(|account| match &account.credential {
+                Some(selected) => saved.iter().any(|current| {
+                    current.id() == selected.id()
+                        && current.account_generation() == selected.account_generation()
+                }),
+                None => saved.is_empty() && account.env_key.as_ref() == env.get("META_API_KEY"),
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        publish(catalog, &accounts);
+        Ok(())
     }
     pub async fn refresh(
         &mut self,
@@ -291,7 +317,8 @@ impl Service {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
-        if self.source.as_ref() == Some(&source) {
+        if self.source.as_ref() == Some(&source) && now < self.next_reconcile {
+            self.seed(catalog, credentials, env)?;
             return Ok(false);
         }
         let connections = if saved.is_empty() {
@@ -364,6 +391,7 @@ impl Service {
         publish(catalog, &accounts);
         self.accounts = accounts;
         self.source = (!failed).then_some(source);
+        self.next_reconcile = now.saturating_add(60_000);
         Ok(true)
     }
 }

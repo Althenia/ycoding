@@ -94,9 +94,8 @@ async fn provider_get(
 ) -> Result<v5::ProviderGetResult, Failure> {
     let (location, services) = services(&invocation, &request.query)?;
     let id = convert::identifier(&request.params.provider_id)?;
-    let provider = services
-        .models
-        .catalog()
+    let catalog = services.models.catalog();
+    let provider = catalog
         .provider(&id)
         .ok_or_else(|| Failure::ProviderNotFound(id.0.clone()))?;
     Ok(v5::ProviderGetResult {

@@ -886,7 +886,7 @@ impl Provider {
         )?);
         Ok(Stream {
             session,
-            events: VecDeque::new(),
+            events: VecDeque::from([Event::StepStart { index: 0.0 }]),
             halted: false,
             tools: if matches!(request.tool_choice, Some(ToolChoice::None)) {
                 Vec::new()
@@ -1042,7 +1042,15 @@ impl Stream {
                 .events
                 .iter()
                 .any(|event| matches!(event, Event::Finish(_)));
-            self.events.extend(batch.events);
+            for event in batch.events {
+                if let Event::Finish(finish) = &event {
+                    self.events.push_back(Event::StepFinish {
+                        index: 0.0,
+                        finish: finish.clone(),
+                    });
+                }
+                self.events.push_back(event);
+            }
             if turn_ended && let (Some(store), Some(key)) = (&self.persistence, &self.session_key) {
                 store.save(key, &self.session.snapshot).await;
             }
@@ -1435,11 +1443,16 @@ impl Stream {
         };
         self.events.extend(self.session.state.close_spans());
         self.events.push_back(Event::ToolCall(call.clone()));
-        self.events.push_back(Event::Finish(Finish {
+        let finish = Finish {
             reason: FinishReason::ToolCalls,
             usage: None,
             provider_metadata: None,
-        }));
+        };
+        self.events.push_back(Event::StepFinish {
+            index: 0.0,
+            finish: finish.clone(),
+        });
+        self.events.push_back(Event::Finish(finish));
         self.session.pending = Some(Pending {
             reply,
             call,

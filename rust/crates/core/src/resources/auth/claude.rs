@@ -430,6 +430,7 @@ type Resolution = Result<Option<Credentials>, Error>;
 struct State {
     closed: bool,
     cache: BTreeMap<String, (Credentials, i64)>,
+    labels: BTreeMap<String, String>,
     pending: BTreeMap<String, watch::Receiver<Option<Resolution>>>,
     tasks: Vec<JoinHandle<()>>,
 }
@@ -448,6 +449,7 @@ impl Store {
             state: Mutex::new(State {
                 closed: false,
                 cache: BTreeMap::new(),
+                labels: BTreeMap::new(),
                 pending: BTreeMap::new(),
                 tasks: Vec::new(),
             }),
@@ -456,6 +458,10 @@ impl Store {
     pub async fn accounts(&self, time: i64) -> Result<Vec<Account>, Error> {
         let accounts = self.0.source.list().await?;
         let mut state = self.0.state.lock().map_err(|_| Error::Closed)?;
+        state.labels = accounts
+            .iter()
+            .map(|account| (account.source.clone(), account.label.clone()))
+            .collect();
         state
             .cache
             .retain(|source, _| accounts.iter().any(|account| &account.source == source));
@@ -984,7 +990,22 @@ impl Store {
             refresh: Some(Arc::new(|_| {
                 Box::pin(async { Err(Error::ProfileUnavailable) })
             })),
-            label: None,
+            label: Some(Arc::new({
+                let store = self.clone();
+                move |secret| {
+                    let value = secret.domain().ok()?;
+                    let source = credential_source(&value)?;
+                    store
+                        .0
+                        .state
+                        .lock()
+                        .ok()?
+                        .labels
+                        .get(source)
+                        .cloned()
+                        .map(Into::into)
+                }
+            })),
         }
     }
 }
