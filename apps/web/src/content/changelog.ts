@@ -22,6 +22,16 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.10.6",
+    date: "2026-10-13",
+    title: "Muse (Meta) subscriptions and quota",
+    tags: ["Added"],
+    changes: [
+      { tag: "Added", text: "Muse (Meta) provider: connect a Meta Muse Code subscription through /connect with a device-code login, or use a Meta Model API key or META_API_KEY. YCoding lists the models your account can use, with their context limits and effort levels, and runs them with tools and reasoning." },
+      { tag: "Added", text: "Muse subscription quota appears in provider usage as live 5-hour window and weekly percentages with reset times, updated from each Muse response." },
+    ],
+  },
+  {
     version: "0.10.5",
     date: "2026-10-13",
     title: "MCP protocol 2026-07-28, lasting MCP sign-ins, and quieter guardrails",
