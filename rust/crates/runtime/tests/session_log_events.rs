@@ -56,7 +56,9 @@ const SESSION: &str = "ses_wire_events";
 
 fn hex(text: &str) -> Vec<u8> {
     text.as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
         .collect()
 }
@@ -468,7 +470,7 @@ async fn real_runner_flow_preserves_order_follow_watermark_cursor_and_full_value
             assert!(ephemerals.iter().any(|event| matches!(event, Kind::SessionTextDelta(value) if units(&value.data.delta) == "Answer" && value.data.ordinal == 0 && units(&value.data.session_id) == id)));
             assert!(ephemerals.iter().any(|event| matches!(event, Kind::SessionReasoningDelta(value) if units(&value.data.delta) == "Think" && value.data.ordinal == 0)));
             assert!(ephemerals.iter().any(|event| matches!(event, Kind::SessionUsageUpdated(value) if value.data.tokens.input == 3.0 && value.data.tokens.output == 2.0)));
-            assert!(ephemerals.iter().any(|event| matches!(event, Kind::SessionDiagnosticsUpdated(value) if value.data.diagnostics.context.total == 5 && value.data.diagnostics.tokens.uncached_input == 3 && value.data.diagnostics.tokens.output == 2 && value.data.diagnostics.cache.read_reported == false)));
+            assert!(ephemerals.iter().any(|event| matches!(event, Kind::SessionDiagnosticsUpdated(value) if value.data.diagnostics.context.total == 5 && value.data.diagnostics.tokens.uncached_input == 3 && value.data.diagnostics.tokens.output == 2 && !value.data.diagnostics.cache.read_reported)));
             assert!(ephemerals.iter().any(|event| matches!(event, Kind::SessionDiagnosticsUpdated(value) if value.data.diagnostics.context_breakdown.as_ref().is_some_and(|breakdown| breakdown.user > 0) && value.data.diagnostics.generation_speed.is_none())));
             let diagnostics = live_records.iter().position(|record| record.durable.is_none() && matches!(v5::PublicEvent::decode(record.event.payload.as_slice()).unwrap().kind, Some(Kind::SessionDiagnosticsUpdated(_)))).unwrap();
             let step_ended = live_records.iter().position(|record| record.durable.is_some() && matches!(v5::PublicEvent::decode(record.event.payload.as_slice()).unwrap().kind, Some(Kind::SessionStepEnded(_)))).unwrap();

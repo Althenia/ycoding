@@ -135,11 +135,11 @@ impl ProviderContext {
             Some(credential::Value::OAuth(value)) => value.metadata.as_ref(),
             None => None,
         };
-        if let Some(metadata) = metadata {
-            if let JsonValue::Object(fields) = &mut settings {
-                for (name, value) in metadata.iter() {
-                    fields.insert(name.clone(), value.clone());
-                }
+        if let Some(metadata) = metadata
+            && let JsonValue::Object(fields) = &mut settings
+        {
+            for (name, value) in metadata.iter() {
+                fields.insert(name.clone(), value.clone());
             }
         }
         if value.is_some()

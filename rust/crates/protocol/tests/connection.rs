@@ -273,7 +273,6 @@ fn ac_wire_011_forwarded_batch_preserves_identity_and_releases_only_on_credit_or
                 scope.clone(),
                 v5::EventSubscribeRequest {
                     scope: scope.clone(),
-                    ..Default::default()
                 }
                 .encode_to_vec(),
                 4,

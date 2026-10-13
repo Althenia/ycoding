@@ -1,7 +1,9 @@
-#[allow(dead_code)]
 #[path = "support/muse.rs"]
 mod fixture;
-use fixture::{Fixture, header, json, model, secret, store};
+#[path = "support/muse_inference.rs"]
+mod inference_fixture;
+use fixture::{Fixture, header, secret, store};
+use inference_fixture::{json, model};
 use ycoding_ai::{
     llm::{self, Request},
     muse::{Runtime, normalize_usage},
@@ -126,7 +128,7 @@ async fn trailing_quota_profile_env_isolation_replacement_malformed_and_no_termi
     for profile in [true, false] {
         let fixture = Fixture::new(vec![(
             200,
-            format!("{}data: {}", fixture::inference(), quota_event()),
+            format!("{}data: {}", inference_fixture::inference(), quota_event()),
         )])
         .await;
         let (_store, credentials) = store();
@@ -245,7 +247,7 @@ async fn live_responses_commentary_function_tools_usage_and_malformed_quota_are_
         serde_json::json!({"type":"response.function_call_arguments.delta","item_id":"fc_live","output_index":2,"delta":"{\"path\":\"file.txt\"}"}),
         serde_json::json!({"type":"response.output_item.done","output_index":2,"item":{"type":"function_call","id":"fc_live","call_id":"call_live","name":"read_file","arguments":"{\"path\":\"file.txt\"}","status":"completed"}}),
     ].iter().map(|v| format!("event: {}\ndata: {v}\n\n", v["type"].as_str().unwrap())).collect::<String>();
-    let stream = fixture::inference().replace(
+    let stream = inference_fixture::inference().replace(
         "event: response.completed",
         &format!("{tools}event: response.completed"),
     );

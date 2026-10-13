@@ -542,10 +542,10 @@ impl Inner {
             ))),
             Event::ToolsChanged(_) | Event::Log { .. } => None,
         };
-        if let Some(data) = data {
-            if self.event_source.emit(data).is_err() {
-                eprintln!("MCP event publication failed");
-            }
+        if let Some(data) = data
+            && self.event_source.emit(data).is_err()
+        {
+            eprintln!("MCP event publication failed");
         }
         let _ = self.events.send(event);
     }

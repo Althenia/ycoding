@@ -130,11 +130,11 @@ fn exited(exit: std::io::Result<process::Exit>) -> Status {
     })
 }
 async fn stop(active: &mut Option<Process>, status: &watch::Sender<Status>) {
-    if let Some(mut process) = active.take() {
-        if process.kill(process::KillOptions::default()).await.is_err() {
-            status.send_replace(error("The sleep inhibitor could not be stopped."));
-            return;
-        }
+    if let Some(mut process) = active.take()
+        && process.kill(process::KillOptions::default()).await.is_err()
+    {
+        status.send_replace(error("The sleep inhibitor could not be stopped."));
+        return;
     }
     status.send_replace(initial(true));
 }

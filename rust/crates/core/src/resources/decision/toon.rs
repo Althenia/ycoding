@@ -136,7 +136,10 @@ struct Line {
     depth: usize,
     body: String,
 }
-pub fn decode(text: &str) -> Result<JsonValue, ()> {
+#[derive(Debug)]
+pub struct DecodeError;
+
+pub fn decode(text: &str) -> Result<JsonValue, DecodeError> {
     let lines = text
         .lines()
         .filter(|line| !line.trim().is_empty())
@@ -150,14 +153,15 @@ pub fn decode(text: &str) -> Result<JsonValue, ()> {
                 body: line[spaces..].trim_end().to_owned(),
             })
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| DecodeError)?;
     if lines.is_empty() {
-        return Err(());
+        return Err(DecodeError);
     }
     let mut index = 0;
-    let result = mapping(&lines, &mut index, 0)?;
+    let result = mapping(&lines, &mut index, 0).map_err(|_| DecodeError)?;
     if index != lines.len() {
-        return Err(());
+        return Err(DecodeError);
     }
     Ok(result)
 }
@@ -305,17 +309,14 @@ fn mapping(lines: &[Line], index: &mut usize, depth: usize) -> Result<JsonValue,
     }
     Ok(JsonValue::Object(object))
 }
-fn header_parts(
-    header: &str,
-) -> Result<
-    (
-        LosslessString,
-        Option<usize>,
-        Option<Vec<LosslessString>>,
-        char,
-    ),
-    (),
-> {
+type HeaderParts = (
+    LosslessString,
+    Option<usize>,
+    Option<Vec<LosslessString>>,
+    char,
+);
+
+fn header_parts(header: &str) -> Result<HeaderParts, ()> {
     let parts = split(header, '[')?;
     if parts.len() == 1 {
         return string_key(header).map(|key| (key, None, None, ','));

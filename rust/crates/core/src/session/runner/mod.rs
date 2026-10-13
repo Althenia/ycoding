@@ -694,7 +694,7 @@ impl Local {
             if !to_promote.is_empty() && !services.store.has_pending_compaction(&session.id)? {
                 for input in to_promote {
                     let prepared = self
-                        .resolve_requested_skills(&session, &agent, std::slice::from_ref(&input))
+                        .resolve_requested_skills(&session, agent, std::slice::from_ref(&input))
                         .await?;
                     match services
                         .store

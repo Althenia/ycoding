@@ -104,6 +104,28 @@ impl Drop for ConnectionStop {
     }
 }
 
+pub async fn stop(
+    invocation: Invocation,
+    request: v5::HealthStopRequest,
+) -> Result<v5::HealthStopResult, Failure> {
+    let identity = &invocation.environment.services.identity.source_epoch;
+    let target = crate::convert::domain(&request.payload.instance_id)?;
+    let accepted = control(identity)
+        .filter(|control| control.managed && target.as_str() == Some(identity.as_str()))
+        .is_some_and(|control| {
+            control.pending.lock().is_ok_and(|mut pending| {
+                pending.insert((
+                    invocation.connection_id.clone(),
+                    invocation.request_id.clone(),
+                ));
+                true
+            })
+        });
+    Ok(v5::HealthStopResult {
+        data: v5::ServiceStopResponse { accepted },
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ConnectionStop, Control, request_stop};
@@ -146,26 +168,4 @@ mod tests {
         assert!(request_stop("owner", "owner"));
         assert!(notify.notified().now_or_never().is_some());
     }
-}
-
-pub async fn stop(
-    invocation: Invocation,
-    request: v5::HealthStopRequest,
-) -> Result<v5::HealthStopResult, Failure> {
-    let identity = &invocation.environment.services.identity.source_epoch;
-    let target = crate::convert::domain(&request.payload.instance_id)?;
-    let accepted = control(identity)
-        .filter(|control| control.managed && target.as_str() == Some(identity.as_str()))
-        .is_some_and(|control| {
-            control.pending.lock().is_ok_and(|mut pending| {
-                pending.insert((
-                    invocation.connection_id.clone(),
-                    invocation.request_id.clone(),
-                ));
-                true
-            })
-        });
-    Ok(v5::HealthStopResult {
-        data: v5::ServiceStopResponse { accepted },
-    })
 }

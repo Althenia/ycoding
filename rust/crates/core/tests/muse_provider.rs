@@ -1,6 +1,9 @@
 #[path = "support/muse.rs"]
 mod fixture;
-use fixture::{Fixture, header, json, model, oauth, row, secret, store};
+#[path = "support/muse_inference.rs"]
+mod inference_fixture;
+use fixture::{Fixture, header, row, secret, store};
+use inference_fixture::{json, model};
 use std::{collections::BTreeMap, sync::Arc};
 use ycoding_ai::{
     llm::{self, Request},
@@ -13,6 +16,11 @@ use ycoding_core::resources::{
     muse,
 };
 use ycoding_schema::{DomainEncode, credential, integration, parse_json, provider};
+
+fn oauth(expires: i64, access: &str) -> ycoding_schema::credential::Value {
+    use ycoding_schema::DomainDecode;
+    ycoding_schema::credential::Value::decode(&ycoding_schema::parse_json(&format!(r#"{{"type":"oauth","methodID":"device","access":"{access}","refresh":"","expires":{expires}}}"#)).unwrap()).unwrap()
+}
 
 fn device(interval: serde_json::Value, complete: bool, expires: i64) -> String {
     let mut value = serde_json::json!({"device_code":"device-fixture","user_code":"CODE","verification_uri":"https://auth.meta.com/device","expires_in":expires,"interval":interval});
@@ -516,10 +524,10 @@ async fn responses_catalog_wire_full_reasoning_replay_and_bounded_remint() {
         responses.push(if failure == "always" {
             (401, "{}".into())
         } else {
-            (200, fixture::inference())
+            (200, inference_fixture::inference())
         });
         if failure != "always" {
-            responses.push((200, fixture::inference()));
+            responses.push((200, inference_fixture::inference()));
         }
         let fixture = Fixture::new(responses).await;
         let (_store, credentials) = store();
@@ -636,13 +644,13 @@ async fn lazy_mint_shared_concurrent_models_and_credential_generation() {
             200,
             r#"{"api_key":"key-1","base_url":"{{base}}/v1"}"#.into(),
         ),
-        (200, fixture::inference()),
-        (200, fixture::inference()),
+        (200, inference_fixture::inference()),
+        (200, inference_fixture::inference()),
         (
             200,
             r#"{"api_key":"key-2","base_url":"{{base}}/v1"}"#.into(),
         ),
-        (200, fixture::inference()),
+        (200, inference_fixture::inference()),
     ])
     .await;
     let (_store, credentials) = store();

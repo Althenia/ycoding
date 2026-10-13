@@ -29,7 +29,6 @@ const DAY: i64 = 86_400_000;
 const NOW: i64 = 100 * DAY;
 const OLD: i64 = NOW - 30 * DAY - 1;
 const BOUNDARY: i64 = NOW - 30 * DAY;
-static OWNER: Mutex<()> = Mutex::new(());
 
 struct TestClock {
     now: AtomicI64,
@@ -532,7 +531,6 @@ async fn usage_batches_preserve_new_requests_and_updated_aggregates() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn startup_hourly_single_owner_failures_and_close_drain() {
-    let _owner = OWNER.lock().unwrap();
     let store = store();
     seed(&store, "ses_startup", OLD);
     let fixture = Fixture::new();

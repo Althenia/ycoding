@@ -845,7 +845,7 @@ fn bedrock_auth(
     service: &'static str,
 ) -> Result<Auth, Error> {
     let setting = field(settings, "region").and_then(text);
-    let region = bedrock::region(setting, &env, endpoint);
+    let region = bedrock::region(setting, env, endpoint);
     let options = bedrock::Options {
         profile: field(settings, "profile").and_then(text).map(str::to_owned),
         home: env

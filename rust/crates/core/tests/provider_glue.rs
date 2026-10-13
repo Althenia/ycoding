@@ -29,9 +29,11 @@ mod guardrails;
 #[path = "session_support/mod.rs"]
 mod support;
 
+type Requests = Arc<Mutex<Vec<(String, axum::http::HeaderMap, serde_json::Value)>>>;
+
 struct Fixture {
     base: String,
-    requests: Arc<Mutex<Vec<(String, axum::http::HeaderMap, serde_json::Value)>>>,
+    requests: Requests,
     stop: tokio::sync::oneshot::Sender<()>,
     task: tokio::task::JoinHandle<()>,
 }
@@ -44,10 +46,7 @@ impl Fixture {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let app = Router::new()
             .fallback(any(
-                |State((requests, body)): State<(
-                    Arc<Mutex<Vec<(String, axum::http::HeaderMap, serde_json::Value)>>>,
-                    Arc<Vec<u8>>,
-                )>,
+                |State((requests, body)): State<(Requests, Arc<Vec<u8>>)>,
                  request: Request| async move {
                     let (parts, body_bytes) = request.into_parts();
                     let bytes = to_bytes(body_bytes, 1_048_576).await.unwrap();

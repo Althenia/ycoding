@@ -358,7 +358,7 @@ fn offset_label(seconds: i32) -> String {
         if seconds < 0 { '-' } else { '+' },
         absolute / 3600,
         absolute / 60 % 60,
-        if absolute % 60 == 0 {
+        if absolute.is_multiple_of(60) {
             String::new()
         } else {
             format!(":{:02}", absolute % 60)

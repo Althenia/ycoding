@@ -251,12 +251,13 @@ async fn cold_quota_uses_selected_claude_source_preserves_zero_and_omits_absent_
         assert!(!public.contains(private), "{private}");
     }
     fixture.finish().await;
-    let requests = fixture.requests.lock().unwrap();
-    assert_eq!(requests.len(), 1);
-    assert!(requests[0].starts_with("GET /api/oauth/usage "));
-    assert!(requests[0].contains("authorization: Bearer private-selected"));
-    assert!(requests[0].contains("anthropic-beta: oauth-2025-04-20"));
-    drop(requests);
+    {
+        let requests = fixture.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].starts_with("GET /api/oauth/usage "));
+        assert!(requests[0].contains("authorization: Bearer private-selected"));
+        assert!(requests[0].contains("anthropic-beta: oauth-2025-04-20"));
+    }
     service.shutdown().await.unwrap();
     accounts.shutdown().await.unwrap();
     credentials.shutdown().await.unwrap();
@@ -294,18 +295,19 @@ async fn cold_claude_quota_retries_401_once_after_selected_source_refresh() {
     assert_eq!(result.status, "available".into());
     assert_eq!(result.windows[0].used, Some(42.0));
     fixture.finish().await;
-    let requests = fixture.requests.lock().unwrap();
-    assert_eq!(requests.len(), 3);
-    assert!(requests[0].contains("authorization: Bearer expired-selected"));
-    assert!(requests[1].starts_with("POST /v1/oauth/token "));
-    assert!(requests[1].contains("refresh-expired-selected"));
-    assert!(requests[2].contains("authorization: Bearer rotated-selected"));
-    assert!(
-        !requests
-            .iter()
-            .any(|request| request.contains("active-untouched"))
-    );
-    drop(requests);
+    {
+        let requests = fixture.requests.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert!(requests[0].contains("authorization: Bearer expired-selected"));
+        assert!(requests[1].starts_with("POST /v1/oauth/token "));
+        assert!(requests[1].contains("refresh-expired-selected"));
+        assert!(requests[2].contains("authorization: Bearer rotated-selected"));
+        assert!(
+            !requests
+                .iter()
+                .any(|request| request.contains("active-untouched"))
+        );
+    }
     service.shutdown().await.unwrap();
     accounts.shutdown().await.unwrap();
     credentials.shutdown().await.unwrap();

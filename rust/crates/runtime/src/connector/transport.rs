@@ -113,9 +113,11 @@ async fn supervise(
 ) -> Result<(), Error> {
     let mut intent = control.subscribe();
     let mut attempt = 0u32;
-    let mut jobs = Vec::<JoinHandle<()>>::new();
-    let permits = Arc::new(Semaphore::new(limits::PENDING_REQUESTS as usize));
-    let mut lanes = BTreeMap::<String, Weak<Mutex<()>>>::new();
+    let mut tasks = DispatchTasks {
+        jobs: Vec::new(),
+        permits: Arc::new(Semaphore::new(limits::PENDING_REQUESTS as usize)),
+        lanes: BTreeMap::new(),
+    };
     loop {
         let current = *intent.borrow_and_update();
         if *stopped.borrow() {
@@ -128,14 +130,14 @@ async fn supervise(
         control.publish(current.generation, State::Connecting, None);
         let opened = AtomicBool::new(false);
         let result = tokio::select! {
-            result = connect(&settings, &control, current, environment.clone(), dispatcher.clone(), &mut jobs, &permits, &mut lanes, &opened) => result,
+            result = connect(&settings, &control, current, environment.clone(), dispatcher.clone(), &mut tasks, &opened) => result,
             _ = intent.changed() => { attempt = 0; continue; },
             _ = stopped.changed() => break,
         };
         if opened.load(Ordering::Acquire) {
             attempt = 0;
         }
-        reap(&mut jobs).await?;
+        reap(&mut tasks.jobs).await?;
         match result {
             Err(Error::Unauthorized | Error::Forbidden | Error::Setup | Error::Incompatible) => {
                 control.publish(
@@ -166,8 +168,8 @@ async fn supervise(
     }
     let mut joined = 0;
     let drain = async {
-        while joined < jobs.len() {
-            let result = (&mut jobs[joined]).await;
+        while joined < tasks.jobs.len() {
+            let result = (&mut tasks.jobs[joined]).await;
             joined += 1;
             if let Err(error) = result
                 && !error.is_cancelled()
@@ -180,10 +182,10 @@ async fn supervise(
     control.publish(intent.borrow().generation, State::Off, None);
     let result = tokio::time::timeout(Duration::from_secs(10), drain).await;
     if !matches!(result, Ok(Ok(()))) {
-        for job in jobs.iter().skip(joined) {
+        for job in tasks.jobs.iter().skip(joined) {
             job.abort();
         }
-        for job in jobs.drain(joined..) {
+        for job in tasks.jobs.drain(joined..) {
             let _ = job.await;
         }
     }
@@ -205,6 +207,12 @@ async fn reap(jobs: &mut Vec<JoinHandle<()>>) -> Result<(), Error> {
         }
     }
     Ok(())
+}
+
+struct DispatchTasks {
+    jobs: Vec<JoinHandle<()>>,
+    permits: Arc<Semaphore>,
+    lanes: BTreeMap<String, Weak<Mutex<()>>>,
 }
 
 struct Work {
@@ -249,9 +257,7 @@ async fn connect(
     intent: Intent,
     environment: Arc<Environment>,
     dispatcher: Arc<Dispatcher>,
-    jobs: &mut Vec<JoinHandle<()>>,
-    permits: &Arc<Semaphore>,
-    lanes: &mut BTreeMap<String, Weak<Mutex<()>>>,
+    tasks: &mut DispatchTasks,
     opened: &AtomicBool,
 ) -> Result<(), Error> {
     let environment = Arc::new(Environment {
@@ -346,7 +352,7 @@ async fn connect(
         if !control.current(intent.generation) {
             return Err(Error::Transport);
         }
-        reap(jobs).await?;
+        reap(&mut tasks.jobs).await?;
         if driver.established {
             while let Some(item) = subscriber.next().map_err(|_| Error::Transport)? {
                 let body = v5::frame::Body::Control(v5::Control {
@@ -444,12 +450,12 @@ async fn connect(
                             let dispatcher = dispatcher.clone();
                             let completed = completed.clone();
                             let control = control.clone();
-                            let permit = permits.clone().try_acquire_owned().map_err(|_| Error::Transport)?;
-                            lanes.retain(|_, lane| lane.strong_count() > 0);
+                            let permit = tasks.permits.clone().try_acquire_owned().map_err(|_| Error::Transport)?;
+                            tasks.lanes.retain(|_, lane| lane.strong_count() > 0);
                             let lane = if mutation {
                                 let key = match &request.scope.target { Some(v5::scope::Target::Session(id) | v5::scope::Target::Form(id)) => id.clone(), _ => String::new() };
-                                let lock = lanes.get(&key).and_then(Weak::upgrade).unwrap_or_else(|| Arc::new(Mutex::new(())));
-                                lanes.insert(key, Arc::downgrade(&lock)); Some(lock)
+                                let lock = tasks.lanes.get(&key).and_then(Weak::upgrade).unwrap_or_else(|| Arc::new(Mutex::new(())));
+                                tasks.lanes.insert(key, Arc::downgrade(&lock)); Some(lock)
                             } else { None };
                             let job = tokio::spawn(async move {
                                 let _permit = permit;
@@ -459,7 +465,7 @@ async fn connect(
                                 let _ = completed.send((id, settled)).await;
                             });
                             driver.work.insert(request_id, Work { cancelled, read: (!mutation).then(|| job.abort_handle()) });
-                            jobs.push(job);
+                            tasks.jobs.push(job);
                         },
                         Decision::Control(control) => {
                             driver.consume(ordinal)?;

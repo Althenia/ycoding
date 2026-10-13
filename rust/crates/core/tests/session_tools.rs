@@ -802,25 +802,26 @@ async fn questions_use_real_forms_tool_ownership_and_first_options_for_yolo_and_
         .await
         .unwrap();
     assert!(h.call("question", input).await.output.is_some());
-    let events = h.fixture.authority.events.lock().unwrap();
-    let created = events
-        .iter()
-        .find(|event| event.type_ == "form.created")
-        .unwrap();
-    let form = get(&created.data, "form");
-    assert_eq!(
-        get(get(form, "metadata"), "tool"),
-        &parse_json(r#"{"messageID":"msg_tool","callID":"call_tool"}"#).unwrap()
-    );
-    let JsonValue::Array(fields) = get(form, "fields") else {
-        panic!()
-    };
-    assert!(get(&fields[0], "type") == &JsonValue::String("string".into()));
-    assert_eq!(
-        get(&fields[1], "type"),
-        &JsonValue::String("multiselect".into())
-    );
-    drop(events);
+    {
+        let events = h.fixture.authority.events.lock().unwrap();
+        let created = events
+            .iter()
+            .find(|event| event.type_ == "form.created")
+            .unwrap();
+        let form = get(&created.data, "form");
+        assert_eq!(
+            get(get(form, "metadata"), "tool"),
+            &parse_json(r#"{"messageID":"msg_tool","callID":"call_tool"}"#).unwrap()
+        );
+        let JsonValue::Array(fields) = get(form, "fields") else {
+            panic!()
+        };
+        assert!(get(&fields[0], "type") == &JsonValue::String("string".into()));
+        assert_eq!(
+            get(&fields[1], "type"),
+            &JsonValue::String("multiselect".into())
+        );
+    }
     assert!(h.server.seen.lock().unwrap().is_empty());
     h.close().await;
 }
@@ -1267,13 +1268,14 @@ async fn decision_real_model_returns_typed_confidence_no_tools_and_accounts_usag
         &parse_json(r#"{"input":8,"output":5,"reasoning":2,"cache":{"read":4,"write":0}}"#)
             .unwrap()
     );
-    let seen = h.server.seen.lock().unwrap();
-    assert_eq!(seen.len(), 1);
-    let serialized = ycoding_schema::stringify_json(&seen[0]);
-    assert!(serialized.contains("uncalibrated"));
-    assert!(serialized.contains("alternatives"));
-    assert!(!serialized.contains("\"tools\":[{"));
-    drop(seen);
+    {
+        let seen = h.server.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        let serialized = ycoding_schema::stringify_json(&seen[0]);
+        assert!(serialized.contains("uncalibrated"));
+        assert!(serialized.contains("alternatives"));
+        assert!(!serialized.contains("\"tools\":[{"));
+    }
     assert!(
         h.events()
             .iter()
@@ -1613,7 +1615,7 @@ async fn image_analyzer_real_vision_requests_memoize_success_only_and_enforce_li
     let info = h.store.get(&h.context().session_id).unwrap().unwrap();
     let first = service
         .analyze(
-            &[input.clone()],
+            std::slice::from_ref(&input),
             Some(&info),
             None,
             &Cancellation::default(),
@@ -1622,7 +1624,7 @@ async fn image_analyzer_real_vision_requests_memoize_success_only_and_enforce_li
         .unwrap();
     let second = service
         .analyze(
-            &[input.clone()],
+            std::slice::from_ref(&input),
             Some(&info),
             None,
             &Cancellation::default(),
@@ -1680,7 +1682,12 @@ async fn unconfigured_text_only_image_fallback_is_explicit_and_multimodal_models
     let info = h.store.get(&h.context().session_id).unwrap().unwrap();
     let result = h
         .image()
-        .fallback_for_text_model(&[input.clone()], &info, None, &Cancellation::default())
+        .fallback_for_text_model(
+            std::slice::from_ref(&input),
+            &info,
+            None,
+            &Cancellation::default(),
+        )
         .await
         .unwrap()
         .unwrap();
@@ -1725,13 +1732,14 @@ async fn transient_generate_uses_fresh_durable_context_and_never_mutates_session
     assert_eq!(h.events(), before);
     assert_eq!(h.store.get(&info.id).unwrap().unwrap(), info);
     assert!(h.ledger().is_empty());
-    let seen = h.server.seen.lock().unwrap();
-    let request = ycoding_schema::stringify_json(&seen[0]);
-    assert!(request.contains("Existing durable context"));
-    assert!(request.contains("Summarize privately"));
-    assert!(request.contains("Initial context"));
-    assert!(!request.contains("\"tools\":[{"));
-    drop(seen);
+    {
+        let seen = h.server.seen.lock().unwrap();
+        let request = ycoding_schema::stringify_json(&seen[0]);
+        assert!(request.contains("Existing durable context"));
+        assert!(request.contains("Summarize privately"));
+        assert!(request.contains("Initial context"));
+        assert!(!request.contains("\"tools\":[{"));
+    }
     h.close().await;
 }
 

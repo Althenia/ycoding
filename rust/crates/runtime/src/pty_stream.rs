@@ -114,8 +114,10 @@ pub async fn upgrade(
                         Some(Ok(Message::Pong(_))) => continue,
                         _ => return,
                     };
-                    if let Some(text) = text {
-                        if !attachment.write(&text).await.unwrap_or(false) { let _ = close(&mut socket, 4409).await; return; }
+                    if let Some(text) = text
+                        && !attachment.write(&text).await.unwrap_or(false)
+                    {
+                        let _ = close(&mut socket, 4409).await; return;
                     }
                 }
                 delivery = attachment.recv() => {

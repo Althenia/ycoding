@@ -364,7 +364,9 @@ fn close_is_idempotent_and_duplicate_install_does_not_replace_sink() {
     assert!(dir.text("ycoding.log").contains("message=secure"));
 }
 
-fn receiver(status: u16) -> (String, thread::JoinHandle<Vec<(String, String, Value)>>) {
+type OtlpRequest = (String, String, Value);
+
+fn receiver(status: u16) -> (String, thread::JoinHandle<Vec<OtlpRequest>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     listener.set_nonblocking(true).unwrap();

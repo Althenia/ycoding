@@ -62,7 +62,7 @@ impl Copies {
             return Ok(());
         }
         (self.publisher)(Event {
-            type_: "project.directories.updated".into(),
+            type_: "project.directories.updated",
             data: ObjectEncoder::new().field("projectID", project).finish(),
         })
         .map_err(|cause| error("copy", self.directory.directory(), cause))

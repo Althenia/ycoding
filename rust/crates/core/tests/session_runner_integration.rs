@@ -187,16 +187,10 @@ fn local_services_with_skill_resolver(
     instructions: Vec<ycoding_core::instructions::Source>,
     skill_resolver: Option<Arc<dyn Resolver>>,
 ) -> Local {
-    local_hosted_with_skill_resolver(
-        store,
-        catalog,
-        agents,
-        registry,
-        clock,
-        instructions,
-        None,
+    Local::new(Services {
         skill_resolver,
-    )
+        ..fixture_services(store, catalog, agents, registry, clock, instructions)
+    })
 }
 
 fn local_hosted(
@@ -208,29 +202,21 @@ fn local_hosted(
     instructions: Vec<ycoding_core::instructions::Source>,
     cursor: Option<ycoding_core::resources::cursor::route::Host>,
 ) -> Local {
-    local_hosted_with_skill_resolver(
-        store,
-        catalog,
-        agents,
-        registry,
-        clock,
-        instructions,
+    Local::new(Services {
         cursor,
-        None,
-    )
+        ..fixture_services(store, catalog, agents, registry, clock, instructions)
+    })
 }
 
-fn local_hosted_with_skill_resolver(
+fn fixture_services(
     store: &ycoding_store::Store,
     catalog: Catalog,
     agents: Vec<ycoding_schema::agent::Info>,
     registry: Arc<Registry>,
     clock: Arc<dyn ycoding_core::session::runner::Clock>,
     instructions: Vec<ycoding_core::instructions::Source>,
-    cursor: Option<ycoding_core::resources::cursor::route::Host>,
-    skill_resolver: Option<Arc<dyn Resolver>>,
-) -> Local {
-    Local::new(Services {
+) -> Services {
+    Services {
         store: Service::new(store.client()),
         events: ycoding_core::event_feed::Feed::attach(&store.client()),
         location: ycoding_schema::location::Ref::decode(
@@ -254,11 +240,11 @@ fn local_hosted_with_skill_resolver(
         compaction: Default::default(),
         guardrails: guardrails::guardrails(store),
         helpers: Default::default(),
-        cursor,
-        skill_resolver,
+        cursor: None,
+        skill_resolver: None,
         claude: None,
         auth: None,
-    })
+    }
 }
 
 #[tokio::test]

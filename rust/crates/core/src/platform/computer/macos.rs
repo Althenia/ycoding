@@ -343,7 +343,7 @@ impl Service {
                 .as_millis()
                 + timeout.as_millis();
             let value = self.exchange("request", serde_json::json!({"deadlineUnixMilliseconds":deadline as u64,"request":request.encode()}), timeout).await.map_err(|_| settlement_failure(request.operation))?;
-            return decode_response(&value.to_string(), request.operation).map_err(|error| {
+            decode_response(&value.to_string(), request.operation).map_err(|error| {
                 if error.code == Code::InvalidResponse
                     && error.message == "Native computer helper returned invalid output"
                 {
@@ -351,7 +351,7 @@ impl Service {
                 } else {
                     error
                 }
-            });
+            })
         }
         #[cfg(not(unix))]
         {

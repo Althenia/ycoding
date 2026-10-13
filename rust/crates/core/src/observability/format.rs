@@ -94,21 +94,21 @@ impl Redactor {
 }
 
 pub(super) fn flatten(key: &str, value: &Value, output: &mut Vec<(String, Value)>) {
-    if let Value::Object(values) = value {
-        if !values.is_empty() {
-            for (name, value) in values {
-                flatten(
-                    &if key.is_empty() {
-                        name.clone()
-                    } else {
-                        format!("{key}.{name}")
-                    },
-                    value,
-                    output,
-                );
-            }
-            return;
+    if let Value::Object(values) = value
+        && !values.is_empty()
+    {
+        for (name, value) in values {
+            flatten(
+                &if key.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{key}.{name}")
+                },
+                value,
+                output,
+            );
         }
+        return;
     }
     output.push((key.into(), value.clone()));
 }

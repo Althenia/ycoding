@@ -431,7 +431,7 @@ pub fn model(info: &model::Info) -> Result<v5::ModelInfo, Failure> {
                 .map(|cost| v5::ModelCost {
                     tier: cost.tier.as_ref().map(|tier| v5::ModelCostTier {
                         r#type: 1,
-                        size: tier.size.get() as i64,
+                        size: tier.size.get(),
                     }),
                     input: cost.input.get(),
                     output: cost.output.get(),
@@ -462,9 +462,9 @@ pub fn model(info: &model::Info) -> Result<v5::ModelInfo, Failure> {
             .map(|value| choice(&value.0, &["chat", "responses"]))
             .transpose()?,
         limit: v5::ModelInfoLimit {
-            context: info.limit.context.get() as i64,
-            input: info.limit.input.map(|value| value.get() as i64),
-            output: info.limit.output.get() as i64,
+            context: info.limit.context.get(),
+            input: info.limit.input.map(|value| value.get()),
+            output: info.limit.output.get(),
         },
     })
 }

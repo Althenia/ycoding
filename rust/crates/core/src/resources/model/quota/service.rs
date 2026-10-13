@@ -456,15 +456,15 @@ impl Service {
             snapshots.extend(
                 observations
                     .iter()
-                    .filter_map(|((provider, source), snapshot)| {
-                        (source.is_none()
+                    .filter(|((provider, source), _)| {
+                        source.is_none()
                             && available.contains(provider)
                             && self
                                 .credentials
                                 .list(&provider.0)
-                                .is_ok_and(|saved| saved.len() > 1))
-                        .then(|| snapshot.clone())
-                    }),
+                                .is_ok_and(|saved| saved.len() > 1)
+                    })
+                    .map(|(_, snapshot)| snapshot.clone()),
             );
         }
         if let Some(command) = &self.app_server {

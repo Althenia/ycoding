@@ -286,19 +286,18 @@ impl AccountCatalog {
                             providers: previous.providers.clone(),
                         });
                     }
-                    if integration == "github-copilot" {
-                        if let Some(mut record) = baseline
+                    if integration == "github-copilot"
+                        && let Some(mut record) = baseline
                             .providers
                             .iter()
                             .find(|record| record.provider.id.0 == "github-copilot".into())
                             .cloned()
-                        {
-                            record.models.clear();
-                            next.push(Inventory {
-                                selected: selected.clone(),
-                                providers: vec![record],
-                            });
-                        }
+                    {
+                        record.models.clear();
+                        next.push(Inventory {
+                            selected: selected.clone(),
+                            providers: vec![record],
+                        });
                     }
                 }
             }

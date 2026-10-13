@@ -123,19 +123,18 @@ fn default(service: &Service, directory: &Path) -> Option<(String, String)> {
                 .copied()
         })
         .or_else(|| remotes.first().copied());
-    if let Some(remote) = remote {
-        if let Some(reference) = success(
+    if let Some(remote) = remote
+        && let Some(reference) = success(
             service,
             directory,
             &["symbolic-ref", &format!("refs/remotes/{remote}/HEAD")],
-        ) {
-            if let Some(name) = reference.strip_prefix(&format!("refs/remotes/{remote}/")) {
-                return Some((
-                    name.into(),
-                    reference.trim_start_matches("refs/remotes/").into(),
-                ));
-            }
-        }
+        )
+        && let Some(name) = reference.strip_prefix(&format!("refs/remotes/{remote}/"))
+    {
+        return Some((
+            name.into(),
+            reference.trim_start_matches("refs/remotes/").into(),
+        ));
     }
     let branches = run(
         service,
@@ -335,10 +334,8 @@ pub fn diff(
             .split('\0')
             .collect::<Vec<_>>()
             .chunks(2)
-            .filter_map(|pair| {
-                (pair.len() == 2 && !pair[1].is_empty())
-                    .then(|| (pair[1].to_owned(), pair[0].to_owned()))
-            })
+            .filter(|pair| pair.len() == 2 && !pair[1].is_empty())
+            .map(|pair| (pair[1].to_owned(), pair[0].to_owned()))
             .collect();
         tracked
             .iter()

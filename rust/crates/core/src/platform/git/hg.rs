@@ -97,10 +97,10 @@ fn chunks(text: &str, truncated: bool) -> BTreeMap<String, String> {
         }
         current.push_str(line);
     }
-    if let Some(file) = file {
-        if current.len() <= MAX_PATCH {
-            chunks.insert(file, current);
-        }
+    if let Some(file) = file
+        && current.len() <= MAX_PATCH
+    {
+        chunks.insert(file, current);
     }
     chunks
 }

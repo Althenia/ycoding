@@ -939,7 +939,7 @@ fn sha1(input: &[u8]) -> [u8; 20] {
         padded.push(0);
     }
     padded.extend(bit_length.to_be_bytes());
-    for block in padded.chunks_exact(64) {
+    for block in padded.as_chunks::<64>().0 {
         let mut words = [0u32; 80];
         for (index, word) in words.iter_mut().take(16).enumerate() {
             *word = u32::from_be_bytes([
