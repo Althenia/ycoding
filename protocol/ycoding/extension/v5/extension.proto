@@ -1,0 +1,121 @@
+syntax = "proto2";
+package ycoding.extension.v5;
+
+enum CapabilityFamily { TOOLS = 1; HOOKS = 2; TRANSFORMS = 3; EVENTS = 4; REGISTRATIONS = 5; MCP = 6; AUTH = 7; SESSION = 8; PROVIDERS = 9; }
+enum AuthMode { AUTO = 1; CODE = 2; }
+enum TransformStage { AGENTS = 1; COMMANDS = 2; REFERENCES = 3; SKILLS = 4; CATALOG = 5; SESSION_CONTEXT = 6; TOOL_BEFORE = 7; TOOL_AFTER = 8; TOOL_DEFINITIONS = 9; }
+enum FailureCode { REJECTED = 1; EXECUTION_FAILED = 2; UNKNOWN_OUTCOME = 3; }
+enum DiagnosticCode { STARTED = 1; STOPPED = 2; CHILD_WARNING = 3; STDERR_DISCARDED = 4; PROTOCOL_REJECTED = 5; PROCESS_EXITED = 6; DEADLINE_EXCEEDED = 7; }
+
+message Text { oneof encoding { string utf8 = 1; bytes utf16_le = 2; } }
+message Null {}
+message Value {
+  oneof kind {
+    Null null = 1;
+    bool boolean = 2;
+    double number = 3;
+    Text string = 4;
+    List list = 5;
+    Object object = 6;
+  }
+}
+message List { repeated Value items = 1; }
+message Object { repeated Entry entries = 1; }
+message Entry { required Text key = 1; required Value value = 2; }
+message File { required Text uri = 1; required Text mime = 2; optional Text name = 3; }
+message Content { oneof kind { Text text = 1; File file = 2; } }
+message ToolScope {
+  required string namespace = 1;
+  repeated string tools = 2;
+  required string action = 3;
+  repeated string resources = 4;
+}
+message FamilyScope { repeated string scopes = 1; required string action = 2; repeated string resources = 3; }
+message Grant { required CapabilityFamily family = 1; optional ToolScope scope = 2; optional FamilyScope family_scope = 3; }
+message Hello {
+  required uint32 revision = 1;
+  required string identity = 2;
+  required string generation = 3;
+  repeated Grant grants = 4;
+  required uint32 registration_order = 5;
+}
+message Ready { required uint32 revision = 1; required string identity = 2; required string generation = 3; }
+message Tool {
+  required string namespace = 1;
+  required string name = 2;
+  required Text description = 3;
+  required Value input_schema = 4;
+  required Value output_schema = 5;
+  required bool direct = 6;
+  required bool code_mode = 7;
+}
+message TransformRegistration { required string id = 1; required TransformStage stage = 2; }
+message DomainRegistration { required TransformStage domain = 1; required string key = 2; required Value value = 3; }
+message Subscription { required uint64 id = 1; repeated string families = 2; }
+message OAuthRegistration { required string integration = 1; required Value method = 2; required bool refresh = 3; required bool label = 4; }
+message RegisterTools { repeated Tool tools = 1; repeated TransformRegistration transforms = 2; repeated DomainRegistration domains = 3; repeated Subscription subscriptions = 4; repeated OAuthRegistration oauth = 5; }
+message Call {
+  required uint64 invocation = 1;
+  required string session_id = 2;
+  required string message_id = 3;
+  required Text call_id = 4;
+  required string agent = 5;
+}
+message Execute { required Call call = 1; required string namespace = 2; required string tool = 3; required Value input = 4; }
+message Output { required Value structured = 1; repeated Content content = 2; }
+message Failure { required FailureCode code = 1; }
+message Result { required Call call = 1; oneof outcome { Output output = 2; Failure failure = 3; } }
+message Progress { required Call call = 1; required Output output = 2; }
+message Cancel { required Call call = 1; }
+message Cleanup { required Call call = 1; }
+message Shutdown {}
+message Stopped {}
+message Diagnostic { required DiagnosticCode code = 1; }
+message Transform { required Call call = 1; required string registration = 2; required TransformStage stage = 3; required uint64 revision = 4; required Value draft = 5; }
+message Transformed { required Call call = 1; required TransformStage stage = 2; required uint64 revision = 3; oneof outcome { Value draft = 4; Failure failure = 5; } }
+message EventDelivery { required uint64 delivery = 1; required uint64 subscription = 2; required string family = 3; required Value envelope = 4; }
+message EventReceipt { required uint64 delivery = 1; }
+message Unsubscribe { required uint64 subscription = 1; }
+message McpServers {}
+message McpTools {}
+message McpReadResource { required string server = 1; required string uri = 2; }
+message McpCallTool { required string server = 1; required string name = 2; required Value args = 3; }
+message SessionGet { required string session = 1; }
+message SessionPrompt { required string session = 1; required string message = 2; required Value input = 3; optional bool resume = 4; }
+message SessionInterrupt { required string session = 1; }
+message HostCall {
+  required Call call = 1;
+  required uint64 request = 2;
+  oneof operation { McpServers servers = 3; McpTools tools = 4; McpReadResource read_resource = 5; McpCallTool call_tool = 6; SessionGet session_get = 7; SessionPrompt session_prompt = 8; SessionInterrupt session_interrupt = 9; }
+}
+message HostReply {
+  required Call call = 1;
+  required uint64 request = 2;
+  oneof outcome { Value value = 3; Failure failure = 4; }
+}
+message AuthAuthorize { required string integration = 1; required string method = 2; required Value inputs = 3; }
+message AuthCallback { required uint64 authorization = 1; optional Text code = 2; }
+message AuthSubmit { required uint64 authorization = 1; required Text code = 2; }
+message AuthRefresh { required string integration = 1; required string method = 2; required Value credential = 3; }
+message AuthLabel { required string integration = 1; required string method = 2; required Value credential = 3; }
+message AuthAuthorization { required Text url = 1; required Text instructions = 2; optional double expires_at = 3; required AuthMode mode = 4; required bool manual_code = 5; }
+message AuthRequest {
+  required uint64 request = 1;
+  oneof operation { AuthAuthorize authorize = 2; AuthCallback callback = 3; AuthSubmit submit = 4; AuthRefresh refresh = 5; AuthLabel label = 6; }
+}
+message AuthReply {
+  required uint64 request = 1;
+  oneof outcome { AuthAuthorization authorization = 2; Value credential = 3; Text label = 4; Null done = 5; Failure failure = 6; }
+}
+message ProviderAttempt { required string package = 1; required string model = 2; optional Value options = 3; required Value body = 4; }
+message ProviderRequest { required uint64 request = 1; required ProviderAttempt attempt = 2; }
+message ProviderResult { required uint64 request = 1; oneof outcome { Value frames = 2; Failure failure = 3; } }
+message ProviderCancel { required uint64 request = 1; }
+message HostFrame {
+  required string generation = 1;
+  oneof body { Hello hello = 2; Execute execute = 3; Cancel cancel = 4; Shutdown shutdown = 5; Transform transform = 6; EventDelivery event = 7; HostReply host_reply = 8; AuthRequest auth = 9; ProviderRequest provider = 10; ProviderCancel provider_cancel = 11; }
+}
+message ChildFrame {
+  required string generation = 1;
+  oneof body { Ready ready = 2; RegisterTools register_tools = 3; Result result = 4; Progress progress = 5; Cleanup cleanup = 6; Stopped stopped = 7; Diagnostic diagnostic = 8; Transformed transformed = 9; Subscription subscribe = 10; Unsubscribe unsubscribe = 11; EventReceipt event_receipt = 12; HostCall host_call = 13; AuthReply auth_reply = 14; ProviderResult provider_result = 15; }
+}

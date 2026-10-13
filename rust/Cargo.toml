@@ -1,0 +1,53 @@
+[workspace]
+members = [
+  "crates/schema",
+  "crates/protocol",
+  "crates/store",
+  "crates/ai",
+  "crates/core",
+  "crates/runtime",
+]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.98"
+license = "AGPL-3.0-only"
+publish = false
+
+[workspace.dependencies]
+encoding_rs = "=0.8.35"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+fff-search = { version = "=0.9.4", default-features = false }
+notify = { version = "=9.0.0-rc.5", default-features = false, features = ["macos_fsevent"] }
+ring = { version = "0.17.14", default-features = false }
+crc32fast = { version = "1.5.2", default-features = false }
+libc = { version = "=0.2.190", default-features = false }
+windows-sys = { version = "0.61", default-features = false }
+futures-util = { version = "0.3.34", default-features = false, features = ["sink"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "ws"] }
+duckdb = { version = "1.10506", default-features = false, features = ["bundled"] }
+icu_normalizer = { version = "2.3", default-features = false, features = ["compiled_data"] }
+icu_collator = { version = "2.3", default-features = false, features = ["compiled_data"] }
+icu_properties = { version = "2.3", default-features = false, features = ["compiled_data"] }
+oxc_allocator = { version = "0.153", default-features = false }
+oxc_ast = { version = "0.153", default-features = false }
+oxc_parser = { version = "0.153", default-features = false }
+oxc_semantic = { version = "0.153", default-features = false }
+photon-rs = { version = "=0.3.3", default-features = false }
+oxc_span = { version = "0.153", default-features = false }
+prost = { version = "0.14", default-features = false, features = ["derive", "no-recursion-limit"] }
+prost-build = { version = "0.14", default-features = false }
+redb = { version = "4.3", default-features = false }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "http2"] }
+rmcp = { version = "=3.5.1", default-features = false, features = ["client", "auth", "elicitation", "transport-async-rw", "transport-streamable-http-client-reqwest", "reqwest"] }
+rusqlite = { version = "0.40", default-features = false, features = ["bundled"] }
+serde = { version = "1", default-features = false, features = ["derive"] }
+serde_json = { version = "1", default-features = false, features = ["std"] }
+thiserror = { version = "2", default-features = false }
+tokio = { version = "1.53", default-features = false, features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+tracing = { version = "0.1", default-features = false }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
+url = { version = "2.5", default-features = false, features = ["std"] }
+yaml-rust2 = { version = "0.13.0", default-features = false }

@@ -1,0 +1,2063 @@
+{
+  "sources": [
+    {
+      "path": "packages/core/src/filesystem.ts",
+      "sha256": "608f2e916d5073795fa62a1f52b331e3b55f45b1b37a02b10b9797e5dd117f73"
+    },
+    {
+      "path": "packages/core/src/filesystem/search.ts",
+      "sha256": "47ecab0cca3b764483884efe96ff9b7f233ba48c95b4b1af303814f4521b8be8"
+    }
+  ],
+  "locale": {
+    "locale": "en-US",
+    "usage": "sort",
+    "sensitivity": "variant",
+    "ignorePunctuation": false,
+    "collation": "default",
+    "numeric": false,
+    "caseFirst": "false"
+  },
+  "listing": {
+    "names": [
+      "Zebra",
+      "äther",
+      "eclair",
+      "Éclair-accent",
+      "apple",
+      "Apple-tree",
+      "_",
+      "-",
+      "!",
+      "1",
+      "10",
+      "2",
+      "ö",
+      "Ω",
+      "中",
+      "😀"
+    ],
+    "expected": [
+      "_",
+      "-",
+      "!",
+      "😀",
+      "1",
+      "10",
+      "2",
+      "apple",
+      "Apple-tree",
+      "äther",
+      "eclair",
+      "Éclair-accent",
+      "ö",
+      "Zebra",
+      "Ω",
+      "中"
+    ]
+  },
+  "comparisons": [
+    {
+      "a": "Zebra",
+      "b": "Zebra",
+      "result": 0
+    },
+    {
+      "a": "Zebra",
+      "b": "äther",
+      "result": 1
+    },
+    {
+      "a": "Zebra",
+      "b": "eclair",
+      "result": 1
+    },
+    {
+      "a": "Zebra",
+      "b": "Éclair-accent",
+      "result": 1
+    },
+    {
+      "a": "Zebra",
+      "b": "apple",
+      "result": 1
+    },
+    {
+      "a": "Zebra",
+      "b": "Apple-tree",
+      "result": 1
+    },
+    {
+      "a": "Zebra",
+      "b": "_",
+      "result": 1
+    },
+    {
+      "a": "Zebra",
+      "b": "-",
+      "result": 1
+    },
+    {
+      "a": "Zebra",
+      "b": "!",
+      "result": 1
+    },
+    {
+      "a": "Zebra",
+      "b": "1",
+      "result": 1
+    },
+    {
+      "a": "Zebra",
+      "b": "10",
+      "result": 1
+    },
+    {
+      "a": "Zebra",
+      "b": "2",
+      "result": 1
+    },
+    {
+      "a": "Zebra",
+      "b": "ö",
+      "result": 1
+    },
+    {
+      "a": "Zebra",
+      "b": "Ω",
+      "result": -1
+    },
+    {
+      "a": "Zebra",
+      "b": "中",
+      "result": -1
+    },
+    {
+      "a": "Zebra",
+      "b": "😀",
+      "result": 1
+    },
+    {
+      "a": "Zebra",
+      "b": "a",
+      "result": 1
+    },
+    {
+      "a": "Zebra",
+      "b": "A",
+      "result": 1
+    },
+    {
+      "a": "Zebra",
+      "b": "ö",
+      "result": 1
+    },
+    {
+      "a": "äther",
+      "b": "Zebra",
+      "result": -1
+    },
+    {
+      "a": "äther",
+      "b": "äther",
+      "result": 0
+    },
+    {
+      "a": "äther",
+      "b": "eclair",
+      "result": -1
+    },
+    {
+      "a": "äther",
+      "b": "Éclair-accent",
+      "result": -1
+    },
+    {
+      "a": "äther",
+      "b": "apple",
+      "result": 1
+    },
+    {
+      "a": "äther",
+      "b": "Apple-tree",
+      "result": 1
+    },
+    {
+      "a": "äther",
+      "b": "_",
+      "result": 1
+    },
+    {
+      "a": "äther",
+      "b": "-",
+      "result": 1
+    },
+    {
+      "a": "äther",
+      "b": "!",
+      "result": 1
+    },
+    {
+      "a": "äther",
+      "b": "1",
+      "result": 1
+    },
+    {
+      "a": "äther",
+      "b": "10",
+      "result": 1
+    },
+    {
+      "a": "äther",
+      "b": "2",
+      "result": 1
+    },
+    {
+      "a": "äther",
+      "b": "ö",
+      "result": -1
+    },
+    {
+      "a": "äther",
+      "b": "Ω",
+      "result": -1
+    },
+    {
+      "a": "äther",
+      "b": "中",
+      "result": -1
+    },
+    {
+      "a": "äther",
+      "b": "😀",
+      "result": 1
+    },
+    {
+      "a": "äther",
+      "b": "a",
+      "result": 1
+    },
+    {
+      "a": "äther",
+      "b": "A",
+      "result": 1
+    },
+    {
+      "a": "äther",
+      "b": "ö",
+      "result": -1
+    },
+    {
+      "a": "eclair",
+      "b": "Zebra",
+      "result": -1
+    },
+    {
+      "a": "eclair",
+      "b": "äther",
+      "result": 1
+    },
+    {
+      "a": "eclair",
+      "b": "eclair",
+      "result": 0
+    },
+    {
+      "a": "eclair",
+      "b": "Éclair-accent",
+      "result": -1
+    },
+    {
+      "a": "eclair",
+      "b": "apple",
+      "result": 1
+    },
+    {
+      "a": "eclair",
+      "b": "Apple-tree",
+      "result": 1
+    },
+    {
+      "a": "eclair",
+      "b": "_",
+      "result": 1
+    },
+    {
+      "a": "eclair",
+      "b": "-",
+      "result": 1
+    },
+    {
+      "a": "eclair",
+      "b": "!",
+      "result": 1
+    },
+    {
+      "a": "eclair",
+      "b": "1",
+      "result": 1
+    },
+    {
+      "a": "eclair",
+      "b": "10",
+      "result": 1
+    },
+    {
+      "a": "eclair",
+      "b": "2",
+      "result": 1
+    },
+    {
+      "a": "eclair",
+      "b": "ö",
+      "result": -1
+    },
+    {
+      "a": "eclair",
+      "b": "Ω",
+      "result": -1
+    },
+    {
+      "a": "eclair",
+      "b": "中",
+      "result": -1
+    },
+    {
+      "a": "eclair",
+      "b": "😀",
+      "result": 1
+    },
+    {
+      "a": "eclair",
+      "b": "a",
+      "result": 1
+    },
+    {
+      "a": "eclair",
+      "b": "A",
+      "result": 1
+    },
+    {
+      "a": "eclair",
+      "b": "ö",
+      "result": -1
+    },
+    {
+      "a": "Éclair-accent",
+      "b": "Zebra",
+      "result": -1
+    },
+    {
+      "a": "Éclair-accent",
+      "b": "äther",
+      "result": 1
+    },
+    {
+      "a": "Éclair-accent",
+      "b": "eclair",
+      "result": 1
+    },
+    {
+      "a": "Éclair-accent",
+      "b": "Éclair-accent",
+      "result": 0
+    },
+    {
+      "a": "Éclair-accent",
+      "b": "apple",
+      "result": 1
+    },
+    {
+      "a": "Éclair-accent",
+      "b": "Apple-tree",
+      "result": 1
+    },
+    {
+      "a": "Éclair-accent",
+      "b": "_",
+      "result": 1
+    },
+    {
+      "a": "Éclair-accent",
+      "b": "-",
+      "result": 1
+    },
+    {
+      "a": "Éclair-accent",
+      "b": "!",
+      "result": 1
+    },
+    {
+      "a": "Éclair-accent",
+      "b": "1",
+      "result": 1
+    },
+    {
+      "a": "Éclair-accent",
+      "b": "10",
+      "result": 1
+    },
+    {
+      "a": "Éclair-accent",
+      "b": "2",
+      "result": 1
+    },
+    {
+      "a": "Éclair-accent",
+      "b": "ö",
+      "result": -1
+    },
+    {
+      "a": "Éclair-accent",
+      "b": "Ω",
+      "result": -1
+    },
+    {
+      "a": "Éclair-accent",
+      "b": "中",
+      "result": -1
+    },
+    {
+      "a": "Éclair-accent",
+      "b": "😀",
+      "result": 1
+    },
+    {
+      "a": "Éclair-accent",
+      "b": "a",
+      "result": 1
+    },
+    {
+      "a": "Éclair-accent",
+      "b": "A",
+      "result": 1
+    },
+    {
+      "a": "Éclair-accent",
+      "b": "ö",
+      "result": -1
+    },
+    {
+      "a": "apple",
+      "b": "Zebra",
+      "result": -1
+    },
+    {
+      "a": "apple",
+      "b": "äther",
+      "result": -1
+    },
+    {
+      "a": "apple",
+      "b": "eclair",
+      "result": -1
+    },
+    {
+      "a": "apple",
+      "b": "Éclair-accent",
+      "result": -1
+    },
+    {
+      "a": "apple",
+      "b": "apple",
+      "result": 0
+    },
+    {
+      "a": "apple",
+      "b": "Apple-tree",
+      "result": -1
+    },
+    {
+      "a": "apple",
+      "b": "_",
+      "result": 1
+    },
+    {
+      "a": "apple",
+      "b": "-",
+      "result": 1
+    },
+    {
+      "a": "apple",
+      "b": "!",
+      "result": 1
+    },
+    {
+      "a": "apple",
+      "b": "1",
+      "result": 1
+    },
+    {
+      "a": "apple",
+      "b": "10",
+      "result": 1
+    },
+    {
+      "a": "apple",
+      "b": "2",
+      "result": 1
+    },
+    {
+      "a": "apple",
+      "b": "ö",
+      "result": -1
+    },
+    {
+      "a": "apple",
+      "b": "Ω",
+      "result": -1
+    },
+    {
+      "a": "apple",
+      "b": "中",
+      "result": -1
+    },
+    {
+      "a": "apple",
+      "b": "😀",
+      "result": 1
+    },
+    {
+      "a": "apple",
+      "b": "a",
+      "result": 1
+    },
+    {
+      "a": "apple",
+      "b": "A",
+      "result": 1
+    },
+    {
+      "a": "apple",
+      "b": "ö",
+      "result": -1
+    },
+    {
+      "a": "Apple-tree",
+      "b": "Zebra",
+      "result": -1
+    },
+    {
+      "a": "Apple-tree",
+      "b": "äther",
+      "result": -1
+    },
+    {
+      "a": "Apple-tree",
+      "b": "eclair",
+      "result": -1
+    },
+    {
+      "a": "Apple-tree",
+      "b": "Éclair-accent",
+      "result": -1
+    },
+    {
+      "a": "Apple-tree",
+      "b": "apple",
+      "result": 1
+    },
+    {
+      "a": "Apple-tree",
+      "b": "Apple-tree",
+      "result": 0
+    },
+    {
+      "a": "Apple-tree",
+      "b": "_",
+      "result": 1
+    },
+    {
+      "a": "Apple-tree",
+      "b": "-",
+      "result": 1
+    },
+    {
+      "a": "Apple-tree",
+      "b": "!",
+      "result": 1
+    },
+    {
+      "a": "Apple-tree",
+      "b": "1",
+      "result": 1
+    },
+    {
+      "a": "Apple-tree",
+      "b": "10",
+      "result": 1
+    },
+    {
+      "a": "Apple-tree",
+      "b": "2",
+      "result": 1
+    },
+    {
+      "a": "Apple-tree",
+      "b": "ö",
+      "result": -1
+    },
+    {
+      "a": "Apple-tree",
+      "b": "Ω",
+      "result": -1
+    },
+    {
+      "a": "Apple-tree",
+      "b": "中",
+      "result": -1
+    },
+    {
+      "a": "Apple-tree",
+      "b": "😀",
+      "result": 1
+    },
+    {
+      "a": "Apple-tree",
+      "b": "a",
+      "result": 1
+    },
+    {
+      "a": "Apple-tree",
+      "b": "A",
+      "result": 1
+    },
+    {
+      "a": "Apple-tree",
+      "b": "ö",
+      "result": -1
+    },
+    {
+      "a": "_",
+      "b": "Zebra",
+      "result": -1
+    },
+    {
+      "a": "_",
+      "b": "äther",
+      "result": -1
+    },
+    {
+      "a": "_",
+      "b": "eclair",
+      "result": -1
+    },
+    {
+      "a": "_",
+      "b": "Éclair-accent",
+      "result": -1
+    },
+    {
+      "a": "_",
+      "b": "apple",
+      "result": -1
+    },
+    {
+      "a": "_",
+      "b": "Apple-tree",
+      "result": -1
+    },
+    {
+      "a": "_",
+      "b": "_",
+      "result": 0
+    },
+    {
+      "a": "_",
+      "b": "-",
+      "result": -1
+    },
+    {
+      "a": "_",
+      "b": "!",
+      "result": -1
+    },
+    {
+      "a": "_",
+      "b": "1",
+      "result": -1
+    },
+    {
+      "a": "_",
+      "b": "10",
+      "result": -1
+    },
+    {
+      "a": "_",
+      "b": "2",
+      "result": -1
+    },
+    {
+      "a": "_",
+      "b": "ö",
+      "result": -1
+    },
+    {
+      "a": "_",
+      "b": "Ω",
+      "result": -1
+    },
+    {
+      "a": "_",
+      "b": "中",
+      "result": -1
+    },
+    {
+      "a": "_",
+      "b": "😀",
+      "result": -1
+    },
+    {
+      "a": "_",
+      "b": "a",
+      "result": -1
+    },
+    {
+      "a": "_",
+      "b": "A",
+      "result": -1
+    },
+    {
+      "a": "_",
+      "b": "ö",
+      "result": -1
+    },
+    {
+      "a": "-",
+      "b": "Zebra",
+      "result": -1
+    },
+    {
+      "a": "-",
+      "b": "äther",
+      "result": -1
+    },
+    {
+      "a": "-",
+      "b": "eclair",
+      "result": -1
+    },
+    {
+      "a": "-",
+      "b": "Éclair-accent",
+      "result": -1
+    },
+    {
+      "a": "-",
+      "b": "apple",
+      "result": -1
+    },
+    {
+      "a": "-",
+      "b": "Apple-tree",
+      "result": -1
+    },
+    {
+      "a": "-",
+      "b": "_",
+      "result": 1
+    },
+    {
+      "a": "-",
+      "b": "-",
+      "result": 0
+    },
+    {
+      "a": "-",
+      "b": "!",
+      "result": -1
+    },
+    {
+      "a": "-",
+      "b": "1",
+      "result": -1
+    },
+    {
+      "a": "-",
+      "b": "10",
+      "result": -1
+    },
+    {
+      "a": "-",
+      "b": "2",
+      "result": -1
+    },
+    {
+      "a": "-",
+      "b": "ö",
+      "result": -1
+    },
+    {
+      "a": "-",
+      "b": "Ω",
+      "result": -1
+    },
+    {
+      "a": "-",
+      "b": "中",
+      "result": -1
+    },
+    {
+      "a": "-",
+      "b": "😀",
+      "result": -1
+    },
+    {
+      "a": "-",
+      "b": "a",
+      "result": -1
+    },
+    {
+      "a": "-",
+      "b": "A",
+      "result": -1
+    },
+    {
+      "a": "-",
+      "b": "ö",
+      "result": -1
+    },
+    {
+      "a": "!",
+      "b": "Zebra",
+      "result": -1
+    },
+    {
+      "a": "!",
+      "b": "äther",
+      "result": -1
+    },
+    {
+      "a": "!",
+      "b": "eclair",
+      "result": -1
+    },
+    {
+      "a": "!",
+      "b": "Éclair-accent",
+      "result": -1
+    },
+    {
+      "a": "!",
+      "b": "apple",
+      "result": -1
+    },
+    {
+      "a": "!",
+      "b": "Apple-tree",
+      "result": -1
+    },
+    {
+      "a": "!",
+      "b": "_",
+      "result": 1
+    },
+    {
+      "a": "!",
+      "b": "-",
+      "result": 1
+    },
+    {
+      "a": "!",
+      "b": "!",
+      "result": 0
+    },
+    {
+      "a": "!",
+      "b": "1",
+      "result": -1
+    },
+    {
+      "a": "!",
+      "b": "10",
+      "result": -1
+    },
+    {
+      "a": "!",
+      "b": "2",
+      "result": -1
+    },
+    {
+      "a": "!",
+      "b": "ö",
+      "result": -1
+    },
+    {
+      "a": "!",
+      "b": "Ω",
+      "result": -1
+    },
+    {
+      "a": "!",
+      "b": "中",
+      "result": -1
+    },
+    {
+      "a": "!",
+      "b": "😀",
+      "result": -1
+    },
+    {
+      "a": "!",
+      "b": "a",
+      "result": -1
+    },
+    {
+      "a": "!",
+      "b": "A",
+      "result": -1
+    },
+    {
+      "a": "!",
+      "b": "ö",
+      "result": -1
+    },
+    {
+      "a": "1",
+      "b": "Zebra",
+      "result": -1
+    },
+    {
+      "a": "1",
+      "b": "äther",
+      "result": -1
+    },
+    {
+      "a": "1",
+      "b": "eclair",
+      "result": -1
+    },
+    {
+      "a": "1",
+      "b": "Éclair-accent",
+      "result": -1
+    },
+    {
+      "a": "1",
+      "b": "apple",
+      "result": -1
+    },
+    {
+      "a": "1",
+      "b": "Apple-tree",
+      "result": -1
+    },
+    {
+      "a": "1",
+      "b": "_",
+      "result": 1
+    },
+    {
+      "a": "1",
+      "b": "-",
+      "result": 1
+    },
+    {
+      "a": "1",
+      "b": "!",
+      "result": 1
+    },
+    {
+      "a": "1",
+      "b": "1",
+      "result": 0
+    },
+    {
+      "a": "1",
+      "b": "10",
+      "result": -1
+    },
+    {
+      "a": "1",
+      "b": "2",
+      "result": -1
+    },
+    {
+      "a": "1",
+      "b": "ö",
+      "result": -1
+    },
+    {
+      "a": "1",
+      "b": "Ω",
+      "result": -1
+    },
+    {
+      "a": "1",
+      "b": "中",
+      "result": -1
+    },
+    {
+      "a": "1",
+      "b": "😀",
+      "result": 1
+    },
+    {
+      "a": "1",
+      "b": "a",
+      "result": -1
+    },
+    {
+      "a": "1",
+      "b": "A",
+      "result": -1
+    },
+    {
+      "a": "1",
+      "b": "ö",
+      "result": -1
+    },
+    {
+      "a": "10",
+      "b": "Zebra",
+      "result": -1
+    },
+    {
+      "a": "10",
+      "b": "äther",
+      "result": -1
+    },
+    {
+      "a": "10",
+      "b": "eclair",
+      "result": -1
+    },
+    {
+      "a": "10",
+      "b": "Éclair-accent",
+      "result": -1
+    },
+    {
+      "a": "10",
+      "b": "apple",
+      "result": -1
+    },
+    {
+      "a": "10",
+      "b": "Apple-tree",
+      "result": -1
+    },
+    {
+      "a": "10",
+      "b": "_",
+      "result": 1
+    },
+    {
+      "a": "10",
+      "b": "-",
+      "result": 1
+    },
+    {
+      "a": "10",
+      "b": "!",
+      "result": 1
+    },
+    {
+      "a": "10",
+      "b": "1",
+      "result": 1
+    },
+    {
+      "a": "10",
+      "b": "10",
+      "result": 0
+    },
+    {
+      "a": "10",
+      "b": "2",
+      "result": -1
+    },
+    {
+      "a": "10",
+      "b": "ö",
+      "result": -1
+    },
+    {
+      "a": "10",
+      "b": "Ω",
+      "result": -1
+    },
+    {
+      "a": "10",
+      "b": "中",
+      "result": -1
+    },
+    {
+      "a": "10",
+      "b": "😀",
+      "result": 1
+    },
+    {
+      "a": "10",
+      "b": "a",
+      "result": -1
+    },
+    {
+      "a": "10",
+      "b": "A",
+      "result": -1
+    },
+    {
+      "a": "10",
+      "b": "ö",
+      "result": -1
+    },
+    {
+      "a": "2",
+      "b": "Zebra",
+      "result": -1
+    },
+    {
+      "a": "2",
+      "b": "äther",
+      "result": -1
+    },
+    {
+      "a": "2",
+      "b": "eclair",
+      "result": -1
+    },
+    {
+      "a": "2",
+      "b": "Éclair-accent",
+      "result": -1
+    },
+    {
+      "a": "2",
+      "b": "apple",
+      "result": -1
+    },
+    {
+      "a": "2",
+      "b": "Apple-tree",
+      "result": -1
+    },
+    {
+      "a": "2",
+      "b": "_",
+      "result": 1
+    },
+    {
+      "a": "2",
+      "b": "-",
+      "result": 1
+    },
+    {
+      "a": "2",
+      "b": "!",
+      "result": 1
+    },
+    {
+      "a": "2",
+      "b": "1",
+      "result": 1
+    },
+    {
+      "a": "2",
+      "b": "10",
+      "result": 1
+    },
+    {
+      "a": "2",
+      "b": "2",
+      "result": 0
+    },
+    {
+      "a": "2",
+      "b": "ö",
+      "result": -1
+    },
+    {
+      "a": "2",
+      "b": "Ω",
+      "result": -1
+    },
+    {
+      "a": "2",
+      "b": "中",
+      "result": -1
+    },
+    {
+      "a": "2",
+      "b": "😀",
+      "result": 1
+    },
+    {
+      "a": "2",
+      "b": "a",
+      "result": -1
+    },
+    {
+      "a": "2",
+      "b": "A",
+      "result": -1
+    },
+    {
+      "a": "2",
+      "b": "ö",
+      "result": -1
+    },
+    {
+      "a": "ö",
+      "b": "Zebra",
+      "result": -1
+    },
+    {
+      "a": "ö",
+      "b": "äther",
+      "result": 1
+    },
+    {
+      "a": "ö",
+      "b": "eclair",
+      "result": 1
+    },
+    {
+      "a": "ö",
+      "b": "Éclair-accent",
+      "result": 1
+    },
+    {
+      "a": "ö",
+      "b": "apple",
+      "result": 1
+    },
+    {
+      "a": "ö",
+      "b": "Apple-tree",
+      "result": 1
+    },
+    {
+      "a": "ö",
+      "b": "_",
+      "result": 1
+    },
+    {
+      "a": "ö",
+      "b": "-",
+      "result": 1
+    },
+    {
+      "a": "ö",
+      "b": "!",
+      "result": 1
+    },
+    {
+      "a": "ö",
+      "b": "1",
+      "result": 1
+    },
+    {
+      "a": "ö",
+      "b": "10",
+      "result": 1
+    },
+    {
+      "a": "ö",
+      "b": "2",
+      "result": 1
+    },
+    {
+      "a": "ö",
+      "b": "ö",
+      "result": 0
+    },
+    {
+      "a": "ö",
+      "b": "Ω",
+      "result": -1
+    },
+    {
+      "a": "ö",
+      "b": "中",
+      "result": -1
+    },
+    {
+      "a": "ö",
+      "b": "😀",
+      "result": 1
+    },
+    {
+      "a": "ö",
+      "b": "a",
+      "result": 1
+    },
+    {
+      "a": "ö",
+      "b": "A",
+      "result": 1
+    },
+    {
+      "a": "ö",
+      "b": "ö",
+      "result": 0
+    },
+    {
+      "a": "Ω",
+      "b": "Zebra",
+      "result": 1
+    },
+    {
+      "a": "Ω",
+      "b": "äther",
+      "result": 1
+    },
+    {
+      "a": "Ω",
+      "b": "eclair",
+      "result": 1
+    },
+    {
+      "a": "Ω",
+      "b": "Éclair-accent",
+      "result": 1
+    },
+    {
+      "a": "Ω",
+      "b": "apple",
+      "result": 1
+    },
+    {
+      "a": "Ω",
+      "b": "Apple-tree",
+      "result": 1
+    },
+    {
+      "a": "Ω",
+      "b": "_",
+      "result": 1
+    },
+    {
+      "a": "Ω",
+      "b": "-",
+      "result": 1
+    },
+    {
+      "a": "Ω",
+      "b": "!",
+      "result": 1
+    },
+    {
+      "a": "Ω",
+      "b": "1",
+      "result": 1
+    },
+    {
+      "a": "Ω",
+      "b": "10",
+      "result": 1
+    },
+    {
+      "a": "Ω",
+      "b": "2",
+      "result": 1
+    },
+    {
+      "a": "Ω",
+      "b": "ö",
+      "result": 1
+    },
+    {
+      "a": "Ω",
+      "b": "Ω",
+      "result": 0
+    },
+    {
+      "a": "Ω",
+      "b": "中",
+      "result": -1
+    },
+    {
+      "a": "Ω",
+      "b": "😀",
+      "result": 1
+    },
+    {
+      "a": "Ω",
+      "b": "a",
+      "result": 1
+    },
+    {
+      "a": "Ω",
+      "b": "A",
+      "result": 1
+    },
+    {
+      "a": "Ω",
+      "b": "ö",
+      "result": 1
+    },
+    {
+      "a": "中",
+      "b": "Zebra",
+      "result": 1
+    },
+    {
+      "a": "中",
+      "b": "äther",
+      "result": 1
+    },
+    {
+      "a": "中",
+      "b": "eclair",
+      "result": 1
+    },
+    {
+      "a": "中",
+      "b": "Éclair-accent",
+      "result": 1
+    },
+    {
+      "a": "中",
+      "b": "apple",
+      "result": 1
+    },
+    {
+      "a": "中",
+      "b": "Apple-tree",
+      "result": 1
+    },
+    {
+      "a": "中",
+      "b": "_",
+      "result": 1
+    },
+    {
+      "a": "中",
+      "b": "-",
+      "result": 1
+    },
+    {
+      "a": "中",
+      "b": "!",
+      "result": 1
+    },
+    {
+      "a": "中",
+      "b": "1",
+      "result": 1
+    },
+    {
+      "a": "中",
+      "b": "10",
+      "result": 1
+    },
+    {
+      "a": "中",
+      "b": "2",
+      "result": 1
+    },
+    {
+      "a": "中",
+      "b": "ö",
+      "result": 1
+    },
+    {
+      "a": "中",
+      "b": "Ω",
+      "result": 1
+    },
+    {
+      "a": "中",
+      "b": "中",
+      "result": 0
+    },
+    {
+      "a": "中",
+      "b": "😀",
+      "result": 1
+    },
+    {
+      "a": "中",
+      "b": "a",
+      "result": 1
+    },
+    {
+      "a": "中",
+      "b": "A",
+      "result": 1
+    },
+    {
+      "a": "中",
+      "b": "ö",
+      "result": 1
+    },
+    {
+      "a": "😀",
+      "b": "Zebra",
+      "result": -1
+    },
+    {
+      "a": "😀",
+      "b": "äther",
+      "result": -1
+    },
+    {
+      "a": "😀",
+      "b": "eclair",
+      "result": -1
+    },
+    {
+      "a": "😀",
+      "b": "Éclair-accent",
+      "result": -1
+    },
+    {
+      "a": "😀",
+      "b": "apple",
+      "result": -1
+    },
+    {
+      "a": "😀",
+      "b": "Apple-tree",
+      "result": -1
+    },
+    {
+      "a": "😀",
+      "b": "_",
+      "result": 1
+    },
+    {
+      "a": "😀",
+      "b": "-",
+      "result": 1
+    },
+    {
+      "a": "😀",
+      "b": "!",
+      "result": 1
+    },
+    {
+      "a": "😀",
+      "b": "1",
+      "result": -1
+    },
+    {
+      "a": "😀",
+      "b": "10",
+      "result": -1
+    },
+    {
+      "a": "😀",
+      "b": "2",
+      "result": -1
+    },
+    {
+      "a": "😀",
+      "b": "ö",
+      "result": -1
+    },
+    {
+      "a": "😀",
+      "b": "Ω",
+      "result": -1
+    },
+    {
+      "a": "😀",
+      "b": "中",
+      "result": -1
+    },
+    {
+      "a": "😀",
+      "b": "😀",
+      "result": 0
+    },
+    {
+      "a": "😀",
+      "b": "a",
+      "result": -1
+    },
+    {
+      "a": "😀",
+      "b": "A",
+      "result": -1
+    },
+    {
+      "a": "😀",
+      "b": "ö",
+      "result": -1
+    },
+    {
+      "a": "a",
+      "b": "Zebra",
+      "result": -1
+    },
+    {
+      "a": "a",
+      "b": "äther",
+      "result": -1
+    },
+    {
+      "a": "a",
+      "b": "eclair",
+      "result": -1
+    },
+    {
+      "a": "a",
+      "b": "Éclair-accent",
+      "result": -1
+    },
+    {
+      "a": "a",
+      "b": "apple",
+      "result": -1
+    },
+    {
+      "a": "a",
+      "b": "Apple-tree",
+      "result": -1
+    },
+    {
+      "a": "a",
+      "b": "_",
+      "result": 1
+    },
+    {
+      "a": "a",
+      "b": "-",
+      "result": 1
+    },
+    {
+      "a": "a",
+      "b": "!",
+      "result": 1
+    },
+    {
+      "a": "a",
+      "b": "1",
+      "result": 1
+    },
+    {
+      "a": "a",
+      "b": "10",
+      "result": 1
+    },
+    {
+      "a": "a",
+      "b": "2",
+      "result": 1
+    },
+    {
+      "a": "a",
+      "b": "ö",
+      "result": -1
+    },
+    {
+      "a": "a",
+      "b": "Ω",
+      "result": -1
+    },
+    {
+      "a": "a",
+      "b": "中",
+      "result": -1
+    },
+    {
+      "a": "a",
+      "b": "😀",
+      "result": 1
+    },
+    {
+      "a": "a",
+      "b": "a",
+      "result": 0
+    },
+    {
+      "a": "a",
+      "b": "A",
+      "result": -1
+    },
+    {
+      "a": "a",
+      "b": "ö",
+      "result": -1
+    },
+    {
+      "a": "A",
+      "b": "Zebra",
+      "result": -1
+    },
+    {
+      "a": "A",
+      "b": "äther",
+      "result": -1
+    },
+    {
+      "a": "A",
+      "b": "eclair",
+      "result": -1
+    },
+    {
+      "a": "A",
+      "b": "Éclair-accent",
+      "result": -1
+    },
+    {
+      "a": "A",
+      "b": "apple",
+      "result": -1
+    },
+    {
+      "a": "A",
+      "b": "Apple-tree",
+      "result": -1
+    },
+    {
+      "a": "A",
+      "b": "_",
+      "result": 1
+    },
+    {
+      "a": "A",
+      "b": "-",
+      "result": 1
+    },
+    {
+      "a": "A",
+      "b": "!",
+      "result": 1
+    },
+    {
+      "a": "A",
+      "b": "1",
+      "result": 1
+    },
+    {
+      "a": "A",
+      "b": "10",
+      "result": 1
+    },
+    {
+      "a": "A",
+      "b": "2",
+      "result": 1
+    },
+    {
+      "a": "A",
+      "b": "ö",
+      "result": -1
+    },
+    {
+      "a": "A",
+      "b": "Ω",
+      "result": -1
+    },
+    {
+      "a": "A",
+      "b": "中",
+      "result": -1
+    },
+    {
+      "a": "A",
+      "b": "😀",
+      "result": 1
+    },
+    {
+      "a": "A",
+      "b": "a",
+      "result": 1
+    },
+    {
+      "a": "A",
+      "b": "A",
+      "result": 0
+    },
+    {
+      "a": "A",
+      "b": "ö",
+      "result": -1
+    },
+    {
+      "a": "ö",
+      "b": "Zebra",
+      "result": -1
+    },
+    {
+      "a": "ö",
+      "b": "äther",
+      "result": 1
+    },
+    {
+      "a": "ö",
+      "b": "eclair",
+      "result": 1
+    },
+    {
+      "a": "ö",
+      "b": "Éclair-accent",
+      "result": 1
+    },
+    {
+      "a": "ö",
+      "b": "apple",
+      "result": 1
+    },
+    {
+      "a": "ö",
+      "b": "Apple-tree",
+      "result": 1
+    },
+    {
+      "a": "ö",
+      "b": "_",
+      "result": 1
+    },
+    {
+      "a": "ö",
+      "b": "-",
+      "result": 1
+    },
+    {
+      "a": "ö",
+      "b": "!",
+      "result": 1
+    },
+    {
+      "a": "ö",
+      "b": "1",
+      "result": 1
+    },
+    {
+      "a": "ö",
+      "b": "10",
+      "result": 1
+    },
+    {
+      "a": "ö",
+      "b": "2",
+      "result": 1
+    },
+    {
+      "a": "ö",
+      "b": "ö",
+      "result": 0
+    },
+    {
+      "a": "ö",
+      "b": "Ω",
+      "result": -1
+    },
+    {
+      "a": "ö",
+      "b": "中",
+      "result": -1
+    },
+    {
+      "a": "ö",
+      "b": "😀",
+      "result": 1
+    },
+    {
+      "a": "ö",
+      "b": "a",
+      "result": 1
+    },
+    {
+      "a": "ö",
+      "b": "A",
+      "result": 1
+    },
+    {
+      "a": "ö",
+      "b": "ö",
+      "result": 0
+    }
+  ],
+  "trim": [
+    {
+      "input": "\tneedle\t",
+      "expected": "needle",
+      "fuzzy": [
+        "needle"
+      ]
+    },
+    {
+      "input": "\nneedle\n",
+      "expected": "needle",
+      "fuzzy": [
+        "needle"
+      ]
+    },
+    {
+      "input": "\u000bneedle\u000b",
+      "expected": "needle",
+      "fuzzy": [
+        "needle"
+      ]
+    },
+    {
+      "input": "\fneedle\f",
+      "expected": "needle",
+      "fuzzy": [
+        "needle"
+      ]
+    },
+    {
+      "input": "\rneedle\r",
+      "expected": "needle",
+      "fuzzy": [
+        "needle"
+      ]
+    },
+    {
+      "input": " needle ",
+      "expected": "needle",
+      "fuzzy": [
+        "needle"
+      ]
+    },
+    {
+      "input": "needle",
+      "expected": "needle",
+      "fuzzy": []
+    },
+    {
+      "input": " needle ",
+      "expected": "needle",
+      "fuzzy": [
+        "needle"
+      ]
+    },
+    {
+      "input": " needle ",
+      "expected": "needle",
+      "fuzzy": [
+        "needle"
+      ]
+    },
+    {
+      "input": "᠎needle᠎",
+      "expected": "᠎needle᠎",
+      "fuzzy": []
+    },
+    {
+      "input": " needle ",
+      "expected": "needle",
+      "fuzzy": [
+        "needle"
+      ]
+    },
+    {
+      "input": " needle ",
+      "expected": "needle",
+      "fuzzy": [
+        "needle"
+      ]
+    },
+    {
+      "input": " needle ",
+      "expected": "needle",
+      "fuzzy": [
+        "needle"
+      ]
+    },
+    {
+      "input": " needle ",
+      "expected": "needle",
+      "fuzzy": [
+        "needle"
+      ]
+    },
+    {
+      "input": " needle ",
+      "expected": "needle",
+      "fuzzy": [
+        "needle"
+      ]
+    },
+    {
+      "input": " needle ",
+      "expected": "needle",
+      "fuzzy": [
+        "needle"
+      ]
+    },
+    {
+      "input": " needle ",
+      "expected": "needle",
+      "fuzzy": [
+        "needle"
+      ]
+    },
+    {
+      "input": " needle ",
+      "expected": "needle",
+      "fuzzy": [
+        "needle"
+      ]
+    },
+    {
+      "input": " needle ",
+      "expected": "needle",
+      "fuzzy": [
+        "needle"
+      ]
+    },
+    {
+      "input": " needle ",
+      "expected": "needle",
+      "fuzzy": [
+        "needle"
+      ]
+    },
+    {
+      "input": " needle ",
+      "expected": "needle",
+      "fuzzy": [
+        "needle"
+      ]
+    },
+    {
+      "input": "​needle​",
+      "expected": "​needle​",
+      "fuzzy": []
+    },
+    {
+      "input": " needle ",
+      "expected": "needle",
+      "fuzzy": [
+        "needle"
+      ]
+    },
+    {
+      "input": " needle ",
+      "expected": "needle",
+      "fuzzy": [
+        "needle"
+      ]
+    },
+    {
+      "input": " needle ",
+      "expected": "needle",
+      "fuzzy": [
+        "needle"
+      ]
+    },
+    {
+      "input": " needle ",
+      "expected": "needle",
+      "fuzzy": [
+        "needle"
+      ]
+    },
+    {
+      "input": "⁠needle⁠",
+      "expected": "⁠needle⁠",
+      "fuzzy": []
+    },
+    {
+      "input": "　needle　",
+      "expected": "needle",
+      "fuzzy": [
+        "needle"
+      ]
+    },
+    {
+      "input": "﻿needle﻿",
+      "expected": "needle",
+      "fuzzy": [
+        "needle"
+      ]
+    }
+  ]
+}

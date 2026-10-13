@@ -31,6 +31,13 @@ The terminal application and the SolidJS browser client share one local executio
 
 ## Dependency direction
 
+The Rust workspace keeps Core independent of application Protocol. Core owns
+trusted extension processes and the self-contained private stdio descriptor at
+`protocol/ycoding/extension/v5/extension.proto`, compiled by the Core build script
+with workspace Prost/Prost Build. Application descriptors remain under
+`protocol/ycoding/v5/` and are owned by `ycoding-protocol`; only `ycoding-runtime`
+combines Core and Protocol. See the [process-extension contract](../specs/process-extension-v5.md).
+
 ```text
 schema ───────────────┐
                       ├─> core ───────┐

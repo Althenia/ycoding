@@ -1,0 +1,43 @@
+[package]
+name = "ycoding-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+prost.workspace = true
+axum.workspace = true
+chrono.workspace = true
+fff-search.workspace = true
+notify.workspace = true
+icu_properties.workspace = true
+icu_normalizer.workspace = true
+icu_collator.workspace = true
+oxc_allocator.workspace = true
+oxc_ast.workspace = true
+oxc_parser.workspace = true
+oxc_semantic.workspace = true
+photon-rs.workspace = true
+oxc_span.workspace = true
+reqwest.workspace = true
+rmcp.workspace = true
+ring = { workspace = true, features = ["alloc"] }
+serde_json.workspace = true
+url.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+yaml-rust2.workspace = true
+ycoding-ai = { path = "../ai" }
+ycoding-schema = { path = "../schema" }
+ycoding-store = { path = "../store" }
+
+[build-dependencies]
+prost-build.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_Threading", "Win32_System_Pipes", "Win32_Storage_FileSystem", "Win32_Security", "Win32_Security_Cryptography"] }

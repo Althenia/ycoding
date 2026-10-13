@@ -8,15 +8,15 @@ Start with the documentation index at [`../docs/README.md`](../docs/README.md) f
 
 Authority follows the concern:
 
-| Concern                                                     | Owner                                                                                                         |
-| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| Executable behavior                                         | Current implementation and targeted tests                                                                     |
-| Public domain shapes and durable event payloads             | [`packages/schema`](../packages/schema/src)                                                                |
-| HTTP operations, middleware placement, and transport errors | [`packages/protocol`](../packages/protocol/src), assembled by Server `HttpApi`                             |
-| Runtime behavior and persistence                            | [`packages/core`](../packages/core/src)                                                                    |
+| Concern                                                     | Owner                                                                                                   |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Executable behavior                                         | Current implementation and targeted tests                                                               |
+| Public domain shapes and durable event payloads             | [`packages/schema`](../packages/schema/src)                                                             |
+| HTTP operations, middleware placement, and transport errors | [`packages/protocol`](../packages/protocol/src), assembled by Server `HttpApi`                          |
+| Runtime behavior and persistence                            | [`packages/core`](../packages/core/src)                                                                 |
 | Product direction and maintained behavior                   | [`docs/product-direction.md`](../docs/product-direction.md) and [`docs/runtime.md`](../docs/runtime.md) |
-| Package boundaries and dependency direction                 | [`docs/architecture.md`](../docs/architecture.md)                                                          |
-| Contributor-critical regression guardrails                  | Root [`AGENTS.md`](../AGENTS.md)                                                                           |
+| Package boundaries and dependency direction                 | [`docs/architecture.md`](../docs/architecture.md)                                                       |
+| Contributor-critical regression guardrails                  | Root [`AGENTS.md`](../AGENTS.md)                                                                        |
 
 Current specifications explain cross-module contracts without copying exact types. Decision records explain why a design was selected. Historical documents describe earlier states and may use obsolete names.
 
@@ -24,19 +24,25 @@ Generated clients follow the assembled public `HttpApi`. GitHub issues own activ
 
 ## Current contracts
 
-| Document                                      | Job                                                                                     |
-| --------------------------------------------- | --------------------------------------------------------------------------------------- |
-| [Session](./session.md)                       | Explain prompt admission, execution, instructions, compaction, and recovery boundaries. |
-| [Session guardrails](./session-guardrails.md) | Explain root-family policy, reviews, counters, boundaries, and security invariants.     |
-| [Provider usage](./provider-usage.md)         | Explain normalized quota sources, caching, source stability, APIs, and TUI semantics.   |
-| [Concurrent provider profiles](./provider-profiles.md) | Define explicit per-Session account selection, private binding, refresh, replay isolation, and consumer behavior. |
-| [Decisions](./decisions.md)                  | Specify explicit agent judgments, abstention, safety, corrective errors, and usage. |
-| [Integration authorization](./integration-auth.md) | Explain automatic OAuth settlement and optional manual-code submission.              |
-| [Tools](./tools.md)                           | Explain tool construction, registration, execution, and settlement laws.                |
-| [Plugin MCP domain](./plugin-mcp.md)         | Define trusted Location-scoped MCP operations for runtime plugins and their approval boundary. |
-| [Session-owned PTY](./pty.md)                 | Explain owned terminal lifecycle, control fencing, bounded replay, and TUI recovery.    |
-| [Selected-tab browser](./browser.md)          | Explain explicit Chrome sharing, pairing, semantic actions, fencing, and safety bounds. |
-| [Machine-local Web latency](./web-latency.md) | Explain sanitized remote ingestion, local SQLite retention, bounded readout, and timing limits. |
+| Document                                                                | Job                                                                                                                                                                 |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Session](./session.md)                                                 | Explain prompt admission, execution, instructions, compaction, and recovery boundaries.                                                                             |
+| [Session guardrails](./session-guardrails.md)                           | Explain root-family policy, reviews, counters, boundaries, and security invariants.                                                                                 |
+| [Provider usage](./provider-usage.md)                                   | Explain normalized quota sources, caching, source stability, APIs, and TUI semantics.                                                                               |
+| [Concurrent provider profiles](./provider-profiles.md)                  | Define explicit per-Session account selection, private binding, refresh, replay isolation, and consumer behavior.                                                   |
+| [Decisions](./decisions.md)                                             | Specify explicit agent judgments, abstention, safety, corrective errors, and usage.                                                                                 |
+| [Integration authorization](./integration-auth.md)                      | Explain automatic OAuth settlement and optional manual-code submission.                                                                                             |
+| [Tools](./tools.md)                                                     | Explain tool construction, registration, execution, and settlement laws.                                                                                            |
+| [Plugin MCP domain](./plugin-mcp.md)                                    | Define trusted Location-scoped MCP operations for runtime plugins and their approval boundary.                                                                      |
+| [Session-owned PTY](./pty.md)                                           | Explain owned terminal lifecycle, control fencing, bounded replay, and TUI recovery.                                                                                |
+| [Selected-tab browser](./browser.md)                                    | Explain explicit Chrome sharing, pairing, semantic actions, fencing, and safety bounds.                                                                             |
+| [Machine-local Web latency](./web-latency.md)                           | Explain sanitized remote ingestion, local SQLite retention, bounded readout, and timing limits.                                                                     |
+| [Revision 5 resource operations](./wire-resources.md)                   | Define binary wire messages, operation IDs, paging, and validation boundaries for resource operations.                                                              |
+| [Revision 5 platform operations](./wire-platform.md)                    | Define platform operation IDs, typed messages, asset/native boundaries, paging, and source validation obligations.                                                  |
+| [Revision 5 session and interaction operations](./wire-session.md)      | Define session and interaction operation IDs, durable admission, typed subscriptions, stream completion, assets, and source validation obligations.                 |
+| [Revision 5 connector and relay notice operations](./wire-connector.md) | Define closed per-role remote allowlists, shared and distinct operation IDs, remote admission obligations, typed connector shapes, and foundation Notice ownership. |
+| [Wire operation inventory](./wire-operation-inventory.md)               | Define baseline operation membership, counts, and manifest disposition inputs.                                                                                      |
+| [Baseline storage catalog](./baseline-storage-catalog.md)               | Define Core and Meeting SQLite table membership required by the semantic fixture exporter.                                                                          |
 
 ## Decisions and proposals
 

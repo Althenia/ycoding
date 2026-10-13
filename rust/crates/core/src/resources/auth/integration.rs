@@ -1,0 +1,1048 @@
+use super::{Error, credential_id, now};
+use crate::resources::credential::{Info, Service};
+use std::{
+    collections::BTreeMap,
+    fmt,
+    future::Future,
+    pin::Pin,
+    process::Stdio,
+    sync::{Arc, Mutex, Weak},
+    time::Duration,
+};
+use tokio::{sync::broadcast, task::JoinHandle};
+use ycoding_schema::{
+    DomainEncode, LosslessString, connection, integration, integration_id::IntegrationMethodId,
+};
+use ycoding_store::resources::Secret;
+
+type Exchange = Pin<Box<dyn Future<Output = Result<Secret, Error>> + Send>>;
+type CodeCallback = Arc<dyn Fn(String) -> Exchange + Send + Sync>;
+type CodeSubmission =
+    Arc<dyn Fn(String) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send>> + Send + Sync>;
+type Transform = Arc<dyn Fn(&mut Draft) + Send + Sync>;
+type Authorize = Arc<
+    dyn Fn(
+            integration::Inputs,
+        ) -> Pin<Box<dyn Future<Output = Result<Authorization, Error>> + Send>>
+        + Send
+        + Sync,
+>;
+type Refresh = Arc<dyn Fn(ycoding_schema::credential::OAuth) -> Exchange + Send + Sync>;
+type Label = Arc<dyn Fn(&Secret) -> Option<LosslessString> + Send + Sync>;
+
+#[derive(Clone)]
+pub struct OAuthImplementation {
+    pub integration: LosslessString,
+    pub method: integration::OAuthMethod,
+    pub authorize: Authorize,
+    pub refresh: Option<Refresh>,
+    pub label: Option<Label>,
+}
+enum Mode {
+    Auto(Option<Exchange>),
+    Code(CodeCallback),
+    Command(Option<Exchange>),
+}
+pub struct Authorization {
+    url: String,
+    instructions: String,
+    expires_at: Option<i64>,
+    mode: Mode,
+    submit: Option<CodeSubmission>,
+}
+impl Authorization {
+    pub fn code(url: String, instructions: String, callback: CodeCallback) -> Self {
+        Self {
+            url,
+            instructions,
+            expires_at: None,
+            mode: Mode::Code(callback),
+            submit: None,
+        }
+    }
+    pub fn automatic(
+        url: String,
+        instructions: String,
+        callback: Exchange,
+        submit: Option<CodeSubmission>,
+        expires_at: Option<i64>,
+    ) -> Self {
+        Self {
+            url,
+            instructions,
+            expires_at,
+            mode: Mode::Auto(Some(callback)),
+            submit,
+        }
+    }
+}
+impl fmt::Debug for Authorization {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Authorization([redacted])")
+    }
+}
+#[derive(Clone)]
+struct Entry {
+    reference: integration::Ref,
+    methods: Vec<integration::Method>,
+    implementations: BTreeMap<IntegrationMethodId, OAuthImplementation>,
+}
+#[derive(Clone, Default)]
+pub struct Draft {
+    entries: BTreeMap<LosslessString, Entry>,
+    order: Vec<LosslessString>,
+}
+impl Draft {
+    fn entry(&mut self, id: LosslessString) -> &mut Entry {
+        if !self.entries.contains_key(&id) {
+            self.order.push(id.clone());
+        }
+        self.entries.entry(id.clone()).or_insert_with(|| Entry {
+            reference: integration::Ref {
+                id: ycoding_schema::integration_id::IntegrationId::new(id.clone())
+                    .expect("integration ID"),
+                name: id,
+            },
+            methods: Vec::new(),
+            implementations: BTreeMap::new(),
+        })
+    }
+    pub fn get(&self, id: &LosslessString) -> Option<&integration::Ref> {
+        self.entries.get(id).map(|entry| &entry.reference)
+    }
+    pub fn references(&self) -> Vec<&integration::Ref> {
+        self.order.iter().filter_map(|id| self.get(id)).collect()
+    }
+    pub fn update(&mut self, id: LosslessString, update: impl FnOnce(&mut integration::Ref)) {
+        let entry = self.entry(id.clone());
+        update(&mut entry.reference);
+        entry.reference.id =
+            ycoding_schema::integration_id::IntegrationId::new(id).expect("integration ID");
+    }
+    pub fn remove(&mut self, id: &LosslessString) {
+        self.entries.remove(id);
+        self.order.retain(|candidate| candidate != id);
+    }
+    pub fn methods(&self, id: &LosslessString) -> &[integration::Method] {
+        self.entries
+            .get(id)
+            .map_or(&[], |entry| entry.methods.as_slice())
+    }
+    pub fn method(&mut self, integration: LosslessString, method: integration::Method) {
+        let entry = self.entry(integration);
+        if let Some(index) = entry
+            .methods
+            .iter()
+            .position(|candidate| same_method(candidate, &method))
+        {
+            entry.methods[index] = method;
+            return;
+        }
+        entry.methods.push(method);
+    }
+    pub fn oauth(&mut self, implementation: OAuthImplementation) {
+        self.method(
+            implementation.integration.clone(),
+            integration::Method::OAuth(implementation.method.clone()),
+        );
+        self.entry(implementation.integration.clone())
+            .implementations
+            .insert(implementation.method.id.clone(), implementation);
+    }
+    pub fn remove_method(&mut self, id: &LosslessString, method: &integration::Method) {
+        let Some(entry) = self.entries.get_mut(id) else {
+            return;
+        };
+        entry
+            .methods
+            .retain(|candidate| !same_method(candidate, method));
+        if let integration::Method::OAuth(method) = method {
+            entry.implementations.remove(&method.id);
+        }
+    }
+}
+fn same_method(first: &integration::Method, second: &integration::Method) -> bool {
+    match (first, second) {
+        (integration::Method::OAuth(a), integration::Method::OAuth(b)) => a.id == b.id,
+        (integration::Method::Command(a), integration::Method::Command(b)) => a.id == b.id,
+        (integration::Method::Key(_), integration::Method::Key(_))
+        | (integration::Method::Env(_), integration::Method::Env(_)) => true,
+        _ => false,
+    }
+}
+#[derive(Clone, Debug, PartialEq)]
+pub enum Event {
+    Updated,
+    ConnectionUpdated(LosslessString),
+}
+struct Attempt {
+    integration: LosslessString,
+    method: IntegrationMethodId,
+    kind: Kind,
+    label: Option<LosslessString>,
+    time: integration::AttemptTime,
+    status: super::Status,
+    authorization: Option<Authorization>,
+    completing: bool,
+    persisting: bool,
+    submitted: bool,
+    remove_at: Option<i64>,
+    task: Option<JoinHandle<()>>,
+}
+#[derive(Clone, Copy, PartialEq)]
+enum Kind {
+    OAuth,
+    Command,
+}
+enum Completion {
+    Submit(CodeSubmission, String),
+    Exchange(Exchange),
+}
+struct State {
+    closed: bool,
+    next_transform: u64,
+    transforms: BTreeMap<u64, Transform>,
+    draft: Draft,
+    attempts: BTreeMap<integration::AttemptId, Attempt>,
+    scrubber: Option<JoinHandle<()>>,
+}
+struct Inner {
+    credentials: Service,
+    env: BTreeMap<String, String>,
+    state: Mutex<State>,
+    events: broadcast::Sender<Event>,
+}
+#[derive(Clone)]
+pub struct Registry(Arc<Inner>);
+impl Registry {
+    pub fn new(credentials: Service, env: BTreeMap<String, String>) -> Self {
+        let registry = Self(Arc::new(Inner {
+            credentials,
+            env,
+            state: Mutex::new(State {
+                closed: false,
+                next_transform: 0,
+                transforms: BTreeMap::new(),
+                draft: Draft::default(),
+                attempts: BTreeMap::new(),
+                scrubber: None,
+            }),
+            events: broadcast::channel(128).0,
+        }));
+        let inner = Arc::downgrade(&registry.0);
+        let task = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                let Some(inner) = inner.upgrade() else {
+                    return;
+                };
+                let Ok(time) = now() else {
+                    return;
+                };
+                if Registry(inner).scrub(time).await.is_err() {
+                    return;
+                }
+            }
+        });
+        if let Ok(mut state) = registry.0.state.lock() {
+            state.scrubber = Some(task);
+        }
+        registry
+    }
+    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
+        self.0.events.subscribe()
+    }
+    pub fn transform(
+        &self,
+        update: impl Fn(&mut Draft) + Send + Sync + 'static,
+    ) -> Result<Registration, Error> {
+        let mut state = self.0.state.lock().map_err(|_| Error::Closed)?;
+        if state.closed {
+            return Err(Error::Closed);
+        }
+        let id = state.next_transform;
+        state.next_transform = id.checked_add(1).ok_or(Error::Closed)?;
+        state.transforms.insert(id, Arc::new(update));
+        materialize(&mut state);
+        let _ = self.0.events.send(Event::Updated);
+        Ok(Registration {
+            registry: Arc::downgrade(&self.0),
+            id,
+        })
+    }
+    pub fn reload(&self) -> Result<(), Error> {
+        let mut state = self.0.state.lock().map_err(|_| Error::Closed)?;
+        materialize(&mut state);
+        let _ = self.0.events.send(Event::Updated);
+        Ok(())
+    }
+    pub fn get(&self, id: &LosslessString) -> Result<Option<integration::Info>, Error> {
+        let entry = self
+            .0
+            .state
+            .lock()
+            .map_err(|_| Error::Closed)?
+            .draft
+            .entries
+            .get(id)
+            .cloned();
+        let Some(entry) = entry else {
+            return Ok(None);
+        };
+        Ok(Some(integration::Info {
+            id: entry.reference.id,
+            name: entry.reference.name,
+            methods: entry.methods.clone(),
+            connections: self.connections(id, &entry.methods)?,
+        }))
+    }
+    pub fn list_by(
+        &self,
+        compare: impl Fn(&LosslessString, &LosslessString) -> std::cmp::Ordering,
+    ) -> Result<Vec<integration::Info>, Error> {
+        let ids: Vec<_> = self
+            .0
+            .state
+            .lock()
+            .map_err(|_| Error::Closed)?
+            .draft
+            .order
+            .clone();
+        let mut items = ids
+            .iter()
+            .map(|id| self.get(id))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        items.sort_by(|first, second| compare(&first.name, &second.name));
+        Ok(items)
+    }
+    fn connections(
+        &self,
+        id: &LosslessString,
+        methods: &[integration::Method],
+    ) -> Result<Vec<connection::Info>, Error> {
+        let mut rows = self.0.credentials.list(id)?;
+        rows.reverse();
+        let active = rows
+            .iter()
+            .find(|row| row.active())
+            .or_else(|| rows.first())
+            .map(|row| row.id().clone());
+        rows.sort_by_key(|row| row.id() != active.as_ref().unwrap_or(row.id()));
+        let mut connections = rows
+            .into_iter()
+            .map(|row| {
+                connection::Info::Credential(connection::CredentialInfo {
+                    id: ycoding_schema::credential::Id(row.id().clone()),
+                    label: row.label().clone(),
+                    active: Some(row.id()) == active.as_ref(),
+                })
+            })
+            .collect::<Vec<_>>();
+        connections.extend(
+            methods
+                .iter()
+                .flat_map(|method| match method {
+                    integration::Method::Env(method) => method.names.as_slice(),
+                    _ => &[],
+                })
+                .filter(|name| {
+                    name.as_str()
+                        .and_then(|name| self.0.env.get(name))
+                        .is_some_and(|value| !value.is_empty())
+                })
+                .map(|name| connection::Info::Env(connection::EnvInfo { name: name.clone() })),
+        );
+        Ok(connections)
+    }
+    pub fn active(&self, id: &LosslessString) -> Result<Option<connection::Info>, Error> {
+        let methods = self
+            .0
+            .state
+            .lock()
+            .map_err(|_| Error::Closed)?
+            .draft
+            .methods(id)
+            .to_vec();
+        Ok(self.connections(id, &methods)?.into_iter().next())
+    }
+    pub async fn snapshot(
+        &self,
+        connection: connection::Info,
+        time: i64,
+    ) -> Result<Snapshot, Error> {
+        if let connection::Info::Env(env) = &connection {
+            let value = env
+                .name
+                .as_str()
+                .and_then(|name| self.0.env.get(name))
+                .filter(|value| !value.is_empty())
+                .map(|value| {
+                    Secret::new(
+                        ycoding_schema::credential::Value::Key(ycoding_schema::credential::Key {
+                            key: value.clone().into(),
+                            metadata: None,
+                        })
+                        .encode(),
+                    )
+                    .map_err(|_| Error::InvalidCredential)
+                })
+                .transpose()?;
+            return Ok(Snapshot {
+                connection,
+                credential: None,
+                value,
+            });
+        }
+        let connection::Info::Credential(selected) = &connection else {
+            unreachable!()
+        };
+        let Some(mut stored) = self.0.credentials.get(&selected.id.0)? else {
+            return Ok(Snapshot {
+                connection,
+                credential: None,
+                value: None,
+            });
+        };
+        if let ycoding_schema::credential::Value::OAuth(value) = stored
+            .secret()
+            .domain()
+            .map_err(|_| Error::InvalidCredential)?
+            && stored.needs_refresh(time)?
+        {
+            let refresh = self
+                .0
+                .state
+                .lock()
+                .map_err(|_| Error::Closed)?
+                .draft
+                .entries
+                .get(stored.integration_id())
+                .and_then(|entry| entry.implementations.get(&value.method_id))
+                .and_then(|implementation| implementation.refresh.clone());
+            if let Some(refresh) = refresh {
+                stored = self
+                    .0
+                    .credentials
+                    .refresh(stored, time, refresh(value))
+                    .await?
+                    .ok_or(Error::ProfileUnavailable)?;
+            }
+        }
+        Ok(Snapshot {
+            connection,
+            value: Some(stored.secret().clone()),
+            credential: Some(stored),
+        })
+    }
+    fn publish_connection(&self, integration: LosslessString) {
+        let _ = self.0.events.send(Event::ConnectionUpdated(integration));
+        let _ = self.0.events.send(Event::Updated);
+    }
+    pub async fn login_key(
+        &self,
+        integration: LosslessString,
+        label: Option<LosslessString>,
+        key: LosslessString,
+        time: i64,
+    ) -> Result<(), Error> {
+        if !self
+            .0
+            .state
+            .lock()
+            .map_err(|_| Error::Closed)?
+            .draft
+            .methods(&integration)
+            .iter()
+            .any(|method| matches!(method, integration::Method::Key(_)))
+        {
+            return Err(Error::Rejected);
+        }
+        let secret = Secret::new(
+            ycoding_schema::credential::Value::Key(ycoding_schema::credential::Key {
+                key,
+                metadata: None,
+            })
+            .encode(),
+        )
+        .map_err(|_| Error::InvalidCredential)?;
+        self.0
+            .credentials
+            .create(credential_id()?, integration.clone(), label, secret, time)
+            .await?;
+        self.publish_connection(integration);
+        Ok(())
+    }
+    pub async fn update(
+        &self,
+        id: LosslessString,
+        label: Option<LosslessString>,
+        time: i64,
+    ) -> Result<(), Error> {
+        let stored = self.0.credentials.get(&id)?;
+        self.0.credentials.update(id, label, None, time).await?;
+        if let Some(stored) = stored {
+            self.publish_connection(stored.integration_id().clone());
+            return Ok(());
+        }
+        let _ = self.0.events.send(Event::Updated);
+        Ok(())
+    }
+    pub async fn activate(&self, id: LosslessString, time: i64) -> Result<(), Error> {
+        let Some(stored) = self.0.credentials.get(&id)? else {
+            return Ok(());
+        };
+        self.0.credentials.activate(id, time).await?;
+        self.publish_connection(stored.integration_id().clone());
+        Ok(())
+    }
+    pub async fn remove(&self, id: LosslessString, time: i64) -> Result<(), Error> {
+        let stored = self.0.credentials.get(&id)?;
+        self.0.credentials.remove(id, time).await?;
+        if let Some(stored) = stored {
+            self.publish_connection(stored.integration_id().clone());
+            return Ok(());
+        }
+        let _ = self.0.events.send(Event::Updated);
+        Ok(())
+    }
+    pub async fn connect(
+        &self,
+        integration: LosslessString,
+        method: LosslessString,
+        inputs: integration::Inputs,
+        label: Option<LosslessString>,
+        time: i64,
+    ) -> Result<integration::Attempt, Error> {
+        let method = IntegrationMethodId::new(method).map_err(|_| Error::Rejected)?;
+        let implementation = self
+            .0
+            .state
+            .lock()
+            .map_err(|_| Error::Closed)?
+            .draft
+            .entries
+            .get(&integration)
+            .and_then(|entry| entry.implementations.get(&method))
+            .cloned()
+            .ok_or(Error::Rejected)?;
+        let authorization = (implementation.authorize)(inputs).await?;
+        self.insert_attempt(integration, method, label, authorization, time)
+    }
+    fn insert_attempt(
+        &self,
+        integration: LosslessString,
+        method: IntegrationMethodId,
+        label: Option<LosslessString>,
+        mut authorization: Authorization,
+        time: i64,
+    ) -> Result<integration::Attempt, Error> {
+        let id = integration::AttemptId(credential_id()?);
+        let callback = match &mut authorization.mode {
+            Mode::Auto(callback) | Mode::Command(callback) => callback.take(),
+            Mode::Code(_) => None,
+        };
+        let info = integration::Attempt {
+            attempt_id: id.clone(),
+            url: authorization.url.clone().into(),
+            instructions: authorization.instructions.clone().into(),
+            mode: if matches!(authorization.mode, Mode::Code(_)) {
+                "code"
+            } else {
+                "auto"
+            }
+            .into(),
+            manual_code: authorization.submit.as_ref().map(|_| true),
+            time: integration::AttemptTime {
+                created: time as f64,
+                expires: authorization
+                    .expires_at
+                    .unwrap_or(time.saturating_add(600_000)) as f64,
+            },
+        };
+        let mut state = self.0.state.lock().map_err(|_| Error::Closed)?;
+        if state.closed {
+            return Err(Error::Closed);
+        }
+        let kind = if matches!(authorization.mode, Mode::Command(_)) {
+            Kind::Command
+        } else {
+            Kind::OAuth
+        };
+        state.attempts.insert(
+            id.clone(),
+            Attempt {
+                integration,
+                method,
+                kind,
+                label,
+                time: info.time.clone(),
+                status: super::Status::Pending,
+                authorization: Some(authorization),
+                completing: callback.is_some(),
+                persisting: false,
+                submitted: false,
+                remove_at: None,
+                task: None,
+            },
+        );
+        if let Some(callback) = callback {
+            let registry = self.clone();
+            let worker_id = id.clone();
+            let task = tokio::spawn(async move {
+                let result = callback.await;
+                let _ = registry
+                    .settle(&worker_id, result, now().unwrap_or(time))
+                    .await;
+            });
+            state.attempts.get_mut(&id).expect("inserted attempt").task = Some(task);
+        }
+        Ok(info)
+    }
+    pub fn status(
+        &self,
+        integration: &LosslessString,
+        id: &integration::AttemptId,
+    ) -> Result<integration::AttemptStatus, Error> {
+        let state = self.0.state.lock().map_err(|_| Error::Closed)?;
+        let attempt = state
+            .attempts
+            .get(id)
+            .filter(|attempt| &attempt.integration == integration && attempt.kind == Kind::OAuth)
+            .ok_or(Error::Rejected)?;
+        Ok(match attempt.status {
+            super::Status::Pending => integration::AttemptStatus::Pending(attempt.time.clone()),
+            super::Status::Complete => integration::AttemptStatus::Complete(attempt.time.clone()),
+            super::Status::Expired => integration::AttemptStatus::Expired(attempt.time.clone()),
+            _ => integration::AttemptStatus::Failed {
+                message: if attempt.status == super::Status::UnknownOutcome {
+                    Error::UnknownOutcome
+                } else {
+                    Error::Rejected
+                }
+                .to_string()
+                .into(),
+                time: attempt.time.clone(),
+            },
+        })
+    }
+    pub async fn complete(
+        &self,
+        integration: &LosslessString,
+        id: &integration::AttemptId,
+        code: Option<&str>,
+        time: i64,
+    ) -> Result<(), Error> {
+        let Some(completion) = self.claim_completion(integration, id, code)? else {
+            return Ok(());
+        };
+        let callback = match completion {
+            Completion::Exchange(callback) => callback,
+            Completion::Submit(submit, code) => {
+                let result = submit(code).await;
+                if let Err(error) = result {
+                    let _ = self.settle(id, Err(error), time).await;
+                    let task = self
+                        .0
+                        .state
+                        .lock()
+                        .map_err(|_| Error::Closed)?
+                        .attempts
+                        .get_mut(id)
+                        .filter(|attempt| {
+                            !attempt.persisting && attempt.status != super::Status::Complete
+                        })
+                        .and_then(|attempt| attempt.task.take());
+                    if let Some(task) = task {
+                        task.abort();
+                        if task.await.is_err_and(|error| !error.is_cancelled()) {
+                            return Err(Error::UnknownOutcome);
+                        }
+                    }
+                }
+                return result;
+            }
+        };
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        {
+            let mut state = self.0.state.lock().map_err(|_| Error::Closed)?;
+            let attempt = state.attempts.get_mut(id).ok_or(Error::Rejected)?;
+            let registry = self.clone();
+            let id = id.clone();
+            attempt.task = Some(tokio::spawn(async move {
+                let result = registry.settle(&id, callback.await, time).await;
+                let _ = sender.send(result);
+            }));
+        }
+        receiver.await.map_err(|_| Error::UnknownOutcome)?
+    }
+    fn claim_completion(
+        &self,
+        integration: &LosslessString,
+        id: &integration::AttemptId,
+        code: Option<&str>,
+    ) -> Result<Option<Completion>, Error> {
+        let mut state = self.0.state.lock().map_err(|_| Error::Closed)?;
+        let attempt = state
+            .attempts
+            .get_mut(id)
+            .filter(|attempt| &attempt.integration == integration && attempt.kind == Kind::OAuth)
+            .ok_or(Error::Rejected)?;
+        if attempt.status != super::Status::Pending {
+            return Ok(None);
+        }
+        let authorization = attempt.authorization.as_ref().ok_or(Error::Rejected)?;
+        if let Some(submit) = &authorization.submit {
+            let code = code
+                .filter(|code| !code.trim().is_empty())
+                .ok_or(Error::CodeRequired)?;
+            if attempt.persisting || attempt.submitted {
+                return Err(Error::Rejected);
+            }
+            attempt.submitted = true;
+            return Ok(Some(Completion::Submit(submit.clone(), code.to_owned())));
+        }
+        let Mode::Code(callback) = &authorization.mode else {
+            return Err(Error::Rejected);
+        };
+        let code = code.ok_or(Error::CodeRequired)?;
+        if attempt.completing || attempt.persisting {
+            return Err(Error::Rejected);
+        }
+        let callback = callback(code.into());
+        attempt.completing = true;
+        Ok(Some(Completion::Exchange(callback)))
+    }
+    async fn settle(
+        &self,
+        id: &integration::AttemptId,
+        result: Result<Secret, Error>,
+        time: i64,
+    ) -> Result<(), Error> {
+        let (integration, label) =
+            {
+                let mut state = self.0.state.lock().map_err(|_| Error::Closed)?;
+                let Some(attempt) = state.attempts.get(id).filter(|attempt| {
+                    attempt.status == super::Status::Pending && !attempt.persisting
+                }) else {
+                    return Ok(());
+                };
+                let integration = attempt.integration.clone();
+                let method = attempt.method.clone();
+                let label = attempt.label.clone().or_else(|| {
+                    result.as_ref().ok().and_then(|value| {
+                        state
+                            .draft
+                            .entries
+                            .get(&integration)
+                            .and_then(|entry| entry.implementations.get(&method))
+                            .and_then(|implementation| implementation.label.as_ref())
+                            .and_then(|label| label(value))
+                    })
+                });
+                let attempt = state.attempts.get_mut(id).expect("pending attempt");
+                if let Err(error) = &result {
+                    attempt.status = if *error == Error::UnknownOutcome {
+                        super::Status::UnknownOutcome
+                    } else {
+                        super::Status::Failed
+                    };
+                    attempt.remove_at = Some(time.saturating_add(60_000));
+                    attempt.authorization.take();
+                    return Err(*error);
+                }
+                attempt.persisting = true;
+                (integration, label)
+            };
+        let result = self
+            .0
+            .credentials
+            .create(credential_id()?, integration.clone(), label, result?, time)
+            .await;
+        {
+            let mut state = self.0.state.lock().map_err(|_| Error::Closed)?;
+            let attempt = state.attempts.get_mut(id).ok_or(Error::UnknownOutcome)?;
+            attempt.status = if result.is_ok() {
+                super::Status::Complete
+            } else if result == Err(Error::UnknownOutcome) {
+                super::Status::UnknownOutcome
+            } else {
+                super::Status::Failed
+            };
+            attempt.persisting = false;
+            attempt.remove_at = Some(time.saturating_add(60_000));
+            attempt.authorization.take();
+        }
+        result?;
+        self.publish_connection(integration);
+        Ok(())
+    }
+    pub async fn cancel(
+        &self,
+        integration: &LosslessString,
+        id: &integration::AttemptId,
+    ) -> Result<(), Error> {
+        self.cancel_kind(integration, id, Kind::OAuth).await
+    }
+    pub async fn cancel_command(
+        &self,
+        integration: &LosslessString,
+        id: &integration::AttemptId,
+    ) -> Result<(), Error> {
+        self.cancel_kind(integration, id, Kind::Command).await
+    }
+    async fn cancel_kind(
+        &self,
+        integration: &LosslessString,
+        id: &integration::AttemptId,
+        kind: Kind,
+    ) -> Result<(), Error> {
+        let attempt = {
+            let mut state = self.0.state.lock().map_err(|_| Error::Closed)?;
+            if !state.attempts.get(id).is_some_and(|attempt| {
+                &attempt.integration == integration
+                    && attempt.kind == kind
+                    && attempt.status == super::Status::Pending
+                    && !attempt.persisting
+            }) {
+                return Ok(());
+            }
+            state.attempts.remove(id)
+        };
+        if let Some(mut attempt) = attempt
+            && let Some(task) = attempt.task.take()
+        {
+            task.abort();
+            if task.await.is_err_and(|error| !error.is_cancelled()) {
+                return Err(Error::UnknownOutcome);
+            }
+        }
+        Ok(())
+    }
+    pub fn command_status(
+        &self,
+        integration: &LosslessString,
+        id: &integration::AttemptId,
+    ) -> Result<integration::CommandAttemptStatus, Error> {
+        let state = self.0.state.lock().map_err(|_| Error::Closed)?;
+        let attempt = state
+            .attempts
+            .get(id)
+            .filter(|attempt| &attempt.integration == integration && attempt.kind == Kind::Command)
+            .ok_or(Error::Rejected)?;
+        Ok(match attempt.status {
+            super::Status::Pending => integration::CommandAttemptStatus::Pending {
+                message: None,
+                time: attempt.time.clone(),
+            },
+            super::Status::Complete => {
+                integration::CommandAttemptStatus::Complete(attempt.time.clone())
+            }
+            super::Status::Expired => {
+                integration::CommandAttemptStatus::Expired(attempt.time.clone())
+            }
+            _ => integration::CommandAttemptStatus::Failed {
+                message: Error::Rejected.to_string().into(),
+                time: attempt.time.clone(),
+            },
+        })
+    }
+    pub async fn scrub(&self, time: i64) -> Result<(), Error> {
+        let tasks = {
+            let mut state = self.0.state.lock().map_err(|_| Error::Closed)?;
+            let mut tasks = Vec::new();
+            for attempt in state.attempts.values_mut() {
+                if attempt.status == super::Status::Pending
+                    && !attempt.persisting
+                    && attempt.time.expires <= time as f64
+                {
+                    attempt.status = super::Status::Expired;
+                    attempt.authorization.take();
+                    attempt.remove_at = Some(time.saturating_add(60_000));
+                    if let Some(task) = attempt.task.take() {
+                        task.abort();
+                        tasks.push(task);
+                    }
+                }
+            }
+            let removed: Vec<_> = state
+                .attempts
+                .extract_if(.., |_, attempt| {
+                    attempt.status != super::Status::Pending
+                        && attempt.remove_at.is_some_and(|remove| remove <= time)
+                })
+                .map(|(_, attempt)| attempt)
+                .collect();
+            tasks.extend(removed.into_iter().filter_map(|attempt| attempt.task));
+            tasks
+        };
+        for task in tasks {
+            if task.await.is_err_and(|error| !error.is_cancelled()) {
+                return Err(Error::UnknownOutcome);
+            }
+        }
+        Ok(())
+    }
+    pub async fn connect_command(
+        &self,
+        integration: LosslessString,
+        method: LosslessString,
+        label: Option<LosslessString>,
+        time: i64,
+    ) -> Result<integration::CommandAttempt, Error> {
+        let method = IntegrationMethodId::new(method).map_err(|_| Error::Rejected)?;
+        let command = self
+            .0
+            .state
+            .lock()
+            .map_err(|_| Error::Closed)?
+            .draft
+            .methods(&integration)
+            .iter()
+            .find_map(|candidate| match candidate {
+                integration::Method::Command(candidate) if candidate.id == method => {
+                    Some(candidate.command.clone())
+                }
+                _ => None,
+            })
+            .ok_or(Error::Rejected)?;
+        let env = self.0.env.clone();
+        let callback = Box::pin(async move {
+            let output = tokio::process::Command::new(
+                command
+                    .first()
+                    .and_then(LosslessString::as_str)
+                    .ok_or(Error::Rejected)?,
+            )
+            .args(
+                command
+                    .iter()
+                    .skip(1)
+                    .map(|arg| arg.as_str().ok_or(Error::Rejected))
+                    .collect::<Result<Vec<_>, _>>()?,
+            )
+            .env_clear()
+            .envs(env)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .output()
+            .await
+            .map_err(|_| Error::Rejected)?;
+            if !output.status.success() {
+                return Err(Error::Rejected);
+            }
+            let key = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            if key.is_empty() {
+                return Err(Error::Rejected);
+            }
+            Secret::new(
+                ycoding_schema::credential::Value::Key(ycoding_schema::credential::Key {
+                    key: key.into(),
+                    metadata: None,
+                })
+                .encode(),
+            )
+            .map_err(|_| Error::InvalidCredential)
+        });
+        let attempt = self.insert_attempt(
+            integration,
+            method,
+            label,
+            Authorization {
+                url: String::new(),
+                instructions: String::new(),
+                expires_at: None,
+                mode: Mode::Command(Some(callback)),
+                submit: None,
+            },
+            time,
+        )?;
+        Ok(integration::CommandAttempt {
+            attempt_id: attempt.attempt_id,
+            time: attempt.time,
+        })
+    }
+    pub async fn shutdown(&self) -> Result<(), Error> {
+        let (scrubber, tasks) = {
+            let mut state = self.0.state.lock().map_err(|_| Error::Closed)?;
+            state.closed = true;
+            let tasks = state
+                .attempts
+                .values_mut()
+                .filter_map(|attempt| {
+                    if !attempt.persisting && attempt.status == super::Status::Pending {
+                        attempt.status = super::Status::Cancelled;
+                        attempt.authorization.take();
+                    }
+                    attempt.task.take().map(|task| {
+                        if !attempt.persisting {
+                            task.abort();
+                        }
+                        (task, attempt.persisting)
+                    })
+                })
+                .collect::<Vec<_>>();
+            (state.scrubber.take(), tasks)
+        };
+        if let Some(task) = scrubber {
+            task.abort();
+            if task.await.is_err_and(|error| !error.is_cancelled()) {
+                return Err(Error::UnknownOutcome);
+            }
+        }
+        for (task, persisting) in &tasks {
+            if !persisting {
+                task.abort();
+            }
+        }
+        for (task, _) in tasks {
+            if task.await.is_err_and(|error| !error.is_cancelled()) {
+                return Err(Error::UnknownOutcome);
+            }
+        }
+        Ok(())
+    }
+}
+pub struct Snapshot {
+    pub connection: connection::Info,
+    pub credential: Option<Info>,
+    pub value: Option<Secret>,
+}
+impl fmt::Debug for Snapshot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ConnectionSnapshot([redacted])")
+    }
+}
+pub struct Registration {
+    registry: Weak<Inner>,
+    id: u64,
+}
+impl Registration {
+    pub fn dispose(&self) -> Result<(), Error> {
+        let Some(registry) = self.registry.upgrade() else {
+            return Ok(());
+        };
+        let mut state = registry.state.lock().map_err(|_| Error::Closed)?;
+        if state.transforms.remove(&self.id).is_some() {
+            materialize(&mut state);
+            let _ = registry.events.send(Event::Updated);
+        }
+        Ok(())
+    }
+}
+impl Drop for Registration {
+    fn drop(&mut self) {
+        let _ = self.dispose();
+    }
+}
+fn materialize(state: &mut State) {
+    let mut draft = Draft::default();
+    for transform in state.transforms.values() {
+        transform(&mut draft);
+    }
+    state.draft = draft;
+}

@@ -1,0 +1,2581 @@
+{
+ "description": "macOS desktop: list once for exact bundle_id/pid/window_id and Space placement; never guess. Launch if absent. Quit only when asked; unsaved-work prompts belong to the app. Inspect first; prefer AX paths off-Space. Safari off-Space page capture can be blank while AX reads/links work; command shortcuts and menu items may be ignored. Capture only if AX is insufficient; frames and pixels share one window-local space. Off-Space Electron capture/pixel/type automatically use a PID-owned bridge when available. Use launch remote_debugging:true only when explicitly requested for a fuse-off Electron app; it gracefully quits/relaunches and leaves a localhost debug port open. Chain returned settled revisions. On effect unchanged do not repeat; use AX or report no effect. On stale_revision inspect once and retry once; on unknown_outcome, focus_restore_failed, or inspector_close_failed inspect before mutation, never replay blindly. Native raw input briefly shifts key focus then restores it; concurrent user keystrokes may reach the target. No window raising, Space switch, hardware cursor warp, or clipboard. iTerm and Finder need explicit targets. Safari/Chrome tabs: webbrowser.tabs first, then pass window_id, 1-based tab_index, and that window's revision; navigate/new_tab URLs must be absolute http(s); JavaScript runs only through webbrowser.eval (and Safari back/forward/reload), which needs the browser's Allow JavaScript from Apple Events setting. Stage a window on a private agent display for off-Space Chromium/Electron/WebKit pixel input and capture; unstage it when done.",
+ "inputSchema": {
+  "anyOf": [
+   {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "webbrowser.tabs"
+      ]
+     },
+     "platform": {
+      "type": "string",
+      "enum": [
+       "macos"
+      ]
+     },
+     "bundle_id": {
+      "type": "string",
+      "enum": [
+       "com.apple.Safari",
+       "com.google.Chrome"
+      ]
+     }
+    },
+    "required": [
+     "action",
+     "platform",
+     "bundle_id"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "webbrowser.navigate"
+      ]
+     },
+     "platform": {
+      "type": "string",
+      "enum": [
+       "macos"
+      ]
+     },
+     "bundle_id": {
+      "type": "string",
+      "enum": [
+       "com.apple.Safari",
+       "com.google.Chrome"
+      ]
+     },
+     "window_id": {
+      "type": "string",
+      "allOf": [
+       {
+        "minLength": 1
+       }
+      ]
+     },
+     "tab_index": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "expected_revision": {
+      "type": "string"
+     },
+     "url": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "action",
+     "platform",
+     "bundle_id",
+     "window_id",
+     "tab_index",
+     "expected_revision",
+     "url"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "webbrowser.back"
+      ]
+     },
+     "platform": {
+      "type": "string",
+      "enum": [
+       "macos"
+      ]
+     },
+     "bundle_id": {
+      "type": "string",
+      "enum": [
+       "com.apple.Safari",
+       "com.google.Chrome"
+      ]
+     },
+     "window_id": {
+      "type": "string",
+      "allOf": [
+       {
+        "minLength": 1
+       }
+      ]
+     },
+     "tab_index": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "expected_revision": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "action",
+     "platform",
+     "bundle_id",
+     "window_id",
+     "tab_index",
+     "expected_revision"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "webbrowser.forward"
+      ]
+     },
+     "platform": {
+      "type": "string",
+      "enum": [
+       "macos"
+      ]
+     },
+     "bundle_id": {
+      "type": "string",
+      "enum": [
+       "com.apple.Safari",
+       "com.google.Chrome"
+      ]
+     },
+     "window_id": {
+      "type": "string",
+      "allOf": [
+       {
+        "minLength": 1
+       }
+      ]
+     },
+     "tab_index": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "expected_revision": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "action",
+     "platform",
+     "bundle_id",
+     "window_id",
+     "tab_index",
+     "expected_revision"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "webbrowser.reload"
+      ]
+     },
+     "platform": {
+      "type": "string",
+      "enum": [
+       "macos"
+      ]
+     },
+     "bundle_id": {
+      "type": "string",
+      "enum": [
+       "com.apple.Safari",
+       "com.google.Chrome"
+      ]
+     },
+     "window_id": {
+      "type": "string",
+      "allOf": [
+       {
+        "minLength": 1
+       }
+      ]
+     },
+     "tab_index": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "expected_revision": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "action",
+     "platform",
+     "bundle_id",
+     "window_id",
+     "tab_index",
+     "expected_revision"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "webbrowser.close_tab"
+      ]
+     },
+     "platform": {
+      "type": "string",
+      "enum": [
+       "macos"
+      ]
+     },
+     "bundle_id": {
+      "type": "string",
+      "enum": [
+       "com.apple.Safari",
+       "com.google.Chrome"
+      ]
+     },
+     "window_id": {
+      "type": "string",
+      "allOf": [
+       {
+        "minLength": 1
+       }
+      ]
+     },
+     "tab_index": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "expected_revision": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "action",
+     "platform",
+     "bundle_id",
+     "window_id",
+     "tab_index",
+     "expected_revision"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "webbrowser.new_tab"
+      ]
+     },
+     "platform": {
+      "type": "string",
+      "enum": [
+       "macos"
+      ]
+     },
+     "bundle_id": {
+      "type": "string",
+      "enum": [
+       "com.apple.Safari",
+       "com.google.Chrome"
+      ]
+     },
+     "window_id": {
+      "type": "string",
+      "allOf": [
+       {
+        "minLength": 1
+       }
+      ]
+     },
+     "expected_revision": {
+      "type": "string"
+     },
+     "url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "action",
+     "platform",
+     "bundle_id",
+     "window_id",
+     "expected_revision"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "webbrowser.eval"
+      ]
+     },
+     "platform": {
+      "type": "string",
+      "enum": [
+       "macos"
+      ]
+     },
+     "bundle_id": {
+      "type": "string",
+      "enum": [
+       "com.apple.Safari",
+       "com.google.Chrome"
+      ]
+     },
+     "window_id": {
+      "type": "string",
+      "allOf": [
+       {
+        "minLength": 1
+       }
+      ]
+     },
+     "tab_index": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "expected_revision": {
+      "type": "string"
+     },
+     "script": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "action",
+     "platform",
+     "bundle_id",
+     "window_id",
+     "tab_index",
+     "expected_revision",
+     "script"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "status"
+      ]
+     }
+    },
+    "required": [
+     "action"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "cancel"
+      ]
+     },
+     "call_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "action",
+     "call_id"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "iterm.inspect"
+      ]
+     },
+     "platform": {
+      "type": "string",
+      "enum": [
+       "macos"
+      ]
+     },
+     "window_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "tab_index": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "session_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "action",
+     "platform",
+     "window_id",
+     "tab_index",
+     "session_id"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "iterm.send_text"
+      ]
+     },
+     "platform": {
+      "type": "string",
+      "enum": [
+       "macos"
+      ]
+     },
+     "window_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "tab_index": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "session_id": {
+      "type": "string"
+     },
+     "expected_revision": {
+      "type": "string"
+     },
+     "text": {
+      "type": "string"
+     },
+     "newline": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "action",
+     "platform",
+     "window_id",
+     "tab_index",
+     "session_id",
+     "expected_revision",
+     "text"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "finder.inspect"
+      ]
+     },
+     "platform": {
+      "type": "string",
+      "enum": [
+       "macos"
+      ]
+     },
+     "path": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "action",
+     "platform",
+     "path"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "desktop.list"
+      ]
+     },
+     "platform": {
+      "type": "string",
+      "enum": [
+       "macos"
+      ]
+     }
+    },
+    "required": [
+     "action",
+     "platform"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "desktop.launch"
+      ]
+     },
+     "platform": {
+      "type": "string",
+      "enum": [
+       "macos"
+      ]
+     },
+     "bundle_id": {
+      "type": "string",
+      "allOf": [
+       {
+        "minLength": 1
+       }
+      ]
+     },
+     "remote_debugging": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "action",
+     "platform",
+     "bundle_id"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "desktop.quit"
+      ]
+     },
+     "platform": {
+      "type": "string",
+      "enum": [
+       "macos"
+      ]
+     },
+     "bundle_id": {
+      "type": "string",
+      "allOf": [
+       {
+        "minLength": 1
+       }
+      ]
+     },
+     "pid": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     }
+    },
+    "required": [
+     "action",
+     "platform",
+     "bundle_id",
+     "pid"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "desktop.inspect"
+      ]
+     },
+     "platform": {
+      "type": "string",
+      "enum": [
+       "macos"
+      ]
+     },
+     "bundle_id": {
+      "type": "string",
+      "allOf": [
+       {
+        "minLength": 1
+       }
+      ]
+     },
+     "pid": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "window_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     }
+    },
+    "required": [
+     "action",
+     "platform",
+     "bundle_id",
+     "pid",
+     "window_id"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "desktop.capture"
+      ]
+     },
+     "platform": {
+      "type": "string",
+      "enum": [
+       "macos"
+      ]
+     },
+     "bundle_id": {
+      "type": "string",
+      "allOf": [
+       {
+        "minLength": 1
+       }
+      ]
+     },
+     "pid": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "window_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     }
+    },
+    "required": [
+     "action",
+     "platform",
+     "bundle_id",
+     "pid",
+     "window_id"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "desktop.stage"
+      ]
+     },
+     "platform": {
+      "type": "string",
+      "enum": [
+       "macos"
+      ]
+     },
+     "bundle_id": {
+      "type": "string",
+      "allOf": [
+       {
+        "minLength": 1
+       }
+      ]
+     },
+     "pid": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "window_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "expected_revision": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "action",
+     "platform",
+     "bundle_id",
+     "pid",
+     "window_id",
+     "expected_revision"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "desktop.unstage"
+      ]
+     },
+     "platform": {
+      "type": "string",
+      "enum": [
+       "macos"
+      ]
+     },
+     "bundle_id": {
+      "type": "string",
+      "allOf": [
+       {
+        "minLength": 1
+       }
+      ]
+     },
+     "pid": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "window_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     }
+    },
+    "required": [
+     "action",
+     "platform",
+     "bundle_id",
+     "pid",
+     "window_id"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "desktop.click"
+      ]
+     },
+     "platform": {
+      "type": "string",
+      "enum": [
+       "macos"
+      ]
+     },
+     "bundle_id": {
+      "type": "string",
+      "allOf": [
+       {
+        "minLength": 1
+       }
+      ]
+     },
+     "pid": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "window_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "element": {
+      "type": "array",
+      "items": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "string"
+        }
+       ]
+      },
+      "allOf": [
+       {
+        "maxItems": 12
+       }
+      ]
+     },
+     "expected_revision": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "action",
+     "platform",
+     "bundle_id",
+     "pid",
+     "window_id",
+     "element",
+     "expected_revision"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "desktop.click"
+      ]
+     },
+     "platform": {
+      "type": "string",
+      "enum": [
+       "macos"
+      ]
+     },
+     "bundle_id": {
+      "type": "string",
+      "allOf": [
+       {
+        "minLength": 1
+       }
+      ]
+     },
+     "pid": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "window_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "expected_revision": {
+      "type": "string"
+     },
+     "x": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "y": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "button": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "left",
+         "right"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "count": {
+      "anyOf": [
+       {
+        "anyOf": [
+         {
+          "type": "integer"
+         },
+         {
+          "type": "string"
+         }
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "action",
+     "platform",
+     "bundle_id",
+     "pid",
+     "window_id",
+     "expected_revision",
+     "x",
+     "y"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "desktop.type"
+      ]
+     },
+     "platform": {
+      "type": "string",
+      "enum": [
+       "macos"
+      ]
+     },
+     "bundle_id": {
+      "type": "string",
+      "allOf": [
+       {
+        "minLength": 1
+       }
+      ]
+     },
+     "pid": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "window_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "element": {
+      "type": "array",
+      "items": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "string"
+        }
+       ]
+      },
+      "allOf": [
+       {
+        "maxItems": 12
+       }
+      ]
+     },
+     "expected_revision": {
+      "type": "string"
+     },
+     "text": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 4096
+       }
+      ]
+     }
+    },
+    "required": [
+     "action",
+     "platform",
+     "bundle_id",
+     "pid",
+     "window_id",
+     "element",
+     "expected_revision",
+     "text"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "desktop.type"
+      ]
+     },
+     "platform": {
+      "type": "string",
+      "enum": [
+       "macos"
+      ]
+     },
+     "bundle_id": {
+      "type": "string",
+      "allOf": [
+       {
+        "minLength": 1
+       }
+      ]
+     },
+     "pid": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "window_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "expected_revision": {
+      "type": "string"
+     },
+     "text": {
+      "type": "string",
+      "allOf": [
+       {
+        "maxLength": 4096
+       }
+      ]
+     }
+    },
+    "required": [
+     "action",
+     "platform",
+     "bundle_id",
+     "pid",
+     "window_id",
+     "expected_revision",
+     "text"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "desktop.scroll"
+      ]
+     },
+     "platform": {
+      "type": "string",
+      "enum": [
+       "macos"
+      ]
+     },
+     "bundle_id": {
+      "type": "string",
+      "allOf": [
+       {
+        "minLength": 1
+       }
+      ]
+     },
+     "pid": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "window_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "element": {
+      "type": "array",
+      "items": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "string"
+        }
+       ]
+      },
+      "allOf": [
+       {
+        "maxItems": 12
+       }
+      ]
+     },
+     "expected_revision": {
+      "type": "string"
+     },
+     "direction": {
+      "type": "string",
+      "enum": [
+       "up",
+       "down"
+      ]
+     }
+    },
+    "required": [
+     "action",
+     "platform",
+     "bundle_id",
+     "pid",
+     "window_id",
+     "element",
+     "expected_revision",
+     "direction"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "desktop.scroll"
+      ]
+     },
+     "platform": {
+      "type": "string",
+      "enum": [
+       "macos"
+      ]
+     },
+     "bundle_id": {
+      "type": "string",
+      "allOf": [
+       {
+        "minLength": 1
+       }
+      ]
+     },
+     "pid": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "window_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "expected_revision": {
+      "type": "string"
+     },
+     "x": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "y": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "delta_x": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "delta_y": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     }
+    },
+    "required": [
+     "action",
+     "platform",
+     "bundle_id",
+     "pid",
+     "window_id",
+     "expected_revision",
+     "x",
+     "y",
+     "delta_x",
+     "delta_y"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "desktop.drag"
+      ]
+     },
+     "platform": {
+      "type": "string",
+      "enum": [
+       "macos"
+      ]
+     },
+     "bundle_id": {
+      "type": "string",
+      "allOf": [
+       {
+        "minLength": 1
+       }
+      ]
+     },
+     "pid": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "window_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "expected_revision": {
+      "type": "string"
+     },
+     "from_x": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "from_y": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "to_x": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "to_y": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     }
+    },
+    "required": [
+     "action",
+     "platform",
+     "bundle_id",
+     "pid",
+     "window_id",
+     "expected_revision",
+     "from_x",
+     "from_y",
+     "to_x",
+     "to_y"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "desktop.key"
+      ]
+     },
+     "platform": {
+      "type": "string",
+      "enum": [
+       "macos"
+      ]
+     },
+     "bundle_id": {
+      "type": "string",
+      "allOf": [
+       {
+        "minLength": 1
+       }
+      ]
+     },
+     "pid": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "window_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "element": {
+      "anyOf": [
+       {
+        "type": "array",
+        "items": {
+         "anyOf": [
+          {
+           "type": "integer"
+          },
+          {
+           "type": "string"
+          }
+         ]
+        },
+        "allOf": [
+         {
+          "maxItems": 12
+         }
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "expected_revision": {
+      "type": "string"
+     },
+     "key": {
+      "type": "string",
+      "allOf": [
+       {
+        "pattern": "^(?:enter|return|tab|escape|space|delete|forward_delete|up|down|left|right|home|end|page_up|page_down|f(?:[1-9]|1[0-2])|[^\\x00-\\x1f\\x7f])$"
+       }
+      ]
+     },
+     "modifiers": {
+      "anyOf": [
+       {
+        "type": "array",
+        "items": {
+         "type": "string",
+         "enum": [
+          "command",
+          "shift",
+          "option",
+          "control",
+          "fn"
+         ]
+        }
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "action",
+     "platform",
+     "bundle_id",
+     "pid",
+     "window_id",
+     "expected_revision",
+     "key"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "finder.move"
+      ]
+     },
+     "platform": {
+      "type": "string",
+      "enum": [
+       "macos"
+      ]
+     },
+     "path": {
+      "type": "string"
+     },
+     "destination_directory": {
+      "type": "string"
+     },
+     "expected_revision": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "action",
+     "platform",
+     "path",
+     "destination_directory",
+     "expected_revision"
+    ],
+    "additionalProperties": false
+   }
+  ]
+ },
+ "outputSchema": {
+  "anyOf": [
+   {
+    "type": "object",
+    "properties": {
+     "type": {
+      "type": "string",
+      "enum": [
+       "status"
+      ]
+     },
+     "platform": {
+      "type": "string"
+     },
+     "state": {
+      "type": "string",
+      "enum": [
+       "supported",
+       "unsupported"
+      ]
+     },
+     "capabilities": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "platform": {
+         "type": "string"
+        },
+        "application": {
+         "type": "string"
+        },
+        "identity": {
+         "type": "object",
+         "properties": {
+          "kind": {
+           "type": "string"
+          },
+          "value": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "kind",
+          "value"
+         ],
+         "additionalProperties": false
+        },
+        "operations": {
+         "type": "array",
+         "items": {
+          "type": "string"
+         }
+        }
+       },
+       "required": [
+        "platform",
+        "application",
+        "identity",
+        "operations"
+       ],
+       "additionalProperties": false
+      }
+     }
+    },
+    "required": [
+     "type",
+     "platform",
+     "state",
+     "capabilities"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "type": {
+      "type": "string",
+      "enum": [
+       "cancelled"
+      ]
+     },
+     "callID": {
+      "type": "string"
+     },
+     "cancelled": {
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "type",
+     "callID",
+     "cancelled"
+    ],
+    "additionalProperties": false
+   },
+   {
+    "type": "object",
+    "properties": {
+     "type": {
+      "type": "string",
+      "enum": [
+       "result"
+      ]
+     },
+     "action": {
+      "type": "string",
+      "enum": [
+       "iterm.inspect",
+       "iterm.send_text",
+       "finder.inspect",
+       "finder.move",
+       "desktop.inspect",
+       "desktop.list",
+       "desktop.launch",
+       "desktop.quit",
+       "desktop.capture",
+       "desktop.click",
+       "desktop.drag",
+       "desktop.type",
+       "desktop.scroll",
+       "desktop.key",
+       "desktop.stage",
+       "desktop.unstage",
+       "webbrowser.tabs",
+       "webbrowser.navigate",
+       "webbrowser.back",
+       "webbrowser.forward",
+       "webbrowser.reload",
+       "webbrowser.new_tab",
+       "webbrowser.close_tab",
+       "webbrowser.eval"
+      ]
+     },
+     "revision": {
+      "type": "string"
+     },
+     "accessible": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "effect": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "changed",
+         "unchanged",
+         "unverified"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "elements": {
+      "anyOf": [
+       {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "properties": {
+          "path": {
+           "type": "array",
+           "items": {
+            "type": "integer"
+           }
+          },
+          "role": {
+           "type": "string"
+          },
+          "label": {
+           "type": "string"
+          },
+          "frame": {
+           "type": "array",
+           "prefixItems": [
+            {
+             "anyOf": [
+              {
+               "type": "number"
+              },
+              {
+               "type": "string",
+               "enum": [
+                "NaN"
+               ]
+              },
+              {
+               "type": "string",
+               "enum": [
+                "Infinity"
+               ]
+              },
+              {
+               "type": "string",
+               "enum": [
+                "-Infinity"
+               ]
+              }
+             ]
+            },
+            {
+             "anyOf": [
+              {
+               "type": "number"
+              },
+              {
+               "type": "string",
+               "enum": [
+                "NaN"
+               ]
+              },
+              {
+               "type": "string",
+               "enum": [
+                "Infinity"
+               ]
+              },
+              {
+               "type": "string",
+               "enum": [
+                "-Infinity"
+               ]
+              }
+             ]
+            },
+            {
+             "anyOf": [
+              {
+               "type": "number"
+              },
+              {
+               "type": "string",
+               "enum": [
+                "NaN"
+               ]
+              },
+              {
+               "type": "string",
+               "enum": [
+                "Infinity"
+               ]
+              },
+              {
+               "type": "string",
+               "enum": [
+                "-Infinity"
+               ]
+              }
+             ]
+            },
+            {
+             "anyOf": [
+              {
+               "type": "number"
+              },
+              {
+               "type": "string",
+               "enum": [
+                "NaN"
+               ]
+              },
+              {
+               "type": "string",
+               "enum": [
+                "Infinity"
+               ]
+              },
+              {
+               "type": "string",
+               "enum": [
+                "-Infinity"
+               ]
+              }
+             ]
+            }
+           ],
+           "maxItems": 4,
+           "minItems": 4
+          },
+          "actions": {
+           "type": "array",
+           "items": {
+            "type": "string",
+            "enum": [
+             "press",
+             "confirm",
+             "increment",
+             "decrement",
+             "show_menu"
+            ]
+           }
+          },
+          "enabled": {
+           "type": "boolean"
+          },
+          "focused": {
+           "type": "boolean"
+          },
+          "value": {
+           "anyOf": [
+            {
+             "type": "string"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          }
+         },
+         "required": [
+          "path",
+          "role",
+          "label",
+          "frame",
+          "actions",
+          "enabled",
+          "focused"
+         ],
+         "additionalProperties": false
+        }
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "image": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "width": {
+      "anyOf": [
+       {
+        "anyOf": [
+         {
+          "type": "number"
+         },
+         {
+          "type": "string",
+          "enum": [
+           "NaN"
+          ]
+         },
+         {
+          "type": "string",
+          "enum": [
+           "Infinity"
+          ]
+         },
+         {
+          "type": "string",
+          "enum": [
+           "-Infinity"
+          ]
+         }
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "height": {
+      "anyOf": [
+       {
+        "anyOf": [
+         {
+          "type": "number"
+         },
+         {
+          "type": "string",
+          "enum": [
+           "NaN"
+          ]
+         },
+         {
+          "type": "string",
+          "enum": [
+           "Infinity"
+          ]
+         },
+         {
+          "type": "string",
+          "enum": [
+           "-Infinity"
+          ]
+         }
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "scale": {
+      "anyOf": [
+       {
+        "anyOf": [
+         {
+          "type": "number"
+         },
+         {
+          "type": "string",
+          "enum": [
+           "NaN"
+          ]
+         },
+         {
+          "type": "string",
+          "enum": [
+           "Infinity"
+          ]
+         },
+         {
+          "type": "string",
+          "enum": [
+           "-Infinity"
+          ]
+         }
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "apps": {
+      "anyOf": [
+       {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "properties": {
+          "bundle_id": {
+           "type": "string"
+          },
+          "pid": {
+           "type": "integer"
+          },
+          "name": {
+           "type": "string"
+          },
+          "is_active": {
+           "type": "boolean"
+          },
+          "is_hidden": {
+           "type": "boolean"
+          },
+          "windows": {
+           "type": "array",
+           "items": {
+            "type": "object",
+            "properties": {
+             "window_id": {
+              "type": "integer"
+             },
+             "title": {
+              "type": "string"
+             },
+             "bounds": {
+              "type": "object",
+              "properties": {
+               "x": {
+                "anyOf": [
+                 {
+                  "type": "number"
+                 },
+                 {
+                  "type": "string",
+                  "enum": [
+                   "NaN"
+                  ]
+                 },
+                 {
+                  "type": "string",
+                  "enum": [
+                   "Infinity"
+                  ]
+                 },
+                 {
+                  "type": "string",
+                  "enum": [
+                   "-Infinity"
+                  ]
+                 }
+                ]
+               },
+               "y": {
+                "anyOf": [
+                 {
+                  "type": "number"
+                 },
+                 {
+                  "type": "string",
+                  "enum": [
+                   "NaN"
+                  ]
+                 },
+                 {
+                  "type": "string",
+                  "enum": [
+                   "Infinity"
+                  ]
+                 },
+                 {
+                  "type": "string",
+                  "enum": [
+                   "-Infinity"
+                  ]
+                 }
+                ]
+               },
+               "width": {
+                "anyOf": [
+                 {
+                  "type": "number"
+                 },
+                 {
+                  "type": "string",
+                  "enum": [
+                   "NaN"
+                  ]
+                 },
+                 {
+                  "type": "string",
+                  "enum": [
+                   "Infinity"
+                  ]
+                 },
+                 {
+                  "type": "string",
+                  "enum": [
+                   "-Infinity"
+                  ]
+                 }
+                ]
+               },
+               "height": {
+                "anyOf": [
+                 {
+                  "type": "number"
+                 },
+                 {
+                  "type": "string",
+                  "enum": [
+                   "NaN"
+                  ]
+                 },
+                 {
+                  "type": "string",
+                  "enum": [
+                   "Infinity"
+                  ]
+                 },
+                 {
+                  "type": "string",
+                  "enum": [
+                   "-Infinity"
+                  ]
+                 }
+                ]
+               }
+              },
+              "required": [
+               "x",
+               "y",
+               "width",
+               "height"
+              ],
+              "additionalProperties": false
+             },
+             "on_screen": {
+              "type": "boolean"
+             },
+             "placement": {
+              "type": "string",
+              "enum": [
+               "current_space",
+               "other_space",
+               "full_screen",
+               "unplaced",
+               "unknown"
+              ]
+             }
+            },
+            "required": [
+             "window_id",
+             "title",
+             "bounds",
+             "on_screen",
+             "placement"
+            ],
+            "additionalProperties": false
+           }
+          }
+         },
+         "required": [
+          "bundle_id",
+          "pid",
+          "name",
+          "is_active",
+          "is_hidden",
+          "windows"
+         ],
+         "additionalProperties": false
+        }
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "pid": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "exited": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "windows": {
+      "anyOf": [
+       {
+        "anyOf": [
+         {
+          "type": "array",
+          "items": {
+           "type": "object",
+           "properties": {
+            "window_id": {
+             "type": "string"
+            },
+            "index": {
+             "type": "integer"
+            },
+            "revision": {
+             "type": "string"
+            },
+            "tabs": {
+             "type": "array",
+             "items": {
+              "type": "object",
+              "properties": {
+               "index": {
+                "type": "integer"
+               },
+               "title": {
+                "type": "string"
+               },
+               "url": {
+                "type": "string"
+               },
+               "active": {
+                "type": "boolean"
+               }
+              },
+              "required": [
+               "index",
+               "title",
+               "url",
+               "active"
+              ],
+              "additionalProperties": false
+             }
+            }
+           },
+           "required": [
+            "window_id",
+            "index",
+            "revision",
+            "tabs"
+           ],
+           "additionalProperties": false
+          }
+         },
+         {
+          "type": "array",
+          "items": {
+           "type": "object",
+           "properties": {
+            "window_id": {
+             "type": "integer"
+            },
+            "title": {
+             "type": "string"
+            },
+            "bounds": {
+             "type": "object",
+             "properties": {
+              "x": {
+               "anyOf": [
+                {
+                 "type": "number"
+                },
+                {
+                 "type": "string",
+                 "enum": [
+                  "NaN"
+                 ]
+                },
+                {
+                 "type": "string",
+                 "enum": [
+                  "Infinity"
+                 ]
+                },
+                {
+                 "type": "string",
+                 "enum": [
+                  "-Infinity"
+                 ]
+                }
+               ]
+              },
+              "y": {
+               "anyOf": [
+                {
+                 "type": "number"
+                },
+                {
+                 "type": "string",
+                 "enum": [
+                  "NaN"
+                 ]
+                },
+                {
+                 "type": "string",
+                 "enum": [
+                  "Infinity"
+                 ]
+                },
+                {
+                 "type": "string",
+                 "enum": [
+                  "-Infinity"
+                 ]
+                }
+               ]
+              },
+              "width": {
+               "anyOf": [
+                {
+                 "type": "number"
+                },
+                {
+                 "type": "string",
+                 "enum": [
+                  "NaN"
+                 ]
+                },
+                {
+                 "type": "string",
+                 "enum": [
+                  "Infinity"
+                 ]
+                },
+                {
+                 "type": "string",
+                 "enum": [
+                  "-Infinity"
+                 ]
+                }
+               ]
+              },
+              "height": {
+               "anyOf": [
+                {
+                 "type": "number"
+                },
+                {
+                 "type": "string",
+                 "enum": [
+                  "NaN"
+                 ]
+                },
+                {
+                 "type": "string",
+                 "enum": [
+                  "Infinity"
+                 ]
+                },
+                {
+                 "type": "string",
+                 "enum": [
+                  "-Infinity"
+                 ]
+                }
+               ]
+              }
+             },
+             "required": [
+              "x",
+              "y",
+              "width",
+              "height"
+             ],
+             "additionalProperties": false
+            },
+            "on_screen": {
+             "type": "boolean"
+            },
+            "placement": {
+             "type": "string",
+             "enum": [
+              "current_space",
+              "other_space",
+              "full_screen",
+              "unplaced",
+              "unknown"
+             ]
+            }
+           },
+           "required": [
+            "window_id",
+            "title",
+            "bounds",
+            "on_screen",
+            "placement"
+           ],
+           "additionalProperties": false
+          }
+         }
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "tab_index": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "value": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "truncated": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "type",
+     "action",
+     "revision"
+    ],
+    "additionalProperties": false
+   }
+  ]
+ }
+}

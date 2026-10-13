@@ -1,0 +1,45 @@
+syntax = "proto2";
+package ycoding.v5;
+
+import "google/protobuf/descriptor.proto";
+import "ycoding/v5/foundation.proto";
+
+message OperationRange {
+  required uint32 first = 1;
+  required uint32 last = 2;
+}
+message OperationOptions {
+  required uint32 operation_id = 1;
+  required string diagnostic_name = 2;
+  repeated string error_types = 5;
+  repeated PeerRole roles = 6;
+  required ScopeKind scope = 7;
+  required MutationClass mutation = 8;
+  required Settlement settlement = 9;
+  required Paging paging = 10;
+  required Streaming streaming = 11;
+  required Sensitivity sensitivity = 12;
+  repeated FieldSensitivity sensitive_fields = 13;
+}
+extend google.protobuf.FileOptions {
+  optional OperationRange operation_range = 51000;
+}
+extend google.protobuf.MethodOptions {
+  optional OperationOptions operation = 51000;
+}
+message FieldConstraints {
+  optional string integer_min = 1;
+  optional string integer_max = 2;
+  optional uint64 utf16_min = 3;
+  optional uint64 utf16_max = 4;
+  optional uint64 codepoints_min = 5;
+  optional uint64 codepoints_max = 6;
+  optional uint64 utf8_bytes_min = 7;
+  optional uint64 utf8_bytes_max = 8;
+  optional uint64 count_min = 9;
+  optional uint64 count_max = 10;
+  repeated string domain_obligations = 11;
+}
+extend google.protobuf.FieldOptions {
+  optional FieldConstraints constraints = 51000;
+}

@@ -1,0 +1,182 @@
+[
+  {
+    "suite": "parity",
+    "test": "json mode mirrors JSON.stringify for undefined",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "tool_arguments_mirror_json_stringify_for_undefined"
+  },
+  {
+    "suite": "promise",
+    "test": "a budget-consuming value does not starve warnings",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "a_budget_consuming_value_does_not_starve_warnings"
+  },
+  {
+    "suite": "promise",
+    "test": "a fatal program error cancels outstanding work without reporting unhandled rejections",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "a_fatal_program_error_cancels_outstanding_work_without_reporting_unhandled_rejections"
+  },
+  {
+    "suite": "promise",
+    "test": "a fire-and-forget call is interrupted when the program returns",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "fire_and_forget_call_is_interrupted_when_the_program_returns"
+  },
+  {
+    "suite": "promise",
+    "test": "a nested aggregate loser and its members are interrupted at completion",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "a_nested_aggregate_loser_and_its_members_are_interrupted_at_completion"
+  },
+  {
+    "suite": "promise",
+    "test": "a never-awaited failing call preserves the result and reports the rejection",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "never_awaited_failing_call_preserves_the_result_and_reports_the_rejection"
+  },
+  {
+    "suite": "promise",
+    "test": "a non-settling race loser cannot hold the execution to the timeout",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "a_non_settling_race_loser_cannot_hold_the_execution_to_the_timeout"
+  },
+  {
+    "suite": "promise",
+    "test": "a plain value wins over pending promises",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "a_plain_value_wins_over_pending_promises"
+  },
+  {
+    "suite": "promise",
+    "test": "a slower observed sibling is interrupted at completion after failing fast",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "a_slower_observed_sibling_is_interrupted_at_completion_after_failing_fast"
+  },
+  {
+    "suite": "promise",
+    "test": "a timeout during completion cleanup keeps the computed value and warns",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "a_timeout_during_completion_cleanup_keeps_the_computed_value_and_warns"
+  },
+  {
+    "suite": "promise",
+    "test": "a timeout during completion cleanup reports the timeout warning before settled rejections",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "a_cleanup_timeout_warning_precedes_settled_rejection_warnings"
+  },
+  {
+    "suite": "promise",
+    "test": "an un-awaited async function's pending chain is interrupted at the return",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "an_unawaited_async_function_pending_chain_is_interrupted_at_the_return"
+  },
+  {
+    "suite": "promise",
+    "test": "an un-awaited constructed rejection is reported like any unhandled rejection",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "an_unawaited_constructed_rejection_is_reported_like_any_unhandled_rejection"
+  },
+  {
+    "suite": "promise",
+    "test": "an un-awaited tool call starts eagerly, in call order, before any await",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "unawaited_tool_calls_start_eagerly_in_call_order_before_any_await"
+  },
+  {
+    "suite": "promise",
+    "test": "async-function promises remain owned by the execution after the function returns",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "async_function_promises_remain_owned_by_the_execution_after_the_function_returns"
+  },
+  {
+    "suite": "promise",
+    "test": "does not cap live tool-call concurrency",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "live_tool_call_concurrency_is_not_capped"
+  },
+  {
+    "suite": "promise",
+    "test": "exceeding maxToolCalls inside Promise.all is a ToolCallLimitExceeded diagnostic",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "exceeding_max_tool_calls_inside_promise_all_is_a_tool_call_limit_diagnostic"
+  },
+  {
+    "suite": "promise",
+    "test": "fail-fast does not cancel a sibling the program still holds and awaits",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "fail_fast_does_not_cancel_a_sibling_the_program_still_holds_and_awaits"
+  },
+  {
+    "suite": "promise",
+    "test": "first settlement wins and a direct loser is interrupted at completion",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "first_settlement_wins_and_a_direct_loser_is_interrupted_at_completion"
+  },
+  {
+    "suite": "promise",
+    "test": "first tool success wins; failing and losing calls are handled silently",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "first_tool_success_wins_and_failing_and_losing_calls_are_handled_silently"
+  },
+  {
+    "suite": "promise",
+    "test": "invalid returned data cancels pending work",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "invalid_returned_data_cancels_pending_work"
+  },
+  {
+    "suite": "promise",
+    "test": "output truncation bounds warning diagnostics with an in-band marker",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "output_truncation_bounds_warning_diagnostics_with_an_in_band_marker"
+  },
+  {
+    "suite": "promise",
+    "test": "rejects before an earlier slow promise fulfills",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "a_rejection_settles_before_an_earlier_slow_promise_fulfills"
+  },
+  {
+    "suite": "promise",
+    "test": "runs async map callbacks concurrently",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "async_map_callbacks_run_concurrently"
+  },
+  {
+    "suite": "promise",
+    "test": "runs items.map tool calls in parallel",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "items_map_tool_calls_run_in_parallel"
+  },
+  {
+    "suite": "promise",
+    "test": "separately-created aggregate batches overlap before either is awaited",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "separately_created_aggregate_batches_overlap_before_either_is_awaited"
+  },
+  {
+    "suite": "promise",
+    "test": "the execution timeout interrupts in-flight forked fibers",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "the_execution_timeout_interrupts_in_flight_calls"
+  },
+  {
+    "suite": "promise",
+    "test": "the timeout also interrupts calls inside Promise.all",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "the_timeout_also_interrupts_calls_inside_promise_all"
+  },
+  {
+    "suite": "stdlib",
+    "test": "promise-returning string replacers are coerced synchronously",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "promise_returning_string_replacers_are_coerced_synchronously"
+  },
+  {
+    "suite": "stdlib",
+    "test": "the host boundary still serializes JSON forms: results, JSON.stringify, and tool arguments",
+    "file": "code_mode_promise_trace.rs",
+    "rust": "host_boundary_tool_arguments_serialize_dates_and_collections_as_json"
+  }
+]

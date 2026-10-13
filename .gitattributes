@@ -2,3 +2,5 @@ packages/core/migration/**/snapshot.json linguist-generated
 packages/core/src/database/migration.gen.ts linguist-generated
 packages/core/src/**/*.txt text eol=lf
 infra/cloudflare/worker-configuration.d.ts linguist-generated whitespace=-trailing-space
+protocol/ycoding/v5/testdata/manifest.tsv whitespace=-blank-at-eol
+rust/crates/ai/tests/fixtures/*.sse whitespace=-blank-at-eof

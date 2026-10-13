@@ -1,0 +1,13 @@
+[package]
+name = "ycoding-store"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+duckdb.workspace = true
+redb.workspace = true
+rusqlite.workspace = true
+ycoding-schema = { path = "../schema" }

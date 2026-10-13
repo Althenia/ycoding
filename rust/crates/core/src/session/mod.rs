@@ -1,0 +1,61 @@
+pub mod analysis;
+pub mod autonomy;
+pub mod cache_diagnostics;
+pub mod captured_changes;
+pub mod compaction;
+pub mod compaction_constraints;
+pub mod compaction_execution;
+pub mod compaction_gate;
+pub mod compaction_job;
+pub mod compaction_list;
+pub mod compaction_policy;
+pub mod compaction_summary;
+pub mod completion;
+pub mod context_manifest;
+pub mod context_pressure;
+pub mod continuation;
+pub mod diagnostics;
+pub mod execution;
+pub mod helper_generation;
+pub mod history;
+pub mod info;
+pub mod instruction_assembly;
+pub mod instruction_entry;
+pub mod instruction_sources;
+pub mod instruction_state;
+pub(crate) mod js_pattern;
+pub mod lifecycle;
+pub mod list;
+pub mod live_state;
+pub mod log;
+pub mod message_updater;
+pub mod model_history;
+pub mod orchestration;
+pub mod outstanding;
+pub mod pending;
+pub mod prediction;
+pub mod projector;
+pub mod prompt_cache;
+pub mod prompt_generator;
+pub mod provider_request;
+pub mod provider_state;
+mod read_json;
+pub mod removal;
+pub mod retention;
+pub mod revert;
+pub mod run_coordinator;
+pub mod runner;
+pub mod skill_status;
+pub mod snapshot;
+pub mod store;
+pub mod summary_toon;
+pub mod todo;
+pub mod usage;
+pub mod usage_read;
+
+use ycoding_schema::LosslessString;
+use ycoding_store::{KeyPart, tuple_key};
+
+pub(crate) fn key(id: &LosslessString) -> Vec<u8> {
+    tuple_key(&[KeyPart::String(id)])
+}

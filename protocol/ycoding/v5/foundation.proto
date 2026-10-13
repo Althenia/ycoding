@@ -1,0 +1,300 @@
+syntax = "proto2";
+package ycoding.v5;
+
+enum WireLimit {
+  option allow_alias = true;
+  REVISION = 5;
+  CLIENT_FRAME_BYTES = 131072;
+  SERVER_FRAME_BYTES = 1048576;
+  HANDSHAKE_BYTES = 16384;
+  HANDSHAKE_RETAINED_BYTES = 32768;
+  HANDSHAKE_TIMEOUT_MS = 5000;
+  TINY_FRAME_BYTES = 512;
+  INLINE_BODY_BYTES = 65536;
+  BULK_PIECE_BYTES = 65536;
+  BULK_MESSAGE_BYTES = 67108864;
+  BULK_PIECES = 1024;
+  BULK_TRANSFERS = 2;
+  EVENT_BATCH_COUNT = 64;
+  EVENT_BATCH_BYTES = 262144;
+  VALUE_DEPTH = 64;
+  TOTAL_FIELDS = 65536;
+  EVENT_QUEUE_COUNT = 4096;
+  EVENT_QUEUE_BYTES = 4194304;
+  EVENT_WINDOW_BYTES = 1048576;
+  BULK_WINDOW_BYTES = 524288;
+  NORMAL_WINDOW_BYTES = 1048576;
+  NORMAL_QUEUE_BYTES = 131072;
+  TINY_QUEUE_COUNT = 32;
+  TINY_QUEUE_BYTES = 16384;
+  DELIVERY_TIMEOUT_MS = 30000;
+  RELAY_PEER_BYTES = 1048576;
+  RELAY_RETAINED_BYTES = 33554432;
+  RELAY_PEERS = 64;
+  HTTP_STREAMS = 2;
+  PENDING_REQUESTS = 32;
+  SUBSCRIPTIONS = 64;
+  CLIENT_RATE = 120;
+  AGENT_RATE = 500;
+  RATE_WINDOW_MS = 10000;
+  TINY_RATE = 500;
+  TINY_RATE_BYTES = 262144;
+  UPLOAD_BYTES = 20971520;
+  UPLOAD_RETAINED_BYTES = 41943040;
+  UPLOAD_COUNT = 64;
+  UPLOAD_TIMEOUT_MS = 600000;
+}
+
+message Empty {}
+enum CollectionLimit {
+  option allow_alias = true;
+  STATUS_RUNNING_MAX_COUNT = 500;
+  STATUS_ATTENTION_MAX_COUNT = 500;
+  STATUS_OUTSTANDING_MAX_COUNT = 500;
+  STATUS_FAILED_MAX_COUNT = 500;
+  STATUS_DETAILS_MAX_COUNT = 500;
+  COMPLETIONS_ITEMS_MAX_COUNT = 200;
+  SUBSCRIPTION_SNAPSHOT_SESSION_IDS_MAX_COUNT = 64;
+  NOTICES_ADDED_NOTICES_MAX_COUNT = 100;
+  NOTICES_REMOVED_IDS_MAX_COUNT = 100;
+  NOTICES_PRESENT_ITEMS_MAX_COUNT = 100;
+}
+enum CodePointLimit {
+  option allow_alias = true;
+  ATTENTION_DETAIL_TITLE_MAX_CODEPOINTS = 120;
+  ALERT_DETAIL_TITLE_MAX_CODEPOINTS = 120;
+  BLOCKED_TITLE_MAX_CODEPOINTS = 120;
+  COMPLETION_TITLE_MAX_CODEPOINTS = 120;
+}
+enum TextPredicate { NONEMPTY = 1; TRIM_STABLE = 2; NO_CONTROLS_OR_BIDI = 4; }
+enum FieldTextPolicy {
+  option allow_alias = true;
+  ATTENTION_DETAIL_TITLE_TEXT_POLICY = 7;
+  ALERT_DETAIL_TITLE_TEXT_POLICY = 7;
+  BLOCKED_TITLE_TEXT_POLICY = 7;
+  COMPLETION_TITLE_TEXT_POLICY = 7;
+}
+message LosslessString {
+  oneof encoding {
+    string utf8 = 1;
+    bytes utf16_le_units = 2;
+  }
+}
+message Value {
+  oneof kind {
+    Empty null = 1;
+    bool boolean = 2;
+    double number = 3;
+    LosslessString string = 4;
+    bytes bytes = 5;
+    ValueList list = 6;
+    ValueObject object = 7;
+  }
+}
+message ValueList { repeated Value items = 1; }
+message ValueObject { repeated ValueEntry entries = 1; }
+message ValueEntry { required LosslessString key = 1; required Value value = 2; }
+message StringList { repeated LosslessString items = 1; }
+message IdentifierList { repeated string items = 1; }
+message ClearableString { oneof state { Empty clear = 1; LosslessString value = 2; } }
+message ClearableValue { oneof state { Empty clear = 1; Value value = 2; } }
+message ClearableBool { oneof state { Empty clear = 1; bool value = 2; } }
+message ClearableUint64 { oneof state { Empty clear = 1; uint64 value = 2; } }
+message ClearableDouble { oneof state { Empty clear = 1; double value = 2; } }
+
+enum PeerRole { LOCAL_CLIENT = 1; REMOTE_CLIENT = 2; RELAY = 3; AGENT = 4; SERVER = 5; }
+enum SenderMask {
+  option allow_alias = true;
+  HELLO_SENDERS = 11;
+  READY_SENDERS = 20;
+  REQUEST_SENDERS = 7;
+  RESULT_SENDERS = 28;
+  EVENT_BATCH_SENDERS = 28;
+  STREAM_END_SENDERS = 16;
+  PING_SENDERS = 31;
+  PONG_SENDERS = 31;
+  CANCEL_SENDERS = 31;
+  CREDIT_SENDERS = 31;
+  SUBSCRIPTION_SNAPSHOT_SENDERS = 4;
+  PRIORITY_SENDERS = 7;
+  INVENTORY_INVALIDATED_SENDERS = 28;
+  STATUS_SENDERS = 28;
+  COMPLETIONS_SENDERS = 24;
+  BLOCKED_SENDERS = 24;
+  NOTICE_SENDERS = 4;
+  RESYNC_REQUIRED_SENDERS = 28;
+  PROTOCOL_FAILURE_SENDERS = 31;
+  BULK_START_SENDERS = 31;
+  BULK_PIECE_SENDERS = 31;
+  BULK_END_SENDERS = 31;
+}
+enum ScopeKind { MACHINE = 1; LOCATION = 2; SESSION = 3; FORM = 4; WORKSPACE = 5; GLOBAL = 6; }
+message Scope {
+  oneof target {
+    Empty machine = 1;
+    LosslessString location = 2;
+    string session = 3;
+    string form = 4;
+    string workspace = 5;
+    Empty global = 6;
+  }
+}
+enum MutationClass { READ = 1; MUTATION = 2; }
+enum Settlement { COMPLETED = 1; DURABLY_ADMITTED = 2; }
+enum Paging { UNPAGED = 1; CURSOR = 2; OFFSET = 3; }
+enum Streaming { INLINE = 1; TYPED_BULK = 2; ASSET_BULK = 3; EVENTS = 4; }
+enum Sensitivity { PUBLIC = 1; PRIVATE = 2; SECRET = 3; }
+message FieldSensitivity { required string field_path = 1; required Sensitivity sensitivity = 2; }
+message OperationDescriptor {
+  required uint32 operation_id = 1;
+  required string diagnostic_name = 2;
+  required string request_type = 3;
+  required string result_type = 4;
+  repeated string error_types = 5;
+  repeated PeerRole roles = 6;
+  required ScopeKind scope = 7;
+  required MutationClass mutation = 8;
+  required Settlement settlement = 9;
+  required Paging paging = 10;
+  required Streaming streaming = 11;
+  required Sensitivity sensitivity = 12;
+  repeated FieldSensitivity sensitive_fields = 13;
+}
+message ReceiveWindows {
+  required uint64 normal_bytes = 1;
+  required uint64 event_bytes = 2;
+  required uint64 bulk_bytes = 3;
+}
+message Hello {
+  required uint32 revision = 1;
+  required bytes contract_digest = 2;
+  required PeerRole role = 3;
+  required ReceiveWindows receive_windows = 4;
+}
+message Ready {
+  required uint32 revision = 1;
+  required bytes contract_digest = 2;
+  required PeerRole role = 3;
+  required ReceiveWindows receive_windows = 4;
+  required string source_epoch = 5;
+  required string connection_epoch = 6;
+}
+message Request {
+  required string request_id = 1;
+  required uint32 operation_id = 2;
+  required Scope scope = 3;
+  required bytes payload = 4;
+}
+message TypedPayload { required string type_name = 1; required bytes payload = 2; }
+message Result {
+  required string request_id = 1;
+  required uint32 operation_id = 2;
+  required Settlement settlement = 3;
+  oneof outcome { TypedPayload success = 4; TypedPayload error = 5; }
+}
+message DurablePosition {
+  required string aggregate_id = 1;
+  required uint64 sequence = 2;
+  required uint32 version = 3;
+}
+message EventRecord {
+  required string event_id = 1;
+  required int64 created_ms = 2;
+  optional DurablePosition durable = 3;
+  required TypedPayload event = 4;
+}
+message EventBatch {
+  required string subscription_id = 1;
+  required Scope scope = 2;
+  required string source_epoch = 3;
+  repeated EventRecord events = 4;
+}
+message StreamEnd { required string subscription_id = 1; }
+enum LedgerClass { NORMAL = 1; EVENT = 2; BULK = 3; TINY = 4; }
+message Ping { required uint64 id = 1; }
+message Pong { required uint64 id = 1; }
+message Cancel { oneof target { string request_id = 1; string transfer_id = 2; } }
+message Credit { required LedgerClass ledger = 1; required uint64 consumed_through = 2; }
+message SubscriptionSnapshot { required string client_id = 1; repeated string session_ids = 2; }
+enum PriorityMode { INTERACTIVE = 1; BACKGROUND = 2; }
+message Priority { optional string client_id = 1; required PriorityMode mode = 2; }
+message InventoryInvalidated {}
+enum AttentionNeed { PERMISSION = 1; QUESTION = 2; REVIEW = 3; FAILED = 4; BLOCKED = 5; }
+message AttentionDetail { required string session_id = 1; optional LosslessString title = 2; optional AttentionNeed need = 3; }
+message AttentionList { repeated AttentionDetail items = 1; }
+message Status {
+  repeated string running = 1;
+  repeated string attention = 2;
+  optional IdentifierList outstanding = 3;
+  optional IdentifierList failed = 4;
+  optional AttentionList details = 5;
+}
+message Completion {
+  required string id = 1;
+  required uint64 sequence = 2;
+  required int64 created_ms = 3;
+  required string session_id = 4;
+  optional LosslessString title = 5;
+}
+message Completions { repeated Completion items = 1; required bool more = 2; }
+message Blocked { required string session_id = 1; optional LosslessString title = 2; }
+enum NoticeCategory { APPROVAL_REQUESTED = 1; AGENT_COMPLETED = 2; }
+message NoticeRecord {
+  required string id = 1;
+  required NoticeCategory category = 2;
+  required string session_id = 3;
+  required int64 created_ms = 4;
+}
+message AlertDetail { optional LosslessString title = 1; optional AttentionNeed need = 2; optional bool repeat = 3; }
+message NoticePresentation { required NoticeRecord notice = 1; optional AlertDetail detail = 2; }
+message Offline { required int64 at_ms = 1; }
+message Presentation { oneof kind { NoticePresentation notice = 1; Offline offline = 2; } }
+message NoticesAdded { repeated NoticeRecord notices = 1; required uint64 total = 2; }
+message NoticesRemoved { repeated string ids = 1; required uint64 total = 2; }
+message NoticesPresent { repeated Presentation items = 1; }
+message Notice {
+  oneof kind {
+    NoticesAdded added = 1; NoticesRemoved removed = 2; Empty cleared = 3;
+    Empty unavailable = 4; Offline offline = 5; NoticesPresent present = 6;
+  }
+}
+message ResyncRequired { required Scope scope = 1; required string source_epoch = 2; optional string message_id = 3; }
+enum FailureCategory { MALFORMED = 1; INCOMPATIBLE = 2; LIMIT = 3; DIRECTION = 4; EPOCH = 5; }
+message ProtocolFailure { required FailureCategory category = 1; }
+message Control {
+  oneof kind {
+    Ping ping = 1; Pong pong = 2; Cancel cancel = 3; Credit credit = 4;
+    SubscriptionSnapshot subscription_snapshot = 5; Priority priority = 6;
+    InventoryInvalidated inventory_invalidated = 7; Status status = 8;
+    Completions completions = 9; Blocked blocked = 10; Notice notice = 11;
+    ResyncRequired resync_required = 12; ProtocolFailure failure = 13;
+  }
+}
+enum ContentKind { TYPED_MESSAGE = 1; ASSET = 2; }
+message BulkStart {
+  required string request_id = 1;
+  required string transfer_id = 2;
+  required uint32 operation_id = 3;
+  required string type_name = 4;
+  required ContentKind content_kind = 5;
+  required uint64 byte_count = 6;
+  required uint32 chunk_count = 7;
+}
+message BulkPiece { required string transfer_id = 1; required uint32 index = 2; required uint64 offset = 3; required bytes data = 4; }
+message BulkEnd {
+  required string transfer_id = 1;
+  required uint64 byte_count = 2;
+  oneof outcome { Empty success = 3; TypedPayload error = 4; }
+}
+message Frame {
+  required uint32 revision = 1;
+  optional string connection_epoch = 2;
+  optional LedgerClass ledger = 3;
+  optional uint64 delivery_ordinal = 4;
+  optional uint64 tiny_consumed_through = 5;
+  oneof body {
+    Hello hello = 10; Ready ready = 11; Request request = 12; Result result = 13;
+    EventBatch event_batch = 14; Control control = 15; BulkStart bulk_start = 16;
+    BulkPiece bulk_piece = 17; BulkEnd bulk_end = 18; StreamEnd stream_end = 19;
+  }
+}

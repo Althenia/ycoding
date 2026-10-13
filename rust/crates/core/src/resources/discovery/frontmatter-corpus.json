@@ -1,0 +1,1276 @@
+[
+  {
+    "source": "packages/core/test/config/agent.test.ts",
+    "input": "---\nmodel:\n  providerID: openrouter\n  model: openai/gpt-5\ndescription: Markdown description\nrequest:\n  body:\n    temperature: 0.5\npermissions:\n  - action: edit\n    resource: \"*\"\n    effect: deny\n---\nReview carefully.",
+    "result": {
+      "data": {
+        "model": {
+          "providerID": "openrouter",
+          "model": "openai/gpt-5"
+        },
+        "description": "Markdown description",
+        "request": {
+          "body": {
+            "temperature": 0.5
+          }
+        },
+        "permissions": [
+          {
+            "action": "edit",
+            "resource": "*",
+            "effect": "deny"
+          }
+        ]
+      },
+      "content": "Review carefully."
+    },
+    "repeat": {
+      "data": {
+        "model": {
+          "providerID": "openrouter",
+          "model": "openai/gpt-5"
+        },
+        "description": "Markdown description",
+        "request": {
+          "body": {
+            "temperature": 0.5
+          }
+        },
+        "permissions": [
+          {
+            "action": "edit",
+            "resource": "*",
+            "effect": "deny"
+          }
+        ]
+      },
+      "content": "Review carefully."
+    }
+  },
+  {
+    "source": "packages/core/test/config/agent.test.ts",
+    "input": "---\nrequest:\n  headers:\n    x-agent: native\n  body:\n    effort: high\npermissions:\n  - action: edit\n    resource: \"*\"\n    effect: deny\n---\nUse current fields.",
+    "result": {
+      "data": {
+        "request": {
+          "headers": {
+            "x-agent": "native"
+          },
+          "body": {
+            "effort": "high"
+          }
+        },
+        "permissions": [
+          {
+            "action": "edit",
+            "resource": "*",
+            "effect": "deny"
+          }
+        ]
+      },
+      "content": "Use current fields."
+    },
+    "repeat": {
+      "data": {
+        "request": {
+          "headers": {
+            "x-agent": "native"
+          },
+          "body": {
+            "effort": "high"
+          }
+        },
+        "permissions": [
+          {
+            "action": "edit",
+            "resource": "*",
+            "effect": "deny"
+          }
+        ]
+      },
+      "content": "Use current fields."
+    }
+  },
+  {
+    "source": "packages/core/test/config/agent.test.ts",
+    "input": "---\ndisabled: true\n---\nDisabled",
+    "result": {
+      "data": {
+        "disabled": true
+      },
+      "content": "Disabled"
+    },
+    "repeat": {
+      "data": {
+        "disabled": true
+      },
+      "content": "Disabled"
+    }
+  },
+  {
+    "source": "packages/core/test/config/command.test.ts",
+    "input": "---\ndescription: File review\nagent: reviewer\nmodel:\n  providerID: anthropic\n  model: claude\n  variant: high\n  profile: Work\nsubtask: true\n---\nReview files",
+    "result": {
+      "data": {
+        "description": "File review",
+        "agent": "reviewer",
+        "model": {
+          "providerID": "anthropic",
+          "model": "claude",
+          "variant": "high",
+          "profile": "Work"
+        },
+        "subtask": true
+      },
+      "content": "Review files"
+    },
+    "repeat": {
+      "data": {
+        "description": "File review",
+        "agent": "reviewer",
+        "model": {
+          "providerID": "anthropic",
+          "model": "claude",
+          "variant": "high",
+          "profile": "Work"
+        },
+        "subtask": true
+      },
+      "content": "Review files"
+    }
+  },
+  {
+    "source": "packages/core/test/skill.test.ts",
+    "input": "---\nname: fixture\ndescription: fixture\n---\n# fixture",
+    "result": {
+      "data": {
+        "name": "fixture",
+        "description": "fixture"
+      },
+      "content": "# fixture"
+    },
+    "repeat": {
+      "data": {
+        "name": "fixture",
+        "description": "fixture"
+      },
+      "content": "# fixture"
+    }
+  },
+  {
+    "source": "packages/core/test/skill.test.ts",
+    "input": "---\nname: manual\ndescription: Manual only\nmetadata:\n  ycoding/slash: true\n  ycoding/autoinvoke: false\n---\n# manual",
+    "result": {
+      "data": {
+        "name": "manual",
+        "description": "Manual only",
+        "metadata": {
+          "ycoding/slash": true,
+          "ycoding/autoinvoke": false
+        }
+      },
+      "content": "# manual"
+    },
+    "repeat": {
+      "data": {
+        "name": "manual",
+        "description": "Manual only",
+        "metadata": {
+          "ycoding/slash": true,
+          "ycoding/autoinvoke": false
+        }
+      },
+      "content": "# manual"
+    }
+  },
+  {
+    "source": "packages/core/test/skill.test.ts",
+    "input": "---\nname: manual\nmetadata:\n  ycoding/conflicts:\n    skills: [\" other \", other]\n    instructions: [\" core/instructions \", core/instructions]\n---\n# manual",
+    "result": {
+      "data": {
+        "name": "manual",
+        "metadata": {
+          "ycoding/conflicts": {
+            "skills": [" other ", "other"],
+            "instructions": [" core/instructions ", "core/instructions"]
+          }
+        }
+      },
+      "content": "# manual"
+    },
+    "repeat": {
+      "data": {
+        "name": "manual",
+        "metadata": {
+          "ycoding/conflicts": {
+            "skills": [" other ", "other"],
+            "instructions": [" core/instructions ", "core/instructions"]
+          }
+        }
+      },
+      "content": "# manual"
+    }
+  },
+  {
+    "source": "packages/core/test/skill.test.ts",
+    "input": "---\nname: manual\nmetadata:\n  ycoding/conflicts:\n    skills: [other, 1]\n---\n# manual",
+    "result": {
+      "data": {
+        "name": "manual",
+        "metadata": {
+          "ycoding/conflicts": {
+            "skills": ["other", 1]
+          }
+        }
+      },
+      "content": "# manual"
+    },
+    "repeat": {
+      "data": {
+        "name": "manual",
+        "metadata": {
+          "ycoding/conflicts": {
+            "skills": ["other", 1]
+          }
+        }
+      },
+      "content": "# manual"
+    }
+  },
+  {
+    "source": "packages/core/test/skill.test.ts",
+    "input": "---\nname: fixture\nmetadata:\n  ycoding/conflicts:\n    fixture: [fixture]\n---\n# fixture",
+    "result": {
+      "data": {
+        "name": "fixture",
+        "metadata": {
+          "ycoding/conflicts": {
+            "fixture": ["fixture"]
+          }
+        }
+      },
+      "content": "# fixture"
+    },
+    "repeat": {
+      "data": {
+        "name": "fixture",
+        "metadata": {
+          "ycoding/conflicts": {
+            "fixture": ["fixture"]
+          }
+        }
+      },
+      "content": "# fixture"
+    }
+  },
+  {
+    "source": "packages/core/test/skill.test.ts",
+    "input": "---\nslash: true\n---\n# foo",
+    "result": {
+      "data": {
+        "slash": true
+      },
+      "content": "# foo"
+    },
+    "repeat": {
+      "data": {
+        "slash": true
+      },
+      "content": "# foo"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "",
+    "result": {
+      "data": {},
+      "content": ""
+    },
+    "repeat": {
+      "data": {},
+      "content": ""
+    }
+  },
+  {
+    "source": "edge",
+    "input": "Plain body\n",
+    "result": {
+      "data": {},
+      "content": "Plain body\n"
+    },
+    "repeat": {
+      "data": {},
+      "content": "Plain body\n"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\n---\nBody",
+    "result": {
+      "data": {},
+      "content": "Body"
+    },
+    "repeat": {
+      "data": {},
+      "content": "Body"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\n# comment\n---\nBody",
+    "result": {
+      "data": {},
+      "content": "Body"
+    },
+    "repeat": {
+      "data": {},
+      "content": "Body"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\nname: x\n",
+    "result": {
+      "data": {
+        "name": "x"
+      },
+      "content": ""
+    },
+    "repeat": {
+      "data": {
+        "name": "x"
+      },
+      "content": ""
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---yaml\nname: x\n---\nBody",
+    "result": {
+      "data": {
+        "name": "x"
+      },
+      "content": "Body"
+    },
+    "repeat": {
+      "data": {
+        "name": "x"
+      },
+      "content": "Body"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---json\n{\"name\":\"x\"}\n---\nBody",
+    "result": {
+      "data": {
+        "name": "x"
+      },
+      "content": "Body"
+    },
+    "repeat": {
+      "data": {
+        "name": "x"
+      },
+      "content": "Body"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\r\nname: x\r\n---\r\nBody\r\n",
+    "result": {
+      "data": {
+        "name": "x"
+      },
+      "content": "Body\r\n"
+    },
+    "repeat": {
+      "data": {
+        "name": "x"
+      },
+      "content": "Body\r\n"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "----\nname: x\n---\nBody",
+    "result": {
+      "data": {},
+      "content": "----\nname: x\n---\nBody"
+    },
+    "repeat": {
+      "data": {},
+      "content": "----\nname: x\n---\nBody"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "﻿---\nname: x\n---\nBody",
+    "result": {
+      "data": {
+        "name": "x"
+      },
+      "content": "Body"
+    },
+    "repeat": {
+      "data": {
+        "name": "x"
+      },
+      "content": "Body"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\nname: x\n---suffix\nBody",
+    "result": {
+      "data": {
+        "name": "x"
+      },
+      "content": "suffix\nBody"
+    },
+    "repeat": {
+      "data": {
+        "name": "x"
+      },
+      "content": "suffix\nBody"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\nname: x\n...\nname: y\n---\nBody",
+    "result": {
+      "data": {},
+      "content": "---\nname: x\n...\nname: y\n---\nBody"
+    },
+    "repeat": {
+      "data": {},
+      "content": "---\nname: x\n...\nname: y\n---\nBody"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\nname: x\n---\nname: y\n---\nBody",
+    "result": {
+      "data": {
+        "name": "x"
+      },
+      "content": "name: y\n---\nBody"
+    },
+    "repeat": {
+      "data": {
+        "name": "x"
+      },
+      "content": "name: y\n---\nBody"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\nname: x\nname: y\n---\nBody",
+    "result": {
+      "data": {},
+      "content": "---\nname: x\nname: y\n---\nBody"
+    },
+    "repeat": {
+      "data": {},
+      "content": "---\nname: x\nname: y\n---\nBody"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\nname: [broken\n---\nBody",
+    "result": {
+      "data": {},
+      "content": "---\nname: [broken\n---\nBody"
+    },
+    "repeat": {
+      "data": {},
+      "content": "---\nname: [broken\n---\nBody"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\nname: a: b\n---\nBody",
+    "result": {
+      "data": {
+        "name": "a: b"
+      },
+      "content": "Body"
+    },
+    "repeat": {
+      "data": {},
+      "content": "---\nname: a: b\n---\nBody"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\ndescription: https://example.test: details\n---\nBody",
+    "result": {
+      "data": {
+        "description": "https://example.test: details"
+      },
+      "content": "Body"
+    },
+    "repeat": {
+      "data": {},
+      "content": "---\ndescription: https://example.test: details\n---\nBody"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\nflags: [yes, Yes, YES, no, No, NO, on, On, ON, off, Off, OFF, true, True, TRUE, false, False, FALSE]\n---\nBody",
+    "result": {
+      "data": {
+        "flags": [
+          "yes",
+          "Yes",
+          "YES",
+          "no",
+          "No",
+          "NO",
+          "on",
+          "On",
+          "ON",
+          "off",
+          "Off",
+          "OFF",
+          true,
+          true,
+          true,
+          false,
+          false,
+          false
+        ]
+      },
+      "content": "Body"
+    },
+    "repeat": {
+      "data": {
+        "flags": [
+          "yes",
+          "Yes",
+          "YES",
+          "no",
+          "No",
+          "NO",
+          "on",
+          "On",
+          "ON",
+          "off",
+          "Off",
+          "OFF",
+          true,
+          true,
+          true,
+          false,
+          false,
+          false
+        ]
+      },
+      "content": "Body"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\nnumbers: [077, 078, 0o77, 0b101, 0xFF, +077, -077, 1_000, 1:20:30, 1:20.5, 1e3, 1.e3, .5, +.inf, -.Inf, .nan, -0]\n---\nBody",
+    "result": {
+      "data": {
+        "numbers": [
+          63,
+          "078",
+          "0o77",
+          5,
+          255,
+          63,
+          -63,
+          1000,
+          4830,
+          80.5,
+          1000,
+          1000,
+          0.5,
+          {
+            "$type": "number",
+            "value": "Infinity"
+          },
+          {
+            "$type": "number",
+            "value": "-Infinity"
+          },
+          {
+            "$type": "number",
+            "value": "NaN"
+          },
+          0
+        ]
+      },
+      "content": "Body"
+    },
+    "repeat": {
+      "data": {
+        "numbers": [
+          63,
+          "078",
+          "0o77",
+          5,
+          255,
+          63,
+          -63,
+          1000,
+          4830,
+          80.5,
+          1000,
+          1000,
+          0.5,
+          {
+            "$type": "number",
+            "value": "Infinity"
+          },
+          {
+            "$type": "number",
+            "value": "-Infinity"
+          },
+          {
+            "$type": "number",
+            "value": "NaN"
+          },
+          0
+        ]
+      },
+      "content": "Body"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\nnulls: [null, Null, NULL, ~, \"null\", \"\", ]\nempty:\n---\nBody",
+    "result": {
+      "data": {
+        "nulls": [null, null, null, null, "null", ""],
+        "empty": null
+      },
+      "content": "Body"
+    },
+    "repeat": {
+      "data": {
+        "nulls": [null, null, null, null, "null", ""],
+        "empty": null
+      },
+      "content": "Body"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\ndefaults: &base {name: first, description: base}\nagent: {<<: *base, name: override}\n---\nBody",
+    "result": {
+      "data": {
+        "defaults": {
+          "name": "first",
+          "description": "base"
+        },
+        "agent": {
+          "name": "override",
+          "description": "base"
+        }
+      },
+      "content": "Body"
+    },
+    "repeat": {
+      "data": {
+        "defaults": {
+          "name": "first",
+          "description": "base"
+        },
+        "agent": {
+          "name": "override",
+          "description": "base"
+        }
+      },
+      "content": "Body"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\na: &a {x: one, y: first}\nb: &b {x: two, z: second}\nc: {<<: [*a, *b], y: override}\n---\nBody",
+    "result": {
+      "data": {
+        "a": {
+          "x": "one",
+          "y": "first"
+        },
+        "b": {
+          "x": "two",
+          "z": "second"
+        },
+        "c": {
+          "x": "one",
+          "y": "override",
+          "z": "second"
+        }
+      },
+      "content": "Body"
+    },
+    "repeat": {
+      "data": {
+        "a": {
+          "x": "one",
+          "y": "first"
+        },
+        "b": {
+          "x": "two",
+          "z": "second"
+        },
+        "c": {
+          "x": "one",
+          "y": "override",
+          "z": "second"
+        }
+      },
+      "content": "Body"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\na: {<<: 1}\n---\nBody",
+    "result": {
+      "data": {
+        "a": "{<<: 1}"
+      },
+      "content": "Body"
+    },
+    "repeat": {
+      "data": {},
+      "content": "---\na: {<<: 1}\n---\nBody"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\ntimestamps: [2020-01-02, 2020-1-2T3:04:05.12345+02:30, 2020-01-02 03:04:05, \"2020-01-02\"]\n---\nBody",
+    "result": {
+      "data": {
+        "timestamps": [
+          {
+            "$type": "date",
+            "value": "2020-01-02T00:00:00.000Z"
+          },
+          {
+            "$type": "date",
+            "value": "2020-01-02T00:34:05.123Z"
+          },
+          {
+            "$type": "date",
+            "value": "2020-01-02T03:04:05.000Z"
+          },
+          "2020-01-02"
+        ]
+      },
+      "content": "Body"
+    },
+    "repeat": {
+      "data": {
+        "timestamps": [
+          {
+            "$type": "date",
+            "value": "2020-01-02T00:00:00.000Z"
+          },
+          {
+            "$type": "date",
+            "value": "2020-01-02T00:34:05.123Z"
+          },
+          {
+            "$type": "date",
+            "value": "2020-01-02T03:04:05.000Z"
+          },
+          "2020-01-02"
+        ]
+      },
+      "content": "Body"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\nname: !!str 077\nother: !!int '077'\nflag: !!bool 'TRUE'\n---\nBody",
+    "result": {
+      "data": {
+        "name": "077",
+        "other": 63,
+        "flag": true
+      },
+      "content": "Body"
+    },
+    "repeat": {
+      "data": {
+        "name": "077",
+        "other": 63,
+        "flag": true
+      },
+      "content": "Body"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\nname: !!unknown value\n---\nBody",
+    "result": {
+      "data": {},
+      "content": "---\nname: !!unknown value\n---\nBody"
+    },
+    "repeat": {
+      "data": {},
+      "content": "---\nname: !!unknown value\n---\nBody"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\nbytes: !!binary aGVsbG8=\n---\nBody",
+    "result": {
+      "data": {
+        "bytes": {
+          "$type": "binary",
+          "value": [104, 101, 108, 108, 111]
+        }
+      },
+      "content": "Body"
+    },
+    "repeat": {
+      "data": {
+        "bytes": {
+          "$type": "binary",
+          "value": [104, 101, 108, 108, 111]
+        }
+      },
+      "content": "Body"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\nordered: !!omap [{a: 1}, {b: 2}]\npairs: !!pairs [{a: 1}, {a: 2}]\nset: !!set {one: null, two: null}\n---\nBody",
+    "result": {
+      "data": {
+        "ordered": [
+          {
+            "a": 1
+          },
+          {
+            "b": 2
+          }
+        ],
+        "pairs": [
+          ["a", 1],
+          ["a", 2]
+        ],
+        "set": {
+          "one": null,
+          "two": null
+        }
+      },
+      "content": "Body"
+    },
+    "repeat": {
+      "data": {
+        "ordered": [
+          {
+            "a": 1
+          },
+          {
+            "b": 2
+          }
+        ],
+        "pairs": [
+          ["a", 1],
+          ["a", 2]
+        ],
+        "set": {
+          "one": null,
+          "two": null
+        }
+      },
+      "content": "Body"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\nname: >-\n  folded\n  words\ndescription: |+\n  literal\n\n---\nBody",
+    "result": {
+      "data": {
+        "name": "folded words",
+        "description": "literal\n"
+      },
+      "content": "Body"
+    },
+    "repeat": {
+      "data": {
+        "name": "folded words",
+        "description": "literal\n"
+      },
+      "content": "Body"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\nname: *missing\n---\nBody",
+    "result": {
+      "data": {},
+      "content": "---\nname: *missing\n---\nBody"
+    },
+    "repeat": {
+      "data": {},
+      "content": "---\nname: *missing\n---\nBody"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\n? [one, two]\n: value\n---\nBody",
+    "result": {
+      "data": {
+        "one,two": "value"
+      },
+      "content": "Body"
+    },
+    "repeat": {
+      "data": {
+        "one,two": "value"
+      },
+      "content": "Body"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\n__proto__: {inherited: true}\nname: prototype\n---\nBody",
+    "result": {
+      "data": {
+        "__proto__": {
+          "inherited": true
+        },
+        "name": "prototype"
+      },
+      "content": "Body"
+    },
+    "repeat": {
+      "data": {
+        "__proto__": {
+          "inherited": true
+        },
+        "name": "prototype"
+      },
+      "content": "Body"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\n%YAML 1.1\n---\nname: x\n---\nBody",
+    "result": {
+      "data": {},
+      "content": "---\n%YAML 1.1\n---\nname: x\n---\nBody"
+    },
+    "repeat": {
+      "data": {},
+      "content": "---\n%YAML 1.1\n---\nname: x\n---\nBody"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\nname: \"\\uD800\"\ndescription: \"\\uD83D\\uDE00\"\n---\nBody",
+    "result": {
+      "data": {
+        "name": "\ud800",
+        "description": "😀"
+      },
+      "content": "Body"
+    },
+    "repeat": {
+      "data": {
+        "name": "\ud800",
+        "description": "😀"
+      },
+      "content": "Body"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\nnumbers: [1_:20, 1:2_0, 1_:20.5, -0.0, 012_, 0x_FF, 0b_10]\n---\nBody",
+    "result": {
+      "data": {
+        "numbers": [
+          80,
+          "1:2_0",
+          80.5,
+          {
+            "$type": "number",
+            "value": "-0"
+          },
+          "012_",
+          255,
+          2
+        ]
+      },
+      "content": "Body"
+    },
+    "repeat": {
+      "data": {
+        "numbers": [
+          80,
+          "1:2_0",
+          80.5,
+          {
+            "$type": "number",
+            "value": "-0"
+          },
+          "012_",
+          255,
+          2
+        ]
+      },
+      "content": "Body"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\ntimestamps: [2020-00-00, 0099-01-01, 9999-99-99]\n---\nBody",
+    "result": {
+      "data": {
+        "timestamps": [
+          {
+            "$type": "date",
+            "value": "2019-11-30T00:00:00.000Z"
+          },
+          {
+            "$type": "date",
+            "value": "1999-01-01T00:00:00.000Z"
+          },
+          {
+            "$type": "date",
+            "value": "+010007-06-07T00:00:00.000Z"
+          }
+        ]
+      },
+      "content": "Body"
+    },
+    "repeat": {
+      "data": {
+        "timestamps": [
+          {
+            "$type": "date",
+            "value": "2019-11-30T00:00:00.000Z"
+          },
+          {
+            "$type": "date",
+            "value": "1999-01-01T00:00:00.000Z"
+          },
+          {
+            "$type": "date",
+            "value": "+010007-06-07T00:00:00.000Z"
+          }
+        ]
+      },
+      "content": "Body"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\nbytes: !!binary ''\n---\nBody",
+    "result": {
+      "data": {
+        "bytes": {
+          "$type": "binary",
+          "value": [0, 0, 0]
+        }
+      },
+      "content": "Body"
+    },
+    "repeat": {
+      "data": {
+        "bytes": {
+          "$type": "binary",
+          "value": [0, 0, 0]
+        }
+      },
+      "content": "Body"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\nbytes: !!binary a\n---\nBody",
+    "result": {
+      "data": {},
+      "content": "---\nbytes: !!binary a\n---\nBody"
+    },
+    "repeat": {
+      "data": {},
+      "content": "---\nbytes: !!binary a\n---\nBody"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\nbytes: !!binary a===\n---\nBody",
+    "result": {
+      "data": {
+        "bytes": {
+          "$type": "binary",
+          "value": []
+        }
+      },
+      "content": "Body"
+    },
+    "repeat": {
+      "data": {
+        "bytes": {
+          "$type": "binary",
+          "value": []
+        }
+      },
+      "content": "Body"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\n? [.nan, .inf, -.inf, -0.0]\n: value\n---\nBody",
+    "result": {
+      "data": {
+        "NaN,Infinity,-Infinity,0": "value"
+      },
+      "content": "Body"
+    },
+    "repeat": {
+      "data": {
+        "NaN,Infinity,-Infinity,0": "value"
+      },
+      "content": "Body"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\n- array\n- frontmatter\n---\nBody",
+    "result": {
+      "data": ["array", "frontmatter"],
+      "content": "Body"
+    },
+    "repeat": {
+      "data": ["array", "frontmatter"],
+      "content": "Body"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\nmetadata:\n  ycoding/slash: \" TRUE \"\n  ycoding/autoinvoke: \"false\"\n---\nBody",
+    "result": {
+      "data": {
+        "metadata": {
+          "ycoding/slash": " TRUE ",
+          "ycoding/autoinvoke": "false"
+        }
+      },
+      "content": "Body"
+    },
+    "repeat": {
+      "data": {
+        "metadata": {
+          "ycoding/slash": " TRUE ",
+          "ycoding/autoinvoke": "false"
+        }
+      },
+      "content": "Body"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\nname: manual\nmetadata:\n  ycoding/conflicts:\n    skills: [\"\"]\n---\n# manual",
+    "result": {
+      "data": {
+        "name": "manual",
+        "metadata": {
+          "ycoding/conflicts": {
+            "skills": [""]
+          }
+        }
+      },
+      "content": "# manual"
+    },
+    "repeat": {
+      "data": {
+        "name": "manual",
+        "metadata": {
+          "ycoding/conflicts": {
+            "skills": [""]
+          }
+        }
+      },
+      "content": "# manual"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\nname: manual\nmetadata:\n  ycoding/conflicts:\n    skills: [\"  \"]\n---\n# manual",
+    "result": {
+      "data": {
+        "name": "manual",
+        "metadata": {
+          "ycoding/conflicts": {
+            "skills": ["  "]
+          }
+        }
+      },
+      "content": "# manual"
+    },
+    "repeat": {
+      "data": {
+        "name": "manual",
+        "metadata": {
+          "ycoding/conflicts": {
+            "skills": ["  "]
+          }
+        }
+      },
+      "content": "# manual"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\nname: manual\nmetadata:\n  ycoding/conflicts:\n    instructions: [\"\"]\n---\n# manual",
+    "result": {
+      "data": {
+        "name": "manual",
+        "metadata": {
+          "ycoding/conflicts": {
+            "instructions": [""]
+          }
+        }
+      },
+      "content": "# manual"
+    },
+    "repeat": {
+      "data": {
+        "name": "manual",
+        "metadata": {
+          "ycoding/conflicts": {
+            "instructions": [""]
+          }
+        }
+      },
+      "content": "# manual"
+    }
+  },
+  {
+    "source": "edge",
+    "input": "---\nname: manual\nmetadata:\n  ycoding/conflicts:\n    instructions: [\"  \"]\n---\n# manual",
+    "result": {
+      "data": {
+        "name": "manual",
+        "metadata": {
+          "ycoding/conflicts": {
+            "instructions": ["  "]
+          }
+        }
+      },
+      "content": "# manual"
+    },
+    "repeat": {
+      "data": {
+        "name": "manual",
+        "metadata": {
+          "ycoding/conflicts": {
+            "instructions": ["  "]
+          }
+        }
+      },
+      "content": "# manual"
+    }
+  }
+]

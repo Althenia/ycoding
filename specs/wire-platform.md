@@ -1,0 +1,47 @@
+# Revision 5 platform operations
+
+`protocol/ycoding/v5/platform.proto` defines 53 typed operations covering the browser, isolatedBrowser, keepAwake, fs, vcs, projectCopy, pty, shell, health, server, debug and remote Protocol groups. Together with the two excluded native upgrade endpoints, this is exactly the 55-member baseline manifest slice. Service declarations describe binary WebSocket operation descriptors, not gRPC servers. Generated messages and descriptors do not implement dispatch, authorization or domain conversion.
+
+## Operation IDs and dispositions
+
+IDs are explicit, permanent allocations from the platform range 3000–3999. No other IDs are allocated or reserved by this contract.
+
+| Group           | Typed operation ID table                                                                                                                 |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| browser         | action=3000; close=3001; control=3002; forget=3003; observe=3004; open=3005; release=3006; start=3007; status=3008; stop=3009; tabs=3010 |
+| debug           | location=3011; location.evict=3012                                                                                                       |
+| fs              | find=3013; list=3014; read=3015                                                                                                          |
+| health          | get=3016; stop=3017                                                                                                                      |
+| isolatedBrowser | action=3018; control=3019; observe=3020; start=3021; status=3022; stop=3023; tabs=3024                                                   |
+| keepAwake       | get=3025; set=3026                                                                                                                       |
+| projectCopy     | create=3027; refresh=3028; remove=3029                                                                                                   |
+| pty             | connectToken=3030; control=3031; create=3032; get=3033; list=3034; remove=3035; update=3036                                              |
+| remote          | get=3037; set=3038                                                                                                                       |
+| server          | get=3039                                                                                                                                 |
+| shell           | create=3040; get=3041; list=3042; output=3043; remove=3044; timeout=3045                                                                 |
+| telemetry       | append=3046; consent.get=3047; consent.set=3048; list=3049                                                                               |
+| vcs             | branch=3050; diff=3051; status=3052                                                                                                      |
+
+`browser.connect` and `pty.connect` have EXTERNAL disposition and no application operation ID. Their Chrome-origin first-frame authentication and single-use ticketed PTY WebSocket contracts remain native external boundaries. `pty.connectToken` is a typed issuance operation; its request retains the source's `x-ycoding-ticket: "1"` marker as a closed `headers.x_ycoding_ticket` field, alongside Location, ownership, generation, access and fence inputs.
+
+`fs.read` has STREAM disposition with ASSET_BULK delivery. Its explicit `params.path` comes from the `/api/fs/read/*` wildcard and names the Protocol source owner as a domain obligation. The Location query remains explicit. Its typed result contains `mime` and `byteCount` metadata, corresponding to the existing raw handler's content type and byte length. The content is absent from the Result and travels through the foundation's BulkStart/BulkPiece/BulkEnd asset body. The additional authenticated browser HTTP asset surface is backend-owned; it does not replace this typed operation.
+
+`health.get`, `health.stop` and `server.get` preserve their live Protocol shapes. The authenticated `GET /health` bootstrap/readiness contract is a separate backend-owned HTTP surface, not an additional operation in this manifest slice. Shutdown retains the exact target instance identity from `ServiceStatus.StopRequest`.
+
+## Shapes, delivery and validation
+
+Requests retain distinct params, query, payload and explicitly declared header messages. Named successes retain their source declaration association; anonymous results retain their source fields and Location envelopes. Empty successes use explicit messages. Optional collections use optional wrapper messages so absent and present-empty remain distinct. Unrestricted strings and map keys use LosslessString. Deliberately open shell metadata values use Value; typed requests, results and errors are not JSON encoded in bytes.
+
+Integer fields use int64 or uint64 according to the source's numeric domain, including JavaScript safe-integer and source bounds. Finite-number fields preserve fractional values as double, including shell timestamps and exit values; they are not coerced to integers. Browser document generations, observation revisions, PTY generation/control fences, output byte offsets and input bounds retain their source constraints. Every descriptor includes endpoint-declared errors plus middleware-inherited UnauthorizedError and InvalidRequestError from `shared.proto`.
+
+Browser and isolated-browser controls use Session scope. Machine state, health, server URLs, telemetry and connector controls use Machine scope. Filesystem, VCS, project-copy, PTY, shell and location eviction use Location scope; `debug.location` lists loaded locations at Machine scope. Keep-awake and telemetry consent descriptors additionally permit REMOTE_CLIENT and RELAY through the closed [connector allowlist](./wire-connector.md); other platform descriptors permit LOCAL_CLIENT only. Results settle at COMPLETED. `telemetry.list` uses CURSOR for its opaque `before` token; `shell.output` uses OFFSET for its numeric byte cursor and limit; all other operations are UNPAGED. Typed bodies use TYPED_BULK, except the filesystem asset operation's ASSET_BULK.
+
+Structural metadata enforces integer, text-unit and repeated-count bounds. Domain obligations retain the source identities of patterns, filters, transformations and refinements. They are not certified as enforced by structural decoding. Wire-to-domain conversion must validate those obligations before any handler executes and reject through the validation-error boundary. Conformance tests exclude that domain implementation, native browser/PTY protocols and live backend execution.
+
+## Coverage and generation
+
+`packages/protocol/test/platform-coverage.test.ts` compares the live Effect endpoint slice and the baseline manifest from `script/rust-parity/manifest.ts`, asserts exactly two EXTERNAL exclusions, verifies every field/type/presence/enum/error/descriptor association, and invokes requireConstraintCoverage for checked source fields. It verifies shared declaration reuse, asset wildcard/metadata boundaries, explicit ticket headers, paging and scopes. A source-order permutation must preserve canonical bytes and IDs.
+
+`packages/protocol/test/wire-contract.ts` owns the shared live-AST projection used by resource and platform coverage. `platform-materialize.ts` performs an exact read-only canonical source check. Its explicit `--write-new` initialization refuses an existing canonical file; contract drift fails rather than rewriting IDs or field tags. Canonical files end in exactly one newline. Both generators reject message/enum name collisions after prost Rust case normalization or Buf TypeScript nested-name flattening, including schema export names. The explicit wrapper-name overrides are `browser.action` → `browser_action_Reply` and `isolatedBrowser.action` → `isolatedBrowser_action_Reply`; their domain ActionResult declarations retain their source names. Override coverage requires each override to resolve a real codec collision. Generate Rust/TS bindings through their owning generators and run `bun run --cwd packages/protocol generate:v5`; regenerate digest-bearing foundation vectors last through `python3 protocol/ycoding/v5/testdata/generate.py`.
+
+`packages/remote/test/platform-conformance.test.ts` and `rust/crates/protocol/tests/wire_platform.rs` share independent binary corpora covering safe-integer browser fences, lone UTF-16 strings and map keys, absent versus empty PTY input collections, deliberately open fractional metadata values, typed-error enums, asset metadata and PTY viewport bounds. Digest-bearing negative vectors must retain their named rejection reasons in both languages; other foundation vectors remain byte-identical.

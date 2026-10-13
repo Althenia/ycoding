@@ -1,0 +1,2519 @@
+syntax = "proto2";
+package ycoding.v5;
+import "ycoding/v5/foundation.proto";
+import "ycoding/v5/operations.proto";
+import "ycoding/v5/shared.proto";
+
+option (ycoding.v5.operation_range) = { first: 3000 last: 3052 };
+
+enum browser_action_Request_payload_actionValue1_type {
+  BROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE1_TYPE_NAVIGATE = 1;
+}
+
+enum browser_action_Request_payload_actionValue2_type {
+  BROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE2_TYPE_CLICK = 1;
+}
+
+enum browser_action_Request_payload_actionValue3_type {
+  BROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE3_TYPE_TYPE = 1;
+}
+
+enum browser_action_Request_payload_actionValue4_type {
+  BROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE4_TYPE_SCROLL = 1;
+}
+
+enum browser_action_Request_payload_actionValue5_type {
+  BROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE5_TYPE_CAPTURE = 1;
+}
+
+enum browser_action_Request_payload_actionValue6_type {
+  BROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE6_TYPE_GROUP = 1;
+}
+
+enum browser_action_Request_payload_actionValue7_type {
+  BROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE7_TYPE_UNGROUP = 1;
+}
+
+enum Browser_Tab_status {
+  BROWSER_TAB_STATUS_SHARED = 1;
+  BROWSER_TAB_STATUS_PAUSED = 2;
+  BROWSER_TAB_STATUS_UNAVAILABLE = 3;
+}
+
+enum Browser_Tab_pauseReason {
+  BROWSER_TAB_PAUSEREASON_USER_ACTIVE = 1;
+  BROWSER_TAB_PAUSEREASON_REQUESTED = 2;
+  BROWSER_TAB_PAUSEREASON_UNCERTAIN = 3;
+  BROWSER_TAB_PAUSEREASON_DISCONNECTED = 4;
+}
+
+enum Browser_Tab_mode {
+  BROWSER_TAB_MODE_OWNED = 1;
+  BROWSER_TAB_MODE_PROFILE = 2;
+}
+
+enum Browser_Tab_lease {
+  BROWSER_TAB_LEASE_SELF = 1;
+  BROWSER_TAB_LEASE_OTHER = 2;
+}
+
+enum Browser_ActionResult_status {
+  BROWSER_ACTIONRESULT_STATUS_COMPLETED = 1;
+  BROWSER_ACTIONRESULT_STATUS_PAUSED = 2;
+  BROWSER_ACTIONRESULT_STATUS_REJECTED = 3;
+  BROWSER_ACTIONRESULT_STATUS_UNCERTAIN = 4;
+}
+
+enum Browser_CaptureOutput_mediaType {
+  BROWSER_CAPTUREOUTPUT_MEDIATYPE_IMAGE_PNG = 1;
+}
+
+enum Browser_ActionResult_input {
+  BROWSER_ACTIONRESULT_INPUT_TRUSTED = 1;
+  BROWSER_ACTIONRESULT_INPUT_SCRIPTED = 2;
+}
+
+enum Browser_ControlInput_action {
+  BROWSER_CONTROLINPUT_ACTION_PAUSE = 1;
+  BROWSER_CONTROLINPUT_ACTION_RESUME = 2;
+}
+
+enum Browser_Status_state {
+  BROWSER_STATUS_STATE_UNAVAILABLE = 1;
+  BROWSER_STATUS_STATE_PAIRING = 2;
+  BROWSER_STATUS_STATE_CONNECTED = 3;
+  BROWSER_STATUS_STATE_PAUSED = 4;
+}
+
+enum fs_find_Request_query_type {
+  FS_FIND_REQUEST_QUERY_TYPE_FILE = 1;
+  FS_FIND_REQUEST_QUERY_TYPE_DIRECTORY = 2;
+}
+
+enum FileSystem_Entry_type {
+  FILESYSTEM_ENTRY_TYPE_FILE = 1;
+  FILESYSTEM_ENTRY_TYPE_DIRECTORY = 2;
+}
+
+enum isolatedBrowser_action_Request_payload_actionValue1_type {
+  ISOLATEDBROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE1_TYPE_NAVIGATE = 1;
+}
+
+enum isolatedBrowser_action_Request_payload_actionValue2_type {
+  ISOLATEDBROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE2_TYPE_CLICK = 1;
+}
+
+enum isolatedBrowser_action_Request_payload_actionValue3_type {
+  ISOLATEDBROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE3_TYPE_TYPE = 1;
+}
+
+enum isolatedBrowser_action_Request_payload_actionValue4_type {
+  ISOLATEDBROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE4_TYPE_SCROLL = 1;
+}
+
+enum isolatedBrowser_action_Request_payload_actionValue5_type {
+  ISOLATEDBROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE5_TYPE_CAPTURE = 1;
+}
+
+enum isolatedBrowser_action_Request_payload_actionValue6_type {
+  ISOLATEDBROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE6_TYPE_GROUP = 1;
+}
+
+enum isolatedBrowser_action_Request_payload_actionValue7_type {
+  ISOLATEDBROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE7_TYPE_UNGROUP = 1;
+}
+
+enum IsolatedBrowser_ActionResult_mode {
+  ISOLATEDBROWSER_ACTIONRESULT_MODE_ISOLATED = 1;
+}
+
+enum IsolatedBrowser_ActionResult_status {
+  ISOLATEDBROWSER_ACTIONRESULT_STATUS_COMPLETED = 1;
+  ISOLATEDBROWSER_ACTIONRESULT_STATUS_REJECTED = 2;
+  ISOLATEDBROWSER_ACTIONRESULT_STATUS_UNCERTAIN = 3;
+}
+
+enum IsolatedBrowser_ControlInput_action {
+  ISOLATEDBROWSER_CONTROLINPUT_ACTION_PAUSE = 1;
+  ISOLATEDBROWSER_CONTROLINPUT_ACTION_RESUME = 2;
+}
+
+enum IsolatedBrowser_Status_mode {
+  ISOLATEDBROWSER_STATUS_MODE_ISOLATED = 1;
+}
+
+enum IsolatedBrowser_Status_state {
+  ISOLATEDBROWSER_STATUS_STATE_UNAVAILABLE = 1;
+  ISOLATEDBROWSER_STATUS_STATE_STARTING = 2;
+  ISOLATEDBROWSER_STATUS_STATE_READY = 3;
+  ISOLATEDBROWSER_STATUS_STATE_PAUSED = 4;
+  ISOLATEDBROWSER_STATUS_STATE_STOPPED = 5;
+}
+
+enum IsolatedBrowser_Observation_mode {
+  ISOLATEDBROWSER_OBSERVATION_MODE_ISOLATED = 1;
+}
+
+enum KeepAwake_State {
+  KEEPAWAKE_STATE_OFF = 1;
+  KEEPAWAKE_STATE_ON = 2;
+  KEEPAWAKE_STATE_UNSUPPORTED = 3;
+  KEEPAWAKE_STATE_ERROR = 4;
+}
+
+enum ProjectCopyError_name {
+  PROJECTCOPYERROR_NAME_PROJECTCOPYERROR = 1;
+}
+
+enum pty_connectToken_Request_headers_x_ycoding_ticket {
+  PTY_CONNECTTOKEN_REQUEST_HEADERS_X_YCODING_TICKET_1 = 1;
+}
+
+enum pty_connectToken_Request_payload_access {
+  PTY_CONNECTTOKEN_REQUEST_PAYLOAD_ACCESS_INSPECT = 1;
+  PTY_CONNECTTOKEN_REQUEST_PAYLOAD_ACCESS_CONTROL = 2;
+}
+
+enum PtyTicket_ConnectToken_access {
+  PTYTICKET_CONNECTTOKEN_ACCESS_INSPECT = 1;
+  PTYTICKET_CONNECTTOKEN_ACCESS_CONTROL = 2;
+}
+
+enum PtyConflictError__tag {
+  PTYCONFLICTERROR__TAG_PTYCONFLICTERROR = 1;
+}
+
+enum PtyNotFoundError__tag {
+  PTYNOTFOUNDERROR__TAG_PTYNOTFOUNDERROR = 1;
+}
+
+enum pty_control_Request_payload_action {
+  PTY_CONTROL_REQUEST_PAYLOAD_ACTION_TAKE = 1;
+  PTY_CONTROL_REQUEST_PAYLOAD_ACTION_PAUSE = 2;
+  PTY_CONTROL_REQUEST_PAYLOAD_ACTION_AGENT = 3;
+}
+
+enum PtyResourceLimitError__tag {
+  PTYRESOURCELIMITERROR__TAG_PTYRESOURCELIMITERROR = 1;
+}
+
+enum pty_update_Request_payload_actor {
+  PTY_UPDATE_REQUEST_PAYLOAD_ACTOR_AGENT = 1;
+  PTY_UPDATE_REQUEST_PAYLOAD_ACTOR_USER = 2;
+}
+
+enum remote_get_Result_data_state {
+  REMOTE_GET_RESULT_DATA_STATE_OFF = 1;
+  REMOTE_GET_RESULT_DATA_STATE_CONNECTING = 2;
+  REMOTE_GET_RESULT_DATA_STATE_ON = 3;
+  REMOTE_GET_RESULT_DATA_STATE_ERROR = 4;
+}
+
+enum remote_set_Result_data_state {
+  REMOTE_SET_RESULT_DATA_STATE_OFF = 1;
+  REMOTE_SET_RESULT_DATA_STATE_CONNECTING = 2;
+  REMOTE_SET_RESULT_DATA_STATE_ON = 3;
+  REMOTE_SET_RESULT_DATA_STATE_ERROR = 4;
+}
+
+enum ShellNotFoundError__tag {
+  SHELLNOTFOUNDERROR__TAG_SHELLNOTFOUNDERROR = 1;
+}
+
+enum Telemetry_RequestSample_kind {
+  TELEMETRY_REQUESTSAMPLE_KIND_REQUEST = 1;
+}
+
+enum Telemetry_RequestSample_operation {
+  TELEMETRY_REQUESTSAMPLE_OPERATION_PROVIDER_AUTH_LIST = 1;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_PROVIDER_AUTH_KEY = 2;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_PROVIDER_AUTH_BEGIN = 3;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_PROVIDER_AUTH_STATUS = 4;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_PROVIDER_AUTH_COMPLETE = 5;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_PROVIDER_AUTH_CANCEL = 6;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_WORKSPACE_LIST = 7;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_LIST = 8;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_ACTIVE = 9;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_GET = 10;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_MESSAGES = 11;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_CAPTUREDCHANGES_LIST = 12;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_COMPACTION_LIST = 13;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_COMPACT = 14;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SNAPSHOT = 15;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_PENDING_LIST = 16;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_ATTACHMENT_READ = 17;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_MESSAGE_STREAM = 18;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_TODO_LIST = 19;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SUBAGENT_LIST = 20;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_PIN = 21;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_UNPIN = 22;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SUBAGENT_CANCEL = 23;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SUBAGENT_ANSWER = 24;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_TEAM_ECONOMICS = 25;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_TEAM_SHELL_LIST = 26;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_TEAM_SHELL_KILL = 27;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SIDE_CHAT_LIST = 28;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SIDE_CHAT_CREATE = 29;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_FAMILY_ACTIVITY = 30;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_LOG = 31;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SUBSCRIBE = 32;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_UNSUBSCRIBE = 33;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_PROMPT = 34;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_ATTACHMENT_UPLOAD = 35;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_INTERRUPT = 36;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_PREDICTION = 37;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_PROMPTGENERATE = 38;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_PERMISSION_LIST = 39;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_PERMISSION_REPLY = 40;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_GUARDRAIL_STATUS = 41;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_GUARDRAIL_REQUEST_LIST = 42;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_GUARDRAIL_REPLY = 43;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_FORM_LIST = 44;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_FORM_REPLY = 45;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_FORM_CANCEL = 46;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SHELL_OUTPUT = 47;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_AUTONOMY_GET = 48;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_AUTONOMY_SET = 49;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_GOAL_SET = 50;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_GOAL_STOP = 51;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_CREATE = 52;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_STATUS = 53;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_CATALOG = 54;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_WORKSPACE_CATALOG = 55;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_FILE_FIND = 56;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_WORKSPACE_FILE_FIND = 57;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SWITCHMODEL = 58;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SWITCHAGENT = 59;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_COMMAND = 60;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SKILL = 61;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_USAGE_PROVIDERS = 62;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_USAGE_SUMMARY = 63;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_USAGE_REPORT = 64;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_MACHINE_KEEPAWAKE_GET = 65;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_MACHINE_KEEPAWAKE_SET = 66;
+}
+
+enum Telemetry_RequestSample_outcome {
+  TELEMETRY_REQUESTSAMPLE_OUTCOME_OK = 1;
+  TELEMETRY_REQUESTSAMPLE_OUTCOME_FAILED = 2;
+  TELEMETRY_REQUESTSAMPLE_OUTCOME_UNKNOWN = 3;
+  TELEMETRY_REQUESTSAMPLE_OUTCOME_UNAVAILABLE = 4;
+}
+
+enum Telemetry_RequestSample_reason {
+  TELEMETRY_REQUESTSAMPLE_REASON_NOT_CONNECTED = 1;
+  TELEMETRY_REQUESTSAMPLE_REASON_IN_FLIGHT_LIMIT = 2;
+  TELEMETRY_REQUESTSAMPLE_REASON_REQUEST_LIMIT = 3;
+  TELEMETRY_REQUESTSAMPLE_REASON_CANCELLED = 4;
+}
+
+enum Telemetry_LongTaskSample_kind {
+  TELEMETRY_LONGTASKSAMPLE_KIND_LONG_TASK = 1;
+}
+
+enum Telemetry_ClientSample_kind {
+  TELEMETRY_CLIENTSAMPLE_KIND_CLIENT = 1;
+}
+
+enum Telemetry_ClientSample_surface {
+  TELEMETRY_CLIENTSAMPLE_SURFACE_TUI = 1;
+  TELEMETRY_CLIENTSAMPLE_SURFACE_WEB = 2;
+}
+
+enum Telemetry_ClientSample_metric {
+  TELEMETRY_CLIENTSAMPLE_METRIC_PROMPT_ADMIT = 1;
+  TELEMETRY_CLIENTSAMPLE_METRIC_STREAM_DELAY = 2;
+  TELEMETRY_CLIENTSAMPLE_METRIC_TRANSCRIPT_LOAD = 3;
+}
+
+enum TelemetryDisabled__tag {
+  TELEMETRYDISABLED__TAG_TELEMETRYDISABLED = 1;
+}
+
+enum Vcs_Mode {
+  VCS_MODE_WORKING = 1;
+  VCS_MODE_BRANCH = 2;
+}
+
+enum Vcs_FileStatus_status {
+  VCS_FILESTATUS_STATUS_ADDED = 1;
+  VCS_FILESTATUS_STATUS_DELETED = 2;
+  VCS_FILESTATUS_STATUS_MODIFIED = 3;
+}
+
+message browser_action_Request_params {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" }];
+}
+
+message browser_action_Request_payload {
+  required LosslessString tabID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" }];
+  required uint64 generation = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" integer_min: "1" integer_max: "9007199254740991" }];
+  required uint64 documentGeneration = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" integer_min: "1" integer_max: "9007199254740991" }];
+  required uint64 observationRevision = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" integer_min: "0" integer_max: "9007199254740991" }];
+  required LosslessString callID = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" utf16_min: 1 utf16_max: 512 }];
+  required browser_action_Request_payload_action action = 6;
+}
+
+message browser_action_Request_payload_action {
+  oneof kind {
+    browser_action_Request_payload_actionValue1 value_1 = 1;
+    browser_action_Request_payload_actionValue2 value_2 = 2;
+    browser_action_Request_payload_actionValue3 value_3 = 3;
+    browser_action_Request_payload_actionValue4 value_4 = 4;
+    browser_action_Request_payload_actionValue5 value_5 = 5;
+    browser_action_Request_payload_actionValue6 value_6 = 6;
+    browser_action_Request_payload_actionValue7 value_7 = 7;
+  }
+}
+
+message browser_action_Request_payload_actionValue1 {
+  required browser_action_Request_payload_actionValue1_type type = 1;
+  required LosslessString url = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" utf16_max: 8192 }];
+}
+
+message browser_action_Request_payload_actionValue2 {
+  required browser_action_Request_payload_actionValue2_type type = 1;
+  required LosslessString ref = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" }];
+}
+
+message browser_action_Request_payload_actionValue3 {
+  required browser_action_Request_payload_actionValue3_type type = 1;
+  required LosslessString ref = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" }];
+  required LosslessString text = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" utf16_max: 8192 }];
+}
+
+message browser_action_Request_payload_actionValue4 {
+  required browser_action_Request_payload_actionValue4_type type = 1;
+  required int64 deltaY = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" integer_min: "-10000" integer_max: "10000" }];
+}
+
+message browser_action_Request_payload_actionValue5 {
+  required browser_action_Request_payload_actionValue5_type type = 1;
+}
+
+message browser_action_Request_payload_actionValue6 {
+  required browser_action_Request_payload_actionValue6_type type = 1;
+  required browser_action_Request_payload_actionValue6_tabIDs tabIDs = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" }];
+  required LosslessString title = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" utf16_min: 1 utf16_max: 64 }];
+}
+
+message browser_action_Request_payload_actionValue6_tabIDs {
+  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" utf16_min: 1 utf16_max: 8 count_min: 1 count_max: 8 }];
+}
+
+message browser_action_Request_payload_actionValue7 {
+  required browser_action_Request_payload_actionValue7_type type = 1;
+  required browser_action_Request_payload_actionValue7_tabIDs tabIDs = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" }];
+  required uint64 groupID = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message browser_action_Request_payload_actionValue7_tabIDs {
+  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" utf16_min: 1 utf16_max: 8 count_min: 1 count_max: 8 }];
+}
+
+message browser_action_Request {
+  required browser_action_Request_params params = 1;
+  required browser_action_Request_payload payload = 2;
+}
+
+message browser_action_Reply {
+  required Browser_ActionResult data = 1;
+}
+
+message Browser_ActionResult {
+  required LosslessString callID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.ActionResult" utf16_min: 1 utf16_max: 512 }];
+  required Browser_Tab tab = 2;
+  required Browser_ActionResult_status status = 3;
+  optional LosslessString message = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.ActionResult" utf16_max: 1024 }];
+  optional Browser_CaptureOutput capture = 5;
+  optional uint64 groupID = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.ActionResult" integer_min: "0" integer_max: "9007199254740991" }];
+  optional Browser_ActionResult_input input = 7;
+}
+
+message Browser_Tab {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.Tab" }];
+  required LosslessString sessionID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.Tab" }];
+  required LosslessString title = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.Tab" utf16_max: 512 }];
+  required Browser_Page page = 4;
+  required Browser_Tab_status status = 5;
+  required uint64 generation = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.Tab" integer_min: "1" integer_max: "9007199254740991" }];
+  required uint64 documentGeneration = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.Tab" integer_min: "1" integer_max: "9007199254740991" }];
+  required uint64 observationRevision = 8 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.Tab" integer_min: "0" integer_max: "9007199254740991" }];
+  optional Browser_Tab_pauseReason pauseReason = 9;
+  optional LosslessString uncertainCallID = 10 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.Tab" utf16_min: 1 utf16_max: 512 }];
+  optional Browser_Tab_mode mode = 11;
+  optional Browser_Tab_lease lease = 12;
+}
+
+message Browser_Page {
+  required LosslessString origin = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.Page" }];
+  required LosslessString path = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.Page" }];
+}
+
+message Browser_CaptureOutput {
+  required Browser_CaptureOutput_mediaType mediaType = 1;
+  required LosslessString data = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.CaptureOutput" utf16_max: 1398110 }];
+  required uint64 bytes = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.CaptureOutput" integer_min: "0" integer_max: "1048576" }];
+}
+
+message browser_close_Request_params {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" }];
+}
+
+message browser_close_Request_payload {
+  required LosslessString tabID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" }];
+  required uint64 generation = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" integer_min: "1" integer_max: "9007199254740991" }];
+  required LosslessString callID = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" utf16_min: 1 utf16_max: 512 }];
+}
+
+message browser_close_Request {
+  required browser_close_Request_params params = 1;
+  required browser_close_Request_payload payload = 2;
+}
+
+message browser_close_Result {
+  required Empty data = 1;
+}
+
+message browser_control_Request_params {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" }];
+}
+
+message Browser_ControlInput {
+  required Browser_ControlInput_action action = 1;
+}
+
+message browser_control_Request {
+  required browser_control_Request_params params = 1;
+  required Browser_ControlInput payload = 2;
+}
+
+message browser_control_Result {
+  required Browser_Status data = 1;
+}
+
+message Browser_Status {
+  required Browser_Status_state state = 1;
+  optional bool paired = 2;
+  optional bool profileGranted = 3;
+  optional uint64 generation = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.Status" integer_min: "1" integer_max: "9007199254740991" }];
+  optional uint64 pairingExpiresAt = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.Status" integer_min: "0" integer_max: "9007199254740991" }];
+  optional LosslessString extensionID = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.Status" }];
+  optional LosslessString pendingCallID = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.Status" utf16_min: 1 utf16_max: 512 }];
+}
+
+message browser_forget_Request_params {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" }];
+}
+
+message browser_forget_Request {
+  required browser_forget_Request_params params = 1;
+}
+
+message browser_forget_Result {
+  required Empty data = 1;
+}
+
+message browser_observe_Request_params {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" }];
+}
+
+message browser_observe_Request_payload {
+  required LosslessString tabID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" }];
+  required uint64 generation = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" integer_min: "1" integer_max: "9007199254740991" }];
+  required LosslessString callID = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" utf16_min: 1 utf16_max: 512 }];
+}
+
+message browser_observe_Request {
+  required browser_observe_Request_params params = 1;
+  required browser_observe_Request_payload payload = 2;
+}
+
+message browser_observe_Result {
+  required Browser_Observation data = 1;
+}
+
+message Browser_Observation {
+  required LosslessString tabID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.Observation" }];
+  required uint64 generation = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.Observation" integer_min: "1" integer_max: "9007199254740991" }];
+  required uint64 documentGeneration = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.Observation" integer_min: "1" integer_max: "9007199254740991" }];
+  required uint64 revision = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.Observation" integer_min: "0" integer_max: "9007199254740991" }];
+  required LosslessString title = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.Observation" utf16_max: 512 }];
+  required Browser_Page page = 6;
+  required Browser_Observation_elements elements = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.Observation" }];
+  required bool truncated = 8;
+}
+
+message Browser_Observation_elements {
+  repeated Browser_Element items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.Observation" count_max: 200 }];
+}
+
+message Browser_Element {
+  required LosslessString ref = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.Element" }];
+  required LosslessString role = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.Element" utf16_max: 64 }];
+  required LosslessString name = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.Element" utf16_max: 1024 }];
+  optional LosslessString description = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.Element" utf16_max: 1024 }];
+  optional bool disabled = 5;
+  optional Browser_Page destination = 6;
+}
+
+message browser_open_Request_params {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" }];
+}
+
+message browser_open_Request_payload {
+  required uint64 generation = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" integer_min: "1" integer_max: "9007199254740991" }];
+  required LosslessString url = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" utf16_max: 8192 }];
+  required LosslessString callID = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" utf16_min: 1 utf16_max: 512 }];
+}
+
+message browser_open_Request {
+  required browser_open_Request_params params = 1;
+  required browser_open_Request_payload payload = 2;
+}
+
+message browser_open_Result {
+  required Browser_Tab data = 1;
+}
+
+message browser_release_Request_params {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" }];
+}
+
+message browser_release_Request_payload {
+  required LosslessString tabID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" }];
+  required uint64 generation = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" integer_min: "1" integer_max: "9007199254740991" }];
+  required LosslessString callID = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" utf16_min: 1 utf16_max: 512 }];
+}
+
+message browser_release_Request {
+  required browser_release_Request_params params = 1;
+  required browser_release_Request_payload payload = 2;
+}
+
+message browser_release_Result {
+  required Empty data = 1;
+}
+
+message browser_start_Request_params {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" }];
+}
+
+message browser_start_Request {
+  required browser_start_Request_params params = 1;
+}
+
+message browser_start_Result {
+  required Browser_Pairing data = 1;
+}
+
+message Browser_Pairing {
+  required LosslessString secret = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.Pairing" utf16_min: 32 utf16_max: 128 }];
+  required uint64 expiresAt = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.Pairing" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message browser_status_Request_params {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" }];
+}
+
+message browser_status_Request {
+  required browser_status_Request_params params = 1;
+}
+
+message browser_status_Result {
+  required Browser_Status data = 1;
+}
+
+message browser_stop_Request_params {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" }];
+}
+
+message browser_stop_Request {
+  required browser_stop_Request_params params = 1;
+}
+
+message browser_stop_Result {
+  required Empty data = 1;
+}
+
+message browser_tabs_Request_params {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" }];
+}
+
+message browser_tabs_Request {
+  required browser_tabs_Request_params params = 1;
+}
+
+message browser_tabs_Result {
+  required browser_tabs_Result_data data = 1;
+}
+
+message browser_tabs_Result_data {
+  repeated Browser_Tab items = 1;
+}
+
+message debug_location_Request {
+
+}
+
+message debug_location_Result {
+  repeated Location_Ref items = 1;
+}
+
+message debug_location_evict_Request {
+  required LocationQuery query = 1;
+}
+
+message debug_location_evict_Result {
+  required Empty data = 1;
+}
+
+message fs_find_Request_query {
+  optional fs_find_Request_query_location location = 1;
+  required LosslessString query = 2;
+  optional fs_find_Request_query_type type = 3;
+  optional uint64 limit = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/fs.ts#FileSystemGroup" integer_min: "1" integer_max: "9007199254740991" }];
+}
+
+message fs_find_Request_query_location {
+  optional LosslessString directory = 1;
+  optional LosslessString workspace = 2;
+}
+
+message fs_find_Request {
+  required fs_find_Request_query query = 1;
+}
+
+message fs_find_Result {
+  required Location_Info location = 1;
+  required fs_find_Result_data data = 2;
+}
+
+message fs_find_Result_data {
+  repeated FileSystem_Entry items = 1;
+}
+
+message FileSystem_Entry {
+  required LosslessString path = 1;
+  required FileSystem_Entry_type type = 2;
+}
+
+message fs_list_Request_query {
+  optional fs_list_Request_query_location location = 1;
+  optional LosslessString path = 2;
+}
+
+message fs_list_Request_query_location {
+  optional LosslessString directory = 1;
+  optional LosslessString workspace = 2;
+}
+
+message fs_list_Request {
+  required fs_list_Request_query query = 1;
+}
+
+message fs_list_Result {
+  required Location_Info location = 1;
+  required fs_list_Result_data data = 2;
+}
+
+message fs_list_Result_data {
+  repeated FileSystem_Entry items = 1;
+}
+
+message Platform_AssetPath {
+  required LosslessString path = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/fs.ts#FileSystemGroup" }];
+}
+
+message fs_read_Request {
+  required Platform_AssetPath params = 1;
+  required LocationQuery query = 2;
+}
+
+message Platform_AssetMetadata {
+  required LosslessString mime = 1;
+  required uint64 byteCount = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/fs.ts#FileSystemGroup" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message fs_read_Result {
+  required Platform_AssetMetadata data = 1;
+}
+
+message health_get_Request {
+
+}
+
+message ServiceHealth {
+  required bool healthy = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/health.ts#ServiceStatus.Health" }];
+  required LosslessString version = 2;
+  required uint64 pid = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/health.ts#ServiceStatus.Health" integer_min: "1" integer_max: "9007199254740991" }];
+  required LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/health.ts#ServiceStatus.Health" utf16_min: 1 }];
+}
+
+message health_get_Result {
+  required ServiceHealth data = 1;
+}
+
+message ServiceStopRequest {
+  required LosslessString instanceID = 1;
+}
+
+message health_stop_Request {
+  required ServiceStopRequest payload = 1;
+}
+
+message ServiceStopResponse {
+  required bool accepted = 1;
+}
+
+message health_stop_Result {
+  required ServiceStopResponse data = 1;
+}
+
+message isolatedBrowser_action_Request_params {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" }];
+}
+
+message isolatedBrowser_action_Request_payload {
+  required LosslessString tabID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" }];
+  required uint64 generation = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" integer_min: "1" integer_max: "9007199254740991" }];
+  required uint64 documentGeneration = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" integer_min: "1" integer_max: "9007199254740991" }];
+  required uint64 observationRevision = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" integer_min: "0" integer_max: "9007199254740991" }];
+  required LosslessString callID = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" utf16_min: 1 utf16_max: 512 }];
+  required isolatedBrowser_action_Request_payload_action action = 6;
+  required LosslessString instanceID = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" }];
+}
+
+message isolatedBrowser_action_Request_payload_action {
+  oneof kind {
+    isolatedBrowser_action_Request_payload_actionValue1 value_1 = 1;
+    isolatedBrowser_action_Request_payload_actionValue2 value_2 = 2;
+    isolatedBrowser_action_Request_payload_actionValue3 value_3 = 3;
+    isolatedBrowser_action_Request_payload_actionValue4 value_4 = 4;
+    isolatedBrowser_action_Request_payload_actionValue5 value_5 = 5;
+    isolatedBrowser_action_Request_payload_actionValue6 value_6 = 6;
+    isolatedBrowser_action_Request_payload_actionValue7 value_7 = 7;
+  }
+}
+
+message isolatedBrowser_action_Request_payload_actionValue1 {
+  required isolatedBrowser_action_Request_payload_actionValue1_type type = 1;
+  required LosslessString url = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" utf16_max: 8192 }];
+}
+
+message isolatedBrowser_action_Request_payload_actionValue2 {
+  required isolatedBrowser_action_Request_payload_actionValue2_type type = 1;
+  required LosslessString ref = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" }];
+}
+
+message isolatedBrowser_action_Request_payload_actionValue3 {
+  required isolatedBrowser_action_Request_payload_actionValue3_type type = 1;
+  required LosslessString ref = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" }];
+  required LosslessString text = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" utf16_max: 8192 }];
+}
+
+message isolatedBrowser_action_Request_payload_actionValue4 {
+  required isolatedBrowser_action_Request_payload_actionValue4_type type = 1;
+  required int64 deltaY = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" integer_min: "-10000" integer_max: "10000" }];
+}
+
+message isolatedBrowser_action_Request_payload_actionValue5 {
+  required isolatedBrowser_action_Request_payload_actionValue5_type type = 1;
+}
+
+message isolatedBrowser_action_Request_payload_actionValue6 {
+  required isolatedBrowser_action_Request_payload_actionValue6_type type = 1;
+  required isolatedBrowser_action_Request_payload_actionValue6_tabIDs tabIDs = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" }];
+  required LosslessString title = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" utf16_min: 1 utf16_max: 64 }];
+}
+
+message isolatedBrowser_action_Request_payload_actionValue6_tabIDs {
+  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" utf16_min: 1 utf16_max: 8 count_min: 1 count_max: 8 }];
+}
+
+message isolatedBrowser_action_Request_payload_actionValue7 {
+  required isolatedBrowser_action_Request_payload_actionValue7_type type = 1;
+  required isolatedBrowser_action_Request_payload_actionValue7_tabIDs tabIDs = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" }];
+  required uint64 groupID = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message isolatedBrowser_action_Request_payload_actionValue7_tabIDs {
+  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" utf16_min: 1 utf16_max: 8 count_min: 1 count_max: 8 }];
+}
+
+message isolatedBrowser_action_Request {
+  required isolatedBrowser_action_Request_params params = 1;
+  required isolatedBrowser_action_Request_payload payload = 2;
+}
+
+message isolatedBrowser_action_Reply {
+  required IsolatedBrowser_ActionResult data = 1;
+}
+
+message IsolatedBrowser_ActionResult {
+  required IsolatedBrowser_ActionResult_mode mode = 1;
+  required LosslessString instanceID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/isolated-browser.ts#IsolatedBrowser.ActionResult" }];
+  required LosslessString callID = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/isolated-browser.ts#IsolatedBrowser.ActionResult" utf16_min: 1 utf16_max: 512 }];
+  required Browser_Tab tab = 4;
+  required IsolatedBrowser_ActionResult_status status = 5;
+  optional LosslessString message = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/isolated-browser.ts#IsolatedBrowser.ActionResult" utf16_max: 1024 }];
+  optional Browser_CaptureOutput capture = 7;
+}
+
+message isolatedBrowser_control_Request_params {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" }];
+}
+
+message IsolatedBrowser_ControlInput {
+  required IsolatedBrowser_ControlInput_action action = 1;
+}
+
+message isolatedBrowser_control_Request {
+  required isolatedBrowser_control_Request_params params = 1;
+  required IsolatedBrowser_ControlInput payload = 2;
+}
+
+message isolatedBrowser_control_Result {
+  required IsolatedBrowser_Status data = 1;
+}
+
+message IsolatedBrowser_Status {
+  required IsolatedBrowser_Status_mode mode = 1;
+  required IsolatedBrowser_Status_state state = 2;
+  optional LosslessString reason = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/isolated-browser.ts#IsolatedBrowser.Status" utf16_max: 1024 }];
+  optional LosslessString instanceID = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/isolated-browser.ts#IsolatedBrowser.Status" }];
+  optional Browser_Tab tab = 5;
+}
+
+message isolatedBrowser_observe_Request_params {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" }];
+}
+
+message isolatedBrowser_observe_Request_payload {
+  required LosslessString tabID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" }];
+  required uint64 generation = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" integer_min: "1" integer_max: "9007199254740991" }];
+  required LosslessString callID = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" utf16_min: 1 utf16_max: 512 }];
+  required LosslessString instanceID = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" }];
+}
+
+message isolatedBrowser_observe_Request {
+  required isolatedBrowser_observe_Request_params params = 1;
+  required isolatedBrowser_observe_Request_payload payload = 2;
+}
+
+message isolatedBrowser_observe_Result {
+  required IsolatedBrowser_Observation data = 1;
+}
+
+message IsolatedBrowser_Observation {
+  required LosslessString tabID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/isolated-browser.ts#IsolatedBrowser.Observation" }];
+  required uint64 generation = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/isolated-browser.ts#IsolatedBrowser.Observation" integer_min: "1" integer_max: "9007199254740991" }];
+  required uint64 documentGeneration = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/isolated-browser.ts#IsolatedBrowser.Observation" integer_min: "1" integer_max: "9007199254740991" }];
+  required uint64 revision = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/isolated-browser.ts#IsolatedBrowser.Observation" integer_min: "0" integer_max: "9007199254740991" }];
+  required LosslessString title = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/isolated-browser.ts#IsolatedBrowser.Observation" utf16_max: 512 }];
+  required Browser_Page page = 6;
+  required IsolatedBrowser_Observation_elements elements = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/isolated-browser.ts#IsolatedBrowser.Observation" }];
+  required bool truncated = 8;
+  required IsolatedBrowser_Observation_mode mode = 9;
+  required LosslessString instanceID = 10 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/isolated-browser.ts#IsolatedBrowser.Observation" }];
+}
+
+message IsolatedBrowser_Observation_elements {
+  repeated Browser_Element items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/isolated-browser.ts#IsolatedBrowser.Observation" count_max: 200 }];
+}
+
+message isolatedBrowser_start_Request_params {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" }];
+}
+
+message IsolatedBrowser_StartPayload {
+  required LosslessString url = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/isolated-browser.ts#IsolatedBrowser.StartPayload" utf16_max: 8192 }];
+}
+
+message isolatedBrowser_start_Request {
+  required isolatedBrowser_start_Request_params params = 1;
+  required IsolatedBrowser_StartPayload payload = 2;
+}
+
+message isolatedBrowser_start_Result {
+  required IsolatedBrowser_Status data = 1;
+}
+
+message isolatedBrowser_status_Request_params {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" }];
+}
+
+message isolatedBrowser_status_Request {
+  required isolatedBrowser_status_Request_params params = 1;
+}
+
+message isolatedBrowser_status_Result {
+  required IsolatedBrowser_Status data = 1;
+}
+
+message isolatedBrowser_stop_Request_params {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" }];
+}
+
+message isolatedBrowser_stop_Request {
+  required isolatedBrowser_stop_Request_params params = 1;
+}
+
+message isolatedBrowser_stop_Result {
+  required Empty data = 1;
+}
+
+message isolatedBrowser_tabs_Request_params {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" }];
+}
+
+message isolatedBrowser_tabs_Request {
+  required isolatedBrowser_tabs_Request_params params = 1;
+}
+
+message isolatedBrowser_tabs_Result {
+  required isolatedBrowser_tabs_Result_data data = 1;
+}
+
+message isolatedBrowser_tabs_Result_data {
+  repeated Browser_Tab items = 1;
+}
+
+message keepAwake_get_Request {
+
+}
+
+message keepAwake_get_Result {
+  required KeepAwake_Status data = 1;
+}
+
+message KeepAwake_Status {
+  required KeepAwake_State state = 1;
+  optional LosslessString message = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/keep-awake.ts#KeepAwake.Status" utf16_max: 200 }];
+}
+
+message keepAwake_set_Request_payload {
+  required bool enabled = 1;
+}
+
+message keepAwake_set_Request {
+  required keepAwake_set_Request_payload payload = 1;
+}
+
+message keepAwake_set_Result {
+  required KeepAwake_Status data = 1;
+}
+
+message projectCopy_create_Request_params {
+  required LosslessString projectID = 1;
+}
+
+message projectCopy_create_Request_payload {
+  required LosslessString strategy = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/project-copy.ts#ProjectCopyGroup" utf16_min: 1 }];
+  required LosslessString directory = 2;
+  optional LosslessString name = 3;
+}
+
+message projectCopy_create_Request {
+  required projectCopy_create_Request_params params = 1;
+  required LocationQuery query = 2;
+  required projectCopy_create_Request_payload payload = 3;
+}
+
+message ProjectCopy_Copy {
+  required LosslessString directory = 1;
+}
+
+message projectCopy_create_Result {
+  required ProjectCopy_Copy data = 1;
+}
+
+message ProjectCopyError {
+  required ProjectCopyError_name name = 1;
+  required ProjectCopyError_data data = 2;
+}
+
+message ProjectCopyError_data {
+  required LosslessString message = 1;
+  optional bool forceRequired = 2;
+}
+
+message projectCopy_refresh_Request_params {
+  required LosslessString projectID = 1;
+}
+
+message projectCopy_refresh_Request {
+  required projectCopy_refresh_Request_params params = 1;
+  required LocationQuery query = 2;
+}
+
+message projectCopy_refresh_Result {
+  required Empty data = 1;
+}
+
+message projectCopy_remove_Request_params {
+  required LosslessString projectID = 1;
+}
+
+message projectCopy_remove_Request_payload {
+  required LosslessString directory = 1;
+  required bool force = 2;
+}
+
+message projectCopy_remove_Request {
+  required projectCopy_remove_Request_params params = 1;
+  required LocationQuery query = 2;
+  required projectCopy_remove_Request_payload payload = 3;
+}
+
+message projectCopy_remove_Result {
+  required Empty data = 1;
+}
+
+message pty_connectToken_Request_params {
+  required LosslessString ptyID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/pty.ts#PtyGroup" }];
+}
+
+message pty_connectToken_Request_headers {
+  required pty_connectToken_Request_headers_x_ycoding_ticket x_ycoding_ticket = 1;
+}
+
+message pty_connectToken_Request_payload {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/pty.ts#PtyGroup" }];
+  required pty_connectToken_Request_payload_access access = 2;
+  required uint64 generation = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/pty.ts#PtyGroup" integer_min: "1" integer_max: "9007199254740991" }];
+  optional uint64 expectedFence = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/pty.ts#PtyGroup" integer_min: "1" integer_max: "9007199254740991" }];
+}
+
+message pty_connectToken_Request {
+  required pty_connectToken_Request_params params = 1;
+  required LocationQuery query = 2;
+  required pty_connectToken_Request_headers headers = 3;
+  required pty_connectToken_Request_payload payload = 4;
+}
+
+message pty_connectToken_Result {
+  required Location_Info location = 1;
+  required PtyTicket_ConnectToken data = 2;
+}
+
+message PtyTicket_ConnectToken {
+  required LosslessString ticket = 1;
+  required uint64 expires_in = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/pty-ticket.ts#PtyTicket.ConnectToken" integer_min: "1" integer_max: "9007199254740991" }];
+  required PtyTicket_ConnectToken_access access = 3;
+  required uint64 generation = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/pty-ticket.ts#PtyTicket.ConnectToken" integer_min: "1" integer_max: "9007199254740991" }];
+  optional uint64 fence = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/pty-ticket.ts#PtyTicket.ConnectToken" integer_min: "1" integer_max: "9007199254740991" }];
+}
+
+message PtyConflictError {
+  required PtyConflictError__tag _tag = 1;
+  required LosslessString ptyID = 2;
+  required LosslessString message = 3;
+}
+
+message PtyNotFoundError {
+  required PtyNotFoundError__tag _tag = 1;
+  required LosslessString ptyID = 2;
+  required LosslessString message = 3;
+}
+
+message pty_control_Request_params {
+  required LosslessString ptyID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/pty.ts#PtyGroup" }];
+}
+
+message pty_control_Request_payload {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/pty.ts#PtyGroup" }];
+  required uint64 generation = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/pty.ts#PtyGroup" integer_min: "1" integer_max: "9007199254740991" }];
+  required uint64 expectedFence = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/pty.ts#PtyGroup" integer_min: "1" integer_max: "9007199254740991" }];
+  required pty_control_Request_payload_action action = 4;
+}
+
+message pty_control_Request {
+  required pty_control_Request_params params = 1;
+  required LocationQuery query = 2;
+  required pty_control_Request_payload payload = 3;
+}
+
+message pty_control_Result {
+  required Location_Info location = 1;
+  required Pty data = 2;
+}
+
+message pty_create_Request_payload {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/pty.ts#PtyGroup" }];
+  optional LosslessString command = 2;
+  optional pty_create_Request_payload_args args = 3;
+  optional LosslessString cwd = 4;
+  optional LosslessString title = 5;
+  optional pty_create_Request_payload_env env = 6;
+  optional Pty_Size size = 7;
+  optional uint64 maxRuntimeSeconds = 8 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/pty.ts#PtyGroup" integer_min: "1" integer_max: "7200" }];
+  optional uint64 maxRetainedBytes = 9 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/pty.ts#PtyGroup" integer_min: "1" integer_max: "2097152" }];
+}
+
+message pty_create_Request_payload_args {
+  repeated LosslessString items = 1;
+}
+
+message pty_create_Request_payload_env {
+  repeated pty_create_Request_payload_envEntry entries = 1;
+}
+
+message pty_create_Request_payload_envEntry {
+  required LosslessString key = 1;
+  required LosslessString value = 2;
+}
+
+message pty_create_Request {
+  required LocationQuery query = 1;
+  required pty_create_Request_payload payload = 2;
+}
+
+message pty_create_Result {
+  required Location_Info location = 1;
+  required Pty data = 2;
+}
+
+message PtyResourceLimitError {
+  required PtyResourceLimitError__tag _tag = 1;
+  required LosslessString resource = 2;
+  required LosslessString message = 3;
+}
+
+message pty_get_Request_params {
+  required LosslessString ptyID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/pty.ts#PtyGroup" }];
+}
+
+message Pty_OwnedLocationQuery {
+  optional Pty_OwnedLocationQuery_location location = 1;
+  required LosslessString sessionID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/pty.ts#OwnedLocationQuery" }];
+}
+
+message Pty_OwnedLocationQuery_location {
+  optional LosslessString directory = 1;
+  optional LosslessString workspace = 2;
+}
+
+message pty_get_Request {
+  required pty_get_Request_params params = 1;
+  required Pty_OwnedLocationQuery query = 2;
+}
+
+message pty_get_Result {
+  required Location_Info location = 1;
+  required Pty data = 2;
+}
+
+message pty_list_Request {
+  required Pty_OwnedLocationQuery query = 1;
+}
+
+message pty_list_Result {
+  required Location_Info location = 1;
+  required pty_list_Result_data data = 2;
+}
+
+message pty_list_Result_data {
+  repeated Pty items = 1;
+}
+
+message pty_remove_Request_params {
+  required LosslessString ptyID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/pty.ts#PtyGroup" }];
+}
+
+message pty_remove_Request {
+  required pty_remove_Request_params params = 1;
+  required Pty_OwnedLocationQuery query = 2;
+}
+
+message pty_remove_Result {
+  required Empty data = 1;
+}
+
+message pty_update_Request_params {
+  required LosslessString ptyID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/pty.ts#PtyGroup" }];
+}
+
+message pty_update_Request_payload {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/pty.ts#PtyGroup" }];
+  required uint64 generation = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/pty.ts#PtyGroup" integer_min: "1" integer_max: "9007199254740991" }];
+  required uint64 expectedFence = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/pty.ts#PtyGroup" integer_min: "1" integer_max: "9007199254740991" }];
+  required pty_update_Request_payload_actor actor = 4;
+  optional LosslessString title = 5;
+  optional Pty_Size size = 6;
+}
+
+message pty_update_Request {
+  required pty_update_Request_params params = 1;
+  required LocationQuery query = 2;
+  required pty_update_Request_payload payload = 3;
+}
+
+message pty_update_Result {
+  required Location_Info location = 1;
+  required Pty data = 2;
+}
+
+message remote_get_Request {
+
+}
+
+message remote_get_Result {
+  required remote_get_Result_data data = 1;
+}
+
+message remote_get_Result_data {
+  required remote_get_Result_data_state state = 1;
+  optional LosslessString message = 2;
+}
+
+message remote_set_Request_payload {
+  required bool enabled = 1;
+}
+
+message remote_set_Request {
+  required remote_set_Request_payload payload = 1;
+}
+
+message remote_set_Result {
+  required remote_set_Result_data data = 1;
+}
+
+message remote_set_Result_data {
+  required remote_set_Result_data_state state = 1;
+  optional LosslessString message = 2;
+}
+
+message server_get_Request {
+
+}
+
+message server_get_Result {
+  required server_get_Result_urls urls = 1;
+}
+
+message server_get_Result_urls {
+  repeated LosslessString items = 1;
+}
+
+message shell_create_Request_payload {
+  required LosslessString command = 1;
+  optional LosslessString cwd = 2;
+  required uint64 timeout = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/shell.ts#ShellGroup" integer_min: "0" integer_max: "9007199254740991" }];
+  optional uint64 memoryLimitMb = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/shell.ts#ShellGroup" integer_min: "0" integer_max: "1048576" }];
+  optional shell_create_Request_payload_metadata metadata = 5;
+}
+
+message shell_create_Request_payload_metadata {
+  repeated shell_create_Request_payload_metadataEntry entries = 1;
+}
+
+message shell_create_Request_payload_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message shell_create_Request {
+  required LocationQuery query = 1;
+  required shell_create_Request_payload payload = 2;
+}
+
+message shell_create_Result {
+  required Location_Info location = 1;
+  required Shell_Info data = 2;
+}
+
+message shell_get_Request_params {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/shell.ts#ShellGroup" }];
+}
+
+message shell_get_Request {
+  required shell_get_Request_params params = 1;
+  required LocationQuery query = 2;
+}
+
+message shell_get_Result {
+  required Location_Info location = 1;
+  required Shell_Info data = 2;
+}
+
+message ShellNotFoundError {
+  required ShellNotFoundError__tag _tag = 1;
+  required LosslessString id = 2;
+  required LosslessString message = 3;
+}
+
+message shell_list_Request {
+  required LocationQuery query = 1;
+}
+
+message shell_list_Result {
+  required Location_Info location = 1;
+  required shell_list_Result_data data = 2;
+}
+
+message shell_list_Result_data {
+  repeated Shell_Info items = 1;
+}
+
+message shell_output_Request_params {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/shell.ts#ShellGroup" }];
+}
+
+message shell_output_Request_query {
+  optional shell_output_Request_query_location location = 1;
+  optional uint64 cursor = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/shell.ts#ShellGroup" integer_min: "0" integer_max: "9007199254740991" }];
+  optional uint64 limit = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/shell.ts#ShellGroup" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message shell_output_Request_query_location {
+  optional LosslessString directory = 1;
+  optional LosslessString workspace = 2;
+}
+
+message shell_output_Request {
+  required shell_output_Request_params params = 1;
+  required shell_output_Request_query query = 2;
+}
+
+message shell_output_Result {
+  required Location_Info location = 1;
+  required shell_output_Result_data data = 2;
+}
+
+message shell_output_Result_data {
+  required LosslessString output = 1;
+  required uint64 cursor = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/shell.ts#ShellGroup" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 size = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/shell.ts#ShellGroup" integer_min: "0" integer_max: "9007199254740991" }];
+  required bool truncated = 4;
+}
+
+message shell_remove_Request_params {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/shell.ts#ShellGroup" }];
+}
+
+message shell_remove_Request {
+  required shell_remove_Request_params params = 1;
+  required LocationQuery query = 2;
+}
+
+message shell_remove_Result {
+  required Empty data = 1;
+}
+
+message shell_timeout_Request_params {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/shell.ts#ShellGroup" }];
+}
+
+message shell_timeout_Request_payload {
+  required uint64 timeout = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/shell.ts#ShellGroup" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message shell_timeout_Request {
+  required shell_timeout_Request_params params = 1;
+  required LocationQuery query = 2;
+  required shell_timeout_Request_payload payload = 3;
+}
+
+message shell_timeout_Result {
+  required Location_Info location = 1;
+  required Shell_Info data = 2;
+}
+
+message Telemetry_Batch {
+  required Telemetry_Batch_samples samples = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/telemetry.ts#Telemetry.Batch" }];
+}
+
+message Telemetry_Batch_samples {
+  repeated Telemetry_Sample items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/telemetry.ts#Telemetry.Batch" count_min: 1 count_max: 20 }];
+}
+
+message Telemetry_Sample {
+  oneof kind {
+    Telemetry_RequestSample value_1 = 1;
+    Telemetry_LongTaskSample value_2 = 2;
+    Telemetry_ClientSample value_3 = 3;
+  }
+}
+
+message Telemetry_RequestSample {
+  required Telemetry_RequestSample_kind kind = 1;
+  required LosslessString at = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/telemetry.ts#Telemetry.RequestSample" }];
+  required Telemetry_RequestSample_operation operation = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/telemetry.ts#Telemetry.RequestSample" }];
+  required Telemetry_RequestSample_outcome outcome = 4;
+  optional Telemetry_RequestSample_reason reason = 5;
+  required uint64 queueMs = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/telemetry.ts#Telemetry.RequestSample" integer_min: "0" integer_max: "600000" }];
+  optional uint64 settlementMs = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/telemetry.ts#Telemetry.RequestSample" integer_min: "0" integer_max: "600000" }];
+  required uint64 totalMs = 8 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/telemetry.ts#Telemetry.RequestSample" integer_min: "0" integer_max: "600000" }];
+}
+
+message Telemetry_LongTaskSample {
+  required Telemetry_LongTaskSample_kind kind = 1;
+  required LosslessString at = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/telemetry.ts#Telemetry.LongTaskSample" }];
+  required uint64 durationMs = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/telemetry.ts#Telemetry.LongTaskSample" integer_min: "50" integer_max: "600000" }];
+}
+
+message Telemetry_ClientSample {
+  required Telemetry_ClientSample_kind kind = 1;
+  required LosslessString at = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/telemetry.ts#Telemetry.ClientSample" }];
+  required Telemetry_ClientSample_surface surface = 3;
+  required Telemetry_ClientSample_metric metric = 4;
+  required uint64 durationMs = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/telemetry.ts#Telemetry.ClientSample" integer_min: "0" integer_max: "600000" }];
+}
+
+message telemetry_append_Request {
+  required Telemetry_Batch payload = 1;
+}
+
+message telemetry_append_Result {
+  required int64 accepted = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/server.ts#ServerGroup" integer_min: "-9007199254740991" integer_max: "9007199254740991" }];
+}
+
+message TelemetryDisabled {
+  required TelemetryDisabled__tag _tag = 1;
+}
+
+message telemetry_consent_get_Request {
+
+}
+
+message Telemetry_ConsentState {
+  optional Telemetry_Consent consent = 1;
+  required double noticeVersion = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/telemetry.ts#Telemetry.ConsentState" }];
+}
+
+message Telemetry_Consent {
+  required bool enabled = 1;
+  required double noticeVersion = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/telemetry.ts#Telemetry.Consent" }];
+  required uint64 decidedAt = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/telemetry.ts#Telemetry.Consent" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message telemetry_consent_get_Result {
+  required Telemetry_ConsentState data = 1;
+}
+
+message Telemetry_ConsentInput {
+  required bool enabled = 1;
+  required double noticeVersion = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/telemetry.ts#Telemetry.ConsentInput" }];
+}
+
+message telemetry_consent_set_Request {
+  required Telemetry_ConsentInput payload = 1;
+}
+
+message telemetry_consent_set_Result {
+  required Telemetry_Consent data = 1;
+}
+
+message telemetry_list_Request_query {
+  optional uint64 limit = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/server.ts#ServerGroup" integer_min: "1" integer_max: "200" }];
+  optional LosslessString before = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/server.ts#ServerGroup" utf16_min: 1 utf16_max: 256 }];
+}
+
+message telemetry_list_Request {
+  required telemetry_list_Request_query query = 1;
+}
+
+message Telemetry_Page {
+  required Telemetry_Page_data data = 1;
+  required Telemetry_Page_cursor cursor = 2;
+}
+
+message Telemetry_Page_data {
+  repeated Telemetry_Page_dataItem items = 1;
+}
+
+message Telemetry_Page_dataItem {
+  required uint64 receivedAt = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/telemetry.ts#Telemetry.Page" integer_min: "0" integer_max: "9007199254740991" }];
+  required Telemetry_Sample sample = 2;
+}
+
+message Telemetry_Page_cursor {
+  optional LosslessString next = 1;
+}
+
+message telemetry_list_Result {
+  required Telemetry_Page data = 1;
+}
+
+message vcs_branch_Request {
+  required LocationQuery query = 1;
+}
+
+message vcs_branch_Result {
+  required Location_Info location = 1;
+  required Vcs_Branch data = 2;
+}
+
+message Vcs_Branch {
+  optional LosslessString current = 1;
+  optional LosslessString default = 2;
+}
+
+message vcs_diff_Request_query {
+  optional vcs_diff_Request_query_location location = 1;
+  required Vcs_Mode mode = 2;
+  optional uint64 context = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/vcs.ts#VcsGroup" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message vcs_diff_Request_query_location {
+  optional LosslessString directory = 1;
+  optional LosslessString workspace = 2;
+}
+
+message vcs_diff_Request {
+  required vcs_diff_Request_query query = 1;
+}
+
+message vcs_diff_Result {
+  required Location_Info location = 1;
+  required vcs_diff_Result_data data = 2;
+}
+
+message vcs_diff_Result_data {
+  repeated FileDiff_Info items = 1;
+}
+
+message vcs_status_Request {
+  required LocationQuery query = 1;
+}
+
+message vcs_status_Result {
+  required Location_Info location = 1;
+  required vcs_status_Result_data data = 2;
+}
+
+message vcs_status_Result_data {
+  repeated Vcs_FileStatus items = 1;
+}
+
+message Vcs_FileStatus {
+  required LosslessString file = 1;
+  required uint64 additions = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/vcs.ts#Vcs.FileStatus" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 deletions = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/vcs.ts#Vcs.FileStatus" integer_min: "0" integer_max: "9007199254740991" }];
+  required Vcs_FileStatus_status status = 4;
+}
+
+service server_browser {
+  rpc browser_action(browser_action_Request) returns (browser_action_Reply) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3000
+      diagnostic_name: "browser.action"
+      error_types: "ycoding.v5.SessionNotFoundError"
+      error_types: "ycoding.v5.ForbiddenError"
+      error_types: "ycoding.v5.ConflictError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      roles: LOCAL_CLIENT
+      scope: SESSION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc browser_close(browser_close_Request) returns (browser_close_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3001
+      diagnostic_name: "browser.close"
+      error_types: "ycoding.v5.SessionNotFoundError"
+      error_types: "ycoding.v5.ForbiddenError"
+      error_types: "ycoding.v5.ConflictError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      roles: LOCAL_CLIENT
+      scope: SESSION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc browser_control(browser_control_Request) returns (browser_control_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3002
+      diagnostic_name: "browser.control"
+      error_types: "ycoding.v5.SessionNotFoundError"
+      error_types: "ycoding.v5.ForbiddenError"
+      error_types: "ycoding.v5.ConflictError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      roles: LOCAL_CLIENT
+      scope: SESSION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc browser_forget(browser_forget_Request) returns (browser_forget_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3003
+      diagnostic_name: "browser.forget"
+      error_types: "ycoding.v5.SessionNotFoundError"
+      error_types: "ycoding.v5.ForbiddenError"
+      error_types: "ycoding.v5.ConflictError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      roles: LOCAL_CLIENT
+      scope: SESSION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc browser_observe(browser_observe_Request) returns (browser_observe_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3004
+      diagnostic_name: "browser.observe"
+      error_types: "ycoding.v5.SessionNotFoundError"
+      error_types: "ycoding.v5.ForbiddenError"
+      error_types: "ycoding.v5.ConflictError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      roles: LOCAL_CLIENT
+      scope: SESSION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc browser_open(browser_open_Request) returns (browser_open_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3005
+      diagnostic_name: "browser.open"
+      error_types: "ycoding.v5.SessionNotFoundError"
+      error_types: "ycoding.v5.ForbiddenError"
+      error_types: "ycoding.v5.ConflictError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      roles: LOCAL_CLIENT
+      scope: SESSION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc browser_release(browser_release_Request) returns (browser_release_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3006
+      diagnostic_name: "browser.release"
+      error_types: "ycoding.v5.SessionNotFoundError"
+      error_types: "ycoding.v5.ForbiddenError"
+      error_types: "ycoding.v5.ConflictError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      roles: LOCAL_CLIENT
+      scope: SESSION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc browser_start(browser_start_Request) returns (browser_start_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3007
+      diagnostic_name: "browser.start"
+      error_types: "ycoding.v5.SessionNotFoundError"
+      error_types: "ycoding.v5.ForbiddenError"
+      error_types: "ycoding.v5.ConflictError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      roles: LOCAL_CLIENT
+      scope: SESSION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: SECRET
+    };
+  }
+  rpc browser_status(browser_status_Request) returns (browser_status_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3008
+      diagnostic_name: "browser.status"
+      error_types: "ycoding.v5.SessionNotFoundError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: SESSION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc browser_stop(browser_stop_Request) returns (browser_stop_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3009
+      diagnostic_name: "browser.stop"
+      error_types: "ycoding.v5.SessionNotFoundError"
+      error_types: "ycoding.v5.ForbiddenError"
+      error_types: "ycoding.v5.ConflictError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      roles: LOCAL_CLIENT
+      scope: SESSION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc browser_tabs(browser_tabs_Request) returns (browser_tabs_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3010
+      diagnostic_name: "browser.tabs"
+      error_types: "ycoding.v5.SessionNotFoundError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: SESSION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}
+
+service server_debug {
+  rpc debug_location(debug_location_Request) returns (debug_location_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3011
+      diagnostic_name: "debug.location"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: MACHINE
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc debug_location_evict(debug_location_evict_Request) returns (debug_location_evict_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3012
+      diagnostic_name: "debug.location.evict"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}
+
+service server_fs {
+  rpc fs_find(fs_find_Request) returns (fs_find_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3013
+      diagnostic_name: "fs.find"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc fs_list(fs_list_Request) returns (fs_list_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3014
+      diagnostic_name: "fs.list"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc fs_read(fs_read_Request) returns (fs_read_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3015
+      diagnostic_name: "fs.read"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: ASSET_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}
+
+service server_health {
+  rpc health_get(health_get_Request) returns (health_get_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3016
+      diagnostic_name: "health.get"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: MACHINE
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc health_stop(health_stop_Request) returns (health_stop_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3017
+      diagnostic_name: "health.stop"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: MACHINE
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}
+
+service server_isolatedBrowser {
+  rpc isolatedBrowser_action(isolatedBrowser_action_Request) returns (isolatedBrowser_action_Reply) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3018
+      diagnostic_name: "isolatedBrowser.action"
+      error_types: "ycoding.v5.SessionNotFoundError"
+      error_types: "ycoding.v5.ForbiddenError"
+      error_types: "ycoding.v5.ConflictError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      roles: LOCAL_CLIENT
+      scope: SESSION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc isolatedBrowser_control(isolatedBrowser_control_Request) returns (isolatedBrowser_control_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3019
+      diagnostic_name: "isolatedBrowser.control"
+      error_types: "ycoding.v5.SessionNotFoundError"
+      error_types: "ycoding.v5.ForbiddenError"
+      error_types: "ycoding.v5.ConflictError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      roles: LOCAL_CLIENT
+      scope: SESSION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc isolatedBrowser_observe(isolatedBrowser_observe_Request) returns (isolatedBrowser_observe_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3020
+      diagnostic_name: "isolatedBrowser.observe"
+      error_types: "ycoding.v5.SessionNotFoundError"
+      error_types: "ycoding.v5.ForbiddenError"
+      error_types: "ycoding.v5.ConflictError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      roles: LOCAL_CLIENT
+      scope: SESSION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc isolatedBrowser_start(isolatedBrowser_start_Request) returns (isolatedBrowser_start_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3021
+      diagnostic_name: "isolatedBrowser.start"
+      error_types: "ycoding.v5.SessionNotFoundError"
+      error_types: "ycoding.v5.ForbiddenError"
+      error_types: "ycoding.v5.ConflictError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      roles: LOCAL_CLIENT
+      scope: SESSION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc isolatedBrowser_status(isolatedBrowser_status_Request) returns (isolatedBrowser_status_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3022
+      diagnostic_name: "isolatedBrowser.status"
+      error_types: "ycoding.v5.SessionNotFoundError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: SESSION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc isolatedBrowser_stop(isolatedBrowser_stop_Request) returns (isolatedBrowser_stop_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3023
+      diagnostic_name: "isolatedBrowser.stop"
+      error_types: "ycoding.v5.SessionNotFoundError"
+      error_types: "ycoding.v5.ForbiddenError"
+      error_types: "ycoding.v5.ConflictError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      roles: LOCAL_CLIENT
+      scope: SESSION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc isolatedBrowser_tabs(isolatedBrowser_tabs_Request) returns (isolatedBrowser_tabs_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3024
+      diagnostic_name: "isolatedBrowser.tabs"
+      error_types: "ycoding.v5.SessionNotFoundError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: SESSION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}
+
+service server_keepAwake {
+  rpc keepAwake_get(keepAwake_get_Request) returns (keepAwake_get_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3025
+      diagnostic_name: "keepAwake.get"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: MACHINE
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc keepAwake_set(keepAwake_set_Request) returns (keepAwake_set_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3026
+      diagnostic_name: "keepAwake.set"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: MACHINE
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}
+
+service server_projectCopy {
+  rpc projectCopy_create(projectCopy_create_Request) returns (projectCopy_create_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3027
+      diagnostic_name: "projectCopy.create"
+      error_types: "ycoding.v5.ProjectCopyError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc projectCopy_refresh(projectCopy_refresh_Request) returns (projectCopy_refresh_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3028
+      diagnostic_name: "projectCopy.refresh"
+      error_types: "ycoding.v5.ProjectCopyError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc projectCopy_remove(projectCopy_remove_Request) returns (projectCopy_remove_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3029
+      diagnostic_name: "projectCopy.remove"
+      error_types: "ycoding.v5.ProjectCopyError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}
+
+service server_pty {
+  rpc pty_connectToken(pty_connectToken_Request) returns (pty_connectToken_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3030
+      diagnostic_name: "pty.connectToken"
+      error_types: "ycoding.v5.ForbiddenError"
+      error_types: "ycoding.v5.PtyConflictError"
+      error_types: "ycoding.v5.PtyNotFoundError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: SECRET
+    };
+  }
+  rpc pty_control(pty_control_Request) returns (pty_control_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3031
+      diagnostic_name: "pty.control"
+      error_types: "ycoding.v5.ForbiddenError"
+      error_types: "ycoding.v5.PtyConflictError"
+      error_types: "ycoding.v5.PtyNotFoundError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc pty_create(pty_create_Request) returns (pty_create_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3032
+      diagnostic_name: "pty.create"
+      error_types: "ycoding.v5.SessionNotFoundError"
+      error_types: "ycoding.v5.PtyResourceLimitError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc pty_get(pty_get_Request) returns (pty_get_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3033
+      diagnostic_name: "pty.get"
+      error_types: "ycoding.v5.ForbiddenError"
+      error_types: "ycoding.v5.PtyNotFoundError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc pty_list(pty_list_Request) returns (pty_list_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3034
+      diagnostic_name: "pty.list"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc pty_remove(pty_remove_Request) returns (pty_remove_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3035
+      diagnostic_name: "pty.remove"
+      error_types: "ycoding.v5.ForbiddenError"
+      error_types: "ycoding.v5.PtyNotFoundError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc pty_update(pty_update_Request) returns (pty_update_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3036
+      diagnostic_name: "pty.update"
+      error_types: "ycoding.v5.ForbiddenError"
+      error_types: "ycoding.v5.PtyConflictError"
+      error_types: "ycoding.v5.PtyNotFoundError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}
+
+service server_remote {
+  rpc remote_get(remote_get_Request) returns (remote_get_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3037
+      diagnostic_name: "remote.get"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: MACHINE
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc remote_set(remote_set_Request) returns (remote_set_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3038
+      diagnostic_name: "remote.set"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: MACHINE
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}
+
+service server_server {
+  rpc server_get(server_get_Request) returns (server_get_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3039
+      diagnostic_name: "server.get"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: MACHINE
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc telemetry_append(telemetry_append_Request) returns (telemetry_append_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3046
+      diagnostic_name: "telemetry.append"
+      error_types: "ycoding.v5.InvalidRequestError"
+      error_types: "ycoding.v5.TelemetryDisabled"
+      error_types: "ycoding.v5.UnauthorizedError"
+      roles: LOCAL_CLIENT
+      scope: MACHINE
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc telemetry_consent_get(telemetry_consent_get_Request) returns (telemetry_consent_get_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3047
+      diagnostic_name: "telemetry.consent.get"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: MACHINE
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc telemetry_consent_set(telemetry_consent_set_Request) returns (telemetry_consent_set_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3048
+      diagnostic_name: "telemetry.consent.set"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: MACHINE
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc telemetry_list(telemetry_list_Request) returns (telemetry_list_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3049
+      diagnostic_name: "telemetry.list"
+      error_types: "ycoding.v5.InvalidCursorError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: MACHINE
+      mutation: READ
+      settlement: COMPLETED
+      paging: CURSOR
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}
+
+service server_shell {
+  rpc shell_create(shell_create_Request) returns (shell_create_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3040
+      diagnostic_name: "shell.create"
+      error_types: "ycoding.v5.InvalidRequestError"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: SECRET
+    };
+  }
+  rpc shell_get(shell_get_Request) returns (shell_get_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3041
+      diagnostic_name: "shell.get"
+      error_types: "ycoding.v5.ShellNotFoundError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc shell_list(shell_list_Request) returns (shell_list_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3042
+      diagnostic_name: "shell.list"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc shell_output(shell_output_Request) returns (shell_output_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3043
+      diagnostic_name: "shell.output"
+      error_types: "ycoding.v5.ShellNotFoundError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: OFFSET
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc shell_remove(shell_remove_Request) returns (shell_remove_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3044
+      diagnostic_name: "shell.remove"
+      error_types: "ycoding.v5.ShellNotFoundError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc shell_timeout(shell_timeout_Request) returns (shell_timeout_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3045
+      diagnostic_name: "shell.timeout"
+      error_types: "ycoding.v5.ShellNotFoundError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}
+
+service server_vcs {
+  rpc vcs_branch(vcs_branch_Request) returns (vcs_branch_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3050
+      diagnostic_name: "vcs.branch"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc vcs_diff(vcs_diff_Request) returns (vcs_diff_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3051
+      diagnostic_name: "vcs.diff"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc vcs_status(vcs_status_Request) returns (vcs_status_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3052
+      diagnostic_name: "vcs.status"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}

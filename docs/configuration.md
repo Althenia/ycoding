@@ -1,5 +1,12 @@
 # Configuration reference
 
+The Rust Core process-extension resolver accepts explicit `extensions` entries
+with executable/arguments, identity, and host-granted tool families/scopes. It
+validates declarations before launch and rejects obsolete executable plugin/npm
+configuration. The host supplies the stored Location directory and captured
+launch/tool authority. See the [process-extension v5 contract](../specs/process-extension-v5.md)
+for fields, precedence, validation, and deadlines.
+
 This document is the canonical configuration reference for the current YCoding repository. It is derived from the live Schema and runtime discovery code.
 
 ## Configure by task

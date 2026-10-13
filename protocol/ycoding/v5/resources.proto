@@ -1,0 +1,3568 @@
+syntax = "proto2";
+package ycoding.v5;
+import "ycoding/v5/foundation.proto";
+import "ycoding/v5/operations.proto";
+import "ycoding/v5/shared.proto";
+
+option (ycoding.v5.operation_range) = { first: 2000 last: 2059 };
+
+enum Agent_Info_mode {
+  AGENT_INFO_MODE_SUBAGENT = 1;
+  AGENT_INFO_MODE_PRIMARY = 2;
+  AGENT_INFO_MODE_ALL = 3;
+}
+
+enum Agent_ColorValue2 {
+  AGENT_COLORVALUE2_PRIMARY = 1;
+  AGENT_COLORVALUE2_SECONDARY = 2;
+  AGENT_COLORVALUE2_ACCENT = 3;
+  AGENT_COLORVALUE2_SUCCESS = 4;
+  AGENT_COLORVALUE2_WARNING = 5;
+  AGENT_COLORVALUE2_ERROR = 6;
+  AGENT_COLORVALUE2_INFO = 7;
+}
+
+enum ProjectArtifact_AutomaticWriteResult {
+  PROJECTARTIFACT_AUTOMATICWRITERESULT_CREATED = 1;
+  PROJECTARTIFACT_AUTOMATICWRITERESULT_UPDATED = 2;
+  PROJECTARTIFACT_AUTOMATICWRITERESULT_RECONCILED = 3;
+}
+
+enum ProjectArtifact_Kind {
+  PROJECTARTIFACT_KIND_SKILL = 1;
+  PROJECTARTIFACT_KIND_COMMAND = 2;
+  PROJECTARTIFACT_KIND_AGENT = 3;
+  PROJECTARTIFACT_KIND_PLUGIN = 4;
+}
+
+enum ProjectArtifact_ApiMutationResult_stage {
+  PROJECTARTIFACT_APIMUTATIONRESULT_STAGE_TRIAL = 1;
+}
+
+enum ArtifactBadRequest__tag {
+  ARTIFACTBADREQUEST__TAG_ARTIFACTBADREQUEST = 1;
+}
+
+enum ArtifactBadRequest_code {
+  ARTIFACTBADREQUEST_CODE_PROJECTIDENTITYUNAVAILABLE = 1;
+  ARTIFACTBADREQUEST_CODE_INVALIDARTIFACT = 2;
+  ARTIFACTBADREQUEST_CODE_UNSAFECONTENT = 3;
+  ARTIFACTBADREQUEST_CODE_UNSUPPORTEDKIND = 4;
+  ARTIFACTBADREQUEST_CODE_INVALIDSCOPE = 5;
+}
+
+enum ArtifactNotFound__tag {
+  ARTIFACTNOTFOUND__TAG_ARTIFACTNOTFOUND = 1;
+}
+
+enum ArtifactNotFound_code {
+  ARTIFACTNOTFOUND_CODE_ARTIFACTNOTFOUND = 1;
+  ARTIFACTNOTFOUND_CODE_VERSIONNOTFOUND = 2;
+  ARTIFACTNOTFOUND_CODE_DELETIONNOTFOUND = 3;
+}
+
+enum ArtifactConflict__tag {
+  ARTIFACTCONFLICT__TAG_ARTIFACTCONFLICT = 1;
+}
+
+enum ArtifactConflict_code {
+  ARTIFACTCONFLICT_CODE_ARTIFACTCOLLISION = 1;
+  ARTIFACTCONFLICT_CODE_SCOPECOLLISION = 2;
+  ARTIFACTCONFLICT_CODE_VERSIONCONFLICT = 3;
+  ARTIFACTCONFLICT_CODE_OWNERSHIPMISMATCH = 4;
+  ARTIFACTCONFLICT_CODE_DESTINATIONEXISTS = 5;
+  ARTIFACTCONFLICT_CODE_PROJECTADOPTIONCONFLICT = 6;
+}
+
+enum ArtifactGone__tag {
+  ARTIFACTGONE__TAG_ARTIFACTGONE = 1;
+}
+
+enum ArtifactGone_code {
+  ARTIFACTGONE_CODE_CONFIRMATIONEXPIRED = 1;
+  ARTIFACTGONE_CODE_TRASHEXPIRED = 2;
+}
+
+enum ArtifactTooLarge__tag {
+  ARTIFACTTOOLARGE__TAG_ARTIFACTTOOLARGE = 1;
+}
+
+enum ArtifactTooLarge_code {
+  ARTIFACTTOOLARGE_CODE_CONTENTTOOLARGE = 1;
+  ARTIFACTTOOLARGE_CODE_SCOPEQUOTAEXCEEDED = 2;
+}
+
+enum ArtifactRateLimited__tag {
+  ARTIFACTRATELIMITED__TAG_ARTIFACTRATELIMITED = 1;
+}
+
+enum ArtifactRateLimited_code {
+  ARTIFACTRATELIMITED_CODE_WRITERATEEXCEEDED = 1;
+  ARTIFACTRATELIMITED_CODE_ARTIFACTCOOLDOWN = 2;
+}
+
+enum ArtifactUnavailable__tag {
+  ARTIFACTUNAVAILABLE__TAG_ARTIFACTUNAVAILABLE = 1;
+}
+
+enum ArtifactUnavailable_code {
+  ARTIFACTUNAVAILABLE_CODE_STORAGEUNAVAILABLE = 1;
+  ARTIFACTUNAVAILABLE_CODE_LOCKTIMEOUT = 2;
+  ARTIFACTUNAVAILABLE_CODE_RECONCILIATIONREQUIRED = 3;
+}
+
+enum ProjectArtifact_ApiScope {
+  PROJECTARTIFACT_APISCOPE_PROJECT = 1;
+  PROJECTARTIFACT_APISCOPE_GLOBAL = 2;
+}
+
+enum ProjectArtifact_SkillDefinition_kind {
+  PROJECTARTIFACT_SKILLDEFINITION_KIND_SKILL = 1;
+}
+
+enum ProjectArtifact_CommandDefinition_kind {
+  PROJECTARTIFACT_COMMANDDEFINITION_KIND_COMMAND = 1;
+}
+
+enum ProjectArtifact_AgentDefinition_kind {
+  PROJECTARTIFACT_AGENTDEFINITION_KIND_AGENT = 1;
+}
+
+enum ProjectArtifact_AgentDefinition_mode {
+  PROJECTARTIFACT_AGENTDEFINITION_MODE_SUBAGENT = 1;
+}
+
+enum ProjectArtifact_PluginDefinition_kind {
+  PROJECTARTIFACT_PLUGINDEFINITION_KIND_PLUGIN = 1;
+}
+
+enum ProjectArtifact_ProjectScope_type {
+  PROJECTARTIFACT_PROJECTSCOPE_TYPE_PROJECT = 1;
+}
+
+enum ProjectArtifact_GlobalScope_type {
+  PROJECTARTIFACT_GLOBALSCOPE_TYPE_GLOBAL = 1;
+}
+
+enum ProjectArtifact_Stage {
+  PROJECTARTIFACT_STAGE_TRIAL = 1;
+  PROJECTARTIFACT_STAGE_ACTIVE = 2;
+  PROJECTARTIFACT_STAGE_DEGRADED = 3;
+  PROJECTARTIFACT_STAGE_DISABLED = 4;
+  PROJECTARTIFACT_STAGE_QUARANTINE = 5;
+}
+
+enum ProjectArtifact_VersionState {
+  PROJECTARTIFACT_VERSIONSTATE_TRIAL = 1;
+  PROJECTARTIFACT_VERSIONSTATE_ACTIVE = 2;
+  PROJECTARTIFACT_VERSIONSTATE_DEGRADED = 3;
+  PROJECTARTIFACT_VERSIONSTATE_DISABLED = 4;
+  PROJECTARTIFACT_VERSIONSTATE_QUARANTINE = 5;
+  PROJECTARTIFACT_VERSIONSTATE_SUPERSEDED = 6;
+}
+
+enum ProjectArtifact_Source {
+  PROJECTARTIFACT_SOURCE_AGENT = 1;
+  PROJECTARTIFACT_SOURCE_USER = 2;
+  PROJECTARTIFACT_SOURCE_PROMOTION = 3;
+  PROJECTARTIFACT_SOURCE_FORK = 4;
+  PROJECTARTIFACT_SOURCE_RESTORE = 5;
+}
+
+enum ProjectArtifact_CollisionDiagnostic_type {
+  PROJECTARTIFACT_COLLISIONDIAGNOSTIC_TYPE_EXISTING_SOURCE = 1;
+  PROJECTARTIFACT_COLLISIONDIAGNOSTIC_TYPE_CROSS_SCOPE = 2;
+  PROJECTARTIFACT_COLLISIONDIAGNOSTIC_TYPE_PROJECT_OVER_GLOBAL_SHADOW = 3;
+}
+
+enum ProjectArtifact_ApiListScope {
+  PROJECTARTIFACT_APILISTSCOPE_PROJECT = 1;
+  PROJECTARTIFACT_APILISTSCOPE_GLOBAL = 2;
+  PROJECTARTIFACT_APILISTSCOPE_TRASH = 3;
+}
+
+enum ProjectArtifact_PromotionPreview_risk {
+  PROJECTARTIFACT_PROMOTIONPREVIEW_RISK_DECLARATIVE = 1;
+  PROJECTARTIFACT_PROMOTIONPREVIEW_RISK_EXECUTABLE = 2;
+}
+
+enum Config_DiagnosticReason {
+  CONFIG_DIAGNOSTICREASON_INVALID_JSON = 1;
+  CONFIG_DIAGNOSTICREASON_INVALID_VALUES = 2;
+  CONFIG_DIAGNOSTICREASON_REMOVED_KEYS = 3;
+}
+
+enum Integration_CommandAttemptStatusValue1_status {
+  INTEGRATION_COMMANDATTEMPTSTATUSVALUE1_STATUS_PENDING = 1;
+}
+
+enum Integration_CommandAttemptStatusValue2_status {
+  INTEGRATION_COMMANDATTEMPTSTATUSVALUE2_STATUS_COMPLETE = 1;
+}
+
+enum Integration_CommandAttemptStatusValue3_status {
+  INTEGRATION_COMMANDATTEMPTSTATUSVALUE3_STATUS_FAILED = 1;
+}
+
+enum Integration_CommandAttemptStatusValue4_status {
+  INTEGRATION_COMMANDATTEMPTSTATUSVALUE4_STATUS_EXPIRED = 1;
+}
+
+enum Integration_OAuthMethod_type {
+  INTEGRATION_OAUTHMETHOD_TYPE_OAUTH = 1;
+}
+
+enum Integration_TextPrompt_type {
+  INTEGRATION_TEXTPROMPT_TYPE_TEXT = 1;
+}
+
+enum Integration_When_op {
+  INTEGRATION_WHEN_OP_EQ = 1;
+  INTEGRATION_WHEN_OP_NEQ = 2;
+}
+
+enum Integration_SelectPrompt_type {
+  INTEGRATION_SELECTPROMPT_TYPE_SELECT = 1;
+}
+
+enum Integration_CommandMethod_type {
+  INTEGRATION_COMMANDMETHOD_TYPE_COMMAND = 1;
+}
+
+enum Integration_KeyMethod_type {
+  INTEGRATION_KEYMETHOD_TYPE_KEY = 1;
+}
+
+enum Integration_EnvMethod_type {
+  INTEGRATION_ENVMETHOD_TYPE_ENV = 1;
+}
+
+enum Connection_CredentialInfo_type {
+  CONNECTION_CREDENTIALINFO_TYPE_CREDENTIAL = 1;
+}
+
+enum Connection_EnvInfo_type {
+  CONNECTION_ENVINFO_TYPE_ENV = 1;
+}
+
+enum Integration_Attempt_mode {
+  INTEGRATION_ATTEMPT_MODE_AUTO = 1;
+  INTEGRATION_ATTEMPT_MODE_CODE = 2;
+}
+
+enum Integration_AttemptStatusValue1_status {
+  INTEGRATION_ATTEMPTSTATUSVALUE1_STATUS_PENDING = 1;
+}
+
+enum Integration_AttemptStatusValue2_status {
+  INTEGRATION_ATTEMPTSTATUSVALUE2_STATUS_COMPLETE = 1;
+}
+
+enum Integration_AttemptStatusValue3_status {
+  INTEGRATION_ATTEMPTSTATUSVALUE3_STATUS_FAILED = 1;
+}
+
+enum Integration_AttemptStatusValue4_status {
+  INTEGRATION_ATTEMPTSTATUSVALUE4_STATUS_EXPIRED = 1;
+}
+
+enum Mcp_LocalConfig_type {
+  MCP_LOCALCONFIG_TYPE_LOCAL = 1;
+}
+
+enum Mcp_RemoteConfig_type {
+  MCP_REMOTECONFIG_TYPE_REMOTE = 1;
+}
+
+enum McpServerNotFoundError__tag {
+  MCPSERVERNOTFOUNDERROR__TAG_MCPSERVERNOTFOUNDERROR = 1;
+}
+
+enum Mcp_Status_Connected_status {
+  MCP_STATUS_CONNECTED_STATUS_CONNECTED = 1;
+}
+
+enum Mcp_Status_Pending_status {
+  MCP_STATUS_PENDING_STATUS_PENDING = 1;
+}
+
+enum Mcp_Status_Disabled_status {
+  MCP_STATUS_DISABLED_STATUS_DISABLED = 1;
+}
+
+enum Mcp_Status_Failed_status {
+  MCP_STATUS_FAILED_STATUS_FAILED = 1;
+}
+
+enum Mcp_Status_NeedsAuth_status {
+  MCP_STATUS_NEEDSAUTH_STATUS_NEEDS_AUTH = 1;
+}
+
+enum Mcp_Status_NeedsClientRegistration_status {
+  MCP_STATUS_NEEDSCLIENTREGISTRATION_STATUS_NEEDS_CLIENT_REGISTRATION = 1;
+}
+
+enum Model_Cost_tier_type {
+  MODEL_COST_TIER_TYPE_CONTEXT = 1;
+}
+
+enum Model_Default_status {
+  MODEL_DEFAULT_STATUS_ALPHA = 1;
+  MODEL_DEFAULT_STATUS_BETA = 2;
+  MODEL_DEFAULT_STATUS_DEPRECATED = 3;
+  MODEL_DEFAULT_STATUS_ACTIVE = 4;
+}
+
+enum Model_API {
+  MODEL_API_CHAT = 1;
+  MODEL_API_RESPONSES = 2;
+}
+
+enum Model_Info_status {
+  MODEL_INFO_STATUS_ALPHA = 1;
+  MODEL_INFO_STATUS_BETA = 2;
+  MODEL_INFO_STATUS_DEPRECATED = 3;
+  MODEL_INFO_STATUS_ACTIVE = 4;
+}
+
+enum Project_Vcs {
+  PROJECT_VCS_GIT = 1;
+  PROJECT_VCS_HG = 2;
+}
+
+enum ProviderNotFoundError__tag {
+  PROVIDERNOTFOUNDERROR__TAG_PROVIDERNOTFOUNDERROR = 1;
+}
+
+enum ProviderUsage_Status {
+  PROVIDERUSAGE_STATUS_AVAILABLE = 1;
+  PROVIDERUSAGE_STATUS_STALE = 2;
+  PROVIDERUSAGE_STATUS_UNSUPPORTED = 3;
+  PROVIDERUSAGE_STATUS_UNAUTHORIZED = 4;
+  PROVIDERUSAGE_STATUS_ERROR = 5;
+}
+
+enum ProviderUsage_Source {
+  PROVIDERUSAGE_SOURCE_PROVIDER_API = 1;
+  PROVIDERUSAGE_SOURCE_LOCAL_CLIENT_RPC = 2;
+  PROVIDERUSAGE_SOURCE_RESPONSE_HEADERS = 3;
+  PROVIDERUSAGE_SOURCE_PROVIDER_INTERNAL_API = 4;
+  PROVIDERUSAGE_SOURCE_LOCAL_SESSION = 5;
+}
+
+enum ProviderUsage_Stability {
+  PROVIDERUSAGE_STABILITY_STABLE = 1;
+  PROVIDERUSAGE_STABILITY_CLIENT_CONTRACT = 2;
+  PROVIDERUSAGE_STABILITY_OBSERVED = 3;
+  PROVIDERUSAGE_STABILITY_BEST_EFFORT = 4;
+}
+
+enum ProviderUsage_Unit {
+  PROVIDERUSAGE_UNIT_PERCENT = 1;
+  PROVIDERUSAGE_UNIT_USD = 2;
+  PROVIDERUSAGE_UNIT_REQUESTS = 3;
+  PROVIDERUSAGE_UNIT_TOKENS = 4;
+  PROVIDERUSAGE_UNIT_COUNT = 5;
+}
+
+enum Reference_LocalSource_type {
+  REFERENCE_LOCALSOURCE_TYPE_LOCAL = 1;
+}
+
+enum Reference_GitSource_type {
+  REFERENCE_GITSOURCE_TYPE_GIT = 1;
+}
+
+enum usage_report_Request_query_group {
+  USAGE_REPORT_REQUEST_QUERY_GROUP_MODEL = 1;
+  USAGE_REPORT_REQUEST_QUERY_GROUP_HOUR = 2;
+  USAGE_REPORT_REQUEST_QUERY_GROUP_DAY = 3;
+  USAGE_REPORT_REQUEST_QUERY_GROUP_MONTH = 4;
+  USAGE_REPORT_REQUEST_QUERY_GROUP_SESSION = 5;
+  USAGE_REPORT_REQUEST_QUERY_GROUP_PROJECT = 6;
+  USAGE_REPORT_REQUEST_QUERY_GROUP_AGENT = 7;
+}
+
+enum usage_report_Request_query_sort {
+  USAGE_REPORT_REQUEST_QUERY_SORT_KEY = 1;
+  USAGE_REPORT_REQUEST_QUERY_SORT_TOKENS = 2;
+  USAGE_REPORT_REQUEST_QUERY_SORT_COST = 3;
+  USAGE_REPORT_REQUEST_QUERY_SORT_STEPS = 4;
+  USAGE_REPORT_REQUEST_QUERY_SORT_INPUT = 5;
+  USAGE_REPORT_REQUEST_QUERY_SORT_OUTPUT = 6;
+  USAGE_REPORT_REQUEST_QUERY_SORT_REASONING = 7;
+  USAGE_REPORT_REQUEST_QUERY_SORT_CACHEREAD = 8;
+  USAGE_REPORT_REQUEST_QUERY_SORT_CACHEWRITE = 9;
+}
+
+enum usage_report_Request_query_order {
+  USAGE_REPORT_REQUEST_QUERY_ORDER_ASC = 1;
+  USAGE_REPORT_REQUEST_QUERY_ORDER_DESC = 2;
+}
+
+message agent_list_Request {
+  required LocationQuery query = 1;
+}
+
+message agent_list_Result {
+  required Location_Info location = 1;
+  required agent_list_Result_data data = 2;
+}
+
+message agent_list_Result_data {
+  repeated Agent_Info items = 1;
+}
+
+message Agent_Info {
+  required LosslessString id = 1;
+  required LosslessString name = 2;
+  optional Model_Ref model = 3;
+  required Provider_Request request = 4;
+  optional LosslessString system = 5;
+  optional LosslessString description = 6;
+  required Agent_Info_mode mode = 7;
+  required bool hidden = 8;
+  optional Agent_Color color = 9;
+  optional uint64 steps = 10 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/agent.ts#Agent.Info" integer_min: "1" integer_max: "9007199254740991" }];
+  optional Agent_Info_locations locations = 11;
+  required Permission_Ruleset permissions = 12;
+}
+
+message Provider_Request {
+  required Provider_Settings settings = 1;
+  required Provider_Request_headers headers = 2;
+  required Provider_Request_body body = 3;
+}
+
+message Provider_Settings {
+  repeated Provider_SettingsEntry entries = 1;
+}
+
+message Provider_SettingsEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message Provider_Request_headers {
+  repeated Provider_Request_headersEntry entries = 1;
+}
+
+message Provider_Request_headersEntry {
+  required LosslessString key = 1;
+  required LosslessString value = 2;
+}
+
+message Provider_Request_body {
+  repeated Provider_Request_bodyEntry entries = 1;
+}
+
+message Provider_Request_bodyEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message Agent_Color {
+  oneof kind {
+    LosslessString value_1 = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/agent.ts#Agent.Color" }];
+    Agent_ColorValue2 value_2 = 2;
+  }
+}
+
+message Agent_Info_locations {
+  repeated LosslessString items = 1;
+}
+
+message ProjectArtifact_ApiGlobalMutationConfirmation {
+  required LosslessString token = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ConfirmationToken" }];
+}
+
+message artifact_confirmGlobal_Request {
+  required LocationQuery query = 1;
+  required ProjectArtifact_ApiGlobalMutationConfirmation payload = 2;
+}
+
+message artifact_confirmGlobal_Result {
+  required ProjectArtifact_ApiMutationResult data = 1;
+}
+
+message ProjectArtifact_ApiMutationResult {
+  required ProjectArtifact_AutomaticWriteResult result = 1;
+  required LosslessString scopeID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ScopeID" }];
+  required ProjectArtifact_Kind kind = 3;
+  required LosslessString id = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ID" }];
+  required LosslessString versionID = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.VersionID" }];
+  required LosslessString contentDigest = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Digest" }];
+  required ProjectArtifact_ApiMutationResult_stage stage = 7;
+  required ProjectArtifact_ApiMutationResult_remaining remaining = 8;
+}
+
+message ProjectArtifact_ApiMutationResult_remaining {
+  required int64 session = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/project-artifact.ts#ArtifactMutationResult" integer_min: "-9007199254740991" integer_max: "9007199254740991" }];
+  required int64 projectDaily = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/project-artifact.ts#ArtifactMutationResult" integer_min: "-9007199254740991" integer_max: "9007199254740991" }];
+  required int64 projectArtifacts = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/project-artifact.ts#ArtifactMutationResult" integer_min: "-9007199254740991" integer_max: "9007199254740991" }];
+  required int64 versions = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/project-artifact.ts#ArtifactMutationResult" integer_min: "-9007199254740991" integer_max: "9007199254740991" }];
+  required int64 bytes = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/project-artifact.ts#ArtifactMutationResult" integer_min: "-9007199254740991" integer_max: "9007199254740991" }];
+}
+
+message ArtifactBadRequest {
+  required ArtifactBadRequest__tag _tag = 1;
+  required ArtifactBadRequest_code code = 2;
+}
+
+message ArtifactNotFound {
+  required ArtifactNotFound__tag _tag = 1;
+  required ArtifactNotFound_code code = 2;
+}
+
+message ArtifactConflict {
+  required ArtifactConflict__tag _tag = 1;
+  required ArtifactConflict_code code = 2;
+}
+
+message ArtifactGone {
+  required ArtifactGone__tag _tag = 1;
+  required ArtifactGone_code code = 2;
+}
+
+message ArtifactTooLarge {
+  required ArtifactTooLarge__tag _tag = 1;
+  required ArtifactTooLarge_code code = 2;
+}
+
+message ArtifactRateLimited {
+  required ArtifactRateLimited__tag _tag = 1;
+  required ArtifactRateLimited_code code = 2;
+}
+
+message ArtifactUnavailable {
+  required ArtifactUnavailable__tag _tag = 1;
+  required ArtifactUnavailable_code code = 2;
+}
+
+message ProjectArtifact_ApiCreate {
+  required ProjectArtifact_ApiScope scope = 1;
+  required LosslessString id = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ID" }];
+  required ProjectArtifact_Definition definition = 3;
+}
+
+message ProjectArtifact_Definition {
+  oneof kind {
+    ProjectArtifact_SkillDefinition value_1 = 1;
+    ProjectArtifact_CommandDefinition value_2 = 2;
+    ProjectArtifact_AgentDefinition value_3 = 3;
+    ProjectArtifact_PluginDefinition value_4 = 4;
+  }
+}
+
+message ProjectArtifact_SkillDefinition {
+  required ProjectArtifact_SkillDefinition_kind kind = 1;
+  required LosslessString name = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.DisplayName" }];
+  required LosslessString description = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Description" }];
+  required LosslessString content = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.SkillContent" }];
+}
+
+message ProjectArtifact_CommandDefinition {
+  required ProjectArtifact_CommandDefinition_kind kind = 1;
+  required LosslessString name = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.DisplayName" }];
+  required LosslessString description = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Description" }];
+  required LosslessString template = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.CommandTemplate" }];
+  required bool subtask = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.CommandDefinition" }];
+}
+
+message ProjectArtifact_AgentDefinition {
+  required ProjectArtifact_AgentDefinition_kind kind = 1;
+  required LosslessString name = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.DisplayName" }];
+  required LosslessString description = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Description" }];
+  required LosslessString system = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.AgentSystem" }];
+  required ProjectArtifact_AgentDefinition_mode mode = 5;
+  required Permission_Ruleset permissions = 6;
+}
+
+message ProjectArtifact_PluginDefinition {
+  required ProjectArtifact_PluginDefinition_kind kind = 1;
+  required LosslessString name = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.DisplayName" }];
+  required LosslessString description = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Description" }];
+  required LosslessString draft = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.PluginDraft" }];
+}
+
+message artifact_create_Request {
+  required LocationQuery query = 1;
+  required ProjectArtifact_ApiCreate payload = 2;
+}
+
+message artifact_create_Result {
+  required artifact_create_Result_data data = 1;
+}
+
+message artifact_create_Result_data {
+  oneof kind {
+    ProjectArtifact_ApiMutationResult value_1 = 1;
+    ProjectArtifact_ApiConfirmationPreview value_2 = 2;
+  }
+}
+
+message ProjectArtifact_ApiConfirmationPreview {
+  required LosslessString token = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ConfirmationToken" }];
+  required uint64 expiresAt = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.TimestampMillis" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message artifact_disable_Request_params {
+  required ProjectArtifact_ApiScope scope = 1;
+  required ProjectArtifact_Kind kind = 2;
+  required LosslessString id = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ID" }];
+}
+
+message ProjectArtifact_ApiExpectation {
+  required uint64 expectedRevision = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Revision" integer_min: "0" integer_max: "9007199254740991" }];
+  required LosslessString expectedVersionID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.VersionID" }];
+  required LosslessString expectedDigest = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Digest" }];
+}
+
+message artifact_disable_Request {
+  required artifact_disable_Request_params params = 1;
+  required LocationQuery query = 2;
+  required ProjectArtifact_ApiExpectation payload = 3;
+}
+
+message artifact_disable_Result {
+  required Empty data = 1;
+}
+
+message artifact_enable_Request_params {
+  required ProjectArtifact_ApiScope scope = 1;
+  required ProjectArtifact_Kind kind = 2;
+  required LosslessString id = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ID" }];
+}
+
+message artifact_enable_Request {
+  required artifact_enable_Request_params params = 1;
+  required LocationQuery query = 2;
+  required ProjectArtifact_ApiExpectation payload = 3;
+}
+
+message artifact_enable_Result {
+  required Empty data = 1;
+}
+
+message artifact_fork_confirm_Request_params {
+  required ProjectArtifact_Kind kind = 1;
+  required LosslessString id = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ID" }];
+  required LosslessString token = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ConfirmationToken" }];
+}
+
+message artifact_fork_confirm_Request {
+  required artifact_fork_confirm_Request_params params = 1;
+  required LocationQuery query = 2;
+}
+
+message artifact_fork_confirm_Result {
+  required ProjectArtifact_ApiMutationResult data = 1;
+}
+
+message artifact_fork_preview_Request_params {
+  required ProjectArtifact_Kind kind = 1;
+  required LosslessString id = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ID" }];
+}
+
+message artifact_fork_preview_Request {
+  required artifact_fork_preview_Request_params params = 1;
+  required LocationQuery query = 2;
+  required ProjectArtifact_ApiExpectation payload = 3;
+}
+
+message artifact_fork_preview_Result {
+  required ProjectArtifact_ApiConfirmationPreview data = 1;
+}
+
+message artifact_get_Request_params {
+  required ProjectArtifact_ApiScope scope = 1;
+  required ProjectArtifact_Kind kind = 2;
+  required LosslessString id = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ID" }];
+}
+
+message artifact_get_Request {
+  required artifact_get_Request_params params = 1;
+  required LocationQuery query = 2;
+}
+
+message artifact_get_Result {
+  required ProjectArtifact_ArtifactDetails data = 1;
+}
+
+message ProjectArtifact_ArtifactDetails {
+  required ProjectArtifact_Artifact artifact = 1;
+  required ProjectArtifact_Definition definition = 2;
+  required ProjectArtifact_Version currentVersion = 3;
+  required ProjectArtifact_ArtifactDetails_versions versions = 4;
+  required ProjectArtifact_ArtifactDetails_diagnostics diagnostics = 5;
+}
+
+message ProjectArtifact_Artifact {
+  required ProjectArtifact_Scope scope = 1;
+  required ProjectArtifact_Kind kind = 2;
+  required LosslessString id = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ID" }];
+  required uint64 revision = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Revision" integer_min: "0" integer_max: "9007199254740991" }];
+  required ProjectArtifact_Stage stage = 5;
+  required LosslessString currentVersionID = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.VersionID" }];
+  optional LosslessString fallbackVersionID = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Artifact" }];
+  optional LosslessString shadowedScopeID = 8 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Artifact" }];
+  optional uint64 lastUsedAt = 9 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Artifact" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 timeCreated = 10 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.TimestampMillis" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 timeUpdated = 11 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.TimestampMillis" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message ProjectArtifact_Scope {
+  oneof kind {
+    ProjectArtifact_ProjectScope value_1 = 1;
+    ProjectArtifact_GlobalScope value_2 = 2;
+  }
+}
+
+message ProjectArtifact_ProjectScope {
+  required ProjectArtifact_ProjectScope_type type = 1;
+  required LosslessString id = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ScopeID" }];
+  required LosslessString projectID = 3;
+  required LosslessString storageID = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.StorageID" }];
+}
+
+message ProjectArtifact_GlobalScope {
+  required ProjectArtifact_GlobalScope_type type = 1;
+  required LosslessString id = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ScopeID" }];
+  required LosslessString storageID = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.StorageID" }];
+}
+
+message ProjectArtifact_Version {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.VersionID" }];
+  optional LosslessString parentVersionID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Version" }];
+  required ProjectArtifact_VersionState state = 3;
+  required LosslessString contentDigest = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Digest" }];
+  required LosslessString contentRelpath = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ContentRelpath" }];
+  required ProjectArtifact_Provenance provenance = 6;
+  required uint64 timeCreated = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.TimestampMillis" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 timeStateChanged = 8 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.TimestampMillis" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message ProjectArtifact_Provenance {
+  required ProjectArtifact_Source source = 1;
+  optional LosslessString creatorAgentID = 2;
+  optional LosslessString creatorSessionID = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Provenance" }];
+  optional LosslessString insightDigest = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Provenance" }];
+  optional LosslessString originScopeID = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Provenance" }];
+  optional LosslessString originVersionID = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Provenance" }];
+  optional LosslessString originEvidenceDigest = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Provenance" }];
+}
+
+message ProjectArtifact_ArtifactDetails_versions {
+  repeated ProjectArtifact_Version items = 1;
+}
+
+message ProjectArtifact_ArtifactDetails_diagnostics {
+  repeated ProjectArtifact_CollisionDiagnostic items = 1;
+}
+
+message ProjectArtifact_CollisionDiagnostic {
+  required ProjectArtifact_CollisionDiagnostic_type type = 1;
+  required ProjectArtifact_Kind kind = 2;
+  required LosslessString id = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ID" }];
+  optional LosslessString scopeID = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.CollisionDiagnostic" }];
+  required LosslessString message = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Description" }];
+}
+
+message ProjectArtifact_ApiQuery {
+  optional ProjectArtifact_ApiQuery_location location = 1;
+  required ProjectArtifact_ApiListScope scope = 2;
+  optional ProjectArtifact_Kind kind = 3;
+  optional ProjectArtifact_Stage stage = 4;
+}
+
+message ProjectArtifact_ApiQuery_location {
+  optional LosslessString directory = 1;
+  optional LosslessString workspace = 2;
+}
+
+message artifact_list_Request {
+  required ProjectArtifact_ApiQuery query = 1;
+}
+
+message artifact_list_Result {
+  required artifact_list_Result_data data = 1;
+}
+
+message artifact_list_Result_data {
+  repeated ProjectArtifact_ApiListItem items = 1;
+}
+
+message ProjectArtifact_ApiListItem {
+  oneof kind {
+    ProjectArtifact_ArtifactSummary value_1 = 1;
+    ProjectArtifact_ApiTrashSummary value_2 = 2;
+  }
+}
+
+message ProjectArtifact_ArtifactSummary {
+  required ProjectArtifact_Scope scope = 1;
+  required ProjectArtifact_Kind kind = 2;
+  required LosslessString id = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ID" }];
+  required LosslessString name = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.DisplayName" }];
+  required LosslessString description = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Description" }];
+  required ProjectArtifact_Stage stage = 6;
+  required uint64 revision = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Revision" integer_min: "0" integer_max: "9007199254740991" }];
+  required LosslessString currentVersionID = 8 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.VersionID" }];
+  required LosslessString currentDigest = 9 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Digest" }];
+  optional uint64 lastUsedAt = 10 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ArtifactSummary" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 timeUpdated = 11 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.TimestampMillis" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message ProjectArtifact_ApiTrashSummary {
+  required LosslessString deletionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.DeletionID" }];
+  required ProjectArtifact_Scope scope = 2;
+  required ProjectArtifact_Kind kind = 3;
+  required LosslessString id = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ID" }];
+  required ProjectArtifact_Stage priorStage = 5;
+  required LosslessString priorVersionID = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.VersionID" }];
+  required uint64 deletedAt = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.TimestampMillis" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 purgeAfter = 8 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.TimestampMillis" integer_min: "0" integer_max: "9007199254740991" }];
+  required LosslessString name = 9 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.DisplayName" }];
+  required LosslessString description = 10 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Description" }];
+  required ProjectArtifact_Definition definition = 11;
+}
+
+message artifact_metrics_Request_params {
+  required ProjectArtifact_ApiScope scope = 1;
+  required ProjectArtifact_Kind kind = 2;
+  required LosslessString id = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ID" }];
+}
+
+message artifact_metrics_Request {
+  required artifact_metrics_Request_params params = 1;
+  required LocationQuery query = 2;
+}
+
+message artifact_metrics_Result {
+  required ProjectArtifact_ApiMetrics data = 1;
+}
+
+message ProjectArtifact_ApiMetrics {
+  required double score = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/project-artifact.ts#MetricsResponse" }];
+  required ProjectArtifact_ApiMetrics_confidence confidence = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Confidence" }];
+  required double rewardUnits = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/project-artifact.ts#MetricsResponse" }];
+  required double penaltyUnits = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/project-artifact.ts#MetricsResponse" }];
+  optional uint64 lastUsedAt = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/project-artifact.ts#MetricsResponse" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message ProjectArtifact_ApiMetrics_confidence {
+  required uint64 sampleCount = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/project-artifact.ts#MetricsResponse" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 successCount = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/project-artifact.ts#MetricsResponse" integer_min: "0" integer_max: "9007199254740991" }];
+  required double lowerBound = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/project-artifact.ts#MetricsResponse" }];
+  required double upperBound = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/project-artifact.ts#MetricsResponse" }];
+  required bool eligible = 5;
+}
+
+message artifact_promotion_confirm_Request_params {
+  required ProjectArtifact_Kind kind = 1;
+  required LosslessString id = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ID" }];
+  required LosslessString token = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ConfirmationToken" }];
+}
+
+message artifact_promotion_confirm_Request {
+  required artifact_promotion_confirm_Request_params params = 1;
+  required LocationQuery query = 2;
+}
+
+message artifact_promotion_confirm_Result {
+  required ProjectArtifact_ApiMutationResult data = 1;
+}
+
+message artifact_promotion_preview_Request_params {
+  required ProjectArtifact_Kind kind = 1;
+  required LosslessString id = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ID" }];
+}
+
+message artifact_promotion_preview_Request {
+  required artifact_promotion_preview_Request_params params = 1;
+  required LocationQuery query = 2;
+  required ProjectArtifact_ApiExpectation payload = 3;
+}
+
+message artifact_promotion_preview_Result {
+  required ProjectArtifact_PromotionPreview data = 1;
+}
+
+message ProjectArtifact_PromotionPreview {
+  required ProjectArtifact_ArtifactSummary artifact = 1;
+  required ProjectArtifact_Metrics metrics = 2;
+  required ProjectArtifact_GlobalScope destination = 3;
+  required ProjectArtifact_PromotionPreview_risk risk = 4;
+  required LosslessString renderedContent = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.RenderedContent" utf16_min: 1 }];
+  optional ProjectArtifact_CollisionDiagnostic collision = 6;
+  required LosslessString token = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ConfirmationToken" }];
+  required uint64 expiresAt = 8 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.TimestampMillis" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message ProjectArtifact_Metrics {
+  required double score = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Metrics" }];
+  required ProjectArtifact_Metrics_confidence confidence = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Confidence" }];
+  required double rewardUnits = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Metrics" }];
+  required double penaltyUnits = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Metrics" }];
+  optional uint64 lastUsedAt = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Metrics" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message ProjectArtifact_Metrics_confidence {
+  required uint64 sampleCount = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Metrics" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 successCount = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Metrics" integer_min: "0" integer_max: "9007199254740991" }];
+  required double lowerBound = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Metrics" }];
+  required double upperBound = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Metrics" }];
+  required bool eligible = 5;
+}
+
+message artifact_purge_Request {
+  required LocationQuery query = 1;
+}
+
+message artifact_purge_Result {
+  required artifact_purge_Result_data data = 1;
+}
+
+message artifact_purge_Result_data {
+  required uint64 count = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/project-artifact.ts#ProjectArtifactGroup" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message artifact_remove_Request_params {
+  required ProjectArtifact_ApiScope scope = 1;
+  required ProjectArtifact_Kind kind = 2;
+  required LosslessString id = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ID" }];
+}
+
+message artifact_remove_Request {
+  required artifact_remove_Request_params params = 1;
+  required LocationQuery query = 2;
+  required ProjectArtifact_ApiExpectation payload = 3;
+}
+
+message artifact_remove_Result {
+  required artifact_remove_Result_data data = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Trash" }];
+}
+
+message artifact_remove_Result_data {
+  required LosslessString deletionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.DeletionID" }];
+  required ProjectArtifact_Scope scope = 2;
+  required ProjectArtifact_Kind kind = 3;
+  required LosslessString id = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ID" }];
+  required ProjectArtifact_Stage priorStage = 5;
+  required LosslessString priorVersionID = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.VersionID" }];
+  required uint64 deletedAt = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.TimestampMillis" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 purgeAfter = 8 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.TimestampMillis" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message artifact_restore_Request_params {
+  required LosslessString deletionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.DeletionID" }];
+}
+
+message artifact_restore_Request {
+  required artifact_restore_Request_params params = 1;
+  required LocationQuery query = 2;
+}
+
+message artifact_restore_Result {
+  required Empty data = 1;
+}
+
+message artifact_revert_Request_params {
+  required ProjectArtifact_ApiScope scope = 1;
+  required ProjectArtifact_Kind kind = 2;
+  required LosslessString id = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ID" }];
+}
+
+message ProjectArtifact_ApiRevert {
+  required uint64 expectedRevision = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Revision" integer_min: "0" integer_max: "9007199254740991" }];
+  required LosslessString expectedVersionID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.VersionID" }];
+  required LosslessString expectedDigest = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Digest" }];
+  required LosslessString targetVersionID = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.VersionID" }];
+}
+
+message artifact_revert_Request {
+  required artifact_revert_Request_params params = 1;
+  required LocationQuery query = 2;
+  required ProjectArtifact_ApiRevert payload = 3;
+}
+
+message artifact_revert_Result {
+  required Empty data = 1;
+}
+
+message artifact_shadow_confirm_Request_params {
+  required ProjectArtifact_Kind kind = 1;
+  required LosslessString id = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ID" }];
+  required LosslessString token = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ConfirmationToken" }];
+}
+
+message artifact_shadow_confirm_Request {
+  required artifact_shadow_confirm_Request_params params = 1;
+  required LocationQuery query = 2;
+}
+
+message artifact_shadow_confirm_Result {
+  required Empty data = 1;
+}
+
+message artifact_shadow_preview_Request_params {
+  required ProjectArtifact_Kind kind = 1;
+  required LosslessString id = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ID" }];
+}
+
+message artifact_shadow_preview_Request {
+  required artifact_shadow_preview_Request_params params = 1;
+  required LocationQuery query = 2;
+  required ProjectArtifact_ApiExpectation payload = 3;
+}
+
+message artifact_shadow_preview_Result {
+  required ProjectArtifact_ApiConfirmationPreview data = 1;
+}
+
+message artifact_update_Request_params {
+  required ProjectArtifact_ApiScope scope = 1;
+  required ProjectArtifact_Kind kind = 2;
+  required LosslessString id = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.ID" }];
+}
+
+message ProjectArtifact_ApiMutation {
+  required ProjectArtifact_Definition definition = 1;
+  required uint64 expectedRevision = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Revision" integer_min: "0" integer_max: "9007199254740991" }];
+  required LosslessString expectedVersionID = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.VersionID" }];
+  required LosslessString expectedDigest = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project-artifact.ts#ProjectArtifact.Digest" }];
+}
+
+message artifact_update_Request {
+  required artifact_update_Request_params params = 1;
+  required LocationQuery query = 2;
+  required ProjectArtifact_ApiMutation payload = 3;
+}
+
+message artifact_update_Result {
+  required artifact_update_Result_data data = 1;
+}
+
+message artifact_update_Result_data {
+  oneof kind {
+    ProjectArtifact_ApiMutationResult value_1 = 1;
+    ProjectArtifact_ApiConfirmationPreview value_2 = 2;
+  }
+}
+
+message command_list_Request {
+  required LocationQuery query = 1;
+}
+
+message command_list_Result {
+  required Location_Info location = 1;
+  required command_list_Result_data data = 2;
+}
+
+message command_list_Result_data {
+  repeated Command_Info items = 1;
+}
+
+message Command_Info {
+  required LosslessString name = 1;
+  required LosslessString template = 2;
+  optional LosslessString description = 3;
+  optional LosslessString agent = 4;
+  optional Model_Ref model = 5;
+  optional bool subtask = 6;
+  optional Command_Info_locations locations = 7;
+}
+
+message Command_Info_locations {
+  repeated LosslessString items = 1;
+}
+
+message config_diagnostics_Request {
+  required LocationQuery query = 1;
+}
+
+message config_diagnostics_Result {
+  required Location_Info location = 1;
+  required config_diagnostics_Result_data data = 2;
+}
+
+message config_diagnostics_Result_data {
+  repeated Config_Diagnostic items = 1;
+}
+
+message Config_Diagnostic {
+  required LosslessString path = 1;
+  required Config_DiagnosticReason reason = 2;
+  optional LosslessString jsonPath = 3;
+  optional bool failClosed = 4;
+  required LosslessString message = 5;
+}
+
+message credential_activate_Request_params {
+  required LosslessString credentialID = 1;
+}
+
+message credential_activate_Request {
+  required credential_activate_Request_params params = 1;
+  required LocationQuery query = 2;
+}
+
+message credential_activate_Result {
+  required Empty data = 1;
+}
+
+message credential_remove_Request_params {
+  required LosslessString credentialID = 1;
+}
+
+message credential_remove_Request {
+  required credential_remove_Request_params params = 1;
+  required LocationQuery query = 2;
+}
+
+message credential_remove_Result {
+  required Empty data = 1;
+}
+
+message credential_update_Request_params {
+  required LosslessString credentialID = 1;
+}
+
+message credential_update_Request_payload {
+  required LosslessString label = 1;
+}
+
+message credential_update_Request {
+  required credential_update_Request_params params = 1;
+  required LocationQuery query = 2;
+  required credential_update_Request_payload payload = 3;
+}
+
+message credential_update_Result {
+  required Empty data = 1;
+}
+
+message integration_command_cancel_Request_params {
+  required LosslessString integrationID = 1;
+  required LosslessString attemptID = 2;
+}
+
+message integration_command_cancel_Request {
+  required integration_command_cancel_Request_params params = 1;
+  required LocationQuery query = 2;
+}
+
+message integration_command_cancel_Result {
+  required Empty data = 1;
+}
+
+message integration_command_connect_Request_params {
+  required LosslessString integrationID = 1;
+}
+
+message integration_command_connect_Request_payload {
+  required LosslessString methodID = 1;
+  optional LosslessString label = 2;
+}
+
+message integration_command_connect_Request {
+  required integration_command_connect_Request_params params = 1;
+  required LocationQuery query = 2;
+  required integration_command_connect_Request_payload payload = 3;
+}
+
+message integration_command_connect_Result {
+  required Location_Info location = 1;
+  required Integration_CommandAttempt data = 2;
+}
+
+message Integration_CommandAttempt {
+  required LosslessString attemptID = 1;
+  required Integration_CommandAttempt_time time = 2;
+}
+
+message Integration_CommandAttempt_time {
+  required double created = 1;
+  required double expires = 2;
+}
+
+message integration_command_status_Request_params {
+  required LosslessString integrationID = 1;
+  required LosslessString attemptID = 2;
+}
+
+message integration_command_status_Request {
+  required integration_command_status_Request_params params = 1;
+  required LocationQuery query = 2;
+}
+
+message integration_command_status_Result {
+  required Location_Info location = 1;
+  required Integration_CommandAttemptStatus data = 2;
+}
+
+message Integration_CommandAttemptStatus {
+  oneof kind {
+    Integration_CommandAttemptStatusValue1 value_1 = 1;
+    Integration_CommandAttemptStatusValue2 value_2 = 2;
+    Integration_CommandAttemptStatusValue3 value_3 = 3;
+    Integration_CommandAttemptStatusValue4 value_4 = 4;
+  }
+}
+
+message Integration_CommandAttemptStatusValue1 {
+  required Integration_CommandAttemptStatusValue1_status status = 1;
+  optional LosslessString message = 2;
+  required Integration_CommandAttemptStatusValue1_time time = 3;
+}
+
+message Integration_CommandAttemptStatusValue1_time {
+  required double created = 1;
+  required double expires = 2;
+}
+
+message Integration_CommandAttemptStatusValue2 {
+  required Integration_CommandAttemptStatusValue2_status status = 1;
+  required Integration_CommandAttemptStatusValue2_time time = 2;
+}
+
+message Integration_CommandAttemptStatusValue2_time {
+  required double created = 1;
+  required double expires = 2;
+}
+
+message Integration_CommandAttemptStatusValue3 {
+  required Integration_CommandAttemptStatusValue3_status status = 1;
+  required LosslessString message = 2;
+  required Integration_CommandAttemptStatusValue3_time time = 3;
+}
+
+message Integration_CommandAttemptStatusValue3_time {
+  required double created = 1;
+  required double expires = 2;
+}
+
+message Integration_CommandAttemptStatusValue4 {
+  required Integration_CommandAttemptStatusValue4_status status = 1;
+  required Integration_CommandAttemptStatusValue4_time time = 2;
+}
+
+message Integration_CommandAttemptStatusValue4_time {
+  required double created = 1;
+  required double expires = 2;
+}
+
+message integration_connect_key_Request_params {
+  required LosslessString integrationID = 1;
+}
+
+message integration_connect_key_Request_payload {
+  required LosslessString key = 1;
+  optional LosslessString label = 2;
+}
+
+message integration_connect_key_Request {
+  required integration_connect_key_Request_params params = 1;
+  required LocationQuery query = 2;
+  required integration_connect_key_Request_payload payload = 3;
+}
+
+message integration_connect_key_Result {
+  required Empty data = 1;
+}
+
+message integration_get_Request_params {
+  required LosslessString integrationID = 1;
+}
+
+message integration_get_Request {
+  required integration_get_Request_params params = 1;
+  required LocationQuery query = 2;
+}
+
+message integration_get_Result {
+  required Location_Info location = 1;
+  required integration_get_Result_data data = 2;
+}
+
+message integration_get_Result_data {
+  oneof kind {
+    Integration_Info value_1 = 1;
+    Empty none = 2;
+  }
+}
+
+message Integration_Info {
+  required LosslessString id = 1;
+  required LosslessString name = 2;
+  required Integration_Info_methods methods = 3;
+  required Integration_Info_connections connections = 4;
+}
+
+message Integration_Info_methods {
+  repeated Integration_Method items = 1;
+}
+
+message Integration_Method {
+  oneof kind {
+    Integration_OAuthMethod value_1 = 1;
+    Integration_CommandMethod value_2 = 2;
+    Integration_KeyMethod value_3 = 3;
+    Integration_EnvMethod value_4 = 4;
+  }
+}
+
+message Integration_OAuthMethod {
+  required LosslessString id = 1;
+  required Integration_OAuthMethod_type type = 2;
+  required LosslessString label = 3;
+  optional Integration_OAuthMethod_prompts prompts = 4;
+  optional bool remote = 5;
+}
+
+message Integration_OAuthMethod_prompts {
+  repeated Integration_OAuthMethod_promptsItem items = 1;
+}
+
+message Integration_OAuthMethod_promptsItem {
+  oneof kind {
+    Integration_TextPrompt value_1 = 1;
+    Integration_SelectPrompt value_2 = 2;
+  }
+}
+
+message Integration_TextPrompt {
+  required Integration_TextPrompt_type type = 1;
+  required LosslessString key = 2;
+  required LosslessString message = 3;
+  optional LosslessString placeholder = 4;
+  optional Integration_When when = 5;
+}
+
+message Integration_When {
+  required LosslessString key = 1;
+  required Integration_When_op op = 2;
+  required LosslessString value = 3;
+}
+
+message Integration_SelectPrompt {
+  required Integration_SelectPrompt_type type = 1;
+  required LosslessString key = 2;
+  required LosslessString message = 3;
+  required Integration_SelectPrompt_options options = 4;
+  optional Integration_When when = 5;
+}
+
+message Integration_SelectPrompt_options {
+  repeated Integration_SelectPrompt_optionsItem items = 1;
+}
+
+message Integration_SelectPrompt_optionsItem {
+  required LosslessString label = 1;
+  required LosslessString value = 2;
+  optional LosslessString hint = 3;
+}
+
+message Integration_CommandMethod {
+  required LosslessString id = 1;
+  required Integration_CommandMethod_type type = 2;
+  required LosslessString label = 3;
+  required Integration_CommandMethod_command command = 4;
+}
+
+message Integration_CommandMethod_command {
+  repeated LosslessString items = 1;
+}
+
+message Integration_KeyMethod {
+  required Integration_KeyMethod_type type = 1;
+  optional LosslessString label = 2;
+}
+
+message Integration_EnvMethod {
+  required Integration_EnvMethod_type type = 1;
+  required Integration_EnvMethod_names names = 2;
+}
+
+message Integration_EnvMethod_names {
+  repeated LosslessString items = 1;
+}
+
+message Integration_Info_connections {
+  repeated Connection_Info items = 1;
+}
+
+message Connection_Info {
+  oneof kind {
+    Connection_CredentialInfo value_1 = 1;
+    Connection_EnvInfo value_2 = 2;
+  }
+}
+
+message Connection_CredentialInfo {
+  required Connection_CredentialInfo_type type = 1;
+  required LosslessString id = 2;
+  required LosslessString label = 3;
+  required bool active = 4;
+}
+
+message Connection_EnvInfo {
+  required Connection_EnvInfo_type type = 1;
+  required LosslessString name = 2;
+}
+
+message integration_list_Request {
+  required LocationQuery query = 1;
+}
+
+message integration_list_Result {
+  required Location_Info location = 1;
+  required integration_list_Result_data data = 2;
+}
+
+message integration_list_Result_data {
+  repeated Integration_Info items = 1;
+}
+
+message integration_oauth_cancel_Request_params {
+  required LosslessString integrationID = 1;
+  required LosslessString attemptID = 2;
+}
+
+message integration_oauth_cancel_Request {
+  required integration_oauth_cancel_Request_params params = 1;
+  required LocationQuery query = 2;
+}
+
+message integration_oauth_cancel_Result {
+  required Empty data = 1;
+}
+
+message integration_oauth_complete_Request_params {
+  required LosslessString integrationID = 1;
+  required LosslessString attemptID = 2;
+}
+
+message integration_oauth_complete_Request_payload {
+  optional LosslessString code = 1;
+}
+
+message integration_oauth_complete_Request {
+  required integration_oauth_complete_Request_params params = 1;
+  required LocationQuery query = 2;
+  required integration_oauth_complete_Request_payload payload = 3;
+}
+
+message integration_oauth_complete_Result {
+  required Empty data = 1;
+}
+
+message integration_oauth_connect_Request_params {
+  required LosslessString integrationID = 1;
+}
+
+message integration_oauth_connect_Request_payload {
+  required LosslessString methodID = 1;
+  required integration_oauth_connect_Request_payload_inputs inputs = 2;
+  optional LosslessString label = 3;
+}
+
+message integration_oauth_connect_Request_payload_inputs {
+  repeated integration_oauth_connect_Request_payload_inputsEntry entries = 1;
+}
+
+message integration_oauth_connect_Request_payload_inputsEntry {
+  required LosslessString key = 1;
+  required LosslessString value = 2;
+}
+
+message integration_oauth_connect_Request {
+  required integration_oauth_connect_Request_params params = 1;
+  required LocationQuery query = 2;
+  required integration_oauth_connect_Request_payload payload = 3;
+}
+
+message integration_oauth_connect_Result {
+  required Location_Info location = 1;
+  required Integration_Attempt data = 2;
+}
+
+message Integration_Attempt {
+  required LosslessString attemptID = 1;
+  required LosslessString url = 2;
+  required LosslessString instructions = 3;
+  required Integration_Attempt_mode mode = 4;
+  optional bool manualCode = 5;
+  required Integration_Attempt_time time = 6;
+}
+
+message Integration_Attempt_time {
+  required double created = 1;
+  required double expires = 2;
+}
+
+message integration_oauth_status_Request_params {
+  required LosslessString integrationID = 1;
+  required LosslessString attemptID = 2;
+}
+
+message integration_oauth_status_Request {
+  required integration_oauth_status_Request_params params = 1;
+  required LocationQuery query = 2;
+}
+
+message integration_oauth_status_Result {
+  required Location_Info location = 1;
+  required Integration_AttemptStatus data = 2;
+}
+
+message Integration_AttemptStatus {
+  oneof kind {
+    Integration_AttemptStatusValue1 value_1 = 1;
+    Integration_AttemptStatusValue2 value_2 = 2;
+    Integration_AttemptStatusValue3 value_3 = 3;
+    Integration_AttemptStatusValue4 value_4 = 4;
+  }
+}
+
+message Integration_AttemptStatusValue1 {
+  required Integration_AttemptStatusValue1_status status = 1;
+  required Integration_AttemptStatusValue1_time time = 2;
+}
+
+message Integration_AttemptStatusValue1_time {
+  required double created = 1;
+  required double expires = 2;
+}
+
+message Integration_AttemptStatusValue2 {
+  required Integration_AttemptStatusValue2_status status = 1;
+  required Integration_AttemptStatusValue2_time time = 2;
+}
+
+message Integration_AttemptStatusValue2_time {
+  required double created = 1;
+  required double expires = 2;
+}
+
+message Integration_AttemptStatusValue3 {
+  required Integration_AttemptStatusValue3_status status = 1;
+  required LosslessString message = 2;
+  required Integration_AttemptStatusValue3_time time = 3;
+}
+
+message Integration_AttemptStatusValue3_time {
+  required double created = 1;
+  required double expires = 2;
+}
+
+message Integration_AttemptStatusValue4 {
+  required Integration_AttemptStatusValue4_status status = 1;
+  required Integration_AttemptStatusValue4_time time = 2;
+}
+
+message Integration_AttemptStatusValue4_time {
+  required double created = 1;
+  required double expires = 2;
+}
+
+message integration_wellknown_add_Request_payload {
+  required LosslessString url = 1;
+}
+
+message integration_wellknown_add_Request {
+  required LocationQuery query = 1;
+  required integration_wellknown_add_Request_payload payload = 2;
+}
+
+message integration_wellknown_add_Result {
+  required Empty data = 1;
+}
+
+message location_get_Request {
+  required LocationQuery query = 1;
+}
+
+message location_get_Result {
+  required Location_Info data = 1;
+}
+
+message mcp_add_Request_params {
+  required LosslessString server = 1;
+}
+
+message mcp_add_Request_payload {
+  required mcp_add_Request_payload_config config = 1;
+}
+
+message mcp_add_Request_payload_config {
+  oneof kind {
+    Mcp_LocalConfig value_1 = 1;
+    Mcp_RemoteConfig value_2 = 2;
+  }
+}
+
+message Mcp_LocalConfig {
+  required Mcp_LocalConfig_type type = 1;
+  required Mcp_LocalConfig_command command = 2;
+  optional LosslessString cwd = 3;
+  optional Mcp_LocalConfig_environment environment = 4;
+  optional bool disabled = 5;
+  optional bool codemode = 6;
+  optional Mcp_TimeoutConfig timeout = 7;
+}
+
+message Mcp_LocalConfig_command {
+  repeated LosslessString items = 1;
+}
+
+message Mcp_LocalConfig_environment {
+  repeated Mcp_LocalConfig_environmentEntry entries = 1;
+}
+
+message Mcp_LocalConfig_environmentEntry {
+  required LosslessString key = 1;
+  required LosslessString value = 2;
+}
+
+message Mcp_TimeoutConfig {
+  optional uint64 startup = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/mcp.ts#Mcp.TimeoutConfig" integer_min: "1" integer_max: "9007199254740991" }];
+  optional uint64 catalog = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/mcp.ts#Mcp.TimeoutConfig" integer_min: "1" integer_max: "9007199254740991" }];
+  optional uint64 execution = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/mcp.ts#Mcp.TimeoutConfig" integer_min: "1" integer_max: "9007199254740991" }];
+}
+
+message Mcp_RemoteConfig {
+  required Mcp_RemoteConfig_type type = 1;
+  required LosslessString url = 2;
+  optional Mcp_RemoteConfig_headers headers = 3;
+  optional Mcp_RemoteConfig_oauth oauth = 4;
+  optional bool disabled = 5;
+  optional bool codemode = 6;
+  optional Mcp_TimeoutConfig timeout = 7;
+}
+
+message Mcp_RemoteConfig_headers {
+  repeated Mcp_RemoteConfig_headersEntry entries = 1;
+}
+
+message Mcp_RemoteConfig_headersEntry {
+  required LosslessString key = 1;
+  required LosslessString value = 2;
+}
+
+message Mcp_RemoteConfig_oauth {
+  oneof kind {
+    Mcp_OAuthConfig value_1 = 1;
+    bool value_2 = 2;
+  }
+}
+
+message Mcp_OAuthConfig {
+  optional LosslessString client_id = 1;
+  optional LosslessString client_secret = 2;
+  optional LosslessString scope = 3;
+  optional int64 callback_port = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/mcp.ts#Mcp.OAuthConfig" integer_min: "1" integer_max: "65535" }];
+  optional LosslessString redirect_uri = 5;
+}
+
+message mcp_add_Request {
+  required mcp_add_Request_params params = 1;
+  required LocationQuery query = 2;
+  required mcp_add_Request_payload payload = 3;
+}
+
+message mcp_add_Result {
+  required Empty data = 1;
+}
+
+message mcp_connect_Request_params {
+  required LosslessString server = 1;
+}
+
+message mcp_connect_Request {
+  required mcp_connect_Request_params params = 1;
+  required LocationQuery query = 2;
+}
+
+message mcp_connect_Result {
+  required Empty data = 1;
+}
+
+message McpServerNotFoundError {
+  required McpServerNotFoundError__tag _tag = 1;
+  required LosslessString server = 2;
+  required LosslessString message = 3;
+}
+
+message mcp_disconnect_Request_params {
+  required LosslessString server = 1;
+}
+
+message mcp_disconnect_Request {
+  required mcp_disconnect_Request_params params = 1;
+  required LocationQuery query = 2;
+}
+
+message mcp_disconnect_Result {
+  required Empty data = 1;
+}
+
+message mcp_list_Request {
+  required LocationQuery query = 1;
+}
+
+message mcp_list_Result {
+  required Location_Info location = 1;
+  required mcp_list_Result_data data = 2;
+}
+
+message mcp_list_Result_data {
+  repeated Mcp_Server items = 1;
+}
+
+message Mcp_Server {
+  required LosslessString name = 1;
+  required Mcp_Server_status status = 2;
+  optional LosslessString integrationID = 3;
+}
+
+message Mcp_Server_status {
+  oneof kind {
+    Mcp_Status_Connected value_1 = 1;
+    Mcp_Status_Pending value_2 = 2;
+    Mcp_Status_Disabled value_3 = 3;
+    Mcp_Status_Failed value_4 = 4;
+    Mcp_Status_NeedsAuth value_5 = 5;
+    Mcp_Status_NeedsClientRegistration value_6 = 6;
+  }
+}
+
+message Mcp_Status_Connected {
+  required Mcp_Status_Connected_status status = 1;
+}
+
+message Mcp_Status_Pending {
+  required Mcp_Status_Pending_status status = 1;
+}
+
+message Mcp_Status_Disabled {
+  required Mcp_Status_Disabled_status status = 1;
+}
+
+message Mcp_Status_Failed {
+  required Mcp_Status_Failed_status status = 1;
+  required LosslessString error = 2;
+}
+
+message Mcp_Status_NeedsAuth {
+  required Mcp_Status_NeedsAuth_status status = 1;
+}
+
+message Mcp_Status_NeedsClientRegistration {
+  required Mcp_Status_NeedsClientRegistration_status status = 1;
+  required LosslessString error = 2;
+}
+
+message mcp_remove_Request_params {
+  required LosslessString server = 1;
+}
+
+message mcp_remove_Request {
+  required mcp_remove_Request_params params = 1;
+  required LocationQuery query = 2;
+}
+
+message mcp_remove_Result {
+  required Empty data = 1;
+}
+
+message mcp_resource_catalog_Request {
+  required LocationQuery query = 1;
+}
+
+message mcp_resource_catalog_Result {
+  required Location_Info location = 1;
+  required Mcp_ResourceCatalog data = 2;
+}
+
+message Mcp_ResourceCatalog {
+  required Mcp_ResourceCatalog_resources resources = 1;
+  required Mcp_ResourceCatalog_templates templates = 2;
+}
+
+message Mcp_ResourceCatalog_resources {
+  repeated Mcp_Resource items = 1;
+}
+
+message Mcp_Resource {
+  required LosslessString server = 1;
+  required LosslessString name = 2;
+  required LosslessString uri = 3;
+  optional LosslessString description = 4;
+  optional LosslessString mimeType = 5;
+}
+
+message Mcp_ResourceCatalog_templates {
+  repeated Mcp_ResourceTemplate items = 1;
+}
+
+message Mcp_ResourceTemplate {
+  required LosslessString server = 1;
+  required LosslessString name = 2;
+  required LosslessString uriTemplate = 3;
+  optional LosslessString description = 4;
+  optional LosslessString mimeType = 5;
+}
+
+message model_default_Request {
+  required LocationQuery query = 1;
+}
+
+message model_default_Result {
+  required Location_Info location = 1;
+  required model_default_Result_data data = 2;
+}
+
+message model_default_Result_data {
+  oneof kind {
+    Model_Default value_1 = 1;
+    Empty none = 2;
+  }
+}
+
+message Model_Default {
+  required LosslessString id = 1;
+  required LosslessString modelID = 2;
+  required LosslessString providerID = 3;
+  optional LosslessString family = 4;
+  required LosslessString name = 5;
+  optional LosslessString package = 6;
+  optional Model_Default_settings settings = 7;
+  optional Model_Default_headers headers = 8;
+  optional Model_Default_body body = 9;
+  required Model_Capabilities capabilities = 10;
+  required Model_Default_variants variants = 11;
+  optional Model_Default_profiles profiles = 12;
+  required Model_Default_time time = 13;
+  required Model_Default_cost cost = 14;
+  required Model_Default_status status = 15;
+  required bool enabled = 16;
+  optional Model_Default_daybreak daybreak = 17;
+  optional Model_API api = 18;
+  required Model_Default_limit limit = 19;
+  required Model_Ref selection = 20;
+}
+
+message Model_Default_settings {
+  repeated Model_Default_settingsEntry entries = 1;
+}
+
+message Model_Default_settingsEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message Model_Default_headers {
+  repeated Model_Default_headersEntry entries = 1;
+}
+
+message Model_Default_headersEntry {
+  required LosslessString key = 1;
+  required LosslessString value = 2;
+}
+
+message Model_Default_body {
+  repeated Model_Default_bodyEntry entries = 1;
+}
+
+message Model_Default_bodyEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message Model_Capabilities {
+  required bool tools = 1;
+  required Model_Capabilities_input input = 2;
+  required Model_Capabilities_output output = 3;
+}
+
+message Model_Capabilities_input {
+  repeated LosslessString items = 1;
+}
+
+message Model_Capabilities_output {
+  repeated LosslessString items = 1;
+}
+
+message Model_Default_variants {
+  repeated Model_Variant items = 1;
+}
+
+message Model_Variant {
+  required LosslessString id = 1;
+  optional Model_Variant_settings settings = 2;
+  optional Model_Variant_headers headers = 3;
+  optional Model_Variant_body body = 4;
+}
+
+message Model_Variant_settings {
+  repeated Model_Variant_settingsEntry entries = 1;
+}
+
+message Model_Variant_settingsEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message Model_Variant_headers {
+  repeated Model_Variant_headersEntry entries = 1;
+}
+
+message Model_Variant_headersEntry {
+  required LosslessString key = 1;
+  required LosslessString value = 2;
+}
+
+message Model_Variant_body {
+  repeated Model_Variant_bodyEntry entries = 1;
+}
+
+message Model_Variant_bodyEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message Model_Default_profiles {
+  repeated Model_Profile items = 1;
+}
+
+message Model_Profile {
+  required LosslessString name = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/model.ts#Model.ProfileName" utf16_min: 1 }];
+  required bool active = 2;
+  optional Model_Profile_variants variants = 3;
+  optional Model_Profile_daybreak daybreak = 4;
+}
+
+message Model_Profile_variants {
+  repeated LosslessString items = 1;
+}
+
+message Model_Profile_daybreak {
+  repeated Model_Daybreak items = 1;
+}
+
+message Model_Default_time {
+  required double released = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/model.ts#Model.Default" }];
+}
+
+message Model_Default_cost {
+  repeated Model_Cost items = 1;
+}
+
+message Model_Cost {
+  optional Model_Cost_tier tier = 1;
+  required double input = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/money.ts#Money.USDPerMillionTokens" }];
+  required double output = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/money.ts#Money.USDPerMillionTokens" }];
+  required Model_Cost_cache cache = 4;
+}
+
+message Model_Cost_tier {
+  required Model_Cost_tier_type type = 1;
+  required int64 size = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/model.ts#Model.Cost" integer_min: "-9007199254740991" integer_max: "9007199254740991" }];
+}
+
+message Model_Cost_cache {
+  required double read = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/money.ts#Money.USDPerMillionTokens" }];
+  required double write = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/money.ts#Money.USDPerMillionTokens" }];
+}
+
+message Model_Default_daybreak {
+  repeated Model_Daybreak items = 1;
+}
+
+message Model_Default_limit {
+  required int64 context = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/model.ts#Model.Default" integer_min: "-9007199254740991" integer_max: "9007199254740991" }];
+  optional int64 input = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/model.ts#Model.Default" integer_min: "-9007199254740991" integer_max: "9007199254740991" }];
+  required int64 output = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/model.ts#Model.Default" integer_min: "-9007199254740991" integer_max: "9007199254740991" }];
+}
+
+message model_list_Request {
+  required LocationQuery query = 1;
+}
+
+message model_list_Result {
+  required Location_Info location = 1;
+  required model_list_Result_data data = 2;
+}
+
+message model_list_Result_data {
+  repeated Model_Info items = 1;
+}
+
+message Model_Info {
+  required LosslessString id = 1;
+  required LosslessString modelID = 2;
+  required LosslessString providerID = 3;
+  optional LosslessString family = 4;
+  required LosslessString name = 5;
+  optional LosslessString package = 6;
+  optional Model_Info_settings settings = 7;
+  optional Model_Info_headers headers = 8;
+  optional Model_Info_body body = 9;
+  required Model_Capabilities capabilities = 10;
+  required Model_Info_variants variants = 11;
+  optional Model_Info_profiles profiles = 12;
+  required Model_Info_time time = 13;
+  required Model_Info_cost cost = 14;
+  required Model_Info_status status = 15;
+  required bool enabled = 16;
+  optional Model_Info_daybreak daybreak = 17;
+  optional Model_API api = 18;
+  required Model_Info_limit limit = 19;
+}
+
+message Model_Info_settings {
+  repeated Model_Info_settingsEntry entries = 1;
+}
+
+message Model_Info_settingsEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message Model_Info_headers {
+  repeated Model_Info_headersEntry entries = 1;
+}
+
+message Model_Info_headersEntry {
+  required LosslessString key = 1;
+  required LosslessString value = 2;
+}
+
+message Model_Info_body {
+  repeated Model_Info_bodyEntry entries = 1;
+}
+
+message Model_Info_bodyEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message Model_Info_variants {
+  repeated Model_Variant items = 1;
+}
+
+message Model_Info_profiles {
+  repeated Model_Profile items = 1;
+}
+
+message Model_Info_time {
+  required double released = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/model.ts#Model.Info" }];
+}
+
+message Model_Info_cost {
+  repeated Model_Cost items = 1;
+}
+
+message Model_Info_daybreak {
+  repeated Model_Daybreak items = 1;
+}
+
+message Model_Info_limit {
+  required int64 context = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/model.ts#Model.Info" integer_min: "-9007199254740991" integer_max: "9007199254740991" }];
+  optional int64 input = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/model.ts#Model.Info" integer_min: "-9007199254740991" integer_max: "9007199254740991" }];
+  required int64 output = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/model.ts#Model.Info" integer_min: "-9007199254740991" integer_max: "9007199254740991" }];
+}
+
+message plugin_list_Request {
+  required LocationQuery query = 1;
+}
+
+message plugin_list_Result {
+  required Location_Info location = 1;
+  required plugin_list_Result_data data = 2;
+}
+
+message plugin_list_Result_data {
+  repeated Plugin_Info items = 1;
+}
+
+message Plugin_Info {
+  required LosslessString id = 1;
+}
+
+message project_current_Request {
+  required LocationQuery query = 1;
+}
+
+message Project_Current {
+  required LosslessString id = 1;
+  required LosslessString directory = 2;
+}
+
+message project_current_Result {
+  required Project_Current data = 1;
+}
+
+message project_directories_Request_params {
+  required LosslessString projectID = 1;
+}
+
+message project_directories_Request {
+  required project_directories_Request_params params = 1;
+  required LocationQuery query = 2;
+}
+
+message Project_Directories {
+  repeated Project_Directory items = 1;
+}
+
+message Project_Directory {
+  required LosslessString directory = 1;
+  optional LosslessString strategy = 2;
+}
+
+message project_directories_Result {
+  required Project_Directories data = 1;
+}
+
+message project_forget_Request_params {
+  required LosslessString projectID = 1;
+}
+
+message project_forget_Request_payload {
+  required LosslessString directory = 1;
+}
+
+message project_forget_Request {
+  required project_forget_Request_params params = 1;
+  required project_forget_Request_payload payload = 2;
+}
+
+message project_forget_Result {
+  required Empty data = 1;
+}
+
+message ProjectInventoryQuery {
+  optional uint64 limit = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/project.ts#ProjectInventoryQuery" integer_min: "1" integer_max: "200" }];
+  optional LosslessString search = 2;
+  optional LosslessString cursor = 3;
+}
+
+message project_inventory_Request {
+  required ProjectInventoryQuery query = 1;
+}
+
+message ProjectInventoryResponse {
+  required ProjectInventoryResponse_data data = 1;
+  required ProjectInventoryResponse_cursor cursor = 2;
+}
+
+message ProjectInventoryResponse_data {
+  repeated Project_InventoryEntry items = 1;
+}
+
+message Project_InventoryEntry {
+  required LosslessString projectID = 1;
+  optional LosslessString projectName = 2;
+  required LosslessString projectWorktree = 3;
+  required LosslessString directory = 4;
+  optional LosslessString strategy = 5;
+  required uint64 sessions = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project.ts#Project.InventoryEntry" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 timeActive = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project.ts#Project.InventoryEntry" integer_min: "0" integer_max: "9007199254740991" }];
+  required bool available = 8;
+}
+
+message ProjectInventoryResponse_cursor {
+  optional LosslessString next = 1;
+}
+
+message project_inventory_Result {
+  required ProjectInventoryResponse data = 1;
+}
+
+message project_list_Request {
+
+}
+
+message project_list_Result {
+  repeated Project items = 1;
+}
+
+message Project {
+  required LosslessString id = 1;
+  required LosslessString worktree = 2;
+  optional Project_Vcs vcs = 3;
+  optional LosslessString name = 4;
+  optional Project_Icon icon = 5;
+  optional Project_Commands commands = 6;
+  required Project_Time time = 7;
+  required Project_sandboxes sandboxes = 8;
+}
+
+message Project_Icon {
+  optional LosslessString url = 1;
+  optional LosslessString override = 2;
+  optional LosslessString color = 3;
+}
+
+message Project_Commands {
+  optional LosslessString start = 1;
+}
+
+message Project_Time {
+  required uint64 created = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project.ts#Project.Time" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 updated = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project.ts#Project.Time" integer_min: "0" integer_max: "9007199254740991" }];
+  optional uint64 initialized = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/project.ts#Project.Time" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message Project_sandboxes {
+  repeated LosslessString items = 1;
+}
+
+message provider_get_Request_params {
+  required LosslessString providerID = 1;
+}
+
+message provider_get_Request {
+  required provider_get_Request_params params = 1;
+  required LocationQuery query = 2;
+}
+
+message provider_get_Result {
+  required Location_Info location = 1;
+  required Provider_Info data = 2;
+}
+
+message Provider_Info {
+  required LosslessString id = 1;
+  optional LosslessString integrationID = 2;
+  required LosslessString name = 3;
+  optional bool disabled = 4;
+  required LosslessString package = 5;
+  optional Provider_Info_settings settings = 6;
+  optional Provider_Info_headers headers = 7;
+  optional Provider_Info_body body = 8;
+}
+
+message Provider_Info_settings {
+  repeated Provider_Info_settingsEntry entries = 1;
+}
+
+message Provider_Info_settingsEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message Provider_Info_headers {
+  repeated Provider_Info_headersEntry entries = 1;
+}
+
+message Provider_Info_headersEntry {
+  required LosslessString key = 1;
+  required LosslessString value = 2;
+}
+
+message Provider_Info_body {
+  repeated Provider_Info_bodyEntry entries = 1;
+}
+
+message Provider_Info_bodyEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message ProviderNotFoundError {
+  required ProviderNotFoundError__tag _tag = 1;
+  required LosslessString providerID = 2;
+  required LosslessString message = 3;
+}
+
+message provider_integrations_Request {
+  required LocationQuery query = 1;
+}
+
+message provider_integrations_Result {
+  required Location_Info location = 1;
+  required provider_integrations_Result_data data = 2;
+}
+
+message provider_integrations_Result_data {
+  repeated Provider_IntegrationRef items = 1;
+}
+
+message Provider_IntegrationRef {
+  required LosslessString providerID = 1;
+  required LosslessString integrationID = 2;
+}
+
+message provider_list_Request {
+  required LocationQuery query = 1;
+}
+
+message provider_list_Result {
+  required Location_Info location = 1;
+  required provider_list_Result_data data = 2;
+}
+
+message provider_list_Result_data {
+  repeated Provider_Info items = 1;
+}
+
+message provider_refresh_Request {
+  required LocationQuery query = 1;
+}
+
+message provider_refresh_Result {
+  required Empty data = 1;
+}
+
+message providerUsage_get_Request_params {
+  required LosslessString providerID = 1;
+}
+
+message ProviderUsageQuery {
+  optional ProviderUsageQuery_location location = 1;
+  optional bool refresh = 2;
+}
+
+message ProviderUsageQuery_location {
+  optional LosslessString directory = 1;
+  optional LosslessString workspace = 2;
+}
+
+message providerUsage_get_Request {
+  required providerUsage_get_Request_params params = 1;
+  required ProviderUsageQuery query = 2;
+}
+
+message providerUsage_get_Result {
+  required Location_Info location = 1;
+  required ProviderUsage_Snapshot data = 2;
+}
+
+message ProviderUsage_Snapshot {
+  required LosslessString providerID = 1;
+  required LosslessString label = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-usage.ts#ProviderUsage.Snapshot" utf16_min: 1 }];
+  optional LosslessString profile = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-usage.ts#ProviderUsage.Snapshot" utf16_min: 1 }];
+  required ProviderUsage_Status status = 4;
+  required ProviderUsage_Source source = 5;
+  required ProviderUsage_Stability stability = 6;
+  required uint64 updatedAt = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-usage.ts#ProviderUsage.Snapshot" integer_min: "0" integer_max: "9007199254740991" }];
+  required ProviderUsage_Snapshot_windows windows = 8;
+  optional LosslessString message = 9;
+}
+
+message ProviderUsage_Snapshot_windows {
+  repeated ProviderUsage_Window items = 1;
+}
+
+message ProviderUsage_Window {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-usage.ts#ProviderUsage.Window" utf16_min: 1 }];
+  required LosslessString label = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-usage.ts#ProviderUsage.Window" utf16_min: 1 }];
+  required ProviderUsage_Unit unit = 3;
+  optional double used = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-usage.ts#ProviderUsage.Window" }];
+  optional double limit = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-usage.ts#ProviderUsage.Window" }];
+  optional double remaining = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-usage.ts#ProviderUsage.Window" }];
+  optional bool unlimited = 7;
+  optional uint64 resetAt = 8 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-usage.ts#ProviderUsage.Window" integer_min: "0" integer_max: "9007199254740991" }];
+  optional uint64 periodSeconds = 9 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-usage.ts#ProviderUsage.Window" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message providerUsage_list_Request {
+  required ProviderUsageQuery query = 1;
+}
+
+message providerUsage_list_Result {
+  required Location_Info location = 1;
+  required providerUsage_list_Result_data data = 2;
+}
+
+message providerUsage_list_Result_data {
+  repeated ProviderUsage_Snapshot items = 1;
+}
+
+message reference_list_Request {
+  required LocationQuery query = 1;
+}
+
+message reference_list_Result {
+  required Location_Info location = 1;
+  required reference_list_Result_data data = 2;
+}
+
+message reference_list_Result_data {
+  repeated Reference_Info items = 1;
+}
+
+message Reference_Info {
+  required LosslessString name = 1;
+  required LosslessString path = 2;
+  optional LosslessString description = 3;
+  optional bool hidden = 4;
+  required Reference_Source source = 5;
+}
+
+message Reference_Source {
+  oneof kind {
+    Reference_LocalSource value_1 = 1;
+    Reference_GitSource value_2 = 2;
+  }
+}
+
+message Reference_LocalSource {
+  required Reference_LocalSource_type type = 1;
+  required LosslessString path = 2;
+  optional LosslessString description = 3;
+  optional bool hidden = 4;
+}
+
+message Reference_GitSource {
+  required Reference_GitSource_type type = 1;
+  required LosslessString repository = 2;
+  optional LosslessString branch = 3;
+  optional LosslessString description = 4;
+  optional bool hidden = 5;
+}
+
+message skill_list_Request {
+  required LocationQuery query = 1;
+}
+
+message skill_list_Result {
+  required Location_Info location = 1;
+  required skill_list_Result_data data = 2;
+}
+
+message skill_list_Result_data {
+  repeated Skill_Info items = 1;
+}
+
+message Skill_Info {
+  required LosslessString id = 1;
+  required LosslessString name = 2;
+  optional LosslessString description = 3;
+  optional bool slash = 4;
+  optional bool autoinvoke = 5;
+  optional Skill_Conflicts conflicts = 6;
+  required LosslessString location = 7;
+  required LosslessString content = 8;
+}
+
+message usage_get_Request {
+
+}
+
+message usage_get_Result {
+  required ProviderRequest_Summary data = 1;
+}
+
+message usage_report_Request_query {
+  required usage_report_Request_query_group group = 1;
+  optional LosslessString timeZone = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/usage.ts#UsageGroup" utf16_min: 1 utf16_max: 128 }];
+  optional uint64 from = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/usage.ts#UsageGroup" integer_min: "0" integer_max: "9007199254740991" }];
+  optional uint64 to = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/usage.ts#UsageGroup" integer_min: "0" integer_max: "9007199254740991" }];
+  optional uint64 offset = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/usage.ts#UsageGroup" integer_min: "0" integer_max: "9007199254740991" }];
+  optional uint64 limit = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/usage.ts#UsageGroup" integer_min: "1" integer_max: "200" }];
+  optional usage_report_Request_query_sort sort = 7;
+  optional usage_report_Request_query_order order = 8;
+}
+
+message usage_report_Request {
+  required usage_report_Request_query query = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/usage.ts#UsageGroup" }];
+}
+
+message usage_report_Result {
+  required ProviderRequest_Report data = 1;
+}
+
+service server_agent {
+  rpc agent_list(agent_list_Request) returns (agent_list_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2000
+      diagnostic_name: "agent.list"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: SECRET
+    };
+  }
+}
+
+service server_projectArtifact {
+  rpc artifact_confirmGlobal(artifact_confirmGlobal_Request) returns (artifact_confirmGlobal_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2001
+      diagnostic_name: "artifact.confirmGlobal"
+      error_types: "ycoding.v5.ArtifactBadRequest"
+      error_types: "ycoding.v5.ArtifactNotFound"
+      error_types: "ycoding.v5.ArtifactConflict"
+      error_types: "ycoding.v5.ArtifactGone"
+      error_types: "ycoding.v5.ArtifactTooLarge"
+      error_types: "ycoding.v5.ArtifactRateLimited"
+      error_types: "ycoding.v5.ArtifactUnavailable"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc artifact_create(artifact_create_Request) returns (artifact_create_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2002
+      diagnostic_name: "artifact.create"
+      error_types: "ycoding.v5.ArtifactBadRequest"
+      error_types: "ycoding.v5.ArtifactNotFound"
+      error_types: "ycoding.v5.ArtifactConflict"
+      error_types: "ycoding.v5.ArtifactGone"
+      error_types: "ycoding.v5.ArtifactTooLarge"
+      error_types: "ycoding.v5.ArtifactRateLimited"
+      error_types: "ycoding.v5.ArtifactUnavailable"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc artifact_disable(artifact_disable_Request) returns (artifact_disable_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2003
+      diagnostic_name: "artifact.disable"
+      error_types: "ycoding.v5.ArtifactBadRequest"
+      error_types: "ycoding.v5.ArtifactNotFound"
+      error_types: "ycoding.v5.ArtifactConflict"
+      error_types: "ycoding.v5.ArtifactGone"
+      error_types: "ycoding.v5.ArtifactTooLarge"
+      error_types: "ycoding.v5.ArtifactRateLimited"
+      error_types: "ycoding.v5.ArtifactUnavailable"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc artifact_enable(artifact_enable_Request) returns (artifact_enable_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2004
+      diagnostic_name: "artifact.enable"
+      error_types: "ycoding.v5.ArtifactBadRequest"
+      error_types: "ycoding.v5.ArtifactNotFound"
+      error_types: "ycoding.v5.ArtifactConflict"
+      error_types: "ycoding.v5.ArtifactGone"
+      error_types: "ycoding.v5.ArtifactTooLarge"
+      error_types: "ycoding.v5.ArtifactRateLimited"
+      error_types: "ycoding.v5.ArtifactUnavailable"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc artifact_fork_confirm(artifact_fork_confirm_Request) returns (artifact_fork_confirm_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2005
+      diagnostic_name: "artifact.fork.confirm"
+      error_types: "ycoding.v5.ArtifactBadRequest"
+      error_types: "ycoding.v5.ArtifactNotFound"
+      error_types: "ycoding.v5.ArtifactConflict"
+      error_types: "ycoding.v5.ArtifactGone"
+      error_types: "ycoding.v5.ArtifactTooLarge"
+      error_types: "ycoding.v5.ArtifactRateLimited"
+      error_types: "ycoding.v5.ArtifactUnavailable"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc artifact_fork_preview(artifact_fork_preview_Request) returns (artifact_fork_preview_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2006
+      diagnostic_name: "artifact.fork.preview"
+      error_types: "ycoding.v5.ArtifactBadRequest"
+      error_types: "ycoding.v5.ArtifactNotFound"
+      error_types: "ycoding.v5.ArtifactConflict"
+      error_types: "ycoding.v5.ArtifactGone"
+      error_types: "ycoding.v5.ArtifactTooLarge"
+      error_types: "ycoding.v5.ArtifactRateLimited"
+      error_types: "ycoding.v5.ArtifactUnavailable"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc artifact_get(artifact_get_Request) returns (artifact_get_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2007
+      diagnostic_name: "artifact.get"
+      error_types: "ycoding.v5.ArtifactBadRequest"
+      error_types: "ycoding.v5.ArtifactNotFound"
+      error_types: "ycoding.v5.ArtifactConflict"
+      error_types: "ycoding.v5.ArtifactGone"
+      error_types: "ycoding.v5.ArtifactTooLarge"
+      error_types: "ycoding.v5.ArtifactRateLimited"
+      error_types: "ycoding.v5.ArtifactUnavailable"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc artifact_list(artifact_list_Request) returns (artifact_list_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2008
+      diagnostic_name: "artifact.list"
+      error_types: "ycoding.v5.ArtifactBadRequest"
+      error_types: "ycoding.v5.ArtifactNotFound"
+      error_types: "ycoding.v5.ArtifactConflict"
+      error_types: "ycoding.v5.ArtifactGone"
+      error_types: "ycoding.v5.ArtifactTooLarge"
+      error_types: "ycoding.v5.ArtifactRateLimited"
+      error_types: "ycoding.v5.ArtifactUnavailable"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc artifact_metrics(artifact_metrics_Request) returns (artifact_metrics_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2009
+      diagnostic_name: "artifact.metrics"
+      error_types: "ycoding.v5.ArtifactBadRequest"
+      error_types: "ycoding.v5.ArtifactNotFound"
+      error_types: "ycoding.v5.ArtifactConflict"
+      error_types: "ycoding.v5.ArtifactGone"
+      error_types: "ycoding.v5.ArtifactTooLarge"
+      error_types: "ycoding.v5.ArtifactRateLimited"
+      error_types: "ycoding.v5.ArtifactUnavailable"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc artifact_promotion_confirm(artifact_promotion_confirm_Request) returns (artifact_promotion_confirm_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2010
+      diagnostic_name: "artifact.promotion.confirm"
+      error_types: "ycoding.v5.ArtifactBadRequest"
+      error_types: "ycoding.v5.ArtifactNotFound"
+      error_types: "ycoding.v5.ArtifactConflict"
+      error_types: "ycoding.v5.ArtifactGone"
+      error_types: "ycoding.v5.ArtifactTooLarge"
+      error_types: "ycoding.v5.ArtifactRateLimited"
+      error_types: "ycoding.v5.ArtifactUnavailable"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc artifact_promotion_preview(artifact_promotion_preview_Request) returns (artifact_promotion_preview_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2011
+      diagnostic_name: "artifact.promotion.preview"
+      error_types: "ycoding.v5.ArtifactBadRequest"
+      error_types: "ycoding.v5.ArtifactNotFound"
+      error_types: "ycoding.v5.ArtifactConflict"
+      error_types: "ycoding.v5.ArtifactGone"
+      error_types: "ycoding.v5.ArtifactTooLarge"
+      error_types: "ycoding.v5.ArtifactRateLimited"
+      error_types: "ycoding.v5.ArtifactUnavailable"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc artifact_purge(artifact_purge_Request) returns (artifact_purge_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2012
+      diagnostic_name: "artifact.purge"
+      error_types: "ycoding.v5.ArtifactBadRequest"
+      error_types: "ycoding.v5.ArtifactNotFound"
+      error_types: "ycoding.v5.ArtifactConflict"
+      error_types: "ycoding.v5.ArtifactGone"
+      error_types: "ycoding.v5.ArtifactTooLarge"
+      error_types: "ycoding.v5.ArtifactRateLimited"
+      error_types: "ycoding.v5.ArtifactUnavailable"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc artifact_remove(artifact_remove_Request) returns (artifact_remove_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2013
+      diagnostic_name: "artifact.remove"
+      error_types: "ycoding.v5.ArtifactBadRequest"
+      error_types: "ycoding.v5.ArtifactNotFound"
+      error_types: "ycoding.v5.ArtifactConflict"
+      error_types: "ycoding.v5.ArtifactGone"
+      error_types: "ycoding.v5.ArtifactTooLarge"
+      error_types: "ycoding.v5.ArtifactRateLimited"
+      error_types: "ycoding.v5.ArtifactUnavailable"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc artifact_restore(artifact_restore_Request) returns (artifact_restore_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2014
+      diagnostic_name: "artifact.restore"
+      error_types: "ycoding.v5.ArtifactBadRequest"
+      error_types: "ycoding.v5.ArtifactNotFound"
+      error_types: "ycoding.v5.ArtifactConflict"
+      error_types: "ycoding.v5.ArtifactGone"
+      error_types: "ycoding.v5.ArtifactTooLarge"
+      error_types: "ycoding.v5.ArtifactRateLimited"
+      error_types: "ycoding.v5.ArtifactUnavailable"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc artifact_revert(artifact_revert_Request) returns (artifact_revert_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2015
+      diagnostic_name: "artifact.revert"
+      error_types: "ycoding.v5.ArtifactBadRequest"
+      error_types: "ycoding.v5.ArtifactNotFound"
+      error_types: "ycoding.v5.ArtifactConflict"
+      error_types: "ycoding.v5.ArtifactGone"
+      error_types: "ycoding.v5.ArtifactTooLarge"
+      error_types: "ycoding.v5.ArtifactRateLimited"
+      error_types: "ycoding.v5.ArtifactUnavailable"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc artifact_shadow_confirm(artifact_shadow_confirm_Request) returns (artifact_shadow_confirm_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2016
+      diagnostic_name: "artifact.shadow.confirm"
+      error_types: "ycoding.v5.ArtifactBadRequest"
+      error_types: "ycoding.v5.ArtifactNotFound"
+      error_types: "ycoding.v5.ArtifactConflict"
+      error_types: "ycoding.v5.ArtifactGone"
+      error_types: "ycoding.v5.ArtifactTooLarge"
+      error_types: "ycoding.v5.ArtifactRateLimited"
+      error_types: "ycoding.v5.ArtifactUnavailable"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc artifact_shadow_preview(artifact_shadow_preview_Request) returns (artifact_shadow_preview_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2017
+      diagnostic_name: "artifact.shadow.preview"
+      error_types: "ycoding.v5.ArtifactBadRequest"
+      error_types: "ycoding.v5.ArtifactNotFound"
+      error_types: "ycoding.v5.ArtifactConflict"
+      error_types: "ycoding.v5.ArtifactGone"
+      error_types: "ycoding.v5.ArtifactTooLarge"
+      error_types: "ycoding.v5.ArtifactRateLimited"
+      error_types: "ycoding.v5.ArtifactUnavailable"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc artifact_update(artifact_update_Request) returns (artifact_update_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2018
+      diagnostic_name: "artifact.update"
+      error_types: "ycoding.v5.ArtifactBadRequest"
+      error_types: "ycoding.v5.ArtifactNotFound"
+      error_types: "ycoding.v5.ArtifactConflict"
+      error_types: "ycoding.v5.ArtifactGone"
+      error_types: "ycoding.v5.ArtifactTooLarge"
+      error_types: "ycoding.v5.ArtifactRateLimited"
+      error_types: "ycoding.v5.ArtifactUnavailable"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}
+
+service server_command {
+  rpc command_list(command_list_Request) returns (command_list_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2019
+      diagnostic_name: "command.list"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}
+
+service server_config {
+  rpc config_diagnostics(config_diagnostics_Request) returns (config_diagnostics_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2020
+      diagnostic_name: "config.diagnostics"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}
+
+service server_credential {
+  rpc credential_activate(credential_activate_Request) returns (credential_activate_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2021
+      diagnostic_name: "credential.activate"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc credential_remove(credential_remove_Request) returns (credential_remove_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2022
+      diagnostic_name: "credential.remove"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc credential_update(credential_update_Request) returns (credential_update_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2023
+      diagnostic_name: "credential.update"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}
+
+service server_integration {
+  rpc integration_command_cancel(integration_command_cancel_Request) returns (integration_command_cancel_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2024
+      diagnostic_name: "integration.command.cancel"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc integration_command_connect(integration_command_connect_Request) returns (integration_command_connect_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2025
+      diagnostic_name: "integration.command.connect"
+      error_types: "ycoding.v5.InvalidRequestError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc integration_command_status(integration_command_status_Request) returns (integration_command_status_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2026
+      diagnostic_name: "integration.command.status"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc integration_connect_key(integration_connect_key_Request) returns (integration_connect_key_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2027
+      diagnostic_name: "integration.connect.key"
+      error_types: "ycoding.v5.InvalidRequestError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: SECRET
+    };
+  }
+  rpc integration_get(integration_get_Request) returns (integration_get_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2028
+      diagnostic_name: "integration.get"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc integration_list(integration_list_Request) returns (integration_list_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2029
+      diagnostic_name: "integration.list"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc integration_oauth_cancel(integration_oauth_cancel_Request) returns (integration_oauth_cancel_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2030
+      diagnostic_name: "integration.oauth.cancel"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc integration_oauth_complete(integration_oauth_complete_Request) returns (integration_oauth_complete_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2031
+      diagnostic_name: "integration.oauth.complete"
+      error_types: "ycoding.v5.InvalidRequestError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: SECRET
+    };
+  }
+  rpc integration_oauth_connect(integration_oauth_connect_Request) returns (integration_oauth_connect_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2032
+      diagnostic_name: "integration.oauth.connect"
+      error_types: "ycoding.v5.InvalidRequestError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: SECRET
+    };
+  }
+  rpc integration_oauth_status(integration_oauth_status_Request) returns (integration_oauth_status_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2033
+      diagnostic_name: "integration.oauth.status"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc integration_wellknown_add(integration_wellknown_add_Request) returns (integration_wellknown_add_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2034
+      diagnostic_name: "integration.wellknown.add"
+      error_types: "ycoding.v5.InvalidRequestError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}
+
+service server_location {
+  rpc location_get(location_get_Request) returns (location_get_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2035
+      diagnostic_name: "location.get"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}
+
+service server_mcp {
+  rpc mcp_add(mcp_add_Request) returns (mcp_add_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2036
+      diagnostic_name: "mcp.add"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc mcp_connect(mcp_connect_Request) returns (mcp_connect_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2037
+      diagnostic_name: "mcp.connect"
+      error_types: "ycoding.v5.McpServerNotFoundError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc mcp_disconnect(mcp_disconnect_Request) returns (mcp_disconnect_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2038
+      diagnostic_name: "mcp.disconnect"
+      error_types: "ycoding.v5.McpServerNotFoundError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc mcp_list(mcp_list_Request) returns (mcp_list_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2039
+      diagnostic_name: "mcp.list"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc mcp_remove(mcp_remove_Request) returns (mcp_remove_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2040
+      diagnostic_name: "mcp.remove"
+      error_types: "ycoding.v5.McpServerNotFoundError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc mcp_resource_catalog(mcp_resource_catalog_Request) returns (mcp_resource_catalog_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2041
+      diagnostic_name: "mcp.resource.catalog"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}
+
+service server_model {
+  rpc model_default(model_default_Request) returns (model_default_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2042
+      diagnostic_name: "model.default"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: SECRET
+    };
+  }
+  rpc model_list(model_list_Request) returns (model_list_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2043
+      diagnostic_name: "model.list"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: SECRET
+    };
+  }
+}
+
+service server_plugin {
+  rpc plugin_list(plugin_list_Request) returns (plugin_list_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2044
+      diagnostic_name: "plugin.list"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}
+
+service server_project {
+  rpc project_current(project_current_Request) returns (project_current_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2045
+      diagnostic_name: "project.current"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc project_directories(project_directories_Request) returns (project_directories_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2046
+      diagnostic_name: "project.directories"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc project_forget(project_forget_Request) returns (project_forget_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2047
+      diagnostic_name: "project.forget"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: MACHINE
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc project_inventory(project_inventory_Request) returns (project_inventory_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2048
+      diagnostic_name: "project.inventory"
+      error_types: "ycoding.v5.InvalidCursorError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: MACHINE
+      mutation: READ
+      settlement: COMPLETED
+      paging: CURSOR
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc project_list(project_list_Request) returns (project_list_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2049
+      diagnostic_name: "project.list"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: MACHINE
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}
+
+service server_provider {
+  rpc provider_get(provider_get_Request) returns (provider_get_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2050
+      diagnostic_name: "provider.get"
+      error_types: "ycoding.v5.ProviderNotFoundError"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: SECRET
+    };
+  }
+  rpc provider_integrations(provider_integrations_Request) returns (provider_integrations_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2051
+      diagnostic_name: "provider.integrations"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc provider_list(provider_list_Request) returns (provider_list_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2052
+      diagnostic_name: "provider.list"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: SECRET
+    };
+  }
+  rpc provider_refresh(provider_refresh_Request) returns (provider_refresh_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2053
+      diagnostic_name: "provider.refresh"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}
+
+service server_providerUsage {
+  rpc providerUsage_get(providerUsage_get_Request) returns (providerUsage_get_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2054
+      diagnostic_name: "providerUsage.get"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc providerUsage_list(providerUsage_list_Request) returns (providerUsage_list_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2055
+      diagnostic_name: "providerUsage.list"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}
+
+service server_reference {
+  rpc reference_list(reference_list_Request) returns (reference_list_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2056
+      diagnostic_name: "reference.list"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}
+
+service server_skill {
+  rpc skill_list(skill_list_Request) returns (skill_list_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2057
+      diagnostic_name: "skill.list"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}
+
+service server_usage {
+  rpc usage_get(usage_get_Request) returns (usage_get_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2058
+      diagnostic_name: "usage.get"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: MACHINE
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc usage_report(usage_report_Request) returns (usage_report_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2059
+      diagnostic_name: "usage.report"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: MACHINE
+      mutation: READ
+      settlement: COMPLETED
+      paging: OFFSET
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}

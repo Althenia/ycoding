@@ -1,0 +1,1986 @@
+[
+  {
+    "path": "test/built-ins/String/prototype/toLowerCase/S15.5.4.16_A2_T1.js",
+    "code": "return [{ label: \"#1 direct value\", value: \"Hello, WoRlD!\".toLowerCase() },{ label: \"#2 String value\", value: \"Hello, WoRlD!\".toLowerCase() }]",
+    "expected": [
+      {
+        "label": "#1 direct value",
+        "value": "hello, world!"
+      },
+      {
+        "label": "#2 String value",
+        "value": "hello, world!"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/toLowerCase/special_casing.js",
+    "code": "return [{ label: \"103 SpecialCasing mappings\", value: \"ßİﬀﬁﬂﬃﬄﬅﬆևﬓﬔﬕﬖﬗŉΐΰǰẖẗẘẙẚὐὒὔὖᾶῆῒΐῖῗῢΰῤῦῧῶᾀᾁᾂᾃᾄᾅᾆᾇᾈᾉᾊᾋᾌᾍᾎᾏᾐᾑᾒᾓᾔᾕᾖᾗᾘᾙᾚᾛᾜᾝᾞᾟᾠᾡᾢᾣᾤᾥᾦᾧᾨᾩᾪᾫᾬᾭᾮᾯᾳᾼῃῌῳῼᾲᾴῂῄῲῴᾷῇῷ\".toLowerCase() }]",
+    "expected": [
+      {
+        "label": "103 SpecialCasing mappings",
+        "value": "ßi̇ﬀﬁﬂﬃﬄﬅﬆևﬓﬔﬕﬖﬗŉΐΰǰẖẗẘẙẚὐὒὔὖᾶῆῒΐῖῗῢΰῤῦῧῶᾀᾁᾂᾃᾄᾅᾆᾇᾀᾁᾂᾃᾄᾅᾆᾇᾐᾑᾒᾓᾔᾕᾖᾗᾐᾑᾒᾓᾔᾕᾖᾗᾠᾡᾢᾣᾤᾥᾦᾧᾠᾡᾢᾣᾤᾥᾦᾧᾳᾳῃῃῳῳᾲᾴῂῄῲῴᾷῇῷ"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/toLowerCase/special_casing_conditional.js",
+    "code": "return [{ label: \"single sigma\", value: \"Σ\".toLowerCase() },{ label: \"preceded by cased\", value: \"AΣ\".toLowerCase() },{ label: \"preceded by supplementary cased\", value: \"𝒢Σ\".toLowerCase() },{ label: \"preceded by full stop\", value: \"A.Σ\".toLowerCase() },{ label: \"preceded by soft hyphen\", value: \"A­Σ\".toLowerCase() },{ label: \"preceded by combining mark\", value: \"A𝉂Σ\".toLowerCase() },{ label: \"preceded by uncased combining mark\", value: \"ͅΣ\".toLowerCase() },{ label: \"preceded by cased and combining mark\", value: \"ᾼΣ\".toLowerCase() },{ label: \"followed by cased\", value: \"AΣB\".toLowerCase() },{ label: \"followed by supplementary cased\", value: \"AΣ𝒢\".toLowerCase() },{ label: \"followed by full stop and cased\", value: \"AΣ.b\".toLowerCase() },{ label: \"followed by soft hyphen and cased\", value: \"AΣ­B\".toLowerCase() },{ label: \"followed by combining mark and cased\", value: \"AΣ𝉂B\".toLowerCase() },{ label: \"followed by uncased combining mark\", value: \"AΣͅ\".toLowerCase() },{ label: \"followed by combining mark and cased Greek\", value: \"AΣͅΑ\".toLowerCase() }]",
+    "expected": [
+      {
+        "label": "single sigma",
+        "value": "σ"
+      },
+      {
+        "label": "preceded by cased",
+        "value": "aς"
+      },
+      {
+        "label": "preceded by supplementary cased",
+        "value": "𝒢ς"
+      },
+      {
+        "label": "preceded by full stop",
+        "value": "a.ς"
+      },
+      {
+        "label": "preceded by soft hyphen",
+        "value": "a­ς"
+      },
+      {
+        "label": "preceded by combining mark",
+        "value": "a𝉂ς"
+      },
+      {
+        "label": "preceded by uncased combining mark",
+        "value": "ͅσ"
+      },
+      {
+        "label": "preceded by cased and combining mark",
+        "value": "ᾳς"
+      },
+      {
+        "label": "followed by cased",
+        "value": "aσb"
+      },
+      {
+        "label": "followed by supplementary cased",
+        "value": "aσ𝒢"
+      },
+      {
+        "label": "followed by full stop and cased",
+        "value": "aσ.b"
+      },
+      {
+        "label": "followed by soft hyphen and cased",
+        "value": "aσ­b"
+      },
+      {
+        "label": "followed by combining mark and cased",
+        "value": "aσ𝉂b"
+      },
+      {
+        "label": "followed by uncased combining mark",
+        "value": "aςͅ"
+      },
+      {
+        "label": "followed by combining mark and cased Greek",
+        "value": "aσͅα"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/toLowerCase/Final_Sigma_U180E.js",
+    "code": "return [{ label: \"preceded by U+180E\", value: \"A᠎Σ\".toLowerCase() },{ label: \"preceded by U+180E and followed by cased\", value: \"A᠎ΣB\".toLowerCase() },{ label: \"followed by U+180E\", value: \"AΣ᠎\".toLowerCase() },{ label: \"followed by U+180E and cased\", value: \"AΣ᠎B\".toLowerCase() },{ label: \"surrounded by U+180E\", value: \"A᠎Σ᠎\".toLowerCase() },{ label: \"surrounded by U+180E and followed by cased\", value: \"A᠎Σ᠎B\".toLowerCase() }]",
+    "expected": [
+      {
+        "label": "preceded by U+180E",
+        "value": "a᠎ς"
+      },
+      {
+        "label": "preceded by U+180E and followed by cased",
+        "value": "a᠎σb"
+      },
+      {
+        "label": "followed by U+180E",
+        "value": "aς᠎"
+      },
+      {
+        "label": "followed by U+180E and cased",
+        "value": "aσ᠎b"
+      },
+      {
+        "label": "surrounded by U+180E",
+        "value": "a᠎ς᠎"
+      },
+      {
+        "label": "surrounded by U+180E and followed by cased",
+        "value": "a᠎σ᠎b"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/toLowerCase/supplementary_plane.js",
+    "code": "return [{ label: \"40 Deseret mappings\", value: \"𐐀𐐁𐐂𐐃𐐄𐐅𐐆𐐇𐐈𐐉𐐊𐐋𐐌𐐍𐐎𐐏𐐐𐐑𐐒𐐓𐐔𐐕𐐖𐐗𐐘𐐙𐐚𐐛𐐜𐐝𐐞𐐟𐐠𐐡𐐢𐐣𐐤𐐥𐐦𐐧\".toLowerCase() }]",
+    "expected": [
+      {
+        "label": "40 Deseret mappings",
+        "value": "𐐨𐐩𐐪𐐫𐐬𐐭𐐮𐐯𐐰𐐱𐐲𐐳𐐴𐐵𐐶𐐷𐐸𐐹𐐺𐐻𐐼𐐽𐐾𐐿𐑀𐑁𐑂𐑃𐑄𐑅𐑆𐑇𐑈𐑉𐑊𐑋𐑌𐑍𐑎𐑏"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/toUpperCase/S15.5.4.18_A2_T1.js",
+    "code": "return [{ label: \"#1 direct value\", value: \"Hello, WoRlD!\".toUpperCase() },{ label: \"#2 String value\", value: \"Hello, WoRlD!\".toUpperCase() }]",
+    "expected": [
+      {
+        "label": "#1 direct value",
+        "value": "HELLO, WORLD!"
+      },
+      {
+        "label": "#2 String value",
+        "value": "HELLO, WORLD!"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/toUpperCase/special_casing.js",
+    "code": "return [{ label: \"103 SpecialCasing mappings\", value: \"ßİﬀﬁﬂﬃﬄﬅﬆևﬓﬔﬕﬖﬗŉΐΰǰẖẗẘẙẚὐὒὔὖᾶῆῒΐῖῗῢΰῤῦῧῶᾀᾁᾂᾃᾄᾅᾆᾇᾈᾉᾊᾋᾌᾍᾎᾏᾐᾑᾒᾓᾔᾕᾖᾗᾘᾙᾚᾛᾜᾝᾞᾟᾠᾡᾢᾣᾤᾥᾦᾧᾨᾩᾪᾫᾬᾭᾮᾯᾳᾼῃῌῳῼᾲᾴῂῄῲῴᾷῇῷ\".toUpperCase() }]",
+    "expected": [
+      {
+        "label": "103 SpecialCasing mappings",
+        "value": "SSİFFFIFLFFIFFLSTSTԵՒՄՆՄԵՄԻՎՆՄԽʼNΪ́Ϋ́J̌H̱T̈W̊Y̊AʾΥ̓Υ̓̀Υ̓́Υ̓͂Α͂Η͂Ϊ̀Ϊ́Ι͂Ϊ͂Ϋ̀Ϋ́Ρ̓Υ͂Ϋ͂Ω͂ἈΙἉΙἊΙἋΙἌΙἍΙἎΙἏΙἈΙἉΙἊΙἋΙἌΙἍΙἎΙἏΙἨΙἩΙἪΙἫΙἬΙἭΙἮΙἯΙἨΙἩΙἪΙἫΙἬΙἭΙἮΙἯΙὨΙὩΙὪΙὫΙὬΙὭΙὮΙὯΙὨΙὩΙὪΙὫΙὬΙὭΙὮΙὯΙΑΙΑΙΗΙΗΙΩΙΩΙᾺΙΆΙῊΙΉΙῺΙΏΙΑ͂ΙΗ͂ΙΩ͂Ι"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/toUpperCase/supplementary_plane.js",
+    "code": "return [{ label: \"40 Deseret mappings\", value: \"𐐨𐐩𐐪𐐫𐐬𐐭𐐮𐐯𐐰𐐱𐐲𐐳𐐴𐐵𐐶𐐷𐐸𐐹𐐺𐐻𐐼𐐽𐐾𐐿𐑀𐑁𐑂𐑃𐑄𐑅𐑆𐑇𐑈𐑉𐑊𐑋𐑌𐑍𐑎𐑏\".toUpperCase() }]",
+    "expected": [
+      {
+        "label": "40 Deseret mappings",
+        "value": "𐐀𐐁𐐂𐐃𐐄𐐅𐐆𐐇𐐈𐐉𐐊𐐋𐐌𐐍𐐎𐐏𐐐𐐑𐐒𐐓𐐔𐐕𐐖𐐗𐐘𐐙𐐚𐐛𐐜𐐝𐐞𐐟𐐠𐐡𐐢𐐣𐐤𐐥𐐦𐐧"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-3-1.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"\\n\\r  \".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": ""
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-3-2.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"\\t\\n\\u000b\\f\\r                  　﻿\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": ""
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-3-3.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"\\t\\n\\u000b\\f\\r                  　﻿\\n\\r  \".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": ""
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-3-4.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"\\t\\n\\u000b\\f\\r                  　﻿\\n\\r  abc\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-3-5.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"abc\\t\\n\\u000b\\f\\r                  　﻿\\n\\r  \".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-3-6.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"\\t\\n\\u000b\\f\\r                  　﻿\\n\\r  abc\\t\\n\\u000b\\f\\r                  　﻿\\n\\r  \".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-3-7.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"ab\\t\\n\\u000b\\f\\r                  　﻿\\n\\r  cd\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "ab\t\n\u000b\f\r                  　﻿\n\r  cd"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-3-8.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"\\u0000\\u0000\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "\u0000\u0000"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-3-9.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"\\u0000\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "\u0000"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-3-10.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"\\u0000\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "\u0000"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-3-11.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"\\u0000\\u0000abc\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "\u0000\u0000abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-3-12.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"abc\\u0000\\u0000\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc\u0000\u0000"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-3-13.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"\\u0000\\u0000abc\\u0000\\u0000\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "\u0000\u0000abc\u0000\u0000"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-3-14.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"a\\u0000\\u0000bc\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "a\u0000\u0000bc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-1.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"\\ta bc \\t\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "a bc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-2.js",
+    "code": "return [{ label: \"upstream assertion\", value: \" \\tabc \\t\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-3.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"\\tabc\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-4.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"\\u000babc\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-5.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"\\fabc\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-6.js",
+    "code": "return [{ label: \"upstream assertion\", value: \" abc\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-8.js",
+    "code": "return [{ label: \"upstream assertion\", value: \" abc\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-10.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"﻿abc\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-11.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"abc\\t\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-12.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"abc\\u000b\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-13.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"abc\\f\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-14.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"abc \".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-16.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"abc \".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-18.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"abc﻿\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-19.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"\\tabc\\t\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-20.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"\\u000babc\\u000b\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-21.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"\\fabc\\f\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-22.js",
+    "code": "return [{ label: \"upstream assertion\", value: \" abc \".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-24.js",
+    "code": "return [{ label: \"upstream assertion\", value: \" abc \".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-27.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"\\t\\t\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": ""
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-28.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"\\u000b\\u000b\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": ""
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-29.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"\\f\\f\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": ""
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-30.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"  \".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": ""
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-32.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"  \".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": ""
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-34.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"﻿﻿\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": ""
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-35.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"ab\\tc\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "ab\tc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-36.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"ab\\u000bc\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "ab\u000bc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-37.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"ab\\fc\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "ab\fc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-38.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"ab c\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "ab c"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-39.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"abc\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-40.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"ab c\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "ab c"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-41.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"ab​c\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "ab​c"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-42.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"ab﻿c\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "ab﻿c"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-43.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"\\nabc\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-44.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"\\rabc\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-45.js",
+    "code": "return [{ label: \"upstream assertion\", value: \" abc\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-46.js",
+    "code": "return [{ label: \"upstream assertion\", value: \" abc\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-47.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"abc\\n\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-48.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"abc\\r\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-49.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"abc \".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-50.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"abc \".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-51.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"\\nabc\\n\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-52.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"\\rabc\\r\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-53.js",
+    "code": "return [{ label: \"upstream assertion\", value: \" abc \".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-54.js",
+    "code": "return [{ label: \"upstream assertion\", value: \" abc \".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-55.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"\\n\\n\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": ""
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-56.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"\\r\\r\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": ""
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-57.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"  \".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": ""
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-58.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"  \".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": ""
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-59.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"            abc\".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/15.5.4.20-4-60.js",
+    "code": "return [{ label: \"upstream assertion\", value: \"    \".trim() }]",
+    "expected": [
+      {
+        "label": "upstream assertion",
+        "value": ""
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trim/u180e.js",
+    "code": "return [{ label: \"trailing U+180E\", value: \"_᠎\".trim() },{ label: \"only U+180E\", value: \"᠎\".trim() },{ label: \"leading U+180E\", value: \"᠎_\".trim() }]",
+    "expected": [
+      {
+        "label": "trailing U+180E",
+        "value": "_᠎"
+      },
+      {
+        "label": "only U+180E",
+        "value": "᠎"
+      },
+      {
+        "label": "leading U+180E",
+        "value": "᠎_"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trimStart/this-value-whitespace.js",
+    "code": "return [{ label: \"all whitespace\", value: \"\\t\\n\\u000b\\f\\r                　  ﻿a\\t\\n\\u000b\\f\\r                　  ﻿b\\t\\n\\u000b\\f\\r                　  ﻿\".trimStart() }]",
+    "expected": [
+      {
+        "label": "all whitespace",
+        "value": "a\t\n\u000b\f\r                　  ﻿b\t\n\u000b\f\r                　  ﻿"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trimStart/this-value-line-terminator.js",
+    "code": "return [{ label: \"all line terminators\", value: \"\\n\\r  a\\n\\r  b\\n\\r  \".trimStart() }]",
+    "expected": [
+      {
+        "label": "all line terminators",
+        "value": "a\n\r  b\n\r  "
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trimEnd/this-value-whitespace.js",
+    "code": "return [{ label: \"all whitespace\", value: \"\\t\\n\\u000b\\f\\r                　  ﻿a\\t\\n\\u000b\\f\\r                　  ﻿b\\t\\n\\u000b\\f\\r                　  ﻿\".trimEnd() }]",
+    "expected": [
+      {
+        "label": "all whitespace",
+        "value": "\t\n\u000b\f\r                　  ﻿a\t\n\u000b\f\r                　  ﻿b"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/trimEnd/this-value-line-terminator.js",
+    "code": "return [{ label: \"all line terminators\", value: \"\\n\\r  a\\n\\r  b\\n\\r  \".trimEnd() }]",
+    "expected": [
+      {
+        "label": "all line terminators",
+        "value": "\n\r  a\n\r  b"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/repeat/repeat-string-n-times.js",
+    "code": "return [{ label: \"repeat once\", value: \"abc\".repeat(1) },{ label: \"repeat three times\", value: \"abc\".repeat(3) },{ label: \"repeat 10000 times length\", value: \".\".repeat(10000).length }]",
+    "expected": [
+      {
+        "label": "repeat once",
+        "value": "abc"
+      },
+      {
+        "label": "repeat three times",
+        "value": "abcabcabc"
+      },
+      {
+        "label": "repeat 10000 times length",
+        "value": 10000
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/repeat/empty-string-returns-empty.js",
+    "code": "return [{ label: \"count 1\", value: \"\".repeat(1) },{ label: \"count 3\", value: \"\".repeat(3) },{ label: \"maximum 32-bit count\", value: \"\".repeat(4294967295) }]",
+    "expected": [
+      {
+        "label": "count 1",
+        "value": ""
+      },
+      {
+        "label": "count 3",
+        "value": ""
+      },
+      {
+        "label": "maximum 32-bit count",
+        "value": ""
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/repeat/count-is-zero-returns-empty-string.js",
+    "code": "return [{ label: \"zero\", value: \"foo\".repeat(0) }]",
+    "expected": [
+      {
+        "label": "zero",
+        "value": ""
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/repeat/count-coerced-to-zero-returns-empty-string.js",
+    "code": "return [{ label: \"fraction truncates to zero\", value: \"abc\".repeat(0.9) }]",
+    "expected": [
+      {
+        "label": "fraction truncates to zero",
+        "value": ""
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/padStart/fill-string-empty.js",
+    "code": "return [{ label: \"empty fill\", value: \"abc\".padStart(5, \"\") }]",
+    "expected": [
+      {
+        "label": "empty fill",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/padStart/normal-operation.js",
+    "code": "return [{ label: \"truncated multi-character fill\", value: \"abc\".padStart(7, \"def\") },{ label: \"single-character fill\", value: \"abc\".padStart(5, \"*\") },{ label: \"truncated surrogate pair\", value: \"abc\".padStart(6, \"💩\") }]",
+    "expected": [
+      {
+        "label": "truncated multi-character fill",
+        "value": "defdabc"
+      },
+      {
+        "label": "single-character fill",
+        "value": "**abc"
+      },
+      {
+        "label": "truncated surrogate pair",
+        "value": "💩\ud83dabc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/padStart/fill-string-omitted.js",
+    "code": "return [{ label: \"omitted fill\", value: \"abc\".padStart(5) },{ label: \"undefined fill\", value: \"abc\".padStart(5, undefined) }]",
+    "expected": [
+      {
+        "label": "omitted fill",
+        "value": "  abc"
+      },
+      {
+        "label": "undefined fill",
+        "value": "  abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/padStart/max-length-not-greater-than-string.js",
+    "code": "return [{ label: \"NaN\", value: \"abc\".padStart(NaN, \"def\") },{ label: \"negative infinity\", value: \"abc\".padStart(-Infinity, \"def\") },{ label: \"zero\", value: \"abc\".padStart(0, \"def\") },{ label: \"negative one\", value: \"abc\".padStart(-1, \"def\") },{ label: \"equal length\", value: \"abc\".padStart(3, \"def\") },{ label: \"fraction truncates\", value: \"abc\".padStart(3.9999, \"def\") }]",
+    "expected": [
+      {
+        "label": "NaN",
+        "value": "abc"
+      },
+      {
+        "label": "negative infinity",
+        "value": "abc"
+      },
+      {
+        "label": "zero",
+        "value": "abc"
+      },
+      {
+        "label": "negative one",
+        "value": "abc"
+      },
+      {
+        "label": "equal length",
+        "value": "abc"
+      },
+      {
+        "label": "fraction truncates",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/padEnd/fill-string-empty.js",
+    "code": "return [{ label: \"empty fill\", value: \"abc\".padEnd(5, \"\") }]",
+    "expected": [
+      {
+        "label": "empty fill",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/padEnd/normal-operation.js",
+    "code": "return [{ label: \"truncated multi-character fill\", value: \"abc\".padEnd(7, \"def\") },{ label: \"single-character fill\", value: \"abc\".padEnd(5, \"*\") },{ label: \"truncated surrogate pair\", value: \"abc\".padEnd(6, \"💩\") }]",
+    "expected": [
+      {
+        "label": "truncated multi-character fill",
+        "value": "abcdefd"
+      },
+      {
+        "label": "single-character fill",
+        "value": "abc**"
+      },
+      {
+        "label": "truncated surrogate pair",
+        "value": "abc💩\ud83d"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/padEnd/fill-string-omitted.js",
+    "code": "return [{ label: \"omitted fill\", value: \"abc\".padEnd(5) },{ label: \"undefined fill\", value: \"abc\".padEnd(5, undefined) }]",
+    "expected": [
+      {
+        "label": "omitted fill",
+        "value": "abc  "
+      },
+      {
+        "label": "undefined fill",
+        "value": "abc  "
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/padEnd/max-length-not-greater-than-string.js",
+    "code": "return [{ label: \"NaN\", value: \"abc\".padEnd(NaN, \"def\") },{ label: \"negative infinity\", value: \"abc\".padEnd(-Infinity, \"def\") },{ label: \"zero\", value: \"abc\".padEnd(0, \"def\") },{ label: \"negative one\", value: \"abc\".padEnd(-1, \"def\") },{ label: \"equal length\", value: \"abc\".padEnd(3, \"def\") },{ label: \"fraction truncates\", value: \"abc\".padEnd(3.9999, \"def\") }]",
+    "expected": [
+      {
+        "label": "NaN",
+        "value": "abc"
+      },
+      {
+        "label": "negative infinity",
+        "value": "abc"
+      },
+      {
+        "label": "zero",
+        "value": "abc"
+      },
+      {
+        "label": "negative one",
+        "value": "abc"
+      },
+      {
+        "label": "equal length",
+        "value": "abc"
+      },
+      {
+        "label": "fraction truncates",
+        "value": "abc"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/charAt/S15.5.4.4_A1_T4.js",
+    "code": "return [{ label: \"omitted position\", value: \"lego\".charAt() }]",
+    "expected": [
+      {
+        "label": "omitted position",
+        "value": "l"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/charAt/S15.5.4.4_A1_T7.js",
+    "code": "return [{ label: \"undefined position\", value: \"lego\".charAt(undefined) }]",
+    "expected": [
+      {
+        "label": "undefined position",
+        "value": "l"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/charAt/S15.5.4.4_A1_T8.js",
+    "code": "return [{ label: \"undefined position\", value: \"42\".charAt(undefined) }]",
+    "expected": [
+      {
+        "label": "undefined position",
+        "value": "4"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/charAt/S15.5.4.4_A4_T1.js",
+    "code": "return [{ label: \"position 0\", value: \"ABCABC\".charAt(0) },{ label: \"position 1\", value: \"ABCABC\".charAt(1) },{ label: \"position 2\", value: \"ABCABC\".charAt(2) },{ label: \"position 3\", value: \"ABCABC\".charAt(3) },{ label: \"position 4\", value: \"ABCABC\".charAt(4) },{ label: \"position 5\", value: \"ABCABC\".charAt(5) }]",
+    "expected": [
+      {
+        "label": "position 0",
+        "value": "A"
+      },
+      {
+        "label": "position 1",
+        "value": "B"
+      },
+      {
+        "label": "position 2",
+        "value": "C"
+      },
+      {
+        "label": "position 3",
+        "value": "A"
+      },
+      {
+        "label": "position 4",
+        "value": "B"
+      },
+      {
+        "label": "position 5",
+        "value": "C"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/charAt/S15.5.4.4_A4_T2.js",
+    "code": "return [{ label: \"position -2\", value: \"ABCABC\".charAt(-2) },{ label: \"position -1\", value: \"ABCABC\".charAt(-1) }]",
+    "expected": [
+      {
+        "label": "position -2",
+        "value": ""
+      },
+      {
+        "label": "position -1",
+        "value": ""
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/charAt/S15.5.4.4_A4_T3.js",
+    "code": "return [{ label: \"position 6\", value: \"ABCABC\".charAt(6) },{ label: \"position 7\", value: \"ABCABC\".charAt(7) }]",
+    "expected": [
+      {
+        "label": "position 6",
+        "value": ""
+      },
+      {
+        "label": "position 7",
+        "value": ""
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/charAt/S9.4_A1.js",
+    "code": "return [{ label: \"NaN position\", value: \"abc\".charAt(NaN) }]",
+    "expected": [
+      {
+        "label": "NaN position",
+        "value": "a"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/charAt/S9.4_A2.js",
+    "code": "return [{ label: \"positive zero\", value: \"abc\".charAt(0) },{ label: \"negative zero\", value: \"abc\".charAt(-0) }]",
+    "expected": [
+      {
+        "label": "positive zero",
+        "value": "a"
+      },
+      {
+        "label": "negative zero",
+        "value": "a"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/charAt/pos-rounding.js",
+    "code": "return [{ label: \"-0.99999\", value: \"abc\".charAt(-0.99999) },{ label: \"-0.00001\", value: \"abc\".charAt(-0.00001) },{ label: \"0.00001\", value: \"abc\".charAt(0.00001) },{ label: \"0.99999\", value: \"abc\".charAt(0.99999) },{ label: \"1.00001\", value: \"abc\".charAt(1.00001) },{ label: \"1.99999\", value: \"abc\".charAt(1.99999) }]",
+    "expected": [
+      {
+        "label": "-0.99999",
+        "value": "a"
+      },
+      {
+        "label": "-0.00001",
+        "value": "a"
+      },
+      {
+        "label": "0.00001",
+        "value": "a"
+      },
+      {
+        "label": "0.99999",
+        "value": "a"
+      },
+      {
+        "label": "1.00001",
+        "value": "b"
+      },
+      {
+        "label": "1.99999",
+        "value": "b"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/charCodeAt/S15.5.4.5_A1_T4.js",
+    "code": "return [{ label: \"omitted position\", value: \"smart\".charCodeAt() }]",
+    "expected": [
+      {
+        "label": "omitted position",
+        "value": 115
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/charCodeAt/S15.5.4.5_A1_T7.js",
+    "code": "return [{ label: \"undefined position\", value: \"lego\".charCodeAt(undefined) }]",
+    "expected": [
+      {
+        "label": "undefined position",
+        "value": 108
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/charCodeAt/S15.5.4.5_A1_T8.js",
+    "code": "return [{ label: \"undefined position\", value: \"42\".charCodeAt(undefined) }]",
+    "expected": [
+      {
+        "label": "undefined position",
+        "value": 52
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/charCodeAt/pos-rounding.js",
+    "code": "return [{ label: \"-0.99999\", value: \"abc\".charCodeAt(-0.99999) },{ label: \"-0.00001\", value: \"abc\".charCodeAt(-0.00001) },{ label: \"0.00001\", value: \"abc\".charCodeAt(0.00001) },{ label: \"0.99999\", value: \"abc\".charCodeAt(0.99999) },{ label: \"1.00001\", value: \"abc\".charCodeAt(1.00001) },{ label: \"1.99999\", value: \"abc\".charCodeAt(1.99999) }]",
+    "expected": [
+      {
+        "label": "-0.99999",
+        "value": 97
+      },
+      {
+        "label": "-0.00001",
+        "value": 97
+      },
+      {
+        "label": "0.00001",
+        "value": 97
+      },
+      {
+        "label": "0.99999",
+        "value": 97
+      },
+      {
+        "label": "1.00001",
+        "value": 98
+      },
+      {
+        "label": "1.99999",
+        "value": 98
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/codePointAt/return-single-code-unit.js",
+    "code": "return [{ label: \"a\", value: \"abc\".codePointAt(0) },{ label: \"b\", value: \"abc\".codePointAt(1) },{ label: \"c\", value: \"abc\".codePointAt(2) },{ label: \"ordinary BMP\", value: \"ꪪ뮻\".codePointAt(0) },{ label: \"before high-surrogate range\", value: \"퟿ꪪ\".codePointAt(0) },{ label: \"low surrogate\", value: \"\\udc00ꪪ\".codePointAt(0) },{ label: \"trailing D800\", value: \"123\\ud800\".codePointAt(3) },{ label: \"trailing DAAA\", value: \"123\\udaaa\".codePointAt(3) },{ label: \"trailing DBFF\", value: \"123\\udbff\".codePointAt(3) }]",
+    "expected": [
+      {
+        "label": "a",
+        "value": 97
+      },
+      {
+        "label": "b",
+        "value": 98
+      },
+      {
+        "label": "c",
+        "value": 99
+      },
+      {
+        "label": "ordinary BMP",
+        "value": 43690
+      },
+      {
+        "label": "before high-surrogate range",
+        "value": 55295
+      },
+      {
+        "label": "low surrogate",
+        "value": 56320
+      },
+      {
+        "label": "trailing D800",
+        "value": 55296
+      },
+      {
+        "label": "trailing DAAA",
+        "value": 55978
+      },
+      {
+        "label": "trailing DBFF",
+        "value": 56319
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/codePointAt/return-first-code-unit.js",
+    "code": "return [{ label: \"D800 before DBFF\", value: \"\\ud800\\udbff\".codePointAt(0) },{ label: \"D800 before E000\", value: \"\\ud800\".codePointAt(0) },{ label: \"DAAA before DBFF\", value: \"\\udaaa\\udbff\".codePointAt(0) },{ label: \"DAAA before E000\", value: \"\\udaaa\".codePointAt(0) },{ label: \"DBFF before DBFF\", value: \"\\udbff\\udbff\".codePointAt(0) },{ label: \"DBFF before E000\", value: \"\\udbff\".codePointAt(0) },{ label: \"D800 before NUL\", value: \"\\ud800\\u0000\".codePointAt(0) },{ label: \"D800 before FFFF\", value: \"\\ud800￿\".codePointAt(0) },{ label: \"DAAA before NUL\", value: \"\\udaaa\\u0000\".codePointAt(0) },{ label: \"DAAA before FFFF\", value: \"\\udaaa￿\".codePointAt(0) },{ label: \"DBFF before FFFF\", value: \"\\udbff￿\".codePointAt(0) }]",
+    "expected": [
+      {
+        "label": "D800 before DBFF",
+        "value": 55296
+      },
+      {
+        "label": "D800 before E000",
+        "value": 55296
+      },
+      {
+        "label": "DAAA before DBFF",
+        "value": 55978
+      },
+      {
+        "label": "DAAA before E000",
+        "value": 55978
+      },
+      {
+        "label": "DBFF before DBFF",
+        "value": 56319
+      },
+      {
+        "label": "DBFF before E000",
+        "value": 56319
+      },
+      {
+        "label": "D800 before NUL",
+        "value": 55296
+      },
+      {
+        "label": "D800 before FFFF",
+        "value": 55296
+      },
+      {
+        "label": "DAAA before NUL",
+        "value": 55978
+      },
+      {
+        "label": "DAAA before FFFF",
+        "value": 55978
+      },
+      {
+        "label": "DBFF before FFFF",
+        "value": 56319
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/codePointAt/return-utf16-decode.js",
+    "code": "return [{ label: \"U+10000\", value: \"𐀀\".codePointAt(0) },{ label: \"U+101D0\", value: \"𐇐\".codePointAt(0) },{ label: \"U+103FF\", value: \"𐏿\".codePointAt(0) },{ label: \"U+BA800\", value: \"򺠀\".codePointAt(0) },{ label: \"U+BA9D0\", value: \"򺧐\".codePointAt(0) },{ label: \"U+BABFF\", value: \"򺯿\".codePointAt(0) },{ label: \"U+10FC00\", value: \"􏰀\".codePointAt(0) },{ label: \"U+10FDD0\", value: \"􏷐\".codePointAt(0) },{ label: \"U+10FFFF\", value: \"􏿿\".codePointAt(0) }]",
+    "expected": [
+      {
+        "label": "U+10000",
+        "value": 65536
+      },
+      {
+        "label": "U+101D0",
+        "value": 66000
+      },
+      {
+        "label": "U+103FF",
+        "value": 66559
+      },
+      {
+        "label": "U+BA800",
+        "value": 763904
+      },
+      {
+        "label": "U+BA9D0",
+        "value": 764368
+      },
+      {
+        "label": "U+BABFF",
+        "value": 764927
+      },
+      {
+        "label": "U+10FC00",
+        "value": 1113088
+      },
+      {
+        "label": "U+10FDD0",
+        "value": 1113552
+      },
+      {
+        "label": "U+10FFFF",
+        "value": 1114111
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/codePointAt/return-code-unit-coerced-position.js",
+    "code": "return [{ label: \"NaN\", value: \"𐀀\".codePointAt(NaN) },{ label: \"undefined\", value: \"𐀀\".codePointAt(undefined) }]",
+    "expected": [
+      {
+        "label": "NaN",
+        "value": 65536
+      },
+      {
+        "label": "undefined",
+        "value": 65536
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/codePointAt/returns-undefined-on-position-less-than-zero.js",
+    "code": "return [{ label: \"negative one\", value: \"abc\".codePointAt(-1) === undefined },{ label: \"negative infinity\", value: \"abc\".codePointAt(-Infinity) === undefined }]",
+    "expected": [
+      {
+        "label": "negative one",
+        "value": true
+      },
+      {
+        "label": "negative infinity",
+        "value": true
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/codePointAt/returns-undefined-on-position-equal-or-more-than-size.js",
+    "code": "return [{ label: \"equal to size\", value: \"abc\".codePointAt(3) === undefined },{ label: \"greater than size\", value: \"abc\".codePointAt(4) === undefined },{ label: \"positive infinity\", value: \"abc\".codePointAt(Infinity) === undefined }]",
+    "expected": [
+      {
+        "label": "equal to size",
+        "value": true
+      },
+      {
+        "label": "greater than size",
+        "value": true
+      },
+      {
+        "label": "positive infinity",
+        "value": true
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/at/returns-code-unit.js",
+    "code": "return [{ label: \"position 0\", value: \"12\\ud80034\".at(0) },{ label: \"position 1\", value: \"12\\ud80034\".at(1) },{ label: \"unpaired surrogate\", value: \"12\\ud80034\".at(2) },{ label: \"position 3\", value: \"12\\ud80034\".at(3) },{ label: \"position 4\", value: \"12\\ud80034\".at(4) }]",
+    "expected": [
+      {
+        "label": "position 0",
+        "value": "1"
+      },
+      {
+        "label": "position 1",
+        "value": "2"
+      },
+      {
+        "label": "unpaired surrogate",
+        "value": "\ud800"
+      },
+      {
+        "label": "position 3",
+        "value": "3"
+      },
+      {
+        "label": "position 4",
+        "value": "4"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/at/returns-item.js",
+    "code": "return [{ label: \"position 0\", value: \"12345\".at(0) },{ label: \"position 1\", value: \"12345\".at(1) },{ label: \"position 2\", value: \"12345\".at(2) },{ label: \"position 3\", value: \"12345\".at(3) },{ label: \"position 4\", value: \"12345\".at(4) }]",
+    "expected": [
+      {
+        "label": "position 0",
+        "value": "1"
+      },
+      {
+        "label": "position 1",
+        "value": "2"
+      },
+      {
+        "label": "position 2",
+        "value": "3"
+      },
+      {
+        "label": "position 3",
+        "value": "4"
+      },
+      {
+        "label": "position 4",
+        "value": "5"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/at/returns-item-relative-index.js",
+    "code": "return [{ label: \"zero\", value: \"12345\".at(0) },{ label: \"negative one\", value: \"12345\".at(-1) },{ label: \"negative three\", value: \"12345\".at(-3) },{ label: \"negative four\", value: \"12345\".at(-4) }]",
+    "expected": [
+      {
+        "label": "zero",
+        "value": "1"
+      },
+      {
+        "label": "negative one",
+        "value": "5"
+      },
+      {
+        "label": "negative three",
+        "value": "3"
+      },
+      {
+        "label": "negative four",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/at/returns-undefined-for-out-of-range-index.js",
+    "code": "return [{ label: \"position -2\", value: \"\".at(-2) === undefined },{ label: \"position 0\", value: \"\".at(0) === undefined },{ label: \"position 1\", value: \"\".at(1) === undefined }]",
+    "expected": [
+      {
+        "label": "position -2",
+        "value": true
+      },
+      {
+        "label": "position 0",
+        "value": true
+      },
+      {
+        "label": "position 1",
+        "value": true
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/at/index-non-numeric-argument-tointeger.js",
+    "code": "return [{ label: \"undefined\", value: \"01\".at(undefined) }]",
+    "expected": [
+      {
+        "label": "undefined",
+        "value": "0"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/concat/S15.5.4.6_A1_T4.js",
+    "code": "return [{ label: \"no arguments\", value: \"lego\".concat() }]",
+    "expected": [
+      {
+        "label": "no arguments",
+        "value": "lego"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/toString/string-primitive.js",
+    "code": "return [{ label: \"empty string\", value: \"\".toString() },{ label: \"non-empty string\", value: \"str\".toString() }]",
+    "expected": [
+      {
+        "label": "empty string",
+        "value": ""
+      },
+      {
+        "label": "non-empty string",
+        "value": "str"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/normalize/return-normalized-string.js",
+    "code": "return [{ label: \"NFC short\", value: \"ẛ̣\".normalize(\"NFC\") },{ label: \"NFD short\", value: \"ẛ̣\".normalize(\"NFD\") },{ label: \"NFKC short\", value: \"ẛ̣\".normalize(\"NFKC\") },{ label: \"NFKD short\", value: \"ẛ̣\".normalize(\"NFKD\") },{ label: \"NFC long\", value: \"Å⫝̸क़Ω̈́\".normalize(\"NFC\") },{ label: \"NFD long\", value: \"Å⫝̸क़Ω̈́\".normalize(\"NFD\") },{ label: \"NFKC long\", value: \"Å⫝̸क़Ω̈́\".normalize(\"NFKC\") },{ label: \"NFKD long\", value: \"Å⫝̸क़Ω̈́\".normalize(\"NFKD\") }]",
+    "expected": [
+      {
+        "label": "NFC short",
+        "value": "ẛ̣"
+      },
+      {
+        "label": "NFD short",
+        "value": "ẛ̣"
+      },
+      {
+        "label": "NFKC short",
+        "value": "ṩ"
+      },
+      {
+        "label": "NFKD short",
+        "value": "ṩ"
+      },
+      {
+        "label": "NFC long",
+        "value": "Å⫝̸क़Ω̈́"
+      },
+      {
+        "label": "NFD long",
+        "value": "Å⫝̸क़Ω̈́"
+      },
+      {
+        "label": "NFKC long",
+        "value": "Å⫝̸क़Ω̈́"
+      },
+      {
+        "label": "NFKD long",
+        "value": "Å⫝̸क़Ω̈́"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/normalize/return-normalized-string-using-default-parameter.js",
+    "code": "return [{ label: \"omitted\", value: \"Å⫝̸क़Ω̈́\".normalize() },{ label: \"undefined\", value: \"Å⫝̸क़Ω̈́\".normalize(undefined) }]",
+    "expected": [
+      {
+        "label": "omitted",
+        "value": "Å⫝̸क़Ω̈́"
+      },
+      {
+        "label": "undefined",
+        "value": "Å⫝̸क़Ω̈́"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/normalize/form-is-not-valid-throws.js",
+    "code": "return [{ label: \"bar\", value: (() => { try { \"foo\".normalize(\"bar\"); return false } catch (error) { return error instanceof RangeError } })() },{ label: \"NFC1\", value: (() => { try { \"foo\".normalize(\"NFC1\"); return false } catch (error) { return error instanceof RangeError } })() }]",
+    "expected": [
+      {
+        "label": "bar",
+        "value": true
+      },
+      {
+        "label": "NFC1",
+        "value": true
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/prototype/localeCompare/15.5.4.9_CE.js",
+    "code": "return [{ label: \"D70\", value: \"ö\".localeCompare(\"ö\") },{ label: \"reordered diaeresis\", value: \"ạ̈\".localeCompare(\"ạ̈\") },{ label: \"reordered marks\", value: \"ạ̈\".localeCompare(\"ạ̈\") },{ label: \"precomposed dot below\", value: \"ạ̈\".localeCompare(\"ạ̈\") },{ label: \"breve after diaeresis\", value: \"ä̆\".localeCompare(\"ä̆\") },{ label: \"diaeresis after breve\", value: \"ă̈\".localeCompare(\"ă̈\") },{ label: \"Hangul\", value: \"퓛\".localeCompare(\"퓛\") },{ label: \"angstrom compatibility\", value: \"Å\".localeCompare(\"Å\") },{ label: \"angstrom decomposed\", value: \"Å\".localeCompare(\"Å\") },{ label: \"reordered horn and dot\", value: \"x̛̣\".localeCompare(\"x̛̣\") },{ label: \"Vietnamese precomposed 1\", value: \"ự\".localeCompare(\"ự\") },{ label: \"Vietnamese decomposed\", value: \"ự\".localeCompare(\"ự\") },{ label: \"Vietnamese precomposed 2\", value: \"ự\".localeCompare(\"ự\") },{ label: \"Vietnamese reordered\", value: \"ự\".localeCompare(\"ự\") },{ label: \"cedilla\", value: \"Ç\".localeCompare(\"Ç\") },{ label: \"q reordered\", value: \"q̣̇\".localeCompare(\"q̣̇\") },{ label: \"Hangul syllable\", value: \"가\".localeCompare(\"가\") },{ label: \"ohm\", value: \"Ω\".localeCompare(\"Ω\") },{ label: \"angstrom\", value: \"Å\".localeCompare(\"Å\") },{ label: \"circumflex\", value: \"ô\".localeCompare(\"ô\") },{ label: \"s with marks\", value: \"ṩ\".localeCompare(\"ṩ\") },{ label: \"d composed plus dot\", value: \"ḍ̇\".localeCompare(\"ḍ̇\") },{ label: \"d two precompositions\", value: \"ḍ̇\".localeCompare(\"ḍ̇\") }]",
+    "expected": [
+      {
+        "label": "D70",
+        "value": 0
+      },
+      {
+        "label": "reordered diaeresis",
+        "value": 0
+      },
+      {
+        "label": "reordered marks",
+        "value": 0
+      },
+      {
+        "label": "precomposed dot below",
+        "value": 0
+      },
+      {
+        "label": "breve after diaeresis",
+        "value": 0
+      },
+      {
+        "label": "diaeresis after breve",
+        "value": 0
+      },
+      {
+        "label": "Hangul",
+        "value": 0
+      },
+      {
+        "label": "angstrom compatibility",
+        "value": 0
+      },
+      {
+        "label": "angstrom decomposed",
+        "value": 0
+      },
+      {
+        "label": "reordered horn and dot",
+        "value": 0
+      },
+      {
+        "label": "Vietnamese precomposed 1",
+        "value": 0
+      },
+      {
+        "label": "Vietnamese decomposed",
+        "value": 0
+      },
+      {
+        "label": "Vietnamese precomposed 2",
+        "value": 0
+      },
+      {
+        "label": "Vietnamese reordered",
+        "value": 0
+      },
+      {
+        "label": "cedilla",
+        "value": 0
+      },
+      {
+        "label": "q reordered",
+        "value": 0
+      },
+      {
+        "label": "Hangul syllable",
+        "value": 0
+      },
+      {
+        "label": "ohm",
+        "value": 0
+      },
+      {
+        "label": "angstrom",
+        "value": 0
+      },
+      {
+        "label": "circumflex",
+        "value": 0
+      },
+      {
+        "label": "s with marks",
+        "value": 0
+      },
+      {
+        "label": "d composed plus dot",
+        "value": 0
+      },
+      {
+        "label": "d two precompositions",
+        "value": 0
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/fromCharCode/S15.5.3.2_A2.js",
+    "code": "return [{ label: \"no arguments\", value: String.fromCharCode() }]",
+    "expected": [
+      {
+        "label": "no arguments",
+        "value": ""
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/fromCharCode/S15.5.3.2_A3_T1.js",
+    "code": "return [{ label: \"ABBA\", value: String.fromCharCode(65, 66, 66, 65) }]",
+    "expected": [
+      {
+        "label": "ABBA",
+        "value": "ABBA"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/fromCharCode/S9.7_A1.js",
+    "code": "return [{ label: \"NaN\", value: String.fromCharCode(NaN).charCodeAt(0) },{ label: \"zero\", value: String.fromCharCode(0).charCodeAt(0) },{ label: \"negative zero\", value: String.fromCharCode(-0).charCodeAt(0) },{ label: \"positive infinity\", value: String.fromCharCode(Infinity).charCodeAt(0) },{ label: \"negative infinity\", value: String.fromCharCode(-Infinity).charCodeAt(0) }]",
+    "expected": [
+      {
+        "label": "NaN",
+        "value": 0
+      },
+      {
+        "label": "zero",
+        "value": 0
+      },
+      {
+        "label": "negative zero",
+        "value": 0
+      },
+      {
+        "label": "positive infinity",
+        "value": 0
+      },
+      {
+        "label": "negative infinity",
+        "value": 0
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/fromCharCode/S9.7_A2.1.js",
+    "code": "return [{ label: \"0\", value: String.fromCharCode(0).charCodeAt(0) },{ label: \"1\", value: String.fromCharCode(1).charCodeAt(0) },{ label: \"-1\", value: String.fromCharCode(-1).charCodeAt(0) },{ label: \"65535\", value: String.fromCharCode(65535).charCodeAt(0) },{ label: \"65534\", value: String.fromCharCode(65534).charCodeAt(0) },{ label: \"65536\", value: String.fromCharCode(65536).charCodeAt(0) },{ label: \"4294967295\", value: String.fromCharCode(4294967295).charCodeAt(0) },{ label: \"4294967294\", value: String.fromCharCode(4294967294).charCodeAt(0) },{ label: \"4294967296\", value: String.fromCharCode(4294967296).charCodeAt(0) }]",
+    "expected": [
+      {
+        "label": "0",
+        "value": 0
+      },
+      {
+        "label": "1",
+        "value": 1
+      },
+      {
+        "label": "-1",
+        "value": 65535
+      },
+      {
+        "label": "65535",
+        "value": 65535
+      },
+      {
+        "label": "65534",
+        "value": 65534
+      },
+      {
+        "label": "65536",
+        "value": 0
+      },
+      {
+        "label": "4294967295",
+        "value": 65535
+      },
+      {
+        "label": "4294967294",
+        "value": 65534
+      },
+      {
+        "label": "4294967296",
+        "value": 0
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/fromCharCode/S9.7_A2.2.js",
+    "code": "return [{ label: \"-32767\", value: String.fromCharCode(-32767).charCodeAt(0) },{ label: \"-32768\", value: String.fromCharCode(-32768).charCodeAt(0) },{ label: \"-32769\", value: String.fromCharCode(-32769).charCodeAt(0) },{ label: \"-65535\", value: String.fromCharCode(-65535).charCodeAt(0) },{ label: \"-65536\", value: String.fromCharCode(-65536).charCodeAt(0) },{ label: \"-65537\", value: String.fromCharCode(-65537).charCodeAt(0) },{ label: \"65535\", value: String.fromCharCode(65535).charCodeAt(0) },{ label: \"65536\", value: String.fromCharCode(65536).charCodeAt(0) },{ label: \"65537\", value: String.fromCharCode(65537).charCodeAt(0) },{ label: \"131071\", value: String.fromCharCode(131071).charCodeAt(0) },{ label: \"131072\", value: String.fromCharCode(131072).charCodeAt(0) },{ label: \"131073\", value: String.fromCharCode(131073).charCodeAt(0) }]",
+    "expected": [
+      {
+        "label": "-32767",
+        "value": 32769
+      },
+      {
+        "label": "-32768",
+        "value": 32768
+      },
+      {
+        "label": "-32769",
+        "value": 32767
+      },
+      {
+        "label": "-65535",
+        "value": 1
+      },
+      {
+        "label": "-65536",
+        "value": 0
+      },
+      {
+        "label": "-65537",
+        "value": 65535
+      },
+      {
+        "label": "65535",
+        "value": 65535
+      },
+      {
+        "label": "65536",
+        "value": 0
+      },
+      {
+        "label": "65537",
+        "value": 1
+      },
+      {
+        "label": "131071",
+        "value": 65535
+      },
+      {
+        "label": "131072",
+        "value": 0
+      },
+      {
+        "label": "131073",
+        "value": 1
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/fromCharCode/S9.7_A3.2_T1.js",
+    "code": "return [{ label: \"positive fraction\", value: String.fromCharCode(1.2345).charCodeAt(0) },{ label: \"negative fraction\", value: String.fromCharCode(-5.4321).charCodeAt(0) }]",
+    "expected": [
+      {
+        "label": "positive fraction",
+        "value": 1
+      },
+      {
+        "label": "negative fraction",
+        "value": 65531
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/fromCodePoint/arguments-is-empty.js",
+    "code": "return [{ label: \"no arguments\", value: String.fromCodePoint() }]",
+    "expected": [
+      {
+        "label": "no arguments",
+        "value": ""
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/fromCodePoint/return-string-value.js",
+    "code": "return [{ label: \"NUL\", value: String.fromCodePoint(0) },{ label: \"asterisk\", value: String.fromCodePoint(42) },{ label: \"AZ\", value: String.fromCodePoint(65, 90) },{ label: \"Cyrillic\", value: String.fromCodePoint(1028) },{ label: \"hex supplementary\", value: String.fromCodePoint(194564) },{ label: \"decimal supplementary\", value: String.fromCodePoint(194564) },{ label: \"mixed supplementary\", value: String.fromCodePoint(119558, 97, 119559) },{ label: \"maximum code point\", value: String.fromCodePoint(1114111) }]",
+    "expected": [
+      {
+        "label": "NUL",
+        "value": "\u0000"
+      },
+      {
+        "label": "asterisk",
+        "value": "*"
+      },
+      {
+        "label": "AZ",
+        "value": "AZ"
+      },
+      {
+        "label": "Cyrillic",
+        "value": "Є"
+      },
+      {
+        "label": "hex supplementary",
+        "value": "你"
+      },
+      {
+        "label": "decimal supplementary",
+        "value": "你"
+      },
+      {
+        "label": "mixed supplementary",
+        "value": "𝌆a𝌇"
+      },
+      {
+        "label": "maximum code point",
+        "value": "􏿿"
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/fromCodePoint/argument-is-not-integer.js",
+    "code": "return [{ label: \"fraction\", value: (() => { try { String.fromCodePoint(3.14); return false } catch (error) { return error instanceof RangeError } })() },{ label: \"fraction after valid\", value: (() => { try { String.fromCodePoint(42, 3.14); return false } catch (error) { return error instanceof RangeError } })() }]",
+    "expected": [
+      {
+        "label": "fraction",
+        "value": true
+      },
+      {
+        "label": "fraction after valid",
+        "value": true
+      }
+    ]
+  },
+  {
+    "path": "test/built-ins/String/fromCodePoint/number-is-out-of-range.js",
+    "code": "return [{ label: \"negative one\", value: (() => { try { String.fromCodePoint(-1); return false } catch (error) { return error instanceof RangeError } })() },{ label: \"negative after valid\", value: (() => { try { String.fromCodePoint(1, -1); return false } catch (error) { return error instanceof RangeError } })() },{ label: \"above maximum\", value: (() => { try { String.fromCodePoint(1114112); return false } catch (error) { return error instanceof RangeError } })() },{ label: \"infinity\", value: (() => { try { String.fromCodePoint(Infinity); return false } catch (error) { return error instanceof RangeError } })() }]",
+    "expected": [
+      {
+        "label": "negative one",
+        "value": true
+      },
+      {
+        "label": "negative after valid",
+        "value": true
+      },
+      {
+        "label": "above maximum",
+        "value": true
+      },
+      {
+        "label": "infinity",
+        "value": true
+      }
+    ]
+  }
+]

@@ -54,3 +54,4 @@ output/
 
 __pycache__/
 *.pyc
+/rust/target/

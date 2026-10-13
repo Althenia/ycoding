@@ -11,20 +11,25 @@
     "dist"
   ],
   "exports": {
+    "./v5": "./src/v5/index.ts",
+    "./v5/connection": "./src/v5/connection/index.ts",
     "./*": "./src/*.ts"
   },
   "scripts": {
     "build": "bun run script/build.ts",
+    "generate:v5": "bun run src/v5/generate.ts",
     "typecheck": "tsgo --noEmit"
   },
   "dependencies": {
     "@ycoding-ai/schema": "workspace:*",
-    "effect": "catalog:"
+    "effect": "catalog:",
+    "@bufbuild/protobuf": "2.16.0"
   },
   "devDependencies": {
     "@tsconfig/bun": "catalog:",
     "@types/bun": "catalog:",
     "@typescript/native-preview": "catalog:",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "@bufbuild/protoc-gen-es": "2.16.0"
   }
 }
