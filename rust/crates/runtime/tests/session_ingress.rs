@@ -117,6 +117,7 @@ async fn fixture(endpoint: &str) -> (Fixture, Artifacts) {
         configuration: None,
         image_analyzer: None,
         extensions: Vec::new(),
+        session_tools: None,
         store: Service::new(world().store.clone()).with_artifact_source(artifact_source.clone()),
         events: world().core.events.clone(),
         location: ycoding_core::ycoding_schema::location::Ref {

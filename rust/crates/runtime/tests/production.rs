@@ -216,6 +216,9 @@ async fn production_flow() {
                 .unwrap()
                 .as_millis() as i64;
             SessionTable::insert(tx, &record)?;
+            let mut movable = record.clone();
+            movable.id = "ses_movable".into();
+            SessionTable::insert(tx, &movable)?;
             for agent in [
                 "invalid",
                 "invalid_generation",
@@ -432,7 +435,6 @@ async fn production_flow() {
             .any(|id| id.0.as_str() == Some("openai"))
     );
     let artifacts = (core.artifacts.as_ref().unwrap())(&info).unwrap();
-    std::fs::create_dir_all(root.join("unrecorded")).unwrap();
     let unrecorded = location::Info::decode(
         &parse_json(&format!(
             r#"{{"directory":"{0}","project":{{"id":"prj_unrecorded","directory":"{0}"}}}}"#,
@@ -447,7 +449,7 @@ async fn production_flow() {
     };
     assert!(
         (core.catalogs.as_ref().unwrap())(&unrecorded).is_err(),
-        "registered catalogs must answer unavailable for an unrecorded Location"
+        "registered catalogs must answer unavailable for a nonexistent Location"
     );
     assert!((core.integrations.as_ref().unwrap())(&unrecorded).is_err());
     assert!((core.mcp.as_ref().unwrap())(&unrecorded).is_err());
@@ -455,6 +457,22 @@ async fn production_flow() {
     assert!((core.artifacts.as_ref().unwrap())(&unrecorded).is_none());
     assert!((core.platform.as_ref().unwrap())(&unrecorded_reference).is_err());
     assert!((core.isolated_browser.as_ref().unwrap())(&unrecorded_reference).is_err());
+    std::fs::create_dir_all(root.join("unrecorded")).unwrap();
+    let resolved = core
+        .locations
+        .location(unrecorded.directory.as_lossless(), None)
+        .unwrap();
+    assert_eq!(
+        resolved.info.project.id.as_lossless().as_str(),
+        Some("global"),
+        "a new directory resolves its filesystem identity, not the supplied Project hypothesis"
+    );
+    let resolved_catalog = (core.catalogs.as_ref().unwrap())(&resolved.info).unwrap();
+    assert!(Arc::ptr_eq(
+        &resolved_catalog.models,
+        &resolved.production.as_ref().unwrap().models
+    ));
+    assert!(resolved_catalog.session.is_some());
     assert!(
         services
             .agents
@@ -552,6 +570,13 @@ async fn production_flow() {
             .quota
     ));
     let other_artifacts = (core.artifacts.as_ref().unwrap())(&other_info).unwrap();
+    assert!(
+        std::ptr::eq(
+            artifacts.store.accounting().unwrap(),
+            other_artifacts.store.accounting().unwrap()
+        ),
+        "every Location must use the same artifact accounting instance"
+    );
     assert_eq!(
         other
             .agents
@@ -629,6 +654,25 @@ async fn production_flow() {
         telemetry.data.data.items.is_empty(),
         "the production analytics engine serves telemetry reads"
     );
+    let remote: v5::RemoteGetResult = support::success(
+        wire.call(
+            "remote.get",
+            v5::Scope {
+                target: Some(v5::scope::Target::Machine(v5::Empty {})),
+            },
+            v5::RemoteGetRequest {}.encode_to_vec(),
+        )
+        .await,
+    );
+    assert_eq!(
+        remote.data.state, 1,
+        "production composes an opted-out remote control"
+    );
+    assert!(remote.data.device.is_none());
+    assert!(
+        artifacts.store.accounting().is_some(),
+        "Session movement can use the shared artifact accounting owner"
+    );
     assert_eq!(
         store
             .client()
@@ -656,6 +700,74 @@ async fn production_flow() {
         None,
         "catalog pricing must stay read-only"
     );
+    let before_generate = core
+        .sessions
+        .model_history(&session::Id::new("ses_production").unwrap())
+        .unwrap()
+        .len();
+    let generated: v5::SessionGenerateResult = support::success(
+        wire.call(
+            "session.generate",
+            support::session_scope("ses_production"),
+            v5::SessionGenerateRequest {
+                params: v5::SessionGenerateRequestParams {
+                    session_id: support::text("ses_production"),
+                },
+                payload: v5::SessionGenerateRequestPayload {
+                    prompt: support::text("Generate without admitting another prompt"),
+                },
+            }
+            .encode_to_vec(),
+        )
+        .await,
+    );
+    assert_eq!(
+        generated.data.data.text,
+        support::text("Run the focused tests")
+    );
+    let generated_request = stringify_json(&received.recv().await.unwrap());
+    assert!(generated_request.contains("Generate without admitting another prompt"));
+    assert!(!generated_request.contains(r#""tools""#));
+    assert_eq!(
+        core.sessions
+            .model_history(&session::Id::new("ses_production").unwrap())
+            .unwrap()
+            .len(),
+        before_generate
+    );
+    let moved: v5::SessionMoveResult = support::success(
+        wire.call(
+            "session.move",
+            support::session_scope("ses_movable"),
+            v5::SessionMoveRequest {
+                params: v5::SessionMoveRequestParams {
+                    session_id: support::text("ses_movable"),
+                },
+                payload: v5::LocationRef {
+                    directory: support::text(root.join("other").to_str().unwrap()),
+                    workspace_id: None,
+                },
+            }
+            .encode_to_vec(),
+        )
+        .await,
+    );
+    assert_eq!(moved.data, v5::Empty {});
+    let moved = core
+        .sessions
+        .get(&session::Id::new("ses_movable").unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(moved.location.directory, other_info.directory);
+    assert_eq!(moved.project_id, other_info.project.id);
+    let (_, moved_location) = core.locations.session(&moved.id).unwrap();
+    let (moved_catalogs, moved_services) = core.session_services(&moved_location).unwrap();
+    assert!(Arc::ptr_eq(
+        moved_services.runner.models(),
+        &moved_catalogs.models
+    ));
+    assert_eq!(moved_services.generate.location, moved.location);
+
     let prediction: v5::SessionPredictionResult = support::success(
         wire.call(
             "session.prediction",

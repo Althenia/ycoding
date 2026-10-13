@@ -199,23 +199,44 @@ impl Locations {
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         let before = cache.len();
-        let evicted = cache.keys().filter(|key| {
-            let cached = &cache[*key];
-            !(
-            Arc::strong_count(&cached.services) > 1
-                || cached.services.production.as_ref().is_some_and(|composed| composed.in_use())
-                || now.saturating_duration_since(
-                    *cached
-                        .released
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner),
-                ) < Duration::from_secs(60 * 60))
-        }).cloned().collect::<Vec<_>>();
-        let mut removed = evicted.iter().filter_map(|key| cache.remove(key)).map(|cached| cached.services).collect::<Vec<_>>();
+        let evicted = cache
+            .keys()
+            .filter(|key| {
+                let cached = &cache[*key];
+                !(Arc::strong_count(&cached.services) > 1
+                    || cached
+                        .services
+                        .production
+                        .as_ref()
+                        .is_some_and(|composed| composed.in_use())
+                    || now.saturating_duration_since(
+                        *cached
+                            .released
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner),
+                    ) < Duration::from_secs(60 * 60))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut removed = evicted
+            .iter()
+            .filter_map(|key| cache.remove(key))
+            .map(|cached| cached.services)
+            .collect::<Vec<_>>();
         let count = before - cache.len();
         drop(cache);
-        let mut retired = self.0.retired.lock().unwrap_or_else(PoisonError::into_inner);
-        removed.extend(retired.extract_if(.., |services| Arc::strong_count(services) == 1 && !services.production.as_ref().is_some_and(|composed| composed.in_use())));
+        let mut retired = self
+            .0
+            .retired
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        removed.extend(retired.extract_if(.., |services| {
+            Arc::strong_count(services) == 1
+                && !services
+                    .production
+                    .as_ref()
+                    .is_some_and(|composed| composed.in_use())
+        }));
         drop(retired);
         self.close_sets(removed)?;
         Ok(count)
@@ -231,7 +252,11 @@ impl Locations {
 
     // Replaces the generation only while `generation` is still current, so a retired
     // generation's watcher cannot rebuild a Location it no longer owns.
-    pub(crate) fn reload_generation(&self, info: &location::Info, generation: u64) -> Result<bool, Failure> {
+    pub(crate) fn reload_generation(
+        &self,
+        info: &location::Info,
+        generation: u64,
+    ) -> Result<bool, Failure> {
         self.replace(info, Some(generation))
     }
 
@@ -240,34 +265,91 @@ impl Locations {
             return Err(Failure::Unavailable("Location map is closed".into()));
         }
         let directory = canonical(info.directory.as_lossless())?;
-        let key = (directory.clone(), info.workspace_id.as_ref().map(|id| id.as_lossless().clone()));
-        let mut cache = self.0.services.lock().unwrap_or_else(PoisonError::into_inner);
+        let key = (
+            directory.clone(),
+            info.workspace_id
+                .as_ref()
+                .map(|id| id.as_lossless().clone()),
+        );
+        let mut cache = self
+            .0
+            .services
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let Some(current) = cache.get_mut(&key) else {
             return Err(Failure::Unavailable("Location is not acquired".into()));
         };
         if generation.is_some_and(|generation| {
-            current.services.production.as_ref().map(|composed| composed.generation) != Some(generation)
+            current
+                .services
+                .production
+                .as_ref()
+                .map(|composed| composed.generation)
+                != Some(generation)
         }) {
             return Ok(false);
         }
-        let built = Arc::new(self.build(&directory, key.1.as_ref(), Project {
-            id: current.services.info.project.id.clone(),
-            directory: current.services.info.project.directory.as_lossless().clone(),
-        }, false)?);
+        let built = Arc::new(
+            self.build(
+                &directory,
+                key.1.as_ref(),
+                Project {
+                    id: current.services.info.project.id.clone(),
+                    directory: current
+                        .services
+                        .info
+                        .project
+                        .directory
+                        .as_lossless()
+                        .clone(),
+                },
+                false,
+            )?,
+        );
         let old = std::mem::replace(&mut current.services, built);
-        self.0.retired.lock().unwrap_or_else(PoisonError::into_inner).push(old);
+        self.0
+            .retired
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(old);
         drop(cache);
-        self.0.feed.emit(ycoding_core::event_feed::Data::ConfigUpdated(Box::new(ycoding_core::ycoding_schema::config::Empty)), Some(location::Ref {
-            directory: info.directory.clone(), workspace_id: info.workspace_id.clone(),
-        })).map_err(|_| Failure::Unavailable("configuration update publication failed".into()))?;
+        self.0
+            .feed
+            .emit(
+                ycoding_core::event_feed::Data::ConfigUpdated(Box::new(
+                    ycoding_core::ycoding_schema::config::Empty,
+                )),
+                Some(location::Ref {
+                    directory: info.directory.clone(),
+                    workspace_id: info.workspace_id.clone(),
+                }),
+            )
+            .map_err(|_| Failure::Unavailable("configuration update publication failed".into()))?;
         Ok(true)
     }
 
     pub(crate) fn close(&self) -> Result<(), Failure> {
-        self.0.closed.store(true, std::sync::atomic::Ordering::Release);
-        let cache = std::mem::take(&mut *self.0.services.lock().unwrap_or_else(PoisonError::into_inner));
-        let mut removed = cache.into_values().map(|cached| cached.services).collect::<Vec<_>>();
-        removed.extend(std::mem::take(&mut *self.0.retired.lock().unwrap_or_else(PoisonError::into_inner)));
+        self.0
+            .closed
+            .store(true, std::sync::atomic::Ordering::Release);
+        let cache = std::mem::take(
+            &mut *self
+                .0
+                .services
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+        let mut removed = cache
+            .into_values()
+            .map(|cached| cached.services)
+            .collect::<Vec<_>>();
+        removed.extend(std::mem::take(
+            &mut *self
+                .0
+                .retired
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        ));
         self.close_sets(removed)
     }
 
@@ -389,7 +471,14 @@ impl Locations {
             .0
             .factory
             .as_ref()
-            .map(|factory| factory.prepare(directory, workspace, project.id.as_lossless(), &project.directory))
+            .map(|factory| {
+                factory.prepare(
+                    directory,
+                    workspace,
+                    project.id.as_lossless(),
+                    &project.directory,
+                )
+            })
             .transpose()?;
         let mut configuration = prepared
             .as_ref()
@@ -526,11 +615,19 @@ impl Locations {
         workspace: Option<&LosslessString>,
     ) -> Result<(), Failure> {
         let key = (canonical(directory)?, workspace.cloned());
-        self.0
+        let removed = self
+            .0
             .services
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(&key);
+        if let Some(removed) = removed {
+            self.0
+                .retired
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(removed.services);
+        }
         Ok(())
     }
 
@@ -759,18 +856,24 @@ mod tests {
         );
         let lease = locations.location(&path, None).unwrap();
         assert_eq!(
-            locations.evict_idle(Instant::now() + Duration::from_secs(7200)).unwrap(),
+            locations
+                .evict_idle(Instant::now() + Duration::from_secs(7200))
+                .unwrap(),
             0,
             "leased services cannot be evicted"
         );
         drop(lease);
         let released = Instant::now();
         assert_eq!(
-            locations.evict_idle(released + Duration::from_secs(3599)).unwrap(),
+            locations
+                .evict_idle(released + Duration::from_secs(3599))
+                .unwrap(),
             0
         );
         assert_eq!(
-            locations.evict_idle(released + Duration::from_secs(3601)).unwrap(),
+            locations
+                .evict_idle(released + Duration::from_secs(3601))
+                .unwrap(),
             1,
             "TTL must start at release, not at the next sweep"
         );

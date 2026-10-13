@@ -88,6 +88,57 @@ fn keeps_replacement_safe_snapshots_isolated_by_location_and_project() {
 }
 
 #[test]
+fn generation_owned_sources_preserve_current_snapshots_and_restore_failed_replacements() {
+    let mut registry = Registry::default();
+    let mut old = record("project", Some("project-one"));
+    old.source.managed_version_id =
+        Some(project_artifact::VersionId::decode(&JsonValue::String("pav_old".into())).unwrap());
+    let mut replacement = old.clone();
+    replacement.source.managed_version_id =
+        Some(project_artifact::VersionId::decode(&JsonValue::String("pav_new".into())).unwrap());
+    let owner = registry.replace("location".into(), vec![old.clone()]);
+    let newer = registry.replace("location".into(), vec![replacement.clone()]);
+    let mut updated = old.clone();
+    updated.source.managed_version_id =
+        Some(project_artifact::VersionId::decode(&JsonValue::String("pav_update".into())).unwrap());
+    registry.update("location", owner, vec![updated.clone()]);
+    assert_eq!(registry.size(), 1);
+    assert_eq!(
+        registry.resolve(
+            "project",
+            Some(&project_id("project-one")),
+            &old.kind,
+            &old.id
+        ),
+        vec![replacement.source.clone()]
+    );
+    registry.remove_owner("location", newer);
+    assert_eq!(
+        registry.resolve(
+            "project",
+            Some(&project_id("project-one")),
+            &old.kind,
+            &old.id
+        ),
+        vec![updated.source]
+    );
+    let newer = registry.replace("location".into(), vec![replacement.clone()]);
+    registry.remove_owner("location", owner);
+    assert_eq!(registry.size(), 1);
+    assert_eq!(
+        registry.resolve(
+            "project",
+            Some(&project_id("project-one")),
+            &old.kind,
+            &old.id
+        ),
+        vec![replacement.source]
+    );
+    registry.remove_owner("location", newer);
+    assert_eq!(registry.size(), 0);
+}
+
+#[test]
 fn validates_authoritative_managed_bytes_and_captures_only_exact_provenance() {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let data = std::env::temp_dir().join(format!(

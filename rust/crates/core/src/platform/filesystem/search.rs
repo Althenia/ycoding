@@ -68,18 +68,32 @@ pub struct Service {
 }
 
 impl Service {
-    pub fn deferred(directory: &std::path::Path, backend: Arc<dyn Fn() -> io::Result<Backend> + Send + Sync>) -> io::Result<Self> {
+    pub fn deferred(
+        directory: &std::path::Path,
+        backend: Arc<dyn Fn() -> io::Result<Backend> + Send + Sync>,
+    ) -> io::Result<Self> {
         Ok(Self {
             location: Location::new(directory)?,
-            state: State::Deferred { backend, service: Default::default() },
+            state: State::Deferred {
+                backend,
+                service: Default::default(),
+            },
         })
     }
     fn initialized(&self) -> io::Result<Option<&Self>> {
         let State::Deferred { backend, service } = &self.state else {
             return Ok(None);
         };
-        service.get_or_init(|| backend().and_then(|backend| Self::new(self.directory(), backend)).map(Box::new).map_err(|error| error.to_string()))
-            .as_ref().map(|service| Some(service.as_ref())).map_err(|error| io::Error::other(error.clone()))
+        service
+            .get_or_init(|| {
+                backend()
+                    .and_then(|backend| Self::new(self.directory(), backend))
+                    .map(Box::new)
+                    .map_err(|error| error.to_string())
+            })
+            .as_ref()
+            .map(|service| Some(service.as_ref()))
+            .map_err(|error| io::Error::other(error.clone()))
     }
     pub fn directory(&self) -> &std::path::Path {
         self.location.directory()

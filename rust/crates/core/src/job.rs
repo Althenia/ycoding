@@ -350,7 +350,13 @@ impl Jobs {
         self.0.abort_all();
     }
     pub async fn shutdown(&self) -> std::io::Result<()> {
-        let tasks = self.0.lock().jobs.values_mut().filter_map(|job| job.task.take()).collect::<Vec<_>>();
+        let tasks = self
+            .0
+            .lock()
+            .jobs
+            .values_mut()
+            .filter_map(|job| job.task.take())
+            .collect::<Vec<_>>();
         for task in &tasks {
             task.abort();
         }

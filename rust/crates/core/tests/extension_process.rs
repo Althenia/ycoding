@@ -396,7 +396,10 @@ async fn captured_leaf_authority_diagnostics_and_bounded_stop() {
         }],
         ..Default::default()
     };
-    for (effect, expected) in [("deny", Error::Permission), ("ask", Error::ApprovalUnavailable)] {
+    for (effect, expected) in [
+        ("deny", Error::Permission),
+        ("ask", Error::ApprovalUnavailable),
+    ] {
         assert_eq!(
             Extension::start(
                 configuration(&fixture, "ok"),

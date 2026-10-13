@@ -77,6 +77,7 @@ pub struct Composed {
     pub references: Arc<reference::Service>,
     pub skills: Arc<tokio::sync::Mutex<skill::Service>>,
     pub generate: Arc<generate::Service>,
+    pub session_generate: Arc<ycoding_core::session::generate::Service>,
     pub activation: Arc<ycoding_core::extension::Activation>,
     pub extension_diagnostics: Vec<ycoding_core::ycoding_schema::config::Diagnostic>,
     pub plugins: Vec<ycoding_core::ycoding_schema::plugin::Info>,
@@ -319,7 +320,53 @@ impl Core {
                     Ok(())
                 })
             });
+            let resolve_locations = resolver_locations.clone();
+            let invalidate_locations = resolver_locations.clone();
             Ok(crate::services::CatalogServices {
+                session: Some(crate::services::SessionServices {
+                    runner: composed.runner.clone(),
+                    generate: composed.session_generate.clone(),
+                    destination: Some(crate::services::DestinationServices {
+                        resolve: Arc::new(move |reference| {
+                            let locations = resolve_locations.clone();
+                            Box::pin(async move {
+                                let resolved = locations.clone();
+                                let info = tokio::task::spawn_blocking(move || {
+                                    resolved
+                                        .location(
+                                            reference.directory.as_lossless(),
+                                            reference
+                                                .workspace_id
+                                                .as_ref()
+                                                .map(|id| id.as_lossless()),
+                                        )
+                                        .map(|held| held.info.clone())
+                                })
+                                .await
+                                .map_err(|_| "Destination resolution worker failed".to_owned())?
+                                .map_err(|_| "Destination Location is unavailable".to_owned())?;
+                                locations.record(&info, false).await.map_err(|_| {
+                                    "Destination Project recording failed".to_owned()
+                                })?;
+                                Ok(info)
+                            })
+                        }),
+                        invalidate: Arc::new(move |reference| {
+                            let locations = invalidate_locations.clone();
+                            Box::pin(async move {
+                                tokio::task::spawn_blocking(move || {
+                                    locations.evict(
+                                        reference.directory.as_lossless(),
+                                        reference.workspace_id.as_ref().map(|id| id.as_lossless()),
+                                    )
+                                })
+                                .await
+                                .map_err(|_| "Destination invalidation worker failed".to_owned())?
+                                .map_err(|_| "Destination invalidation failed".to_owned())
+                            })
+                        }),
+                    }),
+                }),
                 models: composed.models.clone(),
                 agents: services.agents.clone(),
                 commands: composed.commands.clone(),
@@ -449,6 +496,9 @@ impl Core {
             })
         });
         let browser = factory.globals.browser.clone();
+        let remote = crate::connector::Control::open(&factory.options.roots.state)
+            .await
+            .map_err(|_| unavailable("remote control"))?;
         let maintenance = Arc::new(Maintenance::new(&factory));
         started.maintenance = Some(maintenance.clone());
         maintenance
@@ -465,7 +515,7 @@ impl Core {
             mcp: Some(mcp),
             catalogs: Some(catalogs),
             artifacts: Some(artifacts),
-            remote: None,
+            remote: Some(remote),
             publisher,
             credentials,
             browser: Some(browser),
@@ -1117,7 +1167,8 @@ impl Factory {
             helper_models.clone(),
             self.executor.clone(),
         );
-        let session_tools = self.session_tools(services, &prepared, &compaction, helper_models);
+        let session_tools =
+            self.session_tools(services, &prepared, &compaction, helper_models.clone());
         let session_registration = session_tools
             .as_ref()
             .map(|tools| {
@@ -1193,7 +1244,7 @@ impl Factory {
         ));
         if activation
             .event_source
-            .bind(self.events.clone(), Some(reference))
+            .bind(self.events.clone(), Some(reference.clone()))
             .is_err()
         {
             if governor.close().await.is_err() {
@@ -1225,6 +1276,16 @@ impl Factory {
                 }
             }));
         }
+        let session_generate = Arc::new(ycoding_core::session::generate::Service {
+            store: Service::new(self.client.clone()).with_artifact_source(prepared.source.clone()),
+            location: reference.clone(),
+            agents: services.agents.clone(),
+            models: helper_models,
+            executor: self.executor.clone(),
+            attachments: attachments.clone(),
+            instructions: instructions.clone(),
+            extensions: extensions.clone(),
+        });
         let runner = runner::Local::new(runner::Services {
             snapshots: Some(snapshots),
             store: Service::new(self.client.clone()).with_artifact_source(prepared.source.clone()),
@@ -1278,6 +1339,7 @@ impl Factory {
             references,
             skills,
             generate,
+            session_generate,
             paired: self.globals.browser.clone(),
             activation,
             extension_diagnostics,

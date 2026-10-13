@@ -166,11 +166,17 @@ impl Service {
             .map(|secret| secret.domain())
             .transpose()
             .map_err(|_| unavailable("Generation credentials are unavailable"))?;
-        let loaded = self.integrations.selected_model(
-            &contextual, secret.as_ref(),
-            snapshot.as_ref().and_then(|snapshot| snapshot.credential.as_ref()),
-            self.cursor.as_deref(),
-        ).await;
+        let loaded = self
+            .integrations
+            .selected_model(
+                &contextual,
+                secret.as_ref(),
+                snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.credential.as_ref()),
+                self.cursor.as_deref(),
+            )
+            .await;
         let model = loaded.map_err(|error| {
             let message = if error == model::Error::UnsupportedPackage {
                 format!(

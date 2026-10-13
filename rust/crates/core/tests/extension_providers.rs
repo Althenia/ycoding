@@ -5,7 +5,9 @@ use ycoding_ai::{
     route::{Executor, ProcessAttempt, ProcessInput, Transport},
 };
 use ycoding_core::{
-    extension::{Configuration, Extension, FamilyGrant, Host, Launch, Options, ToolGrant, provider},
+    extension::{
+        Configuration, Extension, FamilyGrant, Host, Launch, Options, ToolGrant, provider,
+    },
     resources::{catalog::models_dev, model::from_catalog_model},
 };
 use ycoding_schema::{DomainDecode, parse_json, provider as provider_schema, stringify_json};
@@ -157,10 +159,18 @@ async fn process_provider_round_trips_text_tool_call_and_usage() {
     );
     let executor = Executor::new(Executor::http_client().unwrap());
     assert!(
-        executor.generate(&request(package, "ses_denied")).await.is_err(),
+        executor
+            .generate(&request(package, "ses_denied"))
+            .await
+            .is_err(),
         "the calling Session's denial rejects the attempt"
     );
-    assert_fake_output(&executor.generate(&request(package, "ses_tool")).await.unwrap());
+    assert_fake_output(
+        &executor
+            .generate(&request(package, "ses_tool"))
+            .await
+            .unwrap(),
+    );
     let mut anonymous = request(package, "ses_tool");
     anonymous.caller = None;
     assert!(
@@ -169,7 +179,10 @@ async fn process_provider_round_trips_text_tool_call_and_usage() {
     );
     fixture.deny("extension.provider", "providers");
     assert!(
-        executor.generate(&request(package, "ses_tool")).await.is_err(),
+        executor
+            .generate(&request(package, "ses_tool"))
+            .await
+            .is_err(),
         "denied provider authority rejects the attempt"
     );
     extension.shutdown().await;

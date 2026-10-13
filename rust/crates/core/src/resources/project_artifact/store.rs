@@ -72,7 +72,7 @@ pub struct Service {
     paths: Paths,
     sources: Arc<Mutex<Registry>>,
     tokens: Arc<Mutex<BTreeMap<LosslessString, Confirmation>>>,
-    accounting: Option<super::accounting::Service>,
+    accounting: Option<Arc<super::accounting::Service>>,
 }
 pub struct ManualWriteInput<'a> {
     pub scope: project_artifact::ScopeSelector,
@@ -170,8 +170,11 @@ impl Service {
         }
     }
     pub fn with_accounting(mut self, accounting: super::accounting::Service) -> Self {
-        self.accounting = Some(accounting);
+        self.accounting = Some(Arc::new(accounting));
         self
+    }
+    pub fn accounting(&self) -> Option<&super::accounting::Service> {
+        self.accounting.as_deref()
     }
     pub fn resolve_project_scope(
         &self,

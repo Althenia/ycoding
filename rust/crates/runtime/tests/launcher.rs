@@ -671,9 +671,15 @@ fn unreadable_store_is_refused_with_a_sanitized_diagnostic_and_left_unchanged() 
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
     let diagnostic = std::fs::read_to_string(&errors).unwrap();
-    assert!(diagnostic.contains("unreadable or uses an unsupported format"), "{diagnostic}");
+    assert!(
+        diagnostic.contains("unreadable or uses an unsupported format"),
+        "{diagnostic}"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("unreadable or uses an unsupported format"), "{stderr}");
+    assert!(
+        stderr.contains("unreadable or uses an unsupported format"),
+        "{stderr}"
+    );
     for text in [&diagnostic, &stderr.to_string()] {
         assert!(!text.contains(store.to_str().unwrap()), "{text}");
     }
@@ -683,7 +689,11 @@ fn unreadable_store_is_refused_with_a_sanitized_diagnostic_and_left_unchanged() 
         .map(|entry| entry.unwrap().file_name().into_string().unwrap())
         .filter(|name| name.starts_with("ycoding"))
         .collect::<Vec<_>>();
-    assert_eq!(stores, ["ycoding.redb"], "no fresh or migrated store may appear");
+    assert_eq!(
+        stores,
+        ["ycoding.redb"],
+        "no fresh or migrated store may appear"
+    );
     assert!(!directory.registration("local").exists());
 }
 

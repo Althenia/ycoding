@@ -1659,6 +1659,47 @@ fn location_reload_and_close_reap_extension_processes() {
 }
 
 #[test]
+fn eviction_keeps_held_generation_alive_and_retired_sources_do_not_remove_the_replacement() {
+    let f = fixture("{}", "{}");
+    let locations = f.locations();
+    let first = f.services(&locations);
+    let info = first.info.clone();
+    assert_eq!(f.factory.globals.sources.lock().unwrap().size(), 1);
+    locations.evict(info.directory.as_lossless(), None).unwrap();
+    assert!(locations.cached().is_empty());
+    assert!(
+        !first
+            .production
+            .as_ref()
+            .unwrap()
+            .tools
+            .materialize(&[])
+            .definitions
+            .is_empty()
+    );
+    let current = f.services(&locations);
+    assert!(!Arc::ptr_eq(
+        &first.production.as_ref().unwrap().tools,
+        &current.production.as_ref().unwrap().tools
+    ));
+    drop(first);
+    locations.evict_idle(Instant::now()).unwrap();
+    assert_eq!(
+        f.factory.globals.sources.lock().unwrap().size(),
+        1,
+        "closing the retired generation must retain the current source snapshot"
+    );
+    locations.reload(&info).unwrap();
+    let replacement = f.services(&locations);
+    drop(current);
+    locations.evict_idle(Instant::now()).unwrap();
+    assert_eq!(f.factory.globals.sources.lock().unwrap().size(), 1);
+    drop(replacement);
+    locations.close().unwrap();
+    assert_eq!(f.factory.globals.sources.lock().unwrap().size(), 0);
+}
+
+#[test]
 fn configured_mcp_tools_register_through_the_location_watcher() {
     let state = extension_journal();
     std::fs::write(

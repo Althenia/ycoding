@@ -93,6 +93,7 @@ struct CatalogState {
 }
 #[derive(Default)]
 struct State {
+    registration: Option<u64>,
     active: BTreeMap<String, Provenance>,
     executions: BTreeMap<session::Id, (bool, i64)>,
     terminals: BTreeSet<String>,
@@ -323,8 +324,13 @@ impl Service {
             )
             .map_err(|_| failure("Artifact registration failed"))?;
         }
-        lock(&options.registry).replace(self.0.key.clone(), standard);
-        lock(&self.0.state).active = active;
+        let mut state = lock(&self.0.state);
+        let mut registry = lock(&options.registry);
+        match state.registration {
+            Some(owner) => registry.update(&self.0.key, owner, standard),
+            None => state.registration = Some(registry.replace(self.0.key.clone(), standard)),
+        }
+        state.active = active;
         catalogs.current = current;
         catalogs.pending_standard = false;
         Ok(())
@@ -1009,14 +1015,19 @@ impl Governor {
             .await
             .map_err(|_| failure("Artifact governor task failed"))
             .and_then(|result| result);
-        lock(&self.service.0.state).running = false;
-        lock(&self.service.0.options.registry).remove(&self.service.0.key);
+        let mut state = lock(&self.service.0.state);
+        state.running = false;
+        if let Some(owner) = state.registration.take() {
+            lock(&self.service.0.options.registry).remove_owner(&self.service.0.key, owner);
+        }
         result
     }
 }
 impl Drop for Inner {
     fn drop(&mut self) {
-        lock(&self.options.registry).remove(&self.key);
+        if let Some(owner) = lock(&self.state).registration.take() {
+            lock(&self.options.registry).remove_owner(&self.key, owner);
+        }
     }
 }
 fn candidate_key(kind: &project_artifact::Kind, id: &LosslessString) -> String {

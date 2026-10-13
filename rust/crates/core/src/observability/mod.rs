@@ -210,15 +210,20 @@ impl Guard {
             return Err(Error::AlreadyInstalled);
         }
         let shared = Arc::downgrade(&self.shared);
-        let subscriber = feed.subscribe(Scope::Global, None, move || {
-            if let Some(shared) = shared.upgrade()
-                && let Some(sender) = lock(&shared.sender).as_ref()
-            {
-                let _ = sender.try_send(Command::Wake);
-            }
-        }).map_err(|_| Error::Worker)?;
-        lock(&self.shared.sender).as_ref().ok_or(Error::Worker)?
-            .send(Command::Attach(subscriber)).map_err(|_| Error::Worker)?;
+        let subscriber = feed
+            .subscribe(Scope::Global, None, move || {
+                if let Some(shared) = shared.upgrade()
+                    && let Some(sender) = lock(&shared.sender).as_ref()
+                {
+                    let _ = sender.try_send(Command::Wake);
+                }
+            })
+            .map_err(|_| Error::Worker)?;
+        lock(&self.shared.sender)
+            .as_ref()
+            .ok_or(Error::Worker)?
+            .send(Command::Attach(subscriber))
+            .map_err(|_| Error::Worker)?;
         self.attached = true;
         Ok(())
     }

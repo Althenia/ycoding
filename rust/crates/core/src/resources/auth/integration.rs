@@ -577,7 +577,16 @@ impl Registry {
                     .ok_or(Error::ProfileUnavailable)?;
             }
         }
-        let value = self.0.preparation.prepare_value(&self.0.credentials, stored.clone(), time, self.0.claude.as_ref().map(|host| &host.accounts)).await?;
+        let value = self
+            .0
+            .preparation
+            .prepare_value(
+                &self.0.credentials,
+                stored.clone(),
+                time,
+                self.0.claude.as_ref().map(|host| &host.accounts),
+            )
+            .await?;
         Ok(Snapshot {
             connection,
             value: Some(value),
@@ -592,9 +601,23 @@ impl Registry {
         cursor: Option<&crate::resources::cursor::route::Host>,
     ) -> Result<ycoding_ai::llm::Model, crate::resources::model::Error> {
         if let Some(providers) = &self.0.preparation.providers {
-            return providers.selected_model(info, value, selected, self.0.claude.as_ref(), cursor, self.0.preparation.cursor.as_ref()).await;
+            return providers
+                .selected_model(
+                    info,
+                    value,
+                    selected,
+                    self.0.claude.as_ref(),
+                    cursor,
+                    self.0.preparation.cursor.as_ref(),
+                )
+                .await;
         }
-        crate::resources::model::from_catalog_model_with_claude(info, value, selected, self.0.claude.as_ref())
+        crate::resources::model::from_catalog_model_with_claude(
+            info,
+            value,
+            selected,
+            self.0.claude.as_ref(),
+        )
     }
     fn publish_connection(&self, integration: LosslessString) {
         self.0.publish(Event::ConnectionUpdated(integration));

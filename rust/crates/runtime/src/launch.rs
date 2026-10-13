@@ -501,12 +501,15 @@ async fn serve_until_stopped(
                 && config.port.is_some_and(|port| port != 0)
                 && error.kind() == io::ErrorKind::AddrInUse
             {
-                return (Err(LaunchError::Message(format!(
-                    "Managed service port {} on {} is already in use by another process. Set `port` in {} under the YCoding config directory, or start with `--standalone`.",
-                    config.port.unwrap_or_default(),
-                    config.hostname,
-                    service_filename(&config.channel),
-                ))), None);
+                return (
+                    Err(LaunchError::Message(format!(
+                        "Managed service port {} on {} is already in use by another process. Set `port` in {} under the YCoding config directory, or start with `--standalone`.",
+                        config.port.unwrap_or_default(),
+                        config.hostname,
+                        service_filename(&config.channel),
+                    ))),
+                    None,
+                );
             }
             return (Err(error.into()), None);
         }
@@ -518,14 +521,64 @@ async fn serve_until_stopped(
         Err(error) => return (Err(error.into()), None),
     };
     let stop = Arc::new(Notify::new());
-    let control =
-        match crate::health::Control::install(config.mode == Mode::Service, &identity, stop.clone()) {
-            Ok(control) => control,
-            Err(error) => return (Err(error.into()), None),
-        };
+    let control = match crate::health::Control::install(
+        config.mode == Mode::Service,
+        &identity,
+        stop.clone(),
+    ) {
+        Ok(control) => control,
+        Err(error) => return (Err(error.into()), None),
+    };
+    let remote = match services.core.as_ref().and_then(|core| core.remote.clone()) {
+        Some(control) => {
+            let dispatcher = match crate::handlers::standard() {
+                Ok(dispatcher) => Arc::new(dispatcher),
+                Err(_) => {
+                    return (
+                        Err(LaunchError::Message("remote dispatcher unavailable".into())),
+                        None,
+                    );
+                }
+            };
+            let address = match listener.local_addr() {
+                Ok(address) => address,
+                Err(error) => return (Err(error.into()), None),
+            };
+            Some((
+                control,
+                Arc::new(crate::services::Environment {
+                    services: services.clone(),
+                    urls: vec![format!("http://{address}")],
+                    subscriptions: Default::default(),
+                    uploads: Default::default(),
+                }),
+                dispatcher,
+            ))
+        }
+        None => None,
+    };
     let server = match server::serve(listener, services).await {
         Ok(server) => server,
         Err(error) => return (Err(error.into()), None),
+    };
+    let connector = match remote {
+        Some((control, environment, dispatcher)) => match crate::connector::Connector::start(
+            control.clone(),
+            crate::connector::Settings::new(Arc::new(control.device().clone())),
+            environment,
+            dispatcher,
+        ) {
+            Ok(connector) => Some(connector),
+            Err(_) => {
+                let stopped = server.shutdown().await.map_err(LaunchError::from);
+                return (
+                    Err::<(), _>(LaunchError::Message("remote connector unavailable".into()))
+                        .and(stopped),
+                    None,
+                );
+            }
+        },
+        None => None,
     };
     let url = format!("http://{}", server.address());
 
@@ -540,8 +593,14 @@ async fn serve_until_stopped(
             Ok(registered) => Some(registered),
             Err(error) => {
                 drop(control);
+                let remote = match connector {
+                    Some(connector) => connector.shutdown().await.map_err(|_| {
+                        LaunchError::Message("remote connector shutdown failed".into())
+                    }),
+                    None => Ok(()),
+                };
                 let stopped = server.shutdown().await.map_err(LaunchError::from);
-                return (Err::<(), _>(error).and(stopped), None);
+                return (Err::<(), _>(error).and(remote).and(stopped), None);
             }
         }
     } else {
@@ -569,7 +628,15 @@ async fn serve_until_stopped(
         let _ = watcher.await;
     }
     drop(control);
-    (server.shutdown().await.map_err(LaunchError::from), registration)
+    let remote = match connector {
+        Some(connector) => connector
+            .shutdown()
+            .await
+            .map_err(|_| LaunchError::Message("remote connector shutdown failed".into())),
+        None => Ok(()),
+    };
+    let local = server.shutdown().await.map_err(LaunchError::from);
+    (remote.and(local), registration)
 }
 
 async fn bind(config: &LaunchConfig) -> io::Result<TcpListener> {
@@ -598,7 +665,10 @@ type Signals = tokio::signal::windows::CtrlC;
 #[cfg(unix)]
 fn shutdown_signals() -> io::Result<Signals> {
     use tokio::signal::unix::{SignalKind, signal};
-    Ok((signal(SignalKind::terminate())?, signal(SignalKind::interrupt())?))
+    Ok((
+        signal(SignalKind::terminate())?,
+        signal(SignalKind::interrupt())?,
+    ))
 }
 
 #[cfg(not(unix))]

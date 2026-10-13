@@ -2,7 +2,10 @@ use super::unavailable;
 use crate::dispatch::Failure;
 use std::{
     future::Future,
-    sync::{Mutex, PoisonError, atomic::{AtomicBool, Ordering}},
+    sync::{
+        Mutex, PoisonError,
+        atomic::{AtomicBool, Ordering},
+    },
     thread::JoinHandle,
 };
 use tokio::{runtime::Handle, sync::oneshot};
@@ -17,28 +20,44 @@ impl Composition {
     pub fn start() -> Result<Self, Failure> {
         Self::build(None)
     }
-    pub fn start_reports(client: ycoding_core::ycoding_store::Client, directory: std::path::PathBuf) -> Result<Self, Failure> {
+    pub fn start_reports(
+        client: ycoding_core::ycoding_store::Client,
+        directory: std::path::PathBuf,
+    ) -> Result<Self, Failure> {
         Self::build(Some((client, directory)))
     }
-    fn build(reports: Option<(ycoding_core::ycoding_store::Client, std::path::PathBuf)>) -> Result<Self, Failure> {
+    fn build(
+        reports: Option<(ycoding_core::ycoding_store::Client, std::path::PathBuf)>,
+    ) -> Result<Self, Failure> {
         let (ready, receiver) = std::sync::mpsc::sync_channel(1);
         let (stop, stopped) = oneshot::channel();
         let task = std::thread::Builder::new()
             .name("ycoding-composition".into())
             .spawn(move || {
-                let analytics = reports.map(|(client, directory)| {
-                    let engine = ycoding_core::ycoding_store::analytics::reports::start(client.clone(), directory)
+                let analytics = reports
+                    .map(|(client, directory)| {
+                        let engine = ycoding_core::ycoding_store::analytics::reports::start(
+                            client.clone(),
+                            directory,
+                        )
                         .map_err(|_| unavailable("analytics owner"))?;
-                    let pending = client.snapshot().map_err(|_| unavailable("analytics purge fence"))?
-                        .get::<ycoding_core::ycoding_store::analytics::DeliveryTable>(&[])
-                        .map_err(|_| unavailable("analytics purge fence"))?
-                        .is_some_and(|delivery| delivery.purge_all || !delivery.purges.is_empty());
-                    if pending {
-                        engine.purge().map_err(|_| unavailable("analytics purge"))?;
-                    }
-                    engine.rebuild().map_err(|_| unavailable("analytics rebuild"))?;
-                    Ok::<_, Failure>(engine)
-                }).transpose();
+                        let pending = client
+                            .snapshot()
+                            .map_err(|_| unavailable("analytics purge fence"))?
+                            .get::<ycoding_core::ycoding_store::analytics::DeliveryTable>(&[])
+                            .map_err(|_| unavailable("analytics purge fence"))?
+                            .is_some_and(|delivery| {
+                                delivery.purge_all || !delivery.purges.is_empty()
+                            });
+                        if pending {
+                            engine.purge().map_err(|_| unavailable("analytics purge"))?;
+                        }
+                        engine
+                            .rebuild()
+                            .map_err(|_| unavailable("analytics rebuild"))?;
+                        Ok::<_, Failure>(engine)
+                    })
+                    .transpose();
                 let analytics = match analytics {
                     Ok(analytics) => analytics,
                     Err(error) => {
@@ -55,17 +74,25 @@ impl Composition {
                         if ready.send(Ok(runtime.handle().clone())).is_err() {
                             return Ok(());
                         }
-                        runtime.block_on(async { let _ = stopped.await; });
+                        runtime.block_on(async {
+                            let _ = stopped.await;
+                        });
                     }
-                    Err(_) => { let _ = ready.send(Err(unavailable("composition runtime"))); }
+                    Err(_) => {
+                        let _ = ready.send(Err(unavailable("composition runtime")));
+                    }
                 }
                 if let Some(analytics) = analytics {
-                    analytics.shutdown().map_err(|_| unavailable("analytics shutdown"))?;
+                    analytics
+                        .shutdown()
+                        .map_err(|_| unavailable("analytics shutdown"))?;
                 }
                 Ok(())
             })
             .map_err(|_| unavailable("composition runtime"))?;
-        let handle = receiver.recv().map_err(|_| unavailable("composition runtime"))??;
+        let handle = receiver
+            .recv()
+            .map_err(|_| unavailable("composition runtime"))??;
         Ok(Self {
             handle,
             closed: AtomicBool::new(false),
@@ -81,7 +108,8 @@ impl Composition {
             return Err(unavailable("composition runtime"));
         }
         std::thread::scope(|scope| {
-            scope.spawn(|| self.handle.block_on(future))
+            scope
+                .spawn(|| self.handle.block_on(future))
                 .join()
                 .map_err(|_| unavailable("composition task"))?
         })
@@ -89,10 +117,15 @@ impl Composition {
 
     pub fn close(&self) -> Result<(), Failure> {
         self.closed.store(true, Ordering::Release);
-        let owner = self.owner.lock().unwrap_or_else(PoisonError::into_inner).take();
+        let owner = self
+            .owner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
         if let Some((stop, task)) = owner {
             let _ = stop.send(());
-            task.join().map_err(|_| unavailable("composition runtime"))??;
+            task.join()
+                .map_err(|_| unavailable("composition runtime"))??;
         }
         Ok(())
     }
@@ -114,12 +147,14 @@ mod tests {
         let runtime = Arc::new(Composition::start().unwrap());
         let (release, released) = oneshot::channel();
         let (finished, done) = oneshot::channel();
-        let worker = runtime.run(async {
-            Ok(tokio::spawn(async {
-                released.await.unwrap();
-                finished.send(()).unwrap();
-            }))
-        }).unwrap();
+        let worker = runtime
+            .run(async {
+                Ok(tokio::spawn(async {
+                    released.await.unwrap();
+                    finished.send(()).unwrap();
+                }))
+            })
+            .unwrap();
         release.send(()).unwrap();
         done.await.unwrap();
         worker.await.unwrap();

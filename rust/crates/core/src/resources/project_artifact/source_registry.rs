@@ -18,19 +18,43 @@ pub struct Record {
 }
 #[derive(Default)]
 pub struct Registry {
-    snapshots: Vec<(String, Vec<Record>)>,
+    snapshots: Vec<(String, Vec<(u64, Vec<Record>)>)>,
+    generation: u64,
 }
 impl Registry {
-    pub fn replace(&mut self, location: String, records: Vec<Record>) {
+    pub fn replace(&mut self, location: String, records: Vec<Record>) -> u64 {
+        self.generation += 1;
+        let owner = self.generation;
         if let Some(snapshot) = self
             .snapshots
             .iter_mut()
             .find(|snapshot| snapshot.0 == location)
         {
-            snapshot.1 = records;
-            return;
+            snapshot.1.push((owner, records));
+            return owner;
         }
-        self.snapshots.push((location, records));
+        self.snapshots.push((location, vec![(owner, records)]));
+        owner
+    }
+    pub fn update(&mut self, location: &str, owner: u64, records: Vec<Record>) {
+        if let Some(snapshot) = self
+            .snapshots
+            .iter_mut()
+            .find(|snapshot| snapshot.0 == location)
+            && let Some(entry) = snapshot.1.iter_mut().find(|entry| entry.0 == owner)
+        {
+            entry.1 = records;
+        }
+    }
+    pub fn remove_owner(&mut self, location: &str, owner: u64) {
+        if let Some(snapshot) = self
+            .snapshots
+            .iter_mut()
+            .find(|snapshot| snapshot.0 == location)
+        {
+            snapshot.1.retain(|entry| entry.0 != owner);
+        }
+        self.snapshots.retain(|snapshot| !snapshot.1.is_empty());
     }
     pub fn remove(&mut self, location: &str) {
         self.snapshots.retain(|snapshot| snapshot.0 != location);
@@ -49,7 +73,7 @@ impl Registry {
         for record in self
             .snapshots
             .iter()
-            .flat_map(|snapshot| &snapshot.1)
+            .flat_map(|snapshot| snapshot.1.last().into_iter().flat_map(|entry| &entry.1))
             .filter(|record| {
                 record.source.scope.as_str() == Some(scope)
                     && &record.kind == kind
