@@ -35,6 +35,28 @@ pub struct Catalog {
 }
 
 impl Catalog {
+    pub fn integrations(&self) -> Vec<provider::IntegrationRef> {
+        self.providers
+            .iter()
+            .filter(|record| {
+                record.provider.disabled != Some(true) && !self.denied.contains(&record.provider.id)
+            })
+            .map(|record| provider::IntegrationRef {
+                provider_id: record.provider.id.clone(),
+                integration_id: record.provider.integration_id.clone().unwrap_or_else(|| {
+                    ycoding_schema::integration::Id::new(record.provider.id.0.clone())
+                        .expect("integration ID")
+                }),
+            })
+            .collect()
+    }
+    pub fn available_providers(&self, saved: &[credential::Info]) -> Vec<&provider::Info> {
+        self.providers
+            .iter()
+            .map(|record| &record.provider)
+            .filter(|provider| self.provider_available(provider, saved))
+            .collect()
+    }
     pub fn configured_default(&self) -> Option<&model::Ref> {
         self.default.as_ref()
     }

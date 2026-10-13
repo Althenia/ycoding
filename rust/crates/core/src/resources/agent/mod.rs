@@ -10,6 +10,8 @@ use ycoding_schema::{
 };
 
 pub const DEFAULT_ID: &str = "god";
+pub mod builtin;
+pub mod prompts;
 pub fn empty(id: Id) -> Info {
     Info {
         name: id.clone(),

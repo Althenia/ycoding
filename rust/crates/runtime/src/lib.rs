@@ -2,6 +2,8 @@ mod artifact;
 mod auth;
 mod browser;
 mod browser_convert;
+mod catalog_convert;
+mod catalog_ops;
 mod connection;
 pub mod connector;
 mod convert;
@@ -57,8 +59,8 @@ pub use locations::{
 };
 pub use server::{Server, serve, serve_with};
 pub use services::{
-    ArtifactProvider, ArtifactServices, Core, Environment, Identity, IsolatedBrowserResolver,
-    PlatformResolver, PlatformServices, ProviderUsageResolver, ProviderUsageServices, Services,
-    Subscriptions, UsagePricer,
+    ArtifactProvider, ArtifactServices, CatalogProvider, CatalogServices, CatalogTask, Core,
+    Environment, Identity, IsolatedBrowserResolver, PlatformResolver, PlatformServices,
+    ProviderUsageResolver, ProviderUsageServices, Services, Subscriptions, UsagePricer,
 };
 pub use services::{IntegrationResolver, IntegrationServices, McpResolver};

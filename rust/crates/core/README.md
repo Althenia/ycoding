@@ -3010,3 +3010,17 @@ checks:
 cargo test --locked -p ycoding-core --test event_feed
 cargo test --locked -p ycoding-runtime --test events
 ```
+
+## Built-in agent catalog
+
+`builtin::catalog(&Roots)` returns the sixteen built-in definitions in registration order. It reads embedded Markdown metadata and role text, composes the shared project and capability fragments, and expands the shell-output and temporary-directory permission resources from the supplied roots. Invalid Unicode paths return `discovery::Error::InvalidPath`.
+
+`Service::new` starts with exactly the supplied definitions. Use `Service::from_entries` to apply discovered agent documents to the built-ins. User and project documents retain discovery order; narrower documents override only specified scalar fields. Request headers and bodies merge shallowly, while model references replace as a complete selection including profile and variant. All document-level permissions precede every agent-specific permission. Home expansion applies only to `external_directory`, `read`, and `edit` resources. Disabled definitions are removed, and later documents may define the same identity again. Absolute source paths accumulate without duplicates in `locations`.
+
+`Service::list` places the effective default first: the selectable configured default, then selectable `god`, then the first selectable definition. Hidden helpers, subagent-only definitions, and `btw` cannot become the selectable default. Explicit unknown selections retain their identity and have no resolved definition.
+
+The eight visible role prompts are composed as shared project guidance, trimmed Markdown role text, and capability guidance separated by two newlines. Primary definitions include the background notice followed by main-session controls; subagents include child controls. The BTW and seven hidden helper prompts are standalone. Built-in permissions preserve ordered rule evaluation, including the helper's final all-tools deny and BTW's approval requirements for mutation.
+
+```sh
+cargo test --locked -p ycoding-core --test builtin_agents
+```

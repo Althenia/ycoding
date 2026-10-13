@@ -7,6 +7,7 @@ pub mod config;
 pub mod credential;
 pub mod cursor;
 pub mod discovery;
+pub mod generate;
 pub mod image;
 pub mod instruction_discovery;
 pub mod mcp;

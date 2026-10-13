@@ -43,6 +43,7 @@ pub struct Identity {
 pub struct Core {
     pub integrations: Option<IntegrationResolver>,
     pub mcp: Option<McpResolver>,
+    pub catalogs: Option<CatalogProvider>,
     pub artifacts: Option<ArtifactProvider>,
     pub remote: Option<crate::connector::Control>,
     pub sessions: SessionStore,
@@ -131,6 +132,7 @@ impl Core {
             publisher: configuration.publisher.clone(),
             integrations: None,
             mcp: None,
+            catalogs: None,
             browser: None,
             isolated_browser: None,
             platform: None,
@@ -160,6 +162,25 @@ impl Core {
         }
     }
 }
+
+pub type CatalogTask = Arc<dyn Fn() -> crate::dispatch::Boxed<Result<(), String>> + Send + Sync>;
+
+#[derive(Clone)]
+pub struct CatalogServices {
+    pub models: Arc<ycoding_core::resources::model::Resolver>,
+    pub agents: Arc<ycoding_core::resources::agent::Service>,
+    pub commands: Arc<ycoding_core::resources::command::Service>,
+    pub references: Arc<ycoding_core::resources::reference::Service>,
+    pub skills: Arc<tokio::sync::Mutex<ycoding_core::resources::skill::Service>>,
+    pub diagnostics: Vec<ycoding_core::ycoding_schema::config::Diagnostic>,
+    pub plugins: Vec<ycoding_core::ycoding_schema::plugin::Info>,
+    pub ready: CatalogTask,
+    pub refresh: CatalogTask,
+    pub generate: Arc<ycoding_core::resources::generate::Service>,
+}
+
+pub type CatalogProvider =
+    Arc<dyn Fn(&location::Info) -> Result<CatalogServices, String> + Send + Sync>;
 
 fn ephemeral(event: &policy::Event) -> Result<Ephemeral, String> {
     let path = JsonPath::default();

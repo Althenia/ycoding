@@ -38,6 +38,7 @@ pub fn standard() -> Result<Dispatcher, RegistrationError> {
     dispatcher.handle("projectCopy.remove", crate::project_copy::remove)?;
     dispatcher.handle("fs.find", crate::fs::find)?;
     dispatcher.handle("fs.list", crate::fs::list)?;
+    crate::catalog_ops::register(&mut dispatcher)?;
     dispatcher.handle("telemetry.append", crate::telemetry::append)?;
     dispatcher.handle("telemetry.list", crate::telemetry::list)?;
     dispatcher.handle("telemetry.consent.get", crate::telemetry::consent_get)?;

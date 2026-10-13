@@ -108,6 +108,11 @@ pub enum Failure {
     IntegrationCodeRequired,
     WellKnownDiscovery(String),
     McpServerNotFound(ycoding_core::ycoding_schema::LosslessString),
+    ProviderNotFound(ycoding_core::ycoding_schema::LosslessString),
+    GenerationUnavailable {
+        message: String,
+        service: Option<ycoding_core::ycoding_schema::LosslessString>,
+    },
     TelemetryDisabled,
     Artifact(ycoding_core::ycoding_schema::project_artifact::ErrorCode),
     Connector {
@@ -509,6 +514,27 @@ impl Failure {
                 })
             }
             Failure::McpServerNotFound(_) => invalid("MCP server not found", "not_found"),
+            Failure::ProviderNotFound(id) if declared(v5::ProviderNotFoundError::full_name()) => {
+                encoded(v5::ProviderNotFoundError {
+                    tag: 1,
+                    provider_id: convert::wire(&id),
+                    message: convert::text(&format!(
+                        "Provider not found: {}",
+                        convert::readable(&id)
+                    )),
+                })
+            }
+            Failure::ProviderNotFound(_) => invalid("Provider not found", "not_found"),
+            Failure::GenerationUnavailable { message, service }
+                if declared(v5::ServiceUnavailableError::full_name()) =>
+            {
+                encoded(v5::ServiceUnavailableError {
+                    tag: 1,
+                    message: convert::text(&message),
+                    service: service.as_ref().map(convert::wire),
+                })
+            }
+            Failure::GenerationUnavailable { message, .. } => invalid(&message, "unavailable"),
             Failure::TelemetryDisabled if declared(v5::TelemetryDisabled::full_name()) => {
                 encoded(v5::TelemetryDisabled { tag: 1 })
             }
