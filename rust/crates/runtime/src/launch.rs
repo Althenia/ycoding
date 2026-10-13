@@ -4,7 +4,7 @@ use crate::services::{Identity, Services};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -892,7 +892,7 @@ fn json_u64(value: &JsonValue, key: &str) -> Option<u64> {
     }
 }
 
-fn write_private(path: &PathBuf, contents: &[u8]) -> io::Result<()> {
+fn write_private(path: &Path, contents: &[u8]) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -943,7 +943,13 @@ fn open_store(config: &LaunchConfig) -> Result<Store, LaunchError> {
     let catalog = import::catalog(import::DatabaseKind::Core);
     let file = config.roots.data.join("ycoding.redb");
     if config.channel == "beta" {
-        import_beta(config, &file)?;
+        import_stable(
+            &config.stable_data.join("ycoding.db"),
+            &file,
+            &config.roots.state.join("stable-import-v1.json"),
+            &config.roots.tmp,
+            import::DatabaseKind::Core,
+        )?;
     }
     if file.try_exists()? {
         return Store::open(file, Options::core(), catalog).map_err(|_| unsupported_store());
@@ -965,10 +971,15 @@ fn unsupported_store() -> LaunchError {
     )
 }
 
-fn import_beta(config: &LaunchConfig, file: &std::path::Path) -> Result<(), LaunchError> {
-    let marker = config.roots.state.join("stable-import-v1.json");
+pub(crate) fn import_stable(
+    source: &Path,
+    file: &Path,
+    marker: &Path,
+    scratch_root: &Path,
+    kind: import::DatabaseKind,
+) -> Result<(), LaunchError> {
     if marker.try_exists()? {
-        return match std::fs::read_to_string(&marker)?.as_str() {
+        return match std::fs::read_to_string(marker)?.as_str() {
             "{\"complete\":true,\"version\":1,\"imported\":true}\n" if file.try_exists()? => Ok(()),
             "{\"complete\":true,\"version\":1,\"imported\":false}\n" => Ok(()),
             _ => Err(message(
@@ -979,8 +990,12 @@ fn import_beta(config: &LaunchConfig, file: &std::path::Path) -> Result<(), Laun
     if file.try_exists()? {
         let store = Store::open(
             file,
-            Options::core(),
-            import::catalog(import::DatabaseKind::Core),
+            if kind == import::DatabaseKind::Meeting {
+                Options::meeting()
+            } else {
+                Options::core()
+            },
+            import::catalog(kind),
         )
         .map_err(|_| unsupported_store())?;
         let verified = store
@@ -993,54 +1008,49 @@ fn import_beta(config: &LaunchConfig, file: &std::path::Path) -> Result<(), Laun
         if !verified {
             return Err(message("beta store has no completed import provenance"));
         }
-    } else {
-        let source = config.stable_data.join("ycoding.db");
-        if source.try_exists()? {
-            let scratch = config
-                .roots
-                .tmp
-                .join(format!("stable-import-{}", source_epoch()?));
-            std::fs::create_dir(&scratch)?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&scratch, std::fs::Permissions::from_mode(0o700))?;
-            }
-            let candidate = config
-                .roots
-                .data
-                .join(format!(".stable-import-{}.redb", source_epoch()?));
-            let copied = scratch.join("source.sqlite");
-            let result = (|| {
-                import::copy_source(&source, &copied).map_err(message)?;
-                import::stage(
-                    import::Request {
-                        source: &copied,
-                        candidate: &candidate,
-                        kind: import::DatabaseKind::Core,
-                        metadata: metadata()?,
-                    },
-                    |_| std::ops::ControlFlow::Continue(()),
-                )
-                .map_err(message)?;
-                std::fs::rename(&candidate, file)?;
-                #[cfg(unix)]
-                std::fs::File::open(&config.roots.data)?.sync_all()?;
-                Ok::<_, LaunchError>(())
-            })();
-            let cleanup = std::fs::remove_dir_all(&scratch)
-                .and_then(|()| {
-                    if candidate.try_exists()? {
-                        std::fs::remove_file(&candidate)?;
-                    }
-                    Ok(())
-                })
-                .map_err(LaunchError::from);
-            result.and(cleanup)?;
+    } else if source.try_exists()? {
+        let scratch = scratch_root.join(format!("stable-import-{}", source_epoch()?));
+        std::fs::create_dir(&scratch)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&scratch, std::fs::Permissions::from_mode(0o700))?;
         }
+        let candidate = file.with_file_name(format!(".stable-import-{}.redb", source_epoch()?));
+        let copied = scratch.join("source.sqlite");
+        let result = (|| {
+            import::copy_source(source, &copied).map_err(message)?;
+            import::stage(
+                import::Request {
+                    source: &copied,
+                    candidate: &candidate,
+                    kind,
+                    metadata: metadata()?,
+                },
+                |_| std::ops::ControlFlow::Continue(()),
+            )
+            .map_err(message)?;
+            std::fs::rename(&candidate, file)?;
+            #[cfg(unix)]
+            std::fs::File::open(
+                file.parent()
+                    .ok_or_else(|| message("import target has no parent"))?,
+            )?
+            .sync_all()?;
+            Ok::<_, LaunchError>(())
+        })();
+        let cleanup = std::fs::remove_dir_all(&scratch)
+            .and_then(|()| {
+                if candidate.try_exists()? {
+                    std::fs::remove_file(&candidate)?;
+                }
+                Ok(())
+            })
+            .map_err(LaunchError::from);
+        result.and(cleanup)?;
     }
     write_private(
-        &marker,
+        marker,
         if file.try_exists()? {
             b"{\"complete\":true,\"version\":1,\"imported\":true}\n"
         } else {

@@ -13,6 +13,18 @@ Without `XDG_DATA_HOME`, the base is `~/.local/share`. Clients require a regular
 non-symlink descriptor of at most 4096 bytes owned by the current user, without
 group or other access. Its exact fields are `url`, `token`, and `pid`.
 
+With `YCODING_CHANNEL=beta`, discovery and runtime storage use
+`$XDG_DATA_HOME/ycoding-beta/meeting/<location-key>` with the same canonical key.
+On that Location's first beta start, a stable
+`ycoding/meeting/<location-key>/meetings.sqlite` is copied with its SQLite
+sidecars to private scratch, imported and verified, then atomically published as
+`ycoding-beta/meeting/<location-key>/meetings.redb`. Stable files remain unchanged.
+The beta directory's private `stable-import-v1.json` records whether a source was
+present. Restarts keep the beta store; a missing marker is reconstructed only
+from completed import provenance. A failed import publishes no partial store or
+completion marker and logs a Location-scoped failure without stopping the server.
+Saved Meeting settings remain local to each channel's directory.
+
 Native clients authenticate `/control` with the descriptor token and send no
 Origin. `{"action":"view"}` returns a live-page URL whose fragment carries a
 separate view key. The page uses that key for `/view/state`, `/view/control`,
@@ -42,6 +54,7 @@ Run from the repository root:
 bun run --cwd extensions/meeting test:unit
 ~/.cache/ycoding/cargo-gate.sh cargo test --manifest-path rust/Cargo.toml --locked -p ycoding-core --test 'meeting_*'
 ~/.cache/ycoding/cargo-gate.sh cargo test --manifest-path rust/Cargo.toml --locked -p ycoding-runtime --test production --test meeting_clients
+~/.cache/ycoding/cargo-gate.sh cargo test --manifest-path rust/Cargo.toml --locked -p ycoding-runtime --test meeting_import --test launcher
 ```
 
 The `meeting_clients` integration test copies the real runtime binary to a

@@ -670,6 +670,19 @@ exactly `{url, token, pid}` with a numeric `http://127.0.0.1:<port>` URL and a
 redirects, a 10-second bound, and distinct errors for rejection, an unknown
 outcome and an invalid reply.
 
+Production composition uses the same Location key in the beta namespace:
+`<data>/ycoding-beta/meeting/<key>`. Before opening its first beta Meeting store,
+it invokes the runtime's shared stable-import lifecycle with the stable
+`<data>/ycoding/meeting/<key>/meetings.sqlite` source and Meeting importer catalog.
+Only a private scratch copy is checkpointed and read. The importer verifies all
+nine tables and persisted provenance before a same-filesystem atomic rename
+publishes `meetings.redb`. A private per-Location `stable-import-v1.json` records
+completion or source absence; a missing marker with an existing store requires
+completed provenance. Corrupt sources, invalid markers and unverified existing
+stores fail closed without replacing data; a failed Meeting start is logged and
+does not prevent other Location services from working. Native discovery chooses
+this namespace only when `YCODING_CHANNEL=beta`.
+
 `bridge::Bridge::start(Options, Arc<dyn Handlers>)` serves Axum on `127.0.0.1`
 only. `Handlers` supplies the control, capture, disconnect, state-view and ask
 callbacks. `Options.assets` and `ServiceOptions.assets` default to the complete

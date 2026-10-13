@@ -9,7 +9,12 @@ export async function meetingDirectory(directory: string) {
     .update(await realpath(directory))
     .digest("hex")
     .slice(0, 32)
-  return path.join(process.env.XDG_DATA_HOME ?? path.join(homedir(), ".local", "share"), "ycoding", "meeting", key)
+  return path.join(
+    process.env.XDG_DATA_HOME ?? path.join(homedir(), ".local", "share"),
+    process.env.YCODING_CHANNEL === "beta" ? "ycoding-beta" : "ycoding",
+    "meeting",
+    key,
+  )
 }
 
 export function validateDescriptor(value: unknown) {

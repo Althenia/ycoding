@@ -87,6 +87,7 @@ async fn packaged_runtime_serves_the_existing_meeting_clients_without_adjacent_a
             .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../extensions/meeting"))
             .env("YCODING_TEST_MEETING_DIRECTORY", &project)
             .env("XDG_DATA_HOME", directory.0.join("data"))
+            .env("YCODING_CHANNEL", "local")
             .kill_on_drop(true)
             .output()
             .await

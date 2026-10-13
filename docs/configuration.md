@@ -187,6 +187,21 @@ Meeting does not download weights or start recording. Native clients discover
 the private `bridge.json` descriptor and obtain a separate view key for the
 consent-led browser capture page.
 
+Meeting storage is per canonical Location. Its key is the first 32 hexadecimal
+characters of SHA-256 over the Location's real path. The stable source is
+`$XDG_DATA_HOME/ycoding/meeting/<key>/meetings.sqlite`; the beta runtime uses
+`$XDG_DATA_HOME/ycoding-beta/meeting/<key>/meetings.redb`. Without `XDG_DATA_HOME`,
+the base is `~/.local/share`. On the Location's first beta start, the runtime
+copies the stable SQLite database and any sidecars to private scratch, imports
+the copy, verifies provenance, and atomically publishes the beta store before
+opening Meeting. Stable files remain unchanged. The beta Meeting directory's
+private `stable-import-v1.json` records completion or source absence; later
+starts reuse the beta store rather than merge stable changes. Import failures
+leave no partial selected store or completion marker, log a clear Meeting
+diagnostic, and keep the Location usable. `YCODING_CHANNEL=beta` selects that
+same beta directory for native discovery. Settings are read from the selected
+channel's Meeting directory.
+
 Meeting requires the native Bun-built `ycoding` executable. The Node CLI excludes Meeting; `meeting` and `serve --meeting` exit nonzero with an error directing you to the native executable, without starting a meeting server or arming capture.
 
 `ycoding meeting [directory] [--no-open]` starts a private server with the bundled meeting runtime for the directory (default: the current directory), arms a meeting, and opens or prints its local live page; it reuses a meeting runtime that already serves the directory. `ycoding serve --meeting` starts a server with the same runtime plugin. The live page owns browser-tab audio capture using its per-bridge view key, with fresh participant consent and an optional microphone; no capture extension or pairing is required. Keep it open while recording. Speech prerequisites and recording consent are described in [meeting intelligence](./meeting-intelligence.md#ycoding-meeting).

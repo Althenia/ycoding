@@ -69,6 +69,7 @@ impl Meetings {
         client: &Client,
         roots: &Roots,
         data_home: Option<&Path>,
+        beta: bool,
         target: Target<'_>,
     ) -> Option<Attached> {
         if !self.enabled {
@@ -88,7 +89,7 @@ impl Meetings {
             meeting.mcp.replace(target.mcp);
             return Some(meeting.attached());
         }
-        match start(client, roots, data_home, target).await {
+        match start(client, roots, data_home, beta, target).await {
             Ok(meeting) => {
                 let attached = meeting.attached();
                 entries.insert(key, meeting);
@@ -127,11 +128,38 @@ async fn start(
     client: &Client,
     roots: &Roots,
     data_home: Option<&Path>,
+    beta: bool,
     target: Target<'_>,
 ) -> Result<Meeting, String> {
     let execution = Execution::global().ok_or("Session execution is not installed")?;
-    let directory: PathBuf = discovery::directory(target.directory, data_home, &roots.home)
+    let stable: PathBuf = discovery::directory(target.directory, data_home, &roots.os_home)
         .map_err(|error| error.to_string())?;
+    let directory = if beta {
+        let directory = roots.data.join("meeting").join(
+            stable
+                .file_name()
+                .ok_or("Meeting Location key is missing")?,
+        );
+        let source = stable.join("meetings.sqlite");
+        let file = directory.join("meetings.redb");
+        let marker = directory.join("stable-import-v1.json");
+        let scratch_root = roots.tmp.clone();
+        tokio::task::spawn_blocking(move || {
+            crate::launch::import_stable(
+                &source,
+                &file,
+                &marker,
+                &scratch_root,
+                ycoding_core::ycoding_store::import::DatabaseKind::Meeting,
+            )
+        })
+        .await
+        .map_err(|_| "Stable Meeting history import worker failed".to_owned())?
+        .map_err(|error| format!("Stable Meeting history import failed: {error}"))?;
+        directory
+    } else {
+        stable
+    };
     let config = saved_config(
         &directory,
         MeetingConfig::defaults().map_err(|error| error.to_string())?,

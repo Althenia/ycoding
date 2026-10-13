@@ -1174,6 +1174,7 @@ impl Factory {
                     .env
                     .get("XDG_DATA_HOME")
                     .map(std::path::Path::new),
+                self.options.env.get("YCODING_CHANNEL").map(String::as_str) == Some("beta"),
                 meeting::Target {
                     reference: location::Ref {
                         directory: services.info.directory.clone(),
