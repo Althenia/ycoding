@@ -22,11 +22,17 @@ Result decoding preserves HTTP JSON absence: an `UndefinedOr` wire `none` branch
 
 Raw asset methods require terminal typed metadata from the connection API; missing metadata rejects as unsupported rather than fabricating MIME or content. Attachments convert completed bytes into the existing client result, while file reads return raw bytes. Specialized PTY and browser bridge protocols remain outside the application socket.
 
+The protocol machine consumes asset metadata, BulkStart, each BulkPiece, and BulkEnd after transferring them to its bounded asset owner. The socket adapter consumes ordinary inline Results only, resolves raw asset content at terminal success, and releases the completed transfer. Empty bodies, exact 64 KiB pieces, final short pieces and transfers beyond the bulk window preserve the same connection for later requests.
+
+Local `session.prompt` and `session.command` accept file references in `files: [{ uri: pathToFileURL(absolutePath).href, name? }]`. The `file:` URI identifies a path readable on the backend machine; local attachments need not be inside the Session directory. Use `node:url`'s `pathToFileURL` to preserve spaces, percent signs and fragment characters; do not base64-inline large files or percent-encode path separators. The backend reads and materializes the attachment during admission: retain the source file until admission is confirmed, and reconcile an unknown outcome before deleting it. Image admission preserves bytes within configured image limits and normalizes or rejects larger images according to configuration. The inline request budget stays unchanged, and operation 5023's upload references belong to remote peers, not this local path.
+
 Run `bun run generate:v5` to derive method bindings, result-envelope selection, and lossless enum associations from the operation manifest and current Promise types. The binary runtime imports neither the HTTP implementation nor Core/Server. Both transports remain independently selected entrypoints during the coordinated client cutover; the binary entrypoint has no HTTP/SSE fallback.
 
 Run the client test scope with `bun test --cwd packages/client ./test` and the typecheck with `bun run --cwd packages/client typecheck`. The v5 tests in `test` use an in-memory protocol peer. Run the listening native WebSocket suite separately with `bun run --cwd packages/client test:integration`.
 
 Run Rust interoperability with `bun run --cwd packages/client test:integration:rust`. This command requires `YCODING_V5_TEST_URL` and fails immediately when it is unset. Start a disposable Rust runtime socket test server with ready Core and the standard dispatcher, then run `YCODING_V5_TEST_URL="$URL" bun run --cwd packages/client test:integration:rust`. Supply `YCODING_V5_TEST_PASSWORD` through the environment when local authentication is enabled. The suite verifies handshake, bootstrap results, and a typed missing-Session rejection without executing provider work or writing Session data.
+
+`YCODING_TEST_RUST_RUNTIME="$PWD/rust/target/debug/ycoding-runtime" bun test --cwd packages/client ./test-integration/v5-attachments-rust.integration.test.ts` launches disposable production runtimes and verifies managed attachment admission, a large image referenced outside its Session directory, exact read bytes, bulk-window progress, repeated transfer release and same-connection follow-up RPCs. It admits prompts with `resume: false` and runs no provider work.
 
 ## HTTP clients
 

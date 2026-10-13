@@ -11,7 +11,6 @@ import {
   SessionLogItemSchema,
   ResultSchema,
   TypedPayloadSchema,
-  ScopeSchema,
   InvalidRequestErrorSchema,
   Streaming,
   event_subscribe_RequestSchema,
@@ -21,10 +20,12 @@ import {
   BulkPieceSchema,
   BulkEndSchema,
   ContentKind,
-  EventBatchSchema,
+  encodeAssetMetadata,
+  encodeLossless,
+  session_attachment_read_ResultSchema,
   EventRecordSchema,
 } from "@ycoding-ai/protocol/v5"
-import type { Request, OperationDescriptor, Scope } from "@ycoding-ai/protocol/v5"
+import type { Scope } from "@ycoding-ai/protocol/v5"
 import type { Socket } from "../../src/v5/socket.js"
 
 export type Dispatch = Extract<Decision, { type: "dispatch" }>
@@ -196,6 +197,74 @@ export class ScriptedPeer {
     })
     this.time += 50
     this.connection.advance(this.time)
+    this.flush()
+  }
+
+  asset(dispatch: Dispatch, data: Uint8Array) {
+    const metadata = encodeAssetMetadata(
+      session_attachment_read_ResultSchema,
+      create(session_attachment_read_ResultSchema, {
+        data: { mime: encodeLossless("application/octet-stream"), bytes: BigInt(data.length) },
+      }),
+    )
+    this.connection.enqueue(
+      {
+        case: "result",
+        value: create(ResultSchema, {
+          requestId: dispatch.requestID,
+          operationId: dispatch.operation.operationId,
+          settlement: dispatch.operation.settlement,
+          outcome: { case: "assetMetadata", value: metadata },
+        }),
+      },
+      1024,
+      this.time,
+    )
+    const transferId = `asset-${dispatch.requestID}`
+    this.connection.enqueue(
+      {
+        case: "bulkStart",
+        value: create(BulkStartSchema, {
+          requestId: dispatch.requestID,
+          transferId,
+          operationId: dispatch.operation.operationId,
+          typeName: dispatch.operation.resultType,
+          contentKind: ContentKind.ASSET,
+          byteCount: BigInt(data.length),
+          chunkCount: Math.ceil(data.length / 65536),
+        }),
+      },
+      512,
+      this.time,
+    )
+    for (let offset = 0; offset < data.length; offset += 65536) {
+      const piece = data.subarray(offset, offset + 65536)
+      this.connection.enqueue(
+        {
+          case: "bulkPiece",
+          value: create(BulkPieceSchema, {
+            transferId,
+            index: offset / 65536,
+            offset: BigInt(offset),
+            data: piece,
+          }),
+        },
+        piece.length + 512,
+        this.time,
+      )
+    }
+    this.connection.enqueue(
+      {
+        case: "bulkEnd",
+        value: create(BulkEndSchema, {
+          transferId,
+          byteCount: BigInt(data.length),
+          outcome: { case: "success", value: {} },
+        }),
+      },
+      512,
+      this.time,
+    )
     this.flush()
   }
 

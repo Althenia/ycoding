@@ -256,8 +256,7 @@ export class LocalTransport {
         this.process(owner, decisions, bytes.length)
         if (
           owner.active &&
-          ((frame.body.case === "result" &&
-            decisions.some((decision) => ["settled", "assetMetadata"].includes(decision.type))) ||
+          ((frame.body.case === "result" && decisions.some((decision) => decision.type === "settled")) ||
             (frame.ledger === LedgerClass.NORMAL && decisions.some((decision) => decision.type === "control")))
         )
           this.process(owner, connection.consume(frame.ledger, frame.deliveryOrdinal, performance.now()))
