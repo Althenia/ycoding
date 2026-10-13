@@ -256,6 +256,129 @@ pub fn amazon_bedrock(id: impl Into<LosslessString>, config: Config) -> Model {
     route.model(id)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Api {
+    Converse,
+    Mantle,
+}
+pub struct HostedConfig {
+    pub endpoint: Option<String>,
+    pub base_url: Option<String>,
+    pub region: Option<String>,
+    pub bearer_token: Option<crate::auth::Credential>,
+    pub auth: Auth,
+    pub environment: BTreeMap<String, String>,
+    pub defaults: Defaults,
+}
+pub fn model(id: impl Into<LosslessString>, config: HostedConfig, api: Api) -> Model {
+    let id = id.into();
+    let region = config
+        .region
+        .as_deref()
+        .or_else(|| config.environment.get("AWS_REGION").map(String::as_str))
+        .unwrap_or("us-east-1");
+    let endpoint = config
+        .endpoint
+        .or(config.base_url)
+        .unwrap_or_else(|| match api {
+            Api::Converse => format!("https://bedrock-runtime.{region}.amazonaws.com"),
+            Api::Mantle => format!("https://bedrock-mantle.{region}.api.aws/v1"),
+        });
+    let token = config
+        .environment
+        .get("AWS_BEARER_TOKEN_BEDROCK")
+        .map(|value| crate::auth::Credential::value(value.clone()))
+        .or(config.bearer_token);
+    let auth = token.map(crate::auth::Auth::bearer).unwrap_or(config.auth);
+    if api == Api::Converse {
+        return amazon_bedrock(
+            regional_model_id(id.as_str().unwrap_or(""), region),
+            Config {
+                endpoint,
+                auth,
+                defaults: config.defaults,
+            },
+        );
+    }
+    let mut route = if matches!(
+        id.as_str(),
+        Some("openai.gpt-oss-safeguard-20b" | "openai.gpt-oss-safeguard-120b")
+    ) {
+        Route::openai_chat()
+    } else {
+        Route::openai_responses()
+    };
+    route.id = "bedrock-mantle".into();
+    route.provider = provider::Id("amazon-bedrock".into());
+    route.endpoint.base_url = endpoint;
+    route.auth = auth;
+    route.defaults = config.defaults;
+    route.model(id)
+}
+pub fn regional_model_id(id: &str, region: &str) -> String {
+    if ["global.", "us.", "eu.", "jp.", "apac.", "au."]
+        .iter()
+        .any(|prefix| id.starts_with(prefix))
+    {
+        return id.into();
+    }
+    let contains = |parts: &[&str]| parts.iter().any(|part| id.contains(part));
+    if region.starts_with("us-") {
+        return if !region.starts_with("us-gov")
+            && contains(&[
+                "nova-micro",
+                "nova-lite",
+                "nova-pro",
+                "nova-premier",
+                "nova-2",
+                "claude",
+                "deepseek",
+            ]) {
+            format!("us.{id}")
+        } else {
+            id.into()
+        };
+    }
+    if region.starts_with("eu-") {
+        return if [
+            "eu-west-1",
+            "eu-west-2",
+            "eu-west-3",
+            "eu-north-1",
+            "eu-central-1",
+            "eu-south-1",
+            "eu-south-2",
+        ]
+        .iter()
+        .any(|value| region.contains(value))
+            && contains(&["claude", "nova-lite", "nova-micro", "llama3", "pixtral"])
+        {
+            format!("eu.{id}")
+        } else {
+            id.into()
+        };
+    }
+    if !region.starts_with("ap-") {
+        return id.into();
+    }
+    if matches!(region, "ap-southeast-2" | "ap-southeast-4")
+        && contains(&["anthropic.claude-sonnet-4-5", "anthropic.claude-haiku"])
+    {
+        return format!("au.{id}");
+    }
+    if !contains(&["claude", "nova-lite", "nova-micro", "nova-pro"]) {
+        return id.into();
+    }
+    format!(
+        "{}.{id}",
+        if region == "ap-northeast-1" {
+            "jp"
+        } else {
+            "apac"
+        }
+    )
+}
+
 fn metadata(value: JsonValue) -> JsonValue {
     json::object([("bedrock", value)])
 }

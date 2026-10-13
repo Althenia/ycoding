@@ -163,6 +163,82 @@ pub struct AzureConfig {
     pub query: BTreeMap<String, String>,
     pub defaults: Defaults,
 }
+pub fn azure_endpoint(
+    base_url: Option<&str>,
+    resource: Option<&str>,
+    environment: &BTreeMap<String, String>,
+) -> Result<AzureEndpoint, Error> {
+    if let Some(url) = base_url.filter(|url| !url.is_empty()) {
+        return Ok(AzureEndpoint::BaseUrl(url.into()));
+    }
+    resource
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .or_else(|| {
+            environment
+                .get("AZURE_RESOURCE_NAME")
+                .map(|name| name.trim())
+                .filter(|name| !name.is_empty())
+        })
+        .map(|name| AzureEndpoint::Resource(name.into()))
+        .ok_or_else(|| Error::invalid("Azure requires resourceName or baseURL"))
+}
+pub struct AzureSdkConfig {
+    pub common: AzureConfig,
+    pub use_completion_urls: bool,
+    pub use_deployment_based_urls: bool,
+}
+pub fn azure_sdk(id: impl Into<LosslessString>, config: AzureSdkConfig) -> Model {
+    let id = id.into();
+    let prefix = match &config.common.endpoint {
+        AzureEndpoint::Resource(name) => format!("https://{}.openai.azure.com/openai", name.trim()),
+        AzureEndpoint::BaseUrl(url) => url.trim_end_matches('/').into(),
+    };
+    let azure_endpoint = reqwest::Url::parse(&prefix)
+        .ok()
+        .and_then(|url| {
+            url.host_str()
+                .map(|host| host.ends_with(".openai.azure.com"))
+        })
+        .unwrap_or(false);
+    let explicit_version = config.common.query.contains_key("api-version");
+    let mut model = azure(
+        id.clone(),
+        config.common,
+        if config.use_completion_urls {
+            Api::Chat
+        } else {
+            Api::Responses
+        },
+    );
+    let route = Arc::make_mut(&mut model.route);
+    route.endpoint.base_url = if !config.use_deployment_based_urls && azure_endpoint {
+        format!("{prefix}/v1")
+    } else {
+        prefix
+    };
+    if config.use_deployment_based_urls {
+        route.endpoint.path = format!(
+            "/deployments/{}{}",
+            component(id.as_str().unwrap_or("")),
+            route.endpoint.path
+        );
+    }
+    if !azure_endpoint && !config.use_deployment_based_urls && !explicit_version {
+        route.endpoint.query.remove("api-version");
+    }
+    model
+}
+pub fn azure_cognitive_endpoint(
+    base_url: Option<&str>,
+    environment: &BTreeMap<String, String>,
+) -> Option<String> {
+    environment
+        .get("AZURE_COGNITIVE_SERVICES_RESOURCE_NAME")
+        .filter(|name| !name.is_empty())
+        .map(|name| format!("https://{name}.cognitiveservices.azure.com/openai"))
+        .or_else(|| base_url.map(String::from))
+}
 pub fn azure(id: impl Into<LosslessString>, config: AzureConfig, api: Api) -> Model {
     let mut route = match api {
         Api::Chat => Route::openai_chat(),

@@ -375,11 +375,20 @@ pub fn lower(request: &Request) -> Result<JsonValue, Error> {
         );
     }
     json::set(&mut body, "stream", JsonValue::Bool(true));
-    json::set(
-        &mut body,
-        "stream_options",
-        json::object([("include_usage", JsonValue::Bool(true))]),
-    );
+    if request
+        .provider_options
+        .as_ref()
+        .and_then(|options| get(options, "openai-compatible"))
+        .and_then(|options| get(options, "includeUsage"))
+        .and_then(json::boolean)
+        .unwrap_or(true)
+    {
+        json::set(
+            &mut body,
+            "stream_options",
+            json::object([("include_usage", JsonValue::Bool(true))]),
+        );
+    }
     for (key, value) in [
         ("max_tokens", request.generation.max_tokens),
         ("temperature", request.generation.temperature),

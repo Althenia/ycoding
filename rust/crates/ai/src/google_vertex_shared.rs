@@ -7,8 +7,8 @@ use crate::{
     providers::Api,
     route::Route,
 };
-use std::collections::BTreeMap;
-use ycoding_schema::provider;
+use std::{collections::BTreeMap, sync::Arc};
+use ycoding_schema::{JsonValue, LosslessString, provider};
 
 #[derive(Clone, Default)]
 pub struct Config {
@@ -56,6 +56,34 @@ pub fn host(location: &str) -> String {
         "eu" | "us" => format!("aiplatform.{location}.rep.googleapis.com"),
         _ => format!("{location}-aiplatform.googleapis.com"),
     }
+}
+pub fn expand_template(value: &str, project: Option<&str>, location: &str) -> String {
+    value
+        .replace(
+            "${GOOGLE_VERTEX_PROJECT}",
+            project.unwrap_or("${GOOGLE_VERTEX_PROJECT}"),
+        )
+        .replace("${GOOGLE_VERTEX_LOCATION}", location)
+        .replace(
+            "${GOOGLE_VERTEX_ENDPOINT}",
+            &if location == "global" {
+                "aiplatform.googleapis.com".into()
+            } else {
+                format!("{location}-aiplatform.googleapis.com")
+            },
+        )
+}
+pub fn anthropic_environment(environment: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    environment
+        .iter()
+        .filter(|(name, _)| {
+            !matches!(
+                name.as_str(),
+                "GOOGLE_VERTEX_PROJECT" | "GOOGLE_VERTEX_LOCATION"
+            )
+        })
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect()
 }
 pub(crate) fn require_project(config: &Config) -> Result<&str, Error> {
     config
@@ -113,7 +141,7 @@ pub(crate) fn openai_route(config: Config, api: Api) -> Result<Route, Error> {
     let auth = auth(&config, Some(label))?;
     let location = config.location.as_deref().unwrap_or("global");
     let base_url = match &config.base_url {
-        Some(base_url) => base_url.clone(),
+        Some(base_url) => expand_template(base_url, config.project.as_deref(), location),
         None => format!(
             "https://aiplatform.googleapis.com/v1/projects/{}/locations/{location}/endpoints/openapi",
             require_project(&config)?
@@ -129,6 +157,7 @@ pub(crate) fn openai_route(config: Config, api: Api) -> Result<Route, Error> {
     }
     .into();
     route.provider = provider::Id("google-vertex".into());
+    route.protocol = Arc::new(VertexOpenAI(api));
     route.endpoint.base_url = base_url;
     route.auth = auth;
     let provider_options = route
@@ -149,4 +178,33 @@ pub(crate) fn openai_route(config: Config, api: Api) -> Result<Route, Error> {
     route.defaults = config.defaults;
     route.defaults.provider_options = provider_options;
     Ok(route)
+}
+struct VertexOpenAI(Api);
+impl crate::route::Protocol for VertexOpenAI {
+    fn id(&self) -> &'static str {
+        match self.0 {
+            Api::Chat => "openai-chat",
+            Api::Responses => "openai-responses",
+        }
+    }
+    fn lower(&self, request: &crate::llm::Request) -> Result<JsonValue, Error> {
+        let mut request = request.clone();
+        if let Some(id) = request.model.id.as_str() {
+            request.model.id = LosslessString::from(id.trim());
+        }
+        match self.0 {
+            Api::Chat => crate::route::Protocol::lower(&crate::openai_chat::OpenAIChat, &request),
+            Api::Responses => {
+                crate::route::Protocol::lower(&crate::openai_responses::OpenAIResponses, &request)
+            }
+        }
+    }
+    fn parser(&self, request: &crate::llm::Request) -> Box<dyn crate::route::StreamParser> {
+        match self.0 {
+            Api::Chat => crate::route::Protocol::parser(&crate::openai_chat::OpenAIChat, request),
+            Api::Responses => {
+                crate::route::Protocol::parser(&crate::openai_responses::OpenAIResponses, request)
+            }
+        }
+    }
 }

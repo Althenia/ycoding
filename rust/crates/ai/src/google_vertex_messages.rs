@@ -13,7 +13,9 @@ pub fn route(config: Config) -> Result<Route, Error> {
     let auth = google_vertex_shared::auth(&config, Some("Messages"))?;
     let location = config.location.as_deref().unwrap_or("global");
     let base_url = match &config.base_url {
-        Some(base_url) => base_url.clone(),
+        Some(base_url) => {
+            google_vertex_shared::expand_template(base_url, config.project.as_deref(), location)
+        }
         None => format!(
             "https://{}/v1/projects/{}/locations/{location}/publishers/anthropic/models",
             google_vertex_shared::host(location),
@@ -28,7 +30,7 @@ pub fn route(config: Config) -> Result<Route, Error> {
         dynamic_path: Some(Arc::new(|request, _| {
             format!(
                 "/{}:streamRawPredict",
-                request.model.id.as_str().unwrap_or("")
+                request.model.id.as_str().unwrap_or("").trim()
             )
         })),
         ..Endpoint::new(base_url, "")

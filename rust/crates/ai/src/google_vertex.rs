@@ -8,6 +8,10 @@ use ycoding_schema::{LosslessString, provider};
 
 pub fn model(id: impl Into<LosslessString>, config: Config) -> Result<Model, Error> {
     let id = id.into();
+    let id = id
+        .as_str()
+        .map(|id| LosslessString::from(id.trim()))
+        .unwrap_or(id);
     let auth = google_vertex_shared::auth(&config, None)?;
     let endpoint_model = id.as_str().is_some_and(|id| id.starts_with("endpoints/"));
     if config.api_key.is_some() && endpoint_model {
@@ -17,7 +21,9 @@ pub fn model(id: impl Into<LosslessString>, config: Config) -> Result<Model, Err
     }
     let location = config.location.as_deref().unwrap_or("us-central1");
     let base_url = match &config.base_url {
-        Some(base_url) => base_url.clone(),
+        Some(base_url) => {
+            google_vertex_shared::expand_template(base_url, config.project.as_deref(), location)
+        }
         None if config
             .api_key
             .as_ref()
