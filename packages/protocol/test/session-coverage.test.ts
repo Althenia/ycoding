@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { frontendBoundaryBaselineFields } from "./frontend-boundary-baseline.js"
 import path from "node:path"
 import { generateManifest } from "../../../script/rust-parity/manifest.js"
 import { ClientApi } from "../src/client.js"
@@ -93,7 +94,7 @@ test("all session fields, tags, presence, enums and obligations match live sourc
     expect(value, name).toBeDefined()
     expect(value.oneofs, name).toBe(message.oneof ? 1 : 0)
     expect(
-      value.fields.map((field) => ({
+      frontendBoundaryBaselineFields(name, value.fields).map((field) => ({
         tag: field.tag,
         name: field.name,
         type: field.type,

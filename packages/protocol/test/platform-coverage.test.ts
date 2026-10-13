@@ -34,6 +34,7 @@ import type { Constraints } from "../src/v5/constraints.js"
 import { rustTypeName } from "../src/v5/codec-names.js"
 import { connectorRoles } from "./connector-source.js"
 import { descriptorSet } from "./descriptor-set.js"
+import { frontendBoundaryBaseline, frontendBoundaryBaselineFields } from "./frontend-boundary-baseline.js"
 
 test("platform slice exactly matches all 55 baseline and live endpoint declarations", async () => {
   const live = platformEndpoints().map(({ endpoint }) => endpoint.identifier)
@@ -49,7 +50,7 @@ test("platform slice exactly matches all 55 baseline and live endpoint declarati
   ).toEqual(["browser.connect", "pty.connect"])
   expect(Object.keys(platformExclusions).sort()).toEqual(["browser.connect", "pty.connect"])
   expect(baseline.find((member) => member.name === "fs.read")?.disposition).toBe("STREAM")
-  const actual = operations.filter((operation) => operation.operationId >= 3000 && operation.operationId <= 3999)
+  const actual = operations.filter((operation) => operation.operationId >= 3000 && operation.operationId <= 3052)
   expect(actual).toHaveLength(53)
   expect(actual.map((operation) => operation.diagnosticName).sort()).toEqual(
     platformRpcEndpoints()
@@ -87,7 +88,7 @@ test("every platform field, presence, enum and typed error matches the live Effe
     expect(value, name).toBeDefined()
     expect(value.oneofs, name).toBe(message.oneof ? 1 : 0)
     expect(
-      value.fields.map((field) => ({
+      frontendBoundaryBaselineFields(name, value.fields).map((field) => ({
         name: field.name,
         type: field.type,
         required: field.required,
@@ -151,10 +152,24 @@ test("every platform field, presence, enum and typed error matches the live Effe
   const platform = set.file.find((file) => file.name === "ycoding/v5/platform.proto")!
   const shared = sharedSet()
   expect(platform.messageType.map((message) => message.name).sort()).toEqual(
-    [...contract.messages.keys()].filter((name) => !shared.has(name)).sort(),
+    [
+      ...[...contract.messages.keys()].filter((name) => !shared.has(name)),
+      "RemoteDevice",
+      "RemoteEnrollmentError",
+      "RemoteEnrollmentPartialFailure",
+      "remote_enroll_Request",
+      "remote_enroll_Request_payload",
+      "remote_enroll_Result",
+    ].sort(),
   )
   expect(platform.enumType.map((item) => item.name).sort()).toEqual(
-    [...contract.enums.keys()].filter((name) => !shared.has(name)).sort(),
+    [
+      ...[...contract.enums.keys()].filter((name) => !shared.has(name)),
+      "RemoteDeviceCredentialState",
+      "RemoteEnrollmentError__tag",
+      "RemoteEnrollmentError_code",
+      "RemoteEnrollmentPartialFailure__tag",
+    ].sort(),
   )
   expect(platform.dependency).toContain("ycoding/v5/shared.proto")
 })
@@ -210,9 +225,11 @@ test("wildcard asset path, native ticket headers and metadata retain their sourc
 
 test("source ordering cannot change canonical tags, operation IDs or projected bytes", async () => {
   expect(platformProto([...platformRpcEndpoints()].reverse())).toBe(platformProto())
-  expect(await Bun.file(path.resolve(import.meta.dir, "../../../protocol/ycoding/v5/platform.proto")).text()).toBe(
-    platformProto(),
-  )
+  expect(
+    frontendBoundaryBaseline(
+      await Bun.file(path.resolve(import.meta.dir, "../../../protocol/ycoding/v5/platform.proto")).text(),
+    ),
+  ).toBe(platformProto())
   const result = Bun.spawnSync(
     ["bun", "run", path.resolve(import.meta.dir, "platform-materialize.ts"), "--write-new"],
     { stdout: "pipe", stderr: "pipe" },

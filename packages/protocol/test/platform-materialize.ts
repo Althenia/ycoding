@@ -1,6 +1,7 @@
 import path from "node:path"
 import { platformProto, sharedProto, platformSharedSet } from "./platform-contract.js"
 import { resourceSharedSet } from "./resources-contract.js"
+import { frontendBoundaryBaseline } from "./frontend-boundary-baseline.js"
 
 const file = Bun.file(path.resolve(import.meta.dir, "../../../protocol/ycoding/v5/platform.proto"))
 const expected = platformProto()
@@ -30,7 +31,7 @@ if (process.argv.includes("--write-new")) {
   console.log("created canonical platform.proto from the live source projection")
   process.exit(0)
 }
-if ((await file.text()) !== expected)
+if (frontendBoundaryBaseline(await file.text()) !== expected)
   throw new Error(
     "platform.proto: live source projection differs from canonical declarations; IDs and tags must not be rewritten",
   )

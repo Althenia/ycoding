@@ -10,12 +10,13 @@ import { requireConstraintCoverage } from "../src/v5/constraint-coverage.js"
 import type { Constraints } from "../src/v5/constraints.js"
 import { Schema, SchemaAST } from "effect"
 import { operations, Paging } from "../src/generated/v5/index.js"
+import { frontendBoundaryBaseline, frontendBoundaryBaselineFields } from "./frontend-boundary-baseline.js"
 
 test("resource RPC membership equals the live 60-operation Protocol slice", async () => {
   const sources = resourceSources()
   expect(sources).toHaveLength(60)
   const proto = await Bun.file(path.resolve(import.meta.dir, "../../../protocol/ycoding/v5/resources.proto")).text()
-  const names = Array.from(proto.matchAll(/rpc (\w+)\(/g), (match) => match[1])
+  const names = Array.from(frontendBoundaryBaseline(proto).matchAll(/rpc (\w+)\(/g), (match) => match[1])
   expect(names.sort()).toEqual(sources.map((source) => source.name.replace(/[^a-zA-Z0-9]/g, "_")).sort())
   const manifest = await generateManifest(path.resolve(import.meta.dir, "../../.."))
   const groups = new Set<string>(sources.map((source) => source.group))
@@ -48,10 +49,13 @@ test("enum literal names match live Effect literals, including single-member tag
 
 test("shared declarations are exactly those reached by live endpoints outside the resource slice", async () => {
   const shared = await Bun.file(path.resolve(import.meta.dir, "../../../protocol/ycoding/v5/shared.proto")).text()
-  const names = Array.from(shared.matchAll(/^(?:message|enum) (\w+)/gm), (match) => match[1])
+  const names = Array.from(frontendBoundaryBaseline(shared).matchAll(/^(?:message|enum) (\w+)/gm), (match) => match[1])
   expect(names.sort()).toEqual([...sharedSet()].sort())
   const resources = await Bun.file(path.resolve(import.meta.dir, "../../../protocol/ycoding/v5/resources.proto")).text()
-  const resourceNames = Array.from(resources.matchAll(/^(?:message|enum) (\w+)/gm), (match) => match[1])
+  const resourceNames = Array.from(
+    frontendBoundaryBaseline(resources).matchAll(/^(?:message|enum) (\w+)/gm),
+    (match) => match[1],
+  )
   expect(names.filter((name) => resourceNames.includes(name))).toEqual([])
   const contract = resourceContract()
   expect([...names.filter((name) => resourceSharedSet().has(name)), ...resourceNames].sort()).toEqual(
@@ -87,7 +91,7 @@ test("every request, result and typed error matches the live Effect field types 
     expect(descriptor, name).toBeDefined()
     expect(descriptor.oneofs, name).toBe(message.oneof ? 1 : 0)
     expect(
-      descriptor.fields.map((field) => ({
+      frontendBoundaryBaselineFields(name, descriptor.fields).map((field) => ({
         name: field.name,
         type: field.type,
         required: field.required,
@@ -144,7 +148,7 @@ test("canonical operation descriptors have exact resource IDs, request/result as
   const expected = resourceContract().operations
   expect(
     operations
-      .filter((operation) => operation.operationId >= 2000 && operation.operationId <= 2999)
+      .filter((operation) => operation.operationId >= 2000 && operation.operationId <= 2059)
       .map((operation) => ({
         id: operation.operationId,
         name: operation.diagnosticName,

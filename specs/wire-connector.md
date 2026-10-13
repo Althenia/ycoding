@@ -10,6 +10,8 @@ Application-protocol failures and timeouts close with 1008 before connection est
 
 ## Allocation and source authority
 
+Local enrollment is `remote.enroll` (3053) in `platform.proto`, specified in [wire-platform](./wire-platform.md#backend-owned-device-enrollment). It permits LOCAL_CLIENT only and does not enter the 70-operation REMOTE_CLIENT or 66-operation RELAY allowlists. The local backend owns key generation, private persistence, refresh/signing and enrollment; results and status expose only `RemoteDevice` metadata. Enrollment does not grant a browser Location selector or automatically enable the connector. No credential-removal operation is allocated; CLI disconnect uses the existing `remote.set` disable path.
+
 The source membership is `packages/remote/src/index.ts:40–104,447` and `packages/remote/src/provider-auth.ts:1`. Mutation classes are exactly `remoteOperationAccess` at `packages/remote/src/index.ts:163–232`, including MUTATION for provider authentication status. Notice listing is READ; subscription, read and readAll mutate relay-owned state (`infra/cloudflare/src/relay/core.ts:806–826`). Notice requests share a connection lane regardless of descriptor mutation class (`infra/cloudflare/src/relay/core.ts:601–605`).
 
 The table is source-to-canonical migration evidence, not a runtime alias dispatcher. Repeated targets have one descriptor. A denotes shared semantics, B-reuse denotes shared shapes with remote admission constraints, and C denotes a derived workflow. IDs are explicit allocations. Catalog composition has fresh ID 5043. Unallocated IDs 5007, 5009–5012, 5019–5022, 5024–5029 and 5031–5038 must not be reused. No generated `remote.*` split descriptor exists.

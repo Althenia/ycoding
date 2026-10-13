@@ -2,7 +2,8 @@ import ts from "typescript"
 import { operations, schemas, PeerRole, Streaming } from "@ycoding-ai/protocol/v5"
 
 const sourcePath = `${import.meta.dir}/../src/promise/generated/client.ts`
-const program = ts.createProgram([sourcePath], {
+const boundaryPath = `${import.meta.dir}/../src/v5/frontend-boundary.ts`
+const program = ts.createProgram([sourcePath, boundaryPath], {
   strict: true,
   module: ts.ModuleKind.Preserve,
   moduleResolution: ts.ModuleResolutionKind.Bundler,
@@ -22,10 +23,13 @@ const collect = (node: ts.Node) => {
   if (ts.isStringLiteral(node)) stringLiterals.add(node.text)
   node.forEachChild(collect)
 }
-collect(types)
-types.forEachChild((node) => {
-  if (ts.isTypeAliasDeclaration(node)) aliases.set(node.name.text.replaceAll("_", ""), checker.getTypeAtLocation(node))
-})
+for (const declarations of [types, program.getSourceFile(boundaryPath)!]) {
+  declarations.forEachChild((node) => {
+    if (ts.isTypeAliasDeclaration(node))
+      aliases.set(node.name.text.replaceAll("_", ""), checker.getTypeAtLocation(node))
+  })
+  collect(declarations)
+}
 const normalize = (value: string) => value.replace(/[^A-Za-z0-9]/g, "_").toUpperCase()
 const members = (type: ts.Type): ts.Type[] =>
   type.isUnion() ? type.types.filter((item) => !(item.flags & ts.TypeFlags.Undefined)) : [type]
@@ -313,6 +317,44 @@ function emit(object: ts.ObjectLiteralExpression, path: string[] = []): string {
   )
 }
 const surface = emit(result)
+const boundaryMethods = [
+  ["provider", "configure", "ProviderConfigureInput", "ProviderConfigureOutput", true],
+  ["mcp", "configure", "McpConfigureInput", "McpConfigureOutput", true],
+  ["frontendPackage", "resolve", "FrontendPackageResolveInput", "FrontendPackageResolveOutput", true],
+  ["remote", "enroll", "RemoteEnrollInput", "RemoteEnrollOutput", false],
+] as const
+const boundarySurface = boundaryMethods.map(([group, method, input, output, query]) => {
+  const operation = operations.find((item) => item.diagnosticName === `${group}.${method}`)!
+  if (!operation || operation.roles.length !== 1 || operation.roles[0] !== PeerRole.LOCAL_CLIENT)
+    throw new Error(`Missing local-only frontend operation: ${group}.${method}`)
+  const request = messages.get(operation.requestType)!
+  associate(request.fields.find((field) => field.name === "payload")!.message!, aliases.get(input)!)
+  associate(messages.get(operation.resultType)!.fields[0].message!, aliases.get(output)!)
+  for (const error of operation.errorTypes) {
+    const type = aliases.get(error.slice("ycoding.v5.".length).replaceAll("_", ""))
+    if (type) associate(messages.get(error)!, type)
+  }
+  const payload = request.fields
+    .find((field) => field.name === "payload")!
+    .message!.fields.map((field) => `${field.name}: input.${field.name}`)
+    .join(", ")
+  const binding = `{ method: "${group}.${method}", operationID: ${operation.operationId}, resultPath: ["data"], empty: false }`
+  return `${group}: { ${group === "frontendPackage" ? "" : `...client.${group},`} ${method}: (input: ${input}, requestOptions?: RequestOptions) => transport.call<${output}>(${binding}, { ${query ? "query: { location: input.location }, " : ""}payload: { ${payload} } }, input, requestOptions) ${group === "remote" ? `, get: (requestOptions?: RequestOptions) => client.remote.get(requestOptions) as Promise<RemoteStatusOutput>` : ""} }`
+})
+associate(messages.get("ycoding.v5.remote_get_Result_data")!, aliases.get("RemoteStatusOutput")!)
+associate(messages.get("ycoding.v5.Location_Info")!, aliases.get("BackendLocationOutput")!)
+associate(messages.get("ycoding.v5.skill_list_Result")!, aliases.get("BackendSkillListOutput")!)
+const boundaryImports = [
+  ...boundaryMethods.flatMap(([, , input, output]) => [input, output]),
+  "FrontendBoundaryClient",
+  "RemoteStatusOutput",
+  "BackendLocationOutput",
+  "BackendSkillListOutput",
+]
+await Bun.write(
+  `${import.meta.dir}/../src/v5/generated/frontend-boundary.ts`,
+  `import type { YCodingClient } from "../../promise/index.js"\nimport type { RequestOptions } from "../../promise/generated/client.js"\nimport type { LocationGetInput, SkillListInput } from "../../promise/generated/types.js"\nimport type { ${boundaryImports.join(", ")} } from "../frontend-boundary.js"\nimport type { LocalTransport } from "../socket.js"\nexport function bindFrontendBoundary(transport: LocalTransport, client: YCodingClient): Omit<YCodingClient, keyof FrontendBoundaryClient> & { [K in keyof FrontendBoundaryClient]: K extends keyof YCodingClient ? Omit<YCodingClient[K], keyof FrontendBoundaryClient[K]> & FrontendBoundaryClient[K] : FrontendBoundaryClient[K] } { return { ...client, ${boundarySurface.join(",\n")}, location: { ...client.location, get: (input?: LocationGetInput, requestOptions?: RequestOptions) => client.location.get(input, requestOptions) as Promise<BackendLocationOutput> }, skill: { ...client.skill, list: (input?: SkillListInput, requestOptions?: RequestOptions) => client.skill.list(input, requestOptions) as Promise<BackendSkillListOutput> } } }\n`,
+)
 associate(messages.get("ycoding.v5.PublicEvent")!, aliases.get("ServerEvent")!)
 for (const schema of schemas) {
   const logical = aliases.get(schema.name.replaceAll("_", ""))
@@ -359,6 +401,7 @@ const formatted = Bun.spawnSync(
     "--write",
     `${import.meta.dir}/../src/v5/generated/surface.ts`,
     `${import.meta.dir}/../src/v5/generated/domain.ts`,
+    `${import.meta.dir}/../src/v5/generated/frontend-boundary.ts`,
   ],
   { stdout: "ignore", stderr: "inherit" },
 )

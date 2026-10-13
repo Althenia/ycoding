@@ -4,7 +4,7 @@ import "ycoding/v5/foundation.proto";
 import "ycoding/v5/operations.proto";
 import "ycoding/v5/shared.proto";
 
-option (ycoding.v5.operation_range) = { first: 3000 last: 3052 };
+option (ycoding.v5.operation_range) = { first: 3000 last: 3053 };
 
 enum browser_action_Request_payload_actionValue1_type {
   BROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE1_TYPE_NAVIGATE = 1;
@@ -1260,6 +1260,7 @@ message remote_get_Result {
 message remote_get_Result_data {
   required remote_get_Result_data_state state = 1;
   optional LosslessString message = 2;
+  optional RemoteDevice device = 3;
 }
 
 message remote_set_Request_payload {
@@ -2521,6 +2522,88 @@ service server_vcs {
       paging: UNPAGED
       streaming: TYPED_BULK
       sensitivity: PRIVATE
+    };
+  }
+}
+
+enum RemoteDeviceCredentialState {
+  REMOTEDEVICECREDENTIALSTATE_NOT_AUTHENTICATED = 1;
+  REMOTEDEVICECREDENTIALSTATE_VALID = 2;
+  REMOTEDEVICECREDENTIALSTATE_EXPIRED = 3;
+  REMOTEDEVICECREDENTIALSTATE_REVOKED = 4;
+}
+
+message RemoteDevice {
+  required LosslessString deviceID = 1 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 128 }];
+  required LosslessString name = 2 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 128 }];
+  required LosslessString relayOrigin = 3 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 2048 }];
+  required uint64 enrolledAt = 4 [(ycoding.v5.constraints) = { integer_min: "0" integer_max: "9007199254740991" }];
+  required RemoteDeviceCredentialState credentialState = 5;
+  optional uint64 credentialExpiresAt = 6 [(ycoding.v5.constraints) = { integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+enum RemoteEnrollmentError__tag {
+  REMOTEENROLLMENTERROR__TAG_REMOTEENROLLMENTERROR = 1;
+}
+
+enum RemoteEnrollmentError_code {
+  REMOTEENROLLMENTERROR_CODE_INVALID_ORIGIN = 1;
+  REMOTEENROLLMENTERROR_CODE_INVALID_CODE = 2;
+  REMOTEENROLLMENTERROR_CODE_ALREADY_ENROLLED = 3;
+  REMOTEENROLLMENTERROR_CODE_RELAY_REJECTED = 4;
+  REMOTEENROLLMENTERROR_CODE_RELAY_UNAVAILABLE = 5;
+  REMOTEENROLLMENTERROR_CODE_KEY_FAILED = 6;
+  REMOTEENROLLMENTERROR_CODE_STORE_FAILED = 7;
+}
+
+message RemoteEnrollmentError {
+  required RemoteEnrollmentError__tag _tag = 1;
+  required RemoteEnrollmentError_code code = 2;
+}
+
+enum RemoteEnrollmentPartialFailure__tag {
+  REMOTEENROLLMENTPARTIALFAILURE__TAG_REMOTEENROLLMENTPARTIALFAILURE = 1;
+}
+
+message RemoteEnrollmentPartialFailure {
+  required RemoteEnrollmentPartialFailure__tag _tag = 1;
+  required RemoteDevice device = 2;
+}
+
+message remote_enroll_Request_payload {
+  required LosslessString relayOrigin = 1 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 2048 }];
+  required LosslessString enrollmentID = 2 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 128 }];
+  required LosslessString code = 3 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 128 }];
+  optional LosslessString name = 4 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 128 }];
+  optional bool replace = 5;
+}
+
+message remote_enroll_Request {
+  required remote_enroll_Request_payload payload = 1;
+}
+
+message remote_enroll_Result {
+  required RemoteDevice data = 1;
+}
+
+service frontend_remote {
+  rpc remote_enroll(remote_enroll_Request) returns (remote_enroll_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3053
+      diagnostic_name: "remote.enroll"
+      error_types: "ycoding.v5.RemoteEnrollmentError"
+      error_types: "ycoding.v5.RemoteEnrollmentPartialFailure"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: MACHINE
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: SECRET
+      sensitive_fields: { field_path: "payload.code" sensitivity: SECRET }
     };
   }
 }

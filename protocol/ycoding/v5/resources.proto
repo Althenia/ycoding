@@ -4,7 +4,7 @@ import "ycoding/v5/foundation.proto";
 import "ycoding/v5/operations.proto";
 import "ycoding/v5/shared.proto";
 
-option (ycoding.v5.operation_range) = { first: 2000 last: 2059 };
+option (ycoding.v5.operation_range) = { first: 2000 last: 2062 };
 
 enum Agent_Info_mode {
   AGENT_INFO_MODE_SUBAGENT = 1;
@@ -2448,6 +2448,7 @@ message Skill_Info {
   optional Skill_Conflicts conflicts = 6;
   required LosslessString location = 7;
   required LosslessString content = 8;
+  optional ConfigurationScope scope = 9;
 }
 
 message usage_get_Request {
@@ -3566,6 +3567,241 @@ service server_usage {
       mutation: READ
       settlement: COMPLETED
       paging: OFFSET
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}
+
+enum ConfigurationScope {
+  CONFIGURATIONSCOPE_GLOBAL = 1;
+  CONFIGURATIONSCOPE_PROJECT = 2;
+}
+
+message ConfigurationTarget {
+  required ConfigurationScope scope = 1;
+  required LosslessString path = 2 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 8192 }];
+}
+
+enum ConfigurationWriteError__tag {
+  CONFIGURATIONWRITEERROR__TAG_CONFIGURATIONWRITEERROR = 1;
+}
+
+enum ConfigurationWriteError_code {
+  CONFIGURATIONWRITEERROR_CODE_INVALID_CONFIG = 1;
+  CONFIGURATIONWRITEERROR_CODE_SCOPE_NOT_ALLOWED = 2;
+  CONFIGURATIONWRITEERROR_CODE_PROVIDER_COLLISION = 3;
+  CONFIGURATIONWRITEERROR_CODE_WRITE_FAILED = 4;
+}
+
+message ConfigurationWriteError {
+  required ConfigurationWriteError__tag _tag = 1;
+  required ConfigurationWriteError_code code = 2;
+}
+
+enum ConfigurationPartialFailure__tag {
+  CONFIGURATIONPARTIALFAILURE__TAG_CONFIGURATIONPARTIALFAILURE = 1;
+}
+
+enum ConfigurationPartialFailure_stage {
+  CONFIGURATIONPARTIALFAILURE_STAGE_RELOAD = 1;
+  CONFIGURATIONPARTIALFAILURE_STAGE_REGISTRATION = 2;
+}
+
+message ConfigurationPartialFailure {
+  required ConfigurationPartialFailure__tag _tag = 1;
+  required ConfigurationTarget target = 2;
+  required ConfigurationPartialFailure_stage stage = 3;
+}
+
+enum ProviderEndpointAPI {
+  PROVIDERENDPOINTAPI_CHAT = 1;
+  PROVIDERENDPOINTAPI_RESPONSES = 2;
+}
+
+enum ProviderEndpointWorker {
+  PROVIDERENDPOINTWORKER_OLLAMA = 1;
+  PROVIDERENDPOINTWORKER_VLLM = 2;
+}
+
+enum ProviderEndpointCatalog {
+  PROVIDERENDPOINTCATALOG_OPENAI_MODELS = 1;
+}
+
+message ProviderEndpoint {
+  oneof kind {
+    ProviderEndpoint_OpenAI openai = 1;
+    ProviderEndpoint_Runpod runpod = 2;
+  }
+}
+
+message ProviderEndpoint_OpenAI {
+  required LosslessString baseURL = 1 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 8192 }];
+  required ProviderEndpointAPI api = 2;
+}
+
+message ProviderEndpoint_Runpod {
+  required LosslessString baseURL = 1 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 8192 }];
+  required ProviderEndpointWorker worker = 2;
+}
+
+message ProviderEndpointModel {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 128 }];
+  optional LosslessString modelID = 2 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 256 }];
+  optional LosslessString name = 3 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 256 }];
+  optional LosslessString family = 4 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 128 }];
+  optional ProviderEndpointAPI api = 5;
+  optional bool disabled = 6;
+  optional bool tools = 7;
+}
+
+message ProviderEndpointModels {
+  repeated ProviderEndpointModel items = 1 [(ycoding.v5.constraints) = { count_min: 0 count_max: 256 }];
+}
+
+message provider_configure_Request_payload {
+  required LosslessString providerID = 1 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 128 }];
+  required ConfigurationScope scope = 2;
+  required ProviderEndpoint endpoint = 3;
+  optional ProviderEndpointCatalog catalog = 4;
+  optional ProviderEndpointModels models = 5;
+}
+
+message provider_configure_Request {
+  required LocationQuery query = 1;
+  required provider_configure_Request_payload payload = 2;
+}
+
+message provider_configure_Result {
+  required provider_configure_Result_data data = 1;
+}
+
+message provider_configure_Result_data {
+  required LosslessString providerID = 1 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 128 }];
+  required ConfigurationTarget target = 2;
+  required bool registered = 3;
+}
+
+message mcp_configure_Request_payload {
+  required LosslessString name = 1 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 128 }];
+  required ConfigurationScope scope = 2;
+  required mcp_add_Request_payload_config config = 3;
+}
+
+message mcp_configure_Request {
+  required LocationQuery query = 1;
+  required mcp_configure_Request_payload payload = 2;
+}
+
+message mcp_configure_Result {
+  required mcp_configure_Result_data data = 1;
+}
+
+message mcp_configure_Result_data {
+  required LosslessString name = 1 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 128 }];
+  required ConfigurationTarget target = 2;
+  required bool reloaded = 3;
+}
+
+enum FrontendPackageError__tag {
+  FRONTENDPACKAGEERROR__TAG_FRONTENDPACKAGEERROR = 1;
+}
+
+enum FrontendPackageError_code {
+  FRONTENDPACKAGEERROR_CODE_INVALID_PACKAGE = 1;
+  FRONTENDPACKAGEERROR_CODE_PERMISSION_DENIED = 2;
+  FRONTENDPACKAGEERROR_CODE_INSTALL_FAILED = 3;
+  FRONTENDPACKAGEERROR_CODE_ENTRYPOINT_MISSING = 4;
+  FRONTENDPACKAGEERROR_CODE_INTEGRITY_FAILED = 5;
+}
+
+message FrontendPackageError {
+  required FrontendPackageError__tag _tag = 1;
+  required FrontendPackageError_code code = 2;
+}
+
+message frontendPackage_resolve_Request_payload {
+  required LosslessString spec = 1 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 2048 }];
+}
+
+message frontendPackage_resolve_Request {
+  required LocationQuery query = 1;
+  required frontendPackage_resolve_Request_payload payload = 2;
+}
+
+message FrontendPackageAsset {
+  required LosslessString path = 1 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 8192 }];
+  required LosslessString digest = 2 [(ycoding.v5.constraints) = { utf16_min: 64 utf16_max: 64 }];
+}
+
+message FrontendPackageDescriptor {
+  required LosslessString name = 1 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 256 }];
+  required LosslessString version = 2 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 128 }];
+  required LosslessString digest = 3 [(ycoding.v5.constraints) = { utf16_min: 64 utf16_max: 64 }];
+  required LosslessString root = 4 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 8192 }];
+  required FrontendPackageAsset entrypoint = 5;
+  optional FrontendPackageAssets assets = 6;
+}
+
+message FrontendPackageAssets {
+  repeated FrontendPackageAsset items = 1 [(ycoding.v5.constraints) = { count_min: 0 count_max: 1024 }];
+}
+
+message frontendPackage_resolve_Result {
+  required FrontendPackageDescriptor data = 1;
+}
+
+service frontend_resources {
+  rpc provider_configure(provider_configure_Request) returns (provider_configure_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2060
+      diagnostic_name: "provider.configure"
+      error_types: "ycoding.v5.ConfigurationWriteError"
+      error_types: "ycoding.v5.ConfigurationPartialFailure"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc mcp_configure(mcp_configure_Request) returns (mcp_configure_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2061
+      diagnostic_name: "mcp.configure"
+      error_types: "ycoding.v5.ConfigurationWriteError"
+      error_types: "ycoding.v5.ConfigurationPartialFailure"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: SECRET
+      sensitive_fields: { field_path: "payload.config" sensitivity: SECRET }
+    };
+  }
+  rpc frontendPackage_resolve(frontendPackage_resolve_Request) returns (frontendPackage_resolve_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2062
+      diagnostic_name: "frontendPackage.resolve"
+      error_types: "ycoding.v5.FrontendPackageError"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
       streaming: TYPED_BULK
       sensitivity: PRIVATE
     };

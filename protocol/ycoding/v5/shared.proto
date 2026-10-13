@@ -83,6 +83,7 @@ message Location_Info {
   required LosslessString directory = 1;
   optional LosslessString workspaceID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/location.ts#Location.Info" }];
   required Location_Info_project project = 3;
+  optional BackendPaths backendPaths = 4;
 }
 
 message Location_Info_project {
@@ -385,4 +386,11 @@ message FileDiff_Info {
   required uint64 additions = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/file-diff.ts#FileDiff.Info" integer_min: "0" integer_max: "9007199254740991" }];
   required uint64 deletions = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/file-diff.ts#FileDiff.Info" integer_min: "0" integer_max: "9007199254740991" }];
   required FileDiff_Info_status status = 5;
+}
+
+message BackendPaths {
+  required LosslessString home = 1;
+  required LosslessString state = 2;
+  required LosslessString worktree = 3;
+  required LosslessString config = 4;
 }

@@ -979,6 +979,77 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
     "2": "invalid-values",
     "3": "removed-keys",
   },
+  "ycoding.v5.ConfigurationScope": {
+    "1": "global",
+    "2": "project",
+  },
+  "ycoding.v5.ProviderEndpointAPI": {
+    "1": "chat",
+    "2": "responses",
+  },
+  "ycoding.v5.ProviderEndpointWorker": {
+    "1": "ollama",
+    "2": "vllm",
+  },
+  "ycoding.v5.ProviderEndpointCatalog": {
+    "1": "openai-models",
+  },
+  "ycoding.v5.ConfigurationWriteError__tag": {
+    "1": "ConfigurationWriteError",
+  },
+  "ycoding.v5.ConfigurationWriteError_code": {
+    "1": "invalid_config",
+    "2": "scope_not_allowed",
+    "3": "provider_collision",
+    "4": "write_failed",
+  },
+  "ycoding.v5.ConfigurationPartialFailure__tag": {
+    "1": "ConfigurationPartialFailure",
+  },
+  "ycoding.v5.ConfigurationPartialFailure_stage": {
+    "1": "reload",
+    "2": "registration",
+  },
+  "ycoding.v5.ServiceUnavailableError__tag": {
+    "1": "ServiceUnavailableError",
+  },
+  "ycoding.v5.UnauthorizedError__tag": {
+    "1": "UnauthorizedError",
+  },
+  "ycoding.v5.InvalidRequestError__tag": {
+    "1": "InvalidRequestError",
+  },
+  "ycoding.v5.FrontendPackageError__tag": {
+    "1": "FrontendPackageError",
+  },
+  "ycoding.v5.FrontendPackageError_code": {
+    "1": "invalid_package",
+    "2": "permission_denied",
+    "3": "install_failed",
+    "4": "entrypoint_missing",
+    "5": "integrity_failed",
+  },
+  "ycoding.v5.RemoteDeviceCredentialState": {
+    "1": "not_authenticated",
+    "2": "valid",
+    "3": "expired",
+    "4": "revoked",
+  },
+  "ycoding.v5.RemoteEnrollmentError__tag": {
+    "1": "RemoteEnrollmentError",
+  },
+  "ycoding.v5.RemoteEnrollmentError_code": {
+    "1": "invalid_origin",
+    "2": "invalid_code",
+    "3": "already_enrolled",
+    "4": "relay_rejected",
+    "5": "relay_unavailable",
+    "6": "key_failed",
+    "7": "store_failed",
+  },
+  "ycoding.v5.RemoteEnrollmentPartialFailure__tag": {
+    "1": "RemoteEnrollmentPartialFailure",
+  },
   "ycoding.v5.PublicEvent_models_dev_refreshed_type": {
     "1": "models-dev.refreshed",
   },
@@ -1417,15 +1488,6 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
   },
   "ycoding.v5.PublicEvent_mcp_resources_changed_type": {
     "1": "mcp.resources.changed",
-  },
-  "ycoding.v5.UnauthorizedError__tag": {
-    "1": "UnauthorizedError",
-  },
-  "ycoding.v5.InvalidRequestError__tag": {
-    "1": "InvalidRequestError",
-  },
-  "ycoding.v5.ServiceUnavailableError__tag": {
-    "1": "ServiceUnavailableError",
   },
   "ycoding.v5.InvalidCursorError__tag": {
     "1": "InvalidCursorError",
