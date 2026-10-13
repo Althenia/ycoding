@@ -577,14 +577,39 @@ the remaining tab and requires manual Chrome recovery.
 Guardrail reservations are released on every settled path, and browser/computer
 reviews carry `skip_review: true` without bypassing deny decisions.
 
+`macos::NativeClient` lazily bootstraps one persistent app service with a private
+0700 control directory and 0600 `service.json` containing `action: "service"`,
+`controlDirectory`, and the backend's `ownerPID`. LaunchServices receives only
+that file. The shared Swift service authenticates the Unix peer PID and exits
+on owner death. Calls are serialized on `computer-use.sock` as JSON-RPC 2.0,
+with a four-byte little-endian length prefix and an 8 MiB UTF-8 JSON frame cap.
+A version-1 ping precedes requests; each request includes its absolute deadline.
+Connections reconnect to a surviving service; failed handshakes and timeouts
+terminate it, with lazy replacement on a later call. Lost or invalid mutation
+responses report `unknown_outcome` without replay. Cancellation retains the
+target lock through settlement and requires reinspection. Await `shutdown` to
+drain calls, send shutdown, close the socket, and remove the control directory.
+`display.hold` keeps its separate request/response-file launch and lifetime.
+
+Paired Chrome bridge version 4 accepts worker results without an `input` field.
+Public Schema, tool output, and v5 projections omit that field. The shared Chrome
+worker owns focus emulation at debugger attachment and always dispatches CDP
+click/scroll input; the Rust backend does not inject visibility-dependent scripts.
+
+Regenerate the browser tool definition with
+`bun rust/crates/core/tests/generate-browser-tool.ts [reference-checkout]` from
+the repository root. The optional reference supplies the TypeScript source and
+installed Effect version; the generated JSON stays in the invoking worktree.
+
 Run focused client checks from `rust` with exact Cargo test targets:
 
 ```sh
-cargo test --locked -p ycoding-core --test browser_protocol --test browser_capture --test browser_cdp --test browser_fences --test browser_lifecycle --test browser_owned --test browser_auth --test browser_boundary --test browser_isolated --test browser_relinquish --test browser_chrome --test computer_client --test computer_ownership --test computer_electron --test computer_boundary
+cargo test --locked -p ycoding-core --test browser_protocol --test browser_capture --test browser_cdp --test browser_fences --test browser_lifecycle --test browser_owned --test browser_auth --test browser_boundary --test browser_isolated --test browser_relinquish --test browser_chrome --test computer_client --test computer_service --test computer_ownership --test computer_electron --test computer_boundary
 ```
 
-These checks use local control-pipe, credential-store, WebSocket, and fake-native
-boundaries. They do not launch installed Chrome or prove native desktop input,
+These checks use local control-pipe, credential-store, WebSocket, Unix-socket, and
+fake-native boundaries. `computer_service` starts a Python process stand-in, not
+the Swift app. They do not launch installed Chrome or prove native desktop input,
 Space placement, privacy grants, extension assets, or debugger UI. Live browser
 and native integration are separate environment-dependent suites.
 
@@ -3454,6 +3479,13 @@ cargo test --locked -p ycoding-runtime --test events
 `Service::list` places the effective default first: the selectable configured default, then selectable `god`, then the first selectable definition. Hidden helpers, subagent-only definitions, and `btw` cannot become the selectable default. Explicit unknown selections retain their identity and have no resolved definition.
 
 The eight visible role prompts are composed as shared project guidance, trimmed Markdown role text, and capability guidance separated by two newlines. Primary definitions include the background notice followed by main-session controls; subagents include child controls. The BTW and seven hidden helper prompts are standalone. Built-in permissions preserve ordered rule evaluation, including the helper's final all-tools deny and BTW's approval requirements for mutation.
+
+The eight role prompts carry the shared checkpoint-testing cadence: design cases
+before building, build a complete milestone with its tests, run focused tests at
+feature checkpoints, and run affected full checks at integration. IDs remain
+stable (`god`, `architech`, `zeus`, and `GSD`); catalog names and encoded agent
+projections display `God`, `Architech`, `Zeus`, and `GSD`. Prompt bytes and metadata
+are checked against the TypeScript reference and fixed SHA-256 fixtures.
 
 ```sh
 cargo test --locked -p ycoding-core --test builtin_agents

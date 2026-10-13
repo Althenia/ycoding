@@ -169,7 +169,6 @@ pub fn decode_client(frame: &[u8]) -> Option<ClientMessage> {
                 && object
                     .optional::<ycoding_schema::schema::NonNegativeInt>("groupID")
                     .is_ok()
-                && object.optional::<browser::InputKind>("input").is_ok()
         }
         Kind::Error => {
             tab()

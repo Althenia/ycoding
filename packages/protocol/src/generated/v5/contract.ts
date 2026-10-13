@@ -1,4 +1,4 @@
-export const CONTRACT_DIGEST = "3c027255a4a15212e3d6f79ad83523d500882db59090ac505e40cce0fbc5115b"
+export const CONTRACT_DIGEST = "351c650e02d17a72327bba65263d8b2353a1c2c8c792717a0ca01edcaebb04a3"
 export const messages = {
   "ycoding.v5.Empty": {
     oneofs: 0,
@@ -41019,14 +41019,6 @@ export const messages = {
           domainObligations: ["packages/schema/src/browser.ts#Browser.ActionResult"],
         },
       },
-      {
-        tag: 7,
-        name: "input",
-        type: 14,
-        required: false,
-        repeated: false,
-        target: "ycoding.v5.Browser_ActionResult_input",
-      },
     ],
   },
   "ycoding.v5.Browser_Tab": {
@@ -56564,7 +56556,6 @@ export const enums = {
   "ycoding.v5.Browser_Tab_lease": [1, 2],
   "ycoding.v5.Browser_ActionResult_status": [1, 2, 3, 4],
   "ycoding.v5.Browser_CaptureOutput_mediaType": [1],
-  "ycoding.v5.Browser_ActionResult_input": [1, 2],
   "ycoding.v5.Browser_ControlInput_action": [1, 2],
   "ycoding.v5.Browser_Status_state": [1, 2, 3, 4],
   "ycoding.v5.fs_find_Request_query_type": [1, 2],

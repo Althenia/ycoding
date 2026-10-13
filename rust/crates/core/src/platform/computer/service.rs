@@ -21,9 +21,9 @@ impl Invoke for NativeClient {
     fn invoke<'a>(
         &'a self,
         request: Request,
-        _signal: watch::Receiver<bool>,
+        signal: watch::Receiver<bool>,
     ) -> Future<'a, Result<Success, NativeError>> {
-        Box::pin(NativeClient::invoke(self, request))
+        Box::pin(self.invoke_with_signal(request, signal))
     }
 }
 
@@ -359,7 +359,11 @@ impl Service {
                 let target=request.target.clone().ok_or_else(||NativeError::new(Code::InvalidRequest,"Stage requires an explicit target",Outcome::NotStarted))?;
                 self.coordinator.state.lock().unwrap_or_else(|e|e.into_inner()).staged.insert((self.location,target.key()),Staged {session:request.owner.session_id.clone(),target,frame});
             }
-            if *call.active.cancellation.borrow() {return Err(Error::Ownership("Computer call was cancelled; inspect the target again".into()));}
+            if *call.active.cancellation.borrow() {
+                return Err(if request.operation.mutating() {
+                    NativeError::new(Code::UnknownOutcome,"Computer mutation was cancelled; inspect the target again",Outcome::Unknown).into()
+                } else { Error::Ownership("Computer call was cancelled; inspect the target again".into()) });
+            }
             if request.operation==Operation::BrowserTabs {self.claim_browser_windows(&request,&output)?;}
             if let Some(target)=&request.target {
                 let mut state=self.coordinator.state.lock().unwrap_or_else(|e|e.into_inner());

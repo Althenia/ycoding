@@ -882,10 +882,6 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
   "ycoding.v5.Browser_CaptureOutput_mediaType": {
     "1": "image/png",
   },
-  "ycoding.v5.Browser_ActionResult_input": {
-    "1": "trusted",
-    "2": "scripted",
-  },
   "ycoding.v5.Browser_ControlInput_action": {
     "1": "pause",
     "2": "resume",

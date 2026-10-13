@@ -275,10 +275,6 @@ pub fn action_result(value: &browser::ActionResult) -> Result<v5::BrowserActionR
         message: value.message.as_ref().map(convert::wire),
         capture: value.capture.as_ref().map(capture),
         group_id: value.group_id.map(|value| value.get() as u64),
-        input: value.input.map(|value| match value {
-            browser::InputKind::Trusted => 1,
-            browser::InputKind::Scripted => 2,
-        }),
     })
 }
 

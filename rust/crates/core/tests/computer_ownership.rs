@@ -412,6 +412,69 @@ async fn session_release_invalidates_its_claims_across_every_location() {
 }
 
 #[tokio::test]
+async fn cancelled_mutations_keep_the_target_locked_and_settle_unknown_without_restoring_claims() {
+    for operation in [
+        Operation::DesktopClick,
+        Operation::DesktopLaunch,
+        Operation::DesktopQuit,
+    ] {
+        let native = Arc::new(Native::new());
+        let coordinator = Coordinator::new(native.clone(), "darwin");
+        let service = coordinator.service();
+        service
+            .execute(Request::inspect(owner("ses_a", "inspect"), target(73)).unwrap())
+            .await
+            .unwrap();
+        native
+            .hold
+            .store(true, std::sync::atomic::Ordering::Release);
+        let request = match operation {
+            Operation::DesktopLaunch => Request::launch(
+                owner("ses_a", "mutation"),
+                "com.example.fixture".into(),
+                false,
+            ),
+            Operation::DesktopQuit => Request::quit(
+                owner("ses_a", "mutation"),
+                "com.example.fixture".into(),
+                451,
+            ),
+            _ => click("ses_a", "mutation", "rev-1", 73),
+        };
+        let task = tokio::spawn({
+            let service = service.clone();
+            async move { service.execute(request).await }
+        });
+        native.entered.notified().await;
+        assert!(service.cancel("ses_a", "mutation"));
+        if operation == Operation::DesktopClick {
+            assert!(
+                service
+                    .execute(Request::inspect(owner("ses_b", "blocked"), target(73)).unwrap())
+                    .await
+                    .is_err()
+            );
+        }
+        native.proceed.notify_one();
+        let computer::service::Error::Native(error) = task.await.unwrap().unwrap_err() else {
+            panic!("cancelled mutation must be a native unknown outcome")
+        };
+        assert_eq!(error.code, Code::UnknownOutcome);
+        assert_eq!(error.outcome, Some(Outcome::Unknown));
+        if operation != Operation::DesktopLaunch {
+            assert!(
+                service
+                    .execute(click("ses_a", "retry", "rev-1", 73))
+                    .await
+                    .is_err()
+            );
+        }
+        assert_eq!(native.calls.lock().unwrap().len(), 2);
+        coordinator.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn private_display_is_shared_and_last_unstage_stops_the_display_owner() {
     let native = Arc::new(Native::new());
     let coordinator = Coordinator::new(native.clone(), "darwin");

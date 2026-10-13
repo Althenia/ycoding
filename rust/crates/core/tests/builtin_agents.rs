@@ -48,14 +48,24 @@ fn roots() -> Roots {
 #[test]
 fn all_builtin_fields_and_full_prompts_equal_main_ts_fixtures() {
     let service = Service::new(agent::builtin::catalog(&roots()).unwrap());
-    let project = ts_template("YCODING_PROJECT_PROMPT").replace(
-        "Never make atomic commits.",
-        &format!("{CHECKPOINT}\n\nNever make atomic commits."),
-    );
-    let main = ts_template("MAINCHAT_CAPABILITIES").replace(
-        "at a time across all agents on the machine.",
-        &format!("at a time across all agents on the machine.{BUILD_LANES}"),
-    );
+    let project = ts_template("YCODING_PROJECT_PROMPT");
+    let project = if project.contains(CHECKPOINT) {
+        project
+    } else {
+        project.replace(
+            "Never make atomic commits.",
+            &format!("{CHECKPOINT}\n\nNever make atomic commits."),
+        )
+    };
+    let main = ts_template("MAINCHAT_CAPABILITIES");
+    let main = if main.contains(BUILD_LANES) {
+        main
+    } else {
+        main.replace(
+            "at a time across all agents on the machine.",
+            &format!("at a time across all agents on the machine.{BUILD_LANES}"),
+        )
+    };
     let notice = "Subagents always run in the background, and a shell may also run in the background. Both notify you when they finish. Do not poll them or wait idle for them. While either is running, continue every remaining task that is still your responsibility and does not depend on that result.";
     let child = ts_template("SUBAGENT_CAPABILITIES");
     let fixtures = [
@@ -154,6 +164,22 @@ fn all_builtin_fields_and_full_prompts_equal_main_ts_fixtures() {
             "full prompt bytes for {id}"
         );
         assert_eq!(actual.name, name.into());
+        assert_eq!(
+            service
+                .list()
+                .iter()
+                .find(|agent| agent.id == id.into())
+                .unwrap()
+                .name,
+            name.into()
+        );
+        let JsonValue::Object(encoded) = actual.encode() else {
+            panic!("agent projection must be an object")
+        };
+        assert_eq!(
+            encoded.get(&"name".into()),
+            Some(&JsonValue::String(name.into()))
+        );
         assert_eq!(
             actual.description.as_ref().unwrap().encode(),
             expected.data.get("description").unwrap().json().unwrap()

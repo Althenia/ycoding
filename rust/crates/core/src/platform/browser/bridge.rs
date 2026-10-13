@@ -1257,7 +1257,6 @@ impl Bridge {
             );
             result.capture = object.optional("capture")?;
             result.group_id = object.optional("groupID")?;
-            result.input = object.optional("input")?;
             remember_pending(&mut state, &result);
             finish(&mut state, Ok(Output::Action(result)));
         }
@@ -1325,7 +1324,6 @@ fn result(
         message,
         capture: None,
         group_id: None,
-        input: None,
     }
 }
 fn remember_pending(state: &mut State, result: &browser::ActionResult) {

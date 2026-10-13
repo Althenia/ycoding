@@ -867,7 +867,6 @@ impl DomainEncode for CaptureOutput {
     }
 }
 crate::schema::literal_enum_type!(ResultStatus,{Completed=>"completed",Paused=>"paused",Rejected=>"rejected",Uncertain=>"uncertain"});
-crate::schema::literal_enum_type!(InputKind,{Trusted=>"trusted",Scripted=>"scripted"});
 #[derive(Clone, Debug, PartialEq)]
 pub struct ActionResult {
     pub call_id: CallId,
@@ -876,7 +875,6 @@ pub struct ActionResult {
     pub message: Option<LosslessString>,
     pub capture: Option<CaptureOutput>,
     pub group_id: Option<crate::schema::NonNegativeInt>,
-    pub input: Option<InputKind>,
 }
 impl DomainDecode for ActionResult {
     fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
@@ -895,7 +893,6 @@ impl DomainDecode for ActionResult {
             message,
             capture: o.optional("capture")?,
             group_id: o.optional("groupID")?,
-            input: o.optional("input")?,
         })
     }
 }
@@ -908,7 +905,6 @@ impl DomainEncode for ActionResult {
             .optional("message", &self.message)
             .optional("capture", &self.capture)
             .optional("groupID", &self.group_id)
-            .optional("input", &self.input)
             .finish()
     }
 }

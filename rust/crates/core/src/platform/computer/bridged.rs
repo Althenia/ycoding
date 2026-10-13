@@ -40,15 +40,15 @@ impl Client {
                 Operation::DesktopList | Operation::DesktopInspect | Operation::DesktopQuit
             )
         {
-            return self.native.invoke(request).await;
+            return self.native.invoke_with_signal(request, signal).await;
         }
         if request.operation == Operation::DesktopLaunch {
             if request.fields().get("remoteDebugging") != Some(&Value::Bool(true)) {
-                return self.native.invoke(request).await;
+                return self.native.invoke_with_signal(request, signal).await;
             }
             let listed = self
                 .native
-                .invoke(Request::list(request.owner.clone()))
+                .invoke_with_signal(Request::list(request.owner.clone()), signal.clone())
                 .await?;
             let bundle = request
                 .fields()
@@ -77,10 +77,13 @@ impl Client {
             {
                 return self
                     .native
-                    .invoke(Request::launch(request.owner.clone(), bundle.into(), false))
+                    .invoke_with_signal(
+                        Request::launch(request.owner.clone(), bundle.into(), false),
+                        signal,
+                    )
                     .await;
             }
-            let launched = self.native.invoke(request).await?;
+            let launched = self.native.invoke_with_signal(request, signal).await?;
             let pid = launched
                 .detail
                 .get("pid")
@@ -123,7 +126,7 @@ impl Client {
                 | Operation::DesktopKey
         ) || request.fields().get("element").is_some()
         {
-            return self.native.invoke(request).await;
+            return self.native.invoke_with_signal(request, signal).await;
         }
         let target = request.target.as_ref().ok_or_else(invalid)?;
         let Target::Desktop {
@@ -135,11 +138,11 @@ impl Client {
             return Err(invalid());
         };
         if !self.electron.is_electron(*pid).await? {
-            return self.native.invoke(request).await;
+            return self.native.invoke_with_signal(request, signal).await;
         }
         let listed = self
             .native
-            .invoke(Request::list(request.owner.clone()))
+            .invoke_with_signal(Request::list(request.owner.clone()), signal.clone())
             .await?;
         let window = listed
             .detail
@@ -185,10 +188,14 @@ impl Client {
                 .ok_or_else(invalid)?,
         };
         if window.on_screen && request.operation != Operation::DesktopCapture {
-            return self.native.invoke(request).await;
+            return self.native.invoke_with_signal(request, signal).await;
         }
         let native_capture = if window.on_screen && request.operation == Operation::DesktopCapture {
-            Some(self.native.invoke(request.clone()).await)
+            Some(
+                self.native
+                    .invoke_with_signal(request.clone(), signal.clone())
+                    .await,
+            )
         } else {
             None
         };
@@ -198,7 +205,10 @@ impl Client {
         if let Some(expected) = &request.expected_revision {
             let before = self
                 .native
-                .invoke(Request::inspect(request.owner.clone(), target.clone())?)
+                .invoke_with_signal(
+                    Request::inspect(request.owner.clone(), target.clone())?,
+                    signal.clone(),
+                )
                 .await?;
             if before.revision != *expected {
                 return Err(NativeError::new(
@@ -215,12 +225,15 @@ impl Client {
         };
         let performed = self
             .electron
-            .perform(target.clone(), window, operation, Some(signal))
+            .perform(target.clone(), window, operation, Some(signal.clone()))
             .await?;
         if let Some(performed) = performed {
             let inspected = self
                 .native
-                .invoke(Request::inspect(request.owner.clone(), target.clone())?)
+                .invoke_with_signal(
+                    Request::inspect(request.owner.clone(), target.clone())?,
+                    signal.clone(),
+                )
                 .await?;
             let detail = match performed {
                 BridgeResult::Capture {
@@ -249,7 +262,7 @@ impl Client {
         if let Some(Err(error)) = native_capture {
             return Err(error);
         }
-        self.native.invoke(request).await
+        self.native.invoke_with_signal(request, signal).await
     }
     pub async fn shutdown(&self) -> Result<(), NativeError> {
         let native = self.native.shutdown().await;

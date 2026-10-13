@@ -53,6 +53,42 @@ fn typescript_pty_input_preserves_optional_empty_collections() {
 }
 
 #[test]
+fn browser_action_result_has_no_input_transport_field() {
+    let text = |value: &str| encode_lossless(&value.encode_utf16().collect::<Vec<_>>());
+    let result = v5::BrowserActionResult {
+        call_id: text("call_contract"),
+        tab: v5::BrowserTab {
+            id: text("btab_contract"),
+            session_id: text("ses_contract"),
+            title: text("Fixture"),
+            page: v5::BrowserPage {
+                origin: text("https://example.test"),
+                path: text("/"),
+            },
+            status: 1,
+            generation: 1,
+            document_generation: 2,
+            observation_revision: 3,
+            ..Default::default()
+        },
+        status: 1,
+        message: None,
+        capture: None,
+        group_id: Some(0),
+    };
+    let mut bytes = result.encode_to_vec();
+    assert_eq!(
+        decode_strict::<v5::BrowserActionResult>(&bytes).unwrap(),
+        result
+    );
+    bytes.extend_from_slice(&[0x38, 1]);
+    assert_eq!(
+        decode_strict::<v5::BrowserActionResult>(&bytes).unwrap_err(),
+        WireError("unknown field")
+    );
+}
+
+#[test]
 fn typescript_shell_metadata_preserves_lone_keys_and_fractional_values() {
     let bytes = hex("0a110a04120200d8120919000000000000e0bf");
     let value = v5::ShellInfoMetadata {

@@ -1048,7 +1048,7 @@ corpus.push(
   accepted("Browser.CloseInput", Browser.CloseInput, '{"sessionID":"ses","tabID":"btab_x","generation":1,"callID":"c"}', '{"sessionID":"ses","tabID":"bad","generation":1,"callID":"c"}'),
   accepted("Browser.ReleaseInput", Browser.ReleaseInput, '{"sessionID":"ses","tabID":"btab_x","generation":1,"callID":"c"}', '{"sessionID":"bad","tabID":"btab_x","generation":1,"callID":"c"}'),
   accepted("Browser.CaptureOutput", Browser.CaptureOutput, '{"mediaType":"image/png","data":"AA==","bytes":0}', '{"mediaType":"image/jpeg","data":"AA==","bytes":0}'),
-  accepted("Browser.ActionResult", Browser.ActionResult, `{"callID":"c","tab":${tab},"status":"completed","input":"scripted"}`, `{"callID":"","tab":${tab},"status":"completed"}`),
+  accepted("Browser.ActionResult", Browser.ActionResult, `{"callID":"c","tab":${tab},"status":"completed"}`, `{"callID":"","tab":${tab},"status":"completed"}`),
   accepted("Browser.ControlInput", Browser.ControlInput, '{"action":"pause"}', '{"action":"stop"}'),
 )
 

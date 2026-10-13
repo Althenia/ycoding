@@ -105,9 +105,10 @@ async fn successful_action_invalidates_semantic_refs_and_exact_retry_never_repla
         async move { bridge.action(input).await }
     });
     extension.notice.notified().await;
-    bridge.receive(protocol::decode_client(json!({"type":"result","callID":"click","tabID":"btab_test","generation":1,"documentGeneration":1,"observationRevision":1,"status":"completed","title":"Fixture","url":"https://example.test/form","input":"scripted"}).to_string().as_bytes()).unwrap()).unwrap();
+    bridge.receive(protocol::decode_client(json!({"type":"result","callID":"click","tabID":"btab_test","generation":1,"documentGeneration":1,"observationRevision":1,"status":"completed","title":"Fixture","url":"https://example.test/form"}).to_string().as_bytes()).unwrap()).unwrap();
     let result = task.await.unwrap().unwrap();
     assert_eq!(result.status, browser::ResultStatus::Completed);
+    assert!(!stringify_json(&result.encode()).contains("\"input\""));
     assert_eq!(bridge.action(input.clone()).await.unwrap(), result);
     assert!(bridge.action(click("ses_a", "new-click")).await.is_err());
     let mut conflict = input;

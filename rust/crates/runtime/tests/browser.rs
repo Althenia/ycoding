@@ -122,7 +122,6 @@ async fn script(
                 .field("status", &LosslessString::from("completed"))
                 .field("title", &LosslessString::from("Fixture"))
                 .field("url", &LosslessString::from("https://example.test/form?private=query"))
-                .field("input", &LosslessString::from("scripted"))
                 .field("groupID", &JsonValue::Number(17.))
                 .field("capture", &decode::<JsonValue>(r#"{"mediaType":"image/png","data":"iVBORw==","bytes":4}"#)).finish(),
             other => panic!("unexpected extension command {other}"),
@@ -533,7 +532,6 @@ async fn browser_wire_flows_preserve_ownership_fences_settlement_and_lifecycle()
     let result: v5::BrowserActionReply =
         success(call(&mut client, "browser.action", OWNER, request.clone()).await);
     assert_eq!(result.data.status, 1);
-    assert_eq!(result.data.input, Some(2));
     assert_eq!(result.data.group_id, Some(17));
     assert_eq!(result.data.capture.as_ref().unwrap().bytes, 4);
     assert_eq!(result.data.tab.observation_revision, 1);

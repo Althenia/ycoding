@@ -125,6 +125,8 @@ fn the_advertised_definition_carries_the_typescript_contract() {
         .find(|definition| definition.name.as_str() == Some("browser"))
         .expect("browser is advertised");
     let description = definition.description.as_str().unwrap();
+    assert!(description.ends_with("Focus emulation keeps controlled pages visible and unthrottled while attached; it ends when the debugger detaches."));
+    assert!(!description.contains("scripted"));
     assert!(
         description.starts_with("Use status once, then tabs. Reuse returned tabID, generation,")
     );

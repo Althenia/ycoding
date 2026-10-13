@@ -68,11 +68,6 @@ enum Browser_CaptureOutput_mediaType {
   BROWSER_CAPTUREOUTPUT_MEDIATYPE_IMAGE_PNG = 1;
 }
 
-enum Browser_ActionResult_input {
-  BROWSER_ACTIONRESULT_INPUT_TRUSTED = 1;
-  BROWSER_ACTIONRESULT_INPUT_SCRIPTED = 2;
-}
-
 enum Browser_ControlInput_action {
   BROWSER_CONTROLINPUT_ACTION_PAUSE = 1;
   BROWSER_CONTROLINPUT_ACTION_RESUME = 2;
@@ -427,7 +422,6 @@ message Browser_ActionResult {
   optional LosslessString message = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.ActionResult" utf16_max: 1024 }];
   optional Browser_CaptureOutput capture = 5;
   optional uint64 groupID = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/browser.ts#Browser.ActionResult" integer_min: "0" integer_max: "9007199254740991" }];
-  optional Browser_ActionResult_input input = 7;
 }
 
 message Browser_Tab {

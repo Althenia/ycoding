@@ -1,5 +1,10 @@
 # Domain string and JSON codec
 
+`browser::ActionResult` exposes call identity, tab fences, settlement status, and
+optional message, capture, and group ID. It does not expose an input-transport
+field; decoding an extra `input` property discards it, matching the TypeScript
+public Schema. The v5 browser result follows the same field set.
+
 `LosslessString` stores scalar-valid text as UTF-8 and text containing an unpaired surrogate as the entire UTF-16 code-unit sequence. `from_utf16` selects the canonical representation. `code_units`, equality, ordering, hashing, and `len` operate on original UTF-16 code units. `as_str` returns `None` for non-scalar text; `to_utf8` and `String::try_from` reject it. No replacement or Unicode normalization occurs.
 
 `JsonValue` represents null, booleans, binary64 numbers, lossless strings, arrays, and `JsonObject`. Objects retain unique keys in JavaScript enumeration order: array-index names from `0` through `4294967294` sort numerically, followed by other names in insertion order. Replacing a duplicate key retains its original position. Keys such as `01`, `-0`, and `4294967295` are not array indices.

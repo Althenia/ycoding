@@ -39,7 +39,7 @@ fn protocol_requires_profile_grant_version_and_exact_extension_origin() {
 
 #[test]
 fn protocol_validates_correlated_results_and_does_not_accept_numeric_strings() {
-    let mut result = json!({"type":"result","callID":"call","tabID":"btab_test","generation":1,"documentGeneration":1,"observationRevision":0,"status":"completed","title":"Title","url":"https://example.test/","input":"scripted"});
+    let mut result = json!({"type":"result","callID":"call","tabID":"btab_test","generation":1,"documentGeneration":1,"observationRevision":0,"status":"completed","title":"Title","url":"https://example.test/"});
     assert!(protocol::decode_client(result.to_string().as_bytes()).is_some());
     result["generation"] = json!("1");
     assert!(protocol::decode_client(result.to_string().as_bytes()).is_none());

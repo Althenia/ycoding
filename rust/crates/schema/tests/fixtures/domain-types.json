@@ -15625,8 +15625,8 @@
   },
   {
     "name": "Browser.ActionResult",
-    "input": "{\"callID\":\"c\",\"tab\":{\"id\":\"btab_x\",\"sessionID\":\"ses\",\"title\":\"t\",\"page\":{\"origin\":\"https://example.com\",\"path\":\"/\"},\"status\":\"shared\",\"generation\":1,\"documentGeneration\":1,\"observationRevision\":0},\"status\":\"completed\",\"input\":\"scripted\"}",
-    "output": "{\"callID\":\"c\",\"tab\":{\"id\":\"btab_x\",\"sessionID\":\"ses\",\"title\":\"t\",\"page\":{\"origin\":\"https://example.com\",\"path\":\"/\"},\"status\":\"shared\",\"generation\":1,\"documentGeneration\":1,\"observationRevision\":0},\"status\":\"completed\",\"input\":\"scripted\"}",
+    "input": "{\"callID\":\"c\",\"tab\":{\"id\":\"btab_x\",\"sessionID\":\"ses\",\"title\":\"t\",\"page\":{\"origin\":\"https://example.com\",\"path\":\"/\"},\"status\":\"shared\",\"generation\":1,\"documentGeneration\":1,\"observationRevision\":0},\"status\":\"completed\"}",
+    "output": "{\"callID\":\"c\",\"tab\":{\"id\":\"btab_x\",\"sessionID\":\"ses\",\"title\":\"t\",\"page\":{\"origin\":\"https://example.com\",\"path\":\"/\"},\"status\":\"shared\",\"generation\":1,\"documentGeneration\":1,\"observationRevision\":0},\"status\":\"completed\"}",
     "negativeZeros": []
   },
   {
