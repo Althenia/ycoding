@@ -315,28 +315,45 @@ impl Service {
     ) -> Result<usize, Error> {
         let session = session.as_lossless().clone();
         let project = project.as_lossless().clone();
+        let service = self.clone();
         self.client
             .submit(move |tx| {
-                let activations = rows::<artifacts::ActivationTable>(
+                service.deactivate_project_in_transaction(
                     tx,
-                    "project_artifact_activation_session_open_idx",
-                    &tuple_key(&[KeyPart::String(&session), KeyPart::Null]),
-                )?;
-                let mut count = 0;
-                for mut activation in activations {
-                    if tx
-                        .get::<artifacts::ProjectScopeTable>(&key(&activation.scope_id))?
-                        .is_some_and(|scope| scope.project_id == project)
-                    {
-                        activation.deactivated_at = Some(deactivated_at);
-                        activation.boundary_seq = boundary_seq;
-                        artifacts::ActivationTable::put(tx, &activation)?;
-                        count += 1;
-                    }
-                }
-                Ok(count)
+                    &session,
+                    &project,
+                    boundary_seq,
+                    deactivated_at,
+                )
             })?
             .wait()
+    }
+    pub fn deactivate_project_in_transaction(
+        &self,
+        tx: &mut Write<'_>,
+        session: &LosslessString,
+        project: &LosslessString,
+        boundary_seq: i64,
+        deactivated_at: i64,
+    ) -> Result<usize, Error> {
+        let activations = rows::<artifacts::ActivationTable>(
+            tx,
+            "project_artifact_activation_session_open_idx",
+            &tuple_key(&[KeyPart::String(session), KeyPart::Null]),
+        )?;
+        let mut count = 0;
+        for mut activation in activations {
+            if tx
+                .get::<artifacts::ProjectScopeTable>(&key(&activation.scope_id))?
+                .is_some_and(|scope| scope.project_id == *project)
+            {
+                activation.deactivated_at = Some(deactivated_at);
+                activation.boundary_seq = boundary_seq;
+                artifacts::ActivationTable::put(tx, &activation)?;
+                count += 1;
+            }
+        }
+        Ok(count)
     }
     pub fn metrics(
         &self,

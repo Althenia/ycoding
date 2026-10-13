@@ -693,7 +693,7 @@ async fn move_session(
     })?;
     let info = (destination.resolve)(target.clone())
         .await
-        .map_err(Failure::Invalid)?;
+        .map_err(Failure::Unavailable)?;
     if info.directory != target.directory || info.workspace_id != target.workspace_id {
         return Err(Failure::Unavailable(
             "Destination resolver returned another Location".into(),
@@ -711,9 +711,30 @@ async fn move_session(
             .await
             .map_err(Failure::Unavailable)?;
     }
+    let destination_agent = if held.info.project.id != info.project.id {
+        let destination_location = core.locations.move_location(&info)?;
+        destination_location
+            .agents
+            .default()
+            .map(|agent| agent.id.clone())
+    } else {
+        None
+    };
+    let artifacts = core
+        .artifacts
+        .as_ref()
+        .and_then(|artifacts| artifacts(&held.info));
     services
         .runner
-        .move_to(core.execution.coordinator(), &id, &info)
+        .move_to(
+            core.execution.coordinator(),
+            &id,
+            &info,
+            artifacts
+                .as_ref()
+                .and_then(|artifacts| artifacts.store.accounting()),
+            destination_agent.as_ref(),
+        )
         .await
         .map_err(failure)?;
     Ok(v5::SessionMoveResult { data: v5::Empty {} })

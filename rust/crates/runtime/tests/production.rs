@@ -121,6 +121,15 @@ async fn production_flow() {
     roots.initialize().unwrap();
     std::fs::create_dir_all(root.join("project")).unwrap();
     std::fs::create_dir_all(root.join("other")).unwrap();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(root.join("other"))
+            .status()
+            .unwrap()
+            .success()
+    );
+    std::fs::write(root.join("other/.git/ycoding"), "prj_other").unwrap();
     std::fs::write(roots.config.join("ycoding.json"), format!(r#"{{"session_retention":{{"days":2}},"model":{{"providerID":"openai","model":"gpt-runtime"}},"efficiency":{{"helper_models":{{"prompt":{{"providerID":"openai","model":"gpt-helper"}}}}}},"providers":{{"openai":{{"settings":{{"baseURL":"{endpoint}"}}}}}},"agents":{{"prediction":{{"description":"configured prediction"}},"god":{{"request":{{"headers":{{"X-Agent":"configured-agent"}},"body":{{"temperature":0.2}}}}}}}}}}"#)).unwrap();
     std::fs::write(
         root.join("project/ycoding.json"),
@@ -768,6 +777,155 @@ async fn production_flow() {
         &moved_catalogs.models
     ));
     assert_eq!(moved_services.generate.location, moved.location);
+
+    let adopted_directory = root.join("adopted");
+    std::fs::create_dir_all(&adopted_directory).unwrap();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&adopted_directory)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        std::process::Command::new("git")
+            .args([
+                "remote",
+                "add",
+                "origin",
+                "https://example.invalid/session-move.git"
+            ])
+            .current_dir(&adopted_directory)
+            .status()
+            .unwrap()
+            .success()
+    );
+    std::fs::write(adopted_directory.join(".git/ycoding"), "prj_previous").unwrap();
+    let adopted_id = ycoding_core::platform::project_identity::remote_id(
+        "https://example.invalid/session-move.git",
+    )
+    .unwrap();
+    let mut previous_project = store
+        .client()
+        .snapshot()
+        .unwrap()
+        .get::<project::ProjectTable>(&tuple_key(&[KeyPart::String(&"prj_other".into())]))
+        .unwrap()
+        .unwrap();
+    previous_project.id = "prj_previous".into();
+    previous_project.worktree = adopted_directory.to_str().unwrap().into();
+    core.sessions
+        .record_project(previous_project, None)
+        .await
+        .unwrap();
+    let definition = ycoding_core::ycoding_schema::project_artifact::Definition::decode(&parse_json(
+        r#"{"kind":"skill","name":"Move review","description":"Adopted project review","content":"Review project changes."}"#,
+    ).unwrap()).unwrap();
+    let adopted_artifact = artifacts
+        .store
+        .write_manual(
+            ycoding_core::resources::project_artifact::store::ManualWriteInput {
+                scope: ycoding_core::ycoding_schema::project_artifact::ScopeSelector::Project,
+                project_id: Some(
+                    ycoding_core::ycoding_schema::project::Id::new("prj_previous").unwrap(),
+                ),
+                id: "move-review",
+                definition: &definition,
+                expected: None,
+                now: 1,
+            },
+        )
+        .unwrap();
+    let before_adoption = artifacts
+        .store
+        .get(
+            &adopted_artifact.scope_id,
+            &adopted_artifact.kind,
+            &adopted_artifact.id,
+        )
+        .unwrap();
+    let ycoding_core::ycoding_schema::project_artifact::Scope::Project(previous_scope) =
+        &before_adoption.artifact.scope
+    else {
+        panic!("project scope")
+    };
+    std::fs::remove_file(
+        ycoding_core::resources::project_artifact::package::scope_marker_path(
+            &roots
+                .data
+                .join("project-artifacts")
+                .join(previous_scope.storage_id.as_lossless().as_str().unwrap()),
+        ),
+    )
+    .unwrap();
+    let _: v5::SessionMoveResult = support::success(
+        wire.call(
+            "session.move",
+            support::session_scope("ses_movable"),
+            v5::SessionMoveRequest {
+                params: v5::SessionMoveRequestParams {
+                    session_id: support::text("ses_movable"),
+                },
+                payload: v5::LocationRef {
+                    directory: support::text(adopted_directory.to_str().unwrap()),
+                    workspace_id: None,
+                },
+            }
+            .encode_to_vec(),
+        )
+        .await,
+    );
+    let after_adoption = artifacts
+        .store
+        .get(
+            &adopted_artifact.scope_id,
+            &adopted_artifact.kind,
+            &adopted_artifact.id,
+        )
+        .unwrap();
+    assert_eq!(
+        after_adoption.current_version,
+        before_adoption.current_version
+    );
+    assert_eq!(after_adoption.definition, before_adoption.definition);
+    let ycoding_core::ycoding_schema::project_artifact::Scope::Project(scope) =
+        after_adoption.artifact.scope
+    else {
+        panic!("project scope")
+    };
+    assert_eq!(
+        scope.project_id.as_lossless().as_str(),
+        Some(adopted_id.as_str())
+    );
+    let marker = ycoding_core::resources::project_artifact::package::scope_marker_path(
+        &roots
+            .data
+            .join("project-artifacts")
+            .join(scope.storage_id.as_lossless().as_str().unwrap()),
+    );
+    assert_eq!(
+        parse_json(&std::fs::read_to_string(marker).unwrap()).unwrap(),
+        ycoding_core::ycoding_schema::ObjectEncoder::new()
+            .field("schema", &1.0)
+            .field("scopeID", &scope.id)
+            .field("type", "project")
+            .field("storageID", &scope.storage_id)
+            .finish()
+    );
+    let adopted_session = core
+        .sessions
+        .get(&session::Id::new("ses_movable").unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        adopted_session.project_id.as_lossless().as_str(),
+        Some(adopted_id.as_str())
+    );
+    assert_eq!(
+        adopted_session.location.directory.as_lossless().as_str(),
+        adopted_directory.to_str()
+    );
 
     let prediction: v5::SessionPredictionResult = support::success(
         wire.call(

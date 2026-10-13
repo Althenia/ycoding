@@ -1275,6 +1275,149 @@ async fn command_attachments_materialize_once_into_managed_files() {
     fixture.close().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn session_move_wire_deactivates_project_artifacts_and_reselects_the_destination_default() {
+    let (mut fixture, artifacts) = fixture("http://127.0.0.1:1").await;
+    let definition = ycoding_core::ycoding_schema::project_artifact::Definition::decode(&parse_json(
+        r#"{"kind":"agent","name":"Move agent","description":"Project review","mode":"subagent","system":"Review changes.","permissions":[]}"#,
+    ).unwrap()).unwrap();
+    let written = artifacts
+        .store
+        .write_manual(artifact_store::ManualWriteInput {
+            scope: ycoding_core::ycoding_schema::project_artifact::ScopeSelector::Project,
+            project_id: Some(
+                ycoding_core::ycoding_schema::project::Id::new(fixture.project.as_str()).unwrap(),
+            ),
+            id: "move-agent",
+            definition: &definition,
+            expected: None,
+            now: 1,
+        })
+        .unwrap();
+    artifacts.source.refresh().await;
+    let runner = &fixture.catalogs.session.as_ref().unwrap().runner;
+    runner
+        .switch_agent(&sid(&fixture.root), &"move-agent".into())
+        .await
+        .unwrap();
+    let destination_path = fixture.path.join("destination");
+    std::fs::create_dir_all(&destination_path).unwrap();
+    let target = ycoding_core::ycoding_schema::location::Info::decode(
+        &ObjectEncoder::new()
+            .field("directory", destination_path.to_str().unwrap())
+            .field(
+                "project",
+                &ObjectEncoder::new()
+                    .field("id", format!("{}-moved", fixture.project).as_str())
+                    .field("directory", destination_path.to_str().unwrap())
+                    .finish(),
+            )
+            .finish(),
+    )
+    .unwrap();
+    let mut project = world()
+        .store
+        .snapshot()
+        .unwrap()
+        .get::<ycoding_core::ycoding_store::project::ProjectTable>(
+            &ycoding_core::ycoding_store::tuple_key(&[
+                ycoding_core::ycoding_store::KeyPart::String(&fixture.project.as_str().into()),
+            ]),
+        )
+        .unwrap()
+        .unwrap();
+    project.id = target.project.id.as_lossless().clone();
+    project.worktree = target.project.directory.as_lossless().clone();
+    world()
+        .core
+        .sessions
+        .record_project(project, None)
+        .await
+        .unwrap();
+    let info = target.clone();
+    fixture
+        .catalogs
+        .session
+        .as_mut()
+        .unwrap()
+        .destination
+        .as_mut()
+        .unwrap()
+        .resolve = Arc::new(move |_| {
+        let info = info.clone();
+        Box::pin(async move { Ok(info) })
+    });
+    let mut services = fixture.environment(true).services.clone();
+    let store = artifacts.store.clone();
+    services.core.as_mut().unwrap().artifacts = Some(Arc::new(move |_| {
+        Some(ycoding_runtime::ArtifactServices {
+            store: store.clone(),
+            refresh: Arc::new(|| {}),
+        })
+    }));
+    let server = support::start(services, ycoding_runtime::standard().unwrap()).await;
+    let mut client = Client::open(server.address(), &[]).await.unwrap();
+    let before = remote_derived_support::now();
+    let _: v5::SessionMoveResult = ask(
+        &mut client,
+        "session.move",
+        scope(&fixture.root),
+        v5::SessionMoveRequest {
+            params: v5::SessionMoveRequestParams {
+                session_id: text(&fixture.root),
+            },
+            payload: v5::LocationRef {
+                directory: text(destination_path.to_str().unwrap()),
+                workspace_id: None,
+            },
+        },
+    )
+    .await;
+    let after = remote_derived_support::now();
+    let info = world()
+        .core
+        .sessions
+        .get(&sid(&fixture.root))
+        .unwrap()
+        .unwrap();
+    assert_eq!(info.location.directory, target.directory);
+    assert_eq!(info.project_id, target.project.id);
+    assert_eq!(info.agent.unwrap().as_str(), Some("build"));
+    let snapshot = world().store.snapshot().unwrap();
+    let ended = snapshot
+        .scan::<ycoding_core::ycoding_store::session::EventTable>(
+            std::ops::Bound::Unbounded,
+            std::ops::Bound::Unbounded,
+            usize::MAX,
+        )
+        .unwrap()
+        .into_iter()
+        .find(|event| {
+            event.aggregate_id.as_str() == Some(&fixture.root)
+                && event.type_.as_str() == Some("session.project-artifacts-ended.1")
+        })
+        .unwrap();
+    let activation = snapshot
+        .scan::<ycoding_core::ycoding_store::artifacts::ActivationTable>(
+            std::ops::Bound::Unbounded,
+            std::ops::Bound::Unbounded,
+            usize::MAX,
+        )
+        .unwrap()
+        .into_iter()
+        .find(|row| {
+            row.session_id.as_ref().and_then(LosslessString::as_str) == Some(&fixture.root)
+                && row.scope_id == *written.scope_id.as_lossless()
+        })
+        .unwrap();
+    assert_eq!(activation.deactivated_at, Some(ended.created));
+    assert!((before..=after).contains(&ended.created));
+    assert_eq!(activation.boundary_seq, ended.seq);
+    drop(client);
+    server.shutdown().await.unwrap();
+    fixture.close().await;
+}
+
 #[test]
 fn every_session_ingress_descriptor_has_a_handler() {
     let dispatcher = ycoding_runtime::standard().unwrap();

@@ -21,7 +21,18 @@ Catalog, agent, command, reference, skill, configuration, integration, MCP, shel
 
 Production shutdown stops Meeting runtimes, Session execution, Jobs, the maintenance workers, Locations, the process-global owners, credentials and finally the composition runtime; the caller closes the Store last. A bootstrap failure releases every owner it started in that order and returns the original error. Startup settles interrupted Steps, the shell ledger and stale tasks and drains the subagent notification outbox before serving; it never replays a provider attempt. Later durable task updates drain the outbox again, and a failed drain is retried on the next update.
 
-Production catalogs include the Location runner and transient Session generator. Destination resolution composes and records the backend-resolved Project; invalidation retires the cached generation without revoking held calls. The executable owns the remote connector, starts it with the same Core owners and an independent connection-scoped subscription/upload environment, and joins it before Core and Store shutdown. Remote access remains off until the persisted machine preference enables it. Core starts one analytics report Engine on the composition owner thread; telemetry and usage report reads share that Engine.
+Production catalogs include the Location runner and transient Session generator. Destination resolution records the backend-resolved Project; invalidation retires the cached generation without revoking held calls. The executable owns the remote connector, starts it with the same Core owners and an independent connection-scoped subscription/upload environment, and joins it before Core and Store shutdown. Remote access remains off until the persisted machine preference enables it. Core starts one analytics report Engine on the composition owner thread; telemetry and usage report reads share that Engine.
+
+Session movement resolves the destination's filesystem Project identity, records
+that Project, adopts its previous artifact scope and completes the post-commit
+scope marker before interrupting active execution. Cross-Project moves retire the
+destination generation, compose its default agent, and use the shared artifact
+accounting owner to close the old Project's open Session activations atomically
+with `session.project-artifacts-ended`. A project-scoped current agent selects the
+destination default before `session.moved`; standard and global selections stay
+unchanged. Same-Project movement skips deactivation and reselection, and an
+unchanged Location publishes nothing. Later failures preserve earlier committed
+adoption and publications; requests report the failure rather than replaying them.
 
 `YCODING_CHANNEL=beta ycoding-runtime --paths` is the shared namespace/path authority for the Rust runtime and beta TypeScript CLI. It prints resolved JSON without creating files. Beta uses `ycoding-beta`, imports stable SQLite only through a private copy, and retains a completion marker and verified Store provenance for retry-safe first start.
 

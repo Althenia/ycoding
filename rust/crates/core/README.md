@@ -5,6 +5,22 @@ history as durable synthetic instructions. The Location-scoped loader deduplicat
 concurrent and repeated reads, respects the current `instruction_max_bytes`
 limit, and skips missing files, external reads, and the Location-root file.
 
+## Session movement
+
+Session movement adopts a destination Project's previous artifact scope in its
+own transaction and writes the scope marker only after commit, before interrupting
+execution. A failed adoption transaction leaves scope ownership and files intact;
+a marker failure reports an error with the adoption already committed.
+
+Cross-Project movement records `session.project-artifacts-ended` and closes only
+the Session's open activations in the old Project in one transaction. Activation
+rows receive that event's sequence and the sampled millisecond timestamp. A
+project-scoped current agent selects the destination's default, even if its ID is
+still available; standard and global agents retain their selection. Agent selection
+and `session.moved` are separate subsequent publications. Movement projects the
+new Location, Project and subpath and clears the instruction epoch. Same-Project
+moves publish only movement; an unchanged Location is a no-op.
+
 ## Derived Session retention and maintenance ownership
 
 `session::cleanups::Cleanups` removes only derived context exclusions, file-change

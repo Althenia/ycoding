@@ -599,6 +599,48 @@ impl Locations {
 }
 
 impl Locations {
+    pub(crate) fn resolve_move(
+        &self,
+        target: &location::Ref,
+    ) -> Result<(location::Info, Option<ProjectId>), Failure> {
+        let resolved = self.resolve(target.directory.as_lossless())?;
+        let previous = resolved
+            .previous
+            .map(ProjectId::new)
+            .transpose()
+            .map_err(|_| unrepresentable())?;
+        Ok((
+            location::Info {
+                directory: target.directory.clone(),
+                workspace_id: target.workspace_id.clone(),
+                project: location::Project {
+                    id: ProjectId::new(resolved.id).map_err(|_| unrepresentable())?,
+                    directory: AbsolutePath::new(
+                        resolved.directory.to_str().ok_or_else(unrepresentable)?,
+                    )
+                    .map_err(|_| unrepresentable())?,
+                },
+            },
+            previous,
+        ))
+    }
+
+    pub(crate) fn move_location(
+        &self,
+        info: &location::Info,
+    ) -> Result<Arc<LocationServices>, Failure> {
+        self.acquire(
+            info.directory.as_lossless(),
+            info.workspace_id.as_ref().map(WorkspaceId::as_lossless),
+            |_| {
+                Ok(Project {
+                    id: info.project.id.clone(),
+                    directory: info.project.directory.as_lossless().clone(),
+                })
+            },
+        )
+    }
+
     pub fn cached(&self) -> Vec<(LosslessString, Option<LosslessString>)> {
         self.0
             .services

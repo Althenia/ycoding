@@ -2913,6 +2913,124 @@ fn scope_is_shared_marker_restored_and_adoption_keeps_storage_identity() {
 }
 
 #[test]
+fn adoption_transaction_rollback_keeps_scope_artifacts_and_marker_unchanged() {
+    let fixture = Fixture::new();
+    let written = fixture.service.write_manual(manual(&definition())).unwrap();
+    let scope = fixture.service.resolve_project_scope(&project()).unwrap();
+    let marker = package::scope_marker_path(
+        &fixture
+            .root
+            .join("data/project-artifacts")
+            .join(scope.storage_id.as_lossless().as_str().unwrap()),
+    );
+    let before = std::fs::read(&marker).unwrap();
+    let service = fixture.service.clone();
+    assert!(
+        fixture
+            .db
+            .submit(move |tx| {
+                service.adopt_project(tx, &project(), &project::Id::new("adopted").unwrap())?;
+                Err::<(), _>(ycoding_store::Error::Rejected("rollback"))
+            })
+            .unwrap()
+            .wait()
+            .is_err()
+    );
+    assert_eq!(
+        fixture.service.resolve_project_scope(&project()).unwrap(),
+        scope
+    );
+    assert_eq!(std::fs::read(marker).unwrap(), before);
+    assert_eq!(
+        fixture
+            .service
+            .get(&written.scope_id, &written.kind, &written.id)
+            .unwrap()
+            .artifact
+            .scope,
+        project_artifact::Scope::Project(scope)
+    );
+}
+
+#[tokio::test]
+async fn committed_adoption_preserves_versions_and_conflicts_do_not_partially_adopt() {
+    let fixture = Fixture::new();
+    let written = fixture.service.write_manual(manual(&definition())).unwrap();
+    let before = fixture
+        .service
+        .get(&written.scope_id, &written.kind, &written.id)
+        .unwrap();
+    fixture
+        .service
+        .adopt_project_committed(&project(), &project::Id::new("adopted").unwrap())
+        .await
+        .unwrap();
+    let after = fixture
+        .service
+        .get(&written.scope_id, &written.kind, &written.id)
+        .unwrap();
+    assert_eq!(after.current_version, before.current_version);
+    assert_eq!(after.definition, before.definition);
+    let project_artifact::Scope::Project(adopted) = after.artifact.scope else {
+        panic!("project scope")
+    };
+    assert_eq!(adopted.project_id, project::Id::new("adopted").unwrap());
+    let original = fixture.service.resolve_project_scope(&project()).unwrap();
+    assert_eq!(
+        fixture
+            .service
+            .adopt_project_committed(&project(), &project::Id::new("adopted").unwrap())
+            .await
+            .unwrap_err()
+            .code
+            .encode(),
+        JsonValue::String("ProjectAdoptionConflict".into())
+    );
+    assert_eq!(
+        fixture.service.resolve_project_scope(&project()).unwrap(),
+        original
+    );
+    assert_eq!(
+        fixture
+            .service
+            .resolve_project_scope(&project::Id::new("adopted").unwrap())
+            .unwrap(),
+        adopted
+    );
+}
+
+#[tokio::test]
+async fn adoption_marker_failure_reports_error_after_the_database_commit() {
+    let fixture = Fixture::new();
+    let scope = fixture.service.resolve_project_scope(&project()).unwrap();
+    let marker = package::scope_marker_path(
+        &fixture
+            .root
+            .join("data/project-artifacts")
+            .join(scope.storage_id.as_lossless().as_str().unwrap()),
+    );
+    std::fs::remove_file(&marker).unwrap();
+    std::fs::create_dir(&marker).unwrap();
+    assert!(
+        fixture
+            .service
+            .adopt_project_committed(&project(), &project::Id::new("adopted").unwrap())
+            .await
+            .is_err()
+    );
+    let row = fixture
+        .db
+        .snapshot()
+        .unwrap()
+        .get::<ycoding_store::artifacts::ProjectScopeTable>(&ycoding_store::tuple_key(&[
+            ycoding_store::KeyPart::String(scope.id.as_lossless()),
+        ]))
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.project_id.as_str(), Some("adopted"));
+}
+
+#[test]
 fn manual_writes_get_list_and_exact_revision_version_digest_expectations() {
     let fixture = Fixture::new();
     let definition = definition();

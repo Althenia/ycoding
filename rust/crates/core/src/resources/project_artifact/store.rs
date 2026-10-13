@@ -242,6 +242,22 @@ impl Service {
         )?;
         Ok(scope)
     }
+    pub async fn adopt_project_committed(
+        &self,
+        previous: &project::Id,
+        project: &project::Id,
+    ) -> Result<(), Error> {
+        let service = self.clone();
+        let previous = previous.clone();
+        let project = project.clone();
+        let adoption = self
+            .client
+            .submit(move |tx| service.adopt_project(tx, &previous, &project))?
+            .await?;
+        tokio::task::spawn_blocking(move || adoption.post_commit())
+            .await
+            .map_err(|_| error("StorageUnavailable"))?
+    }
     pub fn adopt_project(
         &self,
         tx: &mut Write<'_>,

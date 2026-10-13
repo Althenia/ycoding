@@ -289,6 +289,7 @@ impl Core {
         let pricing_locations = locations.clone();
         let resolver_locations = locations.clone();
         let catalog_roots = factory.options.roots.clone();
+        let move_artifacts = factory.globals.artifacts.clone();
         let catalogs = Arc::new(move |info: &location::Info| {
             let services = resolver_locations
                 .location(
@@ -322,6 +323,7 @@ impl Core {
             });
             let resolve_locations = resolver_locations.clone();
             let invalidate_locations = resolver_locations.clone();
+            let artifacts = move_artifacts.clone();
             Ok(crate::services::CatalogServices {
                 session: Some(crate::services::SessionServices {
                     runner: composed.runner.clone(),
@@ -329,18 +331,11 @@ impl Core {
                     destination: Some(crate::services::DestinationServices {
                         resolve: Arc::new(move |reference| {
                             let locations = resolve_locations.clone();
+                            let artifacts = artifacts.clone();
                             Box::pin(async move {
                                 let resolved = locations.clone();
-                                let info = tokio::task::spawn_blocking(move || {
-                                    resolved
-                                        .location(
-                                            reference.directory.as_lossless(),
-                                            reference
-                                                .workspace_id
-                                                .as_ref()
-                                                .map(|id| id.as_lossless()),
-                                        )
-                                        .map(|held| held.info.clone())
+                                let (info, previous) = tokio::task::spawn_blocking(move || {
+                                    resolved.resolve_move(&reference)
                                 })
                                 .await
                                 .map_err(|_| "Destination resolution worker failed".to_owned())?
@@ -348,6 +343,18 @@ impl Core {
                                 locations.record(&info, false).await.map_err(|_| {
                                     "Destination Project recording failed".to_owned()
                                 })?;
+                                if let Some(previous) = previous.filter(|id| id != &info.project.id)
+                                {
+                                    artifacts
+                                        .adopt_project_committed(&previous, &info.project.id)
+                                        .await
+                                        .map_err(|error| {
+                                            format!(
+                                                "Destination artifact adoption failed: {:?}",
+                                                error.code
+                                            )
+                                        })?;
+                                }
                                 Ok(info)
                             })
                         }),

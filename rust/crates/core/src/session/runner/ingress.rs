@@ -957,6 +957,8 @@ impl Local {
         coordinator: &Coordinator,
         id: &session::Id,
         destination: &location::Info,
+        accounting: Option<&crate::resources::project_artifact::accounting::Service>,
+        destination_agent: Option<&ycoding_schema::agent::Id>,
     ) -> Result<(), IngressError> {
         let current = self.require_session(id)?;
         let target = location::Ref {
@@ -971,8 +973,18 @@ impl Local {
             coordinator.await_idle(id).await;
         }
         if current.project_id != destination.project.id {
-            publish(
-                &self.0.services.store,
+            let accounting = accounting
+                .ok_or_else(|| error("artifact.accounting", "Artifact accounting unavailable"))?
+                .clone();
+            let old_agent = current.agent.as_ref().and_then(|agent| {
+                self.0
+                    .services
+                    .store
+                    .artifact_source()?
+                    .provenance(&artifact_kind("agent"), agent.as_str()?)
+            });
+            let deactivated_at = self.0.services.clock.now();
+            let ended = super::event(
                 id,
                 None,
                 "session.project-artifacts-ended",
@@ -980,26 +992,77 @@ impl Local {
                     .field("oldProjectID", &current.project_id)
                     .field("newProjectID", &destination.project.id)
                     .finish(),
-                self.0.services.clock.now(),
-            )
-            .await?;
+                deactivated_at,
+            )?;
+            let session_id = id.as_lossless().clone();
+            let project_id = current.project_id.as_lossless().clone();
+            self.0
+                .services
+                .store
+                .client
+                .submit(move |tx| {
+                    let event = projector::append(tx, &ended)?;
+                    accounting
+                        .deactivate_project_in_transaction(
+                            tx,
+                            &session_id,
+                            &project_id,
+                            event.seq,
+                            deactivated_at,
+                        )
+                        .map_err(|error| tx.reject(error))?;
+                    Ok(())
+                })?
+                .await?;
+            if old_agent.is_some_and(|agent| agent.scope == "project")
+                && let Some(agent) = destination_agent
+            {
+                publish(
+                    &self.0.services.store,
+                    id,
+                    None,
+                    "session.agent.selected",
+                    ObjectEncoder::new().field("agent", agent).finish(),
+                    self.0.services.clock.now(),
+                )
+                .await?;
+            }
         }
-        let subpath = PathBuf::from(
+        let directory = Path::new(
             destination
                 .directory
                 .as_lossless()
                 .as_str()
                 .ok_or_else(|| IngressError::Invalid("Destination is not Unicode".into()))?,
-        )
-        .strip_prefix(Path::new(
+        );
+        let project_directory = Path::new(
             destination
                 .project
                 .directory
                 .as_lossless()
                 .as_str()
                 .ok_or_else(|| IngressError::Invalid("Project directory is not Unicode".into()))?,
-        ))
-        .map_err(|_| IngressError::Invalid("Destination is outside its Project".into()))?
+        );
+        let common = directory
+            .components()
+            .zip(project_directory.components())
+            .take_while(|(left, right)| left == right)
+            .count();
+        let subpath = if common == 0 {
+            directory.to_path_buf()
+        } else {
+            project_directory
+                .components()
+                .skip(common)
+                .map(|_| Path::new(".."))
+                .chain(
+                    directory
+                        .components()
+                        .skip(common)
+                        .map(|component| Path::new(component.as_os_str())),
+                )
+                .collect::<PathBuf>()
+        }
         .to_string_lossy()
         .replace('\\', "/");
         let subpath =
