@@ -22,11 +22,11 @@ use ycoding_runtime::{
 
 fn peer() -> Peer {
     Peer::authenticate(
-        &Enrolled::new("https://relay.invalid", "owner-a".into(), "device-a".into()).unwrap(),
+        &Enrolled::new("https://relay.invalid", "device-a".into()).unwrap(),
         &Credential::new(
             "stand-in-token".into(),
             now() + 60_000,
-            "owner-a".into(),
+            "https://relay.invalid".into(),
             "device-a".into(),
         ),
         now(),

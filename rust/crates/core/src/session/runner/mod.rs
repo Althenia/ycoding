@@ -7,7 +7,7 @@ mod messages;
 mod notifier;
 mod publisher;
 
-pub use ingress::{IngressError, ShellInput};
+pub use ingress::{CommandInput, IngressError, ShellInput};
 pub use notifier::{Wake, mcp_notifier};
 pub use ycoding_ai::route::Executor;
 

@@ -63,6 +63,15 @@ impl std::fmt::Display for IngressError {
 }
 impl std::error::Error for IngressError {}
 
+pub struct CommandInput<'a> {
+    pub request: pending::Request,
+    pub name: &'a LosslessString,
+    pub arguments: &'a LosslessString,
+    pub agent: Option<ycoding_schema::agent::Id>,
+    pub model: Option<model_schema::Ref>,
+    pub resume: Option<bool>,
+}
+
 pub struct ShellInput<'a> {
     pub session: &'a session::Id,
     pub id: Option<session_message::Id>,
@@ -658,31 +667,26 @@ impl Local {
         commands: &command::Service,
         mcp: Option<&crate::resources::mcp::Service>,
         config: &Configuration,
-        request: pending::Request,
-        name: &LosslessString,
-        arguments: &LosslessString,
-        requested_agent: Option<ycoding_schema::agent::Id>,
-        requested_model: Option<model_schema::Ref>,
-        resume: Option<bool>,
+        input: CommandInput<'_>,
     ) -> Result<Pending, IngressError> {
         let lock = self.ingress_lock(instructions::join(
-            &["command:".into(), request.id.as_lossless().clone()],
+            &["command:".into(), input.request.id.as_lossless().clone()],
             "",
         ));
         let _guard = lock.lock().await;
-        let current = self.require_session(&request.session_id)?;
-        if self.0.services.store.pending(&request.id)?.is_some()
-            || self.0.services.store.message(&request.id)?.is_some()
+        let current = self.require_session(&input.request.session_id)?;
+        if self.0.services.store.pending(&input.request.id)?.is_some()
+            || self.0.services.store.message(&input.request.id)?.is_some()
         {
-            return Ok(execution.prompt(request, resume).await?);
+            return Ok(execution.prompt(input.request, input.resume).await?);
         }
-        let command = commands.get(name);
+        let command = commands.get(input.name);
         let agent = command
             .and_then(|command| command.agent.as_ref())
-            .or(requested_agent.as_ref());
+            .or(input.agent.as_ref());
         if agent.and_then(LosslessString::as_str) == Some("decision") {
             return Err(IngressError::CommandEvaluation {
-                command: name.clone(),
+                command: input.name.clone(),
                 message:
                     "The internal decision helper cannot be selected as a foreground Session agent."
                         .into(),
@@ -691,7 +695,7 @@ impl Local {
         let evaluated = match command {
             Some(command) => crate::session::command::evaluate(
                 &command.template,
-                arguments,
+                input.arguments,
                 Path::new(
                     current
                         .location
@@ -707,16 +711,18 @@ impl Local {
             .await
             .map(Some),
             None => match mcp {
-                Some(mcp) => crate::session::command::evaluate_mcp(mcp, name, arguments).await,
+                Some(mcp) => {
+                    crate::session::command::evaluate_mcp(mcp, input.name, input.arguments).await
+                }
                 None => Ok(None),
             },
         };
         let text = evaluated
             .map_err(|message| IngressError::CommandEvaluation {
-                command: name.clone(),
+                command: input.name.clone(),
                 message,
             })?
-            .ok_or_else(|| IngressError::CommandNotFound(name.clone()))?;
+            .ok_or_else(|| IngressError::CommandNotFound(input.name.clone()))?;
         let model = command
             .and_then(|command| command.model.as_ref())
             .or_else(|| {
@@ -725,7 +731,7 @@ impl Local {
                     .and_then(|agent| self.0.services.agents.get(agent))
                     .and_then(|agent| agent.model.as_ref())
             })
-            .or(requested_model.as_ref());
+            .or(input.model.as_ref());
         if let Some(agent) = agent.filter(|agent| current.agent.as_ref() != Some(*agent)) {
             self.switch_agent(&current.id, agent).await?;
         }
@@ -737,38 +743,38 @@ impl Local {
                 Ok(model_switch::Outcome::Switched) => {}
                 Ok(model_switch::Outcome::Blocked(_)) => {
                     return Err(IngressError::CommandEvaluation {
-                        command: name.clone(),
+                        command: input.name.clone(),
                         message: "Command model context window exceeded".into(),
                     });
                 }
                 Err(error) => {
                     return Err(IngressError::CommandEvaluation {
-                        command: name.clone(),
+                        command: input.name.clone(),
                         message: error.to_string(),
                     });
                 }
             }
         }
-        let mut request = request;
+        let mut request = input.request;
         let session_pending::Message::User(user) = &mut request.input else {
             return Err(IngressError::Invalid("Command requires user input".into()));
         };
         user.data.text = text;
         let source = self.0.services.store.artifact_source();
         let provenance = source
-            .zip(name.as_str())
+            .zip(input.name.as_str())
             .and_then(|(source, name)| source.provenance(&artifact_kind("command"), name));
         user.data.metadata = provenance.as_ref().map(|provenance| {
             let mut metadata = JsonObject::new();
             metadata.insert("projectArtifact".into(), provenance.message().encode());
             metadata
         });
-        let admitted = execution.prompt(request, resume).await?;
+        let admitted = execution.prompt(request, input.resume).await?;
         if let Some(source) = source.filter(|_| provenance.is_some())
             && source
                 .activate(ActivationInput {
                     kind: artifact_kind("command"),
-                    id: name.clone(),
+                    id: input.name.clone(),
                     session_id: current.id.clone(),
                     agent_id: current.agent.clone(),
                     source: ActivationSource::Command {

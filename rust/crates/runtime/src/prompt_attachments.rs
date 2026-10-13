@@ -146,7 +146,7 @@ async fn catalog(
     let references = catalogs
         .references
         .list()
-        .into_iter()
+        .iter()
         .filter(|reference| reference.hidden != Some(true))
         .filter_map(|reference| {
             url::Url::from_file_path(convert::readable(reference.path.as_lossless()))

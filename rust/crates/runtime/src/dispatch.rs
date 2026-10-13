@@ -115,7 +115,7 @@ pub enum Failure {
     },
     SkillNotFound(ycoding_core::ycoding_schema::LosslessString),
     SkillConflictNotFound,
-    ModelSwitchBlocked(ycoding_core::ycoding_schema::session::ModelSwitchBlocked),
+    ModelSwitchBlocked(Box<ycoding_core::ycoding_schema::session::ModelSwitchBlocked>),
     ShellNotFound(String),
     PtyNotFound(String),
     PtyConflict(String),

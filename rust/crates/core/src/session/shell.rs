@@ -68,7 +68,7 @@ pub(crate) fn apply(
                 continue;
             }
             current.status = shell.status;
-            current.exit = shell.exit.map(|exit| exit.get() as f64);
+            current.exit = shell.exit.map(|exit| exit.get());
             current.output = Some(object.field("output").map_err(projector::record_error)?);
             current.time.completed = Some(time);
             return message_updater::update_message(

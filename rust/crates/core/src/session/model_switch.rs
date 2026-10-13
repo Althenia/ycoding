@@ -5,7 +5,7 @@ use ycoding_schema::{JsonValue, model, schema::NonNegativeInt, session, session_
 #[derive(Clone, Debug, PartialEq)]
 pub enum Outcome {
     Switched,
-    Blocked(session::ModelSwitchBlocked),
+    Blocked(Box<session::ModelSwitchBlocked>),
 }
 
 pub fn estimate(messages: &[llm::Message]) -> i64 {
@@ -31,7 +31,7 @@ pub fn decide(
         return Outcome::Switched;
     }
     let nonnegative = |value| NonNegativeInt::new(value).expect("nonnegative context metric");
-    Outcome::Blocked(session::ModelSwitchBlocked {
+    Outcome::Blocked(Box::new(session::ModelSwitchBlocked {
         status: "blocked".into(),
         current_model: current.clone(),
         target_model: target.clone(),
@@ -40,5 +40,5 @@ pub fn decide(
         required_reduction_tokens: nonnegative(tokens - budget.max(0)),
         maximum_safe_summary_boundary: None::<session_message::Id>,
         reason: "context-window-exceeded".into(),
-    })
+    }))
 }

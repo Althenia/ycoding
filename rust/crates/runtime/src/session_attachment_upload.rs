@@ -43,11 +43,13 @@ struct Upload {
     expires: Duration,
 }
 
+type Uploads = BTreeMap<(String, String), Upload>;
+
 // Staged pieces belong to one relay connection and Session, as in the TypeScript
 // bridge: the connector gives each connection its own Environment and clears this
 // owner when the connection ends.
 pub struct Staging {
-    uploads: Mutex<BTreeMap<(String, String), Upload>>,
+    uploads: Mutex<Uploads>,
     clock: Clock,
 }
 
@@ -157,7 +159,7 @@ impl Staging {
         )
     }
 
-    fn current(&self) -> (Duration, MutexGuard<'_, BTreeMap<(String, String), Upload>>) {
+    fn current(&self) -> (Duration, MutexGuard<'_, Uploads>) {
         let now = (self.clock)();
         let mut uploads = self.lock();
         uploads.retain(|_, upload| upload.expires > now);

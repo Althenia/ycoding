@@ -7,7 +7,7 @@ use crate::{
 use ycoding_core::{
     session::{
         compaction_execution, model_switch, orchestration, pending,
-        runner::{IngressError, ShellInput},
+        runner::{CommandInput, IngressError, ShellInput},
     },
     tools::code_mode::Cancellation,
     ycoding_schema::{
@@ -174,37 +174,41 @@ async fn command(
             &catalogs.commands,
             mcp.as_deref(),
             &platform.config,
-            pending::Request {
-                id: message_id,
-                session_id: id,
-                event_id,
-                created: ids::now_millis(),
-                input: session_pending::Message::User(session_pending::UserMessage {
-                    data: session_pending::UserData {
-                        text: "".into(),
-                        files,
-                        agents: payload
-                            .agents
-                            .map(|agents| agents.items.iter().map(convert::agent_domain).collect())
-                            .transpose()?,
-                        metadata: None,
-                    },
-                    delivery: session_delivery::Delivery::decode(&JsonValue::String(
-                        delivery.into(),
-                    ))
-                    .map_err(|error| Failure::Invalid(error.to_string()))?,
-                }),
+            CommandInput {
+                request: pending::Request {
+                    id: message_id,
+                    session_id: id,
+                    event_id,
+                    created: ids::now_millis(),
+                    input: session_pending::Message::User(session_pending::UserMessage {
+                        data: session_pending::UserData {
+                            text: "".into(),
+                            files,
+                            agents: payload
+                                .agents
+                                .map(|agents| {
+                                    agents.items.iter().map(convert::agent_domain).collect()
+                                })
+                                .transpose()?,
+                            metadata: None,
+                        },
+                        delivery: session_delivery::Delivery::decode(&JsonValue::String(
+                            delivery.into(),
+                        ))
+                        .map_err(|error| Failure::Invalid(error.to_string()))?,
+                    }),
+                },
+                name: &command,
+                arguments: &payload
+                    .arguments
+                    .as_ref()
+                    .map(convert::domain)
+                    .transpose()?
+                    .unwrap_or_default(),
+                agent: payload.agent.as_ref().map(convert::domain).transpose()?,
+                model: payload.model.as_ref().map(model_ref).transpose()?,
+                resume: payload.resume,
             },
-            &command,
-            &payload
-                .arguments
-                .as_ref()
-                .map(convert::domain)
-                .transpose()?
-                .unwrap_or_default(),
-            payload.agent.as_ref().map(convert::domain).transpose()?,
-            payload.model.as_ref().map(model_ref).transpose()?,
-            payload.resume,
         )
         .await
         .map_err(failure)?;
