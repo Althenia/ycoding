@@ -208,12 +208,16 @@ impl Local {
         Some(streamed)
     }
 
-    fn role_helper(
+    fn role_selection(
         &self,
         session: &session::Info,
         role: crate::tools::policy::helper::Role,
         agent: &ycoding_schema::agent::Info,
-    ) -> Option<Helper> {
+    ) -> Option<(
+        ycoding_schema::model::Ref,
+        Vec<crate::resources::credential::Info>,
+        Option<ycoding_schema::session_event::ProfileBinding>,
+    )> {
         let services = &self.0.services;
         let saved = services.credentials.all().ok()?;
         let selected = services
@@ -227,8 +231,39 @@ impl Local {
             .cloned()
             .or_else(|| services.models.catalog().default_selection(&saved))?;
         let binding = services.store.profile_binding(&session.id).ok()?;
+        let resolved = self
+            .select_model(&selected, &saved, binding.as_ref())
+            .ok()?;
+        if let Some(connection) = &resolved.connection {
+            let value = connection.secret().domain().ok()?;
+            if matches!(&value, ycoding_schema::credential::Value::OAuth(value) if value.method_id.as_lossless().as_str() == Some("claude-code"))
+                && services.claude.is_none()
+            {
+                return None;
+            }
+            if connection.integration_id().as_str() == Some("cursor")
+                && services
+                    .auth
+                    .as_ref()
+                    .and_then(|auth| auth.cursor.as_ref())
+                    .is_none()
+            {
+                return None;
+            }
+        }
+        Some((selected, saved, binding))
+    }
+
+    async fn role_helper(
+        &self,
+        session: &session::Info,
+        role: crate::tools::policy::helper::Role,
+        agent: &ycoding_schema::agent::Info,
+    ) -> Option<Helper> {
+        let (selected, saved, binding) = self.role_selection(session, role, agent)?;
         let resolution = self
             .resolve_model(&selected, &saved, binding.as_ref())
+            .await
             .ok()?;
         Some(Helper {
             model: resolution.model,
@@ -248,12 +283,14 @@ impl Generate for Local {
         role: crate::tools::policy::helper::Role,
         agent: &ycoding_schema::agent::Info,
     ) -> bool {
-        self.role_helper(session, role, agent).is_some()
+        self.role_selection(session, role, agent).is_some()
     }
 
     fn generate<'a>(&'a self, request: Request<'a>) -> Generation<'a> {
         Box::pin(async move {
-            let helper = self.role_helper(request.session, request.role, request.agent)?;
+            let helper = self
+                .role_helper(request.session, request.role, request.agent)
+                .await?;
             if request.cancellation.is_cancelled() {
                 return None;
             }
@@ -285,7 +322,7 @@ impl Generate for Local {
     }
 }
 
-fn cursor_session_headers(
+pub(super) fn cursor_session_headers(
     session: &session::Id,
     project: &ycoding_schema::project::Id,
     parent: Option<&session::Id>,

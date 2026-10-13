@@ -124,6 +124,24 @@ fn valid_source(source: &str) -> bool {
         })
 }
 
+pub fn credential_source(value: &ycoding_schema::credential::Value) -> Option<&str> {
+    let ycoding_schema::credential::Value::OAuth(value) = value else {
+        return None;
+    };
+    let metadata = value.metadata.as_ref()?;
+    let source = value.access.as_str()?;
+    (value.method_id.as_lossless().as_str() == Some("claude-code")
+        && metadata.get(&"authKind".into())
+            == Some(&ycoding_schema::JsonValue::String("claude-code".into()))
+        && metadata.get(&"managed".into()) == Some(&ycoding_schema::JsonValue::Bool(true))
+        && metadata.get(&"requiresLogin".into()) != Some(&ycoding_schema::JsonValue::Bool(true))
+        && metadata.get(&"source".into())
+            == Some(&ycoding_schema::JsonValue::String(value.access.clone()))
+        && value.expires.get() == 9_007_199_254_740_991
+        && valid_source(source))
+    .then_some(source)
+}
+
 type KeychainFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
 pub trait Keychain: Send + Sync {
     fn read<'a>(&'a self, service: &'a str) -> KeychainFuture<'a, Option<String>>;

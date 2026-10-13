@@ -3,6 +3,7 @@ pub mod auth;
 pub mod bedrock;
 pub mod bedrock_auth;
 pub mod cache;
+pub mod claude_code;
 pub mod cursor;
 pub mod framing;
 pub mod gemini;

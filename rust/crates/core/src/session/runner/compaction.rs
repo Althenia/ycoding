@@ -163,7 +163,7 @@ impl Local {
         job: &Job,
     ) -> Result<Job, compaction_job::CompactionError> {
         let services = &self.0.services;
-        let helper = self.resolve_helper(owner, selection);
+        let helper = self.resolve_helper(owner, selection).await;
         let helper_session = match &helper {
             Some(helper) => Some(self.helper_session(owner, helper, job).await?),
             None => None,
@@ -211,7 +211,11 @@ impl Local {
         compaction_execution::run(&services.store, &*services.clock, &id, &builder).await
     }
 
-    fn resolve_helper(&self, owner: &session::Info, selection: &model::Ref) -> Option<Helper> {
+    async fn resolve_helper(
+        &self,
+        owner: &session::Info,
+        selection: &model::Ref,
+    ) -> Option<Helper> {
         let services = &self.0.services;
         let scope = if owner.parent_id.is_some() {
             CompactionScope::Subagent
@@ -227,7 +231,7 @@ impl Local {
             .select(Role::Compaction, scope, pinned, owner.model.as_ref())
             .unwrap_or(selection);
         let saved = services.credentials.all().ok()?;
-        let resolution = self.resolve_model(selected, &saved, None).ok()?;
+        let resolution = self.resolve_model(selected, &saved, None).await.ok()?;
         Some(Helper {
             model: resolution.model,
             selection: selected.clone(),

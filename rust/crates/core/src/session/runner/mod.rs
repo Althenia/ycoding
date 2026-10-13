@@ -70,6 +70,8 @@ pub struct Services {
     pub guardrails: crate::process::guardrails::Guardrails,
     pub helpers: crate::tools::policy::helper::Settings,
     pub cursor: Option<crate::resources::cursor::route::Host>,
+    pub claude: Option<model::ClaudeHost>,
+    pub auth: Option<crate::resources::auth::Preparation>,
     pub skill_resolver: Option<Arc<dyn skill::Resolver>>,
 }
 
@@ -146,6 +148,13 @@ struct Resolution {
     binding: Option<ycoding_schema::session_event::ProfileBinding>,
 }
 
+struct SelectedModel {
+    resolved: model::Resolved,
+    account_identity: Option<String>,
+    connection: Option<credential::Info>,
+    binding: Option<ycoding_schema::session_event::ProfileBinding>,
+}
+
 impl Local {
     pub fn new(services: Services) -> Self {
         Self(Arc::new(Inner {
@@ -154,12 +163,12 @@ impl Local {
         }))
     }
 
-    fn resolve_model(
+    fn select_model(
         &self,
         selection: &ycoding_schema::model::Ref,
         saved: &[credential::Info],
         saved_binding: Option<&ycoding_schema::session_event::ProfileBinding>,
-    ) -> Result<Resolution, Error> {
+    ) -> Result<SelectedModel, Error> {
         let services = &self.0.services;
         let provider = services
             .models
@@ -222,11 +231,56 @@ impl Local {
             })?;
         let account_identity =
             account_identity_digest(connection.as_ref(), &resolved.info, integration);
-        let secret = connection
-            .as_ref()
-            .map(|credential| credential.secret().domain())
+        let binding = binding
+            .map(|binding| binding.domain())
             .transpose()
-            .map_err(|_| error("provider.auth", "Provider credentials are invalid"))?;
+            .map_err(|_| error("model.profile", "Selected profile binding is invalid"))?;
+        Ok(SelectedModel {
+            resolved,
+            account_identity,
+            connection,
+            binding,
+        })
+    }
+
+    async fn resolve_model(
+        &self,
+        selection: &ycoding_schema::model::Ref,
+        saved: &[credential::Info],
+        saved_binding: Option<&ycoding_schema::session_event::ProfileBinding>,
+    ) -> Result<Resolution, Error> {
+        let services = &self.0.services;
+        let selected = self.select_model(selection, saved, saved_binding)?;
+        let SelectedModel {
+            resolved,
+            account_identity,
+            connection,
+            binding,
+        } = selected;
+        let preparation = services.auth.clone().unwrap_or_default();
+        let secret = match &connection {
+            Some(connection) => {
+                let prepared = preparation
+                    .prepare_value(
+                        &services.credentials,
+                        connection.clone(),
+                        services.clock.now(),
+                        services.claude.as_ref().map(|host| &host.accounts),
+                    )
+                    .await
+                    .map_err(|_| error("model.profile", if connection.integration_id().as_str() == Some("anthropic") {
+                        ycoding_ai::claude_code::RECONNECT
+                    } else {
+                        "Selected profile requires reconnect. Sign in to this profile again."
+                    }))?;
+                Some(
+                    prepared
+                        .domain()
+                        .map_err(|_| error("provider.auth", "Provider credentials are invalid"))?,
+                )
+            }
+            None => None,
+        };
         let model = if resolved.info.provider_id.0 == "muse".into() {
             crate::resources::muse::from_catalog_model(
                 &resolved.info,
@@ -238,14 +292,21 @@ impl Local {
         } else {
             match (&services.cursor, cursor_package(&resolved.info)) {
                 (Some(host), true) => cursor::route::model(&resolved.info, secret.as_ref(), host),
-                _ => model::from_catalog_model(&resolved.info, secret.as_ref()),
+                _ => model::from_catalog_model_with_claude(
+                    &resolved.info,
+                    secret.as_ref(),
+                    connection.as_ref(),
+                    services.claude.as_ref(),
+                ),
             }
         }
-        .map_err(|_| error("model.unavailable", "Selected model route is unavailable"))?;
-        let binding = binding
-            .map(|binding| binding.domain())
-            .transpose()
-            .map_err(|_| error("model.profile", "Selected profile binding is invalid"))?;
+        .map_err(|cause| match cause {
+            model::Error::ProfileUnavailable => error(
+                "model.profile",
+                "Selected profile requires reconnect. Sign in to this profile again.",
+            ),
+            _ => error("model.unavailable", "Selected model route is unavailable"),
+        })?;
         Ok(Resolution {
             resolved,
             model,
@@ -443,7 +504,9 @@ impl Local {
                 account_identity,
                 connection,
                 binding,
-            } = self.resolve_model(&selection, &saved, saved_binding.as_ref())?;
+            } = self
+                .resolve_model(&selection, &saved, saved_binding.as_ref())
+                .await?;
             if saved_binding != binding {
                 publish(
                     &services.store,
@@ -565,6 +628,16 @@ impl Local {
             );
             let materialized = Arc::new(services.tools.materialize(&permissions));
             let mut prepared = llm::Request::new(model);
+            prepared.http.headers.extend(
+                helper::cursor_session_headers(
+                    &session.id,
+                    &session.project_id,
+                    session.parent_id.as_ref(),
+                    account_identity.as_deref(),
+                )
+                .into_iter()
+                .filter(|(name, _)| matches!(name.as_str(), "x-ycoding-session" | "x-session-id")),
+            );
             if !assembly.initial.is_empty() {
                 prepared.system.push(assembly.initial.into());
             }

@@ -10,6 +10,166 @@ use ycoding_ai::{
 };
 use ycoding_schema::{DomainEncode, JsonObject, JsonValue, credential, model};
 
+#[derive(Clone)]
+pub struct ClaudeHost {
+    pub accounts: super::super::auth::claude::Store,
+    pub credentials: super::super::credential::Service,
+    pub sessions: crate::session::store::Service,
+    pub quota: super::quota::Service,
+    pub settings: ycoding_ai::claude_code::Settings,
+}
+
+struct ClaudeAccount {
+    host: ClaudeHost,
+    expected: super::super::credential::Info,
+    source: String,
+}
+impl ycoding_ai::claude_code::Account for ClaudeAccount {
+    fn resolve(&self, force_refresh: bool) -> ycoding_ai::claude_code::Resolution<'_> {
+        Box::pin(async move {
+            self.host
+                .credentials
+                .current_account(&self.expected)
+                .map_err(|_| ycoding_ai::claude_code::reconnect())?;
+            let credentials = self
+                .host
+                .accounts
+                .resolve(
+                    &self.source,
+                    chrono::Utc::now().timestamp_millis(),
+                    force_refresh,
+                )
+                .await
+                .map_err(|_| ycoding_ai::claude_code::reconnect())?
+                .ok_or_else(ycoding_ai::claude_code::reconnect)?;
+            self.host
+                .credentials
+                .current_account(&self.expected)
+                .map_err(|_| ycoding_ai::claude_code::reconnect())?;
+            Ok(ycoding_ai::claude_code::Credentials {
+                access_token: ycoding_ai::auth::Secret::new(credentials.access_token),
+                subscription_type: credentials.subscription_type,
+            })
+        })
+    }
+    fn billing_sample(&self, session: &str) -> Option<ycoding_schema::LosslessString> {
+        let id = ycoding_schema::session::Id::new(session).ok()?;
+        let snapshot = self.host.sessions.client.snapshot().ok()?;
+        let first = crate::session::history::type_rows(
+            &snapshot,
+            &id,
+            "user",
+            std::ops::Bound::Unbounded,
+            std::ops::Bound::Unbounded,
+            ycoding_store::IndexOrder::Ascending,
+            None,
+            1,
+        )
+        .ok()?
+        .into_iter()
+        .next()?;
+        let ycoding_schema::session_message::Info::User(user) = first.record.info().ok()? else {
+            return None;
+        };
+        Some(ycoding_ai::claude_code::billing_sample(&user.text))
+    }
+    fn observe(&self, observation: ycoding_schema::provider_usage::Observation) -> Result<(), ()> {
+        self.host
+            .credentials
+            .current_account(&self.expected)
+            .map_err(|_| ())?;
+        self.host
+            .quota
+            .observe(observation, Some(super::account_identity(&self.expected)))
+            .map_err(|_| ())
+    }
+}
+
+pub fn from_catalog_model_with_claude(
+    info: &model::Info,
+    value: Option<&credential::Value>,
+    selected: Option<&super::super::credential::Info>,
+    host: Option<&ClaudeHost>,
+) -> Result<Model, Error> {
+    let managed = family(info.package.as_ref().ok_or(Error::UnsupportedPackage)?)?
+        == ProviderFamily::Anthropic
+        && (matches!(value, Some(credential::Value::OAuth(value)) if value.method_id.as_lossless().as_str() == Some("claude-code"))
+            || info
+                .settings
+                .as_ref()
+                .and_then(|settings| settings.0.get(&"apiKey".into()))
+                .and_then(text)
+                == Some("claude-code")
+                && !matches!(value, Some(credential::Value::Key(_))));
+    if !managed {
+        return from_catalog_model(info, value);
+    }
+    let host = host.ok_or(Error::ProfileUnavailable)?;
+    let selected = selected.ok_or(Error::ProfileUnavailable)?;
+    host.credentials
+        .current_account(selected)
+        .map_err(|_| Error::ProfileUnavailable)?;
+    let stored = selected
+        .secret()
+        .domain()
+        .map_err(|_| Error::ProfileUnavailable)?;
+    let source =
+        super::super::auth::claude::credential_source(&stored).ok_or(Error::ProfileUnavailable)?;
+    let Some(credential::Value::OAuth(value)) = value else {
+        return Err(Error::ProfileUnavailable);
+    };
+    if value.method_id.as_lossless().as_str() != Some("claude-code")
+        || value
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get(&"authKind".into()))
+            != Some(&JsonValue::String("claude-code".into()))
+        || value
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get(&"managed".into()))
+            != Some(&JsonValue::Bool(true))
+        || value
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get(&"source".into()))
+            .and_then(text)
+            != Some(source)
+        || value
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get(&"requiresLogin".into()))
+            == Some(&JsonValue::Bool(true))
+    {
+        return Err(Error::ProfileUnavailable);
+    }
+    let mut configured = info.clone();
+    if let Some(settings) = &mut configured.settings {
+        let mut fields = JsonObject::new();
+        for (name, value) in settings
+            .0
+            .iter()
+            .filter(|(name, _)| !matches!(name.as_str(), Some("apiKey" | "claudeCodeSource")))
+        {
+            fields.insert(name.clone(), value.clone());
+        }
+        settings.0 = fields;
+    }
+    let mut model = from_catalog_model_base(&configured, None)?;
+    let mut route = ycoding_ai::claude_code::route(
+        Arc::new(ClaudeAccount {
+            host: host.clone(),
+            expected: selected.clone(),
+            source: source.into(),
+        }),
+        host.settings.clone(),
+    );
+    route.endpoint.base_url = model.route.endpoint.base_url.clone();
+    route.provider = info.provider_id.clone();
+    model.route = Arc::new(route);
+    Ok(model)
+}
+
 pub fn from_catalog_model(
     info: &model::Info,
     credential: Option<&credential::Value>,
@@ -37,6 +197,13 @@ pub(crate) fn from_catalog_model_base(
         .as_ref()
         .map(|s| s.encode())
         .unwrap_or_else(|| object(&[]));
+    if family == ProviderFamily::Anthropic
+        && (matches!(credential, Some(credential::Value::OAuth(value)) if value.method_id.as_lossless().as_str() == Some("claude-code"))
+            || field(&settings, "apiKey").and_then(text) == Some("claude-code")
+                && !matches!(credential, Some(credential::Value::Key(_))))
+    {
+        return Err(Error::ProfileUnavailable);
+    }
     if native
         && family == ProviderFamily::OpenAI
         && field(&settings, "transport")
@@ -142,6 +309,27 @@ pub(crate) fn from_catalog_model_base(
         ..Defaults::default()
     };
     defaults.http.headers = headers;
+    if family == ProviderFamily::Anthropic && !native {
+        let existing = defaults
+            .http
+            .headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("anthropic-beta"))
+            .map(|(_, value)| value.clone())
+            .unwrap_or_default();
+        defaults
+            .http
+            .headers
+            .retain(|name, _| !name.eq_ignore_ascii_case("anthropic-beta"));
+        defaults.http.headers.insert(
+            "anthropic-beta".into(),
+            ycoding_ai::claude_code::merge_betas(existing.split(',').chain([
+                "interleaved-thinking-2025-05-14",
+                "fine-grained-tool-streaming-2025-05-14",
+            ]))
+            .join(","),
+        );
+    }
     defaults.http.body = info.body.as_ref().map(DomainEncode::encode);
     if let Some(credential::Value::Key(value)) = credential
         && let Some(metadata) = &value.metadata

@@ -216,6 +216,8 @@ fn local_with_resolver(
         helpers,
         cursor: None,
         skill_resolver,
+        claude: None,
+        auth: None,
     })
 }
 

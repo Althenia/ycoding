@@ -30,6 +30,16 @@ pub trait Protocol: Send + Sync {
         Ok(headers)
     }
     fn response_headers(&self, _request: &Request, _headers: &HeaderMap) {}
+    fn wire_body(&self, _request: &Request, body: JsonValue) -> Result<JsonValue, Error> {
+        Ok(body)
+    }
+    fn dispatch<'a>(
+        &'a self,
+        executor: &'a Executor,
+        prepared: &'a mut Prepared,
+    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, Error>> + Send + 'a>> {
+        Box::pin(async move { executor.execute(prepared).await })
+    }
     fn native(&self) -> Option<&crate::cursor::provider::Provider> {
         None
     }
@@ -220,6 +230,7 @@ impl Route {
         } else {
             body.clone()
         };
+        let wire_body = self.protocol.wire_body(&request, wire_body)?;
         let encoded_body = stringify_json(&wire_body);
         let url = self.endpoint.render(&request, &body)?;
         let headers = request_headers(self.headers.iter().chain(request.http.headers.iter()))?;
@@ -594,7 +605,7 @@ impl Executor {
         }))
     }
     pub async fn stream(&self, request: &Request) -> Result<EventStream, Error> {
-        let prepared = request.model.route.prepare(request)?;
+        let mut prepared = request.model.route.prepare(request)?;
         if let Some(native) = prepared.request.model.route.protocol.native() {
             let native = native
                 .stream(self, &prepared, self.observer.clone())
@@ -669,9 +680,10 @@ impl Executor {
             }
             Transport::Http(_) | Transport::Muse(_) => {
                 let mut tracker = Tracker::new(&prepared, "http-json", self.observer.clone());
+                let protocol = prepared.request.model.route.protocol.clone();
                 let result = match &prepared.request.model.route.transport {
                     Transport::Muse(connection) => connection.execute(self, &prepared).await,
-                    _ => self.execute(&prepared).await,
+                    _ => protocol.dispatch(self, &mut prepared).await,
                 };
                 let response = match result {
                     Ok(response) => response,

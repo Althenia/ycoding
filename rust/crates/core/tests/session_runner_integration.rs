@@ -255,6 +255,8 @@ fn local_hosted_with_skill_resolver(
         helpers: Default::default(),
         cursor,
         skill_resolver,
+        claude: None,
+        auth: None,
     })
 }
 
@@ -2527,6 +2529,8 @@ fn analysis_local(
         helpers: Default::default(),
         cursor: None,
         skill_resolver: None,
+        claude: None,
+        auth: None,
     })
 }
 

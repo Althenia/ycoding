@@ -26,6 +26,42 @@ pub mod muse;
 pub mod opencode;
 pub mod page;
 
+#[derive(Clone, Default)]
+pub struct Preparation {
+    pub clients: std::collections::BTreeMap<String, Client>,
+    pub cursor: Option<cursor::Store>,
+}
+impl Preparation {
+    pub async fn prepare_value(
+        &self,
+        credentials: &Service,
+        stored: Info,
+        time: i64,
+        claude: Option<&claude::Store>,
+    ) -> Result<Secret, Error> {
+        let stored = credentials.current_account(&stored)?;
+        let integration = stored
+            .integration_id()
+            .as_str()
+            .ok_or(Error::InvalidCredential)?;
+        let client = self
+            .clients
+            .get(integration)
+            .cloned()
+            .map(Ok)
+            .unwrap_or_else(|| Client::provider(integration, env!("CARGO_PKG_VERSION")));
+        match client {
+            Ok(client) => {
+                client
+                    .prepare_value(credentials, stored, time, claude, self.cursor.as_ref())
+                    .await
+            }
+            Err(_) if !stored.needs_refresh(time)? => Ok(stored.secret().clone()),
+            Err(_) => Err(Error::ProfileUnavailable),
+        }
+    }
+}
+
 const OPENAI_CLIENT: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const XAI_CLIENT: &str = "b1a00492-073a-47ea-816f-4c329264a828";
 const COPILOT_CLIENT: &str = "Iv23liQxejUrCuRKOtA0";

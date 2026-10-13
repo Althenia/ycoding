@@ -172,6 +172,8 @@ fn local(
         helpers: Default::default(),
         cursor: None,
         skill_resolver: None,
+        claude: None,
+        auth: None,
     })
 }
 
