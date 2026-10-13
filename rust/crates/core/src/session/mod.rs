@@ -16,6 +16,7 @@ pub mod context_pressure;
 pub mod continuation;
 pub mod diagnostics;
 pub mod execution;
+pub mod goal;
 pub mod helper_generation;
 pub mod history;
 pub mod info;

@@ -1175,6 +1175,29 @@ current goal and latest assistant text; `SteerFuture` resolves to `Option<String
 `None` leaves the goal unchanged. The host-supplied implementation owns model
 generation, provider settlement validation, and request/usage accounting.
 
+`session::goal::Service::new(store, provider)` supplies the production `Steer`.
+The provider resolves a Session's current Location to `goal::Environment`
+(serving Location, agent catalog, and shared `helper_generation::Generate`). A
+missing Session, Location environment, goal agent, or model returns `None`.
+`goal::agent()` supplies the hidden primary goal agent with the shipped system
+prompt and deny-all permissions. The adapter uses that system prompt with the
+configured goal agent's model selection: agent model, then
+`efficiency.helper_models.goal`, then Session model, then catalog default.
+An explicitly selected model that cannot resolve does not fall through to a
+different model.
+
+Goal steering sends the newest twelve projected messages as labelled context
+(last 6,000 UTF-16 units), the active goal, continuation phase and iteration,
+and the trimmed latest assistant text (last 2,000 units). Omitted latest text
+reads the newest assistant from history. The shared helper path sends no tools
+and records provider-request and usage accounting under source `goal`.
+Provider failure, missing settlement, or empty output returns `None`; a settled
+nonempty output is trimmed and whitespace-collapsed. Goal steering accepts a
+settled non-`stop` finish, while prediction, prompt generation and compaction
+retain their `stop` requirement. The adapter does not mutate the goal, admit
+input, infer completion, or provide a fallback steer. Composition injects it
+with `Execution::install(store, locations, jobs, Some(Arc::new(adapter)))`.
+
 `session::orchestration::Service` owns child Sessions. `launch` derives
 `ses_task_*`, `msg_task_*`, and `evt_task_*` identifiers from parent Session,
 parent assistant message, and tool call; admits the prompt; publishes `started`;

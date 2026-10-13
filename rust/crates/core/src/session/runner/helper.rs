@@ -23,12 +23,13 @@ pub(super) struct StreamInput<'a> {
     pub prompt: String,
     pub cancellation: Option<&'a Cancellation>,
     pub character_limit: Option<usize>,
+    pub require_stop: bool,
 }
 
 pub(super) struct Streamed {
     pub text: String,
     pub failed: bool,
-    pub stopped: bool,
+    pub settled: bool,
     pub cancelled: bool,
 }
 
@@ -91,7 +92,7 @@ impl Local {
         let mut streamed = Streamed {
             text: String::new(),
             failed: false,
-            stopped: false,
+            settled: false,
             cancelled: false,
         };
         let mut length = 0;
@@ -135,8 +136,8 @@ impl Local {
                         finish: settled, ..
                     })) => finish = Some(settled),
                     Ok(Some(llm::Event::Finish(settled))) => {
-                        streamed.stopped = settled.reason == llm::FinishReason::Stop;
-                        if !streamed.stopped {
+                        streamed.settled = true;
+                        if input.require_stop && settled.reason != llm::FinishReason::Stop {
                             streamed.failed = true;
                         }
                     }
@@ -272,10 +273,11 @@ impl Generate for Local {
                     prompt: request.user,
                     cancellation: Some(request.cancellation),
                     character_limit: Some(request.character_limit),
+                    require_stop: request.role != crate::tools::policy::helper::Role::Goal,
                 })
                 .await?;
             (!streamed.failed
-                && streamed.stopped
+                && streamed.settled
                 && !streamed.cancelled
                 && !request.cancellation.is_cancelled())
             .then_some(streamed.text)

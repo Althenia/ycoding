@@ -312,6 +312,7 @@ impl Local {
                 prompt,
                 cancellation: None,
                 character_limit: None,
+                require_stop: true,
             })
             .await?;
         (!streamed.failed && !streamed.text.trim().is_empty()).then_some(streamed.text)

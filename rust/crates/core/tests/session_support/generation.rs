@@ -79,6 +79,8 @@ pub enum Reply {
     Text(String),
     Finish(String, &'static str),
     Rejected,
+    Unsettled(String),
+    Missing,
 }
 
 struct State {
@@ -197,6 +199,15 @@ async fn serve(mut stream: tokio::net::TcpStream, state: Arc<State>) {
             "application/json",
             r#"{"error":{"message":"rejected"}}"#.to_owned(),
         ),
+        Reply::Unsettled(text) => (
+            200,
+            "text/event-stream",
+            format!(
+                "data: {{\"id\":\"reply\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":{}}},\"finish_reason\":null}}]}}\n\n",
+                ycoding_schema::stringify_json(&JsonValue::String(text.as_str().into()))
+            ),
+        ),
+        Reply::Missing => (200, "text/event-stream", "data: [DONE]\n\n".into()),
     };
     let response = format!(
         "HTTP/1.1 {status} Response\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -637,12 +648,6 @@ async fn memory_service(directory: &std::path::Path, mode: Memory) -> memory::Se
 }
 
 fn local(store: &Store, endpoint: &str, unresolvable_model: bool) -> Local {
-    let models =
-        include_str!("../../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json");
-    let mut catalog = Catalog::new(models_dev::normalize(&parse_json(models).unwrap()).unwrap());
-    catalog
-        .configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"openai","model":"gpt-reasoning"}},"providers":{{"openai":{{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()])
-        .unwrap();
     let selected = ModelSelection::Model(
         ycoding_schema::model::Ref::decode(
             &parse_json(if unresolvable_model {
@@ -654,6 +659,48 @@ fn local(store: &Store, endpoint: &str, unresolvable_model: bool) -> Local {
         )
         .unwrap(),
     );
+    local_with_settings(
+        store,
+        endpoint,
+        helper::Settings {
+            models: BTreeMap::from([
+                (Role::Prediction, selected.clone()),
+                (Role::Prompt, selected),
+            ]),
+            ..helper::Settings::default()
+        },
+    )
+}
+
+pub fn local_with_settings(store: &Store, endpoint: &str, helpers: helper::Settings) -> Local {
+    let models =
+        include_str!("../../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json");
+    let mut source = parse_json(models).unwrap();
+    let JsonValue::Object(providers) = &mut source else {
+        panic!("provider fixture object")
+    };
+    let JsonValue::Object(mut provider) = providers.get(&"openai".into()).unwrap().clone() else {
+        panic!("OpenAI fixture object")
+    };
+    let JsonValue::Object(mut models) = provider.get(&"models".into()).unwrap().clone() else {
+        panic!("model fixture object")
+    };
+    let original = models.get(&"gpt-reasoning".into()).unwrap().clone();
+    for id in ["goal-agent", "goal-role", "goal-session"] {
+        let JsonValue::Object(mut model) = original.clone() else {
+            panic!("model fixture object")
+        };
+        model.insert("id".into(), JsonValue::String(id.into()));
+        model.insert(
+            "cost".into(),
+            parse_json(r#"{"input":2,"output":4}"#).unwrap(),
+        );
+        models.insert(id.into(), JsonValue::Object(model));
+    }
+    provider.insert("models".into(), JsonValue::Object(models));
+    providers.insert("openai".into(), JsonValue::Object(provider));
+    let mut catalog = Catalog::new(models_dev::normalize(&source).unwrap());
+    catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"openai","model":"gpt-reasoning"}},"providers":{{"openai":{{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
     let scratch =
         std::env::temp_dir().join(format!("ycoding-generation-scratch-{}", std::process::id()));
     Local::new(Services {
@@ -684,12 +731,6 @@ fn local(store: &Store, endpoint: &str, unresolvable_model: bool) -> Local {
         )),
         compaction: ycoding_core::session::compaction_policy::resolve(&[]),
         guardrails: guardrails::guardrails(store),
-        helpers: helper::Settings {
-            models: BTreeMap::from([
-                (Role::Prediction, selected.clone()),
-                (Role::Prompt, selected),
-            ]),
-            ..helper::Settings::default()
-        },
+        helpers,
     })
 }
