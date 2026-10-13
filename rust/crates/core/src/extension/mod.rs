@@ -1,8 +1,11 @@
+mod activation;
+mod capabilities;
 pub mod context;
 mod families;
 pub mod provider;
 mod schema;
 mod supervisor;
+pub use activation::Activation;
 pub use families::Resources;
 pub mod wire;
 pub mod v5 {

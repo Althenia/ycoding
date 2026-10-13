@@ -24,14 +24,14 @@ use tokio::{
 use ycoding_ai::llm::{ToolDefinition, ToolOutput};
 use ycoding_schema::{JsonValue, session_error};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolGrant {
     pub namespace: String,
     pub tools: Vec<String>,
     pub action: String,
     pub resources: Vec<String>,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FamilyGrant {
     pub family: v5::CapabilityFamily,
     pub scopes: Vec<String>,
@@ -49,7 +49,7 @@ pub struct Host {
     pub integrations: Option<crate::resources::auth::integration::Registry>,
     pub sessions: Option<SessionHost>,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Configuration {
     pub identity: String,
     pub executable: PathBuf,

@@ -129,6 +129,21 @@ def oauth_credential(access):
 hello = fields(read()[2][0])
 gen = hello[3][0]
 identity = hello[2][0]
+if mode.startswith("lifecycle"):
+    with open(sys.argv[2], "a") as journal:
+        journal.write(json.dumps({"event": "start", "id": identity.decode(), "pid": os.getpid()}) + "\n")
+    if mode == "lifecycle_once":
+        marker = sys.argv[2] + ".once"
+        if os.path.exists(marker):
+            sys.exit(1)
+        with open(marker, "w") as file:
+            file.write("started")
+    if mode == "lifecycle_gate":
+        import socket
+        with socket.socket(socket.AF_UNIX) as gate:
+            gate.connect(sys.argv[3])
+            gate.sendall(b"started")
+            gate.recv(1)
 if mode == "startup_timeout":
     time.sleep(30)
 if mode == "oversized":
@@ -146,10 +161,10 @@ if mode == "malformed":
 if mode == "secret":
     sys.stderr.write("SYNTHETIC_SECRET_DO_NOT_EXPOSE\n")
     sys.stderr.flush()
-send(2, integer(1, 4 if mode == "mismatch" else 5) + field(2, identity) + field(3, gen))
+send(2, integer(1, 4 if mode in ["mismatch", "lifecycle_fail"] else 5) + field(2, identity) + field(3, gen))
 schema = field(6, field(1, field(1, field(1, "type")) + field(2, field(4, field(1, "object")))))
 name = "unauthorized" if mode == "unauthorized" else "echo"
-tool = field(1, "demo") + field(2, name) + field(3, field(1, "Fixture tool")) + field(4, schema) + field(5, schema) + integer(6, 1) + integer(7, 1)
+tool = field(1, identity if mode.startswith("lifecycle") else "demo") + field(2, name) + field(3, field(1, "Fixture tool")) + field(4, schema) + field(5, schema) + integer(6, 1) + integer(7, 1)
 if mode == "bad_schema":
     tool = field(1, "demo") + field(2, name) + field(3, field(1, "Fixture tool")) + field(4, field(1, b"")) + field(5, schema) + integer(6, 1) + integer(7, 1)
 batch = field(1, tool) + (field(1, tool) if mode == "duplicate_registration" else b"")
@@ -419,6 +434,9 @@ while True:
         with open("reply-after-cancel", "w") as marker:
             marker.write("x")
     elif 5 in frame:
+        if mode.startswith("lifecycle"):
+            with open(sys.argv[2], "a") as journal:
+                journal.write(json.dumps({"event": "stop", "id": identity.decode(), "pid": os.getpid()}) + "\n")
         if mode == "shutdown_ignore":
             time.sleep(30)
         send(7, b"")
