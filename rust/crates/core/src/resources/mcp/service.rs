@@ -210,7 +210,8 @@ impl Service {
         self.0.events.subscribe()
     }
     pub fn servers(&self) -> Result<Vec<ServerInfo>, Error> {
-        self.slots()?
+        let mut servers = self
+            .slots()?
             .into_iter()
             .map(|(name, slot)| {
                 let integration_id = slot.authentication.borrow().integration_id.clone();
@@ -227,7 +228,9 @@ impl Service {
                     connection,
                 })
             })
-            .collect()
+            .collect::<Result<Vec<_>, Error>>()?;
+        servers.sort_by(|a, b| compare(&a.name, &b.name));
+        Ok(servers)
     }
     pub async fn add(&self, name: &str, config: ServerConfig) -> Result<(), Error> {
         if self.0.closed.load(Ordering::Acquire) {
@@ -436,9 +439,19 @@ impl Service {
                 }));
             }
         }
-        resources.sort_by(|a, b| catalog_key(a, "uri").cmp(&catalog_key(b, "uri")));
-        templates.sort_by(|a, b| catalog_key(a, "uriTemplate").cmp(&catalog_key(b, "uriTemplate")));
+        resources.sort_by(|a, b| catalog_compare(a, b, "uri"));
+        templates.sort_by(|a, b| catalog_compare(a, b, "uriTemplate"));
         Ok(serde_json::json!({"resources":resources,"templates":templates}))
+    }
+    pub async fn resource_catalog_typed(
+        &self,
+    ) -> Result<ycoding_schema::mcp::ResourceCatalog, Error> {
+        use ycoding_schema::DomainDecode;
+        let catalog = self.resource_catalog().await?;
+        let catalog = ycoding_schema::parse_json(&catalog.to_string())
+            .map_err(|_| Error::InvalidResult("resource catalog"))?;
+        ycoding_schema::mcp::ResourceCatalog::decode(&catalog)
+            .map_err(|_| Error::InvalidResult("resource catalog"))
     }
     pub async fn skill_catalog(&self) -> Result<Vec<mcp_skill::Entry>, Error> {
         let mut entries = Vec::new();
@@ -783,13 +796,21 @@ async fn stop(inner: &Inner, name: &str, slot: &Slot, state: &mut State) -> Resu
     inner.publish(Event::PromptsChanged(name.into()));
     Ok(())
 }
-fn catalog_key<'a>(
-    value: &'a Value,
-    uri: &str,
-) -> (Option<&'a str>, Option<&'a str>, Option<&'a str>) {
-    (
-        value["server"].as_str(),
-        value["name"].as_str(),
-        value[uri].as_str(),
+fn catalog_compare(first: &Value, second: &Value, uri: &str) -> std::cmp::Ordering {
+    ["server", "name", uri]
+        .into_iter()
+        .map(|key| {
+            compare(
+                first[key].as_str().unwrap_or_default(),
+                second[key].as_str().unwrap_or_default(),
+            )
+        })
+        .find(|order| !order.is_eq())
+        .unwrap_or(std::cmp::Ordering::Equal)
+}
+fn compare(first: &str, second: &str) -> std::cmp::Ordering {
+    crate::platform::filesystem::collation::compare(
+        &first.encode_utf16().collect::<Vec<_>>(),
+        &second.encode_utf16().collect::<Vec<_>>(),
     )
 }

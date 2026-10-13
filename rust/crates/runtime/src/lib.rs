@@ -15,10 +15,14 @@ mod guardrail;
 mod handlers;
 mod health;
 mod ids;
+mod integration;
+mod integration_convert;
 mod isolated_browser;
 mod keep_awake;
 mod locations;
 mod log;
+mod mcp;
+mod mcp_convert;
 mod message;
 mod permission;
 mod platform_services;
@@ -57,3 +61,4 @@ pub use services::{
     PlatformResolver, PlatformServices, ProviderUsageResolver, ProviderUsageServices, Services,
     Subscriptions, UsagePricer,
 };
+pub use services::{IntegrationResolver, IntegrationServices, McpResolver};

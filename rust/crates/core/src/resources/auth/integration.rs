@@ -5,7 +5,6 @@ use std::{
     fmt,
     future::Future,
     pin::Pin,
-    process::Stdio,
     sync::{Arc, Mutex, Weak},
     time::Duration,
 };
@@ -41,7 +40,7 @@ pub struct OAuthImplementation {
 enum Mode {
     Auto(Option<Exchange>),
     Code(CodeCallback),
-    Command(Option<Exchange>),
+    Command,
 }
 pub struct Authorization {
     url: String,
@@ -188,6 +187,9 @@ struct Attempt {
     submitted: bool,
     remove_at: Option<i64>,
     task: Option<JoinHandle<()>>,
+    submission: Option<JoinHandle<()>>,
+    cancellation: Option<tokio::sync::watch::Sender<bool>>,
+    message: Option<LosslessString>,
 }
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
@@ -203,6 +205,7 @@ struct State {
     next_transform: u64,
     transforms: BTreeMap<u64, Transform>,
     draft: Draft,
+    wellknown: Vec<(LosslessString, LosslessString, Vec<LosslessString>)>,
     attempts: BTreeMap<integration::AttemptId, Attempt>,
     scrubber: Option<JoinHandle<()>>,
 }
@@ -214,6 +217,71 @@ struct Inner {
 }
 #[derive(Clone)]
 pub struct Registry(Arc<Inner>);
+
+pub struct WellKnown {
+    discovery: tokio::sync::Mutex<crate::resources::discovery::wellknown::Service>,
+    registries: Mutex<Vec<Weak<Inner>>>,
+}
+
+impl WellKnown {
+    pub fn new(discovery: crate::resources::discovery::wellknown::Service) -> Self {
+        Self {
+            discovery: tokio::sync::Mutex::new(discovery),
+            registries: Mutex::new(Vec::new()),
+        }
+    }
+    pub async fn attach(
+        &self,
+        registry: &Registry,
+    ) -> Result<(), crate::resources::discovery::wellknown::Error> {
+        let mut discovery = self.discovery.lock().await;
+        let entries = discovery.entries().await?;
+        registry
+            .wellknown(&entries)
+            .map_err(|_| crate::resources::discovery::wellknown::Error::InvalidManifest)?;
+        let mut registries = self
+            .registries
+            .lock()
+            .map_err(|_| crate::resources::discovery::wellknown::Error::InvalidManifest)?;
+        registries.retain(|registry| registry.strong_count() > 0);
+        if !registries
+            .iter()
+            .any(|attached| attached.ptr_eq(&Arc::downgrade(&registry.0)))
+        {
+            registries.push(Arc::downgrade(&registry.0));
+        }
+        Ok(())
+    }
+    pub async fn add(
+        &self,
+        origin: &str,
+        time: i64,
+    ) -> Result<(), crate::resources::discovery::wellknown::Error> {
+        let mut discovery = self.discovery.lock().await;
+        discovery.add(origin, time).await?;
+        let registries = {
+            let mut registries = self
+                .registries
+                .lock()
+                .map_err(|_| crate::resources::discovery::wellknown::Error::InvalidManifest)?;
+            registries.retain(|registry| registry.strong_count() > 0);
+            registries
+                .iter()
+                .filter_map(Weak::upgrade)
+                .collect::<Vec<_>>()
+        };
+        for registry in registries {
+            match Registry(registry).wellknown(discovery.snapshot()) {
+                Ok(()) | Err(Error::Closed) => (),
+                Err(_) => {
+                    return Err(crate::resources::discovery::wellknown::Error::InvalidManifest);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 impl Registry {
     pub fn new(credentials: Service, env: BTreeMap<String, String>) -> Self {
         let registry = Self(Arc::new(Inner {
@@ -224,6 +292,7 @@ impl Registry {
                 next_transform: 0,
                 transforms: BTreeMap::new(),
                 draft: Draft::default(),
+                wellknown: Vec::new(),
                 attempts: BTreeMap::new(),
                 scrubber: None,
             }),
@@ -272,6 +341,32 @@ impl Registry {
     }
     pub fn reload(&self) -> Result<(), Error> {
         let mut state = self.0.state.lock().map_err(|_| Error::Closed)?;
+        materialize(&mut state);
+        let _ = self.0.events.send(Event::Updated);
+        Ok(())
+    }
+    pub fn wellknown(
+        &self,
+        entries: &[crate::resources::discovery::wellknown::Entry],
+    ) -> Result<(), Error> {
+        let entries = entries
+            .iter()
+            .filter_map(|entry| entry.manifest.auth.as_ref().map(|auth| (entry, auth)))
+            .map(|(entry, auth)| {
+                let url = url::Url::parse(&entry.origin).map_err(|_| Error::Rejected)?;
+                let hostname = url.host_str().ok_or(Error::Rejected)?;
+                Ok((
+                    entry.integration_id.as_str().into(),
+                    hostname.into(),
+                    auth.command.clone(),
+                ))
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        let mut state = self.0.state.lock().map_err(|_| Error::Closed)?;
+        if state.closed {
+            return Err(Error::Closed);
+        }
+        state.wellknown = entries;
         materialize(&mut state);
         let _ = self.0.events.send(Event::Updated);
         Ok(())
@@ -541,8 +636,8 @@ impl Registry {
     ) -> Result<integration::Attempt, Error> {
         let id = integration::AttemptId(credential_id()?);
         let callback = match &mut authorization.mode {
-            Mode::Auto(callback) | Mode::Command(callback) => callback.take(),
-            Mode::Code(_) => None,
+            Mode::Auto(callback) => callback.take(),
+            Mode::Code(_) | Mode::Command => None,
         };
         let info = integration::Attempt {
             attempt_id: id.clone(),
@@ -566,7 +661,7 @@ impl Registry {
         if state.closed {
             return Err(Error::Closed);
         }
-        let kind = if matches!(authorization.mode, Mode::Command(_)) {
+        let kind = if matches!(authorization.mode, Mode::Command) {
             Kind::Command
         } else {
             Kind::OAuth
@@ -586,6 +681,9 @@ impl Registry {
                 submitted: false,
                 remove_at: None,
                 task: None,
+                submission: None,
+                cancellation: None,
+                message: None,
             },
         );
         if let Some(callback) = callback {
@@ -641,7 +739,21 @@ impl Registry {
         let callback = match completion {
             Completion::Exchange(callback) => callback,
             Completion::Submit(submit, code) => {
-                let result = submit(code).await;
+                let (sender, receiver) = tokio::sync::oneshot::channel();
+                {
+                    let mut state = self.0.state.lock().map_err(|_| Error::Closed)?;
+                    let attempt = state
+                        .attempts
+                        .get_mut(id)
+                        .filter(|attempt| {
+                            attempt.status == super::Status::Pending && !attempt.persisting
+                        })
+                        .ok_or(Error::Rejected)?;
+                    attempt.submission = Some(tokio::spawn(async move {
+                        let _ = sender.send(submit(code).await);
+                    }));
+                }
+                let result = receiver.await.unwrap_or(Err(Error::UnknownOutcome));
                 if let Err(error) = result {
                     let _ = self.settle(id, Err(error), time).await;
                     let task = self
@@ -751,6 +863,9 @@ impl Registry {
                     };
                     attempt.remove_at = Some(time.saturating_add(60_000));
                     attempt.authorization.take();
+                    if let Some(task) = attempt.submission.as_ref() {
+                        task.abort();
+                    }
                     return Err(*error);
                 }
                 attempt.persisting = true;
@@ -774,6 +889,9 @@ impl Registry {
             attempt.persisting = false;
             attempt.remove_at = Some(time.saturating_add(60_000));
             attempt.authorization.take();
+            if let Some(task) = attempt.submission.as_ref() {
+                task.abort();
+            }
         }
         result?;
         self.publish_connection(integration);
@@ -811,12 +929,20 @@ impl Registry {
             }
             state.attempts.remove(id)
         };
-        if let Some(mut attempt) = attempt
-            && let Some(task) = attempt.task.take()
-        {
-            task.abort();
-            if task.await.is_err_and(|error| !error.is_cancelled()) {
-                return Err(Error::UnknownOutcome);
+        if let Some(mut attempt) = attempt {
+            if let Some(signal) = attempt.cancellation.take() {
+                signal.send_replace(true);
+            }
+            for task in [attempt.task.take(), attempt.submission.take()]
+                .into_iter()
+                .flatten()
+            {
+                if kind != Kind::Command {
+                    task.abort();
+                }
+                if task.await.is_err_and(|error| !error.is_cancelled()) {
+                    return Err(Error::UnknownOutcome);
+                }
             }
         }
         Ok(())
@@ -834,7 +960,7 @@ impl Registry {
             .ok_or(Error::Rejected)?;
         Ok(match attempt.status {
             super::Status::Pending => integration::CommandAttemptStatus::Pending {
-                message: None,
+                message: attempt.message.clone(),
                 time: attempt.time.clone(),
             },
             super::Status::Complete => {
@@ -844,7 +970,10 @@ impl Registry {
                 integration::CommandAttemptStatus::Expired(attempt.time.clone())
             }
             _ => integration::CommandAttemptStatus::Failed {
-                message: Error::Rejected.to_string().into(),
+                message: attempt
+                    .message
+                    .clone()
+                    .unwrap_or_else(|| "Authentication failed".into()),
                 time: attempt.time.clone(),
             },
         })
@@ -862,6 +991,14 @@ impl Registry {
                     attempt.authorization.take();
                     attempt.remove_at = Some(time.saturating_add(60_000));
                     if let Some(task) = attempt.task.take() {
+                        if let Some(signal) = attempt.cancellation.take() {
+                            signal.send_replace(true);
+                        } else {
+                            task.abort();
+                        }
+                        tasks.push(task);
+                    }
+                    if let Some(task) = attempt.submission.take() {
                         task.abort();
                         tasks.push(task);
                     }
@@ -875,7 +1012,11 @@ impl Registry {
                 })
                 .map(|(_, attempt)| attempt)
                 .collect();
-            tasks.extend(removed.into_iter().filter_map(|attempt| attempt.task));
+            tasks.extend(
+                removed
+                    .into_iter()
+                    .flat_map(|attempt| [attempt.task, attempt.submission].into_iter().flatten()),
+            );
             tasks
         };
         for task in tasks {
@@ -908,46 +1049,9 @@ impl Registry {
                 _ => None,
             })
             .ok_or(Error::Rejected)?;
-        let env = self.0.env.clone();
-        let callback = Box::pin(async move {
-            let output = tokio::process::Command::new(
-                command
-                    .first()
-                    .and_then(LosslessString::as_str)
-                    .ok_or(Error::Rejected)?,
-            )
-            .args(
-                command
-                    .iter()
-                    .skip(1)
-                    .map(|arg| arg.as_str().ok_or(Error::Rejected))
-                    .collect::<Result<Vec<_>, _>>()?,
-            )
-            .env_clear()
-            .envs(env)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .output()
-            .await
-            .map_err(|_| Error::Rejected)?;
-            if !output.status.success() {
-                return Err(Error::Rejected);
-            }
-            let key = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-            if key.is_empty() {
-                return Err(Error::Rejected);
-            }
-            Secret::new(
-                ycoding_schema::credential::Value::Key(ycoding_schema::credential::Key {
-                    key: key.into(),
-                    metadata: None,
-                })
-                .encode(),
-            )
-            .map_err(|_| Error::InvalidCredential)
-        });
+        if command.first().is_none_or(|command| command.is_empty()) {
+            return Err(Error::Rejected);
+        }
         let attempt = self.insert_attempt(
             integration,
             method,
@@ -956,11 +1060,21 @@ impl Registry {
                 url: String::new(),
                 instructions: String::new(),
                 expires_at: None,
-                mode: Mode::Command(Some(callback)),
+                mode: Mode::Command,
                 submit: None,
             },
             time,
         )?;
+        let registry = self.clone();
+        let id = attempt.attempt_id.clone();
+        let (signal, receiver) = tokio::sync::watch::channel(false);
+        let mut state = self.0.state.lock().map_err(|_| Error::Closed)?;
+        let pending = state.attempts.get_mut(&id).ok_or(Error::Rejected)?;
+        pending.cancellation = Some(signal);
+        pending.task = Some(tokio::spawn(async move {
+            let result = registry.run_command(&id, command, receiver).await;
+            let _ = registry.settle(&id, result, now().unwrap_or(time)).await;
+        }));
         Ok(integration::CommandAttempt {
             attempt_id: attempt.attempt_id,
             time: attempt.time,
@@ -973,17 +1087,24 @@ impl Registry {
             let tasks = state
                 .attempts
                 .values_mut()
-                .filter_map(|attempt| {
+                .flat_map(|attempt| {
                     if !attempt.persisting && attempt.status == super::Status::Pending {
                         attempt.status = super::Status::Cancelled;
                         attempt.authorization.take();
                     }
-                    attempt.task.take().map(|task| {
-                        if !attempt.persisting {
-                            task.abort();
-                        }
-                        (task, attempt.persisting)
-                    })
+                    if let Some(signal) = attempt.cancellation.take() {
+                        signal.send_replace(true);
+                    }
+                    let graceful = attempt.kind == Kind::Command || attempt.persisting;
+                    [attempt.task.take(), attempt.submission.take()]
+                        .into_iter()
+                        .flatten()
+                        .map(move |task| {
+                            if !graceful {
+                                task.abort();
+                            }
+                            (task, graceful)
+                        })
                 })
                 .collect::<Vec<_>>();
             (state.scrubber.take(), tasks)
@@ -1003,6 +1124,121 @@ impl Registry {
             if task.await.is_err_and(|error| !error.is_cancelled()) {
                 return Err(Error::UnknownOutcome);
             }
+        }
+        Ok(())
+    }
+    async fn run_command(
+        &self,
+        id: &integration::AttemptId,
+        command: Vec<LosslessString>,
+        mut cancellation: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<Secret, Error> {
+        use crate::platform::process;
+        if *cancellation.borrow() {
+            return Err(Error::Rejected);
+        }
+        let mut command = process::Command::new(
+            command
+                .first()
+                .and_then(LosslessString::as_str)
+                .ok_or(Error::Rejected)?,
+            command
+                .iter()
+                .skip(1)
+                .map(|arg| arg.as_str().ok_or(Error::Rejected))
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+        command.env = self.0.env.clone();
+        command.stdin = process::Input::Ignore;
+        command.kill = process::KillOptions {
+            signal: process::KillSignal::Kill,
+            force_kill_after: Some(Duration::ZERO),
+        };
+        let mut process = match process::spawn(command).await {
+            Ok(process) => process,
+            Err(error) => {
+                self.command_message(id, error.to_string())?;
+                return Err(Error::Rejected);
+            }
+        };
+        let mut output = process.take_output().ok_or(Error::Rejected)?;
+        let mut stdout = Vec::new();
+        let mut stderr = String::new();
+        let mut held = Vec::new();
+        let mut decoder_started = false;
+        let mut cancelled = false;
+        loop {
+            tokio::select! {
+                changed = cancellation.changed(), if !cancelled => {
+                    if changed.is_err() || *cancellation.borrow() {
+                        cancelled = true;
+                        process.terminate(process::Termination::Cancelled).await.map_err(|_| Error::UnknownOutcome)?;
+                    }
+                }
+                chunk = output.recv() => {
+                    let Some(chunk) = chunk else { break; };
+                    match chunk.kind {
+                        process::StreamKind::Stdout => stdout.extend(chunk.bytes),
+                        process::StreamKind::Stderr => {
+                            held.extend(chunk.bytes);
+                            let end = crate::platform::shell::paging::page_end(&held, held.len(), false);
+                            let text = String::from_utf8_lossy(&held[..end]);
+                            if !decoder_started && !text.is_empty() {
+                                decoder_started = true;
+                                stderr.push_str(text.strip_prefix('\u{feff}').unwrap_or(&text));
+                            } else { stderr.push_str(&text); }
+                            held.drain(..end);
+                            if !stderr.is_empty() { self.command_message(id, stderr.clone())?; }
+                        }
+                        process::StreamKind::Fd(_) => (),
+                    }
+                }
+            }
+        }
+        let tail = String::from_utf8_lossy(&held);
+        stderr.push_str(if decoder_started {
+            &tail
+        } else {
+            tail.strip_prefix('\u{feff}').unwrap_or(&tail)
+        });
+        if !stderr.is_empty() {
+            self.command_message(id, stderr.clone())?;
+        }
+        let exit = process.wait().await.map_err(|_| Error::UnknownOutcome)?;
+        if cancelled {
+            return Err(Error::Rejected);
+        }
+        if exit.code != Some(0) {
+            self.command_message(
+                id,
+                if stderr.trim().is_empty() {
+                    format!("Authentication command exited {}", exit.code.unwrap_or(-1))
+                } else {
+                    stderr.trim().into()
+                },
+            )?;
+            return Err(Error::Rejected);
+        }
+        let key = String::from_utf8_lossy(&stdout).trim().to_owned();
+        if key.is_empty() {
+            self.command_message(id, "Authentication command returned no credential".into())?;
+            return Err(Error::Rejected);
+        }
+        Secret::new(
+            ycoding_schema::credential::Value::Key(ycoding_schema::credential::Key {
+                key: key.into(),
+                metadata: None,
+            })
+            .encode(),
+        )
+        .map_err(|_| Error::InvalidCredential)
+    }
+    fn command_message(&self, id: &integration::AttemptId, message: String) -> Result<(), Error> {
+        let mut state = self.0.state.lock().map_err(|_| Error::Closed)?;
+        if let Some(attempt) = state.attempts.get_mut(id).filter(|attempt| {
+            attempt.status == super::Status::Pending && attempt.kind == Kind::Command
+        }) {
+            attempt.message = Some(message.into());
         }
         Ok(())
     }
@@ -1041,6 +1277,17 @@ impl Drop for Registration {
 }
 fn materialize(state: &mut State) {
     let mut draft = Draft::default();
+    for (id, name, command) in &state.wellknown {
+        draft.update(id.clone(), |reference| reference.name = name.clone());
+        draft.method(
+            id.clone(),
+            integration::Method::Command(integration::CommandMethod {
+                id: IntegrationMethodId::new("login").expect("login method"),
+                label: "Log in".into(),
+                command: command.clone(),
+            }),
+        );
+    }
     for transform in state.transforms.values() {
         transform(&mut draft);
     }

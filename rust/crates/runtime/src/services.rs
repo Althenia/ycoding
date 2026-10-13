@@ -41,6 +41,8 @@ pub struct Identity {
 
 #[derive(Clone)]
 pub struct Core {
+    pub integrations: Option<IntegrationResolver>,
+    pub mcp: Option<McpResolver>,
     pub artifacts: Option<ArtifactProvider>,
     pub remote: Option<crate::connector::Control>,
     pub sessions: SessionStore,
@@ -93,6 +95,19 @@ pub struct PlatformServices {
 
 pub type PlatformResolver =
     Arc<dyn Fn(&location::Ref) -> Result<Arc<PlatformServices>, String> + Send + Sync>;
+#[derive(Clone)]
+pub struct IntegrationServices {
+    pub registry: ycoding_core::resources::auth::integration::Registry,
+    pub wellknown: Option<Arc<ycoding_core::resources::auth::integration::WellKnown>>,
+}
+
+pub type IntegrationResolver =
+    Arc<dyn Fn(&location::Info) -> Result<IntegrationServices, String> + Send + Sync>;
+pub type McpResolver = Arc<
+    dyn Fn(&location::Info) -> Result<Arc<ycoding_core::resources::mcp::Service>, String>
+        + Send
+        + Sync,
+>;
 
 impl Core {
     pub fn new(
@@ -114,6 +129,8 @@ impl Core {
         let credentials = credential::Service::new(client.clone());
         Self {
             publisher: configuration.publisher.clone(),
+            integrations: None,
+            mcp: None,
             browser: None,
             isolated_browser: None,
             platform: None,

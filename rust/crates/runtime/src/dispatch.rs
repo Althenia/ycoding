@@ -104,6 +104,10 @@ pub enum Failure {
         message: String,
         force_required: bool,
     },
+    IntegrationAuthorization,
+    IntegrationCodeRequired,
+    WellKnownDiscovery(String),
+    McpServerNotFound(ycoding_core::ycoding_schema::LosslessString),
     TelemetryDisabled,
     Artifact(ycoding_core::ycoding_schema::project_artifact::ErrorCode),
     Connector {
@@ -484,6 +488,27 @@ impl Failure {
             Failure::PtyConflict(_) => invalid("PTY fence is stale", "conflict"),
             Failure::PtyResourceLimit(_) => invalid("PTY resource limit reached", "unavailable"),
             Failure::ProjectCopy { message, .. } => invalid(&message, "invalid"),
+            Failure::IntegrationAuthorization => {
+                invalid("Authentication failed", "integration_authorization")
+            }
+            Failure::IntegrationCodeRequired => invalid(
+                "Authorization code is required",
+                "integration_code_required",
+            ),
+            Failure::WellKnownDiscovery(message) => invalid(&message, "well_known_discovery"),
+            Failure::McpServerNotFound(server)
+                if declared(v5::McpServerNotFoundError::full_name()) =>
+            {
+                encoded(v5::McpServerNotFoundError {
+                    tag: 1,
+                    server: convert::wire(&server),
+                    message: convert::text(&format!(
+                        "MCP server not found: {}",
+                        convert::readable(&server)
+                    )),
+                })
+            }
+            Failure::McpServerNotFound(_) => invalid("MCP server not found", "not_found"),
             Failure::TelemetryDisabled if declared(v5::TelemetryDisabled::full_name()) => {
                 encoded(v5::TelemetryDisabled { tag: 1 })
             }
