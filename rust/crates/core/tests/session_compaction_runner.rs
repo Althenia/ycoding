@@ -219,6 +219,64 @@ async fn ingress_switch_validates_before_interrupt_and_serializes_successful_sel
 }
 
 #[tokio::test]
+async fn ingress_switch_variant_and_package_failures_do_not_interrupt_or_write() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    select_current(&service, "gpt-helper").await;
+    let configured = services(
+        &store,
+        "http://127.0.0.1:1",
+        helper::Settings::default(),
+        None,
+    );
+    let mut catalog = (*configured.models.catalog()).clone();
+    catalog
+        .providers
+        .iter_mut()
+        .find(|record| record.provider.id.0.as_str() == Some("openai"))
+        .unwrap()
+        .models
+        .iter_mut()
+        .find(|model| model.id.as_str() == Some("gpt-reasoning"))
+        .unwrap()
+        .package = Some("@fixture/unsupported".into());
+    configured.models.replace(catalog).unwrap();
+    let runner = Local::new(configured);
+    let (coordinator, id) = busy().await;
+    for (model, kind, message) in [
+        (
+            r#"{"providerID":"openai","id":"gpt-helper","variant":"missing"}"#,
+            "model.variant",
+            "Variant unavailable for openai/gpt-helper: missing",
+        ),
+        (
+            r#"{"providerID":"openai","id":"gpt-reasoning"}"#,
+            "model.unsupported",
+            "Unsupported package for openai/gpt-reasoning: @fixture/unsupported",
+        ),
+    ] {
+        let failure = runner
+            .switch_model(&coordinator, &id, &selection(model))
+            .await
+            .unwrap_err();
+        let IngressError::Execution(ycoding_core::session::run_coordinator::Error::Runner(error)) =
+            failure
+        else {
+            panic!("unexpected failure: {failure:?}")
+        };
+        assert_eq!(error.r#type.as_str(), Some(kind));
+        assert_eq!(error.message.as_str(), Some(message));
+        assert!(coordinator.active().contains(&id));
+        assert_eq!(events(&store).len(), 1);
+        assert_eq!(
+            service.get(&id).unwrap().unwrap().model.unwrap().id,
+            "gpt-helper".into()
+        );
+    }
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn ingress_switch_compacts_once_then_refits_before_publishing_the_model() {
     let store = support::store();
     let service = Service::new(store.client());

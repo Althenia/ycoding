@@ -2977,6 +2977,11 @@ to its `runner::Services.store` with `with_artifact_source`:
 None }` and the Session's agent before the command switch. A failed activation
   is recorded through `record_activation_failure`; the admitted input stands.
   A reused message ID returns the admitted input without attribution.
+  A context-blocked model switch retains the prior model and admits the evaluated
+  command without a switch-blocked notice; compaction lifecycle events remain
+  independent. Model resolution errors refuse admission with the resolver's
+  message. Variant and unsupported-package failures retain distinct
+  `model.variant` and `model.unsupported` runner categories.
 - `switch_agent` publishes `session.agent.selected.1` through
   `publish_activation`, committing provenance and the `agent-selected` row with
   the event.

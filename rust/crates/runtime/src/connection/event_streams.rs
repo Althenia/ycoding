@@ -4,7 +4,7 @@ use prost::{Message, Name};
 use std::sync::Arc;
 use ycoding_core::event_feed::{Item, Payload, Subscriber};
 use ycoding_core::session::log::Entry;
-use ycoding_core::ycoding_schema::{DomainDecode, JsonValue, session};
+use ycoding_core::ycoding_schema::{DomainDecode, JsonValue, session, session_message};
 use ycoding_protocol::{
     connection::{Direction, EventMetadata, ProtocolError},
     v5,
@@ -255,11 +255,28 @@ impl Driver {
         }
         let session = session::Id::decode(&JsonValue::String(event.aggregate_id.clone()))
             .map_err(|_| ProtocolError::Malformed)?;
-        let entry = Entry::from_event(event)
+        let mut entry = Entry::from_event(event)
             .inspect_err(|_| {
                 tracing::warn!(position = item.position, "feed event is not decodable")
             })
             .map_err(|_| ProtocolError::Malformed)?;
+        if type_ == "session.shell.started.1" {
+            let core = self
+                .shared
+                .environment
+                .services
+                .core
+                .as_ref()
+                .ok_or(ProtocolError::Malformed)?;
+            if let Some((owner, session_message::Info::Shell(shell))) = core
+                .sessions
+                .message(&session_message::Id::from_event(&entry.event.0.id))
+                .map_err(|_| ProtocolError::Malformed)?
+                && owner == session
+            {
+                entry.event.0.metadata = shell.metadata;
+            }
+        }
         let record = log::record(&entry, &session, &self.source_epoch())
             .inspect_err(|error| {
                 tracing::debug!(

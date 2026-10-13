@@ -740,17 +740,18 @@ impl Local {
                 .switch_model(execution.coordinator(), &current.id, model)
                 .await
             {
-                Ok(model_switch::Outcome::Switched) => {}
-                Ok(model_switch::Outcome::Blocked(_)) => {
-                    return Err(IngressError::CommandEvaluation {
-                        command: input.name.clone(),
-                        message: "Command model context window exceeded".into(),
-                    });
-                }
+                Ok(_) => {}
                 Err(error) => {
                     return Err(IngressError::CommandEvaluation {
                         command: input.name.clone(),
-                        message: error.to_string(),
+                        message: match error {
+                            IngressError::Execution(Error::Runner(error)) => {
+                                String::from_utf16_lossy(
+                                    &error.message.code_units().collect::<Vec<_>>(),
+                                )
+                            }
+                            error => error.to_string(),
+                        },
                     });
                 }
             }

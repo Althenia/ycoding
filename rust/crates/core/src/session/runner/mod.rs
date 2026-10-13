@@ -37,8 +37,8 @@ use std::{
 };
 use ycoding_ai::{llm, provider_error};
 use ycoding_schema::{
-    DomainDecode, JsonObject, JsonValue, ObjectEncoder, instruction, session, session_message,
-    session_pending, skill as skill_schema,
+    DomainDecode, JsonObject, JsonValue, LosslessString, ObjectEncoder, instruction, session,
+    session_message, session_pending, skill as skill_schema,
 };
 
 pub trait Clock: Send + Sync {
@@ -201,9 +201,9 @@ impl Local {
     ) -> Result<SelectedModel, Error> {
         let services = &self.0.services;
         let catalog = services.models.catalog();
-        let provider = catalog
-            .provider(&selection.provider_id)
-            .ok_or_else(|| error("model.unavailable", "Selected provider is unavailable"))?;
+        let provider = catalog.provider(&selection.provider_id).ok_or_else(|| {
+            model_resolution_error(selection, model::Error::ModelUnavailable, None)
+        })?;
         let integration = provider
             .integration_id
             .as_ref()
@@ -250,12 +250,7 @@ impl Local {
                 .map_err(|_| error("provider.auth", "Provider account is unavailable"))?
         };
         let resolved = model::resolve_catalog(&catalog, selection, saved, connection.as_ref())
-            .map_err(|_| {
-                error(
-                    "model.unavailable",
-                    "Selected model, variant or profile is unavailable",
-                )
-            })?;
+            .map_err(|cause| model_resolution_error(selection, cause, None))?;
         let account_identity =
             account_identity_digest(connection.as_ref(), &resolved.info, integration);
         let binding = binding
@@ -328,7 +323,7 @@ impl Local {
                     "model.profile",
                     "Selected profile requires reconnect. Sign in to this profile again.",
                 ),
-                _ => error("model.unavailable", "Selected model route is unavailable"),
+                cause => model_resolution_error(selection, cause, resolved.info.package.as_ref()),
             })?;
         Ok(Resolution {
             resolved,
@@ -2203,6 +2198,77 @@ impl Drain for Local {
     fn settled(&self, id: session::Id, outcome: Outcome) -> RunFuture {
         self.cleanup(id, outcome)
     }
+}
+
+fn model_resolution_error(
+    selection: &ycoding_schema::model::Ref,
+    cause: model::Error,
+    package: Option<&LosslessString>,
+) -> Error {
+    let identity = crate::instructions::join(
+        &[selection.provider_id.0.clone(), selection.id.clone()],
+        "/",
+    );
+    let (kind, message) = match cause {
+        model::Error::ModelUnavailable => (
+            "model.unavailable",
+            crate::instructions::join(&["Model unavailable: ".into(), identity], ""),
+        ),
+        model::Error::VariantUnavailable => (
+            "model.variant",
+            crate::instructions::join(
+                &[
+                    "Variant unavailable for ".into(),
+                    identity,
+                    ": ".into(),
+                    selection
+                        .variant
+                        .as_ref()
+                        .expect("variant failure requires a selected variant")
+                        .clone(),
+                ],
+                "",
+            ),
+        ),
+        model::Error::UnsupportedPackage => (
+            "model.unsupported",
+            crate::instructions::join(
+                &[
+                    "Unsupported package for ".into(),
+                    identity,
+                    ": ".into(),
+                    package.cloned().unwrap_or_else(|| "unknown".into()),
+                ],
+                "",
+            ),
+        ),
+        model::Error::ProfileUnavailable => (
+            "model.profile",
+            crate::instructions::join(
+                &[
+                    "Profile unavailable for ".into(),
+                    selection.provider_id.0.clone(),
+                    ": ".into(),
+                    selection
+                        .profile
+                        .as_ref()
+                        .expect("profile failure requires a selected profile")
+                        .0
+                        .clone(),
+                    ". Select the profile again.".into(),
+                ],
+                "",
+            ),
+        ),
+        model::Error::InvalidSettings => (
+            "model.unavailable",
+            "Selected model route is unavailable".into(),
+        ),
+    };
+    Error::Runner(ycoding_schema::session_error::Error {
+        r#type: kind.into(),
+        message,
+    })
 }
 
 pub(crate) fn error(kind: &str, message: &str) -> Error {

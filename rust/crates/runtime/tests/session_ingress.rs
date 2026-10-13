@@ -4,6 +4,7 @@ mod connector_support {
     pub const WAIT: std::time::Duration = super::support::WAIT;
 }
 
+use prost::Message;
 use remote_derived_support::{Fixture, world};
 use std::sync::Arc;
 use support::wire::{ask, refuse};
@@ -54,9 +55,17 @@ async fn fixture(endpoint: &str) -> (Fixture, Artifacts) {
         ycoding_core::ycoding_schema::model::Info::decode(&parse_json(&format!(r#"{{"id":"{name}","modelID":"{name}","providerID":"fixture","name":"Fixture","package":"@ycoding-ai/ai/providers/openai-compatible","capabilities":{{"tools":true,"input":["text"],"output":["text"]}},"variants":[],"time":{{"released":1}},"cost":[],"status":"active","enabled":true,"limit":{{"context":{context},"output":96}}}}"#)).unwrap()).unwrap()
     };
     let mut catalog = Catalog::default();
+    let mut unsupported = info("unsupported", 4096);
+    unsupported.package = Some("@fixture/unsupported".into());
     catalog.providers = vec![ProviderRecord {
         provider,
-        models: vec![info("code", 4096), info("large", 32000), info("tiny", 64)],
+        models: vec![
+            info("code", 4096),
+            info("large", 32000),
+            info("small", 128),
+            info("tiny", 64),
+            unsupported,
+        ],
         environment: vec![],
     }];
     let models = Arc::new(model::Resolver::new(catalog));
@@ -434,6 +443,245 @@ async fn command_shell_skills_conflict_and_agent_switch_are_typed_and_durable_ov
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn command_admits_on_prior_model_when_switch_is_blocked_without_a_notice() {
+    let (fixture, _) = fixture("http://127.0.0.1:1").await;
+    let id = fixture.root.clone();
+    let (server, mut client) = open(&fixture).await;
+    let _: v5::SessionSwitchModelResult = ask(
+        &mut client,
+        "session.switchModel",
+        scope(&id),
+        v5::SessionSwitchModelRequest {
+            params: v5::SessionSwitchModelRequestParams {
+                session_id: text(&id),
+            },
+            payload: v5::SessionSwitchModelRequestPayload {
+                model: v5::ModelRef {
+                    provider_id: text("fixture"),
+                    id: text("large"),
+                    variant: None,
+                    profile: None,
+                },
+            },
+        },
+    )
+    .await;
+    remote_derived_support::message(
+        &id,
+        "oversized",
+        "user",
+        2,
+        &format!(
+            r#"{{"text":"{}","time":{{"created":2,"consumed":2}}}}"#,
+            "context ".repeat(1000)
+        ),
+    )
+    .await;
+    let before = world()
+        .core
+        .sessions
+        .log(&sid(&id), None, 512)
+        .unwrap()
+        .events
+        .len();
+    let command = || v5::SessionCommandRequest {
+        params: v5::SessionCommandRequestParams {
+            session_id: text(&id),
+        },
+        payload: v5::SessionCommandRequestPayload {
+            id: Some(text("msg_blocked_command")),
+            command: text("review"),
+            arguments: Some(text("changes")),
+            model: Some(v5::ModelRef {
+                provider_id: text("fixture"),
+                id: text("small"),
+                variant: None,
+                profile: None,
+            }),
+            agent: None,
+            agents: None,
+            files: None,
+            delivery: None,
+            resume: Some(false),
+        },
+    };
+    let admitted: v5::SessionCommandResult =
+        ask(&mut client, "session.command", scope(&id), command()).await;
+    let retried: v5::SessionCommandResult =
+        ask(&mut client, "session.command", scope(&id), command()).await;
+    assert_eq!(admitted, retried);
+    let pending = world().core.sessions.pending_list(&sid(&id)).unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(
+        pending[0].data,
+        parse_json(r#"{"text":"Review changes"}"#).unwrap()
+    );
+    assert_eq!(
+        world()
+            .core
+            .sessions
+            .get(&sid(&id))
+            .unwrap()
+            .unwrap()
+            .model
+            .unwrap()
+            .id,
+        "large".into()
+    );
+    let after = world()
+        .core
+        .sessions
+        .log(&sid(&id), None, 512)
+        .unwrap()
+        .events;
+    assert_eq!(
+        after[before..]
+            .iter()
+            .map(|entry| entry.event.0.event_type.as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec![
+            "session.compaction.admitted",
+            "session.compaction.started",
+            "session.compaction.ended",
+            "session.input.admitted"
+        ]
+    );
+    drop(client);
+    server.shutdown().await.unwrap();
+    fixture.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn switch_and_command_failures_preserve_categories_messages_and_prior_selection() {
+    let (fixture, _) = fixture("http://127.0.0.1:1").await;
+    let id = fixture.root.clone();
+    let (server, mut client) = open(&fixture).await;
+    let _: v5::SessionSwitchModelResult = ask(
+        &mut client,
+        "session.switchModel",
+        scope(&id),
+        v5::SessionSwitchModelRequest {
+            params: v5::SessionSwitchModelRequestParams {
+                session_id: text(&id),
+            },
+            payload: v5::SessionSwitchModelRequestPayload {
+                model: v5::ModelRef {
+                    provider_id: text("fixture"),
+                    id: text("code"),
+                    variant: None,
+                    profile: None,
+                },
+            },
+        },
+    )
+    .await;
+    let before = world()
+        .core
+        .sessions
+        .log(&sid(&id), None, 512)
+        .unwrap()
+        .events;
+    for (name, variant, switch_message, command_message) in [
+        (
+            "missing",
+            None,
+            "Target model is unavailable. Refresh the model catalog and select an available model.",
+            "Model unavailable: fixture/missing",
+        ),
+        (
+            "code",
+            Some("missing"),
+            "Target model variant is unavailable. Select a supported variant.",
+            "Variant unavailable for fixture/code: missing",
+        ),
+        (
+            "unsupported",
+            None,
+            "Target model uses an unsupported provider package. Check provider configuration.",
+            "Unsupported package for fixture/unsupported: @fixture/unsupported",
+        ),
+    ] {
+        let model = v5::ModelRef {
+            provider_id: text("fixture"),
+            id: text(name),
+            variant: variant.map(text),
+            profile: None,
+        };
+        let failed: v5::UnknownError = refuse(
+            &mut client,
+            "session.switchModel",
+            scope(&id),
+            v5::SessionSwitchModelRequest {
+                params: v5::SessionSwitchModelRequestParams {
+                    session_id: text(&id),
+                },
+                payload: v5::SessionSwitchModelRequestPayload {
+                    model: model.clone(),
+                },
+            },
+        )
+        .await;
+        assert_eq!(units(&failed.message), switch_message);
+        assert!(units(failed.r#ref.as_ref().unwrap()).starts_with("err_"));
+        let failed: v5::CommandEvaluationError = refuse(
+            &mut client,
+            "session.command",
+            scope(&id),
+            v5::SessionCommandRequest {
+                params: v5::SessionCommandRequestParams {
+                    session_id: text(&id),
+                },
+                payload: v5::SessionCommandRequestPayload {
+                    id: Some(text("msg_invalid_command")),
+                    command: text("review"),
+                    arguments: Some(text("changes")),
+                    model: Some(model),
+                    agent: None,
+                    agents: None,
+                    files: None,
+                    delivery: None,
+                    resume: Some(false),
+                },
+            },
+        )
+        .await;
+        assert_eq!(units(&failed.message), command_message);
+        assert_eq!(
+            world()
+                .core
+                .sessions
+                .get(&sid(&id))
+                .unwrap()
+                .unwrap()
+                .model
+                .unwrap()
+                .id,
+            "code".into()
+        );
+        assert!(
+            world()
+                .core
+                .sessions
+                .pending_list(&sid(&id))
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            world()
+                .core
+                .sessions
+                .log(&sid(&id), None, 512)
+                .unwrap()
+                .events,
+            before
+        );
+    }
+    drop(client);
+    server.shutdown().await.unwrap();
+    fixture.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn compact_switch_move_and_subagent_launch_use_backend_owners_over_socket() {
     let (fixture, _) = fixture("http://127.0.0.1:1").await;
     let (server, mut client) = open(&fixture).await;
@@ -725,6 +973,16 @@ async fn shell_projects_optional_sandbox_warnings_and_required_sandbox_refuses_b
             .collect::<Vec<_>>()
     };
     let (server, mut client) = open(&fixture).await;
+    let subscription = client
+        .send(
+            "event.subscribe",
+            v5::Scope {
+                target: Some(v5::scope::Target::Global(v5::Empty {})),
+            },
+            v5::EventSubscribeRequest { scope: scope(&id) }.encode_to_vec(),
+        )
+        .await;
+    let subscription = client.subscribe_events(&subscription, scope(&id)).await;
     let _: v5::SessionShellResult = ask(
         &mut client,
         "session.shell",
@@ -740,6 +998,55 @@ async fn shell_projects_optional_sandbox_warnings_and_required_sandbox_refuses_b
             &ycoding_core::ycoding_schema::JsonValue::Object(projected.metadata.unwrap())
         ),
         r#"{"sandboxWarnings":["No enforceable shell sandbox backend was available; command ran with host-user filesystem, process, and network authority."]}"#
+    );
+    let started = |client: &Client| {
+        client
+            .batches
+            .iter()
+            .filter(|batch| batch.subscription_id == subscription)
+            .flat_map(|batch| &batch.events)
+            .find_map(|record| {
+                match v5::PublicEvent::decode(record.event.payload.as_slice())
+                    .unwrap()
+                    .kind
+                    .unwrap()
+                {
+                    v5::public_event::Kind::SessionShellStarted(event) => Some(event),
+                    _ => None,
+                }
+            })
+    };
+    tokio::time::timeout(support::WAIT, async {
+        while started(&client).is_none() {
+            client.step().await;
+        }
+    })
+    .await
+    .unwrap();
+    let live = started(&client).unwrap();
+    let metadata = live.metadata.unwrap();
+    assert_eq!(metadata.entries.len(), 1);
+    assert_eq!(units(&metadata.entries[0].key), "sandboxWarnings");
+    assert_eq!(
+        metadata.entries[0].value.kind,
+        Some(v5::value::Kind::List(v5::ValueList {
+            items: vec![v5::Value {
+                kind: Some(v5::value::Kind::String(text(
+                    "No enforceable shell sandbox backend was available; command ran with host-user filesystem, process, and network authority."
+                )))
+            }],
+        }))
+    );
+    assert!(
+        world()
+            .core
+            .sessions
+            .log(&sid(&id), None, 512)
+            .unwrap()
+            .events
+            .into_iter()
+            .filter(|entry| entry.event.0.event_type.as_str() == Some("session.shell.started"))
+            .all(|entry| entry.event.0.metadata.is_none())
     );
     drop(client);
     server.shutdown().await.unwrap();

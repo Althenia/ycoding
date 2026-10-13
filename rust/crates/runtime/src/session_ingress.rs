@@ -607,6 +607,14 @@ fn switch_failure(id: &session::Id, error: IngressError) -> Failure {
             "model-unavailable",
             "Target model is unavailable. Refresh the model catalog and select an available model.",
         ),
+        Some("model.variant") => (
+            "variant-unavailable",
+            "Target model variant is unavailable. Select a supported variant.",
+        ),
+        Some("model.unsupported") => (
+            "unsupported-provider",
+            "Target model uses an unsupported provider package. Check provider configuration.",
+        ),
         Some("provider.auth") => (
             "provider-authorization",
             "Provider authorization failed. Reconnect the provider and retry the model switch.",
