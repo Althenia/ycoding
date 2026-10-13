@@ -31,6 +31,8 @@ const implicit = (minimumTokens: number): CacheProfile => ({ minimumTokens, exte
 const PROFILES: Record<string, CacheProfile> = {
   // Anthropic — 512
   "claude-opus-5": anthropic(512),
+  "claude-sonnet-5-5": anthropic(512),
+  "claude-haiku-5-5": anthropic(512),
   "claude-opus-5-5": anthropic(512),
   "claude-fable-5": anthropic(512),
   "claude-fable-5-1": anthropic(512),

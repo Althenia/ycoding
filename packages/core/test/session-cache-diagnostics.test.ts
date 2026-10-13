@@ -273,6 +273,25 @@ test("resolves the minimum through platform-qualified model ids", () => {
   expect(bedrock.cache.minimumTokens).toBe(1024)
 })
 
+test("reports the 512-token cache minimum for Claude 5.5 models", () => {
+  for (const id of ["claude-sonnet-5-5", "claude-haiku-5-5"]) {
+    const below = SessionCacheDiagnostics.calculate({
+      tokens: { input: 511, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
+      estimatedCost: Money.USD.zero,
+      model: namedModel("anthropic", id),
+      routeID: "anthropic-messages",
+    })
+    const atMinimum = SessionCacheDiagnostics.calculate({
+      tokens: { input: 512, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
+      estimatedCost: Money.USD.zero,
+      model: namedModel("anthropic", id),
+      routeID: "anthropic-messages",
+    })
+    expect(below.cache).toMatchObject({ minimumTokens: 512, belowMinimum: true })
+    expect(atMinimum.cache).toMatchObject({ minimumTokens: 512, belowMinimum: false })
+  }
+})
+
 test("omits the minimum when the model has no published cache profile", () => {
   const result = SessionCacheDiagnostics.calculate({
     tokens,

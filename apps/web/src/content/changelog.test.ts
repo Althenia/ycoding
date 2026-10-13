@@ -9,12 +9,13 @@ describe("release entries", () => {
       version: "0.10.6",
       date: "2026-10-13",
       title: "Muse (Meta) subscriptions and quota",
-      tags: ["Added", "Changed"],
+      tags: ["Added", "Changed", "Fixed"],
       changes: [
         { tag: "Added", text: "Muse (Meta) provider: connect a Meta Muse Code subscription through /connect with a device-code login, or use a Meta Model API key or META_API_KEY. YCoding lists the models your account can use, with their context limits and effort levels, and runs them with tools and reasoning." },
         { tag: "Added", text: "Muse subscription quota appears in provider usage as live 5-hour window and weekly percentages with reset times, updated from each Muse response." },
         { tag: "Changed", text: "Built-in agents use checkpoint-based testing guidance: plan required tests before building, then run focused tests at feature checkpoints and full checks at integration or merge checkpoints." },
         { tag: "Changed", text: "Built-in agent display names are capitalized; their IDs remain unchanged." },
+        { tag: "Fixed", text: "Claude Sonnet 5.5 and Haiku 5.5 use their 512-token prompt-cache minimum and supported one-hour cache TTL in diagnostics and adaptive cache selection." },
       ],
     })
   })

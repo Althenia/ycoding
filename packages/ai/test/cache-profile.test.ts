@@ -29,6 +29,8 @@ describe("cacheProfile", () => {
   test("resolves the documented Anthropic minimum cacheable prefix per model", () => {
     const cases: ReadonlyArray<readonly [string, number]> = [
       ["claude-opus-5", 512],
+      ["claude-sonnet-5-5", 512],
+      ["claude-haiku-5-5", 512],
       ["claude-fable-5", 512],
       ["claude-mythos-5", 512],
       ["claude-opus-4-8", 1024],
@@ -67,6 +69,8 @@ describe("cacheProfile", () => {
 
   test("marks Anthropic models as supporting the 1h bucket and others as not", () => {
     expect(cacheProfile("claude-opus-5")?.extendedTtl).toBe(true)
+    expect(cacheProfile("claude-sonnet-5.5")?.extendedTtl).toBe(true)
+    expect(cacheProfile("claude-haiku-5.5")?.extendedTtl).toBe(true)
     expect(cacheProfile("anthropic/claude-sonnet-4.6")?.extendedTtl).toBe(true)
     expect(cacheProfile("gpt-5")?.extendedTtl).toBe(false)
     expect(cacheProfile("gemini-2.5-pro")?.extendedTtl).toBe(false)

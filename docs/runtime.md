@@ -823,6 +823,13 @@ Caching is split into distinct concerns:
 - TUI diagnostics;
 - project artifact reuse, which is not a provider prompt cache.
 
+Anthropic cache profiles publish the minimum cacheable prefix and whether a
+model supports the one-hour cache TTL. Claude Sonnet 5.5 and Haiku 5.5 each
+support the one-hour TTL and a 512-token minimum; the selected profile informs
+cache diagnostics and adaptive TTL selection. Adaptive TTL uses one hour for
+interactive requests and five minutes for non-interactive requests when the
+model supports the extended TTL, and five minutes otherwise.
+
 Session request preparation sorts hooked provider-visible tools by name and
 canonicalizes their JSON schemas before deriving the tool digest and sending
 the request. Historical messages remain in chronological order; a new user

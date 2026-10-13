@@ -669,4 +669,6 @@ test("anthropicTtlSeconds fixes one TTL per request source", () => {
   expect([ttl("1h", true), ttl("1h", false)]).toEqual([3600, 3600])
   expect([ttl("5m", true), ttl("5m", false)]).toEqual([300, 300])
   expect([ttl("adaptive", true, "custom-model"), ttl("1h", true, "custom-model")]).toEqual([300, 300])
+  expect(ttl("adaptive", true, "claude-haiku-5.5")).toBe(3600)
+  expect(ttl("adaptive", false, "claude-haiku-5.5")).toBe(300)
 })
