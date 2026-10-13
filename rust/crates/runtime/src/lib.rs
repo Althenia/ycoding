@@ -28,6 +28,7 @@ mod mcp_convert;
 mod message;
 mod permission;
 mod platform_services;
+mod production;
 mod project;
 mod project_copy;
 mod provider_usage;
@@ -55,8 +56,10 @@ pub use auth::LocalAuth;
 pub use dispatch::{Boxed, Bulk, Dispatcher, Failure, Invocation, RegistrationError, Settled};
 pub use handlers::standard;
 pub use locations::{
-    Configuration, HelperEnvironment, HelperProvider, LocationServices, Locations, SnapshotSettings,
+    Configuration, HelperEnvironment, HelperProvider, LocationServices, Locations, ServiceSet,
+    SnapshotSettings,
 };
+pub use production::{Composed, Cursor, Production};
 pub use server::{Server, serve, serve_with};
 pub use services::{
     ArtifactProvider, ArtifactServices, CatalogProvider, CatalogServices, CatalogTask, Core,

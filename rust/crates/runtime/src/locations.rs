@@ -4,6 +4,7 @@ use std::{
     ops::Bound,
     path::{Component, Path, PathBuf},
     sync::{Arc, Mutex, PoisonError},
+    time::{Duration, Instant},
 };
 use ycoding_core::event_feed::Feed;
 use ycoding_core::platform::git;
@@ -63,15 +64,39 @@ struct Inner {
     client: Client,
     sessions: SessionStore,
     configuration: Configuration,
+    factory: Option<Arc<crate::production::Factory>>,
     feed: Feed,
     autonomy: autonomy::Service,
-    services: Mutex<BTreeMap<Key, Arc<LocationServices>>>,
+    services: Mutex<BTreeMap<Key, Cached>>,
+}
+
+struct Cached {
+    services: Arc<ServiceSet>,
+    released: Arc<Mutex<Instant>>,
 }
 
 #[derive(Clone)]
 pub struct Locations(Arc<Inner>);
 
 pub struct LocationServices {
+    inner: Arc<ServiceSet>,
+    released: Arc<Mutex<Instant>>,
+}
+
+impl std::ops::Deref for LocationServices {
+    type Target = ServiceSet;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl Drop for LocationServices {
+    fn drop(&mut self) {
+        *self.released.lock().unwrap_or_else(PoisonError::into_inner) = Instant::now();
+    }
+}
+
+pub struct ServiceSet {
     pub info: location::Info,
     pub permissions: Permissions,
     pub saved: SavedPermissions,
@@ -80,6 +105,8 @@ pub struct LocationServices {
     pub guardrails: Guardrails,
     pub prediction: Option<prediction::Service>,
     pub prompts: Option<prompt_generator::Service>,
+    pub agents: Arc<agent::Service>,
+    pub production: Option<crate::production::Composed>,
     snapshots: SnapshotSettings,
 }
 
@@ -113,10 +140,62 @@ impl Locations {
             client,
             sessions,
             configuration,
+            factory: None,
             feed,
             autonomy,
             services: Mutex::new(BTreeMap::new()),
         }))
+    }
+
+    pub(crate) fn with_factory(mut self, factory: Arc<crate::production::Factory>) -> Self {
+        Arc::get_mut(&mut self.0)
+            .expect("new Location map is unshared")
+            .factory = Some(factory);
+        self
+    }
+
+    pub fn pricing(
+        &self,
+        reference: &ycoding_core::session::usage_read::PricingRef,
+    ) -> Option<ycoding_core::session::usage_read::Pricing> {
+        let services = self
+            .location(&reference.directory, reference.workspace_id.as_ref())
+            .ok()?;
+        let composed = services.production.as_ref()?;
+        let saved = composed.credentials.all().ok()?;
+        let model = composed.models.catalog().get(
+            &ycoding_core::ycoding_schema::provider::Id(reference.provider.clone()),
+            &reference.model,
+            reference
+                .profile
+                .as_ref()
+                .map(|profile| ycoding_core::ycoding_schema::model::ProfileName(profile.clone()))
+                .as_ref(),
+            &saved,
+        )?;
+        Some(ycoding_core::session::usage_read::Pricing {
+            provider: model.cost,
+            router: vec![],
+        })
+    }
+
+    pub(crate) fn evict_idle(&self, now: Instant) -> usize {
+        let mut cache = self
+            .0
+            .services
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let before = cache.len();
+        cache.retain(|_, cached| {
+            Arc::strong_count(&cached.services) > 1
+                || now.saturating_duration_since(
+                    *cached
+                        .released
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner),
+                ) < Duration::from_secs(60 * 60)
+        });
+        before - cache.len()
     }
 
     pub fn session(
@@ -173,28 +252,31 @@ impl Locations {
     ) -> Result<Arc<LocationServices>, Failure> {
         let directory = canonical(directory)?;
         let key = (directory.clone(), workspace.cloned());
-        if let Some(services) = self.cached(&key) {
-            return Ok(services);
-        }
-        let project = project(&directory)?;
-        let built = Arc::new(self.build(&directory, workspace, project)?);
-        Ok(self
+        let mut cache = self
             .0
             .services
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .entry(key)
-            .or_insert(built)
-            .clone())
-    }
-
-    fn cached(&self, key: &Key) -> Option<Arc<LocationServices>> {
-        self.0
-            .services
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(key)
-            .cloned()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(cached) = cache.get(&key) {
+            return Ok(Arc::new(LocationServices {
+                inner: cached.services.clone(),
+                released: cached.released.clone(),
+            }));
+        }
+        let project = project(&directory)?;
+        let built = Arc::new(self.build(&directory, workspace, project)?);
+        let released = Arc::new(Mutex::new(Instant::now()));
+        cache.insert(
+            key,
+            Cached {
+                services: built.clone(),
+                released: released.clone(),
+            },
+        );
+        Ok(Arc::new(LocationServices {
+            inner: built,
+            released,
+        }))
     }
 
     fn build(
@@ -202,8 +284,17 @@ impl Locations {
         directory: &LosslessString,
         workspace: Option<&LosslessString>,
         project: Project,
-    ) -> Result<LocationServices, Failure> {
-        let configuration = &self.0.configuration;
+    ) -> Result<ServiceSet, Failure> {
+        let prepared = self
+            .0
+            .factory
+            .as_ref()
+            .map(|factory| factory.prepare(directory))
+            .transpose()?;
+        let mut configuration = prepared
+            .as_ref()
+            .map(|prepared| prepared.configuration.clone())
+            .unwrap_or_else(|| self.0.configuration.clone());
         let agents = configuration.agents.clone();
         let authority = Authority {
             store: self.0.client.clone(),
@@ -223,8 +314,18 @@ impl Locations {
             permissions.clone(),
             Settings {
                 paths: Paths {
-                    workdir: directory.clone(),
-                    project: project.directory.clone(),
+                    workdir: if prepared.is_some() {
+                        physical_path(Path::new(directory.as_str().ok_or_else(unrepresentable)?))?
+                    } else {
+                        directory.clone()
+                    },
+                    project: if prepared.is_some() {
+                        physical_path(Path::new(
+                            project.directory.as_str().ok_or_else(unrepresentable)?,
+                        ))?
+                    } else {
+                        project.directory.clone()
+                    },
                     ..configuration.guardrails.paths.clone()
                 },
                 ..configuration.guardrails.clone()
@@ -242,27 +343,9 @@ impl Locations {
                 directory: AbsolutePath::new(project.directory).map_err(|_| unrepresentable())?,
             },
         };
-        let dependencies = configuration
-            .helpers
-            .as_ref()
-            .and_then(|helpers| helpers(&info))
-            .map(|helpers| Dependencies {
-                store: self.0.sessions.clone(),
-                agents: configuration.agents.clone(),
-                generate: helpers.generate,
-                memory: helpers.memory,
-                permissions: permissions.clone(),
-                feed: self.0.feed.clone(),
-                location: location::Ref {
-                    directory: info.directory.clone(),
-                    workspace_id: info.workspace_id.clone(),
-                },
-            });
-        Ok(LocationServices {
-            prediction: dependencies.clone().map(|dependencies| {
-                prediction::Service::new(dependencies, self.0.autonomy.clone())
-            }),
-            prompts: dependencies.map(prompt_generator::Service::new),
+        let mut services = ServiceSet {
+            prediction: None,
+            prompts: None,
             info,
             saved: SavedPermissions {
                 store: self.0.client.clone(),
@@ -271,9 +354,54 @@ impl Locations {
             questions: Questions::new(authority.clone(), configuration.publisher.clone()),
             forms: Forms::new(authority, configuration.publisher.clone()),
             guardrails,
+            agents: configuration.agents.clone(),
+            production: None,
             snapshots: configuration.snapshots.clone(),
-        })
+        };
+        if let Some(prepared) = prepared {
+            let composed = self
+                .0
+                .factory
+                .as_ref()
+                .expect("prepared by factory")
+                .compose(&services, prepared)?;
+            let helpers = HelperEnvironment {
+                generate: Arc::new(composed.runner.clone()),
+                memory: composed.memory.clone(),
+            };
+            configuration.helpers = Some(Arc::new(move |_| Some(helpers.clone())));
+            services.production = Some(composed);
+        }
+        let dependencies = configuration
+            .helpers
+            .as_ref()
+            .and_then(|helpers| helpers(&services.info))
+            .map(|helpers| Dependencies {
+                store: self.0.sessions.clone(),
+                agents: services.agents.clone(),
+                generate: helpers.generate,
+                memory: helpers.memory,
+                permissions: services.permissions.clone(),
+                feed: self.0.feed.clone(),
+                location: location::Ref {
+                    directory: services.info.directory.clone(),
+                    workspace_id: services.info.workspace_id.clone(),
+                },
+            });
+        services.prediction = dependencies
+            .clone()
+            .map(|dependencies| prediction::Service::new(dependencies, self.0.autonomy.clone()));
+        services.prompts = dependencies.map(prompt_generator::Service::new);
+        Ok(services)
     }
+}
+
+pub(crate) fn physical_path(path: &Path) -> Result<LosslessString, Failure> {
+    std::fs::canonicalize(path)
+        .map_err(|_| Failure::Unavailable("Location guardrail directory is unavailable".into()))?
+        .to_str()
+        .map(LosslessString::from)
+        .ok_or_else(unrepresentable)
 }
 
 fn canonical(directory: &LosslessString) -> Result<LosslessString, Failure> {
@@ -353,4 +481,114 @@ fn unavailable(_: Error) -> Failure {
 
 fn unrepresentable() -> Failure {
     Failure::Unavailable("stored Location is not representable".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ycoding_core::process::guardrails::Limits;
+    use ycoding_core::ycoding_store::{Catalog, Metadata, Options, Store, TableDeclaration};
+
+    #[test]
+    fn idle_ttl_starts_when_the_last_location_lease_is_released() {
+        let directory = std::env::temp_dir().join(format!(
+            "location-ttl-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        const CATALOG: Catalog = Catalog::new(
+            1,
+            &[
+                TableDeclaration::of::<SessionTable>(),
+                TableDeclaration::of::<DirectoryTable>(),
+                TableDeclaration::of::<ProjectTable>(),
+                TableDeclaration::of::<ycoding_core::ycoding_store::analytics::DeliveryTable>(),
+                TableDeclaration::of::<ycoding_core::ycoding_store::analytics::IntentTable>(),
+            ],
+        );
+        let store = Store::initialize(
+            directory.join("store.redb"),
+            Options::core(),
+            CATALOG,
+            Metadata::new([1; 16], 1),
+        )
+        .unwrap();
+        let path: LosslessString = directory.to_str().unwrap().into();
+        let recorded = path.clone();
+        store
+            .submit(move |tx| {
+                ProjectTable::insert(
+                    tx,
+                    &ycoding_core::ycoding_store::project::Project {
+                        id: "prj_ttl".into(),
+                        worktree: recorded,
+                        vcs: None,
+                        name: None,
+                        icon_url: None,
+                        icon_url_override: None,
+                        icon_color: None,
+                        time_created: 1,
+                        time_updated: 1,
+                        time_initialized: None,
+                        sandboxes: vec![],
+                        commands: None,
+                    },
+                )
+            })
+            .unwrap()
+            .wait()
+            .unwrap();
+        let client = store.client();
+        let configuration = Configuration {
+            agents: Arc::new(agent::Service::new(vec![agent::empty("god".into())])),
+            publisher: Arc::new(|_| Ok(())),
+            helpers: None,
+            guardrails: Settings {
+                paths: Paths {
+                    workdir: path.clone(),
+                    project: path.clone(),
+                    home: path.clone(),
+                    tmpdir: None,
+                    trusted_paths: vec![],
+                },
+                global_roots: vec![],
+                custom: Arc::new(Vec::new),
+                enabled: true,
+                limits: Limits::default(),
+            },
+            snapshots: SnapshotSettings {
+                git: Arc::new(git::Service::new(1024)),
+                data: directory,
+                enabled: false,
+            },
+        };
+        let locations = Locations::new(
+            client.clone(),
+            SessionStore::new(client.clone()),
+            configuration,
+            Feed::attach(&client),
+            autonomy::Service::new(client),
+        );
+        let lease = locations.location(&path, None).unwrap();
+        assert_eq!(
+            locations.evict_idle(Instant::now() + Duration::from_secs(7200)),
+            0,
+            "leased services cannot be evicted"
+        );
+        drop(lease);
+        let released = Instant::now();
+        assert_eq!(
+            locations.evict_idle(released + Duration::from_secs(3599)),
+            0
+        );
+        assert_eq!(
+            locations.evict_idle(released + Duration::from_secs(3601)),
+            1,
+            "TTL must start at release, not at the next sweep"
+        );
+    }
 }

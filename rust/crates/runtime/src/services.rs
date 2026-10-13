@@ -62,6 +62,7 @@ pub struct Core {
     pub keep_awake: ycoding_core::platform::keep_awake::Service,
     pub provider_usage: Option<ProviderUsageResolver>,
     pub usage_pricer: Option<UsagePricer>,
+    pub(crate) maintenance: Option<Arc<crate::production::Maintenance>>,
 }
 
 pub type UsagePricer = Arc<
@@ -159,6 +160,7 @@ impl Core {
             sessions,
             execution,
             credentials,
+            maintenance: None,
         }
     }
 }
@@ -182,7 +184,7 @@ pub struct CatalogServices {
 pub type CatalogProvider =
     Arc<dyn Fn(&location::Info) -> Result<CatalogServices, String> + Send + Sync>;
 
-fn ephemeral(event: &policy::Event) -> Result<Ephemeral, String> {
+pub(crate) fn ephemeral(event: &policy::Event) -> Result<Ephemeral, String> {
     let path = JsonPath::default();
     let object = ObjectDecoder::new(&event.data, &path).map_err(|error| error.to_string())?;
     let session = match object
@@ -210,7 +212,7 @@ fn ephemeral(event: &policy::Event) -> Result<Ephemeral, String> {
     })
 }
 
-struct LocalExecution(&'static Execution);
+pub(crate) struct LocalExecution(pub(crate) &'static Execution);
 
 impl orchestration::Execution for LocalExecution {
     fn wake(&self, id: &session::Id) -> Outcome {

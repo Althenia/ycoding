@@ -225,13 +225,19 @@ pub struct ShellTool {
 
 impl Tool for ShellTool {
     fn definition(&self, name: &str) -> ToolDefinition {
-        definition(name, include_str!("shell.tool.json"))
+        Self::tool_definition(name)
     }
     fn permission(&self) -> Option<&str> {
         Some("shell")
     }
     fn settle(&self, input: JsonValue, context: Context) -> ToolFuture<'_> {
         Box::pin(async move { self.run(parse(&input)?, context).await })
+    }
+}
+
+impl ShellTool {
+    pub fn tool_definition(name: &str) -> ToolDefinition {
+        definition(name, include_str!("shell.tool.json"))
     }
 }
 

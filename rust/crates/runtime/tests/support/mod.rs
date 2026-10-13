@@ -24,9 +24,7 @@ use ycoding_core::session::{
 };
 use ycoding_core::tools::policy::Event as Published;
 use ycoding_core::ycoding_schema::{location, parse_json, permission};
-use ycoding_core::ycoding_store::{
-    Catalog, Metadata, Options, Store, TableDeclaration, analytics, project, session,
-};
+use ycoding_core::ycoding_store::{Metadata, Options, Store, project, session};
 use ycoding_protocol::{
     OPERATIONS,
     connection::{Budgets, Close, Config, Connection, Decision, Outcome},
@@ -37,51 +35,11 @@ use ycoding_runtime::{
     SnapshotSettings, serve_with,
 };
 
+pub mod catalog;
 pub mod wire;
+pub use catalog::{CATALOG, record};
 
 pub const WAIT: Duration = Duration::from_secs(5);
-
-const CATALOG: Catalog = Catalog::new(
-    1,
-    &[
-        TableDeclaration::of::<project::ProjectTable>(),
-        TableDeclaration::of::<project::WorkspaceTable>(),
-        TableDeclaration::of::<project::DirectoryTable>(),
-        TableDeclaration::of::<project::PermissionTable>(),
-        TableDeclaration::of::<session::SequenceTable>(),
-        TableDeclaration::of::<session::EventTable>(),
-        TableDeclaration::of::<session::SessionTable>(),
-        TableDeclaration::of::<session::MessageTable>(),
-        TableDeclaration::of::<session::PendingTable>(),
-        TableDeclaration::of::<session::TaskTable>(),
-        TableDeclaration::of::<session::NotificationTable>(),
-        TableDeclaration::of::<session::TodoTable>(),
-        TableDeclaration::of::<session::TodoStateTable>(),
-        TableDeclaration::of::<session::FileChangeTable>(),
-        TableDeclaration::of::<session::JobTable>(),
-        TableDeclaration::of::<session::RevisionTable>(),
-        TableDeclaration::of::<session::ContextStateTable>(),
-        TableDeclaration::of::<session::InstructionEntryTable>(),
-        TableDeclaration::of::<session::InstructionBlobTable>(),
-        TableDeclaration::of::<session::InstructionStateTable>(),
-        TableDeclaration::of::<ycoding_core::ycoding_store::resources::CredentialTable>(),
-        TableDeclaration::of::<ycoding_core::ycoding_store::resources::ConsentTable>(),
-        TableDeclaration::of::<ycoding_core::ycoding_store::resources::LatencyTable>(),
-        TableDeclaration::of::<ycoding_core::ycoding_store::resources::SequenceTable>(),
-        TableDeclaration::of::<ycoding_core::ycoding_store::resources::RequestTable>(),
-        TableDeclaration::of::<ycoding_core::ycoding_store::resources::UsageTable>(),
-        TableDeclaration::of::<ycoding_core::ycoding_store::resources::ContinuationGenerationTable>(
-        ),
-        TableDeclaration::of::<ycoding_core::ycoding_store::resources::ContinuationTable>(),
-        TableDeclaration::of::<ycoding_core::ycoding_store::resources::StateBlobTable>(),
-        TableDeclaration::of::<ycoding_core::ycoding_store::resources::StateLinkTable>(),
-        TableDeclaration::of::<ycoding_core::ycoding_store::resources::ShellTable>(),
-        TableDeclaration::of::<session::ManifestTable>(),
-        TableDeclaration::of::<session::ExclusionTable>(),
-        TableDeclaration::of::<analytics::DeliveryTable>(),
-        TableDeclaration::of::<analytics::IntentTable>(),
-    ],
-);
 
 pub const SESSIONS: &[&str] = &[
     "ses_rich",
@@ -353,42 +311,6 @@ fn rich_messages() -> Vec<session::Message> {
         .enumerate()
         .map(|(index, (id, kind, data))| message("ses_rich", id, kind, index as i64 + 1, data))
         .collect()
-}
-
-fn record(id: &str) -> session::Session {
-    session::Session {
-        id: id.into(),
-        project_id: "prj_one".into(),
-        workspace_id: None,
-        parent_id: None,
-        fork_session_id: None,
-        fork_message_id: None,
-        fork_seq: None,
-        directory: "/project".into(),
-        path: None,
-        title: format!("Title of {id}").into(),
-        cost: 0.0,
-        tokens_input: 0,
-        tokens_output: 0,
-        tokens_reasoning: 0,
-        tokens_cache_read: 0,
-        tokens_cache_write: 0,
-        revert: None,
-        permission: None,
-        autonomy: None,
-        autonomy_revision: 0,
-        orchestration_revision: 0,
-        agent: None,
-        model: None,
-        profile_binding: None,
-        daybreak: None,
-        time_created: 1,
-        time_updated: 1,
-        time_archived: None,
-        time_active: None,
-        time_pinned: None,
-        time_suspended: None,
-    }
 }
 
 pub fn services(auth: LocalAuth, core: bool) -> Services {

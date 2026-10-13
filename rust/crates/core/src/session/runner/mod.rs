@@ -507,6 +507,92 @@ impl Local {
             } = self
                 .resolve_model(&selection, &saved, saved_binding.as_ref())
                 .await?;
+            let mut prepared = llm::Request::new(model);
+            for (name, value) in agent.request.headers.iter() {
+                let invalid = || {
+                    error(
+                        "agent.request",
+                        "Selected agent request headers are invalid",
+                    )
+                };
+                let name = name.to_utf8().map_err(|_| invalid())?;
+                let JsonValue::String(value) = value else {
+                    return Err(invalid());
+                };
+                let value = value.to_utf8().map_err(|_| invalid())?;
+                prepared
+                    .model
+                    .defaults
+                    .http
+                    .headers
+                    .retain(|key, _| !key.eq_ignore_ascii_case(&name));
+                prepared.http.headers.insert(name, value);
+            }
+            let body = &agent.request.body.0;
+            for (name, target) in [
+                ("max_tokens", &mut prepared.generation.max_tokens),
+                ("temperature", &mut prepared.generation.temperature),
+                ("top_p", &mut prepared.generation.top_p),
+                ("top_k", &mut prepared.generation.top_k),
+                (
+                    "frequency_penalty",
+                    &mut prepared.generation.frequency_penalty,
+                ),
+                (
+                    "presence_penalty",
+                    &mut prepared.generation.presence_penalty,
+                ),
+                ("seed", &mut prepared.generation.seed),
+            ] {
+                if let Some(value) = body.get(&name.into()) {
+                    let JsonValue::Number(value) = value else {
+                        return Err(error(
+                            "agent.request",
+                            "Selected agent generation options are invalid",
+                        ));
+                    };
+                    *target = Some(*value);
+                }
+            }
+            if let Some(value) = body.get(&"stop".into()) {
+                let JsonValue::Array(values) = value else {
+                    return Err(error(
+                        "agent.request",
+                        "Selected agent stop sequences are invalid",
+                    ));
+                };
+                prepared.generation.stop = Some(
+                    values
+                        .iter()
+                        .map(|value| match value {
+                            JsonValue::String(value) => Ok(value.clone()),
+                            _ => Err(error(
+                                "agent.request",
+                                "Selected agent stop sequences are invalid",
+                            )),
+                        })
+                        .collect::<Result<_, _>>()?,
+                );
+            }
+            let mut overlay = ycoding_schema::JsonObject::new();
+            for (name, value) in body.iter().filter(|(name, _)| {
+                !matches!(
+                    name.as_str(),
+                    Some(
+                        "max_tokens"
+                            | "temperature"
+                            | "top_p"
+                            | "top_k"
+                            | "frequency_penalty"
+                            | "presence_penalty"
+                            | "seed"
+                            | "stop"
+                    )
+                )
+            }) {
+                overlay.insert(name.clone(), value.clone());
+            }
+            prepared.http.body = (!overlay.is_empty()).then_some(JsonValue::Object(overlay));
             if saved_binding != binding {
                 publish(
                     &services.store,
@@ -627,7 +713,6 @@ impl Local {
                     .cloned(),
             );
             let materialized = Arc::new(services.tools.materialize(&permissions));
-            let mut prepared = llm::Request::new(model);
             prepared.http.headers.extend(
                 helper::cursor_session_headers(
                     &session.id,
@@ -700,7 +785,10 @@ impl Local {
                 analysis.restrict(&session.id, &mut prepared)?;
             }
             prepared.system = cursor::system::system(&prepared.model, &prepared.system);
-            prepared.generation.max_tokens = prepared.model.defaults.output_limit;
+            prepared.generation.max_tokens = prepared
+                .generation
+                .max_tokens
+                .or(prepared.model.defaults.output_limit);
             let context_window = resolved.info.limit.context.get();
             let gate = self
                 .ensure_within_limit(compaction::GateInput {

@@ -1,3 +1,4 @@
+pub use ycoding_ai;
 pub use ycoding_schema;
 pub use ycoding_store;
 pub mod event_feed;

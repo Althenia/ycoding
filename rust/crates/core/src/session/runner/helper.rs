@@ -234,6 +234,9 @@ impl Local {
         let resolved = self
             .select_model(&selected, &saved, binding.as_ref())
             .ok()?;
+        if super::cursor_package(&resolved.resolved.info) && services.cursor.is_none() {
+            return None;
+        }
         if let Some(connection) = &resolved.connection {
             let value = connection.secret().domain().ok()?;
             if matches!(&value, ycoding_schema::credential::Value::OAuth(value) if value.method_id.as_lossless().as_str() == Some("claude-code"))

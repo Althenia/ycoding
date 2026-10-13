@@ -1946,10 +1946,57 @@ memory service. A Location without a provider, and a Session whose helper model
 does not resolve, answer the typed `unavailable` result rather than an error;
 the Session must exist, and a blank prompt intent is an invalid request.
 
+### Production runtime composition
+
+`ycoding_runtime::Core::production(client, Production)` is the application
+composition boundary. `Production` supplies native configuration `LoadOptions`,
+models.dev source/cache options, the installed ripgrep path, an optional Cursor
+identity and transport runtime, and an optional goal-model `autonomy::Steer`.
+The launcher owns path/environment selection, the Store, listening sockets,
+authentication, process identity, and shutdown. Core re-exports `ycoding_ai` so
+the runtime can name provider inputs through Core without a direct AI dependency.
+
+Each canonical directory/workspace key loads its own configuration and creates
+the built-in agent catalog described below, configured model
+resolver, tool registry, memory, permissions, guardrails, snapshots, and local
+runner. Credentials and provider HTTP execution are shared across Location sets.
+Production guardrails use physical Location, Project, home, and managed-root
+paths so filesystem targets share their path coordinates; stored Location
+identity remains unchanged.
+The runner applies selected-agent request headers as HTTP overlays, lowers
+generation options (including temperature, seed, and stop) through `llm::Generation`,
+and overlays remaining body fields while preserving unrelated model defaults.
+Invalid headers and generation option types fail before a Step starts.
+The registered direct leaves are read, write, edit, patch, glob, grep, shell,
+webfetch, websearch, worktree, memory, and project_artifact. The shell opens on
+first execution and uses `Execution::job_shells()` rather than separate Jobs.
+Built-in and ambient instruction sources and compaction/helper settings feed
+the runner. Prediction and prompt generation use that runner through
+`Configuration::helpers`; usage operations use the serving Location's catalog
+to price ledger records whose costs are absent.
+
+`LocationServices` leases a cached `ServiceSet`. Wire requests and process-global
+Session execution use the same map; an active lease pins the set. The idle
+deadline starts when the last lease is released, and maintenance evicts expired
+sets after 60 idle minutes. A rebuilt set rereads configuration. Retention runs
+at startup and one hour after each completed sweep, loading global-only
+configuration and consulting `Execution::active()` before deleting families.
+`Core::shutdown()` stops and joins maintenance and closes credential refreshes;
+the launcher must stop request intake and Session execution before calling it.
+
+`Production::steer` overrides goal continuation; when omitted, production binds
+`goal::Service` to the Location's agents and real runner. It does not install
+Session/control/MCP tool consumers, extension hosts, filesystem watches, live
+catalog discovery/reconciliation, or provider-quota refresh orchestration.
+The supplied Cursor transport receives a Location-owned encoded request context.
+
 Run `cargo test --locked -p ycoding-core --test session_prediction --test session_prompt_generator`
 from `rust`; the runtime wire behavior runs with
-`cargo test --locked -p ycoding-runtime --test helpers`. The tests drive the real runner against a local scripted
-OpenAI-compatible server and a real memory service. They do not script a
+`cargo test --locked -p ycoding-runtime --test helpers`. The production flow runs
+with `cargo test --locked -p ycoding-runtime --test production`; it builds Core
+from temporary on-disk configuration, serves helper and usage operations, and
+drives the real runner against a local scripted OpenAI-compatible server and a
+real memory service. These tests do not script a
 mid-stream usage report, so partial usage before cancellation is not covered
 and no memory search query is observed beyond the returned snippets.
 
@@ -2859,6 +2906,9 @@ file namespace outside the Location. Webfetch authorizes each redirect, rejects
 unsupported MIME types, and bounds response bodies. Websearch consumes explicit
 operational configuration and endpoints, sends the Exa or Parallel wire contract,
 and excludes credentials from settlement and transport diagnostics.
+`websearch::WebSearch::new` builds the standard native HTTP client and provider
+endpoints and derives the current UTC year. `ShellTool::tool_definition` exposes
+the shipped shell schema without opening a Location shell.
 
 Edit and patch share `platform::diff`, which ports `diffLines`, `structuredPatch`,
 `createTwoFilesPatch`, and `formatPatch`; patch parsing, fuzzy line derivation, and

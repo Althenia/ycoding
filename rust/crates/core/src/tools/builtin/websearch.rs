@@ -138,6 +138,26 @@ pub struct WebSearch {
     pub version: String,
     pub year: i32,
 }
+impl WebSearch {
+    pub fn new(config: Config, policy: Arc<LeafPolicy>, version: String) -> Result<Self, Failure> {
+        Ok(Self {
+            client: reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .map_err(|_| Failure::message("Web search client unavailable"))?,
+            config,
+            policy,
+            version,
+            exa_url: EXA_URL
+                .parse()
+                .map_err(|_| Failure::Defect("Invalid Exa URL".into()))?,
+            parallel_url: PARALLEL_URL
+                .parse()
+                .map_err(|_| Failure::Defect("Invalid Parallel URL".into()))?,
+            year: chrono::Datelike::year(&chrono::Utc::now()),
+        })
+    }
+}
 impl Tool for WebSearch {
     fn definition(&self, name: &str) -> ToolDefinition {
         ToolDefinition { name: name.into(), description: format!("Search the web using the session's local web search provider. Use this for current information beyond knowledge cutoff.\n\nThis is a provider-independent local tool backed by Exa or Parallel. Provider-hosted web search tools are separate and execute at the model provider.\n\nOptional controls support result count, live crawling ('fallback' or 'preferred'), search type ('auto', 'fast', or 'deep'), and maximum context characters.\n\nThe current year is {}. Use this year when searching for recent information or current events.", self.year).into(), input_schema: parse_json(r#"{"type":"object","properties":{"query":{"type":"string","description":"Websearch query"},"numResults":{"anyOf":[{"type":"integer","allOf":[{"exclusiveMinimum":0},{"maximum":20}]},{"type":"null"}],"description":"Number of search results to return (default: 8, maximum: 20)"},"livecrawl":{"anyOf":[{"type":"string","enum":["fallback","preferred"]},{"type":"null"}],"description":"Live crawl mode - 'fallback': use live crawling as backup if cached unavailable, 'preferred': prioritize live crawling (default: 'fallback')"},"type":{"anyOf":[{"type":"string","enum":["auto","fast","deep"]},{"type":"null"}],"description":"Search type - 'auto': balanced search (default), 'fast': quick results, 'deep': comprehensive search"},"contextMaxCharacters":{"anyOf":[{"type":"integer","allOf":[{"exclusiveMinimum":0},{"maximum":50000}]},{"type":"null"}],"description":"Maximum characters for context string optimized for models (default: 10000, maximum: 50000)"}},"required":["query"],"additionalProperties":false}"#).unwrap(), output_schema: Some(parse_json(r#"{"type":"object","properties":{"provider":{"type":"string","enum":["exa","parallel"]},"text":{"type":"string"}},"required":["provider","text"],"additionalProperties":false}"#).unwrap()), cache: None, metadata: None, native: None }
