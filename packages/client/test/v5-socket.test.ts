@@ -236,13 +236,17 @@ test("REQ-WIRE-009/011 rediscovery replaces ownership and never replays a mutati
 
 test("REQ-WIRE-011 failed finite log is incomplete; PublicEvents retain delivery order", async () => {
   const peer = new ScriptedPeer()
-  peer.onRequest = (dispatch) =>
-    dispatch.operation.diagnosticName === "event.unsubscribe"
-      ? peer.result(dispatch, {
-          typeName: event_unsubscribe_ResultSchema.typeName,
-          payload: encodeStrict(event_unsubscribe_ResultSchema, create(event_unsubscribe_ResultSchema, { data: {} })),
-        })
-      : peer.subscribe(dispatch)
+  peer.onRequest = (dispatch) => {
+    if (dispatch.operation.diagnosticName === "event.unsubscribe") {
+      peer.result(dispatch, {
+        typeName: event_unsubscribe_ResultSchema.typeName,
+        payload: encodeStrict(event_unsubscribe_ResultSchema, create(event_unsubscribe_ResultSchema, { data: {} })),
+      })
+      peer.end("subscription-1")
+      return
+    }
+    peer.subscribe(dispatch)
+  }
   const client = make({
     endpoint,
     socket: () => {
@@ -310,6 +314,52 @@ test("REQ-WIRE-011 finite log completes only after the final ordered batch and S
     client.transport.close()
   }
 })
+
+test.each(["before", "after"] as const)(
+  "returned subscription drains late batches until StreamEnd %s unsubscribe settlement",
+  async (order) => {
+    const peer = new ScriptedPeer()
+    let subscriptions = 0
+    peer.onRequest = (dispatch) => {
+      if (dispatch.operation.diagnosticName === "event.subscribe") {
+        peer.subscribe(dispatch, `subscription-${++subscriptions}`)
+        return
+      }
+      if (dispatch.operation.diagnosticName === "event.unsubscribe") {
+        peer.events(`subscription-${subscriptions}`, [catalog("evt_late_one"), catalog("evt_late_two")])
+        if (order === "before") peer.end(`subscription-${subscriptions}`)
+        peer.result(dispatch, {
+          typeName: event_unsubscribe_ResultSchema.typeName,
+          payload: encodeStrict(event_unsubscribe_ResultSchema, create(event_unsubscribe_ResultSchema, { data: {} })),
+        })
+        return
+      }
+      peer.result(dispatch, { typeName: health_get_ResultSchema.typeName, payload: health() })
+    }
+    const client = make({
+      endpoint,
+      budgets: { eventQueueCount: 1 },
+      socket: () => {
+        queueMicrotask(() => peer.socket.open())
+        return peer.socket
+      },
+    })
+    try {
+      for (let repeat = 0; repeat < 3; repeat++) {
+        const events = client.event.subscribe()[Symbol.asyncIterator]()
+        await events.next()
+        await events.return?.()
+        expect(await events.next()).toEqual({ done: true, value: undefined })
+        if (order === "after") peer.end(`subscription-${subscriptions}`)
+        expect((await client.health.get()).healthy).toBe(true)
+        expect(client.transport.state).toBe("established")
+      }
+    } finally {
+      client.transport.close()
+    }
+    expect(client.transport.retainedBytes).toBe(0)
+  },
+)
 
 test("Session-owned Form paths work; global Form paths fail explicitly before transmission", async () => {
   const peer = new ScriptedPeer()

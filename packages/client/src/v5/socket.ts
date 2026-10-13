@@ -66,7 +66,10 @@ type Owner = {
   timer?: ReturnType<typeof setInterval>
   detach?: () => void
   pending: Map<string, Pending>
-  streams: Map<string, { stream: DeliveryStream<unknown>; operation: OperationDescriptor; scope: Scope }>
+  streams: Map<
+    string,
+    { stream: DeliveryStream<unknown>; operation: OperationDescriptor; scope: Scope; closing: boolean }
+  >
   opening: number
   epoch?: string
   sourceEpoch?: string
@@ -506,15 +509,16 @@ export class LocalTransport {
               continue
             }
             pending.stream.subscriptionID = subscriptionID
-            owner.streams.set(subscriptionID, {
+            const subscription = {
               stream: pending.stream,
               operation: pending.operation,
               scope: pending.scope,
-            })
+              closing: false,
+            }
+            owner.streams.set(subscriptionID, subscription)
             pending.stream.onReturn(async () => {
-              owner.streams.delete(subscriptionID)
+              subscription.closing = true
               if (!owner.active || owner !== this.#owner) return
-              this.process(owner, connection.releaseSubscription(subscriptionID, performance.now()))
               await this.execute(
                 owner,
                 { method: "event.unsubscribe", operationID: 4001 },
@@ -544,6 +548,11 @@ export class LocalTransport {
       if (decision.type === "events") {
         const subscription = owner.streams.get(decision.subscriptionID)
         if (!subscription) continue
+        if (subscription.closing) {
+          if (decision.ordinal !== undefined)
+            this.process(owner, connection.consume(LedgerClass.EVENT, decision.ordinal, performance.now()))
+          continue
+        }
         const cost =
           frameBytes || decision.batch.events.reduce((sum, event) => sum + (event.event?.payload.length ?? 0) + 512, 0)
         if (
