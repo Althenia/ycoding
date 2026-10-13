@@ -761,10 +761,10 @@ impl Provider {
                 }
             })
             .await;
-            if drained.is_ok_and(|result| result.is_ok()) {
-                if let (Some(store), Some(key)) = (&self.config.persistence, &session_key) {
-                    store.save(&key.clone().into(), &session.snapshot).await;
-                }
+            if drained.is_ok_and(|result| result.is_ok())
+                && let (Some(store), Some(key)) = (&self.config.persistence, &session_key)
+            {
+                store.save(&key.clone().into(), &session.snapshot).await;
             }
             if let Some(run) = session.release_run() {
                 run.writer.cancel();

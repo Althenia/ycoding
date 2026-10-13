@@ -98,12 +98,11 @@ pub async fn model(client: &reqwest::Client, id: &str, config: Config) -> Result
     route.auth = Auth::Remove("x-api-key".into()).and_then(Auth::bearer(Credential::value(token)));
     if let Some(JsonValue::Object(headers)) = json::get(&body, "headers") {
         for (name, value) in headers.iter() {
-            if let (Some(name), Some(value)) = (name.as_str(), json::text(value)) {
-                if !name.eq_ignore_ascii_case("x-api-key")
-                    && !name.eq_ignore_ascii_case("authorization")
-                {
-                    route.headers.insert(name.into(), value.into());
-                }
+            if let (Some(name), Some(value)) = (name.as_str(), json::text(value))
+                && !name.eq_ignore_ascii_case("x-api-key")
+                && !name.eq_ignore_ascii_case("authorization")
+            {
+                route.headers.insert(name.into(), value.into());
             }
         }
     }

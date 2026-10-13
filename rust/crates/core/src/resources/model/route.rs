@@ -73,15 +73,18 @@ impl ycoding_ai::claude_code::Account for ClaudeAccount {
         };
         Some(ycoding_ai::claude_code::billing_sample(&user.text))
     }
-    fn observe(&self, observation: ycoding_schema::provider_usage::Observation) -> Result<(), ()> {
+    fn observe(
+        &self,
+        observation: ycoding_schema::provider_usage::Observation,
+    ) -> Result<(), ycoding_ai::claude_code::ObservationError> {
         self.host
             .credentials
             .current_account(&self.expected)
-            .map_err(|_| ())?;
+            .map_err(|_| ycoding_ai::claude_code::ObservationError)?;
         self.host
             .quota
             .observe(observation, Some(super::account_identity(&self.expected)))
-            .map_err(|_| ())
+            .map_err(|_| ycoding_ai::claude_code::ObservationError)
     }
 }
 

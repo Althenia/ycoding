@@ -368,10 +368,10 @@ impl Account for FixtureAccount {
         self.samples.lock().unwrap().push(session.into());
         (session == "ses_durable").then(|| "dur".into())
     }
-    fn observe(&self, observation: Observation) -> Result<(), ()> {
+    fn observe(&self, observation: Observation) -> Result<(), claude_code::ObservationError> {
         self.observations.lock().unwrap().push(observation);
         if self.observer_fails {
-            return Err(());
+            return Err(claude_code::ObservationError);
         }
         Ok(())
     }

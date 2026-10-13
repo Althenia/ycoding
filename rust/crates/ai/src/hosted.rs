@@ -390,89 +390,85 @@ struct Parser {
 impl StreamParser for Parser {
     fn push(&mut self, event: &JsonValue) -> Result<Vec<Event>, Error> {
         let mut event = event.clone();
-        if self.vendor == Vendor::Alibaba {
-            if let Some(mut usage) = get(&event, "usage").cloned() {
-                if let Some(mut details) = get(&usage, "prompt_tokens_details").cloned() {
-                    if let Some(write) = get(&details, "cache_creation_input_tokens").cloned() {
-                        json::set(&mut details, "cache_write_tokens", write);
-                    }
-                    json::set(&mut usage, "prompt_tokens_details", details);
+        if self.vendor == Vendor::Alibaba
+            && let Some(mut usage) = get(&event, "usage").cloned()
+        {
+            if let Some(mut details) = get(&usage, "prompt_tokens_details").cloned() {
+                if let Some(write) = get(&details, "cache_creation_input_tokens").cloned() {
+                    json::set(&mut details, "cache_write_tokens", write);
                 }
-                json::set(&mut event, "usage", usage);
+                json::set(&mut usage, "prompt_tokens_details", details);
             }
+            json::set(&mut event, "usage", usage);
         }
-        if self.vendor == Vendor::Mistral {
-            if let Some(JsonValue::Array(choices)) = get(&event, "choices").cloned() {
-                json::set(
-                    &mut event,
-                    "choices",
-                    JsonValue::Array(
-                        choices
-                            .into_iter()
-                            .map(|mut choice| {
-                                if let Some(mut delta) = get(&choice, "delta").cloned() {
-                                    if let Some(JsonValue::Array(content)) =
-                                        get(&delta, "content").cloned()
-                                    {
-                                        let text = crate::openai_shared::join(
-                                            content.iter().filter_map(|p| {
+        if self.vendor == Vendor::Mistral
+            && let Some(JsonValue::Array(choices)) = get(&event, "choices").cloned()
+        {
+            json::set(
+                &mut event,
+                "choices",
+                JsonValue::Array(
+                    choices
+                        .into_iter()
+                        .map(|mut choice| {
+                            if let Some(mut delta) = get(&choice, "delta").cloned() {
+                                if let Some(JsonValue::Array(content)) =
+                                    get(&delta, "content").cloned()
+                                {
+                                    let text = crate::openai_shared::join(
+                                        content.iter().filter_map(|p| {
+                                            get(p, "text").and_then(json::string).cloned()
+                                        }),
+                                        "",
+                                    );
+                                    let reasoning = crate::openai_shared::join(
+                                        content
+                                            .iter()
+                                            .filter_map(|p| get(p, "thinking"))
+                                            .flat_map(|v| json::array(v).unwrap_or(&[]))
+                                            .filter_map(|p| {
                                                 get(p, "text").and_then(json::string).cloned()
                                             }),
-                                            "",
-                                        );
-                                        let reasoning = crate::openai_shared::join(
-                                            content
-                                                .iter()
-                                                .filter_map(|p| get(p, "thinking"))
-                                                .flat_map(|v| json::array(v).unwrap_or(&[]))
-                                                .filter_map(|p| {
-                                                    get(p, "text").and_then(json::string).cloned()
-                                                }),
-                                            "",
-                                        );
-                                        json::set(&mut delta, "content", s(text));
-                                        if !reasoning.is_empty() {
-                                            json::set(
-                                                &mut delta,
-                                                "reasoning_content",
-                                                s(reasoning),
-                                            );
-                                        }
+                                        "",
+                                    );
+                                    json::set(&mut delta, "content", s(text));
+                                    if !reasoning.is_empty() {
+                                        json::set(&mut delta, "reasoning_content", s(reasoning));
                                     }
-                                    if let Some(JsonValue::Array(tools)) =
-                                        get(&delta, "tool_calls").cloned()
-                                    {
-                                        json::set(
-                                            &mut delta,
-                                            "tool_calls",
-                                            JsonValue::Array(
-                                                tools
-                                                    .into_iter()
-                                                    .map(|mut tool| {
-                                                        if get(&tool, "index").is_none() {
-                                                            json::set(
-                                                                &mut tool,
-                                                                "index",
-                                                                JsonValue::Number(
-                                                                    self.next_tool_index as f64,
-                                                                ),
-                                                            );
-                                                            self.next_tool_index += 1;
-                                                        }
-                                                        tool
-                                                    })
-                                                    .collect(),
-                                            ),
-                                        );
-                                    }
-                                    json::set(&mut choice, "delta", delta);
                                 }
-                                choice
-                            })
-                            .collect(),
-                    ),
-                );
-            }
+                                if let Some(JsonValue::Array(tools)) =
+                                    get(&delta, "tool_calls").cloned()
+                                {
+                                    json::set(
+                                        &mut delta,
+                                        "tool_calls",
+                                        JsonValue::Array(
+                                            tools
+                                                .into_iter()
+                                                .map(|mut tool| {
+                                                    if get(&tool, "index").is_none() {
+                                                        json::set(
+                                                            &mut tool,
+                                                            "index",
+                                                            JsonValue::Number(
+                                                                self.next_tool_index as f64,
+                                                            ),
+                                                        );
+                                                        self.next_tool_index += 1;
+                                                    }
+                                                    tool
+                                                })
+                                                .collect(),
+                                        ),
+                                    );
+                                }
+                                json::set(&mut choice, "delta", delta);
+                            }
+                            choice
+                        })
+                        .collect(),
+                ),
+            );
         }
         if self.vendor == Vendor::Perplexity {
             if let Some(citations) = get(&event, "citations").and_then(json::array) {

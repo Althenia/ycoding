@@ -36,10 +36,13 @@ pub struct Credentials {
     pub subscription_type: Option<String>,
 }
 pub type Resolution<'a> = Pin<Box<dyn Future<Output = Result<Credentials, Error>> + Send + 'a>>;
+#[derive(Debug)]
+pub struct ObservationError;
+
 pub trait Account: Send + Sync {
     fn resolve(&self, force_refresh: bool) -> Resolution<'_>;
     fn billing_sample(&self, session: &str) -> Option<LosslessString>;
-    fn observe(&self, observation: Observation) -> Result<(), ()>;
+    fn observe(&self, observation: Observation) -> Result<(), ObservationError>;
 }
 
 pub fn reconnect() -> Error {
