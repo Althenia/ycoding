@@ -90,7 +90,7 @@ pub struct Asset {
     pub body: String,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct ViewAssets {
     pub assets: HashMap<String, Asset>,
     pub policy: String,

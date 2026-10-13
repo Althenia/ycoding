@@ -241,6 +241,24 @@ fn start_message(capture: &str) -> Value {
 }
 
 #[tokio::test]
+async fn default_bridge_serves_the_embedded_live_page_without_host_asset_configuration() {
+    timed(async {
+        let f = Fixture::configured(Recorder::new(), |options| {
+            options.assets = ViewAssets::default();
+        })
+        .await;
+        let response = f.send(Method::GET, "/view", None, None, None, &[]).await;
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response.text().await.unwrap(),
+            include_str!("../../../../extensions/meeting/view/index.html")
+        );
+        f.bridge.close().await;
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn static_page_and_exact_assets_are_key_free_no_store_and_protected_by_loopback_host() {
     timed(async {
         let f = Fixture::start(Recorder::new()).await;

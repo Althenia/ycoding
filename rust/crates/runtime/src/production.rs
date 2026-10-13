@@ -1183,6 +1183,8 @@ impl Factory {
                         services.info.project.id.as_lossless().clone(),
                     )
                     .map_err(|_| unavailable("Project identity"))?,
+                    project_directory: &project,
+                    git: &self.git,
                     directory: &directory,
                     mcp: mcp.clone(),
                 },

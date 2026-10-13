@@ -1,4 +1,5 @@
 pub mod ask;
+mod assets;
 pub mod audio;
 pub mod bridge;
 pub mod client;

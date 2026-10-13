@@ -14,6 +14,7 @@ use ycoding_core::{
         service::{MeetingService, ServiceOptions, saved_config},
         store::MeetingDatabase,
     },
+    platform::{git, project_identity},
     resources::{config::Roots, mcp},
     session::{
         analysis::{Analysis, Generator},
@@ -45,6 +46,8 @@ pub(super) struct Attached {
 pub(super) struct Target<'a> {
     pub reference: location::Ref,
     pub project: project::Id,
+    pub project_directory: &'a Path,
+    pub git: &'a git::Service,
     pub directory: &'a Path,
     pub mcp: Arc<mcp::Service>,
 }
@@ -154,8 +157,33 @@ async fn start(
             .map_err(|error| error.to_string())?,
         ),
     };
+    let resolved = project_identity::resolve(target.git, target.directory)
+        .map_err(|error| error.to_string())?;
+    let now = crate::ids::now_millis();
+    let project = ycoding_core::ycoding_store::project::Project {
+        id: target.project.as_lossless().clone(),
+        worktree: target
+            .project_directory
+            .to_str()
+            .ok_or("Meeting Project directory is not UTF-8")?
+            .into(),
+        vcs: resolved
+            .vcs
+            .filter(|_| target.project.as_lossless().as_str() == Some(&resolved.id))
+            .map(|vcs| vcs.kind.as_str().into()),
+        name: None,
+        icon_url: None,
+        icon_url_override: None,
+        icon_color: None,
+        time_created: now,
+        time_updated: now,
+        time_initialized: None,
+        sandboxes: vec![],
+        commands: None,
+    };
+    let store = Service::new(client.clone());
     let generator = Arc::new(Generator::new(
-        Service::new(client.clone()),
+        store.clone(),
         execution.coordinator().clone(),
         analysis.clone(),
         target.reference,
@@ -165,7 +193,15 @@ async fn start(
     let sessions = generator.clone();
     let create_session: SessionFactory = Arc::new(move |parent| {
         let generator = sessions.clone();
-        Box::pin(async move { generator.create_session(parent.as_deref()).await })
+        let store = store.clone();
+        let project = project.clone();
+        Box::pin(async move {
+            store
+                .record_project(project, None)
+                .await
+                .map_err(|error| error.to_string())?;
+            generator.create_session(parent.as_deref()).await
+        })
     });
     let mcp = Arc::new(ServiceMcp::shared(target.mcp));
     let mut options = ServiceOptions::new(directory, config, create_session);

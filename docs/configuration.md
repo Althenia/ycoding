@@ -177,6 +177,16 @@ The background update check resolves the newest release from the same GitHub Rel
 
 ### Meeting capture
 
+The Rust backend enables Meeting with `ycoding-runtime --meeting`. Each booted
+Location gets one Meeting service and an authenticated numeric-loopback bridge.
+Its live-page assets and Python worker source are compiled into the executable;
+packaged runs need neither an adjacent view directory nor a `worker.py` file.
+The configured `pythonExecutable` and local speech dependencies remain required.
+The Meeting directory's private `settings.json` overrides defaults; enabling
+Meeting does not download weights or start recording. Native clients discover
+the private `bridge.json` descriptor and obtain a separate view key for the
+consent-led browser capture page.
+
 Meeting requires the native Bun-built `ycoding` executable. The Node CLI excludes Meeting; `meeting` and `serve --meeting` exit nonzero with an error directing you to the native executable, without starting a meeting server or arming capture.
 
 `ycoding meeting [directory] [--no-open]` starts a private server with the bundled meeting runtime for the directory (default: the current directory), arms a meeting, and opens or prints its local live page; it reuses a meeting runtime that already serves the directory. `ycoding serve --meeting` starts a server with the same runtime plugin. The live page owns browser-tab audio capture using its per-bridge view key, with fresh participant consent and an optional microphone; no capture extension or pairing is required. Keep it open while recording. Speech prerequisites and recording consent are described in [meeting intelligence](./meeting-intelligence.md#ycoding-meeting).

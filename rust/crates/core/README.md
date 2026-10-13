@@ -672,8 +672,12 @@ outcome and an invalid reply.
 
 `bridge::Bridge::start(Options, Arc<dyn Handlers>)` serves Axum on `127.0.0.1`
 only. `Handlers` supplies the control, capture, disconnect, state-view and ask
-callbacks; the host supplies the static live-page assets and their
-content-security policy in `Options.assets`. The bridge issues one random view
+callbacks. `Options.assets` and `ServiceOptions.assets` default to the complete
+compile-time embedded `extensions/meeting/view` page, including its combined
+font and page stylesheet, JavaScript modules and brand mark, with the same
+content-security policy as the presentation client. A packaged runtime serves
+those exact bytes without adjacent page files or a source checkout. The host
+can supply an explicit asset set in `Options.assets`. The bridge issues one random view
 key per run, available only through the authenticated `{"action":"view"}`
 control request. The controller credential and the view key are separate:
 `/control` requires the controller credential and no `Origin`; `/view/*` requires
@@ -695,7 +699,10 @@ embedded and passed as `-c`) over newline JSON on stdin/stdout through
 `platform::process`. Requests are limited to 12 MiB, responses to 2 MiB, retained
 stderr to 8192 characters and 33 lines, and each request to the configured
 `requestTimeoutMs`. The worker starts lazily with `HF_HUB_CACHE` set to the
-configured cache. A timeout, protocol violation, write failure, crash or
+configured cache. Packaged runs do not resolve a worker file beside either
+executable: the same source is embedded in the runtime and passed to the configured
+`pythonExecutable`. An unavailable executable fails visibly without child state.
+A timeout, protocol violation, write failure, crash or
 cancellation fails every pending request, marks the provider unhealthy and
 reaps the child; a crash message carries only the last stderr line. Disposal
 closes stdin, sends `SIGTERM`, escalates to `SIGKILL` after two seconds and waits
@@ -822,10 +829,25 @@ bridge reports `ask_unavailable`. `approve`, `reject`, `correct`, retrieval and
 (`ServiceOptions.create_session`) that returns the Session id stored with each
 meeting.
 
+Production's Meeting Session factory records the resolved Project through the
+existing idempotent Session-store operation before creating an analysis Session.
+This supports a fresh Location booted through a read such as `agent.list`, without
+requiring a pre-existing foreground Session or marking the directory opened.
+
 Run the focused checks from `rust` with
 `cargo test --locked -p ycoding-core --test 'meeting_*'`. They use real loopback
 bridges, real files and child processes, and a Python stand-in worker (`python3`
 on `PATH`); they do not load a model or touch the Hugging Face cache.
+
+`cargo test --locked -p ycoding-runtime --test meeting_clients` launches a fresh
+real runtime copied to a directory without adjacent assets, opts in with
+`--meeting`, boots a Location through `agent.list`, and runs the existing Bun
+discovery/control client, live-page delivery and rendered TUI against its bridge.
+It checks exact assets against the presentation client's `viewAssets`, capture
+and stop responses, consent and model-install authority separation, final
+transcript rendering, and descriptor/lock cleanup. Only speech inference is
+replaced by a local protocol worker; no model download or provider request is
+needed. Native audio and Windows are outside that Unix integration check.
 
 ## Durable Session foundation
 
