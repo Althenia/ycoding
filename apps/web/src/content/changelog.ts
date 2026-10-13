@@ -22,6 +22,18 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.10.7",
+    date: "2026-10-13",
+    title: "Background Chrome and computer use",
+    tags: ["Changed"],
+    changes: [
+      { tag: "Changed", text: "Chrome control keeps working in the background with real input: clicks and scrolls on a background tab or in an unfocused or minimized window are trusted mouse input that carry user activation, so popups, clipboard access, and file pickers work without bringing the tab forward. While YCoding controls a tab, the page reports itself visible and is not background-throttled; detaching ends this." },
+      { tag: "Changed", text: "Browser action results no longer include the input field." },
+      { tag: "Changed", text: "macOS computer use runs one persistent YCoding Computer Use helper per YCoding process over a private local socket instead of launching the helper for every operation." },
+      { tag: "Changed", text: "When a background app brings itself to the front in response to a computer-use click or key press, YCoding puts your original app and window back in front within the same action." },
+    ],
+  },
+  {
     version: "0.10.6",
     date: "2026-10-13",
     title: "Muse (Meta) subscriptions and quota",
