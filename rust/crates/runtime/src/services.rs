@@ -40,6 +40,8 @@ pub struct Core {
     pub credentials: credential::Service,
     pub browser: Option<Arc<service::Service>>,
     pub isolated_browser: Option<IsolatedBrowserResolver>,
+    pub telemetry: ycoding_core::telemetry::Service,
+    pub keep_awake: ycoding_core::platform::keep_awake::Service,
 }
 
 pub type IsolatedBrowserResolver =
@@ -66,6 +68,8 @@ impl Core {
         Self {
             browser: None,
             isolated_browser: None,
+            telemetry: ycoding_core::telemetry::Service::new(client.clone()),
+            keep_awake: ycoding_core::platform::keep_awake::Service::new(),
             locations: Locations::new(
                 client,
                 sessions.clone(),

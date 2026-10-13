@@ -3,6 +3,7 @@ pub mod computer;
 pub mod diff;
 pub mod filesystem;
 pub mod git;
+pub mod keep_awake;
 pub mod patch;
 pub mod process;
 pub mod project_copy;

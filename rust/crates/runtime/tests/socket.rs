@@ -443,12 +443,12 @@ async fn unwired_operations_return_typed_unavailable_errors() {
     bounded(async {
         let server = start(services(LocalAuth::disabled(), true), standard().unwrap()).await;
         let mut client = Client::open(server.address(), &[]).await.unwrap();
-        let descriptor = operation("keepAwake.get");
-        let payload = rejected(client.call("keepAwake.get", machine(), Vec::new()).await);
+        let descriptor = operation("remote.get");
+        let payload = rejected(client.call("remote.get", machine(), Vec::new()).await);
         assert!(declared(&descriptor, &payload), "{}", payload.type_name);
         let error = v5::InvalidRequestError::decode(payload.payload.as_slice()).unwrap();
         assert_eq!(units(&error.kind.unwrap()), "unavailable");
-        assert!(units(&error.message).contains("keepAwake.get has no Core service wired"));
+        assert!(units(&error.message).contains("remote.get has no Core service wired"));
         server.shutdown().await.unwrap();
     })
     .await;
@@ -582,6 +582,8 @@ async fn every_local_operation_answers_with_a_declared_typed_outcome() {
                 "isolatedBrowser.status",
                 "isolatedBrowser.stop",
                 "isolatedBrowser.tabs",
+                "keepAwake.get",
+                "keepAwake.set",
                 "permission.request.list",
                 "permission.saved.list",
                 "permission.saved.remove",
@@ -655,7 +657,11 @@ async fn every_local_operation_answers_with_a_declared_typed_outcome() {
                 "session.unpin",
                 "session.usage",
                 "session.usageReport",
-                "session.wait"
+                "session.wait",
+                "telemetry.append",
+                "telemetry.consent.get",
+                "telemetry.consent.set",
+                "telemetry.list"
             ]
         );
         let environment = Arc::new(ycoding_runtime::Environment {

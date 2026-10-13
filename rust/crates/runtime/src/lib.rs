@@ -13,6 +13,7 @@ mod handlers;
 mod health;
 mod ids;
 mod isolated_browser;
+mod keep_awake;
 mod locations;
 mod log;
 mod message;
@@ -31,6 +32,7 @@ mod session_revert;
 mod session_services;
 mod session_state;
 mod session_subagent;
+mod telemetry;
 
 pub use auth::LocalAuth;
 pub use dispatch::{Bulk, Dispatcher, Failure, Invocation, RegistrationError, Settled};

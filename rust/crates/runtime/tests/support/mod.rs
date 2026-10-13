@@ -65,6 +65,9 @@ const CATALOG: Catalog = Catalog::new(
         TableDeclaration::of::<session::InstructionBlobTable>(),
         TableDeclaration::of::<session::InstructionStateTable>(),
         TableDeclaration::of::<ycoding_core::ycoding_store::resources::CredentialTable>(),
+        TableDeclaration::of::<ycoding_core::ycoding_store::resources::ConsentTable>(),
+        TableDeclaration::of::<ycoding_core::ycoding_store::resources::LatencyTable>(),
+        TableDeclaration::of::<ycoding_core::ycoding_store::resources::SequenceTable>(),
         TableDeclaration::of::<ycoding_core::ycoding_store::resources::RequestTable>(),
         TableDeclaration::of::<ycoding_core::ycoding_store::resources::UsageTable>(),
         TableDeclaration::of::<ycoding_core::ycoding_store::resources::ContinuationGenerationTable>(

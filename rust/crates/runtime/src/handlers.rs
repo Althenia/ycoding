@@ -15,6 +15,12 @@ use ycoding_protocol::{OPERATIONS, v5};
 
 pub fn standard() -> Result<Dispatcher, RegistrationError> {
     let mut dispatcher = Dispatcher::new(OPERATIONS.clone());
+    dispatcher.handle("telemetry.append", crate::telemetry::append)?;
+    dispatcher.handle("telemetry.list", crate::telemetry::list)?;
+    dispatcher.handle("telemetry.consent.get", crate::telemetry::consent_get)?;
+    dispatcher.handle("telemetry.consent.set", crate::telemetry::consent_set)?;
+    dispatcher.handle("keepAwake.get", crate::keep_awake::get)?;
+    dispatcher.handle("keepAwake.set", crate::keep_awake::set)?;
     dispatcher.handle("health.get", health_get)?;
     dispatcher.handle("health.stop", health::stop)?;
     dispatcher.handle("server.get", server)?;

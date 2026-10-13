@@ -95,6 +95,7 @@ enum Body {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Failure {
+    TelemetryDisabled,
     Invalid(String),
     InvalidField {
         message: String,
@@ -349,6 +350,10 @@ impl Failure {
     fn payload(self, descriptor: &v5::OperationDescriptor) -> v5::TypedPayload {
         let declared = |name: String| descriptor.error_types.contains(&name);
         match self {
+            Failure::TelemetryDisabled if declared(v5::TelemetryDisabled::full_name()) => {
+                encoded(v5::TelemetryDisabled { tag: 1 })
+            }
+            Failure::TelemetryDisabled => invalid("Telemetry disabled", "disabled"),
             Failure::Unauthorized(message) => encoded(v5::UnauthorizedError {
                 tag: 1,
                 message: convert::text(&message),

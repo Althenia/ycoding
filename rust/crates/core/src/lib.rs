@@ -10,4 +10,5 @@ pub mod process;
 pub mod regexp;
 pub mod resources;
 pub mod session;
+pub mod telemetry;
 pub mod tools;
