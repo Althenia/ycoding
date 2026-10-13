@@ -1,5 +1,5 @@
 use crate::{
-    convert,
+    convert, credential,
     dispatch::{Dispatcher, Failure, Invocation, RegistrationError},
     event_subscribe, form, guardrail, health, ids, message, permission, project, question,
     session_autonomy, session_create, session_helpers, session_list, session_outstanding,
@@ -18,6 +18,9 @@ pub fn standard() -> Result<Dispatcher, RegistrationError> {
     dispatcher.handle("health.get", health_get)?;
     dispatcher.handle("health.stop", health::stop)?;
     dispatcher.handle("server.get", server)?;
+    dispatcher.handle("credential.update", credential::update)?;
+    dispatcher.handle("credential.activate", credential::activate)?;
+    dispatcher.handle("credential.remove", credential::remove)?;
     dispatcher.handle("project.current", project::current)?;
     dispatcher.handle("project.directories", project::directories)?;
     dispatcher.handle("project.forget", project::forget)?;

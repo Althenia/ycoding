@@ -7,6 +7,7 @@ use std::{
     sync::{Mutex, PoisonError},
 };
 use ycoding_core::event_feed::{Ephemeral, Feed};
+use ycoding_core::resources::credential;
 use ycoding_core::session::{
     autonomy,
     execution::Execution,
@@ -35,6 +36,7 @@ pub struct Core {
     pub orchestration: orchestration::Service,
     pub events: Feed,
     pub locations: Locations,
+    pub credentials: credential::Service,
 }
 
 impl Core {
@@ -54,6 +56,7 @@ impl Core {
             Ok(())
         });
         let autonomy = autonomy::Service::new(client.clone());
+        let credentials = credential::Service::new(client.clone());
         Self {
             locations: Locations::new(
                 client,
@@ -70,6 +73,7 @@ impl Core {
             ),
             sessions,
             execution,
+            credentials,
         }
     }
 }

@@ -455,6 +455,95 @@ async fn unwired_operations_return_typed_unavailable_errors() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn credential_mutations_use_the_global_store_without_disclosing_secrets() {
+    bounded(async {
+        use ycoding_core::ycoding_schema::{DomainEncode, credential};
+        use ycoding_core::ycoding_store::resources::Secret;
+
+        let id = format!("credential-wire-{}", std::process::id());
+        let core = &world().core;
+        core.credentials
+            .create(
+                id.clone().into(),
+                "wire-test".into(),
+                Some("Work".into()),
+                Secret::new(
+                    credential::Value::Key(credential::Key {
+                        key: "fixture-secret".into(),
+                        metadata: None,
+                    })
+                    .encode(),
+                )
+                .unwrap(),
+                1,
+            )
+            .await
+            .unwrap();
+
+        let server = start(services(LocalAuth::disabled(), true), standard().unwrap()).await;
+        let mut client = Client::open(server.address(), &[]).await.unwrap();
+        let scope = wire::location_scope("/project");
+        let query = v5::LocationQuery { location: None };
+        let updated: v5::CredentialUpdateResult = wire::ask(
+            &mut client,
+            "credential.update",
+            scope.clone(),
+            v5::CredentialUpdateRequest {
+                params: v5::CredentialUpdateRequestParams {
+                    credential_id: text(&id),
+                },
+                query: query.clone(),
+                payload: v5::CredentialUpdateRequestPayload {
+                    label: text("Personal"),
+                },
+            },
+        )
+        .await;
+        assert_eq!(updated.data, v5::Empty {});
+        assert_eq!(
+            core.credentials
+                .get(&id.clone().into())
+                .unwrap()
+                .unwrap()
+                .label()
+                .as_str(),
+            Some("Personal")
+        );
+
+        let activated: v5::CredentialActivateResult = wire::ask(
+            &mut client,
+            "credential.activate",
+            scope.clone(),
+            v5::CredentialActivateRequest {
+                params: v5::CredentialActivateRequestParams {
+                    credential_id: text(&id),
+                },
+                query: query.clone(),
+            },
+        )
+        .await;
+        assert_eq!(activated.data, v5::Empty {});
+
+        let removed: v5::CredentialRemoveResult = wire::ask(
+            &mut client,
+            "credential.remove",
+            scope,
+            v5::CredentialRemoveRequest {
+                params: v5::CredentialRemoveRequestParams {
+                    credential_id: text(&id),
+                },
+                query,
+            },
+        )
+        .await;
+        assert_eq!(removed.data, v5::Empty {});
+        assert!(core.credentials.get(&id.into()).unwrap().is_none());
+        server.shutdown().await.unwrap();
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn every_local_operation_answers_with_a_declared_typed_outcome() {
     bounded(async {
         let dispatcher = standard().unwrap();
@@ -467,6 +556,9 @@ async fn every_local_operation_answers_with_a_declared_typed_outcome() {
         assert_eq!(
             wired,
             [
+                "credential.activate",
+                "credential.remove",
+                "credential.update",
                 "event.subscribe",
                 "event.unsubscribe",
                 "form.request.list",

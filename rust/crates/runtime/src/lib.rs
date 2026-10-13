@@ -1,6 +1,7 @@
 mod auth;
 mod connection;
 mod convert;
+mod credential;
 mod cursor;
 mod dispatch;
 mod event_subscribe;
