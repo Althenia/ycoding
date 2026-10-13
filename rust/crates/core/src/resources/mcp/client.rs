@@ -1,16 +1,23 @@
-use super::{configuration, output_schema, skills, stdio::Stdio, transport::Pinned};
+use super::{
+    configuration, output_schema, skills,
+    stdio::Stdio,
+    transport::{Pinned, Renewal},
+};
 use crate::platform::process;
 use rmcp::{
     RoleClient, ServiceExt,
     model::{
-        ClientConfig, ClientRequest, ClientResult, CustomRequest, ErrorCode, ErrorData,
-        ProtocolVersion, ServerNotification, ServerRequest,
+        ClientConfig, ClientJsonRpcMessage, ClientRequest, ClientResult, CustomRequest,
+        DiscoverResult, ErrorCode, ErrorData, ProtocolVersion, ServerNotification, ServerRequest,
+        SubscriptionFilter,
     },
     service::{
-        NotificationContext, Peer, PeerRequestOptions, RequestContext, RunningService, ServiceError,
+        ClientInitializeError, ClientLifecycleMode, ClientServiceExt, NotificationContext, Peer,
+        PeerRequestOptions, RequestContext, RunningService, ServiceError,
     },
     transport::{
-        StreamableHttpClientTransport, streamable_http_client::StreamableHttpClientTransportConfig,
+        StreamableHttpClientTransport, Transport,
+        streamable_http_client::StreamableHttpClientTransportConfig,
     },
 };
 use serde_json::{Value, json};
@@ -21,14 +28,20 @@ use std::{
     future::Future,
     path::Path,
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use tokio::{
     sync::{broadcast, watch},
-    task::JoinSet,
+    task::{JoinHandle, JoinSet},
 };
-use ycoding_schema::{DomainDecode, LosslessString, mcp::ServerConfig, mcp_skill, parse_json};
+use ycoding_schema::{
+    DomainDecode, DomainEncode, LosslessString, mcp::ServerConfig, mcp_skill, parse_json,
+    stringify_json,
+};
 
 pub const SUPPORTED_VERSIONS: [&str; 5] = [
     "2025-11-25",
@@ -37,6 +50,12 @@ pub const SUPPORTED_VERSIONS: [&str; 5] = [
     "2024-11-05",
     "2024-10-07",
 ];
+
+pub const MODERN_VERSION: &str = "2026-07-28";
+const PROBE_ID: &str = "ycoding-server-discover";
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const INPUT_ROUNDS: usize = 10;
+static LEGACY: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Error {
@@ -94,6 +113,7 @@ pub struct Notification {
     pub params: Value,
 }
 
+#[derive(Clone)]
 struct Handler {
     server: String,
     root: String,
@@ -102,17 +122,15 @@ struct Handler {
     notifications: broadcast::Sender<Notification>,
 }
 
-impl rmcp::Service<RoleClient> for Handler {
-    async fn handle_request(
+impl Handler {
+    async fn answer(
         &self,
-        request: ServerRequest,
-        context: RequestContext<RoleClient>,
-    ) -> Result<ClientResult, ErrorData> {
-        let value = serde_json::to_value(request)
-            .map_err(|_| ErrorData::new(ErrorCode(-32603), "Invalid request", None))?;
-        let result = match value["method"].as_str() {
-            Some("ping") => json!({}),
-            Some("roots/list") => json!({"roots":[{"uri":self.root}]}),
+        value: &Value,
+        cancelled: impl Future<Output = ()>,
+    ) -> Result<Value, ErrorData> {
+        match value["method"].as_str() {
+            Some("ping") => Ok(json!({})),
+            Some("roots/list") => Ok(json!({"roots":[{"uri":self.root}]})),
             Some("elicitation/create") => {
                 let Some(handler) = &self.hooks.elicitation else {
                     return Err(ErrorData::new(
@@ -126,15 +144,12 @@ impl rmcp::Service<RoleClient> for Handler {
                         .as_object()
                         .is_some_and(serde_json::Map::is_empty)
                 {
-                    return serde_json::from_value(json!({"action":"accept","content":{}}))
-                        .map_err(|_| {
-                            ErrorData::new(ErrorCode(-32603), "Invalid client result", None)
-                        });
+                    return Ok(json!({"action":"accept","content":{}}));
                 }
                 let (cancel, signal) = watch::channel(false);
                 let mut result = tokio::select! {
                     result=handler(self.server.clone(),value["params"].clone(),signal)=>result.map_err(|_|ErrorData::new(ErrorCode(-32603),"Elicitation failed",None))?,
-                    _=context.ct.cancelled()=>{cancel.send_replace(true);return Err(ErrorData::new(ErrorCode(-32000),"Elicitation cancelled",None))},
+                    _=cancelled=>{cancel.send_replace(true);return Err(ErrorData::new(ErrorCode(-32000),"Elicitation cancelled",None))},
                 };
                 if value["params"]["mode"] == "url" {
                     result = json!({"action":result["action"]});
@@ -154,11 +169,22 @@ impl rmcp::Service<RoleClient> for Handler {
                         }
                     }
                 }
-                result
+                Ok(result)
             }
-            _ => return Err(ErrorData::new(ErrorCode(-32601), "Method not found", None)),
-        };
-        serde_json::from_value(result)
+            _ => Err(ErrorData::new(ErrorCode(-32601), "Method not found", None)),
+        }
+    }
+}
+
+impl rmcp::Service<RoleClient> for Handler {
+    async fn handle_request(
+        &self,
+        request: ServerRequest,
+        context: RequestContext<RoleClient>,
+    ) -> Result<ClientResult, ErrorData> {
+        let value = serde_json::to_value(request)
+            .map_err(|_| ErrorData::new(ErrorCode(-32603), "Invalid request", None))?;
+        serde_json::from_value(self.answer(&value, context.ct.cancelled()).await?)
             .map_err(|_| ErrorData::new(ErrorCode(-32603), "Invalid client result", None))
     }
     async fn handle_notification(
@@ -208,7 +234,10 @@ pub struct Connection {
     peer: Peer<RoleClient>,
     running: Mutex<Option<RunningService<RoleClient, Handler>>>,
     cancellations: Arc<Mutex<JoinSet<()>>>,
+    listener: Mutex<Option<JoinHandle<()>>>,
     notifications: broadcast::Sender<Notification>,
+    handler: Handler,
+    renewal: Arc<AtomicBool>,
     pub instructions: Option<String>,
     pub skills: Option<mcp_skill::Capability>,
     capabilities: Value,
@@ -228,6 +257,43 @@ impl Connection {
         version: &str,
         environment: &BTreeMap<String, String>,
         hooks: Hooks,
+    ) -> Result<Self, Error> {
+        let known = format!(
+            "{}\0{}",
+            directory.display(),
+            stringify_json(&config.encode())
+        );
+        let connection = Self::open(
+            server,
+            config,
+            directory,
+            version,
+            environment,
+            hooks,
+            &known,
+        )
+        .await;
+        let mut legacy = LEGACY.lock().map_err(|_| Error::Closed)?;
+        match &connection {
+            Ok(connection) if connection.protocol_version != MODERN_VERSION => {
+                legacy.insert(known);
+            }
+            Ok(_) => {}
+            Err(_) => {
+                legacy.remove(&known);
+            }
+        }
+        connection
+    }
+
+    async fn open(
+        server: &str,
+        config: &ServerConfig,
+        directory: &Path,
+        version: &str,
+        environment: &BTreeMap<String, String>,
+        hooks: Hooks,
+        known: &str,
     ) -> Result<Self, Error> {
         let (notifications, _) = broadcast::channel(256);
         let mut capabilities = json!({"roots":{}});
@@ -253,7 +319,17 @@ impl Connection {
                 .and_then(|timeout| timeout.startup)
                 .map_or(30_000, |value| value.get() as u64),
         );
+        let catalog_timeout = Duration::from_millis(
+            timeout
+                .and_then(|timeout| timeout.catalog)
+                .map_or(30_000, |value| value.get() as u64),
+        );
+        let legacy = LEGACY.lock().map_err(|_| Error::Closed)?.contains(known);
+        let modern = || ClientLifecycleMode::Discover {
+            preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+        };
         let mut process_id = None;
+        let renewal = Arc::new(AtomicBool::new(false));
         let running = match config {
             ServerConfig::Local(config) => {
                 let cwd = configuration::working_directory(
@@ -278,32 +354,28 @@ impl Connection {
                         cwd.display()
                     )));
                 }
-                let command = config
+                let program = config
                     .command
                     .first()
                     .and_then(LosslessString::as_str)
                     .ok_or_else(|| Error::Connect("Missing MCP command".into()))?;
-                let mut command = process::Command::new(
-                    command,
-                    config
-                        .command
-                        .iter()
-                        .skip(1)
-                        .map(|argument| {
-                            argument
-                                .to_utf8()
-                                .map_err(|_| Error::Connect("Invalid MCP command argument".into()))
-                        })
-                        .collect::<Result<Vec<_>, _>>()?,
-                );
-                command.cwd = Some(cwd);
-                command.env = environment.clone();
-                if command.program == "ycoding" {
-                    command.env.insert("BUN_BE_BUN".into(), "1".into());
+                let args = config
+                    .command
+                    .iter()
+                    .skip(1)
+                    .map(|argument| {
+                        argument
+                            .to_utf8()
+                            .map_err(|_| Error::Connect("Invalid MCP command argument".into()))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let mut env = environment.clone();
+                if program == "ycoding" {
+                    env.insert("BUN_BE_BUN".into(), "1".into());
                 }
                 if let Some(environment) = &config.environment {
                     for (key, value) in environment.iter() {
-                        command.env.insert(
+                        env.insert(
                             key.to_utf8()
                                 .map_err(|_| Error::Connect("Invalid MCP environment".into()))?,
                             LosslessString::decode(value)
@@ -313,18 +385,46 @@ impl Connection {
                         );
                     }
                 }
-                let transport = Stdio::spawn(command)
+                let spawn = || {
+                    let mut command = process::Command::new(program, args.clone());
+                    command.cwd = Some(cwd.clone());
+                    command.env = env.clone();
+                    Stdio::spawn(command)
+                };
+                let mut transport = spawn()
                     .await
                     .map_err(|error| Error::Connect(error.to_string()))?;
+                let replay = if legacy {
+                    None
+                } else {
+                    match probe(&mut transport, startup.min(PROBE_TIMEOUT), &handler.info).await {
+                        Probe::Modern(result) => Some(result),
+                        Probe::Legacy => None,
+                        Probe::Unsupported(message) => {
+                            let _ = transport.close().await;
+                            return Err(Error::Connect(message));
+                        }
+                        Probe::Gone => {
+                            let _ = transport.close().await;
+                            transport = spawn()
+                                .await
+                                .map_err(|error| Error::Connect(error.to_string()))?;
+                            None
+                        }
+                    }
+                };
                 process_id = Some(transport.pid());
-                tokio::time::timeout(
-                    startup,
-                    handler.serve(Pinned {
-                        inner: transport,
-                        notifications: notifications.clone(),
-                    }),
-                )
-                .await
+                let modern_era = replay.is_some();
+                let transport = Pinned::new(transport, notifications.clone(), replay);
+                if modern_era {
+                    tokio::time::timeout(
+                        startup,
+                        handler.clone().serve_with_lifecycle(transport, modern()),
+                    )
+                    .await
+                } else {
+                    tokio::time::timeout(startup, handler.clone().serve(transport)).await
+                }
                 .map_err(|_| Error::Timeout)?
                 .map_err(|error| Error::Connect(error.to_string()))?
             }
@@ -363,20 +463,38 @@ impl Connection {
                     }
                 }
                 let enabled = !matches!(config.oauth, Some(ycoding_schema::mcp::OAuth::Disabled));
-                let http =
+                let http = Renewal::new(
                     super::http::Http::new(server, config, handler.hooks.credentials.as_ref())
-                        .map_err(|_| Error::Storage)?;
-                let transport = StreamableHttpClientTransport::with_client(http, transport_config);
-                tokio::time::timeout(
-                    startup,
-                    handler.serve(Pinned {
-                        inner: transport,
-                        notifications: notifications.clone(),
-                    }),
-                )
-                .await
-                .map_err(|_| Error::Timeout)?
-                .map_err(|error| {
+                        .map_err(|_| Error::Storage)?,
+                    renewal.clone(),
+                );
+                let transport = || {
+                    Pinned::new(
+                        StreamableHttpClientTransport::with_client(
+                            http.clone(),
+                            transport_config.clone(),
+                        ),
+                        notifications.clone(),
+                        None,
+                    )
+                };
+                let initialize = || async {
+                    tokio::time::timeout(startup, handler.clone().serve(transport())).await
+                };
+                let served = if legacy {
+                    initialize().await
+                } else {
+                    match tokio::time::timeout(
+                        startup,
+                        handler.clone().serve_with_lifecycle(transport(), modern()),
+                    )
+                    .await
+                    {
+                        Ok(Err(error)) if legacy_answer(&error) => initialize().await,
+                        served => served,
+                    }
+                };
+                served.map_err(|_| Error::Timeout)?.map_err(|error| {
                     if enabled && error.auth_challenge().is_some() {
                         Error::NeedsAuth(server.into())
                     } else {
@@ -389,7 +507,9 @@ impl Connection {
             .peer_info()
             .ok_or_else(|| Error::Connect("Missing MCP initialization result".into()))?;
         let protocol_version = info.protocol_version.to_string();
-        if !SUPPORTED_VERSIONS.contains(&protocol_version.as_str()) {
+        if protocol_version != MODERN_VERSION
+            && !SUPPORTED_VERSIONS.contains(&protocol_version.as_str())
+        {
             running.cancel().await.map_err(|_| Error::Closed)?;
             return Err(Error::Connect(format!(
                 "Server's protocol version is not supported: {protocol_version}"
@@ -402,12 +522,26 @@ impl Connection {
                 .map_err(|_| Error::InvalidResult("capabilities"))?,
         );
         let resources = capabilities.get("resources").is_some();
+        let listener = if protocol_version == MODERN_VERSION {
+            listen(
+                running.peer(),
+                &capabilities,
+                catalog_timeout,
+                notifications.clone(),
+            )
+            .await
+        } else {
+            None
+        };
         Ok(Self {
             server: server.into(),
             peer: running.peer().clone(),
             running: Mutex::new(Some(running)),
             cancellations: Arc::new(Mutex::new(JoinSet::new())),
+            listener: Mutex::new(listener),
             notifications,
+            handler,
+            renewal,
             instructions: info
                 .instructions
                 .as_deref()
@@ -418,11 +552,7 @@ impl Connection {
             capabilities,
             protocol_version,
             process_id,
-            catalog_timeout: Duration::from_millis(
-                timeout
-                    .and_then(|timeout| timeout.catalog)
-                    .map_or(30_000, |value| value.get() as u64),
-            ),
+            catalog_timeout,
             execution_timeout: Duration::from_millis(
                 timeout
                     .and_then(|timeout| timeout.execution)
@@ -450,6 +580,13 @@ impl Connection {
     }
 
     pub async fn close(&self) -> Result<(), Error> {
+        let listener = self.listener.lock().map_err(|_| Error::Closed)?.take();
+        if let Some(listener) = listener {
+            listener.abort();
+            if listener.await.is_err_and(|error| !error.is_cancelled()) {
+                return Err(Error::Closed);
+            }
+        }
         let mut cancellations = std::mem::replace(
             &mut *self.cancellations.lock().map_err(|_| Error::Closed)?,
             JoinSet::new(),
@@ -465,6 +602,76 @@ impl Connection {
     }
 
     async fn request(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+        signal: Option<watch::Receiver<bool>>,
+    ) -> Result<Value, Error> {
+        let mut params = params;
+        for round in 0..=INPUT_ROUNDS {
+            let result = match self
+                .send(method, params.clone(), timeout, signal.clone())
+                .await
+            {
+                Err(_) if self.renewal.load(Ordering::SeqCst) => {
+                    let _ = self.close().await;
+                    return Err(Error::Closed);
+                }
+                result => result?,
+            };
+            if result["resultType"] != "input_required" {
+                return Ok(result);
+            }
+            if round == INPUT_ROUNDS {
+                return Err(Error::InvalidResult("input_required"));
+            }
+            let mut responses = serde_json::Map::new();
+            for (key, input) in result["inputRequests"].as_object().into_iter().flatten() {
+                let answer = self
+                    .handler
+                    .answer(input, cancelled(signal.clone()))
+                    .await
+                    .map_err(|error| Error::Rpc {
+                        code: error.code.0 as i64,
+                        message: error.message.into_owned(),
+                    })?;
+                responses.insert(key.clone(), answer);
+            }
+            let state = result
+                .get("requestState")
+                .map(|state| {
+                    state
+                        .as_str()
+                        .map(|_| state.clone())
+                        .ok_or(Error::InvalidResult("requestState"))
+                })
+                .transpose()?;
+            if responses.is_empty() && state.is_none() {
+                return Err(Error::InvalidResult("inputRequests"));
+            }
+            if responses.is_empty() {
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_millis(250)) => {},
+                    _ = cancelled(signal.clone()) => return Err(Error::Cancelled),
+                }
+            }
+            let Some(fields) = params.as_object_mut() else {
+                return Err(Error::InvalidResult("params"));
+            };
+            fields.remove("inputResponses");
+            fields.remove("requestState");
+            if !responses.is_empty() {
+                fields.insert("inputResponses".into(), Value::Object(responses));
+            }
+            if let Some(state) = state {
+                fields.insert("requestState".into(), state);
+            }
+        }
+        Err(Error::InvalidResult("input_required"))
+    }
+
+    async fn send(
         &self,
         method: &str,
         params: Value,
@@ -559,8 +766,9 @@ impl Connection {
             if !tool["inputSchema"].is_object() {
                 return Err(Error::InvalidResult("tool.inputSchema"));
             }
-            if let Some(schema) = tool.get("outputSchema") {
-                output_schema::check(schema)?;
+            if let Some(schema) = tool.get("outputSchema")
+                && output_schema::check(schema).is_ok()
+            {
                 schemas.insert(name, schema.clone());
             }
         }
@@ -864,6 +1072,121 @@ impl Connection {
         })
         .map_err(Error::Skill)
     }
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        if let Ok(listener) = self.listener.get_mut()
+            && let Some(listener) = listener.take()
+        {
+            listener.abort();
+        }
+    }
+}
+
+enum Probe {
+    Modern(Value),
+    Legacy,
+    Unsupported(String),
+    Gone,
+}
+
+async fn probe(transport: &mut Stdio, timeout: Duration, info: &ClientConfig) -> Probe {
+    let info = serde_json::to_value(info).unwrap_or_default();
+    let Ok(request) = serde_json::from_value::<ClientJsonRpcMessage>(
+        json!({"jsonrpc":"2.0","id":PROBE_ID,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":MODERN_VERSION,"io.modelcontextprotocol/clientInfo":info["clientInfo"],"io.modelcontextprotocol/clientCapabilities":info["capabilities"]}}}),
+    ) else {
+        return Probe::Legacy;
+    };
+    if transport.send(request).await.is_err() {
+        return Probe::Gone;
+    }
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let Ok(Some(message)) = tokio::time::timeout_at(deadline, transport.receive()).await else {
+            return Probe::Gone;
+        };
+        let Ok(message) = serde_json::to_value(message) else {
+            continue;
+        };
+        if message["id"] != PROBE_ID {
+            continue;
+        }
+        if let Some(result) = message.get("result") {
+            return if result["supportedVersions"]
+                .as_array()
+                .is_some_and(|versions| versions.iter().any(|version| version == MODERN_VERSION))
+                && serde_json::from_value::<DiscoverResult>(result.clone()).is_ok()
+            {
+                Probe::Modern(result.clone())
+            } else {
+                Probe::Legacy
+            };
+        }
+        let error = &message["error"];
+        return if error["code"] == -32022
+            && error["data"]["supported"]
+                .as_array()
+                .is_some_and(|versions| {
+                    versions
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .any(|version| version >= MODERN_VERSION)
+                })
+        {
+            Probe::Unsupported(error["message"].as_str().unwrap_or_default().into())
+        } else {
+            Probe::Legacy
+        };
+    }
+}
+
+fn legacy_answer(error: &ClientInitializeError) -> bool {
+    match error {
+        ClientInitializeError::JsonRpcError(_) | ClientInitializeError::ExpectedInitResult(_) => {
+            true
+        }
+        ClientInitializeError::NoCompatibleProtocolVersion {
+            server_supported, ..
+        } => !server_supported
+            .iter()
+            .any(|version| version.as_str() >= MODERN_VERSION),
+        _ => false,
+    }
+}
+
+async fn listen(
+    peer: &Peer<RoleClient>,
+    capabilities: &Value,
+    timeout: Duration,
+    notifications: broadcast::Sender<Notification>,
+) -> Option<JoinHandle<()>> {
+    let filter = ["tools", "prompts", "resources"]
+        .into_iter()
+        .filter(|kind| capabilities[kind]["listChanged"] == true)
+        .map(|kind| (format!("{kind}ListChanged"), json!(true)))
+        .collect::<serde_json::Map<_, _>>();
+    if filter.is_empty() {
+        return None;
+    }
+    let filter = serde_json::from_value::<SubscriptionFilter>(Value::Object(filter)).ok()?;
+    let mut subscription = tokio::time::timeout(timeout, peer.listen(filter))
+        .await
+        .ok()?
+        .ok()?;
+    Some(tokio::spawn(async move {
+        while let Ok(Some(notification)) = subscription.next().await {
+            let Ok(value) = serde_json::to_value(notification) else {
+                continue;
+            };
+            if let Some(method) = value["method"].as_str() {
+                let _ = notifications.send(Notification {
+                    method: method.into(),
+                    params: value["params"].clone(),
+                });
+            }
+        }
+    }))
 }
 
 struct CancelOnDrop {

@@ -57,14 +57,34 @@ server status and prompt snapshots remain nonblocking. Lifecycle operations
 serialize per server, and obsolete connection callbacks cannot replace live
 catalogs. Call `shutdown().await` to join owned work and finish transport cleanup.
 
-The client uses pinned `rmcp` 3.5.1 with the `initialize`/`initialized` lifecycle,
-advertises `ycoding` and the supplied version, and supplies the Location as its
-workspace root. Its offered protocol revision is `2025-11-25`; it also accepts
-`2025-06-18`, `2025-03-26`, `2024-11-05`, and `2024-10-07`. Local servers use
+The client uses pinned `rmcp` 3.5.1, advertises `ycoding` and the supplied version,
+and supplies the Location as its workspace root. Local stdio and remote
+Streamable HTTP connections first offer `2026-07-28` through `server/discover`.
+Modern connections omit initialization and carry protocol-version, client-info,
+and client-capabilities request metadata; HTTP requests also carry
+`MCP-Protocol-Version`, `Mcp-Method`, and applicable `Mcp-Name` headers. A legacy
+answer selects `initialize`/`notifications/initialized`, offering `2025-11-25`
+and accepting `2025-06-18`, `2025-03-26`, `2024-11-05`, and `2024-10-07`.
+An unsupported-version error advertising only unsupported modern revisions fails
+without legacy initialization. Stdio probes run in the connection's process:
+an answer permits handover in place; exit or silence stops that process and starts
+one fresh process for initialization. The probe is bounded by 5 seconds or the
+shorter startup timeout; initialization has its own startup timeout. A successfully
+connected legacy configuration skips discovery on subsequent connections within
+the process, until a connection failure clears that knowledge. Local servers use
 `platform::process`, newline JSON-RPC framing, Location-relative `cwd`, inherited
 environment plus explicit overrides, and process-tree shutdown. Stderr is drained
 without logging. Remote servers use Streamable HTTP with JSON or SSE POST
 responses and SDK session/stream handling; no legacy SSE transport is selected.
+An expired legacy HTTP session is reinitialized and its request retried once;
+requests abandoned during renewal are not resent, and failed renewal closes the
+connection. Modern list changes use one `subscriptions/listen` stream for the
+advertised tool, prompt, and resource `listChanged` capabilities. Subscription
+failure does not fail startup; an ended stream stays ended until reconnection.
+Modern connections do not subscribe to server logs. Modern `input_required`
+tool, prompt, and resource results dispatch the same caller-owned elicitation
+handler and retry with input responses and the opaque request state, with a
+maximum of ten fulfillment rounds.
 Catalog requests omit progress metadata; tool calls retain progress tokens while
 enforcing a hard wall-clock execution timeout. Defaults are 30 seconds for startup
 and catalogs and 12 hours for execution. Cancellation signals and dropped request
@@ -83,8 +103,10 @@ methods are remembered independently for resources and templates. Tool output
 schemas remain available across every page. Output validation reuses Forms
 primitive validation through `tools::policy::forms::validate_field` and supports
 object properties, required keys, boolean `additionalProperties`, primitive types,
-and the implemented primitive constraints. Unsupported schema keywords fail
-explicitly; this is not an AJV-complete JSON Schema implementation. RPC errors,
+and the implemented primitive constraints. A schema that cannot be compiled by
+this validator remains in the catalog but disables validation for that tool;
+other tools keep their validation. This is not an AJV-complete JSON Schema
+implementation. RPC errors,
 tool `isError`, structured content, text, image/audio, resource links, and embedded
 resources retain distinct outcomes. The raw MCP client does not grant tool or
 skill permission, register Session tools, or bypass guardrails; `builtin::mcp`
@@ -107,24 +129,29 @@ Browser launch and background tool-job/Session delivery remain caller-owned.
 The optional elicitation callback is caller-owned; the service does not create
 Forms or manage URL-completion acknowledgements. Service catalog ordering is
 lexical; transport strings use the SDK's UTF-8 representation and cannot retain
-lone UTF-16 surrogates. Stateful HTTP teardown and reconnection edge parity require
-separate verification against the TypeScript SDK patch.
+lone UTF-16 surrogates.
 
 Run the focused checks from `rust` with
 `cargo test --locked -p ycoding-core --test 'mcp_*'`.
 `mcp_table` drives a table-configured Python stdio server (`tests/mcp_table.py`)
 for resource, Skills extension, list-changed, and Service lifecycle behavior; it
-needs `python3` only. The other subprocess checks require Bun and cached MCP SDK 1.29.0; set
-`YCODING_MCP_SDK_ROOT` to an existing installation when the standard Bun cache is
-unavailable. `extract-fixture.mjs` reads fixture sources only through `git show
-main`, rewrites their SDK import locations, and installs nothing. HTTP tests use
-real isolated loopback servers for JSON and SSE responses.
+needs `python3` only. The SDK subprocess checks require Bun and cached
+`@modelcontextprotocol/server` 2.3.1; set `YCODING_MCP_SERVER_ROOT` to an existing
+installation when the standard Bun cache is unavailable. `extract-fixture.mjs`
+reads upstream fixture sources through `git show main` and the Rust-owned HTTP
+fixture from `tests/mcp_protocol_http.ts`, rewrites server package import
+locations, and installs nothing. HTTP tests use real isolated loopback servers
+for JSON and SSE responses.
 
 ### MCP OAuth
 
 `resources::mcp::oauth::authorize` returns a caller-owned authorization attempt
 with a browser URL and an independently running loopback callback server.
-Callbacks validate state and code and serve the existing branded HTML pages.
+Callbacks validate state before interpreting the callback, then validate `iss`
+against the held authorization-server metadata before redeeming a code or
+displaying callback error text. An issuer is required when metadata advertises
+`authorization_response_iss_parameter_supported`; a supplied issuer must match
+exactly. Callbacks serve the existing branded HTML pages.
 `finish` exchanges the PKCE verifier, returns a credential-store `Secret`, and
 joins callback-server cleanup; `cancel` joins cleanup without an exchange.
 Dropping the attempt requests cancellation. The caller owns browser launch and
@@ -139,12 +166,19 @@ a client-error response, OAuth authorization-server metadata, and both OIDC
 well-known path forms. The advertised resource must contain the configured
 server URL on the same origin. Registration uses the TypeScript client metadata,
 including the `ycoding` name, authorization-code and refresh-token grants, and
-public-client authentication. Static client configuration skips registration.
+public-client authentication. Registration declares `application_type: native`
+for loopback or custom-scheme redirect URIs and `web` otherwise. Static client
+configuration skips registration.
 Requested scopes take precedence over resource scopes; supported
 `offline_access` adds explicit consent. Token authentication honors the
 registration method, then server-supported Basic, POST, or public-client
 authentication. Credentials preserve the complete dynamic registration, server
-URL, token type, and scope; expiry zero represents unknown or non-expiring tokens.
+URL, token type, scope, and authorization-server issuer; expiry zero represents
+unknown or non-expiring tokens. Issuer-stamped refresh tokens and dynamic client
+information are not presented to a different authorization server. Unstamped
+credentials acquire the discovered issuer when their tokens are saved; stored
+issuer comparison tolerates a single trailing slash, while callback comparison
+uses exact string equality.
 
 Supply `client::Hooks::credentials` to present and refresh persisted credentials
 on HTTP requests. Supply `client::Hooks::integrations` with the shared Integration
@@ -179,9 +213,8 @@ storage uses the existing Rust service; this module creates no separate token
 file and does not log token responses.
 
 The OAuth protocol operations use existing Reqwest, Ring, and URL dependencies.
-The `rmcp` authorization manager adds `application_type: native` to registration
-and its stored credentials omit the complete registration/client secret, unlike
-`packages/core/src/mcp/oauth.ts:48–54,99–122`. It is not used for those operations.
+The `rmcp` authorization manager is not used for those operations; Core preserves
+the complete validated dynamic registration, including its client secret.
 Metadata accepts opaque issuer strings and validates required fields, optional
 arrays, URLs, and booleans for OAuth/OIDC and protected-resource documents.
 Registration validates the SDK client-information/metadata fields, removes empty
@@ -195,8 +228,8 @@ propagate without a cached substitute. Empty form elicitations accept an empty
 answer without invoking the host handler. URL acknowledgement returns only the
 action, never internal host content. Host Forms creation and URL completion
 notification delivery remain caller-owned.
-Remaining verification limits include full AJV output validation, stateful
-transport recovery, GET/DELETE authentication edge behavior, and exhaustive
+Remaining verification limits include full AJV output validation,
+GET/DELETE authentication edge behavior, and exhaustive
 SDK validation/error-envelope parity beyond the covered loopback cases.
 Login does not install a Session tool or background-job delivery mechanism.
 

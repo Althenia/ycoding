@@ -1,5 +1,6 @@
 use super::oauth::Error;
 use crate::resources::auth::page;
+use serde_json::Value;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -19,6 +20,7 @@ impl Callback {
         redirect: Url,
         state: String,
         provider: String,
+        metadata: Option<Value>,
     ) -> Self {
         let (code, receiver) = watch::channel(None);
         let (stop, mut stopping) = watch::channel(false);
@@ -29,8 +31,8 @@ impl Callback {
                     _=stopping.changed()=>break,
                     accepted=listener.accept()=> {
                         let (stream,_)=accepted.map_err(|_|Error::Callback)?;
-                        let redirect=redirect.clone();let state=state.clone();let provider=provider.clone();let code=code.clone();
-                        requests.spawn(async move {serve(stream,redirect,state,provider,code).await});
+                        let redirect=redirect.clone();let state=state.clone();let provider=provider.clone();let code=code.clone();let metadata=metadata.clone();
+                        requests.spawn(async move {serve(stream,redirect,state,provider,code,metadata).await});
                     },
                     completed=requests.join_next(),if !requests.is_empty()=> {
                         match completed {Some(Ok(Ok(())))=>(),_=>{settle(&code,Err(Error::Callback));break;} }
@@ -90,6 +92,7 @@ async fn serve(
     state: String,
     provider: String,
     code: watch::Sender<Option<Result<String, Error>>>,
+    metadata: Option<Value>,
 ) -> Result<(), Error> {
     let mut request = Vec::new();
     let mut buffer = [0; 1024];
@@ -119,22 +122,33 @@ async fn serve(
         .get("error_description")
         .or_else(|| params.get("error"))
         .filter(|error| !error.is_empty());
-    let (result, detail) = if let Some(error) = error {
-        (Err(Error::Rejected), Some(error.to_string()))
-    } else if params.get("state").map(|value| value.as_ref()) != Some(state.as_str()) {
-        (
-            Err(Error::StateMismatch),
-            Some("OAuth state mismatch".into()),
-        )
-    } else {
-        match params.get("code").filter(|value| !value.is_empty()) {
-            Some(code) => (Ok(code.to_string()), None),
-            None => (
-                Err(Error::CodeRequired),
-                Some("Missing authorization code".into()),
-            ),
-        }
-    };
+    let issuer = params.get("iss").map(|value| value.as_ref());
+    let verified = metadata.as_ref().is_none_or(|metadata| match issuer {
+        Some(issuer) => Some(issuer) == metadata["issuer"].as_str(),
+        None => metadata["authorization_response_iss_parameter_supported"] != true,
+    });
+    let (result, detail) =
+        if params.get("state").map(|value| value.as_ref()) != Some(state.as_str()) {
+            (
+                Err(Error::StateMismatch),
+                Some("OAuth state mismatch".into()),
+            )
+        } else if !verified || (error.is_some() && metadata.is_none()) {
+            (
+                Err(Error::IssuerMismatch),
+                Some("OAuth issuer mismatch".into()),
+            )
+        } else if let Some(error) = error {
+            (Err(Error::Rejected), Some(error.to_string()))
+        } else {
+            match params.get("code").filter(|value| !value.is_empty()) {
+                Some(code) => (Ok(code.to_string()), None),
+                None => (
+                    Err(Error::CodeRequired),
+                    Some("Missing authorization code".into()),
+                ),
+            }
+        };
     let (status, body) = match detail {
         Some(detail) => (400, page::error(&detail, Some(&provider))),
         None => (200, page::success(Some(&provider), true)),

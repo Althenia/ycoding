@@ -298,6 +298,7 @@ struct Stored {
     access: String,
     refresh: String,
     client: Option<Value>,
+    issuer: Option<String>,
 }
 fn stored(credentials: &credential::Service, id: &LosslessString) -> Option<Stored> {
     let info = credentials.get(id).unwrap()?;
@@ -312,11 +313,17 @@ fn stored(credentials: &credential::Service, id: &LosslessString) -> Option<Stor
     Some(Stored {
         access: value.access.as_str().unwrap().to_owned(),
         refresh: value.refresh.as_str().unwrap().to_owned(),
-        client: metadata.and_then(|metadata| metadata.get("client").cloned()),
+        client: metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("client").cloned()),
+        issuer: metadata
+            .as_ref()
+            .and_then(|metadata| metadata["issuer"].as_str().map(str::to_owned)),
     })
 }
 fn assert_stored(
     credentials: &credential::Service,
+    server: &Server,
     id: &LosslessString,
     access: &str,
     refresh: &str,
@@ -324,7 +331,10 @@ fn assert_stored(
     let stored = stored(credentials, id).expect("credential is stored");
     assert_eq!(stored.access, access);
     assert_eq!(stored.refresh, refresh);
-    assert_eq!(stored.client, Some(client()));
+    let mut expected_client = client();
+    expected_client["issuer"] = json!(server.url);
+    assert_eq!(stored.client, Some(expected_client));
+    assert_eq!(stored.issuer.as_deref(), Some(server.url.as_str()));
 }
 
 async fn connect(server: &Server, credentials: &credential::Service) -> Result<Connection, Error> {
@@ -380,7 +390,7 @@ async fn rejected_access_token_refreshes_and_keeps_refresh_token_a_non_rotating_
         .await;
         let connection = connect(&server, &credentials).await.unwrap();
         assert_eq!(server.refresh_requests(), ["refresh-0"]);
-        assert_stored(&credentials, info.id(), "access-1", "refresh-0");
+        assert_stored(&credentials, &server, info.id(), "access-1", "refresh-0");
         connection.close().await.unwrap();
         credentials.shutdown().await.unwrap();
         server.close().await;
@@ -404,11 +414,11 @@ async fn each_rotated_refresh_token_is_persisted_and_refreshed_again_mid_session
         )
         .await;
         let connection = connect(&server, &credentials).await.unwrap();
-        assert_stored(&credentials, info.id(), "access-1", "refresh-1");
+        assert_stored(&credentials, &server, info.id(), "access-1", "refresh-1");
         server.revoke_access();
         assert_eq!(echo(&connection).await, ["served with access-2"]);
         assert_eq!(server.refresh_requests(), ["refresh-0", "refresh-1"]);
-        assert_stored(&credentials, info.id(), "access-2", "refresh-2");
+        assert_stored(&credentials, &server, info.id(), "access-2", "refresh-2");
         connection.close().await.unwrap();
         credentials.shutdown().await.unwrap();
         server.close().await;
@@ -439,7 +449,7 @@ async fn connection_holding_a_superseded_token_adopts_another_connections_rotati
         assert_eq!(echo(&second).await, ["served with access-1"]);
         assert_eq!(server.state.lock().unwrap().unauthorized, rejected);
         assert_eq!(server.refresh_requests(), ["refresh-0"]);
-        assert_stored(&credentials, info.id(), "access-1", "refresh-1");
+        assert_stored(&credentials, &server, info.id(), "access-1", "refresh-1");
         first.close().await.unwrap();
         second.close().await.unwrap();
         credentials.shutdown().await.unwrap();
@@ -469,7 +479,7 @@ async fn concurrent_requests_on_one_connection_rejected_together_share_one_excha
         assert_eq!(first, ["served with access-1"]);
         assert_eq!(second, ["served with access-1"]);
         assert_eq!(server.refresh_requests(), ["refresh-0"]);
-        assert_stored(&credentials, info.id(), "access-1", "refresh-1");
+        assert_stored(&credentials, &server, info.id(), "access-1", "refresh-1");
         connection.close().await.unwrap();
         credentials.shutdown().await.unwrap();
         server.close().await;
@@ -500,7 +510,7 @@ async fn concurrent_requests_on_different_connections_share_one_exchange_of_a_si
         assert_eq!(one, ["served with access-1"]);
         assert_eq!(two, ["served with access-1"]);
         assert_eq!(server.refresh_requests(), ["refresh-0"]);
-        assert_stored(&credentials, info.id(), "access-1", "refresh-1");
+        assert_stored(&credentials, &server, info.id(), "access-1", "refresh-1");
         first.close().await.unwrap();
         second.close().await.unwrap();
         credentials.shutdown().await.unwrap();
@@ -526,10 +536,10 @@ async fn refresh_with_a_token_this_process_already_exchanged_reuses_that_exchang
         .await;
         let config = server.remote();
         let first = oauth::refresh(&credentials, &stale, &config).await.unwrap();
-        assert_stored(&credentials, first.id(), "access-1", "refresh-1");
+        assert_stored(&credentials, &server, first.id(), "access-1", "refresh-1");
         let second = oauth::refresh(&credentials, &stale, &config).await.unwrap();
         assert_eq!(server.refresh_requests(), ["refresh-0"]);
-        assert_stored(&credentials, second.id(), "access-1", "refresh-1");
+        assert_stored(&credentials, &server, second.id(), "access-1", "refresh-1");
         credentials.shutdown().await.unwrap();
         server.close().await;
     })
@@ -556,13 +566,13 @@ async fn presenting_the_rotated_token_ends_the_reuse_and_a_later_stale_refresh_a
         let first = oauth::refresh(&credentials, &stale, &config).await.unwrap();
         let second = oauth::refresh(&credentials, &first, &config).await.unwrap();
         assert_eq!(server.refresh_requests(), ["refresh-0", "refresh-1"]);
-        assert_stored(&credentials, second.id(), "access-2", "refresh-2");
+        assert_stored(&credentials, &server, second.id(), "access-2", "refresh-2");
         let third = oauth::refresh(&credentials, &stale, &config).await.unwrap();
         assert_eq!(
             server.refresh_requests(),
             ["refresh-0", "refresh-1", "refresh-0", "refresh-2"]
         );
-        assert_stored(&credentials, third.id(), "access-3", "refresh-3");
+        assert_stored(&credentials, &server, third.id(), "access-3", "refresh-3");
         credentials.shutdown().await.unwrap();
         server.close().await;
     })
@@ -612,7 +622,7 @@ async fn refresh_rejected_because_another_process_rotated_first_retries_with_the
         server.state.lock().unwrap().hook = Some(hook);
         let connection = connect(&server, &credentials).await.unwrap();
         assert_eq!(server.refresh_requests(), ["refresh-0", "refresh-other"]);
-        assert_stored(&credentials, info.id(), "access-1", "refresh-1");
+        assert_stored(&credentials, &server, info.id(), "access-1", "refresh-1");
         connection.close().await.unwrap();
         credentials.shutdown().await.unwrap();
         server.close().await;

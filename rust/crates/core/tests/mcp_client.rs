@@ -73,7 +73,7 @@ async fn real_sdk_stdio_initializes_and_retains_paginated_output_schemas() {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["first", "second"]
+        ["first", "second", "unresolved"]
     );
     assert_eq!(
         tools[0]["outputSchema"],
@@ -82,6 +82,30 @@ async fn real_sdk_stdio_initializes_and_retains_paginated_output_schemas() {
     assert_eq!(
         tools[1]["outputSchema"]["properties"]["value"]["type"],
         "number"
+    );
+    assert_eq!(
+        tools[2]["outputSchema"],
+        json!({"type":"object","properties":{"value":{"$ref":"#/$defs/missing"}}})
+    );
+    assert_eq!(
+        connection
+            .call_tool("second", json!({}), None)
+            .await
+            .unwrap()
+            .structured,
+        Some(json!({"value":1}))
+    );
+    assert_eq!(
+        connection
+            .call_tool("unresolved", json!({}), None)
+            .await
+            .unwrap()
+            .structured,
+        Some(json!({"value":1}))
+    );
+    assert_eq!(
+        connection.call_tool("first", json!({}), None).await,
+        Err(Error::OutputSchema)
     );
     assert!(connection.prompts().await.unwrap().is_empty());
     assert!(connection.resources().await.unwrap().is_empty());
@@ -182,6 +206,27 @@ async fn invalid_working_directories_do_not_spawn_a_server() {
     .await
     .unwrap();
     assert_eq!(fs::read_to_string(marker).unwrap(), "started");
+    connection.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn resource_catalog_uses_the_configured_catalog_timeout() {
+    let fixture = Fixture::new();
+    let config = fixture.config(
+        "mcp-timeout",
+        json!({"environment":{"MCP_TIMEOUT_TARGET":"resource-catalog"},"timeout":{"catalog":10}}),
+    );
+    let connection = Connection::connect(
+        "resource-timeout",
+        &config,
+        &fixture.0,
+        "1.0.0",
+        &BTreeMap::new(),
+        Hooks::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(connection.resources().await, Err(Error::Timeout));
     connection.close().await.unwrap();
 }
 

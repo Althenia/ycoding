@@ -28,6 +28,7 @@ pub enum Error {
     NeedsAuth,
     Rejected,
     StateMismatch,
+    IssuerMismatch,
     CodeRequired,
     Callback,
     Storage,
@@ -83,6 +84,9 @@ pub fn to_credential(
     if let Some(scope) = tokens["scope"].as_str().filter(|value| !value.is_empty()) {
         metadata["scope"] = json!(scope);
     }
+    if let Some(issuer) = tokens["issuer"].as_str().filter(|value| !value.is_empty()) {
+        metadata["issuer"] = json!(issuer);
+    }
     if let Some(client) = client {
         metadata["client"] = client.clone();
     }
@@ -113,6 +117,9 @@ pub fn to_tokens(credential: &credential::OAuth, now: i64) -> Result<Value, Erro
     }
     if let Some(scope) = metadata["scope"].as_str() {
         tokens["scope"] = json!(scope);
+    }
+    if let Some(issuer) = metadata["issuer"].as_str() {
+        tokens["issuer"] = json!(issuer);
     }
     Ok(tokens)
 }
@@ -179,6 +186,15 @@ struct Discovery {
     metadata: Option<Value>,
     resource: Option<Url>,
     scope: Option<String>,
+}
+
+impl Discovery {
+    fn issuer(&self) -> &str {
+        self.metadata
+            .as_ref()
+            .and_then(|metadata| metadata["issuer"].as_str())
+            .unwrap_or(self.server.as_str())
+    }
 }
 
 fn http() -> Result<reqwest::Client, Error> {
@@ -415,6 +431,11 @@ fn static_client(config: &RemoteConfig) -> Result<Option<Value>, Error> {
 
 async fn register(discovery: &Discovery, redirect: &str) -> Result<Value, Error> {
     let mut metadata = json!({"client_name":"ycoding","redirect_uris":[redirect],"grant_types":["authorization_code","refresh_token"],"response_types":["code"],"token_endpoint_auth_method":"none"});
+    metadata["application_type"] = json!(if super::validation::loopback_redirect(redirect) {
+        "native"
+    } else {
+        "web"
+    });
     if let Some(scope) = &discovery.scope {
         metadata["scope"] = json!(scope);
     }
@@ -432,7 +453,9 @@ async fn register(discovery: &Discovery, redirect: &str) -> Result<Value, Error>
         .json::<Value>()
         .await
         .map_err(|_| Error::Registration)?;
-    super::validation::client(client)
+    let mut client = super::validation::client(client)?;
+    client["issuer"] = json!(discovery.issuer());
+    Ok(client)
 }
 
 fn auth_method<'a>(client: &'a Value, discovery: &Discovery) -> &'a str {
@@ -535,7 +558,7 @@ async fn token(
             .await
             .map_err(|_| Error::Rejected)?;
         let status = response.status();
-        let value = response
+        let mut value = response
             .json::<Value>()
             .await
             .map_err(|_| Error::InvalidTokens)?;
@@ -551,6 +574,7 @@ async fn token(
             );
         }
         validate_tokens(&value)?;
+        value["issuer"] = json!(discovery.issuer());
         Ok(value)
     };
     match refresh {
@@ -749,7 +773,13 @@ pub async fn authorize(name: &str, config: &RemoteConfig) -> Result<Attempt, Err
     }
     Ok(Attempt {
         url: url.into(),
-        callback: super::callback::Callback::new(listener, redirect.clone(), state, name.into()),
+        callback: super::callback::Callback::new(
+            listener,
+            redirect.clone(),
+            state,
+            name.into(),
+            discovery.metadata.clone(),
+        ),
         redirect,
         verifier,
         discovery,
@@ -787,6 +817,7 @@ pub(crate) async fn renew(
             return Err(Error::NeedsAuth);
         }
         match exchange_refresh(service, &current, config, challenge).await {
+            Err(Error::IssuerMismatch) => return Err(Error::NeedsAuth),
             Err(Error::NeedsAuth) => {
                 let Some(latest) = service.get(current.id()).map_err(|_| Error::Storage)? else {
                     return Err(Error::NeedsAuth);
@@ -837,7 +868,31 @@ async fn exchange_refresh(
         .transpose()
         .map_err(|_| Error::InvalidTokens)?
         .unwrap_or_else(|| json!({}));
-    let client = match static_client(config)?.or_else(|| metadata.get("client").cloned()) {
+    if metadata["issuer"]
+        .as_str()
+        .is_some_and(|issuer| !issuer_matches(issuer, discovery.issuer()))
+    {
+        return Err(Error::IssuerMismatch);
+    }
+    let configured = static_client(config)?;
+    if configured.is_none()
+        && metadata
+            .get("client")
+            .is_some_and(|client| !client.is_object())
+    {
+        return Err(Error::InvalidConfiguration);
+    }
+    let registered = configured.is_none();
+    let mut client = match configured.or_else(|| {
+        metadata
+            .get("client")
+            .filter(|client| {
+                client["issuer"]
+                    .as_str()
+                    .is_none_or(|issuer| issuer_matches(issuer, discovery.issuer()))
+            })
+            .cloned()
+    }) {
         Some(client) => client,
         None => {
             let redirect =
@@ -846,6 +901,7 @@ async fn exchange_refresh(
             register(&discovery, &redirect).await?
         }
     };
+    client["issuer"] = json!(discovery.issuer());
     let mut tokens = token(
         &discovery,
         &client,
@@ -873,7 +929,7 @@ async fn exchange_refresh(
         current.method_id.as_lossless(),
         &config.url,
         &tokens,
-        metadata.get("client"),
+        registered.then_some(&client),
         now(),
     )?;
     service
@@ -884,4 +940,10 @@ async fn exchange_refresh(
         .get(info.id())
         .map_err(|_| Error::Storage)?
         .ok_or(Error::Storage)
+}
+
+fn issuer_matches(recorded: &str, current: &str) -> bool {
+    recorded == current
+        || recorded.strip_suffix('/') == Some(current)
+        || current.strip_suffix('/') == Some(recorded)
 }

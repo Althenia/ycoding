@@ -2,6 +2,22 @@ use super::oauth::Error;
 use serde_json::Value;
 use url::Url;
 
+pub(crate) fn loopback_redirect(value: &str) -> bool {
+    Url::parse(value).ok().is_some_and(|url| {
+        !["http", "https"].contains(&url.scheme())
+            || match url.host_str() {
+                Some("localhost" | "[::1]") => true,
+                Some(host) => {
+                    host.ends_with(".localhost")
+                        || host
+                            .parse::<std::net::Ipv4Addr>()
+                            .is_ok_and(|ip| ip.is_loopback())
+                }
+                None => false,
+            }
+    })
+}
+
 fn strings(value: &Value) -> bool {
     value
         .as_array()

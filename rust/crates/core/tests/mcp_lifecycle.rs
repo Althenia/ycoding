@@ -70,7 +70,7 @@ async fn configured_servers_start_in_background_and_disabled_servers_do_not_bloc
     assert!(service.prompts().is_empty());
     service.connect("disabled").await.unwrap();
     assert_eq!(service.servers().unwrap()[0].status, Status::Connected);
-    assert_eq!(service.tools().await.unwrap().len(), 2);
+    assert_eq!(service.tools().await.unwrap().len(), 3);
     service.disconnect("disabled").await.unwrap();
     assert_eq!(service.servers().unwrap()[0].status, Status::Disabled);
     assert!(service.tools().await.unwrap().is_empty());
@@ -105,7 +105,7 @@ async fn concurrent_same_server_lifecycle_operations_leave_a_consistent_catalog(
     assert!(matches!(status, Status::Connected | Status::Disabled));
     assert_eq!(
         service.tools().await.unwrap().len(),
-        if status == Status::Connected { 2 } else { 0 }
+        if status == Status::Connected { 3 } else { 0 }
     );
     service.disconnect("server").await.unwrap();
     assert!(service.tools().await.unwrap().is_empty());

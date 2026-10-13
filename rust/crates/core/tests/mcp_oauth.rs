@@ -38,6 +38,7 @@ struct State {
     issuer_dialect_path: bool,
     scope_challenges: Vec<String>,
     response_scope: Option<String>,
+    iss_supported: bool,
 }
 impl Server {
     async fn new() -> Self {
@@ -68,7 +69,7 @@ impl Server {
                                     "/.well-known/oauth-protected-resource/mcp" | "/challenge-meta" if state.resource_fault==Some("server") => (503,json!({})),
                                     "/.well-known/oauth-protected-resource/mcp" | "/challenge-meta" if state.resource_fault==Some("malformed") => (200,json!({"resource":1})),
                                     "/.well-known/oauth-protected-resource/mcp" | "/challenge-meta" => (200, json!({"resource":format!("{base}/mcp"),"authorization_servers":[format!("{base}/issuer{}",if state.issuer_dialect_path {"/openid-configuration"} else {""})],"scopes_supported":["tools"]})),
-                                    "/.well-known/oauth-authorization-server/issuer" | "/.well-known/oauth-authorization-server/issuer/openid-configuration" | "/.well-known/oauth-authorization-server" => (200, json!({"issuer":if state.opaque_issuer {"opaque-issuer".to_owned()} else {format!("{base}/issuer")},"authorization_endpoint":if state.unsafe_endpoint { "javascript:alert(1)".to_owned() } else { format!("{base}/authorize") },"token_endpoint":format!("{base}/token"),"registration_endpoint":format!("{base}/register"),"response_types_supported":if state.malformed_metadata {json!(["code",1])} else {json!(["code"])},"code_challenge_methods_supported":["S256"],"token_endpoint_auth_methods_supported":["none","client_secret_post","client_secret_basic"],"scopes_supported":["tools","offline_access"]})),
+                                    "/.well-known/oauth-authorization-server/issuer" | "/.well-known/oauth-authorization-server/issuer/openid-configuration" | "/.well-known/oauth-authorization-server" => (200, json!({"issuer":if state.opaque_issuer {"opaque-issuer".to_owned()} else {format!("{base}/issuer")},"authorization_endpoint":if state.unsafe_endpoint { "javascript:alert(1)".to_owned() } else { format!("{base}/authorize") },"token_endpoint":format!("{base}/token"),"registration_endpoint":format!("{base}/register"),"response_types_supported":if state.malformed_metadata {json!(["code",1])} else {json!(["code"])},"code_challenge_methods_supported":["S256"],"token_endpoint_auth_methods_supported":["none","client_secret_post","client_secret_basic"],"scopes_supported":["tools","offline_access"],"authorization_response_iss_parameter_supported":state.iss_supported})),
                                     "/register" => (201, json!({"client_id":"fixture-client","client_secret":"fixture-client-secret","token_endpoint_auth_method":"client_secret_post","redirect_uris":if state.malformed_registration {json!("invalid")} else {body["redirect_uris"].clone()},"unknown_registration_field":"must-be-discarded"})),
                                     "/token" => {
                                         let form: BTreeMap<_,_> = url::form_urlencoded::parse(raw.as_bytes()).into_owned().collect();
@@ -167,7 +168,7 @@ async fn dynamic_registration_pkce_callback_and_credential_persistence() {
         .clone();
     assert_eq!(
         registration,
-        json!({"client_name":"ycoding","redirect_uris":[params["redirect_uri"]],"grant_types":["authorization_code","refresh_token"],"response_types":["code"],"token_endpoint_auth_method":"none","scope":"tools offline_access"})
+        json!({"client_name":"ycoding","redirect_uris":[params["redirect_uri"]],"grant_types":["authorization_code","refresh_token"],"response_types":["code"],"token_endpoint_auth_method":"none","application_type":"native","scope":"tools offline_access"})
     );
     let mut callback = url::Url::parse(&params["redirect_uri"]).unwrap();
     callback
@@ -295,6 +296,10 @@ async fn refresh_rotates_same_credential_preserves_refresh_and_invalidates_rejec
     };
     assert_eq!(value.access.as_str(), Some("fixture-fresh"));
     assert_eq!(value.refresh.as_str(), Some("fixture-refresh"));
+    assert_eq!(
+        oauth::to_tokens(&value, oauth::now()).unwrap()["issuer"],
+        format!("{}/issuer", server.url)
+    );
     assert!(value.metadata.unwrap().get(&"client".into()).is_some());
     server.state.lock().unwrap().rejected_refresh = true;
     assert!(matches!(
@@ -302,6 +307,62 @@ async fn refresh_rotates_same_credential_preserves_refresh_and_invalidates_rejec
         Err(oauth::Error::NeedsAuth)
     ));
     assert!(credentials.get(info.id()).unwrap().is_none());
+    credentials.shutdown().await.unwrap();
+    server.close().await;
+}
+
+#[tokio::test]
+async fn malformed_stored_client_information_is_rejected_without_exchange_or_credential_changes() {
+    use ycoding_core::resources::mcp::oauth;
+    let server = Server::new().await;
+    let ServerConfig::Remote(config) = server.config() else {
+        unreachable!()
+    };
+    let store = store();
+    let credentials = credential::Service::new(store.client());
+    let id = oauth::integration_id("oauth-server", &config.url).unwrap();
+    for (index, client) in [
+        json!("malformed-client"),
+        json!([{"client_id":"fixture-client"}]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let value = oauth::to_credential(
+            &id,
+            &config.url,
+            &json!({"access_token":"fixture-expired","refresh_token":"fixture-refresh","token_type":"Bearer"}),
+            Some(&client),
+            1,
+        ).unwrap();
+        let info = credentials
+            .create(
+                format!("fixture-client-shape-{index}").into(),
+                id.clone(),
+                None,
+                value,
+                1,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            oauth::refresh(&credentials, &info, &config).await,
+            Err(oauth::Error::InvalidConfiguration)
+        ));
+        assert_eq!(
+            credentials.get(info.id()).unwrap().unwrap().generation(),
+            info.generation()
+        );
+    }
+    assert!(
+        server
+            .state
+            .lock()
+            .unwrap()
+            .requests
+            .iter()
+            .all(|(_, path, _, _)| !["/register", "/token"].contains(&path.as_str()))
+    );
     credentials.shutdown().await.unwrap();
     server.close().await;
 }
@@ -424,6 +485,13 @@ async fn initialization_challenge_refreshes_and_reconnects_once() {
         requests
             .iter()
             .filter(|(_, path, _, body)| path == "/mcp" && body["method"] == "initialize")
+            .count(),
+        1
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|(_, path, _, body)| path == "/mcp" && body["method"] == "server/discover")
             .count(),
         2
     );
@@ -680,7 +748,7 @@ async fn integration_registration_owns_methods_and_reconnects_on_credential_chan
             .iter()
             .filter(|(_, path, _, body)| path == "/mcp" && body["method"] == "initialize")
             .count(),
-        2
+        1
     );
     assert!(matches!(
         service.servers().unwrap()[0].connection,
@@ -1027,5 +1095,189 @@ async fn rejected_refresh_reauthorizes_and_different_scope_challenges_each_repla
     );
     connection.close().await.unwrap();
     credentials.shutdown().await.unwrap();
+    server.close().await;
+}
+
+#[tokio::test]
+async fn refresh_token_recorded_for_a_different_authorization_server_is_not_presented() {
+    use ycoding_core::resources::mcp::{client::Error, oauth};
+    let server = Server::new().await;
+    let ServerConfig::Remote(config) = server.config() else {
+        unreachable!()
+    };
+    let store = store();
+    let credentials = credential::Service::new(store.client());
+    let id = oauth::integration_id("oauth-server", &config.url).unwrap();
+    let value = oauth::to_credential(&id, &config.url, &json!({"access_token":"fixture-expired","refresh_token":"fixture-refresh","token_type":"Bearer","issuer":"https://other.example"}), Some(&json!({"client_id":"fixture-client","client_secret":"fixture-client-secret","token_endpoint_auth_method":"client_secret_post"})), 1).unwrap();
+    let info = credentials
+        .create("fixture-other-issuer".into(), id, None, value, 1)
+        .await
+        .unwrap();
+    let connection = Connection::connect(
+        "oauth-server",
+        &ServerConfig::Remote(config.clone()),
+        &std::env::temp_dir(),
+        "1",
+        &BTreeMap::new(),
+        Hooks {
+            credentials: Some(credentials.clone()),
+            ..Hooks::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        connection.err(),
+        Some(Error::NeedsAuth("oauth-server".into()))
+    );
+    assert!(matches!(
+        oauth::refresh(&credentials, &info, &config).await,
+        Err(oauth::Error::NeedsAuth)
+    ));
+    assert!(
+        server
+            .state
+            .lock()
+            .unwrap()
+            .requests
+            .iter()
+            .all(|(_, path, _, _)| path != "/token")
+    );
+    let ycoding_schema::credential::Value::OAuth(stored) = credentials
+        .get(info.id())
+        .unwrap()
+        .unwrap()
+        .secret()
+        .domain()
+        .unwrap()
+    else {
+        unreachable!()
+    };
+    assert_eq!(stored.refresh.as_str(), Some("fixture-refresh"));
+    credentials.shutdown().await.unwrap();
+    server.close().await;
+}
+
+async fn callback(
+    server: &Server,
+    query: impl Fn(&BTreeMap<String, String>) -> Vec<(String, String)>,
+) -> (
+    Result<resources::Secret, ycoding_core::resources::mcp::oauth::Error>,
+    String,
+) {
+    use ycoding_core::resources::mcp::oauth;
+    let ServerConfig::Remote(config) = server.config() else {
+        unreachable!()
+    };
+    let attempt = oauth::authorize("oauth-server", &config).await.unwrap();
+    let params: BTreeMap<String, String> = url::Url::parse(attempt.url())
+        .unwrap()
+        .query_pairs()
+        .into_owned()
+        .collect();
+    server.state.lock().unwrap().verifier = Some(params["code_challenge"].clone());
+    let mut target = url::Url::parse(&params["redirect_uri"]).unwrap();
+    target.query_pairs_mut().extend_pairs(query(&params));
+    let (result, response) = tokio::join!(attempt.finish(), reqwest::get(target));
+    (result, response.unwrap().text().await.unwrap())
+}
+
+fn token_requests(server: &Server) -> usize {
+    server
+        .state
+        .lock()
+        .unwrap()
+        .requests
+        .iter()
+        .filter(|(_, path, _, _)| path == "/token")
+        .count()
+}
+
+#[tokio::test]
+async fn authorization_code_is_redeemed_only_when_the_callback_issuer_matches() {
+    use ycoding_core::resources::mcp::oauth;
+    let server = Server::new().await;
+    server.state.lock().unwrap().iss_supported = true;
+    let issuer = format!("{}/issuer", server.url);
+    let answer = |iss: Option<&str>| {
+        let iss = iss.map(str::to_owned);
+        move |params: &BTreeMap<String, String>| {
+            let mut query = vec![
+                ("state".to_owned(), params["state"].clone()),
+                ("code".to_owned(), "fixture-code".to_owned()),
+            ];
+            query.extend(iss.clone().map(|iss| ("iss".to_owned(), iss)));
+            query
+        }
+    };
+    let (result, _) = callback(&server, answer(Some(&issuer))).await;
+    let ycoding_schema::credential::Value::OAuth(value) = result.unwrap().domain().unwrap() else {
+        unreachable!()
+    };
+    let metadata: Value = serde_json::from_str(&ycoding_schema::stringify_json(
+        &ycoding_schema::DomainEncode::encode(value.metadata.as_ref().unwrap()),
+    ))
+    .unwrap();
+    assert_eq!(metadata["issuer"], issuer);
+    assert_eq!(metadata["client"]["client_id"], "fixture-client");
+    assert_eq!(metadata["client"]["issuer"], issuer);
+    assert_eq!(token_requests(&server), 1);
+    for iss in [None, Some("https://attacker.example")] {
+        let (result, _) = callback(&server, answer(iss)).await;
+        assert!(
+            matches!(result, Err(oauth::Error::IssuerMismatch)),
+            "{iss:?}"
+        );
+    }
+    assert_eq!(token_requests(&server), 1);
+    server.close().await;
+}
+
+#[tokio::test]
+async fn callback_error_is_shown_only_after_state_and_issuer_verification() {
+    use ycoding_core::resources::mcp::oauth;
+    let server = Server::new().await;
+    server.state.lock().unwrap().iss_supported = true;
+    let issuer = format!("{}/issuer", server.url);
+    let deny = |state: Option<&str>, iss: Option<&str>| {
+        let state = state.map(str::to_owned);
+        let iss = iss.map(str::to_owned);
+        move |params: &BTreeMap<String, String>| {
+            let mut query = vec![
+                (
+                    "state".to_owned(),
+                    state.clone().unwrap_or_else(|| params["state"].clone()),
+                ),
+                ("error".to_owned(), "access_denied".to_owned()),
+                (
+                    "error_description".to_owned(),
+                    "Denied by the account owner".to_owned(),
+                ),
+            ];
+            query.extend(iss.clone().map(|iss| ("iss".to_owned(), iss)));
+            query
+        }
+    };
+    for (query, expected) in [
+        (
+            deny(Some("forged"), Some(&issuer)),
+            oauth::Error::StateMismatch,
+        ),
+        (
+            deny(None, Some("https://attacker.example")),
+            oauth::Error::IssuerMismatch,
+        ),
+        (deny(None, None), oauth::Error::IssuerMismatch),
+    ] {
+        let (result, page) = callback(&server, query).await;
+        assert_eq!(result.err(), Some(expected));
+        assert!(
+            !page.contains("Denied by the account owner"),
+            "{expected:?}"
+        );
+    }
+    let (result, page) = callback(&server, deny(None, Some(&issuer))).await;
+    assert_eq!(result.err(), Some(oauth::Error::Rejected));
+    assert!(page.contains("Denied by the account owner"));
+    assert_eq!(token_requests(&server), 0);
     server.close().await;
 }
