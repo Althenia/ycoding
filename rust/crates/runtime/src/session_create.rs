@@ -158,7 +158,7 @@ fn store(_: impl std::fmt::Debug) -> Failure {
     Failure::Unavailable("Session store unavailable".into())
 }
 
-fn iso(millis: i64) -> String {
+pub(crate) fn iso(millis: i64) -> String {
     let days = millis.div_euclid(86_400_000);
     let time = millis.rem_euclid(86_400_000);
     let shifted = days + 719_468;

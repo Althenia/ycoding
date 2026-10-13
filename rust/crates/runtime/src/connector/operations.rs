@@ -26,12 +26,32 @@ pub(crate) fn authorize(
         Some(v5::scope::Target::Global(_)) => v5::ScopeKind::Global,
         None => return Err(Failure::Invalid("Missing remote scope".into())),
     };
-    if scope as i32 != descriptor.scope {
+    if ![v5::PeerRole::RemoteClient, v5::PeerRole::Relay]
+        .iter()
+        .all(|role| {
+            descriptor
+                .role_scopes
+                .iter()
+                .find(|entry| entry.role == *role as i32)
+                .map_or(scope as i32 == descriptor.scope, |entry| {
+                    entry.scopes.contains(&(scope as i32))
+                })
+        })
+    {
         return Err(Failure::Invalid(
             "Remote scope does not match the operation".into(),
         ));
     }
-    if matches!(scope, v5::ScopeKind::Location | v5::ScopeKind::Workspace) {
+    if let Some(v5::scope::Target::Workspace(id)) = &request.scope.target {
+        let core = environment
+            .services
+            .core
+            .as_ref()
+            .ok_or_else(|| Failure::Unavailable("Core is not ready".into()))?;
+        crate::remote_derived::target::workspace(core, &id.as_str().into())?;
+        return Ok(());
+    }
+    if scope == v5::ScopeKind::Location {
         return Err(Failure::Forbidden(
             "Remote placement requires backend-advertised workspace resolution".into(),
         ));

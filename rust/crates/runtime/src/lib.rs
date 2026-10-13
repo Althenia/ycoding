@@ -35,6 +35,7 @@ mod provider_usage;
 mod pty;
 mod pty_stream;
 mod question;
+mod remote_derived;
 mod server;
 mod services;
 mod session_autonomy;
