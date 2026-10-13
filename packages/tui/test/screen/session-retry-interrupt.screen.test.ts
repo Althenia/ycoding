@@ -28,14 +28,16 @@ test("an interrupted retry does not keep the header cooking", async () => {
   const screen = await renderScreen({
     ...DESIGN_VIEWPORT,
     args: { sessionID },
-    settle: "cooking",
+    settle: "retry",
     route: (url) => {
       if (url.pathname === "/api/location") return json(location)
       if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
       if (url.pathname === "/api/session/active") return json({ data: { [sessionID]: {} } })
       if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
       if (url.pathname === `/api/session/${sessionID}/snapshot`)
-        return sessionSnapshot(sessionID, [
+        return sessionSnapshot(
+          sessionID,
+          [
             { id: "msg_user", type: "user", text: "Retry then interrupt.", time: { created: 1 } },
             {
               id: "msg_assistant",
@@ -43,13 +45,20 @@ test("an interrupted retry does not keep the header cooking", async () => {
               agent: "build",
               model: { providerID: "anthropic", id: "claude-opus-5" },
               content: [],
-              retry: { attempt: 2, at: Date.now() + 30_000, error: { message: "Provider unavailable" } },
+              retry: {
+                attempt: 2,
+                at: Date.now() + 30_000,
+                error: { type: "provider.transport", message: "Provider unavailable" },
+              },
               time: { created: 2 },
             },
-          ], { session })
+          ],
+          { session },
+        )
       if (url.pathname === `/api/session/${sessionID}/pending`) return json({ data: [] })
       if (url.pathname === `/api/session/${sessionID}/permission`) return json({ data: [] })
-      if (url.pathname === `/api/session/${sessionID}/subagent`) return json({ data: [] })
+      if (url.pathname === `/api/session/${sessionID}/subagent`)
+        return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
       if (url.pathname === `/api/session/${sessionID}/todo`) return json({ data: [] })
       if (url.pathname === `/api/session/${sessionID}/skills`) return json({ data: [] })
       if (url.pathname === "/path")
@@ -66,8 +75,10 @@ test("an interrupted retry does not keep the header cooking", async () => {
       id: "evt_retry_interrupted",
       created: 5,
       type: "session.execution.interrupted",
+      durable: { aggregateID: sessionID, seq: 5, version: 1 },
+      location: { directory },
       data: { sessionID, reason: "user" },
-    } as YCodingEvent)
+    } satisfies YCodingEvent)
 
     const deadline = Date.now() + 2_000
     while (Date.now() < deadline) {

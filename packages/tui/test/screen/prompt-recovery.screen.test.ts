@@ -61,7 +61,10 @@ function resetFixture() {
 
 const route: FetchHandler = async (url, request) => {
   if (url.pathname === "/api/command")
-    return json({ location, data: catalogCommand ? [{ name: "report", description: "Configured report" }] : [] })
+    return json({
+      location,
+      data: catalogCommand ? [{ name: "report", description: "Configured report", template: "Report $ARGUMENTS" }] : [],
+    })
   if (url.pathname === `/api/session/${sessionID}/command` && request.method === "POST") {
     const body = (await request.json()) as { id: string; command: string; arguments: string; resume?: boolean }
     commandRequests.push(body)
@@ -172,7 +175,7 @@ const route: FetchHandler = async (url, request) => {
         model: session.model,
         context: { total: 0, percent: 0 },
         tokens: { uncachedInput: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
-        cache: { eligible: 0, hitRatio: 0.61, mechanism: "unreported", readReported: false, writeReported: false },
+        cache: { eligible: 0, hitRatio: 0.61, mechanism: "none", readReported: false, writeReported: false },
         requests: { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens: session.tokens },
       },
     })
@@ -224,8 +227,22 @@ const route: FetchHandler = async (url, request) => {
       location,
       data: catalogSkill
         ? [
-            { id: "review", name: "Review", description: "Review code", content: "Review instructions", slash: true },
-            { id: "plan", name: "Plan", description: "Plan work", content: "Plan instructions", slash: true },
+            {
+              id: "review",
+              name: "Review",
+              description: "Review code",
+              content: "Review instructions",
+              slash: true,
+              location: `${directory}/.agents/skills/review/SKILL.md`,
+            },
+            {
+              id: "plan",
+              name: "Plan",
+              description: "Plan work",
+              content: "Plan instructions",
+              slash: true,
+              location: `${directory}/.agents/skills/plan/SKILL.md`,
+            },
           ]
         : [],
     })
@@ -288,6 +305,8 @@ test("unavailable explicit Session variant retains the draft and starts no model
       const stale = { ...session, model: { ...session.model, variant: "removed" } }
       if (url.pathname === "/api/session") return json({ data: [stale], cursor: {} })
       if (url.pathname === `/api/session/${sessionID}`) return json({ data: stale })
+      if (url.pathname === `/api/session/${sessionID}/snapshot`)
+        return sessionSnapshot(sessionID, [], { session: stale })
       if (url.pathname === `/api/session/${sessionID}/model`) {
         switches.push(url.pathname)
         return new Response(null, { status: 204 })
@@ -696,7 +715,7 @@ test("shell rejection retains the draft and restores the local retry without dup
 
     gate.resolve()
     await waitFor(() => screen.frame().includes("✗ Error · Shell submission failed"), "shell rejection feedback")
-    expect(screen.frame()).toContain("Check the Session before retrying")
+    expect(screen.frame().replace(/│/g, "").replace(/\s+/g, " ")).toContain("Check the Session before retrying")
     expect(screen.frame()).toContain("Shell submission failed · draft retained")
     expect(composer(screen.renderer.root)?.plainText).toBe("echo retry")
     expect(shellRequests).toHaveLength(1)
@@ -705,7 +724,10 @@ test("shell rejection retains the draft and restores the local retry without dup
     screen.input.pressKey("p", { ctrl: true })
     await waitFor(() => screen.frame().includes("Commands"), "shell recovery palette")
     await screen.input.typeText("retry previous submission")
-    await waitFor(() => screen.frame().includes("Retry previous submission") || screen.frame().includes("No results"), "shell retry search")
+    await waitFor(
+      () => screen.frame().includes("Retry previous submission") || screen.frame().includes("No results"),
+      "shell retry search",
+    )
     expect(screen.frame()).toContain("Retry previous submission")
     expect(screen.frame()).toContain("Discard previous submission recovery")
     screen.input.pressEnter()
@@ -728,7 +750,10 @@ test("discarding failed shell recovery does not replay the command or erase its 
     screen.input.pressKey("p", { ctrl: true })
     await waitFor(() => screen.frame().includes("Commands"), "pristine recovery palette")
     await screen.input.typeText("previous submission")
-    await waitFor(() => screen.frame().includes("No results") || screen.frame().includes("Retry previous submission"), "pristine recovery search")
+    await waitFor(
+      () => screen.frame().includes("No results") || screen.frame().includes("Retry previous submission"),
+      "pristine recovery search",
+    )
     expect(screen.frame()).not.toContain("Retry previous submission")
     expect(screen.frame()).not.toContain("Discard previous submission recovery")
     screen.input.pressKey("ESCAPE")
@@ -750,7 +775,10 @@ test("discarding failed shell recovery does not replay the command or erase its 
     screen.input.pressKey("p", { ctrl: true })
     await waitFor(() => screen.frame().includes("Commands"), "discarded recovery palette")
     await screen.input.typeText("previous submission")
-    await waitFor(() => screen.frame().includes("No results") || screen.frame().includes("Retry previous submission"), "discarded recovery search")
+    await waitFor(
+      () => screen.frame().includes("No results") || screen.frame().includes("Retry previous submission"),
+      "discarded recovery search",
+    )
     expect(screen.frame()).not.toContain("Retry previous submission")
     expect(screen.frame()).not.toContain("Discard previous submission recovery")
   } finally {

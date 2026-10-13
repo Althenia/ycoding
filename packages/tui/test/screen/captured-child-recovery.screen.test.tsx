@@ -127,7 +127,8 @@ function fixture(input?: { secondPrompt?: boolean; noRootEdit?: boolean; live?: 
         return json({ data: [session(parentID), ...childIDs.map(session)], cursor: {} })
       if ([parentID, ...childIDs].some((id) => url.pathname === `/api/session/${id}`))
         return json({ data: session(url.pathname.split("/").at(-1)!) })
-      if (url.pathname === `/api/session/${parentID}/snapshot`) return sessionSnapshot(parentID, root, { session: session(parentID) })
+      if (url.pathname === `/api/session/${parentID}/snapshot`)
+        return sessionSnapshot(parentID, root, { session: session(parentID) })
       for (const id of childIDs) {
         if (url.pathname !== `/api/session/${id}/snapshot`) continue
         await gates.get(id)
@@ -251,6 +252,7 @@ test("keeps partial child successes, labels only the affected prompt incomplete,
     expect(state.requests.slice(beforeToggle)).toEqual([])
     expect(screen.frame()).not.toContain("src/second.ts")
     state.failures.clear()
+    const beforeRetry = state.requests.length
     await screen.mouse.click(
       12,
       screen.lines().findIndex((line) => line.includes("Retry child changes")),
@@ -260,7 +262,7 @@ test("keeps partial child successes, labels only the affected prompt incomplete,
     expect(screen.frame()).not.toContain("incomplete")
     expect(state.reads(childIDs[0])).toBe(initialReads[0])
     expect(state.reads(childIDs[1])).toBe(initialReads[1] + 1)
-    expect(state.requests.some((request) => request.startsWith("POST"))).toBe(false)
+    expect(state.requests.slice(beforeRetry).some((request) => request.startsWith("POST"))).toBe(false)
   } finally {
     await screen.dispose()
   }

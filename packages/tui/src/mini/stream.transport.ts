@@ -2,11 +2,11 @@ import type {
   EventSubscribeOutput,
   FormInfo,
   LocationRef,
-  YCodingClient,
+  V5Client,
   PermissionRequest,
   SessionMessageAssistantTool,
   SessionMessageInfo,
-} from "@ycoding-ai/client/promise"
+} from "@ycoding-ai/client/v5"
 import { Event } from "@ycoding-ai/schema/event"
 import { SessionMessage } from "@ycoding-ai/schema/session-message"
 import { blockerStatus, pickBlockerView } from "./session-data"
@@ -32,9 +32,9 @@ type Trace = {
 }
 
 type StreamInput = {
-  sdk: YCodingClient
-  reconnect?: (signal: AbortSignal) => Promise<YCodingClient>
-  onClient?: (sdk: YCodingClient) => void
+  sdk: V5Client
+  reconnect?: (signal: AbortSignal) => Promise<V5Client>
+  onClient?: (sdk: V5Client) => void
   readTextFile?: (url: string) => Promise<string>
   location?: LocationRef
   sessionID: string
@@ -96,7 +96,7 @@ type RunEvent = EventSubscribeOutput
 type PromptFilePart = Extract<RunPromptPart, { type: "file" }>
 
 type Attempt = {
-  client: YCodingClient
+  client: V5Client
   signal: AbortSignal
   generation: number
 }
@@ -351,7 +351,7 @@ function skillCommit(messageID: string, name: string): StreamCommit {
 
 async function resolveSelectedModel(
   input: StreamInput,
-  sdk: YCodingClient,
+  sdk: V5Client,
   next: Pick<SessionTurnInput, "model" | "variant" | "signal">,
 ) {
   if (next.model)
@@ -639,11 +639,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
     }
   }
 
-  const resolvePermissionSources = async (
-    client: YCodingClient,
-    permissions: PermissionRequest[],
-    attempt: Attempt,
-  ) => {
+  const resolvePermissionSources = async (client: V5Client, permissions: PermissionRequest[], attempt: Attempt) => {
     const pending = new Set(
       permissions.flatMap((request) =>
         request.source?.type === "tool" ? [permissionSourceKey(request.source.messageID, request.source.callID)] : [],
@@ -1145,8 +1141,9 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
         const stream = client.event.subscribe({ signal: connection.signal })[Symbol.asyncIterator]()
         activeAttempt = attempt
         try {
+          await client.transport.ready()
           const first = await nextEvent(stream, connection.signal)
-          if (first.done || first.value.type !== "server.connected") throw new Error("Event stream disconnected")
+          if (first.done) throw new Error("Event stream disconnected")
           const buffered: RunEvent[] = []
           let booting = true
           const consume = (async () => {
@@ -1193,10 +1190,16 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       if (controller.signal.aborted || input.footer.isClosed) return
       input.trace?.write("recv.reconnect", { error: formatUnknownError(error) })
       write([], { phase: "running", status: "reconnecting" })
+      let replaced = false
       if (input.reconnect) {
         try {
           const next = await input.reconnect(controller.signal)
-          if (controller.signal.aborted || input.footer.isClosed) return
+          if (controller.signal.aborted || input.footer.isClosed) {
+            next.transport.close()
+            return
+          }
+          if (sdk !== next) sdk.transport.close()
+          replaced = sdk !== next
           sdk = next
           input.onClient?.(next)
         } catch (resolveError) {
@@ -1205,6 +1208,10 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
         }
       }
       await wait(250, controller.signal)
+      if (!replaced && !controller.signal.aborted && !input.footer.isClosed)
+        await sdk.transport.reconnect().catch((error) => {
+          input.trace?.write("recv.reresolve", { error: formatUnknownError(error) })
+        })
     }
   }
   const connection = connect()

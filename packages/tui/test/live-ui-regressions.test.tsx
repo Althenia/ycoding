@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { expect, mock, test } from "bun:test"
+import { expect, test } from "bun:test"
 import { createTestRenderer } from "@opentui/core/testing"
 import { testRender } from "@opentui/solid"
 import { Effect, FileSystem } from "effect"
@@ -38,12 +38,13 @@ test("centers the first rail section title in a full-width three-row background 
     const matchesTitleBackground = (column: ReturnType<typeof backgroundColumns>[number]) =>
       Boolean(titleBackground && column.every((value, index) => value === titleBackground[index]))
     const hasTitleBackground = (row: number) =>
-      backgroundColumns(row).slice(dimensions.width - railWidth(dimensions.width)).some(matchesTitleBackground)
+      backgroundColumns(row)
+        .slice(dimensions.width - railWidth(dimensions.width))
+        .some(matchesTitleBackground)
     const filledColumns = backgroundColumns(titleRow)
       .map((background, column) => (matchesTitleBackground(background) ? column : undefined))
       .filter(
-        (column): column is number =>
-          column !== undefined && column >= dimensions.width - railWidth(dimensions.width),
+        (column): column is number => column !== undefined && column >= dimensions.width - railWidth(dimensions.width),
       )
 
     expect(titleRow).toBe(4)
@@ -109,10 +110,50 @@ test("keeps subagent and shell footer counts as independent segments", async () 
     if (url.pathname === "/api/session/ses_footer/subagent")
       return json({
         data: [
-          { state: "running" },
-          { state: "waiting" },
-          { state: "completed" },
-          { state: "cancelled" },
+          {
+            sessionID: "ses_running",
+            parentID: "ses_footer",
+            description: "running",
+            agent: "general",
+            model: { providerID: "openai", id: "gpt-5.6" },
+            background: true,
+            state: "running",
+            revision: 1,
+            time: { created: 1, updated: 1 },
+          },
+          {
+            sessionID: "ses_waiting",
+            parentID: "ses_footer",
+            description: "waiting",
+            agent: "general",
+            model: { providerID: "openai", id: "gpt-5.6" },
+            background: true,
+            state: "waiting",
+            revision: 1,
+            time: { created: 1, updated: 1 },
+          },
+          {
+            sessionID: "ses_completed",
+            parentID: "ses_footer",
+            description: "completed",
+            agent: "general",
+            model: { providerID: "openai", id: "gpt-5.6" },
+            background: true,
+            state: "completed",
+            revision: 1,
+            time: { created: 1, updated: 1 },
+          },
+          {
+            sessionID: "ses_cancelled",
+            parentID: "ses_footer",
+            description: "cancelled",
+            agent: "general",
+            model: { providerID: "openai", id: "gpt-5.6" },
+            background: true,
+            state: "cancelled",
+            revision: 1,
+            time: { created: 1, updated: 1 },
+          },
         ],
         // The footer reads the durable page summary, so the fixture must supply it.
         summary: { total: 4, active: 2, running: 1, waiting: 1 },
@@ -151,7 +192,10 @@ test("keeps subagent and shell footer counts as independent segments", async () 
 
   try {
     await app.waitForFrame((frame) => frame.includes("subagents"))
-    const line = app.captureCharFrame().split("\n").find((row) => row.includes("subagents"))
+    const line = app
+      .captureCharFrame()
+      .split("\n")
+      .find((row) => row.includes("subagents"))
     expect(line).toContain("subagents 2   shells 0")
   } finally {
     app.renderer.destroy()
@@ -207,8 +251,6 @@ test("keeps the header model readable while a toast is visible", async () => {
 
 async function bootPromptRegression(dimensions = { width: 120, height: 56 }) {
   const setup = await createTestRenderer({ ...dimensions, useThread: false, kittyKeyboard: true })
-  const core = await import("@opentui/core")
-  mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
   const events = createEventStream()
   const session = {
     id: "ses_prompt_regression",
@@ -237,6 +279,8 @@ async function bootPromptRegression(dimensions = { width: 120, height: 56 }) {
     if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
     if (url.pathname === `/api/session/${session.id}`) return json({ data: session })
     if (url.pathname === `/api/session/${session.id}/snapshot`) return sessionSnapshot(session.id, [], { session })
+    if (url.pathname.endsWith("/subagent"))
+      return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
     if (
       [`pending`, `permission`, `form`, `todo`, `skills`, `subagent`, `guardrail/request`].some((suffix) =>
         url.pathname.endsWith(`/${suffix}`),
@@ -244,11 +288,21 @@ async function bootPromptRegression(dimensions = { width: 120, height: 56 }) {
     )
       return json({ data: [] })
     if (url.pathname === `/api/session/${session.id}/guardrail`)
-      return json({ data: { rootSessionID: session.id, profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [] } })
+      return json({
+        data: {
+          rootSessionID: session.id,
+          profile: "standard",
+          customRules: 0,
+          approvals: 0,
+          blocked: 0,
+          counters: [],
+          invalidFiles: [],
+        },
+      })
     if (url.pathname === "/api/model") return json({ data: [model] })
     return undefined
   }, events)
-  const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request) })
+  const server = calls.listen()
   const { run } = await import("../src/app")
   const task = Effect.runPromise(
     run({
@@ -256,6 +310,7 @@ async function bootPromptRegression(dimensions = { width: 120, height: 56 }) {
       config: { get: async () => ({}), update: async () => ({}) },
       packages: { resolve: async () => undefined },
       args: { sessionID: session.id },
+      terminalHandoff: async () => ({ renderer: setup.renderer, mode: null, complete: () => {} }),
       log: () => {},
     }).pipe(Effect.provide(AppNodeBuilder.build(Global.node)), Effect.provide(FileSystem.layerNoop({}))),
   )
@@ -268,7 +323,6 @@ async function bootPromptRegression(dimensions = { width: 120, height: 56 }) {
       if (!setup.renderer.isDestroyed) setup.renderer.destroy()
       await task.catch(() => {})
       await server.stop()
-      mock.restore()
     },
   }
 }

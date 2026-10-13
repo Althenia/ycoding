@@ -55,7 +55,10 @@ test("renders the responsive rail placement bands", async () => {
   for (const width of [100, 119]) {
     const app = await renderOverlayRail(width, 30)
     try {
-      const line = app.captureCharFrame().split("\n").find((value) => value.includes("SESSION"))
+      const line = app
+        .captureCharFrame()
+        .split("\n")
+        .find((value) => value.includes("SESSION"))
       // Measure from the rail's own left rule rather than the interpolated rail width. The extra
       // section-label padding only applies at the full-width rail, so the overlay band sits at 5.
       expect((line?.indexOf("SESSION") ?? -1) - (line?.indexOf("│") ?? -1)).toBe(5)
@@ -84,7 +87,10 @@ test("renders the shared dialog at the responsive width ladder", async () => {
   for (const viewport of [NARROW_VIEWPORT, { width: 100, height: 30 }, DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE]) {
     const app = await renderDialog(viewport)
     try {
-      const line = app.captureCharFrame().split("\n").find((value) => value.includes("Responsive dialog"))
+      const line = app
+        .captureCharFrame()
+        .split("\n")
+        .find((value) => value.includes("Responsive dialog"))
       // The shared dialog panel is the design's 98-column frame above the narrow band.
       const width = viewport.width < 100 ? viewport.width : 98
       // Board 20 places the dialog title at panel column 3.
@@ -147,7 +153,9 @@ async function renderDialog(viewport: { width: number; height: number }) {
     const dialog = useDialog()
     onMount(() => {
       dialog.setCentered(true)
-      dialog.replace(() => <DialogAlert title="Responsive dialog" message="The shared dialog follows the responsive ladder." />)
+      dialog.replace(() => (
+        <DialogAlert title="Responsive dialog" message="The shared dialog follows the responsive ladder." />
+      ))
     })
     return null
   }
@@ -181,7 +189,9 @@ function route(url: URL) {
   if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
   if (url.pathname === `/api/session/${sessionID}/snapshot`)
-    return sessionSnapshot(sessionID, [
+    return sessionSnapshot(
+      sessionID,
+      [
         {
           id: "msg_assistant",
           type: "assistant",
@@ -191,12 +201,13 @@ function route(url: URL) {
           time: { created: 2, completed: 3 },
         },
         { id: "msg_user", type: "user", text: "Check the responsive rail.", time: { created: 1 } },
-      ], { session })
+      ],
+      { session },
+    )
   if (
     [
       `/api/session/${sessionID}/pending`,
       `/api/session/${sessionID}/permission`,
-      `/api/session/${sessionID}/subagent`,
       `/api/session/${sessionID}/todo`,
       `/api/session/${sessionID}/skills`,
       `/api/session/${sessionID}/guardrail/request`,
@@ -206,16 +217,42 @@ function route(url: URL) {
   )
     return json({ location, data: [] })
   if (url.pathname === "/api/mcp/resource") return json({ location, data: { resources: [], templates: [] } })
+  if (url.pathname === `/api/session/${sessionID}/subagent`)
+    return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
   if (url.pathname === `/api/session/${sessionID}/guardrail`)
-    return json({ data: { rootSessionID: sessionID, profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [] } })
+    return json({
+      data: {
+        rootSessionID: sessionID,
+        profile: "standard",
+        customRules: 0,
+        approvals: 0,
+        blocked: 0,
+        counters: [],
+        invalidFiles: [],
+      },
+    })
   if (url.pathname === `/api/session/${sessionID}/diagnostics`)
     return json({
       data: {
         model: { providerID: "anthropic", id: "claude-opus-5" },
         context: { total: 1_464, percent: 56 },
         tokens: { uncachedInput: 1_411, output: 53, reasoning: 0, cacheRead: 220_672, cacheWrite: 4_096 },
-        cache: { eligible: 220_672, hitRatio: 0.71, mechanism: "anthropic-cache-control", readReported: true, writeReported: true },
-        requests: { logical: 1, physical: 1, helpers: 0, continued: 0, fallback: 0, tokens: { input: 1_411, output: 53, reasoning: 0, cache: { read: 220_672, write: 4_096 } }, latestInvalidation: "stable-hit" },
+        cache: {
+          eligible: 220_672,
+          hitRatio: 0.71,
+          mechanism: "anthropic-cache-control",
+          readReported: true,
+          writeReported: true,
+        },
+        requests: {
+          logical: 1,
+          physical: 1,
+          helpers: 0,
+          continued: 0,
+          fallback: 0,
+          tokens: { input: 1_411, output: 53, reasoning: 0, cache: { read: 220_672, write: 4_096 } },
+          latestInvalidation: "stable-hit",
+        },
       },
     })
   if (url.pathname === "/api/vcs/branch") return json({ location, data: { current: "main", default: "main" } })
@@ -242,9 +279,20 @@ function route(url: URL) {
   if (url.pathname === "/api/agent")
     return json({
       location,
-      data: [{ id: "build", name: "Build", request: { headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] }],
+      data: [
+        {
+          id: "build",
+          name: "Build",
+          request: { headers: {}, body: {} },
+          mode: "primary",
+          hidden: false,
+          permissions: [],
+        },
+      ],
     })
-  if (["/api/integration", "/api/command", "/api/skill", "/api/reference"].includes(url.pathname)) return json({ location, data: [] })
-  if (url.pathname === "/api/permission/request" || url.pathname === "/api/form/request") return json({ location, data: [] })
+  if (["/api/integration", "/api/command", "/api/skill", "/api/reference"].includes(url.pathname))
+    return json({ location, data: [] })
+  if (url.pathname === "/api/permission/request" || url.pathname === "/api/form/request")
+    return json({ location, data: [] })
   return undefined
 }

@@ -32,6 +32,7 @@ async function mount(partialChild = false) {
             parentID,
             sessionID: child(parentID),
             agent: "general",
+            model: { providerID: "openai", id: "gpt-5.6" },
             description: "Read child",
             background: true,
             state: "running",
@@ -48,7 +49,9 @@ async function mount(partialChild = false) {
       await messageGates.get(childID)
       return failures.has(childID)
         ? json({ message: "Read failed" }, { status: 500 })
-        : sessionSnapshot(childID, [{ id: `msg_${childID}`, type: "user", text: childID, time: { created: 1 } }], { before: partial.has(childID) && !url.searchParams.has("before") ? "opaque_older" : undefined })
+        : sessionSnapshot(childID, [{ id: `msg_${childID}`, type: "user", text: childID, time: { created: 1 } }], {
+            before: partial.has(childID) && !url.searchParams.has("before") ? "opaque_older" : undefined,
+          })
     }
     if (url.pathname === "/api/session/ses_old" || url.pathname === "/api/session/ses_new")
       return json({
@@ -104,11 +107,18 @@ test("a ready child with older history stays incomplete and does not page earlie
   const fixture = await mount(true)
   fixture.app.renderer.start()
   try {
-    await fixture.app.waitForFrame(() => fixture.data().session.message.history("ses_old")?.status === "ready" && !fixture.hydration().status(["ses_old"])?.loading)
+    await fixture.app.waitForFrame(
+      () =>
+        fixture.data().session.message.history("ses_old")?.status === "ready" &&
+        !fixture.hydration().status(["ses_old"])?.loading,
+    )
     expect(fixture.hydration()).not.toHaveProperty("loadOlder")
     expect(fixture.hydration().status(["ses_old"])).toMatchObject({ loading: false, failed: 0 })
     expect(fixture.requests.filter((url) => url === "/api/session/ses_old/snapshot")).toHaveLength(1)
-  } finally { fixture.app.renderer.destroy(); fixture.events.disconnect() }
+  } finally {
+    fixture.app.renderer.destroy()
+    fixture.events.disconnect()
+  }
 })
 
 test("an obsolete membership result cannot authorize or read a previous selection's child", async () => {

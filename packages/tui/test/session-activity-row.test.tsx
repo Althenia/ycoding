@@ -1,11 +1,14 @@
 /** @jsxImportSource @opentui/solid */
 import { testRender } from "@opentui/solid"
-import { afterEach, describe, expect, mock, test } from "bun:test"
-import { createSignal } from "solid-js"
+import { afterEach, describe, expect, test } from "bun:test"
+import { createSignal, onMount, Show } from "solid-js"
 import type { ToolLifecycleInput } from "../src/routes/session/activity-row"
 import { registerYCodingSpinner } from "../src/component/register-spinner"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
+import { ClientProvider } from "../src/context/client"
+import { DataProvider, useData } from "../src/context/data"
+import { createApi, createFetch, json } from "./fixture/tui-client"
 
 const originalSetInterval = global.setInterval
 const originalClearInterval = global.clearInterval
@@ -15,18 +18,6 @@ const subagentTask = createSignal({
   state: "running",
   time: { updated: 1_000 },
 })
-
-mock.module("../src/context/data", () => ({
-  useData: () => ({
-    session: {
-      get: (sessionID: string) => sessionID === "child" ? { parentID: "parent", time: { updated: 1_000 } } : undefined,
-      subagent: {
-        page: (sessionID: string) => sessionID === "parent" ? { data: [subagentTask[0]()] } : undefined,
-      },
-      status: () => undefined,
-    },
-  }),
-}))
 
 const { SessionActivityRow, ToolLifecycleStatus } = await import("../src/routes/session/activity-row")
 
@@ -96,7 +87,9 @@ describe("session activity duration intervals", () => {
       return 1 as unknown as ReturnType<typeof setInterval>
     }) as typeof setInterval
 
-    const app = await renderLifecycle(createSignal<ToolLifecycleInput>({ status: "running", time: { created: 0, ran: 0 } }))
+    const app = await renderLifecycle(
+      createSignal<ToolLifecycleInput>({ status: "running", time: { created: 0, ran: 0 } }),
+    )
 
     expect(interval).toBe(1_000)
     app.renderer.destroy()
@@ -104,16 +97,67 @@ describe("session activity duration intervals", () => {
 
   test("self-stops a subagent interval when its durable task completes", async () => {
     const callbacks: Array<() => void> = []
+    const timers = new Set<ReturnType<typeof setInterval>>()
     let clears = 0
-    global.setInterval = ((callback: () => void) => {
+    global.setInterval = ((callback: () => void, milliseconds?: number) => {
+      if (milliseconds !== 1_000) return originalSetInterval(callback, milliseconds)
       callbacks.push(callback)
-      return callbacks.length as unknown as ReturnType<typeof setInterval>
+      const timer = callbacks.length as unknown as ReturnType<typeof setInterval>
+      timers.add(timer)
+      return timer
     }) as typeof setInterval
-    global.clearInterval = (() => {
+    global.clearInterval = ((timer: ReturnType<typeof setInterval>) => {
+      if (!timers.has(timer)) return originalClearInterval(timer)
       clears += 1
     }) as typeof clearInterval
 
     subagentTask[1]({ sessionID: "child", state: "running", time: { updated: 1_000 } })
+    const api = createApi(
+      createFetch((url) => {
+        if (url.pathname === "/api/session/child")
+          return json({ data: { id: "child", parentID: "parent", time: { created: 0, updated: 1_000 } } })
+        if (url.pathname === "/api/session/parent/subagent")
+          return json({
+            data: [
+              {
+                ...subagentTask[0](),
+                parentID: "parent",
+                description: "Child",
+                agent: "build",
+                model: { providerID: "fixture", id: "fixture" },
+                background: true,
+                revision: 1,
+                time: { created: 0, updated: 1_000 },
+              },
+            ],
+            summary: {
+              total: 1,
+              active: subagentTask[0]().state === "running" ? 1 : 0,
+              running: subagentTask[0]().state === "running" ? 1 : 0,
+              waiting: 0,
+            },
+            cursor: {},
+          })
+        return undefined
+      }).fetch,
+    )
+    const ready = Promise.withResolvers<void>()
+    let data!: ReturnType<typeof useData>
+    function Row() {
+      data = useData()
+      const [loaded, setLoaded] = createSignal(false)
+      onMount(() => {
+        void Promise.all([data.session.sync("child"), data.session.subagent.sync("parent")]).then(() => {
+          setLoaded(true)
+          ready.resolve()
+        }, ready.reject)
+      })
+      return (
+        <Show when={loaded()}>
+          <SessionActivityRow row={{ type: "subagent", sessionID: "child", agent: "Build", created: 0 }} />
+        </Show>
+      )
+    }
     const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
       import("../src/config"),
       import("../src/context/theme"),
@@ -123,7 +167,11 @@ describe("session activity duration intervals", () => {
         <TestTuiContexts>
           <ConfigProvider config={createTuiResolvedConfig({ animations: false })}>
             <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-              <SessionActivityRow row={{ type: "subagent", sessionID: "child", agent: "Build", created: 0 }} />
+              <ClientProvider api={api}>
+                <DataProvider>
+                  <Row />
+                </DataProvider>
+              </ClientProvider>
             </ThemeProvider>
           </ConfigProvider>
         </TestTuiContexts>
@@ -131,10 +179,13 @@ describe("session activity duration intervals", () => {
       { width: 80, height: 3 },
     )
     app.renderer.start()
+    await ready.promise
     await app.waitForFrame((frame) => frame.includes("running"))
     expect(callbacks).toHaveLength(1)
 
     subagentTask[1]({ sessionID: "child", state: "completed", time: { updated: 1_000 } })
+    data.session.subagent.invalidate("parent")
+    await data.session.subagent.sync("parent")
     await app.waitForFrame((frame) => frame.includes("completed 1s"))
     const terminalFrame = app.captureCharFrame()
     callbacks[0]?.()

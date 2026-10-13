@@ -20,6 +20,7 @@ import { ConfigProvider } from "../src/config"
 import { FrecencyProvider } from "../src/prompt/frecency"
 import { PromptHistoryProvider } from "../src/prompt/history"
 import { PromptStashProvider } from "../src/prompt/stash"
+import { PromptRefProvider } from "../src/context/prompt"
 import { DialogProvider } from "../src/ui/dialog"
 import { Toast, ToastProvider } from "../src/ui/toast"
 import { tmpdir } from "./fixture/fixture"
@@ -211,9 +212,11 @@ async function renderResume(input: {
                                 <DialogProvider>
                                   <FrecencyProvider>
                                     <PromptHistoryProvider>
-                                      <EditorContextProvider>
-                                        <Fixture />
-                                      </EditorContextProvider>
+                                      <PromptRefProvider>
+                                        <EditorContextProvider>
+                                          <Fixture />
+                                        </EditorContextProvider>
+                                      </PromptRefProvider>
                                     </PromptHistoryProvider>
                                   </FrecencyProvider>
                                 </DialogProvider>

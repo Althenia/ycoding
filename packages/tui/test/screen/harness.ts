@@ -34,7 +34,9 @@ export async function renderScreen(input: {
   /** The real renderer enables the kitty keyboard protocol; modifier sequences need it. */
   kittyKeyboard?: boolean
   /** Frame is stable once this appears; avoids asserting a half-painted screen. */
-  settle: string | ((screen: Pick<Awaited<ReturnType<typeof createTestRenderer>>, "captureCharFrame" | "captureSpans">) => boolean)
+  settle:
+    | string
+    | ((screen: Pick<Awaited<ReturnType<typeof createTestRenderer>>, "captureCharFrame" | "captureSpans">) => boolean)
   config?: Record<string, unknown>
   remote?: { get: () => Promise<RemoteStatus>; set: (enabled: boolean) => Promise<RemoteStatus> }
   keepAwake?: { get: () => Promise<KeepAwakeStatus>; set: (enabled: boolean) => Promise<KeepAwakeStatus> }
@@ -81,8 +83,9 @@ export async function renderScreen(input: {
     }
     mock.module("../../src/context/data", () => ({
       ...data,
-      DataProvider: (props: Parameters<typeof data.DataProvider>[0]) =>
-        createComponent(original.DataProvider, {
+      DataProvider: (props: Parameters<typeof data.DataProvider>[0]) => {
+        let content: Array<typeof props.children> | undefined
+        return createComponent(original.DataProvider, {
           get recordTelemetry() {
             return props.recordTelemetry
           },
@@ -90,9 +93,10 @@ export async function renderScreen(input: {
             return props.selectedSessionID
           },
           get children() {
-            return [createComponent(Probe, {}), props.children]
+            return (content ??= [createComponent(Probe, {}), props.children])
           },
-        }),
+        })
+      },
     }))
     restoreData = () => {
       mock.module("../../src/context/data", () => original)
@@ -108,7 +112,7 @@ export async function renderScreen(input: {
       mock.module("../../src/plugin/builtins", () => original)
     }
   }
-  const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request), idleTimeout: 30 })
+  const server = calls.listen()
   const { run } = await import("../../src/app")
 
   const task = Effect.runPromise(
@@ -127,9 +131,8 @@ export async function renderScreen(input: {
     ),
   )
 
-  const settled = () => typeof input.settle === "string"
-    ? setup.captureCharFrame().includes(input.settle)
-    : input.settle(setup)
+  const settled = () =>
+    typeof input.settle === "string" ? setup.captureCharFrame().includes(input.settle) : input.settle(setup)
   const deadline = Date.now() + 25_000
   while (Date.now() < deadline) {
     await Bun.sleep(50)
@@ -142,6 +145,7 @@ export async function renderScreen(input: {
 
   return {
     events,
+    waitForSettlement: calls.waitForSettlement,
     renderer: setup.renderer,
     /**
      * Waits for a stable live-event subscription before a test emits into the stream. Emitting

@@ -55,7 +55,10 @@ test("mounted production session.memory command computes lazily, refreshes, rend
   try {
     await app.waitFor(() => commands().some((command) => command.id === "session.memory"))
     expect(app.captureCharFrame()).not.toContain("Estimated resident payload")
-    commands().find((command) => command.id === "session.memory")!.run()
+    await data.session.message.sync(sessionID)
+    commands()
+      .find((command) => command.id === "session.memory")!
+      .run()
     await app.waitForFrame(
       (frame) =>
         frame.includes("Global process metrics (direct)") &&

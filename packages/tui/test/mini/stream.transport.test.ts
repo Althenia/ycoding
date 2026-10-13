@@ -3,13 +3,13 @@ import fs from "fs/promises"
 import path from "path"
 import { pathToFileURL } from "node:url"
 import {
-  YCoding,
   type EventSubscribeOutput,
   type FormInfo,
   type MessageListOutput,
-  type YCodingClient,
+  type V5Client,
   type PermissionRequest,
-} from "@ycoding-ai/client/promise"
+} from "@ycoding-ai/client/v5"
+import { createApi } from "../fixture/tui-client"
 import { createSessionTransport } from "../../src/mini/stream.transport"
 import type { FooterEvent, StreamCommit } from "../../src/mini/types"
 import { createFooterApiFixture } from "./fixture/footer-api"
@@ -93,7 +93,7 @@ function durable(sessionID: string, seq = 0, version: 1 | 2 = 1) {
   return { aggregateID: sessionID, seq, version }
 }
 
-function promptAdmission(input: Parameters<YCodingClient["session"]["prompt"]>[0], sessionID = "ses_1") {
+function promptAdmission(input: Parameters<V5Client["session"]["prompt"]>[0], sessionID = "ses_1") {
   return {
     admittedSeq: 1,
     id: input.id ?? "msg_prompt",
@@ -160,7 +160,7 @@ function sdk(input: {
   globalLocation?: { directory: string; workspaceID?: string }
   permissions?: Record<string, PermissionRequest[]>
 }) {
-  const client = YCoding.make({ baseUrl: "https://ycoding.test" })
+  const client = createApi()
   let subscription = 0
   spyOn(client.event, "subscribe").mockImplementation(() => input.streams[subscription++]?.stream ?? feed().stream)
   spyOn(client.message, "list").mockImplementation((request) =>
@@ -549,7 +549,7 @@ describe("Mini transport", () => {
       thinking: false,
       footer: ui.api,
     })
-    let request: Parameters<YCodingClient["session"]["prompt"]>[0] | undefined
+    let request: Parameters<V5Client["session"]["prompt"]>[0] | undefined
     spyOn(client.session, "prompt").mockImplementation((input) => {
       request = input
       queueMicrotask(() => {
@@ -637,7 +637,7 @@ describe("Mini transport", () => {
       thinking: false,
       footer: ui.api,
     })
-    let request: Parameters<YCodingClient["session"]["prompt"]>[0] | undefined
+    let request: Parameters<V5Client["session"]["prompt"]>[0] | undefined
     // The generated method has conditional return types for throwOnError; this mock represents the successful branch.
     // @ts-expect-error successful SDK response is valid for both modes at runtime
     spyOn(client.session, "prompt").mockImplementation((input) => {
@@ -725,7 +725,7 @@ describe("Mini transport", () => {
       thinking: false,
       footer: ui.api,
     })
-    let request: Parameters<YCodingClient["session"]["prompt"]>[0] | undefined
+    let request: Parameters<V5Client["session"]["prompt"]>[0] | undefined
     // The generated method has conditional return types for throwOnError; this mock represents the successful branch.
     // @ts-expect-error successful SDK response is valid for both modes at runtime
     spyOn(client.session, "prompt").mockImplementation((input) => {
@@ -1004,7 +1004,7 @@ describe("Mini transport", () => {
         },
       ])
     })
-    const current: YCodingClient[] = []
+    const current: V5Client[] = []
     const ui = footer()
     const transport = await createSessionTransport({
       sdk: first,
@@ -2008,7 +2008,7 @@ describe("Mini transport", () => {
       thinking: false,
       footer: ui.api,
     })
-    let request!: Parameters<YCodingClient["session"]["shell"]>[0]
+    let request!: Parameters<V5Client["session"]["shell"]>[0]
     spyOn(client.session, "shell").mockImplementation((input) => {
       request = input
       queueMicrotask(() => {
@@ -2141,7 +2141,7 @@ describe("Mini transport", () => {
       thinking: false,
       footer: ui.api,
     })
-    let request!: Parameters<YCodingClient["session"]["shell"]>[0]
+    let request!: Parameters<V5Client["session"]["shell"]>[0]
     let complete!: () => void
     const shellRequested = defer()
     spyOn(client.session, "shell").mockImplementation((input) => {
@@ -2408,7 +2408,7 @@ describe("Mini transport", () => {
       thinking: false,
       footer: ui.api,
     })
-    let request: Parameters<YCodingClient["session"]["command"]>[0] | undefined
+    let request: Parameters<V5Client["session"]["command"]>[0] | undefined
     spyOn(client.session, "command").mockImplementation((input) => {
       request = input
       queueMicrotask(() => {
@@ -2496,7 +2496,7 @@ describe("Mini transport", () => {
       thinking: false,
       footer: ui.api,
     })
-    let request: Parameters<YCodingClient["session"]["skill"]>[0] | undefined
+    let request: Parameters<V5Client["session"]["skill"]>[0] | undefined
     const command = spyOn(client.session, "command")
     const prompt = spyOn(client.session, "prompt")
     spyOn(client.session, "skill").mockImplementation((input) => {

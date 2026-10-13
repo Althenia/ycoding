@@ -21,36 +21,100 @@ const session = {
   tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
   time: { created: 1, updated: 3 },
 }
-const patchFor = (path: string, line: string) => [`--- a/${path}`, `+++ b/${path}`, "@@ -1 +1 @@", "-export const value = false", `+export const value = ${line}`].join("\n")
+const patchFor = (path: string, line: string) =>
+  [
+    `--- a/${path}`,
+    `+++ b/${path}`,
+    "@@ -1 +1 @@",
+    "-export const value = false",
+    `+export const value = ${line}`,
+  ].join("\n")
 const user = (id: string, text: string) => ({ id, type: "user", text, time: { created: 1 } })
 const assistant = (id: string, content: unknown[], finish = "stop") => ({
-  id, type: "assistant", agent: "build", model, content, finish, time: { created: 2, completed: 3 },
+  id,
+  type: "assistant",
+  agent: "build",
+  model,
+  content,
+  finish,
+  time: { created: 2, completed: 3 },
 })
 const editPart = (id: string, path: string, line: string) => ({
-  type: "tool", id, name: "edit",
-  state: { status: "completed", input: { path }, content: [], structured: { files: [{ file: path, patch: patchFor(path, line), additions: 1, deletions: 1 }] } },
+  type: "tool",
+  id,
+  name: "edit",
+  state: {
+    status: "completed",
+    input: { path },
+    content: [],
+    structured: { files: [{ file: path, patch: patchFor(path, line), additions: 1, deletions: 1 }] },
+  },
   time: { created: 2, ran: 2, completed: 3 },
 })
 const controlPart = (id: string, action: string, input: Record<string, unknown> = {}) => ({
-  type: "tool", id, name: "subagent_control",
-  state: { status: "completed", input: { action, sessionID: "ses_child", ...input }, content: [], structured: { action, task: { sessionID: "ses_child" } } },
+  type: "tool",
+  id,
+  name: "subagent_control",
+  state: {
+    status: "completed",
+    input: { action, sessionID: "ses_child", ...input },
+    content: [],
+    structured: { action, task: { sessionID: "ses_child" } },
+  },
   time: { created: 2, ran: 2, completed: 3 },
 })
-const launchPart = { type: "tool", id: "call_launch", name: "subagent", state: { status: "running", input: {}, content: [], structured: { sessionID: "ses_child", status: "running" } }, time: { created: 2, ran: 2 } }
-const forgedPart = { type: "tool", id: "call_forged", name: "subagent", state: { status: "completed", input: {}, content: [], structured: { sessionID: "ses_foreign" } }, time: { created: 2, ran: 2, completed: 3 } }
+const launchPart = {
+  type: "tool",
+  id: "call_launch",
+  name: "subagent",
+  state: { status: "running", input: {}, content: [], structured: { sessionID: "ses_child", status: "running" } },
+  time: { created: 2, ran: 2 },
+}
+const forgedPart = {
+  type: "tool",
+  id: "call_forged",
+  name: "subagent",
+  state: { status: "completed", input: {}, content: [], structured: { sessionID: "ses_foreign" } },
+  time: { created: 2, ran: 2, completed: 3 },
+}
 const parentTranscript = [
   user("msg_user_1", "Launch the review"),
-  assistant("msg_step_1", [editPart("call_edit_parent", "src/parent.ts", "true"), launchPart, forgedPart], "tool-calls"),
+  assistant(
+    "msg_step_1",
+    [editPart("call_edit_parent", "src/parent.ts", "true"), launchPart, forgedPart],
+    "tool-calls",
+  ),
   assistant("msg_reply_1", [{ type: "text", text: "Review launched." }]),
   user("msg_user_2", "Send a follow-up"),
   assistant("msg_reply_2", [controlPart("call_send", "send"), { type: "text", text: "Follow-up sent." }]),
 ] as SessionMessageInfo[]
 const childTranscript = [
   { id: "msg_task_launch", type: "user", text: "Review", time: { created: 2 } },
-  assistant("msg_child_1", [editPart("call_edit_child", "src/child.ts", "true"), { type: "tool", id: "call_edit_bad", name: "edit", state: { status: "completed", input: {}, content: [], structured: { files: [{ file: "src/ignored.ts", patch: "not a diff", additions: 1, deletions: 0 }] } }, time: { created: 2, ran: 2, completed: 3 } }]),
+  assistant("msg_child_1", [
+    editPart("call_edit_child", "src/child.ts", "true"),
+    {
+      type: "tool",
+      id: "call_edit_bad",
+      name: "edit",
+      state: {
+        status: "completed",
+        input: {},
+        content: [],
+        structured: { files: [{ file: "src/ignored.ts", patch: "not a diff", additions: 1, deletions: 0 }] },
+      },
+      time: { created: 2, ran: 2, completed: 3 },
+    },
+  ]),
   { id: "msg_manual_child", type: "user", text: "Manual nudge", time: { created: 3 } },
   assistant("msg_child_manual", [editPart("call_edit_manual", "src/manual.ts", "true")]),
-  { id: SessionOrchestrationIdentity.send(sessionID, "msg_reply_2", "call_send"), type: "synthetic", text: "Follow up", description: "Parent subagent message", metadata: { source: "subagent_parent", kind: "message" }, time: { created: 3 } },
+  {
+    id: SessionOrchestrationIdentity.send(sessionID, "msg_reply_2", "call_send"),
+    type: "synthetic",
+    text: "Follow up",
+    description: "Parent subagent message",
+    metadata: { source: "subagent_parent", kind: "message" },
+    time: { created: 3 },
+  },
   assistant("msg_child_2", [editPart("call_edit_later", "src/later.ts", "true")]),
 ] as SessionMessageInfo[]
 function routeFor(messages: SessionMessageInfo[], onMessages?: (sessionID: string) => void) {
@@ -61,7 +125,10 @@ function routeFor(messages: SessionMessageInfo[], onMessages?: (sessionID: strin
     if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
     if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, messages, { session })
     if (url.pathname === "/api/session/ses_child/snapshot") return sessionSnapshot("ses_child", childTranscript)
-    if (url.pathname === "/api/session/ses_foreign/snapshot") { onMessages?.("ses_foreign"); return sessionSnapshot("ses_foreign", childTranscript) }
+    if (url.pathname === "/api/session/ses_foreign/snapshot") {
+      onMessages?.("ses_foreign")
+      return sessionSnapshot("ses_foreign", childTranscript)
+    }
     if (url.pathname === `/api/session/${sessionID}/pending`) return json({ data: [] })
     if (url.pathname === `/api/session/${sessionID}/guardrail/request`) return json({ location, data: [] })
     if (url.pathname === `/api/session/${sessionID}/subagent`)
@@ -100,13 +167,69 @@ function routeFor(messages: SessionMessageInfo[], onMessages?: (sessionID: strin
       return json({ location, data: [] })
     if (url.pathname === "/api/mcp/resource") return json({ location, data: { resources: [], templates: [] } })
     if (url.pathname === `/api/session/${sessionID}/guardrail`)
-      return json({ data: { rootSessionID: sessionID, profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [] } })
+      return json({
+        data: {
+          rootSessionID: sessionID,
+          profile: "standard",
+          customRules: 0,
+          approvals: 0,
+          blocked: 0,
+          counters: [],
+          invalidFiles: [],
+        },
+      })
     if (url.pathname === `/api/session/${sessionID}/diagnostics`)
-      return json({ data: { model, context: { total: 0, percent: 0 }, tokens: { uncachedInput: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }, cache: { eligible: 0, mechanism: "unreported", readReported: false, writeReported: false }, requests: { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } } } })
+      return json({
+        data: {
+          model,
+          context: { total: 0, percent: 0 },
+          tokens: { uncachedInput: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
+          cache: { eligible: 0, mechanism: "none", readReported: false, writeReported: false },
+          requests: {
+            logical: 0,
+            physical: 0,
+            helpers: 0,
+            continued: 0,
+            fallback: 0,
+            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          },
+        },
+      })
     if (url.pathname === "/api/vcs/branch") return json({ location, data: { current: "main", default: "main" } })
-    if (url.pathname === "/api/model") return json({ location, data: [{ id: model.id, modelID: model.id, providerID: model.providerID, name: "Claude Opus 5", capabilities: { tools: true, input: ["text"], output: ["text"] }, variants: [], time: { released: 0 }, cost: [], status: "active", enabled: true, limit: { context: 200_000, output: 32_000 } }] satisfies ModelInfo[] })
+    if (url.pathname === "/api/model")
+      return json({
+        location,
+        data: [
+          {
+            id: model.id,
+            modelID: model.id,
+            providerID: model.providerID,
+            name: "Claude Opus 5",
+            capabilities: { tools: true, input: ["text"], output: ["text"] },
+            variants: [],
+            time: { released: 0 },
+            cost: [],
+            status: "active",
+            enabled: true,
+            limit: { context: 200_000, output: 32_000 },
+          },
+        ] satisfies ModelInfo[],
+      })
     if (url.pathname === "/api/provider") return json({ location, data: [{ id: "anthropic", name: "Claude" }] })
-    if (url.pathname === "/api/agent") return json({ location, data: [{ id: "build", name: "Build", request: { headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] }] })
+    if (url.pathname === "/api/agent")
+      return json({
+        location,
+        data: [
+          {
+            id: "build",
+            name: "Build",
+            request: { headers: {}, body: {} },
+            mode: "primary",
+            hidden: false,
+            permissions: [],
+          },
+        ],
+      })
     return undefined
   }
 }
@@ -153,7 +276,10 @@ test("attributes a reused child's work to the segment that dispatched it and kee
     expect(screen.lines().filter((row) => row.includes("src/parent.ts"))).toHaveLength(1)
     expect(screen.frame()).not.toContain("src/ignored.ts")
     expect(screen.frame()).not.toContain("src/manual.ts")
-    await screen.mouse.click(12, screen.lines().findIndex((row) => row.includes("src/parent.ts")))
+    await screen.mouse.click(
+      12,
+      screen.lines().findIndex((row) => row.includes("src/parent.ts")),
+    )
     await waitForFrame(screen.frame, "export const value = true")
   } finally {
     await screen.dispose()

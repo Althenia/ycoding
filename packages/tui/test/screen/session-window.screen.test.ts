@@ -9,13 +9,33 @@ import { renderScreen } from "./harness"
 test("first and last navigation reveal both ends of loaded history beyond the 400-row render window", async () => {
   const fixture = sessionHistoryFixture(600)
   fixture.release()
-  fixture.messages.forEach((message) => { if (message.type === "assistant") message.content = [{ type: "text", text: `Synthetic response ${Number(message.id.slice(-6))}` }] })
+  fixture.messages.forEach((message) => {
+    if (message.type === "assistant")
+      message.content = [{ type: "text", text: `Synthetic response ${Number(message.id.slice(-6))}` }]
+  })
   let data!: ReturnType<typeof useData>
-  const screen = await renderScreen({ width: 120, height: 36, args: { sessionID: fixture.sessionID }, settle: "Synthetic response 599", route: fixture.route, state: "/tmp/ycoding-tui-perf/state", config: { session: { sidebar: "hide" } }, data: (value) => { data = value } })
+  const screen = await renderScreen({
+    width: 120,
+    height: 36,
+    args: { sessionID: fixture.sessionID },
+    settle: "Synthetic response 599",
+    route: fixture.route,
+    state: "/tmp/ycoding-tui-perf/state",
+    config: { session: { sidebar: "hide" } },
+    data: (value) => {
+      data = value
+    },
+  })
   const wait = async (ready: () => boolean) => {
     const end = performance.now() + 5000
-    while (!ready() && performance.now() < end) { await screen.renderOnce(); await new Promise<void>((resolve) => setImmediate(resolve)) }
-    if (!ready()) throw new Error(`Viewport condition failed; loaded ${data.session.message.list(fixture.sessionID).length}; reads ${fixture.snapshotQueries.join(",")}:\n${screen.frame()}`)
+    while (!ready() && performance.now() < end) {
+      await screen.renderOnce()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+    if (!ready())
+      throw new Error(
+        `Viewport condition failed; loaded ${data.session.message.list(fixture.sessionID).length}; reads ${fixture.snapshotQueries.join(",")}:\n${screen.frame()}`,
+      )
     expect(ready()).toBe(true)
   }
   const command = async (text: string) => {
@@ -37,20 +57,33 @@ test("first and last navigation reveal both ends of loaded history beyond the 40
     await wait(() => screen.frame().includes("Synthetic response 599"))
     expect(screen.scrollbox()!.getRenderable("msg_000599")).toBeDefined()
     expect(screen.scrollbox()!.getRenderable("msg_000000")).toBeUndefined()
-  } finally { await screen.dispose() }
+  } finally {
+    await screen.dispose()
+  }
 }, 30000)
 
 test("an initial history failure keeps the editor and offers a keyboard retry without admitting the draft", async () => {
   const fixture = sessionHistoryFixture(200)
   fixture.release()
   let failed = true
-  const screen = await renderScreen({ width: 120, height: 36, args: { sessionID: fixture.sessionID }, settle: "Retry history", state: "/tmp/ycoding-tui-perf/state", config: { session: { sidebar: "hide" } }, route: (url, request) => {
-    if (url.pathname.endsWith("/snapshot") && failed) return json({ message: "History unavailable" }, { status: 503 })
-    return fixture.route(url, request)
-  } })
+  const screen = await renderScreen({
+    width: 120,
+    height: 36,
+    args: { sessionID: fixture.sessionID },
+    settle: "Retry history",
+    state: "/tmp/ycoding-tui-perf/state",
+    config: { session: { sidebar: "hide" } },
+    route: (url, request) => {
+      if (url.pathname.endsWith("/snapshot") && failed) return json({ message: "History unavailable" }, { status: 503 })
+      return fixture.route(url, request)
+    },
+  })
   const wait = async (ready: () => boolean) => {
     const end = performance.now() + 5000
-    while (!ready() && performance.now() < end) { await screen.renderOnce(); await new Promise<void>((resolve) => setImmediate(resolve)) }
+    while (!ready() && performance.now() < end) {
+      await screen.renderOnce()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
     expect(ready()).toBe(true)
   }
   try {
@@ -69,7 +102,9 @@ test("an initial history failure keeps the editor and offers a keyboard retry wi
     await wait(() => screen.frame().includes("Synthetic response 199"))
     expect(screen.frame()).toContain("Keep this draft")
     expect(fixture.snapshotQueries).toEqual(["?limit=100"])
-  } finally { await screen.dispose() }
+  } finally {
+    await screen.dispose()
+  }
 }, 30000)
 
 test("opens the newest window and keeps the visible message anchored when top scrolling pages older history", async () => {
@@ -78,9 +113,21 @@ test("opens the newest window and keeps the visible message anchored when top sc
   const requested = Promise.withResolvers<void>()
   const older = Promise.withResolvers<void>()
   let data!: ReturnType<typeof useData>
-  const screen = await renderScreen({ width: 120, height: 36, args: { sessionID: fixture.sessionID }, settle: "Synthetic response 1999", state: "/tmp/ycoding-tui-perf/state", config: { session: { sidebar: "hide" } }, data: (value) => { data = value },
+  const screen = await renderScreen({
+    width: 120,
+    height: 36,
+    args: { sessionID: fixture.sessionID },
+    settle: "Synthetic response 1999",
+    state: "/tmp/ycoding-tui-perf/state",
+    config: { session: { sidebar: "hide" } },
+    data: (value) => {
+      data = value
+    },
     route: async (url, request) => {
-      if (url.pathname.endsWith("/snapshot") && url.searchParams.has("before")) { requested.resolve(); await older.promise }
+      if (url.pathname.endsWith("/snapshot") && url.searchParams.has("before")) {
+        requested.resolve()
+        await older.promise
+      }
       return fixture.route(url, request)
     },
   })
@@ -93,7 +140,12 @@ test("opens the newest window and keeps the visible message anchored when top sc
     expect(ready()).toBe(true)
   }
   try {
-    await wait(() => !!screen.scrollbox() && screen.scrollbox()!.scrollTop === Math.max(0, screen.scrollbox()!.scrollHeight - screen.scrollbox()!.viewport.height))
+    await wait(
+      () =>
+        !!screen.scrollbox() &&
+        screen.scrollbox()!.scrollTop ===
+          Math.max(0, screen.scrollbox()!.scrollHeight - screen.scrollbox()!.viewport.height),
+    )
     expect(data.session.message.list(fixture.sessionID)).toHaveLength(100)
     expect(fixture.requests).not.toContain(`GET /api/session/${fixture.sessionID}/message`)
     const scroll = screen.scrollbox()!
@@ -107,21 +159,57 @@ test("opens the newest window and keeps the visible message anchored when top sc
     await requested.promise
     expect(screen.frame()).toContain("Loading older history")
     older.resolve()
-    await wait(() => data.session.message.list(fixture.sessionID).length === 200 && scroll.getRenderable("msg_001900")?.y === y)
+    await wait(
+      () => data.session.message.list(fixture.sessionID).length === 200 && scroll.getRenderable("msg_001900")?.y === y,
+    )
     expect(scroll.getRenderable("msg_001900") === anchor).toBe(true)
     expect(fixture.snapshotQueries).toEqual(["?limit=100", "?limit=100&before=fixture_cursor_1900"])
     expect(data.session.message.get(fixture.sessionID, "msg_001800")).toBeDefined()
     expect(data.session.message.get(fixture.sessionID, "msg_001700")).toBeUndefined()
-  } finally { older.resolve(); await screen.dispose() }
+  } finally {
+    older.resolve()
+    await screen.dispose()
+  }
 }, 30000)
 
 function appendedAssistant(sessionID: string, id: string, text: string, seq: number): YCodingEvent[] {
-  const envelope = { created: 100 + seq, durable: { aggregateID: sessionID, seq, version: 1 }, location: { directory: "/tmp/ycoding-tui-perf/workspace" } }
+  const envelope = {
+    created: 100 + seq,
+    durable: { aggregateID: sessionID, seq, version: 1 },
+    location: { directory: "/tmp/ycoding-tui-perf/workspace" },
+  }
   return [
-    { id: `evt_${id}_step`, type: "session.step.started", ...envelope, data: { sessionID, assistantMessageID: id, agent: "build", model: { providerID: "fixture", id: "fixture" } } },
-    { id: `evt_${id}_text_started`, type: "session.text.started", ...envelope, data: { sessionID, assistantMessageID: id } },
-    { id: `evt_${id}_text_delta`, type: "session.text.delta", ...envelope, data: { sessionID, assistantMessageID: id, ordinal: 0, delta: text } },
-    { id: `evt_${id}_step_ended`, type: "session.step.ended", ...envelope, data: { sessionID, assistantMessageID: id, finish: "stop", cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } } },
+    {
+      id: `evt_${id}_step`,
+      type: "session.step.started",
+      ...envelope,
+      data: { sessionID, assistantMessageID: id, agent: "build", model: { providerID: "fixture", id: "fixture" } },
+    },
+    {
+      id: `evt_${id}_text_started`,
+      type: "session.text.started",
+      ...envelope,
+      data: { sessionID, assistantMessageID: id, ordinal: 0 },
+    },
+    {
+      id: `evt_${id}_text_delta`,
+      type: "session.text.delta",
+      created: envelope.created,
+      location: envelope.location,
+      data: { sessionID, assistantMessageID: id, ordinal: 0, delta: text },
+    },
+    {
+      id: `evt_${id}_step_ended`,
+      type: "session.step.ended",
+      ...envelope,
+      data: {
+        sessionID,
+        assistantMessageID: id,
+        finish: "stop",
+        cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      },
+    },
   ] as YCodingEvent[]
 }
 
@@ -129,11 +217,28 @@ test("a short session keeps rows appended after an automatic older page mounted"
   const fixture = sessionHistoryFixture(150)
   fixture.release()
   let data!: ReturnType<typeof useData>
-  const screen = await renderScreen({ width: 120, height: 36, args: { sessionID: fixture.sessionID }, settle: "Synthetic response 149", route: fixture.route, state: "/tmp/ycoding-tui-perf/state", config: { session: { sidebar: "hide" } }, data: (value) => { data = value } })
+  const screen = await renderScreen({
+    width: 120,
+    height: 36,
+    args: { sessionID: fixture.sessionID },
+    settle: "Synthetic response 149",
+    route: fixture.route,
+    state: "/tmp/ycoding-tui-perf/state",
+    config: { session: { sidebar: "hide" } },
+    data: (value) => {
+      data = value
+    },
+  })
   const wait = async (ready: () => boolean) => {
     const end = performance.now() + 5000
-    while (!ready() && performance.now() < end) { await screen.renderOnce(); await new Promise<void>((resolve) => setImmediate(resolve)) }
-    if (!ready()) throw new Error(`Viewport condition failed; loaded ${data.session.message.list(fixture.sessionID).length}:\n${screen.frame()}`)
+    while (!ready() && performance.now() < end) {
+      await screen.renderOnce()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+    if (!ready())
+      throw new Error(
+        `Viewport condition failed; loaded ${data.session.message.list(fixture.sessionID).length}:\n${screen.frame()}`,
+      )
   }
   try {
     await wait(() => data.session.message.list(fixture.sessionID).length === 100)
@@ -142,20 +247,45 @@ test("a short session keeps rows appended after an automatic older page mounted"
     scroll.scrollTo(0)
     await wait(() => data.session.message.list(fixture.sessionID).length === 150)
     await wait(() => data.session.message.history(fixture.sessionID)?.status === "ready")
-    for (const event of appendedAssistant(fixture.sessionID, "msg_appended_auto", "Appended after automatic older page", 1)) screen.events.emit(event)
+    for (const event of appendedAssistant(
+      fixture.sessionID,
+      "msg_appended_auto",
+      "Appended after automatic older page",
+      1,
+    ))
+      screen.events.emit(event)
     await wait(() => screen.scrollbox()!.getRenderable("msg_appended_auto") !== undefined)
-  } finally { await screen.dispose() }
+  } finally {
+    await screen.dispose()
+  }
 }, 30000)
 
 test("a short session keeps rows appended after revealing the first message mounted", async () => {
   const fixture = sessionHistoryFixture(150)
   fixture.release()
   let data!: ReturnType<typeof useData>
-  const screen = await renderScreen({ width: 120, height: 36, args: { sessionID: fixture.sessionID }, settle: "Synthetic response 149", route: fixture.route, state: "/tmp/ycoding-tui-perf/state", config: { session: { sidebar: "hide" } }, data: (value) => { data = value } })
+  const screen = await renderScreen({
+    width: 120,
+    height: 36,
+    args: { sessionID: fixture.sessionID },
+    settle: "Synthetic response 149",
+    route: fixture.route,
+    state: "/tmp/ycoding-tui-perf/state",
+    config: { session: { sidebar: "hide" } },
+    data: (value) => {
+      data = value
+    },
+  })
   const wait = async (ready: () => boolean) => {
     const end = performance.now() + 5000
-    while (!ready() && performance.now() < end) { await screen.renderOnce(); await new Promise<void>((resolve) => setImmediate(resolve)) }
-    if (!ready()) throw new Error(`Viewport condition failed; loaded ${data.session.message.list(fixture.sessionID).length}:\n${screen.frame()}`)
+    while (!ready() && performance.now() < end) {
+      await screen.renderOnce()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+    if (!ready())
+      throw new Error(
+        `Viewport condition failed; loaded ${data.session.message.list(fixture.sessionID).length}:\n${screen.frame()}`,
+      )
   }
   try {
     await wait(() => data.session.message.list(fixture.sessionID).length === 100)
@@ -167,12 +297,20 @@ test("a short session keeps rows appended after revealing the first message moun
     screen.input.pressKey("RETURN")
     await wait(() => data.session.message.list(fixture.sessionID).length === 150)
     await wait(() => screen.scrollbox()!.getRenderable("msg_000000") !== undefined)
-    for (const event of appendedAssistant(fixture.sessionID, "msg_appended_reveal", "Appended after revealing first message", 2)) screen.events.emit(event)
+    for (const event of appendedAssistant(
+      fixture.sessionID,
+      "msg_appended_reveal",
+      "Appended after revealing first message",
+      2,
+    ))
+      screen.events.emit(event)
     await wait(() => screen.scrollbox()!.getRenderable("msg_appended_reveal") !== undefined)
     screen.scrollbox()!.scrollTo(screen.scrollbox()!.scrollHeight)
     await wait(() => screen.frame().includes("Appended after revealing first message"))
     await wait(() => screen.scrollbox()!.getRenderable("msg_appended_reveal") !== undefined)
-  } finally { await screen.dispose() }
+  } finally {
+    await screen.dispose()
+  }
 }, 30000)
 
 test("content that shrinks to fit the viewport at the bottom does not page older history and keeps following", async () => {
@@ -181,32 +319,73 @@ test("content that shrinks to fit the viewport at the bottom does not page older
   let compacted = false
   let data!: ReturnType<typeof useData>
   const screen = await renderScreen({
-    width: 120, height: 36, args: { sessionID: fixture.sessionID }, settle: "Synthetic response 149", state: "/tmp/ycoding-tui-perf/state", config: { session: { sidebar: "hide" } }, data: (value) => { data = value },
+    width: 120,
+    height: 36,
+    args: { sessionID: fixture.sessionID },
+    settle: "Synthetic response 149",
+    state: "/tmp/ycoding-tui-perf/state",
+    config: { session: { sidebar: "hide" } },
+    data: (value) => {
+      data = value
+    },
     route: async (url, request) => {
-      if (compacted && url.pathname === `/api/session/${fixture.sessionID}/snapshot` && !url.searchParams.has("before")) {
+      if (
+        compacted &&
+        url.pathname === `/api/session/${fixture.sessionID}/snapshot` &&
+        !url.searchParams.has("before")
+      ) {
         const current = await fixture.route(new URL(`/api/session/${fixture.sessionID}`, url), request)
-        return sessionSnapshot(fixture.sessionID, [{ id: "msg_short_kept", type: "user", text: "Short kept", time: { created: 1 } }], { before: "fixture_cursor_147", session: (await current!.json()).data })
+        return sessionSnapshot(
+          fixture.sessionID,
+          [{ id: "msg_short_kept", type: "user", text: "Short kept", time: { created: 1 } }],
+          { before: "fixture_cursor_147", session: (await current!.json()).data },
+        )
       }
       return fixture.route(url, request)
     },
   })
   const wait = async (ready: () => boolean) => {
     const end = performance.now() + 5000
-    while (!ready() && performance.now() < end) { await screen.renderOnce(); await new Promise<void>((resolve) => setImmediate(resolve)) }
-    if (!ready()) throw new Error(`Viewport condition failed; loaded ${data.session.message.list(fixture.sessionID).length}:\n${screen.frame()}`)
+    while (!ready() && performance.now() < end) {
+      await screen.renderOnce()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+    if (!ready())
+      throw new Error(
+        `Viewport condition failed; loaded ${data.session.message.list(fixture.sessionID).length}:\n${screen.frame()}`,
+      )
   }
   try {
-    await wait(() => data.session.message.list(fixture.sessionID).length === 100 && screen.scrollbox()!.scrollTop === Math.max(0, screen.scrollbox()!.scrollHeight - screen.scrollbox()!.viewport.height))
+    await wait(
+      () =>
+        data.session.message.list(fixture.sessionID).length === 100 &&
+        screen.scrollbox()!.scrollTop ===
+          Math.max(0, screen.scrollbox()!.scrollHeight - screen.scrollbox()!.viewport.height),
+    )
     const queriesBeforeCompaction = fixture.snapshotQueries.length
     compacted = true
     await data.session.message.invalidate(fixture.sessionID)
     await data.session.message.sync(fixture.sessionID)
-    await wait(() => data.session.message.list(fixture.sessionID).length === 1 && (screen.scrollbox()?.scrollTop ?? Infinity) <= 8)
-    for (let frame = 0; frame < 30; frame++) { await screen.renderOnce(); await new Promise<void>((resolve) => setImmediate(resolve)) }
+    await wait(
+      () =>
+        data.session.message.list(fixture.sessionID).length === 1 && (screen.scrollbox()?.scrollTop ?? Infinity) <= 8,
+    )
+    for (let frame = 0; frame < 30; frame++) {
+      await screen.renderOnce()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
     expect(fixture.snapshotQueries.slice(queriesBeforeCompaction)).toEqual([])
     expect(data.session.message.history(fixture.sessionID)?.status).toBe("ready")
-    for (const event of appendedAssistant(fixture.sessionID, "msg_appended_compacted", "Appended after compaction fit", 3)) screen.events.emit(event)
+    for (const event of appendedAssistant(
+      fixture.sessionID,
+      "msg_appended_compacted",
+      "Appended after compaction fit",
+      3,
+    ))
+      screen.events.emit(event)
     await wait(() => screen.frame().includes("Appended after compaction fit"))
     expect(fixture.snapshotQueries.slice(queriesBeforeCompaction)).toEqual([])
-  } finally { await screen.dispose() }
+  } finally {
+    await screen.dispose()
+  }
 }, 30000)

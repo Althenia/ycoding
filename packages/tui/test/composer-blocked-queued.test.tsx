@@ -50,7 +50,7 @@ function base(url: URL) {
         model: session.model,
         context: { total: 0, percent: 0 },
         tokens: { uncachedInput: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
-        cache: { eligible: 0, hitRatio: 0.61, mechanism: "unreported", readReported: false, writeReported: false },
+        cache: { eligible: 0, hitRatio: 0.61, mechanism: "none", readReported: false, writeReported: false },
         requests: { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens: session.tokens },
       },
     })
@@ -118,7 +118,16 @@ function base(url: URL) {
   if (url.pathname === "/api/agent")
     return json({
       location,
-      data: [{ id: "build", name: "Build", request: { headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] }],
+      data: [
+        {
+          id: "build",
+          name: "Build",
+          request: { headers: {}, body: {} },
+          mode: "primary",
+          hidden: false,
+          permissions: [],
+        },
+      ],
     })
   return undefined
 }

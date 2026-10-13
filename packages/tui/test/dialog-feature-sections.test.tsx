@@ -1,6 +1,5 @@
 /** @jsxImportSource @opentui/solid */
 import { testRender } from "@opentui/solid"
-import type { YCodingClient } from "@ycoding-ai/client"
 import { expect, test } from "bun:test"
 import { onMount } from "solid-js"
 import { ConfigProvider } from "../src/config"
@@ -13,13 +12,20 @@ import { DialogProvider, useDialog } from "../src/ui/dialog"
 import { ToastProvider } from "../src/ui/toast"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
+import { createApi } from "./fixture/tui-client"
+import type { V5Client } from "@ycoding-ai/client/v5"
 
 test("renders Active, Conflict, and Available skill sections with conflict treatment", async () => {
   const result = await renderDialog(
     () => <DialogSessionSkills sessionID="ses_1" />,
     sessionSkillsClient([
       skill({ id: "active", name: "Go developer", state: "active" }),
-      skill({ id: "conflict", name: "Go review", state: "active", conflicts: [{ type: "skill", id: "go", name: "Go developer" }] }),
+      skill({
+        id: "conflict",
+        name: "Go review",
+        state: "active",
+        conflicts: [{ type: "skill", id: "go", name: "Go developer" }],
+      }),
       skill({ id: "available", name: "Rust developer", state: "inactive" }),
     ]),
   )
@@ -62,8 +68,16 @@ test("renders project and global skill scopes from registered skill locations", 
         skill({ id: "global-skill", name: "Global skill", state: "active" }),
       ],
       [
-        skillInfo({ id: "project-skill", name: "Project skill", location: "/repo/.ycoding/skills/project-skill/SKILL.md" }),
-        skillInfo({ id: "global-skill", name: "Global skill", location: "/tmp/ycoding/home/.agents/skills/global-skill/SKILL.md" }),
+        skillInfo({
+          id: "project-skill",
+          name: "Project skill",
+          location: "/repo/.ycoding/skills/project-skill/SKILL.md",
+        }),
+        skillInfo({
+          id: "global-skill",
+          name: "Global skill",
+          location: "/tmp/ycoding/home/.agents/skills/global-skill/SKILL.md",
+        }),
       ],
     ),
   )
@@ -101,7 +115,7 @@ test("renders artifact scope and stage-derived load status", async () => {
   expect(result.frame).toContain("Not loaded")
 })
 
-async function renderDialog(view: () => ReturnType<typeof DialogSessionSkills>, api: YCodingClient) {
+async function renderDialog(view: () => ReturnType<typeof DialogSessionSkills>, api: V5Client) {
   function DialogFixture() {
     const dialog = useDialog()
     onMount(() => dialog.replace(view))
@@ -139,29 +153,37 @@ async function renderDialog(view: () => ReturnType<typeof DialogSessionSkills>, 
 }
 
 function sessionSkillsClient(skills: ReturnType<typeof skill>[], skillInfos: ReturnType<typeof skillInfo>[] = []) {
+  const api = createApi()
   return {
+    ...api,
     session: {
+      ...api.session,
       skills: async () => skills,
     },
     skill: {
+      ...api.skill,
       list: async () => ({
         location: { directory: "/repo", project: { id: "project_1", directory: "/repo" } },
         data: skillInfos,
       }),
     },
     event: { subscribe: async function* () {} },
-  } as unknown as YCodingClient
+  } as unknown as V5Client
 }
 
 function artifactsClient(artifacts: ReturnType<typeof artifact>[]) {
+  const api = createApi()
   return {
+    ...api,
     projectArtifact: {
+      ...api.projectArtifact,
       artifact: {
+        ...api.projectArtifact.artifact,
         list: async () => artifacts,
       },
     },
     event: { subscribe: async function* () {} },
-  } as unknown as YCodingClient
+  } as unknown as V5Client
 }
 
 function skill(input: {

@@ -1,4 +1,4 @@
-import { expect, mock, test } from "bun:test"
+import { expect, test } from "bun:test"
 import { createTestRenderer } from "@opentui/core/testing"
 import { Effect, FileSystem } from "effect"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -60,8 +60,6 @@ type Recorded = { method: string; url: URL; body?: unknown }
 
 async function launch(input: { width: number; handler?: FetchHandler }) {
   const setup = await createTestRenderer({ width: input.width, height: 34, useThread: false })
-  const core = await import("@opentui/core")
-  mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
   let started!: () => void
   const ready = new Promise<void>((resolve) => {
     started = resolve
@@ -87,7 +85,7 @@ async function launch(input: { width: number; handler?: FetchHandler }) {
     if (url.pathname === "/api/project/inventory") return json({ data: inventory, cursor: {} })
     return undefined
   }, events)
-  const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request) })
+  const server = calls.listen()
   const { run } = await import("../src/app")
   const task = Effect.runPromise(
     run({
@@ -95,6 +93,7 @@ async function launch(input: { width: number; handler?: FetchHandler }) {
       config: { get: async () => ({}), update: async () => ({}) },
       packages: { resolve: async () => undefined },
       args: {},
+      terminalHandoff: async () => ({ renderer: setup.renderer, mode: null, complete: () => {} }),
       log: () => {},
     }).pipe(Effect.provide(AppNodeBuilder.build(Global.node)), Effect.provide(FileSystem.layerNoop({}))),
   )
@@ -112,20 +111,25 @@ async function launch(input: { width: number; handler?: FetchHandler }) {
     frame()
       .split("\n")
       .find((item) => item.includes(text)) ?? ""
-  const open = async () => {
+  const open = async (waitForInventory = true) => {
     setup.mockInput.pressKey("p", { ctrl: true })
     await Bun.sleep(50)
     await setup.mockInput.typeText("Manage workspaces")
     await waitFor(() => frame().includes("Manage workspaces"))
     setup.mockInput.pressEnter()
-    await waitFor(() => frame().includes("Search workspaces") && frame().includes("loaded"))
+    await waitFor(
+      () =>
+        frame().includes("Search workspaces") &&
+        (waitForInventory
+          ? /Workspaces · [1-9]\d* loaded/.test(line("Workspaces"))
+          : line("Workspaces").includes("loaded")),
+    )
   }
   const inventoryRequests = () => requests.filter((item) => item.url.pathname === "/api/project/inventory")
   const stop = async () => {
     if (!setup.renderer.isDestroyed) setup.renderer.destroy()
     await task.catch(() => undefined)
     await server.stop()
-    mock.restore()
   }
   return { setup, requests, frame, line, waitFor, open, inventoryRequests, stop }
 }
@@ -187,6 +191,7 @@ test("narrow terminals hide the details pane", async () => {
   const app = await launch({ width: 100 })
   try {
     await app.open()
+    await app.waitFor(() => app.line("/tmp/wt/ycoding-feature").includes("copy"))
     expect(app.line("/tmp/wt/ycoding-feature")).toContain("copy")
     expect(app.frame()).not.toContain("Recent sessions")
     expect(app.frame()).not.toContain("┃")
@@ -287,7 +292,7 @@ test("ignores inventory responses from an outdated search generation", async () 
     },
   })
   try {
-    await app.open()
+    await app.open(false)
     await app.waitFor(() => app.inventoryRequests().length === 1)
     await app.setup.mockInput.typeText("feature")
     await app.waitFor(() => app.line("Workspaces").includes("1 loaded"))
@@ -424,6 +429,11 @@ test("enter opens home so the next new session is created in the selected direct
             },
           ],
         })
+      if (url.pathname === "/api/model/default")
+        return json({
+          location: responseLocation,
+          data: { selection: { providerID: "openai", id: "workspace-fixture" } },
+        })
       if (url.pathname === "/api/model")
         return json({
           location: responseLocation,
@@ -447,7 +457,7 @@ test("enter opens home so the next new session is created in the selected direct
       if (url.pathname === "/api/provider")
         return json({
           location: responseLocation,
-          data: [{ id: "openai", name: "OpenAI" }],
+          data: [{ id: "openai", name: "OpenAI", package: "@ai-sdk/openai" }],
         })
       if (url.pathname === "/api/integration")
         return json({
@@ -457,7 +467,7 @@ test("enter opens home so the next new session is created in the selected direct
               id: "openai",
               name: "OpenAI",
               methods: [],
-              connections: [{ type: "credential", id: "cred_test", label: "test" }],
+              connections: [{ type: "credential", id: "cred_test", label: "test", active: true }],
             },
           ],
         })

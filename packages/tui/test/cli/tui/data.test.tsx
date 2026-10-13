@@ -288,6 +288,7 @@ test("syncs MCP status when a connection settles during bootstrap", async () => 
     })
     await wait(() => data.location.mcp.server.list()?.[0]?.status.status === "connected")
     expect(mcpRequests).toBe(2)
+    await wait(() => resolveModels !== undefined)
     resolveModels(
       json({
         location: { directory, project: { id: "proj_test", directory } },
@@ -364,22 +365,24 @@ test("refreshes resources into reactive getters", async () => {
         },
       })
     if (url.pathname === "/api/session/ses_test/snapshot")
-      return sessionSnapshot("ses_test", [
+      return sessionSnapshot(
+        "ses_test",
+        [
           {
             id: "msg_second",
-            created: 0,
             type: "user",
             text: "Second",
             time: { created: 2 },
           },
           {
             id: "msg_first",
-            created: 0,
             type: "user",
             text: "First",
             time: { created: 1 },
           },
-        ], { session: { title: "Test session", time: { created: 0, updated: 0 }, location: { directory } } })
+        ],
+        { session: { title: "Test session", time: { created: 0, updated: 0 }, location: { directory } } },
+      )
     if (url.pathname === "/api/agent")
       return json({
         location,
@@ -869,13 +872,13 @@ test("reconnects the event stream and resyncs active data", async () => {
       requests.message++
       if (requests.message === 1)
         return sessionSnapshot("session-stale", [
-            {
-              id: "message-stale",
-              type: "user",
-              text: "Stale",
-              time: { created: 1 },
-            },
-          ])
+          {
+            id: "message-stale",
+            type: "user",
+            text: "Stale",
+            time: { created: 1 },
+          },
+        ])
       return new Promise<Response>((resolve) => {
         resolveMessages = resolve
       })
@@ -889,7 +892,6 @@ test("reconnects the event stream and resyncs active data", async () => {
           id: `model-${requests.model}`,
           providerID: "provider",
           name: `Model ${requests.model}`,
-          api: { type: "native" },
           capabilities: { tools: false, input: [], output: [] },
           cost: [],
           limit: { context: 1, output: 1 },
@@ -933,7 +935,7 @@ test("reconnects the event stream and resyncs active data", async () => {
     events.disconnect()
     await wait(() => client.connection.status() === "reconnecting")
     expect(client.connection.attempt()).toBe(1)
-    expect(client.connection.error()).toBe("Event stream disconnected")
+    expect(client.connection.error()).toBe("Socket disconnected")
 
     await wait(() => requests.active === 2 && client.connection.status() === "connected", 4000)
     resolveActive(json({ data: { "session-new": { type: "running" } } }))
@@ -945,13 +947,13 @@ test("reconnects the event stream and resyncs active data", async () => {
     expect(data.session.message.get("session-stale", "message-stale")?.id).toBe("message-stale")
     resolveMessages(
       sessionSnapshot("session-stale", [
-          {
-            id: "message-fresh",
-            type: "user",
-            text: "Fresh",
-            time: { created: 2 },
-          },
-        ]),
+        {
+          id: "message-fresh",
+          type: "user",
+          text: "Fresh",
+          time: { created: 2 },
+        },
+      ]),
     )
     await wait(() => data.session.message.get("session-stale", "message-fresh") !== undefined)
     expect(data.session.message.get("session-stale", "message-stale")).toBeUndefined()
@@ -1189,31 +1191,8 @@ test("removes committed revert messages from local state", async () => {
 })
 
 test("distinguishes initial connection from reconnection", async () => {
-  const encoder = new TextEncoder()
-  let stream: ReadableStreamDefaultController<Uint8Array> | undefined
-  const eventResponse = () =>
-    new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          stream = controller
-        },
-      }),
-      { headers: { "content-type": "text/event-stream" } },
-    )
-  const connect = () =>
-    stream?.enqueue(
-      encoder.encode(
-        `data: ${JSON.stringify({ id: "evt_connected", created: 0, type: "server.connected", data: {} })}\n\n`,
-      ),
-    )
-  const disconnect = () => {
-    stream?.close()
-    stream = undefined
-  }
-
-  const calls = createFetch((url) => {
-    if (url.pathname === "/api/event") return eventResponse()
-  })
+  const events = createEventStream({ ready: false })
+  const calls = createFetch(undefined, events)
   let client!: ReturnType<typeof useClient>
 
   function Probe() {
@@ -1234,13 +1213,12 @@ test("distinguishes initial connection from reconnection", async () => {
   ))
 
   try {
-    await wait(() => stream !== undefined)
     expect(client.connection.status()).toBe("connecting")
 
-    connect()
+    events.ready()
     await wait(() => client.connection.status() === "connected")
 
-    disconnect()
+    events.disconnect()
     await wait(() => client.connection.status() === "reconnecting")
   } finally {
     app.renderer.destroy()
@@ -1358,7 +1336,10 @@ test("tracks session status from active sessions and execution events", async ()
   const events = createEventStream()
   let settled = false
   const calls = createFetch((url) => {
-    if (["session-live", "session-failed", "session-retry"].some((id) => url.pathname === `/api/session/${id}/snapshot`)) return sessionSnapshot(url.pathname.slice("/api/session/".length, -"/snapshot".length), [])
+    if (
+      ["session-live", "session-failed", "session-retry"].some((id) => url.pathname === `/api/session/${id}/snapshot`)
+    )
+      return sessionSnapshot(url.pathname.slice("/api/session/".length, -"/snapshot".length), [])
     if (url.pathname === "/api/session/active") return json({ data: { "session-active": { type: "running" } } })
     if (url.pathname === "/api/session/session-live")
       return json({
@@ -2920,7 +2901,10 @@ test("renders admitted prompts immediately and tracks them until promoted", asyn
   let canonical = false
   const calls = createFetch((url) => {
     if (url.pathname === `/api/session/${sessionID}/snapshot`)
-      return sessionSnapshot(sessionID, canonical ? [{ id: messageID, type: "user", text: "hello", time: { created: 0 } }] : [])
+      return sessionSnapshot(
+        sessionID,
+        canonical ? [{ id: messageID, type: "user", text: "hello", time: { created: 0 } }] : [],
+      )
   }, events)
   let sync!: ReturnType<typeof useData>
   let ready!: () => void
@@ -3081,8 +3065,7 @@ test("does not remove a resident promoted user message when canonical projection
     })
     await wait(
       () =>
-        sync.session.message.get(sessionID, messageID) !== undefined &&
-        sync.session.input.list(sessionID).length === 0,
+        sync.session.message.get(sessionID, messageID) !== undefined && sync.session.input.list(sessionID).length === 0,
     )
     expect(sync.session.message.get(sessionID, messageID)).toBeDefined()
 
@@ -3172,7 +3155,10 @@ test("restores a pending steer after leaving and reopening a child session", asy
 
 test("skips initial instruction state and projects later updates with their message ID", async () => {
   const events = createEventStream()
-  const calls = createFetch((url) => url.pathname === "/api/session/session-1/snapshot" ? sessionSnapshot("session-1", []) : undefined, events)
+  const calls = createFetch(
+    (url) => (url.pathname === "/api/session/session-1/snapshot" ? sessionSnapshot("session-1", []) : undefined),
+    events,
+  )
   let sync!: ReturnType<typeof useData>
   let ready!: () => void
   const mounted = new Promise<void>((resolve) => {

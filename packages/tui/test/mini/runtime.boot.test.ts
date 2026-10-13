@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
-import { YCoding } from "@ycoding-ai/client/promise"
+import { createApi } from "../fixture/tui-client"
 import type { Resolved } from "../../src/config"
 import { resolveModelInfo, resolveRunTuiConfig } from "../../src/mini/runtime.boot"
 import { catalogModel, catalogProvider } from "./fixture/catalog"
@@ -106,7 +106,7 @@ describe("run runtime boot", () => {
   })
 
   test("loads v2 providers and models for model selector data", async () => {
-    const sdk = YCoding.make({ baseUrl: "https://ycoding.test" })
+    const sdk = createApi()
     const location = { directory: "/workspace", project: { id: "proj_1", directory: "/workspace" } }
     const providerList = spyOn(sdk.provider, "list").mockResolvedValue({
       location,
@@ -129,6 +129,7 @@ describe("run runtime boot", () => {
                 input: 0,
               },
               status: "active",
+              enabled: true,
               variants: {
                 high: {},
                 minimal: {},

@@ -1,6 +1,13 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import type { ModelDaybreak, ModelProfile, ModelRef, SessionCreateInput, SessionMessageModelSelected, YCodingEvent } from "@ycoding-ai/client"
+import type {
+  ModelDaybreak,
+  ModelProfile,
+  ModelRef,
+  SessionCreateInput,
+  SessionMessageModelSelected,
+  YCodingEvent,
+} from "@ycoding-ai/client"
 import { json, type FetchHandler, sessionSnapshot } from "../fixture/tui-client"
 import { renderScreen } from "./harness"
 
@@ -35,7 +42,13 @@ let mutations: string[] = []
 let createdIDs: string[] = []
 let persistedDaybreakEvent: ((daybreak?: ModelDaybreak) => void) | undefined
 
-function resetFixture(input: { advertised: ModelDaybreak[]; daybreak?: ModelDaybreak; landing?: boolean; profile?: string; profiles?: ModelProfile[] }) {
+function resetFixture(input: {
+  advertised: ModelDaybreak[]
+  daybreak?: ModelDaybreak
+  landing?: boolean
+  profile?: string
+  profiles?: ModelProfile[]
+}) {
   sessionID = baseSession.id
   sessionExists = !input.landing
   failDaybreak = false
@@ -59,8 +72,28 @@ function sessionInfo() {
 const route: FetchHandler = async (url, request) => {
   if (url.pathname === "/api/fs/list") return json({ location, data: [] })
   if (url.pathname === "/api/location") return json(location)
+  if (url.pathname === "/api/model/default")
+    return json({
+      location,
+      data: {
+        id: baseSession.model.id,
+        modelID: baseSession.model.id,
+        providerID: baseSession.model.providerID,
+        name: "GPT 5.6 Terra",
+        capabilities: { tools: true, input: ["text"], output: ["text"] },
+        variants: [{ id: baseSession.model.variant }, { id: "low" }],
+        time: { released: 0 },
+        cost: [],
+        status: "active",
+        enabled: true,
+        daybreak: advertised,
+        profiles,
+        limit: { context: 200_000, output: 32_000 },
+        selection: sessionModel,
+      },
+    })
   if (url.pathname === "/api/session" && request.method === "POST") {
-    const body = await request.json() as SessionCreateInput
+    const body = (await request.json()) as SessionCreateInput
     sessionID = body.id ?? "ses_daybreak_landing_goal"
     sessionModel = body.model ?? baseSession.model
     sessionExists = true
@@ -105,7 +138,8 @@ const route: FetchHandler = async (url, request) => {
       },
     })
   }
-  if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, [], { session: sessionInfo() })
+  if (url.pathname === `/api/session/${sessionID}/snapshot`)
+    return sessionSnapshot(sessionID, [], { session: sessionInfo() })
   if (url.pathname.startsWith(`/api/session/${sessionID}/message/`))
     return json({ data: modelMessages.get(url.pathname.split("/").at(-1)!) })
   if (url.pathname === `/api/session/${sessionID}/subagent`)
@@ -128,12 +162,14 @@ const route: FetchHandler = async (url, request) => {
         model: baseSession.model,
         context: { total: 0, percent: 0 },
         tokens: { uncachedInput: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
-        cache: { eligible: 0, hitRatio: 0.61, mechanism: "unreported", readReported: false, writeReported: false },
+        cache: { eligible: 0, hitRatio: 0.61, mechanism: "none", readReported: false, writeReported: false },
         requests: { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens: baseSession.tokens },
       },
     })
   if (url.pathname === `/api/session/${sessionID}/usage`)
-    return json({ data: { logical: 0, physical: 0, continued: 0, helpers: 0, fallback: 0, cost: 0, tokens: baseSession.tokens } })
+    return json({
+      data: { logical: 0, physical: 0, continued: 0, helpers: 0, fallback: 0, cost: 0, tokens: baseSession.tokens },
+    })
   if (
     [
       `/api/session/${sessionID}/pending`,
@@ -156,24 +192,23 @@ const route: FetchHandler = async (url, request) => {
   if (url.pathname === "/api/model")
     return json({
       location,
-      data: [
-        { ...baseSession.model, name: "GPT 5.6 Terra", daybreak: advertised, profiles },
-        ...unsupportedModels,
-      ].map((model) => ({
-        id: model.id,
-        modelID: model.id,
-        providerID: model.providerID,
-        name: model.name,
-        capabilities: { tools: true, input: ["text"], output: ["text"] },
-        variants: [{ id: baseSession.model.variant }, { id: "low" }],
-        time: { released: 0 },
-        cost: [],
-        status: "active",
-        enabled: true,
-        ...("daybreak" in model && model.daybreak.length > 0 ? { daybreak: model.daybreak } : {}),
-        ...("profiles" in model ? { profiles: model.profiles } : {}),
-        limit: { context: 200_000, output: 32_000 },
-      })),
+      data: [{ ...baseSession.model, name: "GPT 5.6 Terra", daybreak: advertised, profiles }, ...unsupportedModels].map(
+        (model) => ({
+          id: model.id,
+          modelID: model.id,
+          providerID: model.providerID,
+          name: model.name,
+          capabilities: { tools: true, input: ["text"], output: ["text"] },
+          variants: [{ id: baseSession.model.variant }, { id: "low" }],
+          time: { released: 0 },
+          cost: [],
+          status: "active",
+          enabled: true,
+          ...("daybreak" in model && model.daybreak.length > 0 ? { daybreak: model.daybreak } : {}),
+          ...("profiles" in model ? { profiles: model.profiles } : {}),
+          limit: { context: 200_000, output: 32_000 },
+        }),
+      ),
     })
   if (url.pathname === "/api/provider") return json({ location, data: [{ id: "openai", name: "OpenAI" }] })
   if (url.pathname === "/api/skill") return json({ location, data: [] })
@@ -181,7 +216,14 @@ const route: FetchHandler = async (url, request) => {
     return json({
       location,
       data: [
-        { id: "build", name: "Build", request: { headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] },
+        {
+          id: "build",
+          name: "Build",
+          request: { headers: {}, body: {} },
+          mode: "primary",
+          hidden: false,
+          permissions: [],
+        },
       ],
     })
   return undefined
@@ -269,12 +311,20 @@ async function boot(
   profileAdvertisements?: ModelProfile[],
 ) {
   resetFixture({ advertised: advertisedPrograms, daybreak, landing, profile, profiles: profileAdvertisements })
-  const screen = await renderScreen({ width: 120, height: 69, args: landing ? {} : { sessionID }, route, settle: "Message YCoding…" })
-  persistedDaybreakEvent = (daybreak) => emitDaybreak(screen, daybreak)
-  await waitUntil(screen, () => screen.lines()[1].includes("openai/GPT 5.6 Terra"), "the resolved model").catch(async (error) => {
-    await screen.dispose()
-    throw error
+  const screen = await renderScreen({
+    width: 120,
+    height: 69,
+    args: landing ? {} : { sessionID },
+    route,
+    settle: "Message YCoding…",
   })
+  persistedDaybreakEvent = (daybreak) => emitDaybreak(screen, daybreak)
+  await waitUntil(screen, () => screen.lines()[1].includes("openai/GPT 5.6 Terra"), "the resolved model").catch(
+    async (error) => {
+      await screen.dispose()
+      throw error
+    },
+  )
   return screen
 }
 
@@ -311,7 +361,10 @@ test("saves landing Daybreak before the first prompt and rehydrates its Session 
     screen.input.pressEnter()
     await waitUntil(
       screen,
-      () => mutations.includes("wake") && !screen.frame().includes("What should we build?") && screen.lines()[1].includes("Daybreak Blue"),
+      () =>
+        mutations.includes("wake") &&
+        !screen.frame().includes("What should we build?") &&
+        screen.lines()[1].includes("Daybreak Blue"),
       "the new Session",
     )
     expect(mutations).toEqual(["create", "daybreak", "admit", "wake"])
@@ -370,7 +423,11 @@ test("rejects unsupported landing Daybreak without starting a Session", async ()
   const screen = await boot([], undefined, true)
   try {
     await submitDaybreak(screen, "blue")
-    await waitUntil(screen, () => screen.frame().includes("Daybreak blue is not available for this model"), "the rejection")
+    await waitUntil(
+      screen,
+      () => screen.frame().includes("Daybreak blue is not available for this model"),
+      "the rejection",
+    )
     expect(screen.lines()[1]).not.toContain("Daybreak")
     expect(mutations).toEqual([])
   } finally {
@@ -388,7 +445,10 @@ test("applies landing Daybreak before an explicit goal starts the new Session", 
     screen.input.pressEnter()
     await waitUntil(
       screen,
-      () => mutations.includes("goal") && !screen.frame().includes("What should we build?") && screen.lines()[1].includes("Daybreak Blue"),
+      () =>
+        mutations.includes("goal") &&
+        !screen.frame().includes("What should we build?") &&
+        screen.lines()[1].includes("Daybreak Blue"),
       "the goal Session",
     )
     expect(mutations).toEqual(["create", "daybreak", "goal"])
@@ -408,7 +468,11 @@ test("does not activate a landing goal when Daybreak persistence fails", async (
     await focusComposer(screen)
     await screen.input.typeText("/goal Check the application")
     screen.input.pressEnter()
-    await waitUntil(screen, () => screen.frame().includes("Failed to create a session with the goal"), "the goal failure")
+    await waitUntil(
+      screen,
+      () => screen.frame().includes("Failed to create a session with the goal"),
+      "the goal failure",
+    )
     expect(mutations).toEqual(["create", "daybreak"])
     expect(screen.frame()).toContain("/goal Check the application")
     expect(screen.frame()).toContain("What should we build?")
@@ -496,7 +560,11 @@ test("uses only the selected model profile's Daybreak programs", async () => {
   const work = await boot(["daybreak_blue"], "daybreak_blue", false, "Work", profileAdvertisements)
   try {
     await work.waitForEventStream()
-    await waitUntil(work, () => work.lines()[1].includes("Daybreak Blue") && !work.lines()[1].includes("(inactive)"), "the active Work profile indicator")
+    await waitUntil(
+      work,
+      () => work.lines()[1].includes("Daybreak Blue") && !work.lines()[1].includes("(inactive)"),
+      "the active Work profile indicator",
+    )
     expect(daybreakSets).toEqual([])
     expect(mutations).toEqual([])
   } finally {
@@ -506,7 +574,11 @@ test("uses only the selected model profile's Daybreak programs", async () => {
   const personal = await boot(["daybreak_blue"], "daybreak_blue", false, "Personal", profileAdvertisements)
   try {
     await personal.waitForEventStream()
-    await waitUntil(personal, () => personal.lines()[1].includes("Daybreak Blue (inactive)"), "the inactive Personal profile indicator")
+    await waitUntil(
+      personal,
+      () => personal.lines()[1].includes("Daybreak Blue (inactive)"),
+      "the inactive Personal profile indicator",
+    )
     expect(daybreakSets).toEqual([])
     expect(mutations).toEqual([])
     expect(promptRequests).toEqual([])
@@ -532,9 +604,10 @@ test("refreshes Daybreak activity when the account's advertised programs change"
       } satisfies YCodingEvent)
       await waitUntil(
         screen,
-        () => screen.lines()[1].includes(programs.includes("daybreak_blue")
-          ? "Daybreak Blue · high"
-          : "Daybreak Blue (inactive)"),
+        () =>
+          screen
+            .lines()[1]
+            .includes(programs.includes("daybreak_blue") ? "Daybreak Blue · high" : "Daybreak Blue (inactive)"),
         "the refreshed catalog indicator",
       )
     }

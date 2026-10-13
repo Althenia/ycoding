@@ -1,4 +1,4 @@
-import { ClientError, type TelemetryClientSample, type TelemetryConsentState } from "@ycoding-ai/client"
+import { isForbiddenError, type TelemetryClientSample, type TelemetryConsentState } from "@ycoding-ai/client/v5"
 import { createContext, createEffect, createSignal, onCleanup, Show, useContext, type ParentProps } from "solid-js"
 import { useClient } from "./client"
 import { useToast } from "../ui/toast"
@@ -36,14 +36,17 @@ export function TelemetryProvider(props: ParentProps) {
       })
       .catch(setError)
 
-  onCleanup(client.event.on("server.connected", () => {
-    if (consentReadStarted) return
-    consentReadStarted = true
-    void read()
-  }))
+  onCleanup(
+    client.event.on("server.connected", () => {
+      if (consentReadStarted) return
+      consentReadStarted = true
+      void read()
+    }),
+  )
 
   const toggle = () => {
-    void client.api.server.telemetry.consent.get()
+    void client.api.server.telemetry.consent
+      .get()
       .then((state) => client.api.server.telemetry.consent.set({ enabled: !state.consent?.enabled, noticeVersion: 1 }))
       .then((value) => {
         setConsent(value)
@@ -68,23 +71,19 @@ export function TelemetryProvider(props: ParentProps) {
     if (!consent()?.enabled || flushing || queue.length === 0) return
     const samples = queue.splice(0, 20)
     flushing = true
-    void client.api.server.telemetry.append({ samples }).catch((error: unknown) => {
-      if (
-        error instanceof ClientError &&
-        error.reason === "UnexpectedStatus" &&
-        typeof error.cause === "object" &&
-        error.cause !== null &&
-        "status" in error.cause &&
-        error.cause.status === 403
-      ) {
-        queue = []
-        void read()
-        return
-      }
-      setError(error)
-    }).finally(() => {
-      flushing = false
-    })
+    void client.api.server.telemetry
+      .append({ samples })
+      .catch((error: unknown) => {
+        if (isForbiddenError(error)) {
+          queue = []
+          void read()
+          return
+        }
+        setError(error)
+      })
+      .finally(() => {
+        flushing = false
+      })
   }
 
   const interval = setInterval(flush, 10_000)
@@ -101,7 +100,13 @@ export function TelemetryProvider(props: ParentProps) {
         error,
         record(metric, durationMs, at = Date.now()) {
           if (!consent()?.enabled) return
-          queue.push({ kind: "client", surface: "tui", metric, at: new Date(at).toISOString(), durationMs: Math.min(600_000, Math.max(0, Math.round(durationMs))) })
+          queue.push({
+            kind: "client",
+            surface: "tui",
+            metric,
+            at: new Date(at).toISOString(),
+            durationMs: Math.min(600_000, Math.max(0, Math.round(durationMs))),
+          })
         },
       }}
     >

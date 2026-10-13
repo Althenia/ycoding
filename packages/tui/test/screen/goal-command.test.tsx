@@ -85,7 +85,10 @@ const route: FetchHandler = async (url, request) => {
       const body = (await request.json()) as Record<string, unknown>
       requestOrder.push("goal")
       autonomySets.push(body)
-      if (releaseAutonomySet) await new Promise<void>((resolve) => { releaseAutonomySet = resolve })
+      if (releaseAutonomySet)
+        await new Promise<void>((resolve) => {
+          releaseAutonomySet = resolve
+        })
       if (failNextAutonomySet) {
         failNextAutonomySet = false
         return json({ error: "simulated goal calculation failure" }, { status: 500 })
@@ -143,7 +146,7 @@ const route: FetchHandler = async (url, request) => {
         model: session.model,
         context: { total: 0, percent: 0 },
         tokens: { uncachedInput: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
-        cache: { eligible: 0, hitRatio: 0.61, mechanism: "unreported", readReported: false, writeReported: false },
+        cache: { eligible: 0, hitRatio: 0.61, mechanism: "none", readReported: false, writeReported: false },
         requests: { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens: session.tokens },
       },
     })
@@ -195,7 +198,14 @@ const route: FetchHandler = async (url, request) => {
     return json({
       location,
       data: [
-        { id: "build", name: "Build", request: { headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] },
+        {
+          id: "build",
+          name: "Build",
+          request: { headers: {}, body: {} },
+          mode: "primary",
+          hidden: false,
+          permissions: [],
+        },
       ],
     })
   return undefined
@@ -206,7 +216,9 @@ async function waitFor(predicate: () => boolean, label: string) {
     if (predicate()) return
     await Bun.sleep(20)
   }
-  throw new Error(`timed out waiting for ${label}; sets=${JSON.stringify(autonomySets)} prompts=${JSON.stringify(promptRequests)}`)
+  throw new Error(
+    `timed out waiting for ${label}; sets=${JSON.stringify(autonomySets)} prompts=${JSON.stringify(promptRequests)}`,
+  )
 }
 
 async function focusComposer(screen: Awaited<ReturnType<typeof renderScreen>>) {
@@ -248,7 +260,11 @@ test("replaces an active goal with the exact /goal text and never admits a promp
 
 test("clears the composer after an explicit /goal starts goal mode from normal", async () => {
   resetFixture({ mode: "normal", yolo: 0 })
-  autonomyAfterSet = { mode: "normal", yolo: 0, goal: { text: "finish product.", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } }
+  autonomyAfterSet = {
+    mode: "normal",
+    yolo: 0,
+    goal: { text: "finish product.", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 },
+  }
   const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
   try {
     await focusComposer(screen)
@@ -270,74 +286,130 @@ for (const { name, running, direct } of [
   { name: "idle with direct Enter", running: false, direct: true },
   { name: "running with slash menu open", running: true, direct: false },
   { name: "running with direct Enter", running: true, direct: true },
-]) test(`clears a goal draft after ${name} and steer events before the autonomy response`, async () => {
-  resetFixture({ mode: "normal", yolo: 0 })
-  autonomyAfterSet = { mode: "normal", yolo: 0, goal: { text: "finish product.", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } }
-  releaseAutonomySet = () => {}
-  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
-  try {
-    await screen.waitForEventStream()
-    if (running) screen.events.emit({
-      id: "evt_goal_already_running", created: 9, type: "session.execution.started",
-      durable: { aggregateID: sessionID, seq: 1, version: 1 }, location: { directory }, data: { sessionID },
-    } satisfies YCodingEvent)
-    await focusComposer(screen)
-    await screen.input.typeText("/goal finish product.")
-    if (direct) await submitComposer(screen)
-    else await submit(screen)
-    await waitFor(() => autonomySets.length > 0, "goal activation request")
-    for (const id of ["synthesis", "steer"]) screen.events.emit({
-      id: `evt_goal_usage_${id}`, created: 10, type: "session.usage.updated", location: { directory },
-      data: { sessionID, cost: 0, tokens: session.tokens },
-    } satisfies YCodingEvent)
-    screen.events.emit({
-      id: "evt_goal_admitted", created: 10, type: "session.input.admitted",
-      durable: { aggregateID: sessionID, seq: running ? 2 : 1, version: 1 }, location: { directory },
-      data: { sessionID, inputID: "msg_goal_123", input: { type: "synthetic", data: { text: "Goal steer", description: "Goal · steer", metadata: { autonomy: { yolo: 0, goal: true, iteration: 0 } } }, delivery: "steer" } },
-    } satisfies YCodingEvent)
-    await waitFor(() => screen.frame().includes("Goal · steer"), "projected goal steer")
-    if (!running) screen.events.emit({
-      id: "evt_goal_execution", created: 11, type: "session.execution.started",
-      durable: { aggregateID: sessionID, seq: 2, version: 1 }, location: { directory }, data: { sessionID },
-    } satisfies YCodingEvent)
-    screen.events.emit({
-      id: "evt_goal_promoted", created: 12, type: "session.input.promoted",
-      durable: { aggregateID: sessionID, seq: 3, version: 1 }, location: { directory }, data: { sessionID, inputID: "msg_goal_123" },
-    } satisfies YCodingEvent)
-    if (running && direct) {
-      screen.events.emit({
-        id: "evt_goal_permission", created: 13, type: "permission.asked",
-        data: { id: "per_goal_running", sessionID, action: "shell", resources: [directory] }, location: { directory },
-      } satisfies YCodingEvent)
-      await waitFor(() => screen.frame().includes("Permission required"), "running Session permission")
-      screen.events.emit({
-        id: "evt_goal_permission_reply", created: 14, type: "permission.replied",
-        data: { sessionID, requestID: "per_goal_running", reply: "once" }, location: { directory },
-      } satisfies YCodingEvent)
-      await waitFor(() => screen.frame().includes("/goal finish product."), "restored draft after permission")
+])
+  test(`clears a goal draft after ${name} and steer events before the autonomy response`, async () => {
+    resetFixture({ mode: "normal", yolo: 0 })
+    autonomyAfterSet = {
+      mode: "normal",
+      yolo: 0,
+      goal: { text: "finish product.", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 },
     }
-    releaseAutonomySet?.()
-    await waitFor(() => screen.frame().includes("Goal activated"), "goal success toast")
-    expect(screen.frame()).not.toContain("/goal finish product.")
-    expect(promptRequests).toEqual([])
-    if (running && direct) {
+    releaseAutonomySet = () => {}
+    const screen = await renderScreen({
+      width: 100,
+      height: 69,
+      args: { sessionID },
+      route,
+      settle: "Message YCoding…",
+    })
+    try {
+      await screen.waitForEventStream()
+      if (running)
+        screen.events.emit({
+          id: "evt_goal_already_running",
+          created: 9,
+          type: "session.execution.started",
+          durable: { aggregateID: sessionID, seq: 1, version: 1 },
+          location: { directory },
+          data: { sessionID },
+        } satisfies YCodingEvent)
+      await focusComposer(screen)
+      await screen.input.typeText("/goal finish product.")
+      if (direct) await submitComposer(screen)
+      else await submit(screen)
+      await waitFor(() => autonomySets.length > 0, "goal activation request")
+      for (const id of ["synthesis", "steer"])
+        screen.events.emit({
+          id: `evt_goal_usage_${id}`,
+          created: 10,
+          type: "session.usage.updated",
+          location: { directory },
+          data: { sessionID, cost: 0, tokens: session.tokens },
+        } satisfies YCodingEvent)
       screen.events.emit({
-        id: "evt_goal_permission_again", created: 15, type: "permission.asked",
-        data: { id: "per_goal_again", sessionID, action: "shell", resources: [directory] }, location: { directory },
+        id: "evt_goal_admitted",
+        created: 10,
+        type: "session.input.admitted",
+        durable: { aggregateID: sessionID, seq: running ? 2 : 1, version: 1 },
+        location: { directory },
+        data: {
+          sessionID,
+          inputID: "msg_goal_123",
+          input: {
+            type: "synthetic",
+            data: {
+              text: "Goal steer",
+              description: "Goal · steer",
+              metadata: { autonomy: { yolo: 0, goal: true, iteration: 0 } },
+            },
+            delivery: "steer",
+          },
+        },
       } satisfies YCodingEvent)
-      await waitFor(() => screen.frame().includes("Permission required"), "second permission")
+      await waitFor(() => screen.frame().includes("Goal · steer"), "projected goal steer")
+      if (!running)
+        screen.events.emit({
+          id: "evt_goal_execution",
+          created: 11,
+          type: "session.execution.started",
+          durable: { aggregateID: sessionID, seq: 2, version: 1 },
+          location: { directory },
+          data: { sessionID },
+        } satisfies YCodingEvent)
       screen.events.emit({
-        id: "evt_goal_permission_again_reply", created: 16, type: "permission.replied",
-        data: { sessionID, requestID: "per_goal_again", reply: "once" }, location: { directory },
+        id: "evt_goal_promoted",
+        created: 12,
+        type: "session.input.promoted",
+        durable: { aggregateID: sessionID, seq: 3, version: 1 },
+        location: { directory },
+        data: { sessionID, inputID: "msg_goal_123" },
       } satisfies YCodingEvent)
-      await waitFor(() => screen.frame().includes("Message YCoding…"), "empty composer after second remount")
+      if (running && direct) {
+        screen.events.emit({
+          id: "evt_goal_permission",
+          created: 13,
+          type: "permission.asked",
+          data: { id: "per_goal_running", sessionID, action: "shell", resources: [directory] },
+          location: { directory },
+        } satisfies YCodingEvent)
+        await waitFor(() => screen.frame().includes("Permission required"), "running Session permission")
+        screen.events.emit({
+          id: "evt_goal_permission_reply",
+          created: 14,
+          type: "permission.replied",
+          data: { sessionID, requestID: "per_goal_running", reply: "once" },
+          location: { directory },
+        } satisfies YCodingEvent)
+        await waitFor(() => screen.frame().includes("/goal finish product."), "restored draft after permission")
+      }
+      releaseAutonomySet?.()
+      await waitFor(() => screen.frame().includes("Goal activated"), "goal success toast")
       expect(screen.frame()).not.toContain("/goal finish product.")
+      expect(promptRequests).toEqual([])
+      if (running && direct) {
+        screen.events.emit({
+          id: "evt_goal_permission_again",
+          created: 15,
+          type: "permission.asked",
+          data: { id: "per_goal_again", sessionID, action: "shell", resources: [directory] },
+          location: { directory },
+        } satisfies YCodingEvent)
+        await waitFor(() => screen.frame().includes("Permission required"), "second permission")
+        screen.events.emit({
+          id: "evt_goal_permission_again_reply",
+          created: 16,
+          type: "permission.replied",
+          data: { sessionID, requestID: "per_goal_again", reply: "once" },
+          location: { directory },
+        } satisfies YCodingEvent)
+        await waitFor(() => screen.frame().includes("Message YCoding…"), "empty composer after second remount")
+        expect(screen.frame()).not.toContain("/goal finish product.")
+      }
+    } finally {
+      releaseAutonomySet?.()
+      await screen.dispose()
     }
-  } finally {
-    releaseAutonomySet?.()
-    await screen.dispose()
-  }
-}, 30_000)
+  }, 30_000)
 
 test("retains the goal draft after a failed PUT across a permission remount", async () => {
   resetFixture({ mode: "normal", yolo: 0 })
@@ -351,13 +423,19 @@ test("retains the goal draft after a failed PUT across a permission remount", as
     await submitComposer(screen)
     await waitFor(() => autonomySets.length > 0, "goal activation request")
     screen.events.emit({
-      id: "evt_failed_goal_permission", created: 17, type: "permission.asked",
-      data: { id: "per_failed_goal", sessionID, action: "shell", resources: [directory] }, location: { directory },
+      id: "evt_failed_goal_permission",
+      created: 17,
+      type: "permission.asked",
+      data: { id: "per_failed_goal", sessionID, action: "shell", resources: [directory] },
+      location: { directory },
     } satisfies YCodingEvent)
     await waitFor(() => screen.frame().includes("Permission required"), "permission prompt")
     screen.events.emit({
-      id: "evt_failed_goal_permission_reply", created: 18, type: "permission.replied",
-      data: { sessionID, requestID: "per_failed_goal", reply: "once" }, location: { directory },
+      id: "evt_failed_goal_permission_reply",
+      created: 18,
+      type: "permission.replied",
+      data: { sessionID, requestID: "per_failed_goal", reply: "once" },
+      location: { directory },
     } satisfies YCodingEvent)
     await waitFor(() => screen.frame().includes("/goal finish product."), "restored goal draft")
     releaseAutonomySet?.()
@@ -377,7 +455,10 @@ test("creates a landing session and sets its goal with the returned session ID",
     await focusComposer(screen)
     await screen.input.typeText("/goal Investigate $reviewer and /command references")
     await submitComposer(screen)
-    await waitFor(() => autonomySets.length > 0 || screen.frame().includes("Failed to create a session with the goal"), "landing goal result")
+    await waitFor(
+      () => autonomySets.length > 0 || screen.frame().includes("Failed to create a session with the goal"),
+      "landing goal result",
+    )
 
     expect(landingCreates).toBe(1)
     expect(autonomySets).toEqual([{ goal: "Investigate $reviewer and /command references" }])
@@ -410,9 +491,12 @@ test("expands a tracked long paste after /goal and keeps the surrounding text", 
 test("keeps the draft and attachment and reports an error when goal calculation fails", async () => {
   resetFixture(goalState("active", "Old objective"))
   failNextAutonomySet = true
-  const attachment = await materializeClipboardImage(await mkdtemp(path.join(tmpdir(), "ycoding-goal-command-")), async (file) => {
-    await Bun.write(file, "png")
-  })
+  const attachment = await materializeClipboardImage(
+    await mkdtemp(path.join(tmpdir(), "ycoding-goal-command-")),
+    async (file) => {
+      await Bun.write(file, "png")
+    },
+  )
   const screen = await renderScreen({
     width: 100,
     height: 69,
@@ -554,7 +638,10 @@ test("the command palette exposes the goal action and applies it to the active S
     screen.input.pressKey("p", { ctrl: true })
     await waitFor(() => screen.frame().includes("Commands"), "command palette")
     await screen.input.typeText("autonomous goal")
-    await waitFor(() => screen.frame().includes("Set autonomous goal") || screen.frame().includes("No results"), "goal palette search")
+    await waitFor(
+      () => screen.frame().includes("Set autonomous goal") || screen.frame().includes("No results"),
+      "goal palette search",
+    )
     expect(screen.lines().filter((line) => line.includes("Set autonomous goal"))).toHaveLength(1)
     screen.input.pressEnter()
     await waitFor(() => autonomySets.length === 1, "goal action")

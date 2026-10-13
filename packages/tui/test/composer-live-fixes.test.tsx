@@ -149,7 +149,13 @@ async function route(url: URL, request: Request) {
     submittedPrompt = body.text
     const files = body.files?.map((file) => ({
       name: file.name,
-      content: { digest: file.uri.split("/").at(-1)?.padEnd(64, "c").slice(0, 64) ?? "c".repeat(64) },
+      mime: "image/png",
+      content: {
+        type: "managed" as const,
+        digest: file.uri.split("/").at(-1)?.padEnd(64, "c").slice(0, 64) ?? "c".repeat(64),
+        bytes: 3,
+        path: "/tmp/ycoding/attachment",
+      },
     }))
     return json({
       data: {
@@ -196,7 +202,7 @@ async function route(url: URL, request: Request) {
         model: session.model,
         context: { total: 0, percent: 0 },
         tokens: { uncachedInput: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
-        cache: { eligible: 0, hitRatio: 0.61, mechanism: "unreported", readReported: false, writeReported: false },
+        cache: { eligible: 0, hitRatio: 0.61, mechanism: "none", readReported: false, writeReported: false },
         requests: { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens: session.tokens },
       },
     })
@@ -218,7 +224,7 @@ async function route(url: URL, request: Request) {
         model: tasks[0].model,
         context: { total: 0, percent: 0 },
         tokens: { uncachedInput: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
-        cache: { eligible: 0, hitRatio: 0.61, mechanism: "unreported", readReported: false, writeReported: false },
+        cache: { eligible: 0, hitRatio: 0.61, mechanism: "none", readReported: false, writeReported: false },
         requests: { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens: session.tokens },
       },
     })

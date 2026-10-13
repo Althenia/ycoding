@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
-import { YCoding, type SessionMessageUser } from "@ycoding-ai/client/promise"
+import type { SessionMessageUser } from "@ycoding-ai/client/v5"
+import { createApi } from "../fixture/tui-client"
 import {
   createSession,
   resolveCurrentSession,
@@ -173,7 +174,7 @@ describe("run session shared", () => {
   })
 
   test("restores current prompt history from stored text and file references", async () => {
-    const client = YCoding.make({ baseUrl: "https://ycoding.test" })
+    const client = createApi()
     spyOn(client.message, "list").mockImplementation(() =>
       Promise.resolve([
         {
@@ -220,10 +221,7 @@ describe("run session shared", () => {
         },
       ],
     })
-    expect(client.message.list).toHaveBeenCalledWith(
-      { sessionID: "ses_1" },
-      { signal: controller.signal },
-    )
+    expect(client.message.list).toHaveBeenCalledWith({ sessionID: "ses_1" }, { signal: controller.signal })
     expect(client.session.get).toHaveBeenCalledWith({ sessionID: "ses_1" }, { signal: controller.signal })
   })
 })

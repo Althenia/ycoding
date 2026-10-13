@@ -12,7 +12,7 @@ import { RouteProvider, useRoute } from "../src/context/route"
 import { ThemeProvider } from "../src/context/theme"
 import { DialogProvider, useDialog } from "../src/ui/dialog"
 import { ToastProvider } from "../src/ui/toast"
-import { createApi } from "./fixture/tui-client"
+import { createApi, createFetch } from "./fixture/tui-client"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 
@@ -25,7 +25,7 @@ test("picker lists only the active Session terminals and selection deliberately 
     list: async (input) => {
       requests.push(input)
       return {
-        location: { directory: location.directory },
+        location: { ...location, project: { id: "proj_terminal_owner", directory: location.directory } },
         data: [info("pty_owned", sessionID, "Owned terminal"), info("pty_foreign", "ses_foreign", "Foreign terminal")],
       }
     },
@@ -51,7 +51,10 @@ test("picker renders a safe retryable list failure without leaking raw details",
     list: async () => {
       attempts += 1
       if (attempts === 1) throw new Error("private path /Users/example/secret and token=hidden")
-      return { location: { directory: location.directory }, data: [info("pty_retry", sessionID, "Recovered terminal")] }
+      return {
+        location: { ...location, project: { id: "proj_terminal_owner", directory: location.directory } },
+        data: [info("pty_retry", sessionID, "Recovered terminal")],
+      }
     },
   })
   try {
@@ -70,30 +73,18 @@ test("picker renders a safe retryable list failure without leaking raw details",
 })
 
 async function renderPicker(api: { list: (input: unknown) => Promise<unknown> }) {
-  const fetch = Object.assign(
-    async (input: string | URL | Request) => {
-      const url = new URL(input instanceof Request ? input.url : input)
-      if (url.pathname === "/api/event")
-        return new Response(
-          new ReadableStream({
-            start(controller) {
-              controller.enqueue(new TextEncoder().encode('data: {"type":"server.connected"}\n\n'))
-            },
-          }),
-          { headers: { "content-type": "text/event-stream" } },
-        )
-      return Response.json(
-        await api.list({
-          sessionID: url.searchParams.get("sessionID"),
-          location: {
-            directory: url.searchParams.get("location[directory]"),
-            workspace: url.searchParams.get("location[workspace]"),
-          },
-        }),
-      )
-    },
-    { preconnect() {} },
-  )
+  const { fetch } = createFetch(async (url) => {
+    if (url.pathname !== "/api/pty") return undefined
+    return Response.json(
+      await api.list({
+        sessionID: url.searchParams.get("sessionID"),
+        location: {
+          directory: url.searchParams.get("location[directory]"),
+          workspace: url.searchParams.get("location[workspace]"),
+        },
+      }),
+    )
+  })
 
   function Fixture() {
     const dialog = useDialog()

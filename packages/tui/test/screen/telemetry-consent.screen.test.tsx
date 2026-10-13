@@ -19,18 +19,28 @@ function route(consent?: { enabled: boolean; noticeVersion: 1; decidedAt: number
         return json({ consent, noticeVersion: 1 })
       }
       if (url.pathname === "/api/server/telemetry/consent" && request.method === "PUT") {
-        const value = await request.json() as { enabled: boolean; noticeVersion: 1 }
+        const value = (await request.json()) as { enabled: boolean; noticeVersion: 1 }
         writes.push(value)
         if (failSet) return json({ message: "consent write failed" }, { status: 500 })
         consent = { ...value, decidedAt: Date.now() }
         return json(consent)
       }
       if (url.pathname === "/api/server/web-latency" && request.method === "POST") {
-        batches.push((await request.json() as { samples: unknown[] }).samples)
+        batches.push(((await request.json()) as { samples: unknown[] }).samples)
         return json({ accepted: true })
       }
       if (url.pathname === "/api/vcs/branch") return json({ location: { directory }, data: { current: "main" } })
-      if (["/api/agent", "/api/model", "/api/provider", "/api/integration", "/api/command", "/api/skill", "/api/reference"].includes(url.pathname))
+      if (
+        [
+          "/api/agent",
+          "/api/model",
+          "/api/provider",
+          "/api/integration",
+          "/api/command",
+          "/api/skill",
+          "/api/reference",
+        ].includes(url.pathname)
+      )
         return json({ location: { directory }, data: [] })
       return undefined
     },
@@ -116,7 +126,7 @@ test("a failed consent write shows a toast without retrying automatically", asyn
     const lines = screen.lines()
     const agree = lines.findIndex((line) => line.includes("Agree"))
     await screen.mouse.click(lines[agree].indexOf("Agree") + 1, agree)
-    await waitFor(screen, "UnexpectedStatus")
+    await waitFor(screen, "consent write failed")
     expect(api.writes).toEqual([{ enabled: true, noticeVersion: 1 }])
     expect(screen.frame()).toContain("Help improve YCoding")
     await Bun.sleep(100)
@@ -136,7 +146,12 @@ test("live server-timestamped stream events append samples only with enabled con
       id: "evt_telemetry_stream",
       created: Date.now(),
       type: "session.text.delta",
-      data: { sessionID: "ses_telemetry_stream", assistantMessageID: "msg_telemetry_stream", ordinal: 0, delta: "hello" },
+      data: {
+        sessionID: "ses_telemetry_stream",
+        assistantMessageID: "msg_telemetry_stream",
+        ordinal: 0,
+        delta: "hello",
+      },
     })
     const deadline = Date.now() + 15_000
     while (api.batches.length === 0 && Date.now() < deadline) await Bun.sleep(50)

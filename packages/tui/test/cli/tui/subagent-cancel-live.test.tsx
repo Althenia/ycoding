@@ -22,7 +22,7 @@ function task(sessionID: string, state: State) {
   return {
     sessionID,
     parentID,
-    description: `Long review ${sessionID}`,
+    description: "Long review",
     agent: "reviewer",
     model: { providerID: "openai", id: "gpt-5.6" },
     background: true,
@@ -48,7 +48,12 @@ function page(tasks: Array<ReturnType<typeof task>>) {
   const active = tasks.filter((item) => ["starting", "running", "waiting", "cancelling"].includes(item.state)).length
   return json({
     data: tasks,
-    summary: { total: tasks.length, active, running: tasks.filter((item) => item.state === "running").length, waiting: 0 },
+    summary: {
+      total: tasks.length,
+      active,
+      running: tasks.filter((item) => item.state === "running").length,
+      waiting: 0,
+    },
     cursor: {},
   })
 }
@@ -158,7 +163,10 @@ test("external parallel cancels update an open panel and its count while a child
       return page([task(childID, tasks[0]!), task(otherChildID, tasks[1]!)])
     if (url.pathname === `/api/session/${childID}`) return json(childInfo)
     if (url.pathname === `/api/session/${childID}/snapshot`)
-      return sessionSnapshot(childID, [], { watermark: { type: "log.synced", aggregateID: childID, seq: 5 } as never, session: { id: childID, parentID } as never })
+      return sessionSnapshot(childID, [], {
+        watermark: { type: "log.synced", aggregateID: childID, seq: 5 } as never,
+        session: { id: childID, parentID } as never,
+      })
     return undefined
   }, events)
   const app = await mount(fixture)
@@ -168,9 +176,27 @@ test("external parallel cancels update an open panel and its count while a child
     await app.waitForFrame((frame) => frame.includes("running") && frame.includes("Long review"))
     await data.session.message.sync(childID)
     tasks = ["cancelled", "cancelled"]
-    events.emit({ id: "evt_a_req", created: 3, durable: durable(childID, 6), type: "session.task.updated", data: { sessionID: childID, change: { type: "cancel_requested" } } })
-    events.emit({ id: "evt_b_cancelled", created: 4, durable: durable(otherChildID, 1), type: "session.task.updated", data: { sessionID: otherChildID, change: { type: "cancelled" } } })
-    events.emit({ id: "evt_a_cancelled", created: 5, durable: durable(childID, 7), type: "session.task.updated", data: { sessionID: childID, change: { type: "cancelled" } } })
+    events.emit({
+      id: "evt_a_req",
+      created: 3,
+      durable: durable(childID, 6),
+      type: "session.task.updated",
+      data: { sessionID: childID, change: { type: "cancel_requested" } },
+    })
+    events.emit({
+      id: "evt_b_cancelled",
+      created: 4,
+      durable: durable(otherChildID, 1),
+      type: "session.task.updated",
+      data: { sessionID: otherChildID, change: { type: "cancelled" } },
+    })
+    events.emit({
+      id: "evt_a_cancelled",
+      created: 5,
+      durable: durable(childID, 7),
+      type: "session.task.updated",
+      data: { sessionID: childID, change: { type: "cancelled" } },
+    })
     await app.waitForFrame((frame) => /Subagents\s+0/.test(frame) && !frame.includes("running"))
     expect(app.captureCharFrame()).toContain("cancelled")
   } finally {
@@ -185,7 +211,10 @@ test("a task event delivered after the resident child snapshot already includes 
     if (url.pathname === `/api/session/${parentID}/subagent`) return page([task(childID, state)])
     if (url.pathname === `/api/session/${childID}`) return json(childInfo)
     if (url.pathname === `/api/session/${childID}/snapshot`)
-      return sessionSnapshot(childID, [], { watermark: { type: "log.synced", aggregateID: childID, seq: 7 } as never, session: { id: childID, parentID } as never })
+      return sessionSnapshot(childID, [], {
+        watermark: { type: "log.synced", aggregateID: childID, seq: 7 } as never,
+        session: { id: childID, parentID } as never,
+      })
     return undefined
   }, events)
   const app = await mount(fixture)
@@ -195,8 +224,20 @@ test("a task event delivered after the resident child snapshot already includes 
     await app.waitForFrame((frame) => frame.includes("running") && frame.includes("Long review"))
     state = "cancelled"
     await data.session.message.sync(childID)
-    events.emit({ id: "evt_req_late", created: 3, durable: durable(childID, 6), type: "session.task.updated", data: { sessionID: childID, change: { type: "cancel_requested" } } })
-    events.emit({ id: "evt_cancelled_late", created: 4, durable: durable(childID, 7), type: "session.task.updated", data: { sessionID: childID, change: { type: "cancelled" } } })
+    events.emit({
+      id: "evt_req_late",
+      created: 3,
+      durable: durable(childID, 6),
+      type: "session.task.updated",
+      data: { sessionID: childID, change: { type: "cancel_requested" } },
+    })
+    events.emit({
+      id: "evt_cancelled_late",
+      created: 4,
+      durable: durable(childID, 7),
+      type: "session.task.updated",
+      data: { sessionID: childID, change: { type: "cancelled" } },
+    })
     await app.waitForFrame((frame) => frame.includes("cancelled") && !frame.includes("running"))
   } finally {
     app.renderer.destroy()

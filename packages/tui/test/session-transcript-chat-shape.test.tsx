@@ -155,6 +155,7 @@ const skillTranscript = [
   {
     id: "msg_skill_loaded",
     type: "skill",
+    skill: "focus-test",
     name: "focus-test",
     text: "Named skill details must be hidden",
     time: { created: 1 },
@@ -272,7 +273,7 @@ function routeFor(messages: SessionMessageInfo[]) {
           model: session.model,
           context: { total: 0, percent: 0 },
           tokens: { uncachedInput: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
-          cache: { eligible: 0, mechanism: "unreported", readReported: false, writeReported: false },
+          cache: { eligible: 0, mechanism: "none", readReported: false, writeReported: false },
           requests: {
             logical: 0,
             physical: 0,
@@ -426,18 +427,21 @@ test("ends a completed idle exchange with the assistant block", async () => {
 
 test("preserves literal goal-marker text in a completed assistant message", async () => {
   const text = "The literal [GOAL_COMPLETED] marker belongs to this answer."
-  const screen = await transcriptScreen([
-    { id: "msg_literal_user", type: "user", text: "Quote the marker", time: { created: 1 } },
-    {
-      id: "msg_literal_assistant",
-      type: "assistant",
-      agent: "build",
-      model,
-      content: [{ type: "text", text }],
-      finish: "stop",
-      time: { created: 2, completed: 3 },
-    },
-  ], "GOAL_COMPLETED marker belongs")
+  const screen = await transcriptScreen(
+    [
+      { id: "msg_literal_user", type: "user", text: "Quote the marker", time: { created: 1 } },
+      {
+        id: "msg_literal_assistant",
+        type: "assistant",
+        agent: "build",
+        model,
+        content: [{ type: "text", text }],
+        finish: "stop",
+        time: { created: 2, completed: 3 },
+      },
+    ],
+    "GOAL_COMPLETED marker belongs",
+  )
   try {
     expect(screen.frame()).toContain("GOAL_COMPLETED marker belongs to this answer.")
   } finally {
@@ -513,7 +517,10 @@ test("collapses a segment's file edits into one summary block that expands to th
     expect(header.indexOf("Captured changes 3 files")).toBe(10)
     expect(screen.frame()).not.toContain("Edited 3 files")
     expect(screen.frame()).not.toContain("docs/runtime.md")
-    await screen.mouse.click(12, screen.lines().findIndex((line) => line.includes("Captured changes 3 files")))
+    await screen.mouse.click(
+      12,
+      screen.lines().findIndex((line) => line.includes("Captured changes 3 files")),
+    )
     const opened = Date.now() + 2_000
     while (Date.now() < opened && !screen.frame().includes("docs/configuration.md")) await Bun.sleep(20)
     const lines = transcriptLines(screen.lines())

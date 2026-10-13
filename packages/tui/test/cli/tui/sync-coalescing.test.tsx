@@ -11,6 +11,8 @@ test("explicit and integration-event refreshes coalesce into one active and one 
   const ref = { directory: "/tmp/ycoding-sync-coalescing" }
   const location = { ...ref, project: { id: "proj_sync", directory: ref.directory } }
   const paths = ["/api/integration", "/api/model", "/api/model/default", "/api/provider"]
+  // Model sync reads the default before the list and skips the list when its generation is already stale.
+  const gates = paths.filter((path) => path !== "/api/model")
   const first = new Map(paths.map((path) => [path, Promise.withResolvers<Response>()]))
   const second = new Map(paths.map((path) => [path, Promise.withResolvers<Response>()]))
   const counts = new Map(paths.map((path) => [path, 0]))
@@ -21,9 +23,10 @@ test("explicit and integration-event refreshes coalesce into one active and one 
     if (!counts.has(url.pathname)) return undefined
     const count = (counts.get(url.pathname) ?? 0) + 1
     counts.set(url.pathname, count)
-    if (paths.every((path) => (counts.get(path) ?? 0) >= 1)) started.resolve()
-    if (paths.every((path) => (counts.get(path) ?? 0) >= 2)) trailing.resolve()
-    return (count === 1 ? first : second).get(url.pathname)?.promise
+    if (gates.every((path) => (counts.get(path) ?? 0) >= 1)) started.resolve()
+    if (gates.every((path) => (counts.get(path) ?? 0) >= 2)) trailing.resolve()
+    const generation = url.pathname === "/api/model" ? (counts.get("/api/model/default") ?? 1) : count
+    return (generation === 1 ? first : second).get(url.pathname)?.promise
   }, events)
   let data!: ReturnType<typeof useData>
   const ready = Promise.withResolvers<void>()
@@ -54,7 +57,18 @@ test("explicit and integration-event refreshes coalesce into one active and one 
               {
                 id: fresh ? "newest" : "stale",
                 name: fresh ? "Newest" : "Stale",
-                ...(path === "/api/model" ? { providerID: "fixture" } : {}),
+                ...(path === "/api/model"
+                  ? {
+                      providerID: "fixture",
+                      family: "",
+                      capabilities: { tools: true, input: ["text"], output: ["text"] },
+                      variants: [],
+                      time: { released: 0 },
+                      cost: [],
+                      status: "active",
+                      limit: { context: 200_000, output: 32_000 },
+                    }
+                  : {}),
               },
             ],
     })
@@ -74,7 +88,7 @@ test("explicit and integration-event refreshes coalesce into one active and one 
     data.location.model.invalidate(ref)
     data.location.provider.invalidate(ref)
     const repeated = refresh()
-    expect(paths.map((path) => counts.get(path))).toEqual([1, 1, 1, 1])
+    expect(paths.map((path) => counts.get(path))).toEqual([1, 0, 1, 1])
     paths.forEach((path) => first.get(path)?.resolve(response(path, false)))
     await active
     await trailing.promise
@@ -84,13 +98,13 @@ test("explicit and integration-event refreshes coalesce into one active and one 
     expect(data.location.provider.list(ref)).toBeUndefined()
     paths.forEach((path) => second.get(path)?.resolve(response(path, true)))
     await Promise.all([explicit, repeated])
-    expect(paths.map((path) => counts.get(path))).toEqual([2, 2, 2, 2])
+    expect(paths.map((path) => counts.get(path))).toEqual([2, 1, 2, 2])
     expect(data.location.integration.list(ref)?.[0]?.id).toBe("newest")
     expect(data.location.model.list(ref)?.[0]?.id).toBe("newest")
     expect(data.location.model.default(ref)).toEqual({ providerID: "fixture", id: "newest", profile: "Work" })
     expect(data.location.provider.list(ref)?.[0]?.id).toBe("newest")
     await refresh()
-    expect(paths.map((path) => counts.get(path))).toEqual([2, 2, 2, 2])
+    expect(paths.map((path) => counts.get(path))).toEqual([2, 1, 2, 2])
   } finally {
     paths.forEach((path) => {
       first.get(path)?.resolve(response(path, false))

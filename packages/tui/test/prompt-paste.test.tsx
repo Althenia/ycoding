@@ -44,7 +44,15 @@ async function route(url: URL) {
     return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
   if (url.pathname === `/api/session/${sessionID}/guardrail`)
     return json({
-      data: { rootSessionID: sessionID, profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [] },
+      data: {
+        rootSessionID: sessionID,
+        profile: "standard",
+        customRules: 0,
+        approvals: 0,
+        blocked: 0,
+        counters: [],
+        invalidFiles: [],
+      },
     })
   if (url.pathname === `/api/session/${sessionID}/diagnostics`)
     return json({
@@ -52,7 +60,7 @@ async function route(url: URL) {
         model: session.model,
         context: { total: 0, percent: 0 },
         tokens: { uncachedInput: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
-        cache: { eligible: 0, hitRatio: 0, mechanism: "unreported", readReported: false, writeReported: false },
+        cache: { eligible: 0, hitRatio: 0, mechanism: "none", readReported: false, writeReported: false },
         requests: { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens: session.tokens },
       },
     })
@@ -61,7 +69,16 @@ async function route(url: URL) {
   if (url.pathname === "/api/agent")
     return json({
       location,
-      data: [{ id: "build", name: "Build", request: { headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] }],
+      data: [
+        {
+          id: "build",
+          name: "Build",
+          request: { headers: {}, body: {} },
+          mode: "primary",
+          hidden: false,
+          permissions: [],
+        },
+      ],
     })
   if (url.pathname === "/api/skill") return json({ location, data: [] })
   if (url.pathname === "/api/mcp/resource") return json({ location, data: { resources: [], templates: [] } })

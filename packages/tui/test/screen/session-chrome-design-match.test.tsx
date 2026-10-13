@@ -2,6 +2,7 @@
 import { describe, expect, test } from "bun:test"
 import { RGBA } from "@opentui/core"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import type { SessionCacheDiagnostics } from "@ycoding-ai/client"
 import { json, sessionSnapshot } from "../fixture/tui-client"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE } from "../viewport"
 import { railWidth } from "../../src/routes/session/rail"
@@ -13,7 +14,10 @@ const location = { directory, project: { id: "proj_session_chrome_design_match",
 // A profile fixture uses a distinct directory: the client store keys location data by location, and
 // reusing this one would serve the earlier empty integration list from its resident cache.
 const profileDirectory = "/tmp/ycoding/session-chrome-profile"
-const profileLocation = { directory: profileDirectory, project: { id: "proj_session_chrome_profile", directory: profileDirectory } }
+const profileLocation = {
+  directory: profileDirectory,
+  project: { id: "proj_session_chrome_profile", directory: profileDirectory },
+}
 const session = {
   id: sessionID,
   title: "Chrome design match",
@@ -39,8 +43,7 @@ function route(url: URL) {
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
-  if (url.pathname === `/api/session/${sessionID}/snapshot`)
-    return sessionSnapshot(sessionID, [], { session })
+  if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, [], { session })
   if (
     [
       `/api/session/${sessionID}/pending`,
@@ -80,7 +83,7 @@ function route(url: URL) {
         model: session.model,
         context: { total: 0, percent: 0 },
         tokens: { uncachedInput: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
-        cache: { eligible: 0, hitRatio: 0, mechanism: "unreported", readReported: false, writeReported: false },
+        cache: { eligible: 0, hitRatio: 0, mechanism: "none", readReported: false, writeReported: false },
         requests: {
           logical: 0,
           physical: 0,
@@ -89,7 +92,7 @@ function route(url: URL) {
           fallback: 0,
           tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
         },
-      },
+      } satisfies SessionCacheDiagnostics,
     })
   if (url.pathname === "/api/vcs/branch") return json({ location, data: { current: "main", default: "main" } })
   if (url.pathname === "/api/model")
@@ -103,7 +106,10 @@ function route(url: URL) {
           name: "Claude Opus 5",
           capabilities: { tools: true, input: ["text"], output: ["text"] },
           variants: [{ id: "max" }],
-          profiles: [{ name: "Work", active: true }, { name: "Personal", active: false }],
+          profiles: [
+            { name: "Work", active: true },
+            { name: "Personal", active: false },
+          ],
           time: { released: 0 },
           cost: [],
           status: "active",
@@ -116,13 +122,37 @@ function route(url: URL) {
   if (url.pathname === "/api/agent")
     return json({
       location,
-      data: [{ id: "build", name: "Build", request: { headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] }],
+      data: [
+        {
+          id: "build",
+          name: "Build",
+          request: { headers: {}, body: {} },
+          mode: "primary",
+          hidden: false,
+          permissions: [],
+        },
+      ],
     })
   return undefined
 }
 
 async function expectChrome(viewport: typeof DESIGN_VIEWPORT) {
-  const screen = await renderScreen({ ...viewport, args: { sessionID }, route, settle: "Message YCoding…" })
+  const screen = await renderScreen({
+    ...viewport,
+    args: { sessionID },
+    route,
+    settle: (screen) =>
+      screen.captureCharFrame().includes("Message YCoding…") &&
+      screen
+        .captureCharFrame()
+        .split("\n")
+        .some(
+          (line) =>
+            line.includes(`v${InstallationVersion}`) &&
+            line.includes("ready") &&
+            line.includes("Build · anthropic/Claude Opus 5 · max"),
+        ),
+  })
   try {
     const lines = screen.lines()
     const ruleRow = lines.findIndex((line) => line.includes("─") && line.indexOf("─") < viewport.width / 2)
@@ -185,7 +215,8 @@ function profileRoute(url: URL) {
       ],
     })
   if (url.pathname === "/api/location") return json(profileLocation)
-  if (url.pathname === "/api/provider") return json({ location: profileLocation, data: [{ id: "anthropic", name: "Claude" }] })
+  if (url.pathname === "/api/provider")
+    return json({ location: profileLocation, data: [{ id: "anthropic", name: "Claude" }] })
   if (url.pathname === "/api/model")
     return json({
       location: profileLocation,
@@ -197,7 +228,10 @@ function profileRoute(url: URL) {
           name: "Claude Opus 5",
           capabilities: { tools: true, input: ["text"], output: ["text"] },
           variants: [{ id: "max" }],
-          profiles: [{ name: "Work", active: true, variants: ["max"] }, { name: "Personal", active: false, variants: ["max"] }],
+          profiles: [
+            { name: "Work", active: true, variants: ["max"] },
+            { name: "Personal", active: false, variants: ["max"] },
+          ],
           time: { released: 0 },
           cost: [],
           status: "active",
@@ -209,11 +243,21 @@ function profileRoute(url: URL) {
   if (url.pathname === "/api/fs/list") return json({ location: profileLocation, data: [] })
   if (url.pathname === "/api/session") return json({ data: [profileSession], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: profileSession })
-  if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, [], { session: profileSession })
+  if (url.pathname === `/api/session/${sessionID}/snapshot`)
+    return sessionSnapshot(sessionID, [], { session: profileSession })
   if (url.pathname === "/api/agent")
     return json({
       location: profileLocation,
-      data: [{ id: "build", name: "Build", request: { headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] }],
+      data: [
+        {
+          id: "build",
+          name: "Build",
+          request: { headers: {}, body: {} },
+          mode: "primary",
+          hidden: false,
+          permissions: [],
+        },
+      ],
     })
   return route(url)
 }
@@ -229,12 +273,21 @@ function gsdRoute(url: URL) {
     return json({
       location,
       data: [
-        { id: "GSD", name: "GSD", color: "#e67e22", request: { headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] },
+        {
+          id: "GSD",
+          name: "GSD",
+          color: "#e67e22",
+          request: { headers: {}, body: {} },
+          mode: "primary",
+          hidden: false,
+          permissions: [],
+        },
       ],
     })
   if (url.pathname === "/api/session") return json({ data: [gsdSession], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: gsdSession })
-  if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, [], { session: gsdSession })
+  if (url.pathname === `/api/session/${sessionID}/snapshot`)
+    return sessionSnapshot(sessionID, [], { session: gsdSession })
   return route(url)
 }
 
@@ -248,9 +301,20 @@ async function expectProfilePlacement(viewport: typeof DESIGN_VIEWPORT) {
     ...viewport,
     args: { sessionID },
     route: profileRoute,
-    settle: (screen) => screen.captureCharFrame().split("\n").some((line) =>
-      line.includes(`v${InstallationVersion}`) && line.includes("ready") &&
-      line.includes("Build · Personal · anthropic/Claude Opus 5 · max")),
+    settle: (screen) =>
+      screen
+        .captureCharFrame()
+        .split("\n")
+        .some(
+          (line) =>
+            line.includes(`v${InstallationVersion}`) &&
+            line.includes("ready") &&
+            line.includes("Build · Personal · anthropic/Claude Opus 5 · max"),
+        ) &&
+      screen
+        .captureCharFrame()
+        .split("\n")
+        .some((line) => line.includes("Provider") && line.includes("anthropic")),
   })
   try {
     const lines = screen.lines()
@@ -269,9 +333,16 @@ async function expectProfilePlacement(viewport: typeof DESIGN_VIEWPORT) {
       height: 24,
       args: { sessionID },
       route: profileRoute,
-      settle: (screen) => screen.captureCharFrame().split("\n").some((line) =>
-        line.includes(`v${InstallationVersion}`) && line.includes("ready") &&
-        line.includes("Build · anthropic/Claude Opus 5 · max")),
+      settle: (screen) =>
+        screen
+          .captureCharFrame()
+          .split("\n")
+          .some(
+            (line) =>
+              line.includes(`v${InstallationVersion}`) &&
+              line.includes("ready") &&
+              line.includes("Build · anthropic/Claude Opus 5 · max"),
+          ),
     })
     try {
       const narrowHeader = narrow
@@ -304,10 +375,13 @@ describe("active-session chrome Penpot design match", () => {
       ...DESIGN_VIEWPORT,
       args: { sessionID },
       route: gsdRoute,
-      settle: (screen) => screen.captureSpans().lines
-        .flatMap((line) => line.spans)
-        .find((span) => span.text.includes("GSD"))
-        ?.fg.toInts().join() === RGBA.fromHex("#e67e22").toInts().join(),
+      settle: (screen) =>
+        screen
+          .captureSpans()
+          .lines.flatMap((line) => line.spans)
+          .find((span) => span.text.includes("GSD"))
+          ?.fg.toInts()
+          .join() === RGBA.fromHex("#e67e22").toInts().join(),
     })
     try {
       expect(screen.lines().some((line) => line.includes("GSD · anthropic/Claude Opus 5"))).toBe(true)

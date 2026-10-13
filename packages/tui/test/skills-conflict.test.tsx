@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { testRender } from "@opentui/solid"
-import type { YCodingClient } from "@ycoding-ai/client"
+import { createApi } from "./fixture/tui-client"
 import { expect, test } from "bun:test"
 import { createSignal } from "solid-js"
 import { ConfigProvider } from "../src/config"
@@ -15,7 +15,12 @@ import { TestTuiContexts } from "./fixture/tui-environment"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE, NARROW_VIEWPORT } from "./viewport"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 
-const conflict: SessionSkill[] = [
+type ActiveSessionSkill = Omit<SessionSkill, "inactiveReason" | "state"> & {
+  state: "active"
+  inactiveReason?: undefined
+}
+
+const conflict: ActiveSessionSkill[] = [
   {
     id: "winner",
     name: "Winner",
@@ -48,8 +53,9 @@ for (const viewport of viewports) {
       expect(app.captureCharFrame()).toContain("! 1 conflict · ⌃x i")
       // The attention header summary also carries "·" in warning ink, so select the conflict-row
       // separator (the last one) and assert it keeps the shared separator token.
-      const separator = app.captureSpans().lines
-        .flatMap((line) => line.spans)
+      const separator = app
+        .captureSpans()
+        .lines.flatMap((line) => line.spans)
         .filter((span) => span.text.includes("·"))
         .at(-1)
       expect(separator?.fg.toInts()).toEqual(app.separator().toInts())
@@ -61,10 +67,7 @@ for (const viewport of viewports) {
 
 for (const viewport of viewports) {
   test(`omits the conflict row at ${viewport.width} columns when no active skill conflict exists`, async () => {
-    const app = await mount(viewport, [
-      { ...conflict[0], conflicts: [] },
-      conflict[1],
-    ])
+    const app = await mount(viewport, [{ ...conflict[0], conflicts: [] }, conflict[1]])
 
     try {
       expect(app.captureCharFrame()).not.toContain("conflict")
@@ -99,11 +102,16 @@ test("keeps the conflict row without a dead shortcut when the command is unbound
 
 test("resolves the selected skill winner", async () => {
   const calls: Array<{ winner: string; loser: string }> = []
-  const app = await mount(DESIGN_VIEWPORT, conflict, {}, {
-    resolve: async (input) => {
-      calls.push({ winner: input.winner, loser: input.loser })
+  const app = await mount(
+    DESIGN_VIEWPORT,
+    conflict,
+    {},
+    {
+      resolve: async (input) => {
+        calls.push({ winner: input.winner, loser: input.loser })
+      },
     },
-  })
+  )
 
   try {
     app.mockInput.pressKey("x", { ctrl: true })
@@ -119,13 +127,15 @@ test("resolves the selected skill winner", async () => {
 })
 
 test("refreshes the server-derived skills after a conflict is already resolved", async () => {
-  const app = await mount(DESIGN_VIEWPORT, conflict, {}, {
-    resolve: async () => Promise.reject({ _tag: "SkillConflictNotFoundError" }),
-    afterResolve: [
-      { ...conflict[0], conflicts: [] },
-      conflict[1],
-    ],
-  })
+  const app = await mount(
+    DESIGN_VIEWPORT,
+    conflict,
+    {},
+    {
+      resolve: async () => Promise.reject({ _tag: "SkillConflictNotFoundError" }),
+      afterResolve: [{ ...conflict[0], conflicts: [] }, conflict[1]],
+    },
+  )
 
   try {
     app.mockInput.pressKey("x", { ctrl: true })
@@ -141,25 +151,33 @@ test("refreshes the server-derived skills after a conflict is already resolved",
 
 async function mount(
   viewport: { width: number; height: number },
-  initial: SessionSkill[],
+  initial: ActiveSessionSkill[],
   keybinds: { session_skill_conflict_resolve?: "ctrl+k" | "none" } = {},
   behavior: {
     resolve?: (input: { winner: string; loser: string }) => Promise<unknown>
-    afterResolve?: SessionSkill[]
+    afterResolve?: ActiveSessionSkill[]
   } = {},
 ) {
   let skills = initial
   let separator: ReturnType<typeof useTheme>["theme"]["text"]["separator"]
+  const client = createApi()
   const api = {
+    ...client,
     session: {
-      skills: async (_input: { sessionID: string }) => skills,
+      ...client.session,
+      skills: async (_input: { sessionID: string }) =>
+        skills.map((skill) => ({
+          ...skill,
+          conflicts: [...skill.conflicts],
+          declarations: { skills: [], instructions: [] },
+        })),
       resolveSkillConflict: async (input: { winner: string; loser: string }) => {
         if (behavior.afterResolve) skills = behavior.afterResolve
-        return behavior.resolve?.(input)
+        await behavior.resolve?.(input)
       },
     },
     event: { subscribe: async function* () {} },
-  } as unknown as YCodingClient
+  }
 
   function Rail() {
     separator = useTheme().theme.text.separator

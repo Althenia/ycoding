@@ -373,7 +373,8 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       }
 
       if (state.aborting) {
-        void state.sdk.session.interrupt({ sessionID: state.sessionID })
+        void state.sdk.session
+          .interrupt({ sessionID: state.sessionID })
           .catch(() => {})
           .finally(() => {
             state.aborting = false
@@ -550,7 +551,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         state.model.profile === model.profile
       applyModelInfo(
         info,
-        boot ? session.variant ?? model?.variant : state.activeVariant,
+        boot ? (session.variant ?? model?.variant) : state.activeVariant,
         { sdk, generation, signal },
         boot,
         fallbackSavedVariant,
@@ -1048,6 +1049,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
   } finally {
     runtimeController.abort()
     offRuntimeClose()
+    state.sdk.transport.close()
 
     await shell.close({
       showExit: state.shown && !!state.sessionID,

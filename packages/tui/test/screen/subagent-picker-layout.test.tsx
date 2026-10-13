@@ -143,6 +143,7 @@ test("pages past a full active top page to make terminal tasks reachable in INAC
     parentID: sessionID,
     description: `Active task ${index}`,
     agent: "zeus",
+    model: session.model,
     background: true,
     state: "running",
     revision: 1,
@@ -151,8 +152,9 @@ test("pages past a full active top page to make terminal tasks reachable in INAC
   const terminalTask = {
     sessionID: "ses_picker_terminal_after_top",
     parentID: sessionID,
-    description: "Terminal task after active page",
+    description: "Older terminal task",
     agent: "reviewer",
+    model: session.model,
     background: true,
     state: "completed",
     revision: 1,
@@ -165,10 +167,21 @@ test("pages past a full active top page to make terminal tasks reachable in INAC
     route: (url) => {
       if (url.pathname === `/api/session/${sessionID}/subagent`) {
         if (url.searchParams.get("cursor") === "older-terminal")
-          return json({ data: [terminalTask], summary: { total: 11, active: 10, running: 10, waiting: 0 }, cursor: { previous: "top" } })
-        return json({ data: activeTasks, summary: { total: 11, active: 10, running: 10, waiting: 0 }, cursor: { next: "older-terminal" } })
+          return json({
+            data: [terminalTask],
+            summary: { total: 11, active: 10, running: 10, waiting: 0 },
+            cursor: { previous: "top" },
+          })
+        return json({
+          data: activeTasks,
+          summary: { total: 11, active: 10, running: 10, waiting: 0 },
+          cursor: { next: "older-terminal" },
+        })
       }
-      if (url.pathname === `/api/session/${terminalTask.sessionID}/snapshot`) return sessionSnapshot(terminalTask.sessionID, [], { session: { ...session, id: terminalTask.sessionID, parentID: sessionID, title: terminalTask.description } })
+      if (url.pathname === `/api/session/${terminalTask.sessionID}/snapshot`)
+        return sessionSnapshot(terminalTask.sessionID, [], {
+          session: { ...session, id: terminalTask.sessionID, parentID: sessionID, title: terminalTask.description },
+        })
       return route(url)
     },
     settle: "Message YCoding…",
@@ -181,12 +194,12 @@ test("pages past a full active top page to make terminal tasks reachable in INAC
     await waitForFrameText(screen, "Active task 0")
     expect(screen.frame()).toContain("ACTIVE")
     expect(screen.frame()).not.toContain("INACTIVE")
-    expect(screen.frame()).not.toContain("Terminal task after top page")
+    expect(screen.frame()).not.toContain("Older terminal task")
     const olderRow = screen.lines().findIndex((line) => line.includes("+1 more"))
     expect(olderRow).toBeGreaterThan(-1)
     expect(screen.lines().find((line) => line.includes("⌃n older"))).toBeDefined()
     await screen.mouse.click((screen.lines()[olderRow] ?? "").indexOf("+1 more"), olderRow)
-    await waitForFrameText(screen, "Terminal task after active page")
+    await waitForFrameText(screen, "Older terminal task")
     expect(screen.frame()).toContain("completed")
     expect(screen.frame()).toContain("INACTIVE")
   } finally {
@@ -201,6 +214,7 @@ test("freezes a completed task timer while other active task timers keep advanci
     parentID: sessionID,
     description: "Finish timer test",
     agent: "reviewer",
+    model: session.model,
     background: true,
     state: "running",
     revision: 1,
@@ -211,6 +225,7 @@ test("freezes a completed task timer while other active task timers keep advanci
     parentID: sessionID,
     description: "Keep timer running",
     agent: "explore",
+    model: session.model,
     background: true,
     state: "running",
     revision: 1,
@@ -271,7 +286,10 @@ async function route(url: URL) {
   if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
   if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, [], { session })
-  if (tasks.some((task) => url.pathname === `/api/session/${task.sessionID}/snapshot`)) return sessionSnapshot(url.pathname.slice("/api/session/".length, -"/snapshot".length), [], { session: { parentID: sessionID } })
+  if (tasks.some((task) => url.pathname === `/api/session/${task.sessionID}/snapshot`))
+    return sessionSnapshot(url.pathname.slice("/api/session/".length, -"/snapshot".length), [], {
+      session: { parentID: sessionID },
+    })
   if (url.pathname === `/api/session/${sessionID}/subagent`)
     return json({ data: tasks, summary: { total: 2, active: 1, running: 1, waiting: 0 }, cursor: {} })
   if (url.pathname.startsWith("/api/session/") && url.pathname.endsWith("/diagnostics"))
@@ -280,7 +298,13 @@ async function route(url: URL) {
         model: session.model,
         context: { total: 0, percent: 0 },
         tokens: { uncachedInput: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
-        cache: { eligible: 0, hitRatio: 1, mechanism: "anthropic-cache-control", readReported: true, writeReported: true },
+        cache: {
+          eligible: 0,
+          hitRatio: 1,
+          mechanism: "anthropic-cache-control",
+          readReported: true,
+          writeReported: true,
+        },
         requests: { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens: session.tokens },
       },
     })
@@ -321,7 +345,16 @@ async function route(url: URL) {
   if (url.pathname === "/api/agent")
     return json({
       location,
-      data: [{ id: "build", name: "Build", request: { headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] }],
+      data: [
+        {
+          id: "build",
+          name: "Build",
+          request: { headers: {}, body: {} },
+          mode: "primary",
+          hidden: false,
+          permissions: [],
+        },
+      ],
     })
   if (url.pathname === "/api/model")
     return json({

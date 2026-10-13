@@ -1,8 +1,7 @@
 import { render, TimeToFirstDraw, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { registerYCodingSpinner } from "./component/register-spinner"
 import { Deferred, Effect } from "effect"
-import { Service, type Endpoint } from "@ycoding-ai/client/effect/service"
-import { YCoding } from "@ycoding-ai/client"
+import { YCoding, type Discovery } from "@ycoding-ai/client/v5"
 import { Global } from "@ycoding-ai/core/global"
 import { ClipboardProvider, useClipboard } from "./context/clipboard"
 import { LogProvider, useLog, type LogSink } from "./context/log"
@@ -150,9 +149,9 @@ const appBindingCommands = [
 
 export type TuiInput = {
   server: {
-    endpoint: Endpoint
+    endpoint: Discovery
     service?: {
-      reconnect: (signal: AbortSignal) => Promise<Endpoint>
+      reconnect: (signal: AbortSignal) => Promise<Discovery>
       restart: () => Promise<void>
     }
   }
@@ -179,8 +178,10 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
   const config = Config.resolve(yield* Effect.tryPromise(() => input.config.get()), {
     terminalSuspend: process.platform !== "win32",
   })
-  const clientOptions = { baseUrl: input.server.endpoint.url, headers: Service.headers(input.server.endpoint) }
-  const api = YCoding.make(clientOptions)
+  const api = yield* Effect.acquireRelease(
+    Effect.sync(() => YCoding.make({ endpoint: input.server.endpoint, location: { directory: process.cwd() } })),
+    (api) => Effect.sync(() => api.transport.close()),
+  )
   const directory = yield* Effect.tryPromise(() => api.file.list({ location: { directory: process.cwd() } })).pipe(
     Effect.map((response) => response.location.directory),
     Effect.catch(() => Effect.tryPromise(() => api.location.get()).pipe(Effect.map((response) => response.directory))),
@@ -191,8 +192,10 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
     ? {
         reconnect: async (signal: AbortSignal) => {
           const endpoint = await managed.reconnect(signal)
-          const next = { baseUrl: endpoint.url, headers: Service.headers(endpoint) }
-          return { api: YCoding.make(next), baseUrl: next.baseUrl }
+          return {
+            api: YCoding.make({ endpoint, location: { directory } }),
+            baseUrl: endpoint.url,
+          }
         },
         restart: managed.restart,
       }
@@ -334,40 +337,44 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                       <UpdateNotice message={input.updateNotice} />
                                       <RouteProvider>
                                         <PluginRuntimeProvider value={pluginRuntime}>
-                                          <ClientProvider api={api} baseUrl={clientOptions.baseUrl} service={service}>
+                                          <ClientProvider
+                                            api={api}
+                                            baseUrl={input.server.endpoint.url}
+                                            service={service}
+                                          >
                                             <TelemetryProvider>
                                               <TelemetryDataProvider>
                                                 <LocationProvider>
                                                   <ThemeProvider mode={mode}>
                                                     <LocalProvider>
                                                       <RemoteProvider server={input.remote}>
-                                                      <KeepAwakeProvider server={input.keepAwake}>
-                                                      <PromptStashProvider>
-                                                        <DialogProvider>
-                                                          <FrecencyProvider>
-                                                            <PromptHistoryProvider>
-                                                              <PromptRefProvider>
-                                                                <EditorContextProvider>
-                                                                  <PluginProvider packages={input.packages}>
-                                                                    <App
-                                                                      started={appStarted}
-                                                                      pair={
-                                                                        input.server.endpoint.auth
-                                                                          ? input.server.endpoint.auth
-                                                                          : {
-                                                                              username: "ycoding",
-                                                                              password: "",
-                                                                            }
-                                                                      }
-                                                                    />
-                                                                  </PluginProvider>
-                                                                </EditorContextProvider>
-                                                              </PromptRefProvider>
-                                                            </PromptHistoryProvider>
-                                                          </FrecencyProvider>
-                                                        </DialogProvider>
-                                                      </PromptStashProvider>
-                                                      </KeepAwakeProvider>
+                                                        <KeepAwakeProvider server={input.keepAwake}>
+                                                          <PromptStashProvider>
+                                                            <DialogProvider>
+                                                              <FrecencyProvider>
+                                                                <PromptHistoryProvider>
+                                                                  <PromptRefProvider>
+                                                                    <EditorContextProvider>
+                                                                      <PluginProvider packages={input.packages}>
+                                                                        <App
+                                                                          started={appStarted}
+                                                                          pair={
+                                                                            input.server.endpoint.auth
+                                                                              ? input.server.endpoint.auth
+                                                                              : {
+                                                                                  username: "ycoding",
+                                                                                  password: "",
+                                                                                }
+                                                                          }
+                                                                        />
+                                                                      </PluginProvider>
+                                                                    </EditorContextProvider>
+                                                                  </PromptRefProvider>
+                                                                </PromptHistoryProvider>
+                                                              </FrecencyProvider>
+                                                            </DialogProvider>
+                                                          </PromptStashProvider>
+                                                        </KeepAwakeProvider>
                                                       </RemoteProvider>
                                                     </LocalProvider>
                                                   </ThemeProvider>
@@ -407,7 +414,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
       process.stderr.write((cliErrorMessage(result.reason) ?? errorFormat(result.reason)) + "\n")
     if (result.epilogue) process.stdout.write(result.epilogue + "\n")
   })
-})
+}, Effect.scoped)
 
 export function UpdateNotice(props: { message?: Promise<string | undefined> }) {
   const toast = useToast()
@@ -511,7 +518,12 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
   const configAlerted = new Set<string>()
   createEffect(() => {
     const diagnostics = data.location.config.diagnostics.list() ?? []
-    const active = new Set(diagnostics.map((diagnostic) => `${diagnostic.path}\0${diagnostic.jsonPath}\0${diagnostic.failClosed}\0${diagnostic.reason}\0${diagnostic.message}`))
+    const active = new Set(
+      diagnostics.map(
+        (diagnostic) =>
+          `${diagnostic.path}\0${diagnostic.jsonPath}\0${diagnostic.failClosed}\0${diagnostic.reason}\0${diagnostic.message}`,
+      ),
+    )
     for (const key of configAlerted) if (!active.has(key)) configAlerted.delete(key)
     for (const diagnostic of diagnostics) {
       const key = `${diagnostic.path}\0${diagnostic.jsonPath}\0${diagnostic.failClosed}\0${diagnostic.reason}\0${diagnostic.message}`
@@ -520,7 +532,11 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       const firstLine = diagnostic.message.split("\n", 1)[0]
       toast.show({
         variant: "error",
-        title: diagnostic.failClosed ? "Configuration fails closed" : diagnostic.jsonPath ? "Configuration item dropped" : "Configuration file ignored",
+        title: diagnostic.failClosed
+          ? "Configuration fails closed"
+          : diagnostic.jsonPath
+            ? "Configuration item dropped"
+            : "Configuration file ignored",
         message: `${path.basename(diagnostic.path)}${diagnostic.jsonPath ? `: ${diagnostic.jsonPath}` : ""}: ${firstLine.slice(0, 120)}${firstLine.length > 120 ? "…" : ""}. Open Status to view details.`,
       })
     }
@@ -719,9 +735,11 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
         title: "Model cycle",
         category: "Agent",
         run: () => {
-          void local.model.cycle(1).catch((error: unknown) =>
-            toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" }),
-          )
+          void local.model
+            .cycle(1)
+            .catch((error: unknown) =>
+              toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" }),
+            )
         },
       },
       {
@@ -730,9 +748,11 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
         title: "Model cycle reverse",
         category: "Agent",
         run: () => {
-          void local.model.cycle(-1).catch((error: unknown) =>
-            toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" }),
-          )
+          void local.model
+            .cycle(-1)
+            .catch((error: unknown) =>
+              toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" }),
+            )
         },
       },
       {
@@ -741,9 +761,11 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
         title: "Favorite cycle",
         category: "Agent",
         run: () => {
-          void local.model.cycleFavorite(1).catch((error: unknown) =>
-            toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" }),
-          )
+          void local.model
+            .cycleFavorite(1)
+            .catch((error: unknown) =>
+              toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" }),
+            )
         },
       },
       {
@@ -752,9 +774,11 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
         title: "Favorite cycle reverse",
         category: "Agent",
         run: () => {
-          void local.model.cycleFavorite(-1).catch((error: unknown) =>
-            toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" }),
-          )
+          void local.model
+            .cycleFavorite(-1)
+            .catch((error: unknown) =>
+              toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" }),
+            )
         },
       },
       {
@@ -789,9 +813,11 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
         title: "Variant cycle",
         category: "Agent",
         run: () => {
-          void local.model.variant.cycle().catch((error: unknown) =>
-            toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" }),
-          )
+          void local.model.variant
+            .cycle()
+            .catch((error: unknown) =>
+              toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" }),
+            )
         },
       },
       {
@@ -836,39 +862,54 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
             const locationRef = { directory: current.directory, workspace: current.workspaceID }
             void saveCustomEndpoint(Global.Path.config, result, {
               syncRegistration: () => data.location.integration.sync(),
-              registered: (providerID) => (data.location.integration.list() ?? []).some(
-                (integration) => integration.id === providerID && integration.methods.some((method) => method.type === "key"),
-              ),
-              connectKey: ({ integrationID, key, label }) => client.api.integration.connect.key({ integrationID, location: locationRef, key, label }),
+              registered: (providerID) =>
+                (data.location.integration.list() ?? []).some(
+                  (integration) =>
+                    integration.id === providerID && integration.methods.some((method) => method.type === "key"),
+                ),
+              connectKey: ({ integrationID, key, label }) =>
+                client.api.integration.connect.key({ integrationID, location: locationRef, key, label }),
               activate: (credentialID) => client.api.credential.activate({ credentialID, location: locationRef }),
-              refresh: () => Promise.all([
-                data.location.integration.sync(), data.location.model.sync(), data.location.provider.sync(),
-              ]),
+              refresh: () =>
+                Promise.all([
+                  data.location.integration.sync(),
+                  data.location.model.sync(),
+                  data.location.provider.sync(),
+                ]),
             })
-              .then(({ credentialConnected }) => toast.show({ variant: "success", message: credentialConnected
-                ? "Endpoint saved and credential profile connected" : "Endpoint saved to YCoding config",
-              }))
+              .then(({ credentialConnected }) =>
+                toast.show({
+                  variant: "success",
+                  message: credentialConnected
+                    ? "Endpoint saved and credential profile connected"
+                    : "Endpoint saved to YCoding config",
+                }),
+              )
               .catch(toast.error)
           }
           dialog.replace(() => (
             <DialogIntegration
               onConnected={(providerID) => dialog.replace(() => <DialogModel providerID={providerID} />)}
-              onRunpodEndpoint={() => dialog.replace(() => (
-                <DialogCustomEndpoint kind="runpod" onComplete={saveEndpoint} />
-              ))}
-              onCustomEndpoint={() => dialog.replace(() => (
-                <DialogCustomEndpoint
-                  providerOptions={(data.location.integration.list() ?? []).map((integration) => ({
-                    id: integration.id,
-                    name: integration.name,
-                    profiles: integration.connections.flatMap((connection) => connection.type === "credential"
-                      ? [{ id: connection.id, label: connection.label, active: connection.active }]
-                      : []),
-                  }))}
-                  onComplete={saveEndpoint}
-                  onCancel={() => dialog.clear()}
-                />
-              ))}
+              onRunpodEndpoint={() =>
+                dialog.replace(() => <DialogCustomEndpoint kind="runpod" onComplete={saveEndpoint} />)
+              }
+              onCustomEndpoint={() =>
+                dialog.replace(() => (
+                  <DialogCustomEndpoint
+                    providerOptions={(data.location.integration.list() ?? []).map((integration) => ({
+                      id: integration.id,
+                      name: integration.name,
+                      profiles: integration.connections.flatMap((connection) =>
+                        connection.type === "credential"
+                          ? [{ id: connection.id, label: connection.label, active: connection.active }]
+                          : [],
+                      ),
+                    }))}
+                    onComplete={saveEndpoint}
+                    onCancel={() => dialog.clear()}
+                  />
+                ))
+              }
             />
           ))
         },
@@ -912,8 +953,18 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       },
       ...(telemetry.decided() && !telemetry.consent()
         ? [
-            { name: "telemetry.consent.agree", title: "Agree", category: "Telemetry", run: () => telemetry.decide(true) },
-            { name: "telemetry.consent.not-now", title: "Not now", category: "Telemetry", run: () => telemetry.decide(false) },
+            {
+              name: "telemetry.consent.agree",
+              title: "Agree",
+              category: "Telemetry",
+              run: () => telemetry.decide(true),
+            },
+            {
+              name: "telemetry.consent.not-now",
+              title: "Not now",
+              category: "Telemetry",
+              run: () => telemetry.decide(false),
+            },
           ]
         : []),
       {

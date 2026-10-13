@@ -51,7 +51,16 @@ function isPromptRequest(value: unknown): value is PromptRequest {
   )
 }
 
-function fixture(options: { variant?: string; todos?: SessionTodoInfo[]; goalSteer?: string; goalTool?: SessionMessageAssistantTool; omitParentFromList?: boolean; alternativeModel?: boolean } = { variant: "high" }) {
+function fixture(
+  options: {
+    variant?: string
+    todos?: SessionTodoInfo[]
+    goalSteer?: string
+    goalTool?: SessionMessageAssistantTool
+    omitParentFromList?: boolean
+    alternativeModel?: boolean
+  } = { variant: "high" },
+) {
   const sessions = [parent, ordinary, { ...btw, model: { ...model, variant: options.variant } }]
   const listedSessions = options.omitParentFromList ? sessions.filter((session) => session.id !== parentID) : sessions
   const creations: unknown[] = []
@@ -83,43 +92,47 @@ function fixture(options: { variant?: string; todos?: SessionTodoInfo[]; goalSte
       (sessionID) => url.pathname === `/api/session/${sessionID}/snapshot`,
     )
     if (messageSession)
-      return sessionSnapshot(messageSession,
-          messageSession === parentID
-            ? options.goalSteer
-              ? [
-                  {
-                    id: "msg_goal_steer",
-                    type: "synthetic",
-                    text: options.goalSteer,
-                    description: "Goal steer",
-                    metadata: { autonomy: { goal: true, iteration: 1 } },
-                    time: { created: 1 },
-                  },
-                  ...(options.goalTool ? [{
-                    id: "msg_goal_tool",
-                    type: "assistant",
-                    agent: "build",
-                    model,
-                    content: [
-                      { type: "text", text: "Visible assistant response." },
-                      options.goalTool,
-                    ],
-                    time: { created: 2 },
-                  }] : []),
-                ]
-              : []
-            : [
+      return sessionSnapshot(
+        messageSession,
+        messageSession === parentID
+          ? options.goalSteer
+            ? [
                 {
-                  id: `msg_${messageSession}_assistant`,
-                  type: "assistant",
-                  agent: messageSession === btwID ? "btw" : "reviewer",
-                  model,
-                  content: [
-                    { type: "text", text: messageSession === btwID ? "Side-chat context loaded." : "Reviewing." },
-                  ],
-                  time: { created: 1, completed: 2 },
+                  id: "msg_goal_steer",
+                  type: "synthetic",
+                  text: options.goalSteer,
+                  description: "Goal steer",
+                  metadata: { autonomy: { goal: true, iteration: 1 } },
+                  time: { created: 1 },
                 },
-              ], { session: sessions.find((item) => item.id === messageSession) })
+                ...(options.goalTool
+                  ? [
+                      {
+                        id: "msg_goal_tool",
+                        type: "assistant",
+                        agent: "build",
+                        model,
+                        content: [{ type: "text", text: "Visible assistant response." }, options.goalTool],
+                        time: { created: 2 },
+                      },
+                    ]
+                  : []),
+              ]
+            : []
+          : [
+              {
+                id: `msg_${messageSession}_assistant`,
+                type: "assistant",
+                agent: messageSession === btwID ? "btw" : "reviewer",
+                model,
+                content: [
+                  { type: "text", text: messageSession === btwID ? "Side-chat context loaded." : "Reviewing." },
+                ],
+                time: { created: 1, completed: 2 },
+              },
+            ],
+        { session: sessions.find((item) => item.id === messageSession) },
+      )
     const promptSession = [parentID, ordinaryID, btwID, "ses_btw_opened"].find(
       (sessionID) => url.pathname === `/api/session/${sessionID}/prompt` && request.method === "POST",
     )
@@ -164,7 +177,11 @@ function fixture(options: { variant?: string; todos?: SessionTodoInfo[]; goalSte
       interrupts.push(await request.json().catch(() => undefined))
       return new Response(null, { status: 204 })
     }
-    if ([parentID, ordinaryID, btwID, "ses_btw_opened"].some((sessionID) => url.pathname === `/api/session/${sessionID}/subagent`))
+    if (
+      [parentID, ordinaryID, btwID, "ses_btw_opened"].some(
+        (sessionID) => url.pathname === `/api/session/${sessionID}/subagent`,
+      )
+    )
       return json({
         data:
           url.pathname === `/api/session/${parentID}/subagent` && taskActive
@@ -197,7 +214,7 @@ function fixture(options: { variant?: string; todos?: SessionTodoInfo[]; goalSte
           model,
           context: { total: 0, percent: 0 },
           tokens: { uncachedInput: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
-          cache: { eligible: 0, hitRatio: 0, mechanism: "unreported", readReported: false, writeReported: false },
+          cache: { eligible: 0, hitRatio: 0, mechanism: "none", readReported: false, writeReported: false },
           requests: {
             logical: 0,
             physical: 0,
@@ -239,23 +256,34 @@ function fixture(options: { variant?: string; todos?: SessionTodoInfo[]; goalSte
             enabled: true,
             limit: { context: 200_000, output: 32_000 },
           },
-          ...(options.alternativeModel ? [{
-            id: "alternative",
-            modelID: "alternative",
-            providerID: "anthropic",
-            name: "Alternative Model",
-            family: "",
-            capabilities: { tools: true, input: ["text"], output: ["text"] },
-            variants: [],
-            time: { released: 0 },
-            cost: [],
-            status: "active",
-            enabled: true,
-            limit: { context: 100_000, output: 32_000 },
-          }] : []),
+          ...(options.alternativeModel
+            ? [
+                {
+                  id: "alternative",
+                  modelID: "alternative",
+                  providerID: "anthropic",
+                  name: "Alternative Model",
+                  family: "",
+                  capabilities: { tools: true, input: ["text"], output: ["text"] },
+                  variants: [],
+                  time: { released: 0 },
+                  cost: [],
+                  status: "active",
+                  enabled: true,
+                  limit: { context: 100_000, output: 32_000 },
+                },
+              ]
+            : []),
         ],
       })
-    if (url.pathname === "/api/provider") return json({ location, data: [{ id: "openai", name: "OpenAI" }, { id: "anthropic", name: "Anthropic" }] })
+    if (url.pathname === "/api/provider")
+      return json({
+        location,
+        data: [
+          { id: "openai", name: "OpenAI" },
+          { id: "anthropic", name: "Anthropic" },
+        ],
+      })
     if (url.pathname === "/api/agent")
       return json({
         location,
@@ -364,7 +392,10 @@ test("mounts one ordinary composer only for the root and BTW child without a BTW
     await waitFor(() => root.frame().includes("Commands"), "root palette")
     await waitFor(() => root.renderer.currentFocusedEditor instanceof InputRenderable, "root palette filter")
     await root.input.typeText("send to main chat")
-    await waitFor(() => root.frame().includes("No results") || root.frame().includes("Send to main chat"), "root BTW export search")
+    await waitFor(
+      () => root.frame().includes("No results") || root.frame().includes("Send to main chat"),
+      "root BTW export search",
+    )
     expect(root.frame()).not.toContain("Send to main chat")
     expect(rootFixture.prompts).toEqual([])
   } finally {
@@ -384,9 +415,15 @@ test("mounts one ordinary composer only for the root and BTW child without a BTW
     expect(ordinaryScreen.frame()).not.toContain("Message BTW…")
     ordinaryScreen.input.pressKey("p", { ctrl: true })
     await waitFor(() => ordinaryScreen.frame().includes("Commands"), "ordinary child palette")
-    await waitFor(() => ordinaryScreen.renderer.currentFocusedEditor instanceof InputRenderable, "ordinary child palette filter")
+    await waitFor(
+      () => ordinaryScreen.renderer.currentFocusedEditor instanceof InputRenderable,
+      "ordinary child palette filter",
+    )
     await ordinaryScreen.input.typeText("send to main chat")
-    await waitFor(() => ordinaryScreen.frame().includes("No results") || ordinaryScreen.frame().includes("Send to main chat"), "ordinary child BTW export search")
+    await waitFor(
+      () => ordinaryScreen.frame().includes("No results") || ordinaryScreen.frame().includes("Send to main chat"),
+      "ordinary child BTW export search",
+    )
     expect(ordinaryScreen.frame()).not.toContain("Send to main chat")
     expect(ordinaryFixture.prompts).toEqual([])
   } finally {
@@ -461,12 +498,23 @@ test("BTW model selection creates a side chat with the chosen model after loadin
       const modelRow = screen.lines().findIndex((line) => line.includes("Alternative Model"))
       await screen.mouse.click(20, modelRow)
       await waitFor(() => state.creations.length === 1, "BTW side chat creation")
-      expect(state.creations).toEqual([expect.objectContaining({ parentID, agent: "btw", model: { providerID: "anthropic", id: "alternative" } })])
+      expect(state.creations).toEqual([
+        expect.objectContaining({ parentID, agent: "btw", model: { providerID: "anthropic", id: "alternative" } }),
+      ])
       await waitFor(() => state.snapshots.length === 1, "BTW parent snapshot")
-      expect(state.snapshots[0]).toMatchObject({ resume: false, delivery: "steer", description: "Parent session history snapshot" })
+      expect(state.snapshots[0]).toMatchObject({
+        resume: false,
+        delivery: "steer",
+        description: "Parent session history snapshot",
+      })
       await waitFor(() => state.prompts.length === 1, "BTW first prompt")
-      expect(state.prompts).toEqual([{ sessionID: "ses_btw_opened", body: expect.objectContaining({ text: "investigate caching " }) }])
-      await waitFor(() => screen.frame().includes("BTW SIDE CHAT") && screen.frame().includes("Message BTW…"), "new BTW route")
+      expect(state.prompts).toEqual([
+        { sessionID: "ses_btw_opened", body: expect.objectContaining({ text: "investigate caching " }) },
+      ])
+      await waitFor(
+        () => screen.frame().includes("BTW SIDE CHAT") && screen.frame().includes("Message BTW…"),
+        "new BTW route",
+      )
       expect(screen.frame()).not.toContain("/btw investigate caching")
     } finally {
       await screen.dispose()
@@ -521,7 +569,10 @@ test("hydrates the parent title for a cold-opened BTW and retains it for the exp
     settle: "Side-chat context loaded.",
   })
   try {
-    await waitFor(() => screen.frame().includes("Parent context snapshot · read-only · Main implementation"), "hydrated parent title")
+    await waitFor(
+      () => screen.frame().includes("Parent context snapshot · read-only · Main implementation"),
+      "hydrated parent title",
+    )
     await focusEmptyBtwComposer(screen)
     await screen.input.typeText("/btw-send retained parent")
     screen.input.pressEnter()
@@ -565,29 +616,35 @@ test.each([
   { width: 80, height: 24 },
   { width: 189, height: 69 },
   { width: 220, height: 69 },
-])("renders the compact BTW notice and chrome footer at $width×$height", async ({ width, height }) => {
-  const state = fixture()
-  const screen = await renderScreen({
-    width,
-    height,
-    args: { sessionID: btwID },
-    route: state.route,
-    settle: "Side-chat context loaded.",
-  })
-  try {
-    await waitFor(() => screen.frame().includes("Parent context snapshot · read-only"), "compact BTW notice")
-    const lines = screen.lines()
-    expect(lines).toHaveLength(height + 1)
-    expect(lines.every((line) => line.length <= width)).toBe(true)
-    expect(lines.slice(-3).join("\n")).toContain("Back to main")
-    expect(lines.slice(-3).join("\n")).toContain("commands")
-    const footer = screen.spans().lines.slice(-4, -1)
-    expect(footer).toHaveLength(3)
-    expect(footer.slice(1).every((line) => line.spans.every((span) => span.bg.toInts().join(",") === "15,17,21,255"))).toBe(true)
-  } finally {
-    await screen.dispose()
-  }
-}, 120_000)
+])(
+  "renders the compact BTW notice and chrome footer at $width×$height",
+  async ({ width, height }) => {
+    const state = fixture()
+    const screen = await renderScreen({
+      width,
+      height,
+      args: { sessionID: btwID },
+      route: state.route,
+      settle: "Side-chat context loaded.",
+    })
+    try {
+      await waitFor(() => screen.frame().includes("Parent context snapshot · read-only"), "compact BTW notice")
+      const lines = screen.lines()
+      expect(lines).toHaveLength(height + 1)
+      expect(lines.every((line) => line.length <= width)).toBe(true)
+      expect(lines.slice(-3).join("\n")).toContain("Back to main")
+      expect(lines.slice(-3).join("\n")).toContain("commands")
+      const footer = screen.spans().lines.slice(-4, -1)
+      expect(footer).toHaveLength(3)
+      expect(
+        footer.slice(1).every((line) => line.spans.every((span) => span.bg.toInts().join(",") === "15,17,21,255")),
+      ).toBe(true)
+    } finally {
+      await screen.dispose()
+    }
+  },
+  120_000,
+)
 
 test("subagent chat hydrates its todos and renders live status changes without the parent rail", async () => {
   const todos: SessionTodoInfo[] = [
@@ -642,19 +699,77 @@ test("goal steer shows the generated response rather than the synthetic descript
   }
 }, 120_000)
 
-test.each(["streaming", "running", "completed", "error"] as const)("hides %s goal tool rows but retains the goal steer", async (status) => {
+test.each(["streaming", "running", "completed", "error"] as const)(
+  "hides %s goal tool rows but retains the goal steer",
+  async (status) => {
+    const state = fixture({
+      goalSteer: "Verify the rendered transcript before finishing.",
+      goalTool: {
+        type: "tool",
+        id: "call_goal_hidden",
+        name: "goal",
+        state:
+          status === "streaming"
+            ? { status, input: '{"action":"get"}' }
+            : status === "error"
+              ? {
+                  status,
+                  input: { action: "get" },
+                  content: [],
+                  structured: {},
+                  error: { type: "Error", message: "Goal lookup failed" },
+                }
+              : {
+                  status,
+                  input: { action: "get" },
+                  content: [{ type: "text", text: "Goal tool result" }],
+                  structured: {},
+                },
+        time: { created: 2, ran: 2, ...(status === "completed" || status === "error" ? { completed: 3 } : {}) },
+      },
+    })
+    const screen = await renderScreen({
+      width: 120,
+      height: 40,
+      args: { sessionID: parentID },
+      route: state.route,
+      settle: "Visible assistant response.",
+    })
+    try {
+      await screen.waitForEventStream()
+      expect(screen.frame()).toContain("Goal · steer")
+      expect(screen.frame()).toContain("Verify the rendered transcript before finishing.")
+      expect(screen.frame()).toContain("Visible assistant response.")
+      expect(screen.frame()).not.toMatch(/\bgoal(?: \[| {2,})/)
+      expect(screen.frame()).not.toContain("Goal tool result")
+      expect(screen.frame()).not.toContain("Goal lookup failed")
+    } finally {
+      await screen.dispose()
+    }
+  },
+  30_000,
+)
+
+test("renders a compact completed decision row without request or response details", async () => {
   const state = fixture({
-    goalSteer: "Verify the rendered transcript before finishing.",
+    goalSteer: "Verify compact decision rendering.",
     goalTool: {
       type: "tool",
-      id: "call_goal_hidden",
-      name: "goal",
-      state: status === "streaming"
-        ? { status, input: '{"action":"get"}' }
-        : status === "error"
-          ? { status, input: { action: "get" }, content: [], structured: {}, error: { type: "Error", message: "Goal lookup failed" } }
-          : { status, input: { action: "get" }, content: [{ type: "text", text: "Goal tool result" }], structured: {} },
-      time: { created: 2, ran: 2, ...(status === "completed" || status === "error" ? { completed: 3 } : {}) },
+      id: "call_decision_toon",
+      name: "decision",
+      state: {
+        status: "completed",
+        input: {
+          provider: "agent",
+          request: {
+            state: "PRIVATE_REQUEST_VALUE",
+            questions: [{ type: "predicate", name: "safe", instructions: "PRIVATE_QUESTION_VALUE" }],
+          },
+        },
+        content: [{ type: "text", text: "PRIVATE_RESPONSE_VALUE" }],
+        structured: {},
+      },
+      time: { created: 2, ran: 2, completed: 3 },
     },
   })
   const screen = await renderScreen({
@@ -664,31 +779,6 @@ test.each(["streaming", "running", "completed", "error"] as const)("hides %s goa
     route: state.route,
     settle: "Visible assistant response.",
   })
-  try {
-    await screen.waitForEventStream()
-    expect(screen.frame()).toContain("Goal · steer")
-    expect(screen.frame()).toContain("Verify the rendered transcript before finishing.")
-    expect(screen.frame()).toContain("Visible assistant response.")
-    expect(screen.frame()).not.toMatch(/\bgoal(?: \[| {2,})/)
-    expect(screen.frame()).not.toContain("Goal tool result")
-    expect(screen.frame()).not.toContain("Goal lookup failed")
-  } finally {
-    await screen.dispose()
-  }
-}, 30_000)
-
-test("renders a compact completed decision row without request or response details", async () => {
-  const state = fixture({
-    goalSteer: "Verify compact decision rendering.",
-    goalTool: {
-      type: "tool", id: "call_decision_toon", name: "decision",
-      state: { status: "completed", input: { provider: "agent", request: { state: "PRIVATE_REQUEST_VALUE", questions: [
-        { type: "predicate", name: "safe", instructions: "PRIVATE_QUESTION_VALUE" },
-      ] } }, content: [{ type: "text", text: "PRIVATE_RESPONSE_VALUE" }], structured: {} },
-      time: { created: 2, ran: 2, completed: 3 },
-    },
-  })
-  const screen = await renderScreen({ width: 120, height: 40, args: { sessionID: parentID }, route: state.route, settle: "Visible assistant response." })
   try {
     await screen.waitForEventStream()
     expect(screen.frame()).toContain("Decision · agent · 1 question")
@@ -707,12 +797,25 @@ test("renders a running decision without exposing its request", async () => {
   const state = fixture({
     goalSteer: "Verify a pending decision row.",
     goalTool: {
-      type: "tool", id: "call_decision_running", name: "decision",
-      state: { status: "running", input: { provider: "openai", request: { state: "PRIVATE_RUNNING_REQUEST", questions: [] } }, content: [], structured: {} },
+      type: "tool",
+      id: "call_decision_running",
+      name: "decision",
+      state: {
+        status: "running",
+        input: { provider: "openai", request: { state: "PRIVATE_RUNNING_REQUEST", questions: [] } },
+        content: [],
+        structured: {},
+      },
       time: { created: 2, ran: 2 },
     },
   })
-  const screen = await renderScreen({ width: 120, height: 40, args: { sessionID: parentID }, route: state.route, settle: "Visible assistant response." })
+  const screen = await renderScreen({
+    width: 120,
+    height: 40,
+    args: { sessionID: parentID },
+    route: state.route,
+    settle: "Visible assistant response.",
+  })
   try {
     await screen.waitForEventStream()
     expect(screen.frame()).toContain("Decision · openai · 0 questions")
@@ -727,14 +830,26 @@ test("renders only a sanitized error line for a failed decision", async () => {
   const state = fixture({
     goalSteer: "Retain the baseline when a decision fails.",
     goalTool: {
-      type: "tool", id: "call_decision_failed", name: "decision",
-      state: { status: "error", input: { provider: "agent", request: { state: "PRIVATE_REQUEST_VALUE" } }, content: [], structured: {},
+      type: "tool",
+      id: "call_decision_failed",
+      name: "decision",
+      state: {
+        status: "error",
+        input: { provider: "agent", request: { state: "PRIVATE_REQUEST_VALUE" } },
+        content: [],
+        structured: {},
         error: { type: "Error", message: "Decision output was invalid" },
       },
       time: { created: 2, ran: 2, completed: 3 },
     },
   })
-  const screen = await renderScreen({ width: 120, height: 40, args: { sessionID: parentID }, route: state.route, settle: "Visible assistant response." })
+  const screen = await renderScreen({
+    width: 120,
+    height: 40,
+    args: { sessionID: parentID },
+    route: state.route,
+    settle: "Visible assistant response.",
+  })
   try {
     await screen.waitForEventStream()
     expect(screen.frame()).toContain("Decision Decision output was invalid")

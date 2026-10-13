@@ -54,11 +54,16 @@ export function Toast() {
           flexDirection="column"
           gap={1}
         >
-          <text attributes={TextAttributes.BOLD} fg={theme.text.feedback[current().variant].default}>
+          <text
+            width="100%"
+            attributes={TextAttributes.BOLD}
+            fg={theme.text.feedback[current().variant].default}
+            wrapMode="word"
+          >
             {glyph()} {label()}
             <Show when={current().title}> · {current().title}</Show>
           </text>
-          <text fg={theme.text.default} wrapMode="word">
+          <text width="100%" fg={theme.text.default} wrapMode="word">
             {current().message}
           </text>
         </box>

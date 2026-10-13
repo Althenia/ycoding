@@ -241,7 +241,7 @@ test("cache pressure preserves active families, queued inputs, forms and in-flig
             id: "frm_waiting",
             sessionID: "ses_form",
             title: "Input required",
-            fields: [{ key: "answer", type: "text", label: "Answer" }],
+            fields: [{ key: "answer", type: "string", title: "Answer" }],
           },
         ],
       })

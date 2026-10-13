@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
-import { YCoding } from "@ycoding-ai/client/promise"
+import { createApi } from "../fixture/tui-client"
 import { loadRunReferences, runProviders, waitForDefaultModel } from "../../src/mini/catalog.shared"
 import { catalogModel, catalogProvider } from "./fixture/catalog"
 
@@ -9,7 +9,7 @@ afterEach(() => {
 
 describe("run catalog shared", () => {
   test("resolves the catalog-selected model for the footer", async () => {
-    const client = YCoding.make({ baseUrl: "https://ycoding.test" })
+    const client = createApi()
     const selected = spyOn(client.model, "default").mockImplementation(
       () =>
         Promise.resolve({
@@ -36,7 +36,7 @@ describe("run catalog shared", () => {
   })
 
   test("loads visible project references from the current reference catalog", async () => {
-    const client = YCoding.make({ baseUrl: "https://ycoding.test" })
+    const client = createApi()
     const list = spyOn(client.reference, "list").mockImplementation(
       () =>
         Promise.resolve({

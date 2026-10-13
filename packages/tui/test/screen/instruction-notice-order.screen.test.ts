@@ -71,7 +71,16 @@ test("an instruction notice stays before the assistant that consumed it", async 
       if (url.pathname === "/api/agent")
         return json({
           location,
-          data: [{ id: "build", name: "Build", request: { headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] }],
+          data: [
+            {
+              id: "build",
+              name: "Build",
+              request: { headers: {}, body: {} },
+              mode: "primary",
+              hidden: false,
+              permissions: [],
+            },
+          ],
         })
       if (url.pathname === "/api/provider") return json({ location, data: [{ id: "fixture", name: "Fixture" }] })
       if (url.pathname === "/api/model")
@@ -95,7 +104,11 @@ test("an instruction notice stays before the assistant that consumed it", async 
         })
       if (url.pathname === `/api/session/${sessionID}/subagent`)
         return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
-      if (["pending", "permission", "todo", "skills"].some((suffix) => url.pathname === `/api/session/${sessionID}/${suffix}`))
+      if (
+        ["pending", "permission", "todo", "skills"].some(
+          (suffix) => url.pathname === `/api/session/${sessionID}/${suffix}`,
+        )
+      )
         return json({ data: [], cursor: {} })
       if (url.pathname === `/api/session/${sessionID}/guardrail`)
         return json({
@@ -147,6 +160,7 @@ test("an instruction notice stays before the assistant that consumed it", async 
       created: 9,
       type: "session.text.started",
       location: { directory },
+      durable: { aggregateID: sessionID, seq: 9, version: 1 },
       data: { sessionID, assistantMessageID: assistant.id, ordinal: 0 },
     } as YCodingEvent)
     emit({
@@ -154,6 +168,7 @@ test("an instruction notice stays before the assistant that consumed it", async 
       created: 10,
       type: "session.text.ended",
       location: { directory },
+      durable: { aggregateID: sessionID, seq: 10, version: 1 },
       data: { sessionID, assistantMessageID: assistant.id, ordinal: 0, text: "Streaming answer" },
     } as YCodingEvent)
     await wait(() => screen.frame().includes("Streaming answer"))

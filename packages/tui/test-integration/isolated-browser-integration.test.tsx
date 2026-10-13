@@ -1,14 +1,11 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
-import { YCoding } from "@ycoding-ai/client"
-import { Effect, Exit, Logger, Scope } from "effect"
+import { YCoding } from "@ycoding-ai/client/v5"
 import { mkdir, mkdtemp, rm } from "node:fs/promises"
-import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { onMount } from "solid-js"
-import { ServerProcess } from "../../server/src/process"
 import { DialogSessionBrowser } from "../src/component/dialog-session-browser"
 import { ConfigProvider } from "../src/config"
 import { ClientProvider } from "../src/context/client"
@@ -19,28 +16,33 @@ import { ToastProvider } from "../src/ui/toast"
 import { TestTuiContexts } from "../test/fixture/tui-environment"
 import { createTuiResolvedConfig } from "../test/fixture/tui-runtime"
 
-const auth = `Basic ${Buffer.from("ycoding:test-password").toString("base64")}`
-
 test("rendered explicit Start and Stop cross the real Session API and isolated Chrome lifecycle", async () => {
+  const url = process.env.YCODING_V5_TEST_URL
+  if (!url)
+    throw new Error(
+      "YCODING_V5_TEST_URL must name a disposable Rust runtime with ready Core and isolated-browser services",
+    )
   const root = await mkdtemp(join(tmpdir(), "ycoding-tui-isolated-browser-"))
   const home = join(root, "home")
   const directory = join(root, "workspace")
   const previousHome = process.env.HOME
   let fixture: ReturnType<typeof browserFixture> | undefined
-  let server: Awaited<ReturnType<typeof startServer>> | undefined
 
   try {
     await Promise.all([mkdir(home, { recursive: true }), mkdir(directory, { recursive: true })])
     process.env.HOME = home
     const currentFixture = browserFixture()
     fixture = currentFixture
-    server = await startServer({ directory, database: join(root, "ycoding.db") })
-    const client = YCoding.make({ baseUrl: server.base, headers: { authorization: auth } })
+    const password = process.env.YCODING_V5_TEST_PASSWORD
+    const client = YCoding.make({
+      endpoint: { url, ...(password ? { auth: { type: "basic", username: "ycoding", password } } : {}) },
+      location: { directory },
+    })
     const sessionID = "ses_tui_isolated_integration"
-    const session = await client.session.create({ id: sessionID, location: { directory } })
     let app: Awaited<ReturnType<typeof testRender>> | undefined
 
     try {
+      const session = await client.session.create({ id: sessionID, location: { directory } })
       function Fixture() {
         const dialog = useDialog()
         onMount(() => dialog.replace(() => <DialogSessionBrowser sessionID={sessionID} location={session.location} />))
@@ -109,49 +111,19 @@ test("rendered explicit Start and Stop cross the real Session API and isolated C
         app?.renderer.destroy()
       } finally {
         await client.isolatedBrowser.stop({ sessionID }).catch(() => {})
+        client.transport.close()
       }
     }
   } finally {
     try {
-      await server?.close()
+      await fixture?.server.stop(true)
     } finally {
-      try {
-        await fixture?.server.stop(true)
-      } finally {
-        if (previousHome === undefined) delete process.env.HOME
-        else process.env.HOME = previousHome
-        await rm(root, { recursive: true, force: true })
-      }
+      if (previousHome === undefined) delete process.env.HOME
+      else process.env.HOME = previousHome
+      await rm(root, { recursive: true, force: true })
     }
   }
 }, 90_000)
-
-async function startServer(options: { readonly directory: string; readonly database: string }) {
-  const port = await availablePort()
-  const scope = await Effect.runPromise(Scope.make())
-  const logger = Logger.map(Logger.formatStructured, () => {})
-  const startingRaw = ServerProcess.start<never, never>({
-    hostname: "127.0.0.1",
-    port,
-    password: "test-password",
-    database: { path: options.database },
-    config: { directory: options.directory, project: false, content: "{}" },
-    fs: { filewatcher: false, fff: false },
-  }).pipe(Effect.provideService(Scope.Scope, scope))
-  // Runtime-owned request markers are supplied when the assembled router dispatches.
-  // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
-  const starting = startingRaw as Effect.Effect<Effect.Success<typeof startingRaw>, Effect.Error<typeof startingRaw>>
-  await Effect.runPromise(starting.pipe(Effect.provide(Logger.layer([logger]))))
-  let closed = false
-  return {
-    base: `http://127.0.0.1:${port}`,
-    async close() {
-      if (closed) return
-      closed = true
-      await Effect.runPromise(Scope.close(scope, Exit.void))
-    },
-  }
-}
 
 function browserFixture() {
   let loads = 0
@@ -175,16 +147,4 @@ function browserFixture() {
 
 function supportedHost() {
   return process.platform === "darwin" && process.arch === "arm64"
-}
-
-async function availablePort() {
-  const server = createServer()
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject)
-    server.listen(0, "127.0.0.1", resolve)
-  })
-  const address = server.address()
-  if (!address || typeof address === "string") throw new Error("failed to reserve isolated-browser test port")
-  await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
-  return address.port
 }

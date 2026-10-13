@@ -12,7 +12,7 @@ import { RouteProvider, useRoute } from "../src/context/route"
 import { ThemeProvider } from "../src/context/theme"
 import { Composer } from "../src/routes/session/composer"
 import { ToastProvider } from "../src/ui/toast"
-import { createApi, createFetch, json } from "./fixture/tui-client"
+import { createApi, createFetch, directory, json } from "./fixture/tui-client"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 
@@ -59,13 +59,20 @@ test("loads older direct BTW chats, reopens one, and creates only one model-defe
       created.push(body)
       return json({ data: session("ses_btw_new", { agent: "btw", parentID: "ses_main", title: "New BTW" }) })
     }
-    if (url.pathname === "/api/session/ses_btw_new/synthetic") return json({ data: {} })
+    if (url.pathname === "/api/session/ses_btw_new/synthetic") return json({ data: { id: "msg_btw_parent_context" } })
     if (url.pathname !== "/api/session") return undefined
+    if ([null, "null"].includes(url.searchParams.get("parentID"))) return json({ data: [], cursor: {} })
     expect(url.searchParams.get("parentID")).toBe("ses_main")
     cursors.push(url.searchParams.get("cursor"))
     if (url.searchParams.get("cursor") === "older")
-      return json({ data: [session("ses_btw", { agent: "btw", parentID: "ses_main", title: "Ask about caching" })], cursor: {} })
-    return json({ data: [session("ses_task", { agent: "reviewer", parentID: "ses_main", title: "Managed task" })], cursor: { next: "older" } })
+      return json({
+        data: [session("ses_btw", { agent: "btw", parentID: "ses_main", title: "Ask about caching" })],
+        cursor: {},
+      })
+    return json({
+      data: [session("ses_task", { agent: "reviewer", parentID: "ses_main", title: "Managed task" })],
+      cursor: { next: "older" },
+    })
   })
   const config = createTuiResolvedConfig()
   let routeSessionID: string | undefined
@@ -82,18 +89,18 @@ test("loads older direct BTW chats, reopens one, and creates only one model-defe
         <ConfigProvider config={config}>
           <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
             <Keymap.Provider config={config}>
-            <ClientProvider api={createApi(calls.fetch)}>
-              <DataProvider>
-                <LocationProvider>
-                  <ToastProvider>
-                    <RouteProvider initialRoute={{ type: "session", sessionID: "ses_main" }}>
-                      <RouteProbe />
-                      <Composer sessionID="ses_main" open defaultTab="side-chats" />
-                    </RouteProvider>
-                  </ToastProvider>
-                </LocationProvider>
-              </DataProvider>
-            </ClientProvider>
+              <ClientProvider api={createApi(calls.fetch)}>
+                <DataProvider>
+                  <LocationProvider>
+                    <ToastProvider>
+                      <RouteProvider initialRoute={{ type: "session", sessionID: "ses_main" }}>
+                        <RouteProbe />
+                        <Composer sessionID="ses_main" open defaultTab="side-chats" />
+                      </RouteProvider>
+                    </ToastProvider>
+                  </LocationProvider>
+                </DataProvider>
+              </ClientProvider>
             </Keymap.Provider>
           </ThemeProvider>
         </ConfigProvider>
@@ -113,7 +120,7 @@ test("loads older direct BTW chats, reopens one, and creates only one model-defe
     app.mockInput.pressKey("n")
     app.mockInput.pressKey("n")
     await app.waitForFrame(() => routeSessionID === "ses_btw_new")
-    expect(created).toEqual([{ parentID: "ses_main", agent: "btw" }])
+    expect(created).toEqual([{ parentID: "ses_main", agent: "btw", location: { directory } }])
     expect(cursors).toEqual([null, "older"])
   } finally {
     app.renderer.destroy()

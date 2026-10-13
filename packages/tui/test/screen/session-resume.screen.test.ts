@@ -173,12 +173,16 @@ test("a resumed Session retains the draft with a catalog warning until its model
   fixture.release()
   const catalog = Promise.withResolvers<void>()
   const writes: string[] = []
+  let data!: ReturnType<typeof useData>
   const screen = await renderScreen({
     width: 120,
     height: 36,
     state: state.path,
     args: { sessionID: fixture.sessionID },
     settle: "Synthetic response 1",
+    data: (value) => {
+      data = value
+    },
     config: { attention: { enabled: false } },
     route: async (url, request) => {
       if (request.method === "POST") writes.push(url.pathname)
@@ -209,9 +213,13 @@ test("a resumed Session retains the draft with a catalog warning until its model
     expect(screen.frame()).toContain("held resumed input")
     expect(writes).toEqual([])
     catalog.resolve()
-    await until(screen, () => !screen.frame().includes("model catalog is not available yet"))
+    await until(screen, () => {
+      const location = data.session.get(fixture.sessionID)?.location
+      return !!location && !!data.location.model.list(location)?.length && !!data.location.agent.list(location)?.length
+    })
     screen.input.pressEnter()
     await until(screen, () => writes.includes(`/api/session/${fixture.sessionID}/prompt`))
+    expect(writes).toEqual([`/api/session/${fixture.sessionID}/prompt`])
   } finally {
     catalog.resolve()
     await screen.dispose()

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
-import { YCoding, type EventSubscribeOutput, type MessageListOutput } from "@ycoding-ai/client/promise"
+import type { EventSubscribeOutput, MessageListOutput } from "@ycoding-ai/client/v5"
+import { createApi } from "../fixture/tui-client"
 import { createSessionTransport } from "../../src/mini/stream.transport"
 import type { FooterEvent, FooterSubagentState } from "../../src/mini/types"
 import { createFooterApiFixture } from "./fixture/footer-api"
@@ -70,7 +71,7 @@ function sdk(input: {
   // Reachable through `session.get` discovery only, never through `session.list`.
   discovered?: { id: string; parentID?: string; title?: string; agent?: string; time: { updated: number } }
 }) {
-  const client = YCoding.make({ baseUrl: "https://ycoding.test" })
+  const client = createApi()
   let subscription = 0
   spyOn(client.event, "subscribe").mockImplementation(() => input.streams[subscription++]?.stream ?? feed().stream)
   spyOn(client.message, "list").mockImplementation((request) => ok(input.messages?.[request.sessionID] ?? []))

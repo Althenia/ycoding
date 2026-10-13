@@ -109,7 +109,7 @@ const skills = ["review", "cache-audit"].map((id) => ({
   activationMessageID: "msg_skill",
   content: "",
   conflicts: [],
-  declarations: {},
+  declarations: { skills: [], instructions: [] },
   state: "active" as const,
 }))
 const pluginStatus = [
@@ -131,9 +131,17 @@ const homeRoute: FetchHandler = (url) => {
   if (url.pathname === "/api/model/default") return json({ location, data: { ...model, selection: session.model } })
   if (url.pathname === "/api/provider") return json({ location, data: [{ id: "anthropic", name: "Claude" }] })
   if (url.pathname === "/api/integration")
-    return json({ location, data: [{ id: "anthropic", name: "Anthropic", connections: [{ type: "credential", id: "cred_capture", label: "Capture" }] }] })
-  if (["/api/command", "/api/skill", "/api/reference"].includes(url.pathname))
-    return json({ location, data: [] })
+    return json({
+      location,
+      data: [
+        {
+          id: "anthropic",
+          name: "Anthropic",
+          connections: [{ type: "credential", id: "cred_capture", label: "Capture" }],
+        },
+      ],
+    })
+  if (["/api/command", "/api/skill", "/api/reference"].includes(url.pathname)) return json({ location, data: [] })
   return undefined
 }
 
@@ -143,7 +151,9 @@ const sessionRoute: FetchHandler = (url, request) => {
   if (url.pathname === "/api/session") return json({ data: [session, childSession], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
   if (url.pathname === `/api/session/${sessionID}/snapshot`) {
-    return sessionSnapshot(sessionID, [
+    return sessionSnapshot(
+      sessionID,
+      [
         {
           id: "msg_compaction",
           type: "compaction",
@@ -201,9 +211,12 @@ const sessionRoute: FetchHandler = (url, request) => {
           time: { created: Date.now() - 4_060 },
         },
         { id: "msg_user", type: "user", text: "Where is provider cache telemetry recorded?", time: { created: 1 } },
-      ], { session })
+      ],
+      { session },
+    )
   }
-  if (subagents.some((child) => url.pathname === `/api/session/${child.sessionID}/snapshot`)) return sessionSnapshot(url.pathname.slice("/api/session/".length, -"/snapshot".length), [])
+  if (subagents.some((child) => url.pathname === `/api/session/${child.sessionID}/snapshot`))
+    return sessionSnapshot(url.pathname.slice("/api/session/".length, -"/snapshot".length), [])
   if (url.pathname === `/api/session/${sessionID}/file-change`) return json({ data: [] })
   if ([`/api/session/${sessionID}/pending`, `/api/session/${sessionID}/permission`].includes(url.pathname))
     return json({ data: [] })

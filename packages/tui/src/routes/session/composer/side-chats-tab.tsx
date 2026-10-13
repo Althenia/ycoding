@@ -112,7 +112,7 @@ function SideChatsTabContent(props: { sessionID: string }) {
 
   onMount(() =>
     client.event.on("server.connected", () => {
-      if (composer.active("side-chats")) void load({ reset: true })
+      if (composer.active("side-chats") && !loading()) void load({ reset: true })
     }),
   )
   onCleanup(() => {
@@ -124,23 +124,28 @@ function SideChatsTabContent(props: { sessionID: string }) {
     if (creating()) return
     const parent = parentID()
     setCreating(true)
-    void client.api.session.snapshot({ sessionID: parent, limit: 100 }).then((snapshot) => openBtwSession({
-      api: client.api.session,
-      parentID: parent,
-      messages: snapshot.messages,
-    })).then(
-      (created) => {
-        if (disposed) return
-        setSessions((current) => [...current, created])
-        setCreating(false)
-        navigation.navigate({ type: "session", sessionID: created.id })
-      },
-      (cause) => {
-        if (disposed) return
-        setCreating(false)
-        toast.show({ title: "Failed to open BTW", message: errorMessage(cause), variant: "error" })
-      },
-    )
+    void client.api.session
+      .snapshot({ sessionID: parent, limit: 100 })
+      .then((snapshot) =>
+        openBtwSession({
+          api: client.api.session,
+          parentID: parent,
+          messages: snapshot.messages,
+        }),
+      )
+      .then(
+        (created) => {
+          if (disposed) return
+          setSessions((current) => [...current, created])
+          setCreating(false)
+          navigation.navigate({ type: "session", sessionID: created.id })
+        },
+        (cause) => {
+          if (disposed) return
+          setCreating(false)
+          toast.show({ title: "Failed to open BTW", message: errorMessage(cause), variant: "error" })
+        },
+      )
   }
 
   Keymap.createLayer(() => ({
@@ -248,7 +253,8 @@ function SideChatsTabContent(props: { sessionID: string }) {
                   truncate
                   wrapMode="none"
                 >
-                  {active() ? "> " : "  "}{entry.title}
+                  {active() ? "> " : "  "}
+                  {entry.title}
                 </text>
               </box>
             )

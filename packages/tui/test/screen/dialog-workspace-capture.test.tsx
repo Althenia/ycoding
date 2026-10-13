@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { testRender } from "@opentui/solid"
-import type { YCodingClient } from "@ycoding-ai/client"
+import type { V5Client } from "@ycoding-ai/client/v5"
+import { createApi } from "../fixture/tui-client"
 import { expect, test } from "bun:test"
 import path from "path"
 import { onMount, type JSX } from "solid-js"
@@ -35,9 +36,24 @@ const sessionSkills = [
 
 const skillInfo = [
   { id: "go-developer", name: "go-developer", content: "", location: "/repo/.ycoding/skills/go-developer/SKILL.md" },
-  { id: "writing-test", name: "writing-test", content: "", location: "/tmp/ycoding/home/.agents/skills/writing-test/SKILL.md" },
-  { id: "rust-developer", name: "rust-developer", content: "", location: "/tmp/ycoding/home/.agents/skills/rust-developer/SKILL.md" },
-  { id: "python-developer", name: "python-developer", content: "", location: "/tmp/ycoding/home/.agents/skills/python-developer/SKILL.md" },
+  {
+    id: "writing-test",
+    name: "writing-test",
+    content: "",
+    location: "/tmp/ycoding/home/.agents/skills/writing-test/SKILL.md",
+  },
+  {
+    id: "rust-developer",
+    name: "rust-developer",
+    content: "",
+    location: "/tmp/ycoding/home/.agents/skills/rust-developer/SKILL.md",
+  },
+  {
+    id: "python-developer",
+    name: "python-developer",
+    content: "",
+    location: "/tmp/ycoding/home/.agents/skills/python-developer/SKILL.md",
+  },
 ]
 
 const artifacts = [
@@ -77,7 +93,7 @@ test("captures workspace dialogs at reference terminal dimensions", async () => 
 async function capture(
   name: string,
   view: () => JSX.Element,
-  api: YCodingClient,
+  api: V5Client,
   viewport: (typeof viewports)[number],
   settle: string,
   commands = false,
@@ -86,8 +102,24 @@ async function capture(
     Keymap.createLayer(() => ({
       mode: "global",
       commands: [
-        { id: "test.model", bind: "ctrl+x m", title: "Switch model", group: "Suggested", palette: true, suggested: true, run: () => {} },
-        { id: "test.session", bind: "ctrl+x l", title: "Switch session", group: "Suggested", palette: true, suggested: true, run: () => {} },
+        {
+          id: "test.model",
+          bind: "ctrl+x m",
+          title: "Switch model",
+          group: "Suggested",
+          palette: true,
+          suggested: true,
+          run: () => {},
+        },
+        {
+          id: "test.session",
+          bind: "ctrl+x l",
+          title: "Switch session",
+          group: "Suggested",
+          palette: true,
+          suggested: true,
+          run: () => {},
+        },
         { id: "test.settings", title: "Open settings", group: "Suggested", palette: true, run: () => {} },
         { id: "test.new", bind: "ctrl+x n", title: "New session", group: "Session", palette: true, run: () => {} },
         { id: "test.editor", bind: "ctrl+x e", title: "Open editor", group: "Session", palette: true, run: () => {} },
@@ -192,7 +224,10 @@ async function capture(
 
     // --- End focused assertions ---
 
-    await Bun.write(path.join(renders, `dialog-workspace-${name}-${viewport.width}x${viewport.height}.txt`), rows.join("\n"))
+    await Bun.write(
+      path.join(renders, `dialog-workspace-${name}-${viewport.width}x${viewport.height}.txt`),
+      rows.join("\n"),
+    )
   } finally {
     app.renderer.destroy()
   }
@@ -209,27 +244,35 @@ function expectAt(rows: string[], row: number, column: number, text: string) {
 }
 
 function commandPaletteClient() {
-  return { event: { subscribe: async function* () {} } } as unknown as YCodingClient
+  return { ...createApi(), event: { subscribe: async function* () {} } }
 }
 
 function sessionSkillsClient() {
+  const api = createApi()
   return {
-    session: { skills: async () => sessionSkills },
+    ...api,
+    session: { ...api.session, skills: async () => sessionSkills },
     skill: {
+      ...api.skill,
       list: async () => ({
         location: { directory: "/repo", project: { id: "proj_dialog_capture", directory: "/repo" } },
         data: skillInfo,
       }),
     },
     event: { subscribe: async function* () {} },
-  } as unknown as YCodingClient
+  } as unknown as V5Client
 }
 
 function artifactsClient() {
+  const api = createApi()
   return {
-    projectArtifact: { artifact: { list: async () => artifacts } },
+    ...api,
+    projectArtifact: {
+      ...api.projectArtifact,
+      artifact: { ...api.projectArtifact.artifact, list: async () => artifacts },
+    },
     event: { subscribe: async function* () {} },
-  } as unknown as YCodingClient
+  } as unknown as V5Client
 }
 
 function skill(input: {

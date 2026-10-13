@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { expect, mock, test } from "bun:test"
+import { expect, test } from "bun:test"
 import { MarkdownRenderable, TextBufferRenderable, type Renderable } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import type {
@@ -17,6 +17,7 @@ import type { useData } from "../src/context/data"
 import { SPINNER_FRAMES } from "../src/component/spinner-frames"
 import { toolLifecyclePresentation } from "../src/routes/session/activity-row"
 import { railPlacement, railWidth } from "../src/routes/session/rail"
+import { resetRailExpansion } from "../src/routes/session/rail-section"
 import { createEventStream, createFetch, json, type FetchHandler, sessionSnapshot } from "./fixture/tui-client"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE, NARROW_VIEWPORT } from "./viewport"
 import { renderScreen } from "./screen/harness"
@@ -66,7 +67,10 @@ const guardrailRequest = {
   standard: true,
 }
 
-const yoloGoal: SessionAutonomyState = { mode: "normal", yolo: true, goal: { text: "Keep todos in the sidebar", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 },
+const yoloGoal: SessionAutonomyState = {
+  mode: "normal",
+  yolo: true,
+  goal: { text: "Keep todos in the sidebar", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 },
 }
 const yoloTodos: SessionTodoInfo[] = [{ content: "Yolo sidebar todo", status: "in_progress", priority: "medium" }]
 
@@ -341,7 +345,13 @@ const skillResourceTranscript = [
 
 const largeTranscript: SessionMessageInfo[] = Array.from({ length: 600 }, (_, i) => {
   const idx = String(i).padStart(4, "0")
-  if (i % 2 === 0) return { id: `msg_large_user_${idx}`, type: "user", text: `Large prompt ${idx}`, time: { created: i } } as SessionMessageInfo
+  if (i % 2 === 0)
+    return {
+      id: `msg_large_user_${idx}`,
+      type: "user",
+      text: `Large prompt ${idx}`,
+      time: { created: i },
+    } as SessionMessageInfo
   return {
     id: `msg_large_assistant_${idx}`,
     type: "assistant",
@@ -355,146 +365,148 @@ const largeTranscript: SessionMessageInfo[] = Array.from({ length: 600 }, (_, i)
 
 const lifecycleStart = 1_000
 const lifecycleEnd = lifecycleStart + 134_000
-const lifecycleRunningStart = Date.now() - 2_000
-const lifecycleTranscript = [
-  { id: "msg_user_lifecycle", type: "user", text: "Exercise tool lifecycle rows", time: { created: 1 } },
-  {
-    id: "msg_assistant_lifecycle",
-    type: "assistant",
-    agent: "build",
-    model: { providerID: "anthropic", id: "claude-opus-5" },
-    content: [
-      {
-        type: "tool",
-        id: "call_execute_running",
-        name: "execute",
-        state: {
-          status: "running",
-          input: { code: "await tools.project_search({ scope: 'workspace' })" },
-          content: [],
-          structured: {
-            toolCalls: [{ tool: "project_search", status: "running", input: { scope: "workspace" } }],
+function lifecycleTranscript() {
+  const lifecycleRunningStart = Date.now() - 2_000
+  return [
+    { id: "msg_user_lifecycle", type: "user", text: "Exercise tool lifecycle rows", time: { created: 1 } },
+    {
+      id: "msg_assistant_lifecycle",
+      type: "assistant",
+      agent: "build",
+      model: { providerID: "anthropic", id: "claude-opus-5" },
+      content: [
+        {
+          type: "tool",
+          id: "call_execute_running",
+          name: "execute",
+          state: {
+            status: "running",
+            input: { code: "await tools.project_search({ scope: 'workspace' })" },
+            content: [],
+            structured: {
+              toolCalls: [{ tool: "project_search", status: "running", input: { scope: "workspace" } }],
+            },
           },
+          time: { created: lifecycleRunningStart - 1_000, ran: lifecycleRunningStart },
         },
-        time: { created: lifecycleRunningStart - 1_000, ran: lifecycleRunningStart },
-      },
-      {
-        type: "tool",
-        id: "call_shell_result_failure",
-        name: "shell",
-        state: {
-          status: "completed",
-          input: { command: "bun typecheck" },
-          content: [{ type: "text", text: "2 errors" }],
-          structured: {},
-        },
-        time: { created: lifecycleStart, ran: lifecycleStart, completed: lifecycleEnd },
-      },
-      {
-        type: "tool",
-        id: "call_grep_lifecycle",
-        name: "grep",
-        state: {
-          status: "completed",
-          input: { pattern: "lifecycle" },
-          content: [{ type: "text", text: "match" }],
-          structured: { matches: 1 },
-        },
-        time: { created: lifecycleStart, ran: lifecycleStart, completed: lifecycleEnd - 1_000 },
-      },
-      {
-        type: "tool",
-        id: "call_glob_lifecycle",
-        name: "glob",
-        state: {
-          status: "completed",
-          input: { pattern: "**/*.ts" },
-          content: [{ type: "text", text: "activity-row.tsx" }],
-          structured: { count: 1 },
-        },
-        time: { created: lifecycleStart + 1_000, ran: lifecycleStart + 1_000, completed: lifecycleEnd },
-      },
-      {
-        type: "tool",
-        id: "call_generic_completed",
-        name: "project_plan",
-        state: {
-          status: "completed",
-          input: { scope: "workspace" },
-          content: [{ type: "text", text: "Lifecycle detail response" }],
-          structured: { steps: 3 },
-        },
-        time: { created: lifecycleStart, ran: lifecycleStart, completed: lifecycleEnd },
-      },
-      {
-        type: "tool",
-        id: "call_generic_failed",
-        name: "project_publish",
-        state: {
-          status: "error",
-          input: { target: "preview" },
-          content: [],
-          structured: {},
-          error: { type: "tool.failed", message: "Publish failed" },
-        },
-        time: { created: lifecycleStart, ran: lifecycleStart, completed: lifecycleEnd },
-      },
-      {
-        type: "tool",
-        id: "call_generic_cancelled",
-        name: "project_cancel",
-        state: {
-          status: "error",
-          input: { target: "preview" },
-          content: [],
-          structured: {},
-          error: { type: "aborted", message: "Tool execution interrupted" },
-        },
-        time: { created: lifecycleStart, ran: lifecycleStart, completed: lifecycleEnd },
-      },
-      {
-        type: "tool",
-        id: "call_skill_failed",
-        name: "skill",
-        state: {
-          status: "error",
-          input: { name: "gpt-subgent-routing" },
-          content: [],
-          structured: {},
-          error: {
-            type: "tool.execution",
-            message: "Skill gpt-subgent-routing is not served over MCP; read /Users/x/.config/ycoding/skills/…",
+        {
+          type: "tool",
+          id: "call_shell_result_failure",
+          name: "shell",
+          state: {
+            status: "completed",
+            input: { command: "bun typecheck" },
+            content: [{ type: "text", text: "2 errors" }],
+            structured: {},
           },
+          time: { created: lifecycleStart, ran: lifecycleStart, completed: lifecycleEnd },
         },
-        time: { created: lifecycleStart, ran: lifecycleStart, completed: lifecycleEnd },
-      },
-      ...["cancelled", "killed", "interrupted", "aborted"].map((word) => ({
-        type: "tool" as const,
-        id: `call_message_${word}`,
-        name: `project_${word}`,
-        state: {
-          status: "error" as const,
-          input: {},
-          content: [],
-          structured: {},
-          error: { type: "tool.execution", message: `Operation ${word}` },
+        {
+          type: "tool",
+          id: "call_grep_lifecycle",
+          name: "grep",
+          state: {
+            status: "completed",
+            input: { pattern: "lifecycle" },
+            content: [{ type: "text", text: "match" }],
+            structured: { matches: 1 },
+          },
+          time: { created: lifecycleStart, ran: lifecycleStart, completed: lifecycleEnd - 1_000 },
         },
-        time: { created: lifecycleStart, ran: lifecycleStart, completed: lifecycleEnd },
-      })),
-    ],
-    finish: "tool-calls",
-    time: { created: lifecycleStart },
-  },
-  {
-    id: "msg_cli_cancelled",
-    type: "shell",
-    shellID: "sh_lifecycle_cancelled",
-    command: "sleep 300",
-    status: "killed",
-    output: { output: "Stopped by user", cursor: 15, size: 15, truncated: false },
-    time: { created: lifecycleStart, completed: lifecycleEnd },
-  },
-] as SessionMessageInfo[]
+        {
+          type: "tool",
+          id: "call_glob_lifecycle",
+          name: "glob",
+          state: {
+            status: "completed",
+            input: { pattern: "**/*.ts" },
+            content: [{ type: "text", text: "activity-row.tsx" }],
+            structured: { count: 1 },
+          },
+          time: { created: lifecycleStart + 1_000, ran: lifecycleStart + 1_000, completed: lifecycleEnd },
+        },
+        {
+          type: "tool",
+          id: "call_generic_completed",
+          name: "project_plan",
+          state: {
+            status: "completed",
+            input: { scope: "workspace" },
+            content: [{ type: "text", text: "Lifecycle detail response" }],
+            structured: { steps: 3 },
+          },
+          time: { created: lifecycleStart, ran: lifecycleStart, completed: lifecycleEnd },
+        },
+        {
+          type: "tool",
+          id: "call_generic_failed",
+          name: "project_publish",
+          state: {
+            status: "error",
+            input: { target: "preview" },
+            content: [],
+            structured: {},
+            error: { type: "tool.failed", message: "Publish failed" },
+          },
+          time: { created: lifecycleStart, ran: lifecycleStart, completed: lifecycleEnd },
+        },
+        {
+          type: "tool",
+          id: "call_generic_cancelled",
+          name: "project_cancel",
+          state: {
+            status: "error",
+            input: { target: "preview" },
+            content: [],
+            structured: {},
+            error: { type: "aborted", message: "Tool execution interrupted" },
+          },
+          time: { created: lifecycleStart, ran: lifecycleStart, completed: lifecycleEnd },
+        },
+        {
+          type: "tool",
+          id: "call_skill_failed",
+          name: "skill",
+          state: {
+            status: "error",
+            input: { name: "gpt-subgent-routing" },
+            content: [],
+            structured: {},
+            error: {
+              type: "tool.execution",
+              message: "Skill gpt-subgent-routing is not served over MCP; read /Users/x/.config/ycoding/skills/…",
+            },
+          },
+          time: { created: lifecycleStart, ran: lifecycleStart, completed: lifecycleEnd },
+        },
+        ...["cancelled", "killed", "interrupted", "aborted"].map((word) => ({
+          type: "tool" as const,
+          id: `call_message_${word}`,
+          name: `project_${word}`,
+          state: {
+            status: "error" as const,
+            input: {},
+            content: [],
+            structured: {},
+            error: { type: "tool.execution", message: `Operation ${word}` },
+          },
+          time: { created: lifecycleStart, ran: lifecycleStart, completed: lifecycleEnd },
+        })),
+      ],
+      finish: "tool-calls",
+      time: { created: lifecycleStart },
+    },
+    {
+      id: "msg_cli_cancelled",
+      type: "shell",
+      shellID: "sh_lifecycle_cancelled",
+      command: "sleep 300",
+      status: "killed",
+      output: { output: "Stopped by user", cursor: 15, size: 15, truncated: false },
+      time: { created: lifecycleStart, completed: lifecycleEnd },
+    },
+  ] as SessionMessageInfo[]
+}
 
 const shortBubbleTranscript = [
   { id: "msg_user_short", type: "user", text: "Short bubble", time: { created: 1 } },
@@ -504,8 +516,7 @@ const longBubbleTranscript = [
   {
     id: "msg_user_long",
     type: "user",
-    text:
-      "Long bubble content wraps within the existing maximum width without ever painting over either rounded border edge at any supported viewport width.",
+    text: "Long bubble content wraps within the existing maximum width without ever painting over either rounded border edge at any supported viewport width.",
     time: { created: 4 },
   },
 ] as SessionMessageInfo[]
@@ -581,7 +592,6 @@ const pendingReceipt = [
   },
 ] as SessionPendingInfo[]
 
-
 const streamingTranscript = [
   { id: "msg_user_stream", type: "user", text: "Stream the answer", time: { created: 1 } },
   {
@@ -592,7 +602,10 @@ const streamingTranscript = [
     content: [
       {
         type: "text",
-        text: Array.from({ length: 28 }, (_, index) => `Streaming transcript line ${String(index + 1).padStart(2, "0")}`).join("\n"),
+        text: Array.from(
+          { length: 28 },
+          (_, index) => `Streaming transcript line ${String(index + 1).padStart(2, "0")}`,
+        ).join("\n"),
       },
       {
         type: "tool",
@@ -690,7 +703,7 @@ function routeFor(
           model: session.model,
           context: { total: 0, percent: 0 },
           tokens: { uncachedInput: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
-          cache: { eligible: 0, mechanism: "unreported", readReported: false, writeReported: false },
+          cache: { eligible: 0, mechanism: "none", readReported: false, writeReported: false },
           requests: {
             logical: 0,
             physical: 0,
@@ -738,7 +751,14 @@ function routeFor(
       return json({
         location,
         data: [
-          { id: "build", name: "Build", request: { headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] },
+          {
+            id: "build",
+            name: "Build",
+            request: { headers: {}, body: {} },
+            mode: "primary",
+            hidden: false,
+            permissions: [],
+          },
         ],
       })
     return undefined
@@ -1028,7 +1048,9 @@ test("does not render an unavailable Decision advisory while keeping surrounding
     expect(screen.frame()).not.toContain("No sufficiently confident")
     expect(screen.frame()).not.toContain("Decision advisory")
     expect(screen.frame()).not.toContain("Notice")
-    expect(screen.frame().indexOf("Fix the config loader")).toBeLessThan(screen.frame().indexOf("Continue after the quiet advisory"))
+    expect(screen.frame().indexOf("Fix the config loader")).toBeLessThan(
+      screen.frame().indexOf("Continue after the quiet advisory"),
+    )
     expect(messages[1]).toMatchObject({ id: "msg_quiet_advisory" })
   } finally {
     await screen.dispose()
@@ -1062,7 +1084,10 @@ test("Decision advisories add no transcript lines between messages or at the tra
       ...DESIGN_VIEWPORT,
       args: { sessionID },
       route: routeFor(items),
-      settle: "Next message",
+      settle: (view) =>
+        ["help agent work better", "I can help improve the agent workflow.", "Next message"].every((text) =>
+          view.captureCharFrame().includes(text),
+        ),
     })
     try {
       return {
@@ -1078,18 +1103,30 @@ test("Decision advisories add no transcript lines between messages or at the tra
   const expected = await renderTranscript(messages)
   const withAdjacentAdvisories = await renderTranscript([
     messages[0]!,
-    advisory("msg_gap_nothing", 2, "Decision advisory: no recommendation.\nNo sufficiently confident actionable recommendation was produced."),
+    advisory(
+      "msg_gap_nothing",
+      2,
+      "Decision advisory: no recommendation.\nNo sufficiently confident actionable recommendation was produced.",
+    ),
     advisory("msg_gap_recommendations", 3, "Decision advisory: recommendation.\nRecommended direction: continue."),
     messages[1]!,
     messages[2]!,
   ])
   const withTrailingAdvisory = await renderTranscript([
     ...messages,
-    advisory("msg_gap_trailing", 7, "Decision advisory: no recommendation.\nNo sufficiently confident actionable recommendation was produced."),
+    advisory(
+      "msg_gap_trailing",
+      7,
+      "Decision advisory: no recommendation.\nNo sufficiently confident actionable recommendation was produced.",
+    ),
   ])
 
-  expect(withAdjacentAdvisories.anchors[1]! - withAdjacentAdvisories.anchors[0]!).toBe(expected.anchors[1]! - expected.anchors[0]!)
-  expect(withAdjacentAdvisories.anchors[2]! - withAdjacentAdvisories.anchors[1]!).toBe(expected.anchors[2]! - expected.anchors[1]!)
+  expect(withAdjacentAdvisories.anchors[1]! - withAdjacentAdvisories.anchors[0]!).toBe(
+    expected.anchors[1]! - expected.anchors[0]!,
+  )
+  expect(withAdjacentAdvisories.anchors[2]! - withAdjacentAdvisories.anchors[1]!).toBe(
+    expected.anchors[2]! - expected.anchors[1]!,
+  )
   expect(withAdjacentAdvisories.height).toBe(expected.height)
   expect(withTrailingAdvisory.height).toBe(expected.height)
 }, 60_000)
@@ -1097,14 +1134,27 @@ test("Decision advisories add no transcript lines between messages or at the tra
 test("does not render a Scoping advisory", async () => {
   const messages: SessionMessageInfo[] = [
     { id: "msg_scope_prompt", type: "user", text: "Partition the change", time: { created: 1 } },
-    { id: "msg_scope_notice", type: "synthetic", description: "Scoping advisory",
-      metadata: { decisionInputID: "msg_scope_prompt", scoping: true }, time: { created: 2 },
-      text: ["Decision advisory: task scoping judgments, not approval or completion evidence.",
-        "Recommended granularity: right-sized", "Recommended task implement: child; dispatchable true",
-        'Scoping plan: {"conflicts":[],"dispatched":[]}'].join("\n") },
+    {
+      id: "msg_scope_notice",
+      type: "synthetic",
+      description: "Scoping advisory",
+      metadata: { decisionInputID: "msg_scope_prompt", scoping: true },
+      time: { created: 2 },
+      text: [
+        "Decision advisory: task scoping judgments, not approval or completion evidence.",
+        "Recommended granularity: right-sized",
+        "Recommended task implement: child; dispatchable true",
+        'Scoping plan: {"conflicts":[],"dispatched":[]}',
+      ].join("\n"),
+    },
     { id: "msg_scope_followup", type: "user", text: "Continue scoped work", time: { created: 3 } },
   ]
-  const screen = await renderScreen({ ...DESIGN_VIEWPORT, args: { sessionID }, route: routeFor(messages), settle: "Continue scoped work" })
+  const screen = await renderScreen({
+    ...DESIGN_VIEWPORT,
+    args: { sessionID },
+    route: routeFor(messages),
+    settle: "Continue scoped work",
+  })
   try {
     expect(screen.frame()).not.toContain("Decision advisory")
     expect(screen.frame()).not.toContain("Notice")
@@ -1120,6 +1170,7 @@ test("does not render a Scoping advisory", async () => {
 }, 60_000)
 
 test("keeps yolo-goal todos in the sidebar instead of the transcript", async () => {
+  resetRailExpansion()
   const screen = await renderScreen({
     ...DESIGN_VIEWPORT,
     args: { sessionID },
@@ -1130,10 +1181,15 @@ test("keeps yolo-goal todos in the sidebar instead of the transcript", async () 
   try {
     const railStart = DESIGN_VIEWPORT.width - railWidth(DESIGN_VIEWPORT.width)
     const lines = screen.lines()
-    expect(lines.some((line) => line.includes("Yolo sidebar todo") && line.indexOf("Yolo sidebar todo") < railStart)).toBe(false)
-    expect(lines.some((line) => line.includes("Yolo sidebar todo") && line.indexOf("Yolo sidebar todo") >= railStart)).toBe(true)
+    expect(
+      lines.some((line) => line.includes("Yolo sidebar todo") && line.indexOf("Yolo sidebar todo") < railStart),
+    ).toBe(false)
+    expect(
+      lines.some((line) => line.includes("Yolo sidebar todo") && line.indexOf("Yolo sidebar todo") >= railStart),
+    ).toBe(true)
   } finally {
     await screen.dispose()
+    resetRailExpansion()
   }
 }, 60_000)
 
@@ -1295,7 +1351,9 @@ test("keeps non-subagent activity rows on one marker/label grid with symmetric c
     expect(tool.indexOf("project_search")).toBe(10)
     expect(guardrail.indexOf("guardrail")).toBe(10)
     expect(running.indexOf("project_index")).toBe(10)
-    expect(lines.some((line) => line.includes("subagent docs-sync") && line.indexOf("subagent docs-sync") < railStart)).toBe(false)
+    expect(
+      lines.some((line) => line.includes("subagent docs-sync") && line.indexOf("subagent docs-sync") < railStart),
+    ).toBe(false)
 
     // Running rows carry an animated spinner between the marker and the label column.
     expect(SPINNER_FRAMES.some((frame) => running.slice(0, 10).includes(frame))).toBe(true)
@@ -1326,7 +1384,7 @@ test("renders one durable lifecycle grammar for execute, exploration, shell, CLI
   const screen = await renderScreen({
     ...DESIGN_VIEWPORT,
     args: { sessionID },
-    route: routeFor(lifecycleTranscript),
+    route: routeFor(lifecycleTranscript()),
     settle: "sleep 300",
   })
 
@@ -1349,13 +1407,19 @@ test("renders one durable lifecycle grammar for execute, exploration, shell, CLI
     expect(row("sleep 300")).toContain("cancelled · killed · 2m14s")
     const markerColor = (text: string) => {
       const index = screen.lines().findIndex((line) => line.includes(text))
-      return screen.spans().lines[index]?.spans.find((span) => span.text.includes("!!"))?.fg.toInts()
+      return screen
+        .spans()
+        .lines[index]?.spans.find((span) => span.text.includes("!!"))
+        ?.fg.toInts()
     }
     expect(markerColor("project_cancel")).not.toEqual(markerColor("project_publish"))
 
     const collapsedStatus = row("project_plan")
     expect(screen.frame()).not.toContain("Lifecycle detail response")
-    await screen.mouse.click(12, screen.lines().findIndex((line) => line.includes("project_plan")))
+    await screen.mouse.click(
+      12,
+      screen.lines().findIndex((line) => line.includes("project_plan")),
+    )
     await waitForFrame(screen.frame, "Lifecycle detail response")
     expect(row("project_plan")).toBe(collapsedStatus)
   } finally {
@@ -1367,7 +1431,7 @@ test("advances running tool elapsed time without changing terminal durations", a
   const screen = await renderScreen({
     ...DESIGN_VIEWPORT,
     args: { sessionID },
-    route: routeFor(lifecycleTranscript),
+    route: routeFor(lifecycleTranscript()),
     settle: "sleep 300",
   })
 
@@ -1375,7 +1439,10 @@ test("advances running tool elapsed time without changing terminal durations", a
     const execute = () =>
       transcriptSlice(screen.lines().find((line) => line.includes("execute")) ?? "", DESIGN_VIEWPORT.width).trimEnd()
     const terminal = () =>
-      transcriptSlice(screen.lines().find((line) => line.includes("project_plan")) ?? "", DESIGN_VIEWPORT.width).trimEnd()
+      transcriptSlice(
+        screen.lines().find((line) => line.includes("project_plan")) ?? "",
+        DESIGN_VIEWPORT.width,
+      ).trimEnd()
     const firstElapsed = /running · (\d+)s$/.exec(execute())?.[1]
     const firstTerminal = terminal()
 
@@ -1399,7 +1466,10 @@ test("renders subagent notifications as compact safe activity rows", async () =>
   try {
     const lines = screen.lines()
     const railStart = DESIGN_VIEWPORT.width - railWidth(DESIGN_VIEWPORT.width)
-    const row = lines.find((line) => line.includes("subagent") && line.includes("completed") && line.indexOf("subagent") < railStart) ?? ""
+    const row =
+      lines.find(
+        (line) => line.includes("subagent") && line.includes("completed") && line.indexOf("subagent") < railStart,
+      ) ?? ""
     const rowIndex = lines.indexOf(row)
 
     expect(row.indexOf("◦")).toBe(3)
@@ -1418,31 +1488,53 @@ test("hidden parallel subagent launches add no lines between assistant text and 
   const messages: SessionMessageInfo[] = [
     { id: "msg_delegation_user", type: "user", text: "Delegate both items", time: { created: 1 } },
     {
-      id: "msg_delegation", type: "assistant", agent: "build", model: session.model,
+      id: "msg_delegation",
+      type: "assistant",
+      agent: "build",
+      model: session.model,
       content: [
         { type: "text", text: "Delegating both new items in parallel." },
         ...["first", "second"].map((item) => ({
-          type: "tool" as const, id: `call_delegate_${item}`, name: "subagent",
+          type: "tool" as const,
+          id: `call_delegate_${item}`,
+          name: "subagent",
           state: {
             status: "completed" as const,
             input: { agent: "build", description: `Hidden ${item} task` },
-            content: [], structured: { status: "running" },
+            content: [],
+            structured: { status: "running" },
           },
           time: { created: 2, ran: 2, completed: 3 },
         })),
       ],
-      finish: "tool-calls", time: { created: 2, completed: 3 },
+      finish: "tool-calls",
+      time: { created: 2, completed: 3 },
     },
     {
-      id: "msg_after_delegation", type: "assistant", agent: "build", model: session.model,
+      id: "msg_after_delegation",
+      type: "assistant",
+      agent: "build",
+      model: session.model,
       content: [
         { type: "reasoning", text: "Checking the delegated work.", time: { created: 4, completed: 5 } },
-        { type: "tool", id: "call_visible_shell", name: "shell", state: { status: "completed", input: { command: "bun test visible-check" }, content: [], structured: {} }, time: { created: 5, ran: 5, completed: 6 } },
+        {
+          type: "tool",
+          id: "call_visible_shell",
+          name: "shell",
+          state: { status: "completed", input: { command: "bun test visible-check" }, content: [], structured: {} },
+          time: { created: 5, ran: 5, completed: 6 },
+        },
       ],
-      finish: "stop", time: { created: 4, completed: 6 },
+      finish: "stop",
+      time: { created: 4, completed: 6 },
     },
   ]
-  const screen = await renderScreen({ ...DESIGN_VIEWPORT, args: { sessionID }, route: routeFor(messages), settle: "visible-check" })
+  const screen = await renderScreen({
+    ...DESIGN_VIEWPORT,
+    args: { sessionID },
+    route: routeFor(messages),
+    settle: "visible-check",
+  })
   try {
     await waitForFrame(screen.frame, "Delegating both new items")
     const lines = screen.lines().map((line) => transcriptSlice(line, DESIGN_VIEWPORT.width))
@@ -1468,15 +1560,30 @@ test("keeps subagent tool rows visible inside a child Session", async () => {
   const child = { ...session, parentID: parent.id }
   const listed = Promise.withResolvers<void>()
   let data: ReturnType<typeof useData> | undefined
-  const messages: SessionMessageInfo[] = [{
-    id: "msg_child_delegation", type: "assistant", agent: "build", model: session.model,
-    content: [{
-      type: "tool", id: "call_child_delegation", name: "subagent",
-      state: { status: "completed", input: { agent: "build", description: "Visible child delegation" }, content: [], structured: { status: "completed" } },
-      time: { created: 1, ran: 1, completed: 2 },
-    }],
-    finish: "tool-calls", time: { created: 1, completed: 2 },
-  }]
+  const messages: SessionMessageInfo[] = [
+    {
+      id: "msg_child_delegation",
+      type: "assistant",
+      agent: "build",
+      model: session.model,
+      content: [
+        {
+          type: "tool",
+          id: "call_child_delegation",
+          name: "subagent",
+          state: {
+            status: "completed",
+            input: { agent: "build", description: "Visible child delegation" },
+            content: [],
+            structured: { status: "completed" },
+          },
+          time: { created: 1, ran: 1, completed: 2 },
+        },
+      ],
+      finish: "tool-calls",
+      time: { created: 1, completed: 2 },
+    },
+  ]
   const screen = await renderScreen({
     ...DESIGN_VIEWPORT,
     args: { sessionID },
@@ -1519,16 +1626,36 @@ test("renders a running Edit beside Shell on the compact activity grid", async (
   const messages: SessionMessageInfo[] = [
     { id: "msg_parallel_user", type: "user", text: "Edit while checking", time: { created: 1 } },
     {
-      id: "msg_parallel_assistant", type: "assistant", agent: "build", model: session.model,
+      id: "msg_parallel_assistant",
+      type: "assistant",
+      agent: "build",
+      model: session.model,
       content: [
-        { type: "tool", id: "call_parallel_edit", name: "edit", state: { status: "running", input: { path: "src/agent.ts" }, content: [], structured: {} }, time: { created: started, ran: started } },
-        { type: "tool", id: "call_parallel_shell", name: "shell", state: { status: "running", input: { command: "bun test parallel-check" }, content: [], structured: {} }, time: { created: started, ran: started } },
+        {
+          type: "tool",
+          id: "call_parallel_edit",
+          name: "edit",
+          state: { status: "running", input: { path: "src/agent.ts" }, content: [], structured: {} },
+          time: { created: started, ran: started },
+        },
+        {
+          type: "tool",
+          id: "call_parallel_shell",
+          name: "shell",
+          state: { status: "running", input: { command: "bun test parallel-check" }, content: [], structured: {} },
+          time: { created: started, ran: started },
+        },
       ],
       time: { created: 2 },
     },
   ]
   for (const viewport of [NARROW_VIEWPORT, DESIGN_VIEWPORT]) {
-    const screen = await renderScreen({ ...viewport, args: { sessionID }, route: routeFor(messages), settle: "parallel-check" })
+    const screen = await renderScreen({
+      ...viewport,
+      args: { sessionID },
+      route: routeFor(messages),
+      settle: "parallel-check",
+    })
     try {
       const lines = screen.lines()
       const editIndex = lines.findIndex((line) => line.includes("src/agent.ts"))
@@ -1541,7 +1668,11 @@ test("renders a running Edit beside Shell on the compact activity grid", async (
       expect(edit.trimEnd()).toMatch(/running · \d+[smhdw]$/)
       expect(edit.indexOf("running")).toBe(shell.indexOf("running"))
       expect(transcriptSlice(lines[editIndex - 1] ?? "", viewport.width).trim()).toMatch(/^─+$/)
-      const background = (index: number) => screen.spans().lines[index]?.spans.find((span) => span.text.includes("running"))?.bg.toInts()
+      const background = (index: number) =>
+        screen
+          .spans()
+          .lines[index]?.spans.find((span) => span.text.includes("running"))
+          ?.bg.toInts()
       expect(background(editIndex)).toEqual(background(shellIndex))
     } finally {
       await screen.dispose()
@@ -1557,10 +1688,25 @@ test("replaces a live completed Edit with Captured changes while its Shell sibli
     route: routeFor([
       { id: "msg_parallel_user", type: "user", text: "Edit while checking", time: { created: 1 } },
       {
-        id: "msg_parallel_assistant", type: "assistant", agent: "build", model: session.model,
+        id: "msg_parallel_assistant",
+        type: "assistant",
+        agent: "build",
+        model: session.model,
         content: [
-          { type: "tool", id: "call_parallel_edit", name: "edit", state: { status: "running", input: { path: "src/agent.ts" }, content: [], structured: {} }, time: { created: started, ran: started } },
-          { type: "tool", id: "call_parallel_shell", name: "shell", state: { status: "running", input: { command: "bun test parallel-check" }, content: [], structured: {} }, time: { created: started, ran: started } },
+          {
+            type: "tool",
+            id: "call_parallel_edit",
+            name: "edit",
+            state: { status: "running", input: { path: "src/agent.ts" }, content: [], structured: {} },
+            time: { created: started, ran: started },
+          },
+          {
+            type: "tool",
+            id: "call_parallel_shell",
+            name: "shell",
+            state: { status: "running", input: { command: "bun test parallel-check" }, content: [], structured: {} },
+            time: { created: started, ran: started },
+          },
         ],
         time: { created: 2 },
       },
@@ -1571,18 +1717,35 @@ test("replaces a live completed Edit with Captured changes while its Shell sibli
     expect(screen.frame()).toContain("src/agent.ts")
     await screen.waitForEventStream()
     screen.events.emit({
-      id: "evt_parallel_edit_success", created: started + 1, type: "session.tool.success",
+      id: "evt_parallel_edit_success",
+      created: started + 1,
+      type: "session.tool.success",
       durable: { aggregateID: sessionID, seq: 1, version: 1 },
       data: {
-        sessionID, assistantMessageID: "msg_parallel_assistant", callID: "call_parallel_edit",
+        sessionID,
+        assistantMessageID: "msg_parallel_assistant",
+        callID: "call_parallel_edit",
         executed: false,
         content: [{ type: "text", text: "Edited file successfully" }],
-        structured: { files: [{ file: "src/agent.ts", patch: "--- a/src/agent.ts\n+++ b/src/agent.ts\n@@ -1 +1 @@\n-old\n+new", status: "modified", additions: 1, deletions: 1 }] },
+        structured: {
+          files: [
+            {
+              file: "src/agent.ts",
+              patch: "--- a/src/agent.ts\n+++ b/src/agent.ts\n@@ -1 +1 @@\n-old\n+new",
+              status: "modified",
+              additions: 1,
+              deletions: 1,
+            },
+          ],
+        },
       },
     })
     await waitForFrame(screen.frame, "Captured changes 1 file")
     expect(screen.frame()).not.toContain("src/agent.ts")
-    const shell = transcriptSlice(screen.lines().find((line) => line.includes("parallel-check")) ?? "", DESIGN_VIEWPORT.width)
+    const shell = transcriptSlice(
+      screen.lines().find((line) => line.includes("parallel-check")) ?? "",
+      DESIGN_VIEWPORT.width,
+    )
     expect(shell.trimEnd()).toMatch(/running · \d+[smhdw]$/)
     expect(shell.indexOf("..")).toBe(3)
   } finally {
@@ -1623,7 +1786,8 @@ test("collapses the segment's edit summary before expanding the board diff grid"
 
   try {
     const railStart = DESIGN_VIEWPORT.width - railWidth(DESIGN_VIEWPORT.width)
-    const rowIn = (lines: string[], text: string) => lines.findIndex((line) => line.includes(text) && line.indexOf(text) < railStart)
+    const rowIn = (lines: string[], text: string) =>
+      lines.findIndex((line) => line.includes(text) && line.indexOf(text) < railStart)
     const header = screen.lines()[rowIn(screen.lines(), "Captured changes 2 files")] ?? ""
     expect(header.indexOf("Captured changes 2 files")).toBe(10)
     expect(screen.frame()).not.toContain("docs/runtime.md")
@@ -1672,8 +1836,11 @@ test("keeps the board diff grid in unified transcript view", async () => {
   })
   try {
     const railStart = DESIGN_VIEWPORT.width - railWidth(DESIGN_VIEWPORT.width)
-    const rowIn = (lines: string[], text: string) => lines.findIndex((line) => line.includes(text) && line.indexOf(text) < railStart)
-    expect((screen.lines()[rowIn(screen.lines(), "Captured changes 2 files")] ?? "").indexOf("Captured changes 2 files")).toBe(10)
+    const rowIn = (lines: string[], text: string) =>
+      lines.findIndex((line) => line.includes(text) && line.indexOf(text) < railStart)
+    expect(
+      (screen.lines()[rowIn(screen.lines(), "Captured changes 2 files")] ?? "").indexOf("Captured changes 2 files"),
+    ).toBe(10)
     await screen.mouse.click(12, rowIn(screen.lines(), "Captured changes 2 files"))
     await waitForFrame(screen.frame, "docs/runtime.md")
     expect((screen.lines()[rowIn(screen.lines(), "docs/runtime.md")] ?? "").indexOf("docs/runtime.md")).toBe(12)
@@ -1683,8 +1850,14 @@ test("keeps the board diff grid in unified transcript view", async () => {
       return screen.frame()
     }, "+ Current cache note")
     const expanded = screen.lines()
-    const removed = transcriptSlice(expanded.find((line) => line.includes("- Old cache note")) ?? "", DESIGN_VIEWPORT.width)
-    const added = transcriptSlice(expanded.find((line) => line.includes("+ Current cache note")) ?? "", DESIGN_VIEWPORT.width)
+    const removed = transcriptSlice(
+      expanded.find((line) => line.includes("- Old cache note")) ?? "",
+      DESIGN_VIEWPORT.width,
+    )
+    const added = transcriptSlice(
+      expanded.find((line) => line.includes("+ Current cache note")) ?? "",
+      DESIGN_VIEWPORT.width,
+    )
     expect(removed.search(/\d/)).toBe(5)
     expect(removed.indexOf("- Old cache note")).toBe(12)
     expect(added.indexOf("+ Current cache note")).toBe(12)
@@ -1835,8 +2008,7 @@ test("renders a pasted multi-section Markdown user prompt at full height", async
       return false
     }
     if (!(await reachableWidened("## Section 01"))) throw new Error("unreachable-widened: ## Section 01")
-    if (!(await reachableWidened("Follow-up prompt remains visible")))
-      throw new Error("unreachable-widened: follow-up")
+    if (!(await reachableWidened("Follow-up prompt remains visible"))) throw new Error("unreachable-widened: follow-up")
   } finally {
     await screen.dispose()
   }
@@ -1869,7 +2041,10 @@ test("renders only truthful icon receipts at the lower-right of outbound user bu
     const sentRow = receipt(sent, "✓")
     const readRow = receipt(read, "✓✓")
     const color = (row: number, glyph: string) =>
-      screen.spans().lines[row]?.spans.find((span) => span.text.includes(glyph))?.fg.toInts()
+      screen
+        .spans()
+        .lines[row]?.spans.find((span) => span.text.includes(glyph))
+        ?.fg.toInts()
     expect(pending.body.some((line) => line.includes("file") && line.includes("receipt.txt"))).toBe(true)
     expect(lines[pendingRow]).toContain("Queued")
     expect(lines[pendingRow]).not.toContain("◷")
@@ -2078,7 +2253,10 @@ async function renderBubble(
     settle,
   })
   try {
-    return bubbleBounds(screen.lines().map((line) => transcriptSlice(line, viewport.width)), settle)
+    return bubbleBounds(
+      screen.lines().map((line) => transcriptSlice(line, viewport.width)),
+      settle,
+    )
   } finally {
     await screen.dispose()
   }
@@ -2154,15 +2332,10 @@ async function renderMeasuredScreen(input: {
   config: { animations: boolean }
 }) {
   const setup = await createTestRenderer({ width: input.width, height: input.height, useThread: false })
-  const core = await import("@opentui/core")
-  mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
-  const runtime = await import("../src/plugin/runtime")
-  const pluginRuntime = runtime.createPluginRuntime()
-  mock.module("../src/plugin/runtime", () => ({ ...runtime, createPluginRuntime: () => pluginRuntime }))
 
   const events = createEventStream()
   const calls = createFetch(input.route, events)
-  const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request), idleTimeout: 30 })
+  const server = calls.listen()
   const { run } = await import("../src/app")
   const task = Effect.runPromise(
     run({
@@ -2170,6 +2343,7 @@ async function renderMeasuredScreen(input: {
       config: { get: async () => input.config, update: async () => input.config },
       packages: { resolve: async () => undefined },
       args: { sessionID },
+      terminalHandoff: async () => ({ renderer: setup.renderer, mode: null, complete: () => {} }),
       log: () => {},
     }).pipe(Effect.provide(AppNodeBuilder.build(Global.node)), Effect.provide(FileSystem.layerNoop({}))),
   )
@@ -2187,7 +2361,6 @@ async function renderMeasuredScreen(input: {
       if (!setup.renderer.isDestroyed) setup.renderer.destroy()
       await task.catch(() => {})
       await server.stop()
-      mock.restore()
     },
   }
 }

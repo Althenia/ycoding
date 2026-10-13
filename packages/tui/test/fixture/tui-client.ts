@@ -1,7 +1,22 @@
-import { YCoding, type YCodingEvent, type SessionInfo, type SessionProjection } from "@ycoding-ai/client"
+import { afterEach } from "bun:test"
+import {
+  YCoding,
+  encodeDomain,
+  type V5Client,
+  type EventSubscribeOutput,
+  type SessionInfo,
+  type SessionProjection,
+  type SessionLogItem,
+} from "@ycoding-ai/client/v5"
+import { eventSources, fixtureBudgets, scriptedTransport, type EventSource } from "./v5-peer"
 
 export const worktree = "/tmp/ycoding"
 export const directory = `${worktree}/packages/tui`
+const clients = new Set<V5Client>()
+afterEach(() => {
+  for (const client of clients) client.transport.close()
+  clients.clear()
+})
 
 export function json(data: unknown, init?: ResponseInit) {
   const headers = new Headers(init?.headers)
@@ -15,10 +30,12 @@ export function json(data: unknown, init?: ResponseInit) {
 export function sessionSnapshot(
   sessionID: string,
   messages: readonly unknown[],
-  options: Partial<Pick<SessionProjection, "before" | "sourceEpoch" | "watermark">> & { session?: Partial<SessionInfo> } = {},
+  options: Partial<Pick<SessionProjection, "before" | "sourceEpoch" | "watermark">> & {
+    session?: Partial<SessionInfo>
+  } = {},
 ) {
   return json({
-    sourceEpoch: "test_epoch",
+    sourceEpoch: "source-1",
     watermark: { type: "log.synced", aggregateID: sessionID },
     ...options,
     session: {
@@ -36,56 +53,63 @@ export function sessionSnapshot(
   })
 }
 
-export function createEventStream() {
-  const encoder = new TextEncoder()
-  const streams = new Set<ReadableStreamDefaultController<Uint8Array>>()
-  const pending: Uint8Array[] = []
-  const response = (
-    controllers: Set<ReadableStreamDefaultController<Uint8Array>>,
-    queued: Uint8Array[],
-    initial?: unknown,
-  ) => {
-    let current: ReadableStreamDefaultController<Uint8Array> | undefined
-    return new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          current = controller
-          controllers.add(controller)
-          if (initial) controller.enqueue(encoder.encode(`data: ${JSON.stringify(initial)}\n\n`))
-          for (const chunk of queued.splice(0)) controller.enqueue(chunk)
-        },
-        cancel() {
-          if (current) controllers.delete(current)
-        },
-      }),
-      { headers: { "content-type": "text/event-stream" } },
+export function createEventStream(options: { ready?: boolean; end?: boolean } = {}) {
+  const streams = new Map<Parameters<EventSource["attach"]>[0], string>()
+  const pending: EventSubscribeOutput[] = []
+  const openings = new Set<() => void>()
+  let ready = options.ready !== false
+  const send = (peer: Parameters<EventSource["attach"]>[0], id: string, events: EventSubscribeOutput[]) => {
+    peer.events(
+      id,
+      events.map((event) => ({
+        typeName: "ycoding.v5.PublicEvent",
+        payload: encodeDomain("ycoding.v5.PublicEvent", { created: 0, sourceEpoch: "source-1", ...event }),
+      })),
     )
   }
-  const send = (
-    controllers: Set<ReadableStreamDefaultController<Uint8Array>>,
-    queued: Uint8Array[],
-    event: unknown,
-  ) => {
-    const chunk = encoder.encode(`data: ${JSON.stringify(event)}\n\n`)
-    if (controllers.size === 0) {
-      queued.push(chunk)
-      return
-    }
-    for (const controller of controllers) controller.enqueue(chunk)
+  const source: EventSource = {
+    opening(open) {
+      if (ready) open()
+      else openings.add(open)
+    },
+    attach(peer, dispatch) {
+      const id = `tui_subscription_${streams.size}`
+      streams.set(peer, id)
+      peer.subscribe(dispatch, id)
+      const close = peer.socket.close.bind(peer.socket)
+      peer.socket.close = () => {
+        streams.delete(peer)
+        close()
+      }
+      if (pending.length) queueMicrotask(() => send(peer, id, pending.splice(0)))
+      if (options.end) queueMicrotask(() => peer.end(id))
+    },
   }
-
   return {
-    emit(event: YCodingEvent) {
-      send(streams, pending, event)
+    ...source,
+    emit(event: EventSubscribeOutput) {
+      if (event.type === "server.connected") throw new Error("Ready owns server.connected")
+      if (!streams.size) {
+        pending.push(event)
+        return
+      }
+      for (const [peer, id] of streams) send(peer, id, [event])
     },
     subscriptions() {
       return streams.size
     },
+    ready() {
+      ready = true
+      for (const open of openings) open()
+      openings.clear()
+    },
     connect() {
-      return response(streams, pending, { id: "evt_connected", type: "server.connected", data: {} })
+      const response = new Response(null)
+      eventSources.set(response, source)
+      return response
     },
     disconnect() {
-      for (const controller of streams) controller.close()
+      for (const peer of streams.keys()) peer.socket.close()
       streams.clear()
     },
   }
@@ -93,7 +117,40 @@ export function createEventStream() {
 
 export type FetchHandler = (url: URL, request: Request) => Response | undefined | Promise<Response | undefined>
 
+export function createLogStream(items: SessionLogItem[], end = true) {
+  const response = new Response(null)
+  const peers = new Set<Parameters<EventSource["attach"]>[0]>()
+  eventSources.set(response, {
+    opening(open) {
+      open()
+    },
+    attach(peer, dispatch) {
+      const id = `log_${dispatch.requestID}`
+      peers.add(peer)
+      peer.subscribe(dispatch, id)
+      queueMicrotask(() => {
+        peer.events(
+          id,
+          items.map((item) => ({
+            typeName: "ycoding.v5.SessionLogItem",
+            payload: encodeDomain("ycoding.v5.SessionLogItem", item),
+          })),
+        )
+        if (end) peer.end(id)
+      })
+    },
+  })
+  return {
+    response,
+    disconnect() {
+      for (const peer of peers) peer.socket.close()
+      peers.clear()
+    },
+  }
+}
+
 export function createFetch(override?: FetchHandler, events?: ReturnType<typeof createEventStream>) {
+  const source = events ?? createEventStream()
   const session = [] as URL[]
   async function fetch(input: RequestInfo | URL, init?: RequestInit) {
     const request = input instanceof Request ? input : new Request(input, init)
@@ -101,7 +158,7 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
     if (url.pathname === "/session") session.push(url)
     const overridden = await override?.(url, request)
     if (overridden) return overridden
-    if (url.pathname === "/api/event" && events) return events.connect()
+    if (url.pathname === "/api/event") return source.connect()
 
     if (
       [
@@ -160,7 +217,17 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
     if (/^\/api\/session\/[^/]+\/compaction$/.test(url.pathname))
       return json({ data: [], truncated: false, completedBefore: 0, completedCount: 0, totalSavedTokens: 0 })
     if (/^\/api\/session\/[^/]+\/diagnostics$/.test(url.pathname)) return json({ data: null })
-    if (/^\/api\/session\/[^/]+\/usage$/.test(url.pathname)) return json({ data: null })
+    if (/^\/api\/session\/[^/]+\/usage$/.test(url.pathname))
+      return json({
+        data: {
+          logical: 0,
+          physical: 0,
+          helpers: 0,
+          continued: 0,
+          fallback: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        },
+      })
     // Provider-usage refresh is read-only and best effort. Absent usage renders as unreported, so the
     // fixture returns no payload rather than zeroed quota values.
     if (/^\/api\/provider\/[^/]+\/usage$/.test(url.pathname)) return json({ data: null })
@@ -183,9 +250,24 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
     throw new Error(`unexpected request: ${url.pathname}`)
   }
   fetch.preconnect = () => {}
-  return { fetch, session }
+  const transport = scriptedTransport((url, request) => fetch(request), source)
+  return {
+    fetch: Object.assign(fetch, { socket: transport.socket }),
+    session,
+    listen: transport.listen,
+    close: transport.close,
+    waitForSettlement: transport.waitForSettlement,
+  }
 }
 
-export function createApi(fetch: typeof globalThis.fetch) {
-  return YCoding.make({ baseUrl: "http://test", fetch })
+export function createApi(fetch?: ReturnType<typeof createFetch>["fetch"]) {
+  const fixture = fetch ?? createFetch().fetch
+  const client = YCoding.make({
+    endpoint: { url: "http://test" },
+    location: { directory },
+    socket: fixture.socket,
+    budgets: fixtureBudgets,
+  })
+  clients.add(client)
+  return client
 }

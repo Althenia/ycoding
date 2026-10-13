@@ -46,20 +46,38 @@ const usage: ProviderRequestSummary = {
 
 test("renders an unreported cache read as a word instead of a bare placeholder", async () => {
   const config = createTuiResolvedConfig()
-  const app = await testRender(() => <TestTuiContexts><ConfigProvider config={config}>
-    <Keymap.Provider config={config}><ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-      <ToastProvider><ProviderUsageScreenContent snapshots={() => []} backendUsage={() => ({
-        ...usage, cacheReadReported: false, models: usage.models?.map((entry) => ({ ...entry, cacheReadReported: false })),
-      })} /></ToastProvider>
-    </ThemeProvider></Keymap.Provider>
-  </ConfigProvider></TestTuiContexts>, { width: 189, height: 38 })
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={config}>
+          <Keymap.Provider config={config}>
+            <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+              <ToastProvider>
+                <ProviderUsageScreenContent
+                  snapshots={() => []}
+                  backendUsage={() => ({
+                    ...usage,
+                    cacheReadReported: false,
+                    models: usage.models?.map((entry) => ({ ...entry, cacheReadReported: false })),
+                  })}
+                />
+              </ToastProvider>
+            </ThemeProvider>
+          </Keymap.Provider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 189, height: 38 },
+  )
   app.renderer.start()
   try {
     await app.waitForFrame((frame) => frame.includes("LIFETIME MODEL BREAKDOWN"))
     const frame = app.captureCharFrame()
     expect(frame).toContain("Unknown/300")
     expect(frame).not.toMatch(/\s-\/300/)
-  } finally { app.renderer.destroy() }
+  } finally {
+    app.renderer.destroy()
+  }
 })
 
 test.each([
@@ -101,17 +119,40 @@ test.each([
     expect(lines.every((line) => line.length <= width)).toBe(true)
     expect(header).toHaveLength(3)
     expect(footer).toHaveLength(3)
-    expect(header.flatMap((line) => line.spans).some((span) => span.fg.toInts().every((value, index) => value === mint[index]))).toBe(true)
-    expect(header.flatMap((line) => line.spans).some((span) => span.text.includes("Usage") && span.bg.toInts().every((value, index) => value === chrome[index]))).toBe(true)
-    expect(footer.slice(1).flatMap((line) => line.spans).every((span) => span.bg.toInts().every((value, index) => value === chrome[index]))).toBe(true)
-    expect(app.captureSpans().lines.flatMap((line) => line.spans).find((span) => span.text.includes("Overview"))?.fg.toInts()).toEqual([...blue])
+    expect(
+      header
+        .flatMap((line) => line.spans)
+        .some((span) => span.fg.toInts().every((value, index) => value === mint[index])),
+    ).toBe(true)
+    expect(
+      header
+        .flatMap((line) => line.spans)
+        .some(
+          (span) => span.text.includes("Usage") && span.bg.toInts().every((value, index) => value === chrome[index]),
+        ),
+    ).toBe(true)
+    expect(
+      footer
+        .slice(1)
+        .flatMap((line) => line.spans)
+        .every((span) => span.bg.toInts().every((value, index) => value === chrome[index])),
+    ).toBe(true)
+    expect(
+      app
+        .captureSpans()
+        .lines.flatMap((line) => line.spans)
+        .find((span) => span.text.includes("Overview"))
+        ?.fg.toInts(),
+    ).toEqual([...blue])
     expect(row?.indexOf("LIFETIME MODEL BREAKDOWN")).toBe(3)
     const navigation = lines.slice(3, 6).find((line) => line.includes("Overview"))!
     expect(navigation).toMatch(/Overview {2,}│ {2,}Usage/)
     const separators = [...navigation.matchAll(/│/g)].map((match) => match.index)
     expect(separators.length).toBeGreaterThan(0)
     expect(separators.slice(1).every((column, index) => column - separators[index] === 13)).toBe(true)
-    expect(spans[height - 4].spans.every((span) => span.bg.toInts().every((value, index) => value === canvas[index]))).toBe(true)
+    expect(
+      spans[height - 4].spans.every((span) => span.bg.toInts().every((value, index) => value === canvas[index])),
+    ).toBe(true)
     if (width < 108) expect(frame).toContain("steps 3")
     if (width >= 108) expect(frame).toContain("STEPS")
     if (width >= 189) {
@@ -152,16 +193,25 @@ test("sorts complete overview model rows client-side and keeps Total pinned", as
   try {
     await app.waitForFrame((frame) => frame.includes("LIFETIME MODEL BREAKDOWN"))
     app.mockInput.pressKey("i")
-    let frame = await app.waitForFrame((value) => value.includes("INPUT▼") && value.indexOf("openrouter/") < value.indexOf("openai/"))
+    let frame = await app.waitForFrame(
+      (value) => value.includes("INPUT▼") && value.indexOf("openrouter/") < value.indexOf("openai/"),
+    )
     let lines = frame.split("\n")
-    expect(lines.findIndex((line) => line.trimStart().startsWith("Total"))).toBeLessThan(lines.findIndex((line) => line.includes("openrouter/")))
+    expect(lines.findIndex((line) => line.trimStart().startsWith("Total"))).toBeLessThan(
+      lines.findIndex((line) => line.includes("openrouter/")),
+    )
 
     app.mockInput.pressKey("i")
-    frame = await app.waitForFrame((value) => value.includes("INPUT▲") && value.indexOf("openai/") < value.indexOf("openrouter/"))
+    frame = await app.waitForFrame(
+      (value) => value.includes("INPUT▲") && value.indexOf("openai/") < value.indexOf("openrouter/"),
+    )
     lines = frame.split("\n")
-    expect(lines.findIndex((line) => line.trimStart().startsWith("Total"))).toBeLessThan(lines.findIndex((line) => line.includes("openai/")))
-    expect(lines.findIndex((line) => line.includes("openai/"))).toBeLessThan(lines.findIndex((line) => line.includes("openrouter/")))
-
+    expect(lines.findIndex((line) => line.trimStart().startsWith("Total"))).toBeLessThan(
+      lines.findIndex((line) => line.includes("openai/")),
+    )
+    expect(lines.findIndex((line) => line.includes("openai/"))).toBeLessThan(
+      lines.findIndex((line) => line.includes("openrouter/")),
+    )
   } finally {
     app.renderer.destroy()
   }
@@ -173,65 +223,105 @@ test.each([
   { width: 123, height: 32 },
   { width: 189, height: 69 },
   { width: 220, height: 69 },
-])("renders direct Models navigation and a full-width selected table row at $width×$height", async ({ width, height }) => {
-  const metrics = {
-    logical: 2, physical: 3, helpers: 0, continued: 1, fallback: 0,
-    tokens: { input: 1_000, output: 200, reasoning: 50, cache: { read: 300, write: 40 } },
-    cost: 0.02, costProvenance: "recorded" as const, cacheReadReported: true,
-  }
-  const report: ProviderRequestReport = {
-    group: "model", rowCount: 1,
-    rows: [{ key: "model-a", label: `openrouter/${longModelID}`, ...metrics }],
-    total: metrics,
-  }
-  const config = createTuiResolvedConfig()
-  const app = await testRender(() => (
-    <TestTuiContexts>
-      <ConfigProvider config={config}>
-        <Keymap.Provider config={config}>
-          <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-            <ToastProvider>
-              <DialogProvider>
-                <ProviderUsageScreenContent initialTab="models" snapshots={() => []} loadReport={async () => report} />
-              </DialogProvider>
-            </ToastProvider>
-          </ThemeProvider>
-        </Keymap.Provider>
-      </ConfigProvider>
-    </TestTuiContexts>
-  ), { width, height })
-  app.renderer.start()
-  try {
-    await app.waitForFrame((frame) => frame.includes("openrouter/"))
-    const frame = app.captureCharFrame()
-    const lines = frame.split("\n")
-    const spans = app.captureSpans().lines
-    const selectedRow = lines.findIndex((line) => line.includes("openrouter/"))
-    expect(lines).toHaveLength(height + 1)
-    expect(lines.every((line) => line.length <= width)).toBe(true)
-    expect(lines[selectedRow].indexOf("openrouter/")).toBeGreaterThanOrEqual(3)
-    expect(lines.slice(selectedRow, selectedRow + 3).join("\n")).toContain("$0.02")
-    expect(frame).not.toContain("Selected:")
-    expect(frame).not.toContain("Group:")
-    expect(frame).not.toContain("Reports")
-    expect(spans.flatMap((line) => line.spans).some((span) => span.text.includes("Models") && span.fg.toInts().every((value, index) => value === blue[index]))).toBe(true)
-    const selectedWidth = spans[selectedRow].spans
-      .filter((span) => span.bg.toInts().every((value, index) => value === [29, 33, 40, 255][index]))
-      .reduce((total, span) => total + span.text.length, 0)
-    expect(selectedWidth).toBeGreaterThanOrEqual(width - 6)
-    if (width >= 189) {
-      expect(frame).toContain(longModelID)
-      const metricColors = new Set(spans[selectedRow].spans.filter((span) => /\d/.test(span.text)).map((span) => span.fg.toInts().join(",")))
-      expect(metricColors.size).toBeGreaterThanOrEqual(3)
-      expect(Math.abs(lines[selectedRow].trimEnd().length - (width - 3))).toBeLessThanOrEqual(1)
-      for (const tab of ["Overview", "Usage", "Models", "Daily", "Hourly", "Monthly", "Sessions", "Projects", "Stats", "Agents"]) {
-        expect(lines.slice(3, 6).join("\n")).toContain(tab)
-      }
-      for (const column of ["INPUT", "OUTPUT", "CACHE", "COST"]) expect(frame.toUpperCase()).toContain(column)
+])(
+  "renders direct Models navigation and a full-width selected table row at $width×$height",
+  async ({ width, height }) => {
+    const metrics = {
+      logical: 2,
+      physical: 3,
+      helpers: 0,
+      continued: 1,
+      fallback: 0,
+      tokens: { input: 1_000, output: 200, reasoning: 50, cache: { read: 300, write: 40 } },
+      cost: 0.02,
+      costProvenance: "recorded" as const,
+      cacheReadReported: true,
     }
-    expect(lines.slice(-5).join("\n").toLowerCase()).toContain("tab")
-    expect(lines.slice(-5).join("\n").toLowerCase()).toContain("refresh")
-  } finally {
-    app.renderer.destroy()
-  }
-})
+    const report: ProviderRequestReport = {
+      group: "model",
+      rowCount: 1,
+      rows: [{ key: "model-a", label: `openrouter/${longModelID}`, ...metrics }],
+      total: metrics,
+    }
+    const config = createTuiResolvedConfig()
+    const app = await testRender(
+      () => (
+        <TestTuiContexts>
+          <ConfigProvider config={config}>
+            <Keymap.Provider config={config}>
+              <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+                <ToastProvider>
+                  <DialogProvider>
+                    <ProviderUsageScreenContent
+                      initialTab="models"
+                      snapshots={() => []}
+                      loadReport={async () => report}
+                    />
+                  </DialogProvider>
+                </ToastProvider>
+              </ThemeProvider>
+            </Keymap.Provider>
+          </ConfigProvider>
+        </TestTuiContexts>
+      ),
+      { width, height },
+    )
+    app.renderer.start()
+    try {
+      await app.waitForFrame((frame) => frame.includes("openrouter/"))
+      const frame = app.captureCharFrame()
+      const lines = frame.split("\n")
+      const spans = app.captureSpans().lines
+      const selectedRow = lines.findIndex((line) => line.includes("openrouter/"))
+      expect(lines).toHaveLength(height + 1)
+      expect(lines.every((line) => line.length <= width)).toBe(true)
+      expect(lines[selectedRow].indexOf("openrouter/")).toBeGreaterThanOrEqual(3)
+      expect(lines.slice(selectedRow, selectedRow + 3).join("\n")).toContain("$0.02")
+      expect(frame).not.toContain("Selected:")
+      expect(frame).not.toContain("Group:")
+      expect(frame).not.toContain("Reports")
+      expect(
+        spans
+          .flatMap((line) => line.spans)
+          .some(
+            (span) => span.text.includes("Models") && span.fg.toInts().every((value, index) => value === blue[index]),
+          ),
+      ).toBe(true)
+      const selectedWidth = spans[selectedRow].spans
+        .filter((span) => span.bg.toInts().every((value, index) => value === [29, 33, 40, 255][index]))
+        .reduce((total, span) => total + span.text.length, 0)
+      expect(selectedWidth).toBeGreaterThanOrEqual(width - 6)
+      if (width >= 189) {
+        if (width >= 220) expect(frame).toContain(longModelID)
+        if (width < 220) {
+          expect(lines[selectedRow]).toContain("openrouter/deepseek/deepseek-v4-pro")
+          expect(lines[selectedRow]).toContain("…")
+        }
+        const metricColors = new Set(
+          spans[selectedRow].spans.filter((span) => /\d/.test(span.text)).map((span) => span.fg.toInts().join(",")),
+        )
+        expect(metricColors.size).toBeGreaterThanOrEqual(3)
+        expect(Math.abs(lines[selectedRow].trimEnd().length - (width - 3))).toBeLessThanOrEqual(1)
+        for (const tab of [
+          "Overview",
+          "Usage",
+          "Models",
+          "Daily",
+          "Hourly",
+          "Monthly",
+          "Sessions",
+          "Projects",
+          "Stats",
+          "Agents",
+        ]) {
+          expect(lines.slice(3, 6).join("\n")).toContain(tab)
+        }
+        for (const column of ["INPUT", "OUTPUT", "CACHE", "COST"]) expect(frame.toUpperCase()).toContain(column)
+      }
+      expect(lines.slice(-5).join("\n").toLowerCase()).toContain("tab")
+      expect(lines.slice(-5).join("\n").toLowerCase()).toContain("refresh")
+    } finally {
+      app.renderer.destroy()
+    }
+  },
+)

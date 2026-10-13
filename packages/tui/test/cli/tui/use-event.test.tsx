@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test"
-import type { YCodingClient, YCodingEvent } from "@ycoding-ai/client"
+import type { YCodingEvent } from "@ycoding-ai/client"
+import type { V5Client } from "@ycoding-ai/client/v5"
 import { testRender } from "@opentui/solid"
 import { onMount } from "solid-js"
 import { ClientProvider, useClient } from "../../../src/context/client"
@@ -25,6 +26,7 @@ function event(
 ): YCodingEvent {
   return {
     ...payload,
+    sourceEpoch: "source-1",
     location: { directory: input.directory, workspaceID: input.workspace },
   }
 }
@@ -51,10 +53,7 @@ function update(version: string): YCodingEvent {
   }
 }
 
-async function mount(
-  reconnect?: (signal: AbortSignal) => Promise<{ api: YCodingClient }>,
-  log?: LogSink,
-) {
+async function mount(reconnect?: (signal: AbortSignal) => Promise<{ api: V5Client }>, log?: LogSink) {
   const events = createEventStream()
   const calls = createFetch(undefined, events)
   const seen: YCodingEvent[] = []
@@ -241,19 +240,7 @@ describe("useEvent", () => {
 
   test("backs off when a resolved event stream keeps failing", async () => {
     let calls = 0
-    const encoder = new TextEncoder()
-    const replacementCalls = createFetch((url) => {
-      if (url.pathname !== "/api/event") return undefined
-      return new Response(
-        new ReadableStream({
-          start(controller) {
-            controller.enqueue(encoder.encode('data: {"id":"evt_connected","type":"server.connected","data":{}}\n\n'))
-            controller.close()
-          },
-        }),
-        { headers: { "content-type": "text/event-stream" } },
-      )
-    })
+    const replacementCalls = createFetch(undefined, createEventStream({ end: true }))
     const replacement = {
       api: createApi(replacementCalls.fetch),
     }

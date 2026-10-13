@@ -26,7 +26,9 @@ function route(url: URL) {
   if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
   if (url.pathname === `/api/session/${sessionID}/snapshot`)
-    return sessionSnapshot(sessionID, [
+    return sessionSnapshot(
+      sessionID,
+      [
         {
           id: "msg_assistant",
           type: "assistant",
@@ -36,12 +38,13 @@ function route(url: URL) {
           time: { created: 2, completed: 3 },
         },
         { id: "msg_user", type: "user", text: "Where is provider cache telemetry recorded?", time: { created: 1 } },
-      ], { session })
+      ],
+      { session },
+    )
   if (
     [
       `/api/session/${sessionID}/pending`,
       `/api/session/${sessionID}/permission`,
-      `/api/session/${sessionID}/subagent`,
       `/api/session/${sessionID}/todo`,
       `/api/session/${sessionID}/skills`,
       `/api/session/${sessionID}/guardrail/request`,
@@ -51,6 +54,8 @@ function route(url: URL) {
   )
     return json({ location, data: [] })
   if (url.pathname === "/api/mcp/resource") return json({ location, data: { resources: [], templates: [] } })
+  if (url.pathname === `/api/session/${sessionID}/subagent`)
+    return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
   if (url.pathname === `/api/session/${sessionID}/guardrail`)
     return json({
       data: {
@@ -123,11 +128,21 @@ function route(url: URL) {
   if (url.pathname === "/api/agent")
     return json({
       location,
-      data: [{ id: "build", name: "Build", request: { headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] }],
+      data: [
+        {
+          id: "build",
+          name: "Build",
+          request: { headers: {}, body: {} },
+          mode: "primary",
+          hidden: false,
+          permissions: [],
+        },
+      ],
     })
   if (["/api/integration", "/api/command", "/api/skill", "/api/reference"].includes(url.pathname))
     return json({ location, data: [] })
-  if (url.pathname === "/api/permission/request" || url.pathname === "/api/form/request") return json({ location, data: [] })
+  if (url.pathname === "/api/permission/request" || url.pathname === "/api/form/request")
+    return json({ location, data: [] })
   return undefined
 }
 

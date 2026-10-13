@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
-import { YCoding } from "@ycoding-ai/client/promise"
+import { createApi } from "../fixture/tui-client"
 import { runInteractiveDeferredMode } from "../../src/mini/runtime"
 import type { LifecycleInput } from "../../src/mini/runtime.lifecycle"
 import type { FooterEvent, MiniHost } from "../../src/mini/types"
@@ -49,7 +49,7 @@ afterEach(() => {
 
 describe("run interactive runtime", () => {
   test("Mini pairing uses the active Session and only starts after an explicit request", async () => {
-    const sdk = YCoding.make({ baseUrl: "https://ycoding.test" })
+    const sdk = createApi()
     const api = footer()
     const streamStarted = defer<void>()
     let lifecycle!: LifecycleInput
@@ -120,7 +120,7 @@ describe("run interactive runtime", () => {
   })
 
   test("switching to a model with an unavailable saved variant retains it and starts no model prompt", async () => {
-    const sdk = YCoding.make({ baseUrl: "https://ycoding.test" })
+    const sdk = createApi()
     const footerFixture = createFooterApiFixture()
     const api = footerFixture.api
     const modelLoaded = defer<void>()
@@ -214,7 +214,7 @@ describe("run interactive runtime", () => {
   })
 
   test("routes form responses to their owners with global location and local settlement", async () => {
-    const sdk = YCoding.make({ baseUrl: "https://ycoding.test" })
+    const sdk = createApi()
     const api = footer()
     const streamStarted = defer<void>()
     let lifecycle!: LifecycleInput
@@ -303,7 +303,7 @@ describe("run interactive runtime", () => {
   })
 
   test("resolves the deferred session only after first paint", async () => {
-    const sdk = YCoding.make({ baseUrl: "https://ycoding.test" })
+    const sdk = createApi()
     const lifecycleStarted = defer<void>()
     const painted = defer<void>()
     const api = footer()
@@ -357,7 +357,7 @@ describe("run interactive runtime", () => {
   })
 
   test("loads the configured default profile and variant for a fresh Mini Session", async () => {
-    const sdk = YCoding.make({ baseUrl: "https://ycoding.test" })
+    const sdk = createApi()
     const events: FooterEvent[] = []
     const api = footer(events)
     const event = api.event
@@ -367,16 +367,18 @@ describe("run interactive runtime", () => {
     }
     stubCatalogLists(sdk, {
       providers: [catalogProvider("openai", "OpenAI")],
-      models: [catalogModel({
-        id: "gpt-5",
-        providerID: "openai",
-        variants: ["default-only"],
-        profiles: [
-          { name: "Work", active: true, variants: ["high"] },
-          { name: "Personal", active: false, variants: ["low"] },
-        ],
-        enabled: false,
-      })],
+      models: [
+        catalogModel({
+          id: "gpt-5",
+          providerID: "openai",
+          variants: ["default-only"],
+          profiles: [
+            { name: "Work", active: true, variants: ["high"] },
+            { name: "Personal", active: false, variants: ["low"] },
+          ],
+          enabled: false,
+        }),
+      ],
     })
     spyOn(sdk.model, "default").mockImplementation(
       () =>
@@ -444,7 +446,7 @@ describe("run interactive runtime", () => {
   })
 
   test("blocks an unavailable unprofiled Mini default before provider prompt work", async () => {
-    const sdk = YCoding.make({ baseUrl: "https://ycoding.test" })
+    const sdk = createApi()
     const fixture = createFooterApiFixture()
     const blocked = defer<void>()
     const append = fixture.api.append
@@ -521,7 +523,9 @@ describe("run interactive runtime", () => {
 
     try {
       await blocked.promise
-      expect(fixture.commits.at(-1)).toMatchObject({ text: expect.stringContaining("unavailable for the provider default") })
+      expect(fixture.commits.at(-1)).toMatchObject({
+        text: expect.stringContaining("unavailable for the provider default"),
+      })
       expect(prompt).not.toHaveBeenCalled()
     } finally {
       fixture.api.close()
@@ -530,7 +534,7 @@ describe("run interactive runtime", () => {
   })
 
   test("restores deferred session history and model after first paint", async () => {
-    const sdk = YCoding.make({ baseUrl: "https://ycoding.test" })
+    const sdk = createApi()
     const lifecycleStarted = defer<void>()
     const painted = defer<void>()
     const events: FooterEvent[] = []
@@ -621,7 +625,7 @@ describe("run interactive runtime", () => {
   })
 
   test("aborts deferred resume history on close and uses the cached exit title", async () => {
-    const sdk = YCoding.make({ baseUrl: "https://ycoding.test" })
+    const sdk = createApi()
     const painted = defer<void>()
     const readsStarted = defer<void>()
     const api = footer()
@@ -696,7 +700,7 @@ describe("run interactive runtime", () => {
   })
 
   test("adopts the deferred target location for catalogs, files, and runtime placement", async () => {
-    const sdk = YCoding.make({ baseUrl: "https://ycoding.test" })
+    const sdk = createApi()
     const lifecycleStarted = defer<void>()
     const painted = defer<void>()
     const api = footer()

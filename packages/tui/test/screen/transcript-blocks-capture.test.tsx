@@ -67,7 +67,9 @@ const route: FetchHandler = (url) => {
   if (url.pathname === "/api/session") return json({ data: [session, ...children], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
   if (url.pathname === `/api/session/${sessionID}/snapshot`)
-    return sessionSnapshot(sessionID, [
+    return sessionSnapshot(
+      sessionID,
+      [
         {
           id: "msg_assistant",
           type: "assistant",
@@ -132,7 +134,9 @@ const route: FetchHandler = (url) => {
           ],
           time: { created: now - 8_400 },
         },
-      ], { session })
+      ],
+      { session },
+    )
   if (
     [
       `/api/session/${sessionID}/pending`,
@@ -164,6 +168,8 @@ const route: FetchHandler = (url) => {
         revision: 1,
         time: { created: now - (index + 1) * 60_000, updated: now },
       })),
+      summary: { total: 2, active: 2, running: 2, waiting: 0 },
+      cursor: {},
     })
   if (url.pathname === `/api/session/${sessionID}/skills`)
     return json({
@@ -174,7 +180,7 @@ const route: FetchHandler = (url) => {
         activationMessageID: "msg_assistant",
         content: "",
         conflicts: [],
-        declarations: {},
+        declarations: { skills: [], instructions: [] },
         state: "active",
       })),
     })
@@ -259,7 +265,14 @@ const route: FetchHandler = (url) => {
     return json({
       location,
       data: [
-        { id: "build", name: "Build", mode: "primary", hidden: false, permissions: [], request: { headers: {}, body: {} } },
+        {
+          id: "build",
+          name: "Build",
+          mode: "primary",
+          hidden: false,
+          permissions: [],
+          request: { headers: {}, body: {} },
+        },
       ],
     })
   if (["/api/integration", "/api/command", "/api/skill", "/api/reference"].includes(url.pathname))
@@ -325,7 +338,10 @@ test("captures the product transcript block primitives at canonical terminal dim
       }
 
       await mkdir(renders, { recursive: true })
-      await Bun.write(path.join(renders, `transcript-blocks-components-${viewport.width}x${viewport.height}.txt`), rows.join("\n"))
+      await Bun.write(
+        path.join(renders, `transcript-blocks-components-${viewport.width}x${viewport.height}.txt`),
+        rows.join("\n"),
+      )
     } finally {
       app.renderer.destroy()
     }
@@ -338,7 +354,9 @@ test("captures transcript blocks through the real session route", async () => {
       ...viewport,
       route,
       args: { sessionID },
-      pluginStatus: [{ id: "audit-tools", source: "file", spec: "audit-tools", target: "audit-tools", enabled: true, active: true }],
+      pluginStatus: [
+        { id: "audit-tools", source: "file", spec: "audit-tools", target: "audit-tools", enabled: true, active: true },
+      ],
       settle: "Claude Opus 5",
       stable: ["SESSION", "CONTEXT", "TODO LIST", "SUBAGENTS", "MCP"],
     })
@@ -355,7 +373,6 @@ test("captures transcript blocks through the real session route", async () => {
     expect(text).toContain("2 errors")
     expect(text).toContain("goal off")
     expect(text).toContain("YOLO off")
-
 
     await mkdir(renders, { recursive: true })
     await Bun.write(path.join(renders, `transcript-blocks-${viewport.width}x${viewport.height}.txt`), lines.join("\n"))
@@ -434,7 +451,12 @@ function TranscriptBlocksFixture(props: { width: number }) {
       <box width={props.width - 6} marginLeft={3} flexDirection="column">
         <text>YCODING</text>
         <text>Applied the cache accounting fix.</text>
-        <InlineDiff path="packages/core/src/provider/usage.ts" additions={3} deletions={1} files={[{ diff: DIFF_FIXTURE }]} />
+        <InlineDiff
+          path="packages/core/src/provider/usage.ts"
+          additions={3}
+          deletions={1}
+          files={[{ diff: DIFF_FIXTURE }]}
+        />
         <InlineCommand icon="✓" command="bun test provider" pass={14} fail={0} width={props.width - 6} />
         <InlineCommand icon="!" command="bun typecheck" errors={2} failed={true} width={props.width - 6} />
       </box>

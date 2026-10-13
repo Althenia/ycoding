@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { InputRenderable, ScrollBoxRenderable, TextBufferRenderable, type Renderable } from "@opentui/core"
-import type { SessionMessageInfo } from "@ycoding-ai/client"
+import type { SessionMessageInfo, SessionSkillsOutput } from "@ycoding-ai/client"
 import { DEFAULT_THEMES } from "../src/theme/builtins"
 import { resolveThemeFile } from "../src/theme/resolve"
 import { json, sessionSnapshot } from "./fixture/tui-client"
@@ -30,14 +30,20 @@ const skills = [
     activationMessageID: "msg_user_skill",
     content,
     conflicts: [],
-    declarations: {},
+    declarations: { skills: [], instructions: [] },
     state: "active",
   },
   {
-    id: "agent-review", name: "Agent review", activatedBy: "tool", activationMessageID: "msg_agent_skill",
-    content, conflicts: [], declarations: {}, state: "active",
+    id: "agent-review",
+    name: "Agent review",
+    activatedBy: "tool",
+    activationMessageID: "msg_agent_skill",
+    content,
+    conflicts: [],
+    declarations: { skills: [], instructions: [] },
+    state: "active",
   },
-]
+] satisfies SessionSkillsOutput
 const messages: SessionMessageInfo[] = [
   {
     id: "msg_user_skill",
@@ -146,7 +152,8 @@ async function until(screen: Awaited<ReturnType<typeof renderScreen>>, text: str
     await new Promise<void>((resolve) => setImmediate(resolve))
   }
   await screen.renderOnce()
-  expect(screen.frame().includes(text)).toBe(visible)
+  if (visible) expect(screen.frame()).toContain(text)
+  if (!visible) expect(screen.frame()).not.toContain(text)
 }
 
 function scrollboxes(node: Renderable): ScrollBoxRenderable[] {
@@ -232,7 +239,9 @@ test("hides a running reload of an already-active skill and keeps a first load v
     height: 40,
     args: { sessionID },
     route: (url) =>
-      url.pathname === `/api/session/${sessionID}/snapshot` ? sessionSnapshot(sessionID, pendingMessages, { session }) : route(url),
+      url.pathname === `/api/session/${sessionID}/snapshot`
+        ? sessionSnapshot(sessionID, pendingMessages, { session })
+        : route(url),
     config: { animations: false },
     settle: 'Skill "Agent review"',
   })
@@ -292,7 +301,7 @@ test("agent skill content expands from its focusable row into a bounded pageable
     args: { sessionID },
     route,
     config: { animations: false },
-    settle: "Message YCoding…",
+    settle: "+ Skill content",
   })
   try {
     const row = skillContent(screen.renderer.root)

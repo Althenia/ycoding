@@ -339,16 +339,19 @@ function reconcileCanonicalMessages(
   const currentIndex = new Map(current.map((message, index) => [message.id, index]))
   current.forEach((message) => {
     const position = positions.get(message.id)
-    const preserve = touched.has(message.id) || active.has(message.id) ||
+    const preserve =
+      touched.has(message.id) ||
+      active.has(message.id) ||
       (position === undefined && !isMessageComplete(message)) ||
       (position === undefined && older.has(message.id))
     if (!preserve) return
     if (position === undefined) {
       const origin = currentIndex.get(message.id) ?? current.length
-      const insertAt = current
-        .slice(origin + 1)
-        .map((later) => positions.get(later.id))
-        .find((later) => later !== undefined) ?? messages.length
+      const insertAt =
+        current
+          .slice(origin + 1)
+          .map((later) => positions.get(later.id))
+          .find((later) => later !== undefined) ?? messages.length
       messages.splice(insertAt, 0, message)
       positions.forEach((value, id) => {
         if (value >= insertAt) positions.set(id, value + 1)
@@ -368,8 +371,11 @@ function reconcileCanonicalMessages(
       content: message.content.map((part) => {
         if (part.type === "tool") {
           const live = resident.content.find((item) => item.type === "tool" && item.id === part.id)
-          if (part.state.status !== "streaming" || live?.type !== "tool" || live.state.status !== "streaming") return part
-          return live.state.input.startsWith(part.state.input) ? { ...part, state: { ...part.state, input: live.state.input } } : part
+          if (part.state.status !== "streaming" || live?.type !== "tool" || live.state.status !== "streaming")
+            return part
+          return live.state.input.startsWith(part.state.input)
+            ? { ...part, state: { ...part.state, input: live.state.input } }
+            : part
         }
         const live = resident.content.filter((item) => item.type === part.type)[ordinal[part.type]++]
         if (!live || live.type === "tool" || (part.type === "reasoning" && part.time?.completed)) return part
@@ -559,7 +565,7 @@ export function sessionMemoryLines(memory: DataSessionMemoryEstimate) {
   ]
 }
 
-function createSync(settled: () => void) {
+function createSync(settled: () => void, closed: () => boolean) {
   type Load = (current: () => boolean) => Promise<void>
   type Entry = {
     generation: number
@@ -595,6 +601,9 @@ function createSync(settled: () => void) {
     const pending = load(current)
       .then(() => {
         if (current()) entry.loaded = true
+      })
+      .catch((error: unknown) => {
+        if (!closed()) throw error
       })
       .finally(() => {
         if (entry.pending === pending) entry.pending = undefined
@@ -678,7 +687,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       admitted: (pending) => {
         addPending(pending)
         if (!store.session.input[pending.sessionID]?.includes(pending.id))
-          setStore("session", "input", pending.sessionID, [...(store.session.input[pending.sessionID] ?? []), pending.id])
+          setStore("session", "input", pending.sessionID, [
+            ...(store.session.input[pending.sessionID] ?? []),
+            pending.id,
+          ])
         projectPending(pending)
       },
     })
@@ -701,7 +713,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     const subagentGeneration = new Map<string, number>()
     const metadataRecency = new Set<string>()
     const metadataReads = new Map<object, string>()
-    const sync = createSync(pruneMetadata)
+    const sync = createSync(pruneMetadata, () => client.api.transport.state === "closed")
 
     function replaceMessages(sessionID: string, messages: SessionMessageInfo[]) {
       submissions.reconcile(sessionID, messages, store.session.pending[sessionID] ?? [])
@@ -726,7 +738,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         if (!residentIDs.has(id)) olderMessageIDs.get(sessionID)?.delete(id)
       })
       const checkpoint = resident.some((message) => message.type === "compaction" && message.status === "completed")
-      if (checkpoint && store.session.history[sessionID]) setStore("session", "history", sessionID, { before: undefined, checkpoint: true })
+      if (checkpoint && store.session.history[sessionID])
+        setStore("session", "history", sessionID, { before: undefined, checkpoint: true })
       return resident
     }
 
@@ -757,36 +770,64 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       const requestVersion = messageVersion.get(sessionID) ?? 0
       messageSyncLoad.set(sessionID, token)
       historyOwner.set(sessionID, token)
-      setStore("session", "history", sessionID, { ...store.session.history[sessionID], status: "loading", checkpoint: store.session.history[sessionID]?.checkpoint ?? false, error: undefined, failedRead: undefined })
+      setStore("session", "history", sessionID, {
+        ...store.session.history[sessionID],
+        status: "loading",
+        checkpoint: store.session.history[sessionID]?.checkpoint ?? false,
+        error: undefined,
+        failedRead: undefined,
+      })
       try {
         const snapshot = await client.api.session.snapshot({ sessionID, limit: HISTORY_PAGE_SIZE })
         if (!current() || messageSyncLoad.get(sessionID) !== token) return
-        if (snapshot.session.id !== sessionID || snapshot.watermark.aggregateID !== sessionID ||
-          (sourceEpoch && snapshot.sourceEpoch !== sourceEpoch)) throw new Error("The Session snapshot does not belong to the current connection")
+        if (
+          snapshot.session.id !== sessionID ||
+          snapshot.watermark.aggregateID !== sessionID ||
+          (sourceEpoch && snapshot.sourceEpoch !== sourceEpoch)
+        )
+          throw new Error("The Session snapshot does not belong to the current connection")
         const previous = store.session.history[sessionID]
-        if (previous?.sourceEpoch === snapshot.sourceEpoch && previous.watermark !== undefined &&
-          (snapshot.watermark.seq === undefined || snapshot.watermark.seq < previous.watermark))
+        if (
+          previous?.sourceEpoch === snapshot.sourceEpoch &&
+          previous.watermark !== undefined &&
+          (snapshot.watermark.seq === undefined || snapshot.watermark.seq < previous.watermark)
+        )
           throw new Error("The Session snapshot is older than the resident history")
         const response = snapshot.messages
         const active = new Set(store.session.input[sessionID] ?? [])
         const canonicalIDs = new Set(response.map((message) => message.id))
         const touched = new Set(
           [...(messageMutations.get(sessionID)?.entries() ?? [])]
-            .filter(([id, version]) => !canonicalIDs.has(id) ||
-              version > requestVersion && (messageMutationSeq.get(sessionID)?.get(id) ?? Infinity) > (snapshot.watermark.seq ?? -1))
+            .filter(
+              ([id, version]) =>
+                !canonicalIDs.has(id) ||
+                (version > requestVersion &&
+                  (messageMutationSeq.get(sessionID)?.get(id) ?? Infinity) > (snapshot.watermark.seq ?? -1)),
+            )
             .map(([id]) => id),
         )
         const older = olderMessageIDs.get(sessionID) ?? new Set<string>()
-        const reconciled = reconcileCanonicalMessages(response, store.session.message[sessionID] ?? [], touched, active, older)
+        const reconciled = reconcileCanonicalMessages(
+          response,
+          store.session.message[sessionID] ?? [],
+          touched,
+          active,
+          older,
+        )
         batch(() => {
           setStore("session", "info", sessionID, reconcile(snapshot.session))
           registerSession(sessionID)
           setStore("session", "history", sessionID, {
-            status: "ready", checkpoint: false, error: undefined, failedRead: undefined,
-            before: older.size > 0 ? previous?.before : snapshot.before ?? undefined,
-            sourceEpoch: snapshot.sourceEpoch, watermark: snapshot.watermark.seq,
+            status: "ready",
+            checkpoint: false,
+            error: undefined,
+            failedRead: undefined,
+            before: older.size > 0 ? previous?.before : (snapshot.before ?? undefined),
+            sourceEpoch: snapshot.sourceEpoch,
+            watermark: snapshot.watermark.seq,
           })
-          if (snapshot.watermark.seq !== undefined) streamSequence.set(sessionID, Math.max(streamSequence.get(sessionID) ?? -1, snapshot.watermark.seq))
+          if (snapshot.watermark.seq !== undefined)
+            streamSequence.set(sessionID, Math.max(streamSequence.get(sessionID) ?? -1, snapshot.watermark.seq))
           response.forEach((item) => {
             const lifecycle = compactionLifecycle(item)
             if (!lifecycle) return
@@ -805,7 +846,12 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
         props.recordTelemetry?.("transcript.load", performance.now() - started)
       } catch (error) {
-        if (current() && messageSyncLoad.get(sessionID) === token) setStore("session", "history", sessionID, { status: "error", error: errorMessage(error), failedRead: "latest" })
+        if (current() && messageSyncLoad.get(sessionID) === token)
+          setStore("session", "history", sessionID, {
+            status: "error",
+            error: errorMessage(error),
+            failedRead: "latest",
+          })
         throw error
       } finally {
         if (messageSyncLoad.get(sessionID) === token) messageSyncLoad.delete(sessionID)
@@ -821,7 +867,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       try {
         const snapshot = await client.api.session.snapshot({ sessionID, limit: HISTORY_PAGE_SIZE, before })
         if (historyOwner.get(sessionID) !== owner || store.session.history[sessionID]?.before !== before) return
-        if (snapshot.session.id !== sessionID || snapshot.watermark.aggregateID !== sessionID || snapshot.sourceEpoch !== history.sourceEpoch)
+        if (
+          snapshot.session.id !== sessionID ||
+          snapshot.watermark.aggregateID !== sessionID ||
+          snapshot.sourceEpoch !== history.sourceEpoch
+        )
           throw new Error("The older history page does not belong to the resident Session")
         if (snapshot.before === before) throw new Error("The older history cursor did not advance")
         const current = store.session.message[sessionID] ?? []
@@ -834,12 +884,25 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             const lifecycle = compactionLifecycle(message)
             if (lifecycle) setCompaction(sessionID, lifecycle)
           })
-          setStore("session", "history", sessionID, { status: "ready", before: snapshot.before ?? undefined, error: undefined, failedRead: undefined })
-          replaceMessages(sessionID, [...snapshot.messages.map((message) => current.find((item) => item.id === message.id) ?? message), ...current.filter((message) => !ids.has(message.id))])
+          setStore("session", "history", sessionID, {
+            status: "ready",
+            before: snapshot.before ?? undefined,
+            error: undefined,
+            failedRead: undefined,
+          })
+          replaceMessages(sessionID, [
+            ...snapshot.messages.map((message) => current.find((item) => item.id === message.id) ?? message),
+            ...current.filter((message) => !ids.has(message.id)),
+          ])
           store.session.pending[sessionID]?.forEach(projectPending)
         })
       } catch (error) {
-        if (historyOwner.get(sessionID) === owner) setStore("session", "history", sessionID, { status: "error", error: errorMessage(error), failedRead: "older" })
+        if (historyOwner.get(sessionID) === owner)
+          setStore("session", "history", sessionID, {
+            status: "error",
+            error: errorMessage(error),
+            failedRead: "older",
+          })
         throw error
       }
     }
@@ -875,7 +938,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
 
     function syncCompactionHistory(sessionID: string) {
       const visible = Object.values(store.session.compaction[sessionID] ?? {}).some(
-        (lifecycle) => lifecycle.status !== "failed" || lifecycle.code === "cancelled" || lifecycle.code === "superseded",
+        (lifecycle) =>
+          lifecycle.status !== "failed" || lifecycle.code === "cancelled" || lifecycle.code === "superseded",
       )
       if (!visible) return Promise.resolve()
       return sync.run(`session.compaction:${sessionID}`, async (current) => {
@@ -965,7 +1029,13 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         index.set(item.id, messages.length)
         messages.push(item)
       },
-      place(sessionID: string, messages: SessionMessageInfo[], index: Map<string, number>, item: SessionMessageInfo, seq: number) {
+      place(
+        sessionID: string,
+        messages: SessionMessageInfo[],
+        index: Map<string, number>,
+        item: SessionMessageInfo,
+        seq: number,
+      ) {
         if (index.has(item.id)) return
         const sequences = messageOrderSeq.get(sessionID)
         const later = messages.findIndex((message) => {
@@ -1248,7 +1318,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           })
           registerSession(sessionID)
           result.session.invalidate(sessionID)
-          void result.session.sync(sessionID)
+          void result.session
+            .sync(sessionID)
+            .catch((error) => console.error("Failed to refresh created Session", error))
           break
         }
         case "session.deleted":
@@ -1288,11 +1360,23 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           break
         case "session.prediction.updated": {
           const words = event.data.text.trim().split(/\s+/).length
-          if (!event.data.text.trim() || words < 2 || words > 40 || event.data.text.length > 400 || /[\p{Cc}\p{Bidi_Control}\u2028\u2029]/u.test(event.data.text)) break
+          if (
+            !event.data.text.trim() ||
+            words < 2 ||
+            words > 40 ||
+            event.data.text.length > 400 ||
+            /[\p{Cc}\p{Bidi_Control}\u2028\u2029]/u.test(event.data.text)
+          )
+            break
           if (store.session.predictionDismissed[event.data.sessionID] === event.data.sourceMessageID) break
-          const sourceMessageID = result.session.message.list(event.data.sessionID).findLast(message => message.type === "assistant")?.id
+          const sourceMessageID = result.session.message
+            .list(event.data.sessionID)
+            .findLast((message) => message.type === "assistant")?.id
           if (sourceMessageID && sourceMessageID !== event.data.sourceMessageID) break
-          setStore("session", "prediction", event.data.sessionID, { sourceMessageID: event.data.sourceMessageID, text: event.data.text })
+          setStore("session", "prediction", event.data.sessionID, {
+            sourceMessageID: event.data.sourceMessageID,
+            text: event.data.text,
+          })
           break
         }
         case "catalog.updated":
@@ -1458,13 +1542,19 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             break
           if (Object.keys(event.data.delta).length === 0) break
           message.update(event.data.sessionID, (draft, index) => {
-            message.place(event.data.sessionID, draft, index, {
-              id: messageIDFromEvent(event.id),
-              type: "system",
-              text: `Instructions updated: ${Object.keys(event.data.delta).join(", ")}`,
-              metadata: event.metadata,
-              time: { created: event.created },
-            }, event.durable.seq)
+            message.place(
+              event.data.sessionID,
+              draft,
+              index,
+              {
+                id: messageIDFromEvent(event.id),
+                type: "system",
+                text: `Instructions updated: ${Object.keys(event.data.delta).join(", ")}`,
+                metadata: event.metadata,
+                time: { created: event.created },
+              },
+              event.durable.seq,
+            )
           })
           break
         case "session.context.observed":
@@ -1983,17 +2073,24 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           return store.session.active[sessionID] ?? "idle"
         },
         prediction: {
-          get(sessionID: string) { return store.session.prediction[sessionID] },
+          get(sessionID: string) {
+            return store.session.prediction[sessionID]
+          },
           dismiss(sessionID: string) {
-            const sourceMessageID = result.session.message.list(sessionID).findLast(message => message.type === "assistant")?.id
+            const sourceMessageID = result.session.message
+              .list(sessionID)
+              .findLast((message) => message.type === "assistant")?.id
             if (sourceMessageID) setStore("session", "predictionDismissed", sessionID, sourceMessageID)
             setStore("session", "prediction", sessionID, undefined)
           },
           request(sessionID: string, input: { memory: ReadonlyArray<"repository" | "knowledge">; hint?: string }) {
-            setStore("session", produce((draft) => {
-              delete draft.predictionDismissed[sessionID]
-              delete draft.prediction[sessionID]
-            }))
+            setStore(
+              "session",
+              produce((draft) => {
+                delete draft.predictionDismissed[sessionID]
+                delete draft.prediction[sessionID]
+              }),
+            )
             return client.api.session.prediction({
               sessionID,
               memory: input.memory,
@@ -2151,11 +2248,14 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           },
           list(sessionID: string) {
             const messages = store.session.message[sessionID] ?? []
-            return [...messages, ...submissions.list(sessionID).flatMap((entry) => {
-              if (messages.some((message) => message.id === entry.input.promptID)) return []
-              const message = submissions.message(sessionID, entry.input.promptID)
-              return message ? [message] : []
-            })]
+            return [
+              ...messages,
+              ...submissions.list(sessionID).flatMap((entry) => {
+                if (messages.some((message) => message.id === entry.input.promptID)) return []
+                const message = submissions.message(sessionID, entry.input.promptID)
+                return message ? [message] : []
+              }),
+            ]
           },
           memory(sessionID: string) {
             const memory = process.memoryUsage()
@@ -2190,8 +2290,12 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           async find(sessionID: string, messageID: string) {
             if (result.session.message.get(sessionID, messageID)) return true
             await result.session.message.sync(sessionID)
-            while (!result.session.message.get(sessionID, messageID) && store.session.history[sessionID]?.before &&
-              !store.session.history[sessionID]?.checkpoint && client.connection.status() === "connected")
+            while (
+              !result.session.message.get(sessionID, messageID) &&
+              store.session.history[sessionID]?.before &&
+              !store.session.history[sessionID]?.checkpoint &&
+              client.connection.status() === "connected"
+            )
               await result.session.message.loadOlder(sessionID)
             return result.session.message.get(sessionID, messageID) !== undefined
           },
@@ -2651,35 +2755,48 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       untrack(pruneMetadata)
     })
 
-    createEffect(
-      (previous) => {
-        const status = client.connection.status()
-        if (status === "connected" || previous !== "connected") return status
-        setStore(
-          "session",
-          "prediction",
-          produce((draft) => {
-            Object.keys(draft).forEach((id) => {
-              delete draft[id]
-            })
-          }),
-        )
-        activeSnapshot = undefined
-        sync.invalidate()
-        subagentGeneration.forEach((generation, parentID) => subagentGeneration.set(parentID, generation + 1))
-        messageSyncLoad.clear()
-        historyOwner.clear()
-        olderLoads.clear()
-        return status
-      },
-      client.connection.status(),
-    )
+    createEffect((previous) => {
+      const status = client.connection.status()
+      if (status === "connected" || previous !== "connected") return status
+      setStore(
+        "session",
+        "prediction",
+        produce((draft) => {
+          Object.keys(draft).forEach((id) => {
+            delete draft[id]
+          })
+        }),
+      )
+      activeSnapshot = undefined
+      sync.invalidate()
+      subagentGeneration.forEach((generation, parentID) => subagentGeneration.set(parentID, generation + 1))
+      messageSyncLoad.clear()
+      historyOwner.clear()
+      olderLoads.clear()
+      return status
+    }, client.connection.status())
 
     onCleanup(
       client.event.listen(({ details }) => {
-        if (["session.input.admitted", "session.execution.started", "session.step.started", "session.moved", "session.deleted", "session.archived", "session.agent.selected", "session.model.selected"].includes(details.type) && "sessionID" in details.data)
+        if (
+          [
+            "session.input.admitted",
+            "session.execution.started",
+            "session.step.started",
+            "session.moved",
+            "session.deleted",
+            "session.archived",
+            "session.agent.selected",
+            "session.model.selected",
+          ].includes(details.type) &&
+          "sessionID" in details.data
+        )
           result.session.prediction.dismiss(details.data.sessionID)
-        if (details.type === "session.text.delta" || details.type === "session.reasoning.delta" || details.type === "session.tool.input.delta")
+        if (
+          details.type === "session.text.delta" ||
+          details.type === "session.reasoning.delta" ||
+          details.type === "session.tool.input.delta"
+        )
           props.recordTelemetry?.("stream.delay", Date.now() - details.created, Date.now())
         submissions.observe(details)
         if (details.type === "server.connected") {
@@ -2764,22 +2881,28 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       }),
     )
 
-    onCleanup(client.event.filter((event) => {
-      if (sourceEpoch && event.sourceEpoch && event.sourceEpoch !== sourceEpoch) return false
-      if (!("durable" in event)) return true
-      const sessionID = event.durable.aggregateID
-      const history = store.session.history[sessionID]
-      if (!history) return true
-      if (history.watermark !== undefined && event.durable.seq <= history.watermark && event.type !== "session.task.updated")
-        return false
-      const previous = streamSequence.get(sessionID) ?? history.watermark
-      streamSequence.set(sessionID, Math.max(previous ?? -1, event.durable.seq))
-      if (previous !== undefined && event.durable.seq > previous + 1 && client.connection.status() === "connected") {
-        result.session.message.invalidate(sessionID)
-        void result.session.message.sync(sessionID).catch(() => undefined)
-      }
-      return true
-    }))
+    onCleanup(
+      client.event.filter((event) => {
+        if (sourceEpoch && event.sourceEpoch && event.sourceEpoch !== sourceEpoch) return false
+        if (!("durable" in event)) return true
+        const sessionID = event.durable.aggregateID
+        const history = store.session.history[sessionID]
+        if (!history) return true
+        if (
+          history.watermark !== undefined &&
+          event.durable.seq <= history.watermark &&
+          event.type !== "session.task.updated"
+        )
+          return false
+        const previous = streamSequence.get(sessionID) ?? history.watermark
+        streamSequence.set(sessionID, Math.max(previous ?? -1, event.durable.seq))
+        if (previous !== undefined && event.durable.seq > previous + 1 && client.connection.status() === "connected") {
+          result.session.message.invalidate(sessionID)
+          void result.session.message.sync(sessionID).catch(() => undefined)
+        }
+        return true
+      }),
+    )
 
     return result
   },

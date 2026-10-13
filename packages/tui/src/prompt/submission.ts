@@ -15,10 +15,15 @@ import type { PromptInfo } from "./history"
 import type { promptSkillMetadata } from "./skill"
 import { projectedPromptInput } from "./codec"
 import type { SessionSubmissionRetry, YoloLevel } from "../util/session-autonomy"
-import { createLandingSession, landingAutonomyPayload, persistLandingAutonomy, persistLandingDaybreak } from "../util/landing-session"
+import {
+  createLandingSession,
+  landingAutonomyPayload,
+  persistLandingAutonomy,
+  persistLandingDaybreak,
+} from "../util/landing-session"
 import { submitPrompt } from "../component/prompt/prompt-admission"
 import { errorMessage } from "../util/error"
-import { isConflictError, isInvalidRequestError } from "@ycoding-ai/client"
+import { isConflictError, isInvalidRequestError } from "@ycoding-ai/client/v5"
 
 export type PromptSubmissionPayload = {
   inputText: string
@@ -153,9 +158,7 @@ export function createPromptSubmissions(input: {
     if (payload.daybreak && !entry.completed.has("daybreak")) {
       update(entry, { phase: "Selecting Daybreak" })
       const daybreak = payload.daybreak
-      await request(entry, "daybreak", (signal) =>
-        persistLandingDaybreak(input.api(), { sessionID, daybreak, signal }),
-      )
+      await request(entry, "daybreak", (signal) => persistLandingDaybreak(input.api(), { sessionID, daybreak, signal }))
       entry.completed.add("daybreak")
     }
     if (entry.skillOnly) {
@@ -185,8 +188,13 @@ export function createPromptSubmissions(input: {
         session.model.variant === payload.model.variant &&
         session.model.profile === payload.model.profile
       if (entry.completed.has("model") && payload.model.profile !== undefined && !modelMatches)
-        throw new Error("The Session model changed while this prompt was pending; select the model again before retrying")
-      if (payload.modelSelectionPending && (!entry.completed.has("model") || (payload.model.profile === undefined && !modelMatches))) {
+        throw new Error(
+          "The Session model changed while this prompt was pending; select the model again before retrying",
+        )
+      if (
+        payload.modelSelectionPending &&
+        (!entry.completed.has("model") || (payload.model.profile === undefined && !modelMatches))
+      ) {
         update(entry, { phase: "Switching model" })
         await request(entry, "model", (signal) =>
           input.api().session.switchModel({ sessionID, model: payload.model }, { signal }),

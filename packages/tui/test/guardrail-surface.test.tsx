@@ -67,7 +67,9 @@ async function route(url: URL, init?: Request) {
   if (url.pathname === `/api/session/${parentID}`) return json({ data: parent })
   if (url.pathname === `/api/session/${childID}`) return json({ data: child })
   if (url.pathname === `/api/session/${parentID}/snapshot` || url.pathname === `/api/session/${childID}/snapshot`)
-    return sessionSnapshot(url.pathname === `/api/session/${childID}/snapshot` ? childID : parentID, [], { session: url.pathname === `/api/session/${childID}/snapshot` ? child : parent })
+    return sessionSnapshot(url.pathname === `/api/session/${childID}/snapshot` ? childID : parentID, [], {
+      session: url.pathname === `/api/session/${childID}/snapshot` ? child : parent,
+    })
   if (url.pathname === `/api/session/${childID}/guardrail/request`) return json({ data: listed })
   if (url.pathname === `/api/session/${parentID}/guardrail/request`) return json({ data: listed })
   if (
@@ -86,7 +88,7 @@ async function route(url: URL, init?: Request) {
         model: parent.model,
         context: { total: 0, percent: 0 },
         tokens: { uncachedInput: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
-        cache: { eligible: 0, hitRatio: 0, mechanism: "unreported", readReported: false, writeReported: false },
+        cache: { eligible: 0, hitRatio: 0, mechanism: "none", readReported: false, writeReported: false },
         requests: { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens: parent.tokens },
       },
     })

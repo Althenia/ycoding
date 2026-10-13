@@ -82,15 +82,15 @@ function DialogProviders(props: { children: JSX.Element }) {
             <ToastProvider>
               <RouteProvider initialRoute={{ type: "home" }}>
                 <ClientProvider api={createApi(transport.fetch)}>
-                    <DataProvider>
-                      <LocationProvider>
-                        <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-                          <LocalProvider>
-                            <DialogProvider>{props.children}</DialogProvider>
-                          </LocalProvider>
-                        </ThemeProvider>
-                      </LocationProvider>
-                    </DataProvider>
+                  <DataProvider>
+                    <LocationProvider>
+                      <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+                        <LocalProvider>
+                          <DialogProvider>{props.children}</DialogProvider>
+                        </LocalProvider>
+                      </ThemeProvider>
+                    </LocationProvider>
+                  </DataProvider>
                 </ClientProvider>
               </RouteProvider>
             </ToastProvider>
@@ -109,7 +109,14 @@ function route(url: URL) {
   return undefined
 }
 
-const model = (input: { id: string; providerID: string; name: string; family: string; context: number; enabled?: boolean }) => ({
+const model = (input: {
+  id: string
+  providerID: string
+  name: string
+  family: string
+  context: number
+  enabled?: boolean
+}) => ({
   id: input.id,
   modelID: input.id,
   providerID: input.providerID,
@@ -125,11 +132,36 @@ const model = (input: { id: string; providerID: string; name: string; family: st
 })
 
 const models = [
-  model({ id: "claude-opus-5", providerID: "anthropic", name: "Claude Opus 5", family: "deep reasoning", context: 200_000 }),
-  model({ id: "claude-sonnet-5", providerID: "anthropic", name: "Claude Sonnet 5", family: "balanced", context: 262_144 }),
-  model({ id: "claude-haiku-4-5", providerID: "anthropic", name: "Claude Haiku 4.5", family: "fast", context: 200_000 }),
+  model({
+    id: "claude-opus-5",
+    providerID: "anthropic",
+    name: "Claude Opus 5",
+    family: "deep reasoning",
+    context: 200_000,
+  }),
+  model({
+    id: "claude-sonnet-5",
+    providerID: "anthropic",
+    name: "Claude Sonnet 5",
+    family: "balanced",
+    context: 262_144,
+  }),
+  model({
+    id: "claude-haiku-4-5",
+    providerID: "anthropic",
+    name: "Claude Haiku 4.5",
+    family: "fast",
+    context: 200_000,
+  }),
   model({ id: "gpt-5-2", providerID: "openai", name: "GPT-5.2", family: "", context: 300_000 }),
-  model({ id: "gemini-3-pro", providerID: "google", name: "Gemini 3 Pro", family: "connect first", context: 1_000_000, enabled: false }),
+  model({
+    id: "gemini-3-pro",
+    providerID: "google",
+    name: "Gemini 3 Pro",
+    family: "connect first",
+    context: 1_000_000,
+    enabled: false,
+  }),
 ]
 
 const providers = [
@@ -139,5 +171,10 @@ const providers = [
 ]
 
 const integrations = [
-  { id: "anthropic", name: "Claude", methods: [], connections: [{ type: "credential" as const, id: "cred_test", label: "test" }] },
+  {
+    id: "anthropic",
+    name: "Claude",
+    methods: [],
+    connections: [{ type: "credential" as const, id: "cred_test", label: "test", active: true }],
+  },
 ]

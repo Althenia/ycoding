@@ -169,7 +169,7 @@ function route(url: URL) {
         model: session.model,
         context: { total: 0, percent: 0 },
         tokens: { uncachedInput: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
-        cache: { eligible: 0, mechanism: "unreported", readReported: false, writeReported: false },
+        cache: { eligible: 0, mechanism: "none", readReported: false, writeReported: false },
         requests: {
           logical: 0,
           physical: 0,
@@ -216,7 +216,16 @@ function route(url: URL) {
   if (url.pathname === "/api/agent")
     return json({
       location,
-      data: [{ id: "build", name: "Build", request: { headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] }],
+      data: [
+        {
+          id: "build",
+          name: "Build",
+          request: { headers: {}, body: {} },
+          mode: "primary",
+          hidden: false,
+          permissions: [],
+        },
+      ],
     })
   return undefined
 }
@@ -232,7 +241,8 @@ test("renders typed transcript chat rows at the design gutter with safe expandab
   try {
     const collapsed = screen.lines()
     const railStart = DESIGN_VIEWPORT.width - railWidth(DESIGN_VIEWPORT.width)
-    const rowOf = (lines: string[], text: string) => lines.findIndex((line) => line.includes(text) && line.indexOf(text) < railStart)
+    const rowOf = (lines: string[], text: string) =>
+      lines.findIndex((line) => line.includes(text) && line.indexOf(text) < railStart)
     const assistantRow = rowOf(collapsed, "YCODING")
     const textRow = rowOf(collapsed, "I inspected the typed transcript data.")
     const ordinaryRow = rowOf(collapsed, "project_search")
@@ -244,7 +254,9 @@ test("renders typed transcript chat rows at the design gutter with safe expandab
     expect(collapsed[ordinaryRow]?.indexOf("ok")).toBe(3)
     expect(collapsed[errorRow]?.indexOf("!!")).toBe(3)
     expect(collapsed[shellRow]?.indexOf("ok")).toBe(3)
-    expect(collapsed.some((line) => line.includes("subagent review") && line.indexOf("subagent review") < railStart)).toBe(false)
+    expect(
+      collapsed.some((line) => line.includes("subagent review") && line.indexOf("subagent review") < railStart),
+    ).toBe(false)
     expect(collapsed.join("\n")).not.toContain("Request")
     expect(collapsed.join("\n")).not.toContain("Response")
     expectSafe(collapsed.join("\n"))
@@ -310,13 +322,23 @@ test("finds and highlights resident transcript text from its session keybind", a
   })
 
   try {
-    const normalTextBackground = screen.spans().lines.flatMap((line) => line.spans).find((span) => span.text.includes("inspected"))?.bg.toInts()
+    const normalTextBackground = screen
+      .spans()
+      .lines.flatMap((line) => line.spans)
+      .find((span) => span.text.includes("inspected"))
+      ?.bg.toInts()
     screen.input.pressKey("g", { ctrl: true, shift: true })
     await waitFor(screen.frame, "Find in loaded history")
     await screen.input.typeText("inspected")
 
     expect(screen.frame()).toContain("1 of 2")
-    expect(screen.spans().lines.flatMap((line) => line.spans).find((span) => span.text.includes("inspected"))?.bg.toInts()).not.toEqual(normalTextBackground)
+    expect(
+      screen
+        .spans()
+        .lines.flatMap((line) => line.spans)
+        .find((span) => span.text.includes("inspected"))
+        ?.bg.toInts(),
+    ).not.toEqual(normalTextBackground)
     expect(screen.colorOf("inspected")).not.toEqual(screen.colorOf("1 of 1"))
     const scrollTop = screen.scrollbox()?.scrollTop
 
@@ -340,7 +362,6 @@ test("finds and highlights resident transcript text from its session keybind", a
     expect(screen.frame()).not.toContain("Find in loaded history")
     expect(screen.frame()).toContain("I inspected the typed transcript data.")
     expect(screen.scrollbox()?.scrollTop).toBe(scrollTop)
-
   } finally {
     await screen.dispose()
   }
@@ -364,13 +385,24 @@ test("find counts a live matching message without losing the current match", asy
     await waitFor(screen.frame, "2 of 2")
 
     screen.events.emit({
-      id: "evt_find_admitted", created: 20, type: "session.input.admitted",
-      durable: { aggregateID: sessionID, seq: 1, version: 1 }, location: { directory },
-      data: { sessionID, inputID: "msg_find_live", input: { type: "user", data: { text: "Has the build been inspected yet?" }, delivery: "steer" } },
+      id: "evt_find_admitted",
+      created: 20,
+      type: "session.input.admitted",
+      durable: { aggregateID: sessionID, seq: 1, version: 1 },
+      location: { directory },
+      data: {
+        sessionID,
+        inputID: "msg_find_live",
+        input: { type: "user", data: { text: "Has the build been inspected yet?" }, delivery: "steer" },
+      },
     } satisfies YCodingEvent)
     screen.events.emit({
-      id: "evt_find_promoted", created: 21, type: "session.input.promoted",
-      durable: { aggregateID: sessionID, seq: 2, version: 1 }, location: { directory }, data: { sessionID, inputID: "msg_find_live" },
+      id: "evt_find_promoted",
+      created: 21,
+      type: "session.input.promoted",
+      durable: { aggregateID: sessionID, seq: 2, version: 1 },
+      location: { directory },
+      data: { sessionID, inputID: "msg_find_live" },
     } satisfies YCodingEvent)
 
     await waitFor(screen.frame, "2 of 3")

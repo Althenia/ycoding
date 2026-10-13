@@ -14,13 +14,13 @@
 import type {
   FormAnswer,
   FormInfo,
-  YCodingClient,
+  V5Client,
   LocationGetOutput,
   LocationRef,
   PermissionRequest,
   ReferenceListOutput,
   SessionMessageAssistantTool,
-} from "@ycoding-ai/client/promise"
+} from "@ycoding-ai/client/v5"
 import type { Config } from "../config"
 import type { CliRenderer } from "@opentui/core"
 
@@ -98,7 +98,7 @@ export type RunAgent = {
 export type RunReference = ReferenceListOutput["data"][number]
 
 export type RunInput = {
-  sdk: YCodingClient
+  sdk: V5Client
   location: LocationGetOutput
   agent: string | undefined
   model: PromptModel | undefined
@@ -383,7 +383,7 @@ export type FooterEvent =
       state: FooterSubagentState
     }
 
-export type PermissionReply = Parameters<YCodingClient["permission"]["reply"]>[0]
+export type PermissionReply = Parameters<V5Client["permission"]["reply"]>[0]
 
 export type FormReply = {
   sessionID: string

@@ -120,7 +120,13 @@ test("captures populated subagent picker states at reference terminal dimensions
       expect(inactiveLines.some((line) => line.includes("completed       keymap-audit"))).toBe(true)
       expect(inactiveLines.some((line) => line.includes("cancelled       bench-run"))).toBe(true)
       for (const line of lines) expect(line.length).toBeLessThanOrEqual(viewport.width)
-      await Bun.write(path.resolve(import.meta.dir, `../../../../.aphrodite/renders/subagent-picker-${viewport.width}x${viewport.height}.txt`), lines.join("\n"))
+      await Bun.write(
+        path.resolve(
+          import.meta.dir,
+          `../../../../.aphrodite/renders/subagent-picker-${viewport.width}x${viewport.height}.txt`,
+        ),
+        lines.join("\n"),
+      )
     } finally {
       await capture.dispose()
     }
@@ -155,7 +161,10 @@ test("keeps the parent header status informational while subagents are active", 
 
   try {
     const spanOf = (text: string) =>
-      screen.spans().lines.flatMap((line) => line.spans).find((span) => span.text.trim() === text)
+      screen
+        .spans()
+        .lines.flatMap((line) => line.spans)
+        .find((span) => span.text.trim() === text)
 
     expect(spanOf("waiting · 2 subagents")?.fg.toInts()).not.toEqual([240, 190, 98, 255])
   } finally {
@@ -241,10 +250,20 @@ async function waitFor(frame: () => string, text: string) {
 
 function expectAt(lines: string[], row: number, column: number, text: string) {
   const actual = lines[row]?.slice(column, column + text.length)
-  if (actual !== text) throw new Error(`Expected ${JSON.stringify(text)} at ${row}:${column}, found at ${lines[row]?.indexOf(text)}: ${lines[row]}`)
+  if (actual !== text)
+    throw new Error(
+      `Expected ${JSON.stringify(text)} at ${row}:${column}, found at ${lines[row]?.indexOf(text)}: ${lines[row]}`,
+    )
 }
 
-function task(sessionID: string, agent: string, description: string, state: "waiting" | "running" | "completed" | "cancelled", elapsed: number, modelID: string) {
+function task(
+  sessionID: string,
+  agent: string,
+  description: string,
+  state: "waiting" | "running" | "completed" | "cancelled",
+  elapsed: number,
+  modelID: string,
+) {
   return {
     sessionID,
     parentID: session.id,
@@ -254,7 +273,14 @@ function task(sessionID: string, agent: string, description: string, state: "wai
     background: true,
     state,
     revision: 1,
-    question: state === "waiting" ? { text: "Should I mark the pre-existing failures as expected, or fix them?" } : undefined,
+    question:
+      state === "waiting"
+        ? {
+            id: `que_${sessionID}`,
+            text: "Should I mark the pre-existing failures as expected, or fix them?",
+            time: capturedAt,
+          }
+        : undefined,
     time: { created: capturedAt - elapsed * 1_000, updated: capturedAt },
   }
 }
@@ -266,18 +292,78 @@ function route(url: URL) {
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
   if (children.some((child) => url.pathname === `/api/session/${child.id}`))
     return json({ data: children.find((child) => url.pathname === `/api/session/${child.id}`) })
-  if (children.some((child) => [`/api/session/${child.id}/pending`, `/api/session/${child.id}/permission`, `/api/session/${child.id}/form`, `/api/session/${child.id}/todo`, `/api/session/${child.id}/skills`, `/api/session/${child.id}/guardrail/request`].includes(url.pathname))) return json({ data: [] })
-  if (children.some((child) => url.pathname === `/api/session/${child.id}/guardrail`)) return json({ data: { rootSessionID: sessionID, profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [] } })
+  if (
+    children.some((child) =>
+      [
+        `/api/session/${child.id}/pending`,
+        `/api/session/${child.id}/permission`,
+        `/api/session/${child.id}/form`,
+        `/api/session/${child.id}/todo`,
+        `/api/session/${child.id}/skills`,
+        `/api/session/${child.id}/guardrail/request`,
+      ].includes(url.pathname),
+    )
+  )
+    return json({ data: [] })
+  if (children.some((child) => url.pathname === `/api/session/${child.id}/guardrail`))
+    return json({
+      data: {
+        rootSessionID: sessionID,
+        profile: "standard",
+        customRules: 0,
+        approvals: 0,
+        blocked: 0,
+        counters: [],
+        invalidFiles: [],
+      },
+    })
   if (url.pathname === `/api/session/${sessionID}/snapshot`)
-    return sessionSnapshot(sessionID, [
-      { id: "msg_assistant", type: "assistant", agent: "ycoding", model: { providerID: "anthropic", id: "claude-opus-5", variant: "max" }, content: [{ type: "text", text: "Dispatched two background subagents. They run independently and report back here." }], time: { created: 2, completed: 3 } },
-      { id: "msg_user", type: "user", text: "Dispatch the background subagents.", time: { created: 1 } },
-    ], { session })
-  if (children.some((child) => url.pathname === `/api/session/${child.id}/snapshot`)) return sessionSnapshot(url.pathname.slice("/api/session/".length, -"/snapshot".length), [], { session: children.find((child) => url.pathname === `/api/session/${child.id}/snapshot`) })
-  if ([`/api/session/${sessionID}/pending`, `/api/session/${sessionID}/permission`, `/api/session/${sessionID}/form`, `/api/session/${sessionID}/todo`, `/api/session/${sessionID}/skills`, `/api/session/${sessionID}/guardrail/request`].includes(url.pathname)) return json({ data: [] })
+    return sessionSnapshot(
+      sessionID,
+      [
+        {
+          id: "msg_assistant",
+          type: "assistant",
+          agent: "ycoding",
+          model: { providerID: "anthropic", id: "claude-opus-5", variant: "max" },
+          content: [
+            { type: "text", text: "Dispatched two background subagents. They run independently and report back here." },
+          ],
+          time: { created: 2, completed: 3 },
+        },
+        { id: "msg_user", type: "user", text: "Dispatch the background subagents.", time: { created: 1 } },
+      ],
+      { session },
+    )
+  if (children.some((child) => url.pathname === `/api/session/${child.id}/snapshot`))
+    return sessionSnapshot(url.pathname.slice("/api/session/".length, -"/snapshot".length), [], {
+      session: children.find((child) => url.pathname === `/api/session/${child.id}/snapshot`),
+    })
+  if (
+    [
+      `/api/session/${sessionID}/pending`,
+      `/api/session/${sessionID}/permission`,
+      `/api/session/${sessionID}/form`,
+      `/api/session/${sessionID}/todo`,
+      `/api/session/${sessionID}/skills`,
+      `/api/session/${sessionID}/guardrail/request`,
+    ].includes(url.pathname)
+  )
+    return json({ data: [] })
   if (url.pathname === `/api/session/${sessionID}/subagent`)
     return json({ data: tasks, summary: { total: 4, active: 2, running: 1, waiting: 1 }, cursor: {} })
-  if (url.pathname === `/api/session/${sessionID}/guardrail`) return json({ data: { rootSessionID: sessionID, profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [] } })
+  if (url.pathname === `/api/session/${sessionID}/guardrail`)
+    return json({
+      data: {
+        rootSessionID: sessionID,
+        profile: "standard",
+        customRules: 0,
+        approvals: 0,
+        blocked: 0,
+        counters: [],
+        invalidFiles: [],
+      },
+    })
   if (url.pathname === `/api/session/${sessionID}/diagnostics`) return json({ data: diagnostics(sessionID) })
   if (children.some((child) => url.pathname === `/api/session/${child.id}/diagnostics`))
     return json({ data: diagnostics(url.pathname.slice("/api/session/".length, -"/diagnostics".length)) })
@@ -285,10 +371,35 @@ function route(url: URL) {
   if (url.pathname === "/api/shell") return json({ location, data: shells })
   if (url.pathname === "/api/model") return json({ location, data: models() })
   if (url.pathname === "/api/provider") return json({ location, data: [{ id: "anthropic", name: "Claude" }] })
-  if (url.pathname === "/api/agent") return json({ location, data: [{ id: "build", name: "Build", mode: "primary", hidden: false, permissions: [], request: { headers: {}, body: {} } }] })
-  if (["/api/integration", "/api/command", "/api/skill", "/api/reference", "/api/mcp", "/api/permission/request", "/api/form/request"].includes(url.pathname)) return json({ location, data: [] })
+  if (url.pathname === "/api/agent")
+    return json({
+      location,
+      data: [
+        {
+          id: "build",
+          name: "Build",
+          mode: "primary",
+          hidden: false,
+          permissions: [],
+          request: { headers: {}, body: {} },
+        },
+      ],
+    })
+  if (
+    [
+      "/api/integration",
+      "/api/command",
+      "/api/skill",
+      "/api/reference",
+      "/api/mcp",
+      "/api/permission/request",
+      "/api/form/request",
+    ].includes(url.pathname)
+  )
+    return json({ location, data: [] })
   if (url.pathname === "/api/mcp/resource") return json({ location, data: { resources: [], templates: [] } })
-  if (url.pathname === "/path") return json({ home: process.env.HOME, state: "", config: "", worktree: directory, directory })
+  if (url.pathname === "/path")
+    return json({ home: process.env.HOME, state: "", config: "", worktree: directory, directory })
   return undefined
 }
 
@@ -313,7 +424,11 @@ function model(id: string, name: string, variants: string[] = []) {
 }
 
 function models() {
-  return [model("claude-opus-5", "Claude Opus 5", ["max"]), model("claude-sonnet-5", "Sonnet 5"), model("claude-haiku-4-5", "Haiku 4.5")]
+  return [
+    model("claude-opus-5", "Claude Opus 5", ["max"]),
+    model("claude-sonnet-5", "Sonnet 5"),
+    model("claude-haiku-4-5", "Haiku 4.5"),
+  ]
 }
 
 function diagnostics(id: string) {
@@ -323,15 +438,43 @@ function diagnostics(id: string) {
       model: session.model,
       context: { total: 1_464, percent: 56 },
       tokens: { uncachedInput: 1_411, output: 53, reasoning: 0, cacheRead: 220_672, cacheWrite: 4_096 },
-      cache: { eligible: 220_672, hitRatio: 0.71, mechanism: "anthropic-cache-control", readReported: true, writeReported: true },
-      requests: { logical: 1, physical: 1, helpers: 0, continued: 0, fallback: 0, tokens: session.tokens, latestInvalidation: "stable-hit" },
+      cache: {
+        eligible: 220_672,
+        hitRatio: 0.71,
+        mechanism: "anthropic-cache-control",
+        readReported: true,
+        writeReported: true,
+      },
+      requests: {
+        logical: 1,
+        physical: 1,
+        helpers: 0,
+        continued: 0,
+        fallback: 0,
+        tokens: session.tokens,
+        latestInvalidation: "stable-hit",
+      },
     }
   const hitRatio = { ses_0a11ce02: 0.68, ses_0a11ce03: 0.74, ses_0a11ce04: 0.81 }[id]
   return {
     model: child.model,
     context: { total: 1_464, percent: 56 },
     tokens: { uncachedInput: 1_411, output: 53, reasoning: 0, cacheRead: 220_672, cacheWrite: 4_096 },
-    cache: { eligible: 220_672, hitRatio, mechanism: "anthropic-cache-control", readReported: hitRatio !== undefined, writeReported: hitRatio !== undefined },
-    requests: { logical: 1, physical: 1, helpers: 0, continued: 0, fallback: 0, tokens: child.tokens, latestInvalidation: "stable-hit" },
+    cache: {
+      eligible: 220_672,
+      hitRatio,
+      mechanism: "anthropic-cache-control",
+      readReported: hitRatio !== undefined,
+      writeReported: hitRatio !== undefined,
+    },
+    requests: {
+      logical: 1,
+      physical: 1,
+      helpers: 0,
+      continued: 0,
+      fallback: 0,
+      tokens: child.tokens,
+      latestInvalidation: "stable-hit",
+    },
   }
 }

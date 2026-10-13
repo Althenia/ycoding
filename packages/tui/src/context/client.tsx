@@ -1,4 +1,4 @@
-import type { YCodingClient, YCodingEvent } from "@ycoding-ai/client"
+import type { V5Client, EventSubscribeOutput } from "@ycoding-ai/client/v5"
 import { createGlobalEmitter } from "@solid-primitives/event-bus"
 import { onCleanup, onMount } from "solid-js"
 import { createStore } from "solid-js/store"
@@ -18,24 +18,24 @@ export type ClientConnectionEvent = {
 }
 
 type ManagedService = {
-  reconnect: (signal: AbortSignal) => Promise<{ api: YCodingClient; baseUrl?: string }>
+  reconnect: (signal: AbortSignal) => Promise<{ api: V5Client; baseUrl?: string }>
   restart: () => Promise<void>
 }
 
-type ClientEventMap = { [Type in YCodingEvent["type"]]: Extract<YCodingEvent, { type: Type }> }
+type ClientEventMap = { [Type in EventSubscribeOutput["type"]]: Extract<EventSubscribeOutput, { type: Type }> }
 const connectTimeout = 2_000
 const connectionHistoryLimit = 50
 
 export const { use: useClient, provider: ClientProvider } = createSimpleContext({
   name: "Client",
-  init: (props: { api: YCodingClient; baseUrl?: string; service?: ManagedService }) => {
+  init: (props: { api: V5Client; baseUrl?: string; service?: ManagedService }) => {
     const log = useLog({ component: "client" })
     const abort = new AbortController()
     const history: ClientConnectionEvent[] = []
     let api = props.api
     let baseUrl = props.baseUrl
     const events = createGlobalEmitter<ClientEventMap>()
-    const filters = new Set<(event: YCodingEvent) => boolean>()
+    const filters = new Set<(event: EventSubscribeOutput) => boolean>()
     const [connection, setConnection] = createStore<{
       status: ClientConnectionStatus
       attempt: number
@@ -73,8 +73,6 @@ export const { use: useClient, provider: ClientProvider } = createSimpleContext(
               return request.signal.reason instanceof Error
                 ? request.signal.reason
                 : new Error("Event stream disconnected")
-            if (first.value.type !== "server.connected")
-              return new Error("Event stream did not start with server.connected")
             clearTimeout(timeout)
             record("connected", attempt)
             connectedAt = Date.now()
@@ -111,9 +109,7 @@ export const { use: useClient, provider: ClientProvider } = createSimpleContext(
             error: message,
           })
           setConnection({ status: "reconnecting", attempt, error: message })
-          // Re-resolve the transport before retrying: the server may have
-          // moved (service restarted on a new port) or need starting. Static
-          // transports (--server, standalone) resolve to the same address.
+          let replaced = false
           if (props.service) {
             const next = await props.service.reconnect(controller.signal).catch((error) => {
               if (!controller.signal.aborted)
@@ -122,14 +118,23 @@ export const { use: useClient, provider: ClientProvider } = createSimpleContext(
                   error: errorMessage(error),
                 })
             })
-            if (abort.signal.aborted || controller.signal.aborted) return
+            if (abort.signal.aborted || controller.signal.aborted) {
+              next?.api.transport.close()
+              return
+            }
             if (next) {
+              if (api !== next.api) api.transport.close()
+              replaced = api !== next.api
               api = next.api
               baseUrl = next.baseUrl ?? baseUrl
-              if (attempt === 1) continue
+              if (attempt === 1 && replaced) continue
             }
           }
           await wait(1_000, controller.signal)
+          if (!replaced && !abort.signal.aborted && !controller.signal.aborted)
+            await api.transport.reconnect().catch((error) => {
+              log.info("server reconnection failed", { attempt, error: errorMessage(error) })
+            })
         }
       })()
     }
@@ -138,6 +143,7 @@ export const { use: useClient, provider: ClientProvider } = createSimpleContext(
     onCleanup(() => {
       abort.abort()
       stream?.abort()
+      api.transport.close()
       events.clear()
     })
 
@@ -151,9 +157,11 @@ export const { use: useClient, provider: ClientProvider } = createSimpleContext(
       event: {
         on: events.on,
         listen: events.listen,
-        filter(accept: (event: YCodingEvent) => boolean) {
+        filter(accept: (event: EventSubscribeOutput) => boolean) {
           filters.add(accept)
-          return () => { filters.delete(accept) }
+          return () => {
+            filters.delete(accept)
+          }
         },
       },
       connection: {

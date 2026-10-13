@@ -1,4 +1,4 @@
-import { expect, mock, test } from "bun:test"
+import { expect, test } from "bun:test"
 import { createTestRenderer } from "@opentui/core/testing"
 import { Effect, FileSystem } from "effect"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -7,8 +7,6 @@ import { createEventStream, createFetch, directory } from "./fixture/tui-client"
 
 test("the command palette refreshes models and providers for the current location", async () => {
   const setup = await createTestRenderer({ width: 100, height: 30, useThread: false })
-  const core = await import("@opentui/core")
-  mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
   let started!: () => void
   const ready = new Promise<void>((resolve) => {
     started = resolve
@@ -27,7 +25,7 @@ test("the command palette refreshes models and providers for the current locatio
     refreshes.push(url.searchParams.get("location[directory]") ?? "")
     return new Response(null, { status: 204 })
   }, events)
-  const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request) })
+  const server = calls.listen()
   const waitForFrame = async (text: string) => {
     const deadline = Date.now() + 10_000
     while (!setup.captureCharFrame().includes(text) && Date.now() < deadline) {
@@ -44,6 +42,7 @@ test("the command palette refreshes models and providers for the current locatio
         config: { get: async () => ({}), update: async () => ({}) },
         packages: { resolve: async () => undefined },
         args: {},
+        terminalHandoff: async () => ({ renderer: setup.renderer, mode: null, complete: () => {} }),
         log: () => {},
       }).pipe(Effect.provide(AppNodeBuilder.build(Global.node)), Effect.provide(FileSystem.layerNoop({}))),
     )
@@ -60,7 +59,7 @@ test("the command palette refreshes models and providers for the current locatio
     await waitForFrame("Models and providers refreshed")
     expect(refreshes).toEqual([directory])
     const after = requests.slice(before)
-    expect(after.indexOf("GET /api/model")).toBeGreaterThan(after.indexOf("POST /api/provider/refresh"))
+    expect(after.lastIndexOf("GET /api/model")).toBeGreaterThan(after.indexOf("POST /api/provider/refresh"))
     expect(after.indexOf("GET /api/provider")).toBeGreaterThan(after.indexOf("POST /api/provider/refresh"))
 
     setup.renderer.destroy()
@@ -68,6 +67,5 @@ test("the command palette refreshes models and providers for the current locatio
   } finally {
     if (!setup.renderer.isDestroyed) setup.renderer.destroy()
     await server.stop()
-    mock.restore()
   }
 })

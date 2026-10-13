@@ -75,7 +75,15 @@ async function route(url: URL, request: Request) {
     return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
   if (url.pathname === `/api/session/${sessionID}/guardrail`)
     return json({
-      data: { rootSessionID: sessionID, profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [] },
+      data: {
+        rootSessionID: sessionID,
+        profile: "standard",
+        customRules: 0,
+        approvals: 0,
+        blocked: 0,
+        counters: [],
+        invalidFiles: [],
+      },
     })
   if (url.pathname === `/api/session/${sessionID}/diagnostics`)
     return json({
@@ -83,7 +91,7 @@ async function route(url: URL, request: Request) {
         model: session.model,
         context: { total: 0, percent: 0 },
         tokens: { uncachedInput: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
-        cache: { eligible: 0, hitRatio: 0, mechanism: "unreported", readReported: false, writeReported: false },
+        cache: { eligible: 0, hitRatio: 0, mechanism: "none", readReported: false, writeReported: false },
         requests: { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens: session.tokens },
       },
     })
@@ -92,7 +100,16 @@ async function route(url: URL, request: Request) {
   if (url.pathname === "/api/agent")
     return json({
       location,
-      data: [{ id: "build", name: "Build", request: { headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] }],
+      data: [
+        {
+          id: "build",
+          name: "Build",
+          request: { headers: {}, body: {} },
+          mode: "primary",
+          hidden: false,
+          permissions: [],
+        },
+      ],
     })
   if (url.pathname === "/api/skill") return json({ location, data: [] })
   if (url.pathname === "/api/mcp/resource") return json({ location, data: { resources: [], templates: [] } })
@@ -120,7 +137,10 @@ async function route(url: URL, request: Request) {
 function promptBody(value: unknown): { text: string; resume?: boolean } | undefined {
   if (typeof value !== "object" || value === null) return undefined
   if (!("text" in value) || typeof value.text !== "string") return undefined
-  return { text: value.text, ...("resume" in value && typeof value.resume === "boolean" ? { resume: value.resume } : {}) }
+  return {
+    text: value.text,
+    ...("resume" in value && typeof value.resume === "boolean" ? { resume: value.resume } : {}),
+  }
 }
 
 async function waitForFrameText(screen: { frame(): string }, text: string, attempts = 150) {
@@ -214,52 +234,109 @@ async function renderModelAuthority(input: { state: string; initial?: ModelRef; 
   const state = path.resolve("../../.cache/tui-model-authority", input.state)
   await mkdir(state, { recursive: true })
   await Bun.write(path.join(state, "model.json"), JSON.stringify({ recent: [], favorite: [], variant: {} }))
-  let selected: ModelRef | undefined = input.unselected ? undefined : input.initial ?? session.model
+  let selected: ModelRef | undefined = input.unselected ? undefined : (input.initial ?? session.model)
   let seq = 0
   const switches: ModelRef[] = []
   const prompts: { resume?: boolean; model: ModelRef | undefined }[] = []
   const receipts = Promise.withResolvers<void>()
-  const plain: ModelInfo = { ...model, id: "model-without-effort", modelID: "model-without-effort", name: "Plain model", variants: [], status: "active" }
+  const plain: ModelInfo = {
+    ...model,
+    id: "model-without-effort",
+    modelID: "model-without-effort",
+    name: "Plain model",
+    variants: [],
+    status: "active",
+  }
   const projected = new Map<string, unknown>()
-  const screen = await renderScreen({ width: 120, height: 45, state, args: { sessionID }, settle: "Message YCoding…", route: async (url, request) => {
-    if (url.pathname === "/api/session/active") return json({ data: {} })
-    if (url.pathname === "/api/session") return json({ data: [{ ...session, model: selected }], cursor: {} })
-    if (url.pathname === `/api/session/${sessionID}`) return json({ data: { ...session, model: selected } })
-    if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, [...projected.values()], { session: { ...session, model: selected } })
-    if (url.pathname === "/api/model") return json({ location, data: [{ ...model, status: "active" }, plain] satisfies ModelInfo[] })
-    if (url.pathname === "/api/model/default") return json({ location, data: { ...model, selection: session.model } })
-    if (url.pathname.startsWith(`/api/session/${sessionID}/message/`)) return json({ data: projected.get(url.pathname.split("/").at(-1)!) })
-    if (url.pathname === `/api/session/${sessionID}/model` && request.method === "POST") {
-      const body: unknown = await request.json()
-      if (!isRecord(body) || !isRecord(body.model) || typeof body.model.providerID !== "string" || typeof body.model.id !== "string" || body.model.variant !== undefined && typeof body.model.variant !== "string") throw new Error("Invalid model selection request")
-      selected = { providerID: body.model.providerID, id: body.model.id, ...(body.model.variant === undefined ? {} : { variant: body.model.variant }) }
-      switches.push(selected)
-      return new Response(null, { status: 204 })
-    }
-    if (url.pathname === `/api/session/${sessionID}/prompt` && request.method === "POST") {
-      const body: unknown = await request.json()
-      const prompt = promptBody(body)
-      if (!isRecord(body) || typeof body.id !== "string" || !prompt) throw new Error("Invalid prompt admission request")
-      prompts.push({ resume: prompt.resume, model: selected })
-      if (prompt.resume) receipts.resolve()
-      return json({ data: { id: body.id, sessionID, admittedSeq: prompts.length, timeCreated: 1, type: "user", data: { text: prompt.text, files: [] }, delivery: "steer" } })
-    }
-    return route(url, request)
-  } })
+  const screen = await renderScreen({
+    width: 120,
+    height: 45,
+    state,
+    args: { sessionID },
+    settle: "Message YCoding…",
+    route: async (url, request) => {
+      if (url.pathname === "/api/session/active") return json({ data: {} })
+      if (url.pathname === "/api/session") return json({ data: [{ ...session, model: selected }], cursor: {} })
+      if (url.pathname === `/api/session/${sessionID}`) return json({ data: { ...session, model: selected } })
+      if (url.pathname === `/api/session/${sessionID}/snapshot`)
+        return sessionSnapshot(sessionID, [...projected.values()], { session: { ...session, model: selected } })
+      if (url.pathname === "/api/model")
+        return json({ location, data: [{ ...model, status: "active" }, plain] satisfies ModelInfo[] })
+      if (url.pathname === "/api/model/default") return json({ location, data: { ...model, selection: session.model } })
+      if (url.pathname.startsWith(`/api/session/${sessionID}/message/`))
+        return json({ data: projected.get(url.pathname.split("/").at(-1)!) })
+      if (url.pathname === `/api/session/${sessionID}/model` && request.method === "POST") {
+        const body: unknown = await request.json()
+        if (
+          !isRecord(body) ||
+          !isRecord(body.model) ||
+          typeof body.model.providerID !== "string" ||
+          typeof body.model.id !== "string" ||
+          (body.model.variant !== undefined && typeof body.model.variant !== "string")
+        )
+          throw new Error("Invalid model selection request")
+        selected = {
+          providerID: body.model.providerID,
+          id: body.model.id,
+          ...(body.model.variant === undefined ? {} : { variant: body.model.variant }),
+        }
+        switches.push(selected)
+        return new Response(null, { status: 204 })
+      }
+      if (url.pathname === `/api/session/${sessionID}/prompt` && request.method === "POST") {
+        const body: unknown = await request.json()
+        const prompt = promptBody(body)
+        if (!isRecord(body) || typeof body.id !== "string" || !prompt)
+          throw new Error("Invalid prompt admission request")
+        prompts.push({ resume: prompt.resume, model: selected })
+        if (prompt.resume) receipts.resolve()
+        return json({
+          data: {
+            id: body.id,
+            sessionID,
+            admittedSeq: prompts.length,
+            timeCreated: 1,
+            type: "user",
+            data: { text: prompt.text, files: [] },
+            delivery: "steer",
+          },
+        })
+      }
+      return route(url, request)
+    },
+  })
   await screen.waitForEventStream()
   return {
-    screen, switches, prompts, settled: receipts.promise,
+    screen,
+    switches,
+    prompts,
+    settled: receipts.promise,
     selectExternal(next: ModelRef) {
       selected = next
       seq += 1
       const id = `evt_authority_${seq}`
-      projected.set(id.replace(/^evt_/, "msg_"), { id: id.replace(/^evt_/, "msg_"), type: "model-switched", model: next, time: { created: seq + 3 } })
-      screen.events.emit({ id, created: seq + 3, durable: { aggregateID: sessionID, seq, version: 1 }, type: "session.model.selected", location: { directory }, data: { sessionID, model: next } } satisfies YCodingEvent)
+      projected.set(id.replace(/^evt_/, "msg_"), {
+        id: id.replace(/^evt_/, "msg_"),
+        type: "model-switched",
+        model: next,
+        time: { created: seq + 3 },
+      })
+      screen.events.emit({
+        id,
+        created: seq + 3,
+        durable: { aggregateID: sessionID, seq, version: 1 },
+        type: "session.model.selected",
+        location: { directory },
+        data: { sessionID, model: next },
+      } satisfies YCodingEvent)
     },
   }
 }
 
-const externalTargets: readonly ModelRef[] = [{ ...session.model, variant: "low" }, { providerID: "openai", id: "model-without-effort" }]
+const externalTargets: readonly ModelRef[] = [
+  { ...session.model, variant: "low" },
+  { providerID: "openai", id: "model-without-effort" },
+]
 for (const target of externalTargets) {
   test(`ordinary submit follows external durable ${target.id} ${target.variant ?? "base"} without silently reselecting`, async () => {
     const probe = await renderModelAuthority({ state: `external-${target.id}-${target.variant ?? "base"}` })
@@ -272,8 +349,13 @@ for (const target of externalTargets) {
       expect(await waitForFrameText(probe.screen, "Message YCoding…")).toBe(true)
       await probe.settled
       expect(probe.switches).toEqual([])
-      expect(probe.prompts).toEqual([{ resume: false, model: target }, { resume: true, model: target }])
-    } finally { await probe.screen.dispose() }
+      expect(probe.prompts).toEqual([
+        { resume: false, model: target },
+        { resume: true, model: target },
+      ])
+    } finally {
+      await probe.screen.dispose()
+    }
   }, 30_000)
 }
 
@@ -292,19 +374,29 @@ test("a genuine pending effort survives an external durable model update and swi
     const desired = { ...session.model, variant: "low" }
     await probe.settled
     expect(probe.switches).toEqual([desired])
-    expect(probe.prompts).toEqual([{ resume: false, model: desired }, { resume: true, model: desired }])
-  } finally { await probe.screen.dispose() }
+    expect(probe.prompts).toEqual([
+      { resume: false, model: desired },
+      { resume: true, model: desired },
+    ])
+  } finally {
+    await probe.screen.dispose()
+  }
 }, 30_000)
 
 test("an unavailable durable effort retains the draft without silently repairing or admitting it", async () => {
-  const probe = await renderModelAuthority({ state: "unavailable-effort", initial: { ...session.model, variant: "max" } })
+  const probe = await renderModelAuthority({
+    state: "unavailable-effort",
+    initial: { ...session.model, variant: "max" },
+  })
   try {
     await typeAndSend(probe.screen, "keep this invalid selection draft")
     expect(await waitForFrameText(probe.screen, "Model selection needs attention")).toBe(true)
     expect(probe.screen.frame()).toContain("keep this invalid selection draft")
     expect(probe.switches).toEqual([])
     expect(probe.prompts).toEqual([])
-  } finally { await probe.screen.dispose() }
+  } finally {
+    await probe.screen.dispose()
+  }
 }, 30_000)
 
 test("an existing Session without a saved model admits on its default without persisting a UI fallback", async () => {
@@ -314,8 +406,13 @@ test("an existing Session without a saved model admits on its default without pe
     expect(await waitForFrameText(probe.screen, "Message YCoding…")).toBe(true)
     await probe.settled
     expect(probe.switches).toEqual([])
-    expect(probe.prompts).toEqual([{ resume: false, model: undefined }, { resume: true, model: undefined }])
-  } finally { await probe.screen.dispose() }
+    expect(probe.prompts).toEqual([
+      { resume: false, model: undefined },
+      { resume: true, model: undefined },
+    ])
+  } finally {
+    await probe.screen.dispose()
+  }
 }, 30_000)
 
 test("holds the composer behind an awaited model switch and admits on the selected variant", async () => {

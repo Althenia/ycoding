@@ -63,7 +63,9 @@ async function route(url: URL) {
   if (url.pathname === `/api/session/${parentID}`) return json({ data: parent })
   if (url.pathname === `/api/session/${childID}`) return json({ data: child })
   if (url.pathname === `/api/session/${parentID}/snapshot` || url.pathname === `/api/session/${childID}/snapshot`)
-    return sessionSnapshot(url.pathname === `/api/session/${childID}/snapshot` ? childID : parentID, [], { session: url.pathname === `/api/session/${childID}/snapshot` ? child : parent })
+    return sessionSnapshot(url.pathname === `/api/session/${childID}/snapshot` ? childID : parentID, [], {
+      session: url.pathname === `/api/session/${childID}/snapshot` ? child : parent,
+    })
   if (url.pathname === `/api/session/${childID}/permission`) return json({ location, data: childPermissions })
   if (url.pathname === `/api/session/${parentID}/permission`) return json({ location, data: [] })
   if (url.pathname.endsWith(`/permission/${childPermission.id}/reply`)) {
@@ -78,13 +80,21 @@ async function route(url: URL) {
         model: parent.model,
         context: { total: 0, percent: 0 },
         tokens: { uncachedInput: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
-        cache: { eligible: 0, hitRatio: 0, mechanism: "unreported", readReported: false, writeReported: false },
+        cache: { eligible: 0, hitRatio: 0, mechanism: "none", readReported: false, writeReported: false },
         requests: { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens: parent.tokens },
       },
     })
   if (url.pathname === `/api/session/${parentID}/guardrail` || url.pathname === `/api/session/${childID}/guardrail`)
     return json({
-      data: { rootSessionID: parentID, profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [] },
+      data: {
+        rootSessionID: parentID,
+        profile: "standard",
+        customRules: 0,
+        approvals: 0,
+        blocked: 0,
+        counters: [],
+        invalidFiles: [],
+      },
     })
   if (url.pathname === "/api/model") return json({ location, data: [model] })
   if (url.pathname === "/api/provider") return json({ location, data: [{ id: "openai", name: "OpenAI" }] })
@@ -92,14 +102,29 @@ async function route(url: URL) {
     return json({
       location,
       data: [
-        { id: "build", name: "Build", request: { headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] },
-        { id: "general", name: "General", request: { headers: {}, body: {} }, mode: "subagent", hidden: false, permissions: [] },
+        {
+          id: "build",
+          name: "Build",
+          request: { headers: {}, body: {} },
+          mode: "primary",
+          hidden: false,
+          permissions: [],
+        },
+        {
+          id: "general",
+          name: "General",
+          request: { headers: {}, body: {} },
+          mode: "subagent",
+          hidden: false,
+          permissions: [],
+        },
       ],
     })
   if (url.pathname === "/api/skill") return json({ location, data: [] })
   if (url.pathname === "/api/mcp/resource") return json({ location, data: { resources: [], templates: [] } })
   if (url.pathname === "/api/vcs/branch") return json({ location, data: { current: "main", default: "main" } })
-  if (url.pathname === "/path") return json({ home: process.env.HOME, state: "", config: "", worktree: directory, directory })
+  if (url.pathname === "/path")
+    return json({ home: process.env.HOME, state: "", config: "", worktree: directory, directory })
   if (
     [
       `/api/session/${parentID}/pending`,
@@ -175,13 +200,15 @@ test("surfaces a live subagent permission in the subagent view", async () => {
 }, 30_000)
 
 test("shows the download side-effect warning on selected Chrome site approval", async () => {
-  childPermissions = [{
-    ...childPermission,
-    id: "per_chrome_site",
-    action: "browser_interact",
-    resources: ["https://example.test/form"],
-    metadata: { mode: "selected", incidentalDownloads: true, site: "https://example.test" },
-  }]
+  childPermissions = [
+    {
+      ...childPermission,
+      id: "per_chrome_site",
+      action: "browser_interact",
+      resources: ["https://example.test/form"],
+      metadata: { mode: "selected", incidentalDownloads: true, site: "https://example.test" },
+    },
+  ]
   const screen = await renderScreen({
     width: 120,
     height: 40,

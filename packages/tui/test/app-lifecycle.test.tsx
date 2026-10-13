@@ -1,4 +1,4 @@
-import { expect, mock, test } from "bun:test"
+import { expect, test } from "bun:test"
 import { createTestRenderer } from "@opentui/core/testing"
 import { Effect, FileSystem } from "effect"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -7,8 +7,6 @@ import { createEventStream, createFetch, directory, json, sessionSnapshot } from
 
 test("SIGHUP clears title and disposes scoped resources once", async () => {
   const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
-  const core = await import("@opentui/core")
-  mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
   const titles: string[] = []
   let started!: () => void
   const ready = new Promise<void>((resolve) => {
@@ -23,7 +21,7 @@ test("SIGHUP clears title and disposes scoped resources once", async () => {
   const listeners = new Set(process.listeners("SIGHUP"))
   const events = createEventStream()
   const calls = createFetch(undefined, events)
-  const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request) })
+  const server = calls.listen()
   try {
     const { run } = await import("../src/app")
     const task = Effect.runPromise(
@@ -32,6 +30,7 @@ test("SIGHUP clears title and disposes scoped resources once", async () => {
         config: { get: async () => ({}), update: async () => ({}) },
         packages: { resolve: async () => undefined },
         args: {},
+        terminalHandoff: async () => ({ renderer: setup.renderer, mode: null, complete: () => {} }),
         log: () => {},
       }).pipe(Effect.provide(AppNodeBuilder.build(Global.node)), Effect.provide(FileSystem.layerNoop({}))),
     )
@@ -45,14 +44,11 @@ test("SIGHUP clears title and disposes scoped resources once", async () => {
   } finally {
     if (!setup.renderer.isDestroyed) setup.renderer.destroy()
     await server.stop()
-    mock.restore()
   }
 })
 
 test("Escape never exits and Ctrl+C requires two presses", async () => {
   const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
-  const core = await import("@opentui/core")
-  mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
   let started!: () => void
   const ready = new Promise<void>((resolve) => {
     started = resolve
@@ -64,7 +60,7 @@ test("Escape never exits and Ctrl+C requires two presses", async () => {
   }
   const events = createEventStream()
   const calls = createFetch(undefined, events)
-  const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request) })
+  const server = calls.listen()
 
   try {
     const { run } = await import("../src/app")
@@ -75,6 +71,7 @@ test("Escape never exits and Ctrl+C requires two presses", async () => {
         config: { get: async () => ({}), update: async () => ({}) },
         packages: { resolve: async () => undefined },
         args: {},
+        terminalHandoff: async () => ({ renderer: setup.renderer, mode: null, complete: () => {} }),
         log: () => {},
       }).pipe(Effect.provide(AppNodeBuilder.build(Global.node)), Effect.provide(FileSystem.layerNoop({}))),
     ).then(() => {
@@ -98,14 +95,11 @@ test("Escape never exits and Ctrl+C requires two presses", async () => {
   } finally {
     if (!setup.renderer.isDestroyed) setup.renderer.destroy()
     await server.stop()
-    mock.restore()
   }
 })
 
 test("session lifecycle updates the terminal title and prints the epilogue after cleanup", async () => {
   const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
-  const core = await import("@opentui/core")
-  mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
   let initialTitle!: () => void
   const initialTitleSet = new Promise<void>((resolve) => {
     initialTitle = resolve
@@ -147,7 +141,7 @@ test("session lifecycle updates the terminal title and prints the epilogue after
     if (url.pathname === "/api/vcs/branch") return json({ location: { directory }, data: {} })
     return undefined
   }, events)
-  const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request) })
+  const server = calls.listen()
   const originalWrite = process.stdout.write.bind(process.stdout)
   let stdout = ""
   process.stdout.write = ((chunk: string | Uint8Array) => {
@@ -163,6 +157,7 @@ test("session lifecycle updates the terminal title and prints the epilogue after
         config: { get: async () => ({}), update: async () => ({}) },
         packages: { resolve: async () => undefined },
         args: { sessionID: "dummy" },
+        terminalHandoff: async () => ({ renderer: setup.renderer, mode: null, complete: () => {} }),
         log: () => {},
       }).pipe(Effect.provide(AppNodeBuilder.build(Global.node)), Effect.provide(FileSystem.layerNoop({}))),
     )
@@ -186,14 +181,11 @@ test("session lifecycle updates the terminal title and prints the epilogue after
     process.stdout.write = originalWrite
     if (!setup.renderer.isDestroyed) setup.renderer.destroy()
     await server.stop()
-    mock.restore()
   }
 })
 
 test("explicit session bootstrap restores its location-scoped model without an invalid-model warning", async () => {
   const setup = await createTestRenderer({ width: 120, height: 32, useThread: false })
-  const core = await import("@opentui/core")
-  mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
 
   const defaultDirectory = "/tmp/ycoding/default"
   const sessionDirectory = "/tmp/ycoding/session-workspace"
@@ -256,13 +248,15 @@ test("explicit session bootstrap restores its location-scoped model without an i
     if (url.pathname === "/api/location") return json(location)
     if (url.pathname === "/api/session") return json({ data: [], cursor: {} })
     if (url.pathname === "/api/session/ses_resume") return json({ data: session })
-    if (url.pathname === "/api/session/ses_resume/snapshot") return sessionSnapshot("ses_resume", [citation], { session })
+    if (url.pathname === "/api/session/ses_resume/snapshot")
+      return sessionSnapshot("ses_resume", [citation], { session })
     if (url.pathname === "/api/session/ses_resume/pending") return json({ data: [] })
     if (url.pathname === "/api/session/ses_resume/permission") return json({ data: [] })
     if (url.pathname === "/api/vcs/branch") return json({ location, data: {} })
     // The rail docks from 120 columns, so this 120-column session also loads its rail sections.
     if (url.pathname === "/api/session/ses_resume/todo") return json({ data: [] })
-    if (url.pathname === "/api/session/ses_resume/subagent") return json({ data: [] })
+    if (url.pathname === "/api/session/ses_resume/subagent")
+      return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
     if (url.pathname === "/api/session/ses_resume/skills") return json({ data: [] })
     if (url.pathname === "/api/session/ses_resume/guardrail/request") return json({ data: [] })
     if (url.pathname === "/api/session/ses_resume/guardrail")
@@ -293,7 +287,7 @@ test("explicit session bootstrap restores its location-scoped model without an i
     if (url.pathname === "/api/form/request") return json({ location, data: [] })
     return undefined
   }, events)
-  const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request) })
+  const server = calls.listen()
 
   let titled!: () => void
   const titleReady = new Promise<void>((resolve) => {
@@ -313,6 +307,7 @@ test("explicit session bootstrap restores its location-scoped model without an i
         config: { get: async () => ({}), update: async () => ({}) },
         packages: { resolve: async () => undefined },
         args: { sessionID: "ses_resume" },
+        terminalHandoff: async () => ({ renderer: setup.renderer, mode: null, complete: () => {} }),
         log: () => {},
       }).pipe(Effect.provide(AppNodeBuilder.build(Global.node)), Effect.provide(FileSystem.layerNoop({}))),
     )
@@ -336,6 +331,5 @@ test("explicit session bootstrap restores its location-scoped model without an i
   } finally {
     if (!setup.renderer.isDestroyed) setup.renderer.destroy()
     await server.stop()
-    mock.restore()
   }
 })

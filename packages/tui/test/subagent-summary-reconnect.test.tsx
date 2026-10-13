@@ -76,7 +76,10 @@ test("refreshes a resident subagent summary after reconnect and rejects the pre-
     expect(data.session.subagent.summary(parentID)?.active).toBe(1)
 
     data.session.subagent.invalidate(parentID)
-    const pendingStale = data.session.subagent.sync(parentID)
+    const staleOutcome = data.session.subagent.sync(parentID).then(
+      () => undefined,
+      (error: unknown) => error,
+    )
     await waitFor(() => subagentRequests === 2, "pre-disconnect subagent request")
 
     active = 0
@@ -84,7 +87,7 @@ test("refreshes a resident subagent summary after reconnect and rejects the pre-
     await waitFor(() => activeRequests === 2, "reconnected active-session snapshot")
     await waitFor(() => subagentRequests === 3, "resident subagent refresh")
     releaseStale()
-    await pendingStale
+    expect(await staleOutcome).toMatchObject({ _tag: "V5ClientError", status: "unknown" })
 
     await app.waitForFrame((frame) => frame.includes("subagents 0"))
     expect(data.session.subagent.summary(parentID)).toEqual({ total: 0, active: 0, running: 0, waiting: 0 })

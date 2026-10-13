@@ -61,41 +61,85 @@ const guardrailRequest = {
 test("captures runtime dialog frames at reference dimensions", async () => {
   for (const viewport of viewports) {
     for (const tab of ["overview", "usage"] as const) {
-      await capture(`screen-runtime-provider-usage-${tab}-${viewport.width}x${viewport.height}.txt`, viewport, tab === "overview" ? "YCODING BACKEND" : "Provider capture", () => (
-        <RuntimeProviders>
-          <ProviderUsageFixture tab={tab} />
-        </RuntimeProviders>
-      ))
+      await capture(
+        `screen-runtime-provider-usage-${tab}-${viewport.width}x${viewport.height}.txt`,
+        viewport,
+        tab === "overview" ? "YCODING BACKEND" : "Provider capture",
+        () => (
+          <RuntimeProviders>
+            <ProviderUsageFixture tab={tab} />
+          </RuntimeProviders>
+        ),
+      )
     }
-    await capture(`dialog-runtime-permission-${viewport.width}x${viewport.height}.txt`, viewport, "Permission required", () => (
-      <RuntimeProviders>
-        <PermissionPrompt request={permissionRequest} />
-      </RuntimeProviders>
-    ))
-    await capture(`dialog-runtime-guardrail-${viewport.width}x${viewport.height}.txt`, viewport, "Guardrail blocked", () => (
-      <RuntimeProviders>
-        <GuardrailPrompt request={guardrailRequest} />
-      </RuntimeProviders>
-    ))
+    await capture(
+      `dialog-runtime-permission-${viewport.width}x${viewport.height}.txt`,
+      viewport,
+      "Permission required",
+      () => (
+        <RuntimeProviders>
+          <PermissionPrompt request={permissionRequest} />
+        </RuntimeProviders>
+      ),
+    )
+    await capture(
+      `dialog-runtime-guardrail-${viewport.width}x${viewport.height}.txt`,
+      viewport,
+      "Guardrail blocked",
+      () => (
+        <RuntimeProviders>
+          <GuardrailPrompt request={guardrailRequest} />
+        </RuntimeProviders>
+      ),
+    )
   }
 }, 120_000)
 
 test("captures complete bounded command and edit reviews without nested scroll owners", async () => {
   for (const action of ["shell", "edit", "guardrail"] as const) {
-    const lines = [...Array.from({ length: 60 }, (_, index) => `display-only review line ${index}`), "FINAL_DETAILS_SENTINEL"]
+    const lines = [
+      ...Array.from({ length: 60 }, (_, index) => `display-only review line ${index}`),
+      "FINAL_DETAILS_SENTINEL",
+    ]
     const height = action === "guardrail" ? 24 : 12
     const app = await testRender(
       () => (
         <RuntimeProviders>
-          {action === "guardrail" ? <GuardrailPrompt request={{
-            id: "guardrail_long", rootSessionID: "session_capture", sessionID: "session_capture", action: "shell",
-            resources: [lines.join("\n")], reason: "Review complete display-only command", ruleIDs: [], standard: true,
-          }} /> : <PermissionPrompt request={{
-            id: `permission_long_${action}`, sessionID: "session_capture", action,
-            resources: [action === "shell" ? lines.join("\n") : "display-only.txt"],
-            metadata: action === "edit" ? { diff: ["--- a/display-only.txt", "+++ b/display-only.txt", `@@ -0,0 +1,${lines.length} @@`, ...lines.map((line) => `+${line}`)].join("\n") } : {},
-            save: ["workspace"],
-          }} />}
+          {action === "guardrail" ? (
+            <GuardrailPrompt
+              request={{
+                id: "guardrail_long",
+                rootSessionID: "session_capture",
+                sessionID: "session_capture",
+                action: "shell",
+                resources: [lines.join("\n")],
+                reason: "Review complete display-only command",
+                ruleIDs: [],
+                standard: true,
+              }}
+            />
+          ) : (
+            <PermissionPrompt
+              request={{
+                id: `permission_long_${action}`,
+                sessionID: "session_capture",
+                action,
+                resources: [action === "shell" ? lines.join("\n") : "display-only.txt"],
+                metadata:
+                  action === "edit"
+                    ? {
+                        diff: [
+                          "--- a/display-only.txt",
+                          "+++ b/display-only.txt",
+                          `@@ -0,0 +1,${lines.length} @@`,
+                          ...lines.map((line) => `+${line}`),
+                        ].join("\n"),
+                      }
+                    : {},
+                save: ["workspace"],
+              }}
+            />
+          )}
         </RuntimeProviders>
       ),
       { width: 80, height, kittyKeyboard: true },
@@ -111,7 +155,10 @@ test("captures complete bounded command and edit reviews without nested scroll o
         expect(scrolls[0].height).toBeGreaterThanOrEqual(5)
         expect(app.captureCharFrame()).toContain("display-only review line 4")
       }
-      await Bun.write(path.join(output, `dialog-runtime-review-long-${action}-80x${height}.txt`), app.captureCharFrame())
+      await Bun.write(
+        path.join(output, `dialog-runtime-review-long-${action}-80x${height}.txt`),
+        app.captureCharFrame(),
+      )
       for (let page = 0; page < 100 && !app.captureCharFrame().includes("FINAL_DETAILS_SENTINEL"); page++) {
         app.mockInput.pressKey("\u001b[6~")
         await app.renderOnce()
@@ -119,7 +166,10 @@ test("captures complete bounded command and edit reviews without nested scroll o
       expect(app.captureCharFrame()).toContain("FINAL_DETAILS_SENTINEL")
       expect(app.captureCharFrame()).toContain("Allow once")
       expect(app.captureCharFrame()).toContain("Deny")
-      await Bun.write(path.join(output, `dialog-runtime-review-long-${action}-end-80x${height}.txt`), app.captureCharFrame())
+      await Bun.write(
+        path.join(output, `dialog-runtime-review-long-${action}-end-80x${height}.txt`),
+        app.captureCharFrame(),
+      )
     } finally {
       app.renderer.destroy()
     }
@@ -129,35 +179,35 @@ test("captures complete bounded command and edit reviews without nested scroll o
 function ProviderUsageFixture(props: { tab: "overview" | "usage" }) {
   return (
     <ProviderUsageScreenContent
-        initialTab={props.tab}
-        snapshots={() => providerSnapshots}
-        now={() => 1_000}
-        backendUsage={() => ({
-          logical: 3,
-          physical: 3,
-          helpers: 0,
-          continued: 0,
-          fallback: 0,
-          tokens: { input: 2_863, output: 128, reasoning: 0, cache: { read: 247_996, write: 14_184 } },
-          cacheReadReported: true,
-          cost: 10.12,
-          models: [
-            {
-              model: { providerID: "anthropic", id: "claude-opus-5", variant: "high" },
-              requests: 1,
-              tokens: { input: 1_411, output: 53, reasoning: 0, cache: { read: 220_672, write: 12_004 } },
-              cacheReadReported: true,
-              cost: 9.08,
-            },
-            {
-              model: { providerID: "anthropic", id: "claude-sonnet-5" },
-              requests: 2,
-              tokens: { input: 1_452, output: 75, reasoning: 0, cache: { read: 27_324, write: 2_180 } },
-              cacheReadReported: true,
-              cost: 1.04,
-            },
-          ],
-        })}
+      initialTab={props.tab}
+      snapshots={() => providerSnapshots}
+      now={() => 1_000}
+      backendUsage={() => ({
+        logical: 3,
+        physical: 3,
+        helpers: 0,
+        continued: 0,
+        fallback: 0,
+        tokens: { input: 2_863, output: 128, reasoning: 0, cache: { read: 247_996, write: 14_184 } },
+        cacheReadReported: true,
+        cost: 10.12,
+        models: [
+          {
+            model: { providerID: "anthropic", id: "claude-opus-5", variant: "high" },
+            requests: 1,
+            tokens: { input: 1_411, output: 53, reasoning: 0, cache: { read: 220_672, write: 12_004 } },
+            cacheReadReported: true,
+            cost: 9.08,
+          },
+          {
+            model: { providerID: "anthropic", id: "claude-sonnet-5" },
+            requests: 2,
+            tokens: { input: 1_452, output: 75, reasoning: 0, cache: { read: 27_324, write: 2_180 } },
+            cacheReadReported: true,
+            cost: 1.04,
+          },
+        ],
+      })}
     />
   )
 }
@@ -183,12 +233,7 @@ function RuntimeProviders(props: { children: JSX.Element }) {
   )
 }
 
-async function capture(
-  name: string,
-  viewport: (typeof viewports)[number],
-  settle: string,
-  view: () => JSX.Element,
-) {
+async function capture(name: string, viewport: (typeof viewports)[number], settle: string, view: () => JSX.Element) {
   const app = await testRender(view, viewport)
   app.renderer.start()
   await app.waitForFrame((frame) => frame.includes(settle))
@@ -261,7 +306,7 @@ function assertGuardrailGrammar(root: Renderable, rows: string[], width: number)
   expectAt(rows, choose.row + 3, title.column + 3, "Allow once")
   expectAt(rows, choose.row + 5, title.column + 3, "Allow for this session")
   expectAt(rows, choose.row + 8, title.column + 3, "pgup/pgdn review")
-  expectAt(rows, choose.row + 9, title.column + 3, "guardrails apply even in YOLO")
+  expectAt(rows, choose.row + 9, title.column + 3, "ordinary reviews auto-approve")
   expect(choose.row + 9).toBeLessThan(rows.length)
   expectCenteredSelectionBand(panel, root, "session.guardrail.action.reject")
 }

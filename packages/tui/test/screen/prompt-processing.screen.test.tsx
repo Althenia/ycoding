@@ -71,19 +71,41 @@ function route(messages: SessionMessageInfo[], admitted: SessionPendingInfo[] = 
     if (url.pathname === "/api/agent")
       return json({
         location,
-        data: [{ id: "general", name: "General", request: { headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] }],
+        data: [
+          {
+            id: "general",
+            name: "General",
+            request: { headers: {}, body: {} },
+            mode: "primary",
+            hidden: false,
+            permissions: [],
+          },
+        ],
       })
-    if (/\/(permission|skills|todo|guardrail\/request)$/.test(url.pathname) || ["/api/shell", "/api/mcp", "/api/command", "/api/skill"].includes(url.pathname))
+    if (
+      /\/(permission|skills|todo|guardrail\/request)$/.test(url.pathname) ||
+      ["/api/shell", "/api/mcp", "/api/command", "/api/skill"].includes(url.pathname)
+    )
       return json({ location, data: [] })
     if (url.pathname === `/api/session/${sessionID}/guardrail`)
-      return json({ data: { rootSessionID: sessionID, profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [] } })
+      return json({
+        data: {
+          rootSessionID: sessionID,
+          profile: "standard",
+          customRules: 0,
+          approvals: 0,
+          blocked: 0,
+          counters: [],
+          invalidFiles: [],
+        },
+      })
     if (url.pathname === `/api/session/${sessionID}/diagnostics`)
       return json({
         data: {
           model,
           context: { total: 0, percent: 0 },
           tokens: { uncachedInput: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
-          cache: { eligible: 0, mechanism: "unreported", readReported: false, writeReported: false },
+          cache: { eligible: 0, mechanism: "none", readReported: false, writeReported: false },
           requests: { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens: session.tokens },
         },
       })
@@ -143,7 +165,9 @@ function receipt(lines: string[], prompt: string) {
 }
 
 let sequence = 0
-function execution(type: "session.execution.started" | "session.execution.interrupted" | "session.execution.failed"): YCodingEvent {
+function execution(
+  type: "session.execution.started" | "session.execution.interrupted" | "session.execution.failed",
+): YCodingEvent {
   sequence += 1
   return {
     id: `evt_execution_${sequence}`,

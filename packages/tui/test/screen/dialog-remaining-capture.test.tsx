@@ -45,7 +45,15 @@ import { DialogRetryAction } from "../../src/component/dialog-retry-action"
 import { DialogSessionDeleteFailed } from "../../src/component/dialog-session-delete-failed"
 import { DialogThemeList } from "../../src/component/dialog-theme-list"
 import { DialogWorkspaceFileChanges } from "../../src/component/dialog-workspace-file-changes"
-import { createApi, createEventStream, createFetch, directory, json, worktree, sessionSnapshot } from "../fixture/tui-client"
+import {
+  createApi,
+  createEventStream,
+  createFetch,
+  directory,
+  json,
+  worktree,
+  sessionSnapshot,
+} from "../fixture/tui-client"
 import { TestTuiContexts } from "../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
 
@@ -84,47 +92,243 @@ const helpShortcuts = {
 
 const states = [
   { name: "mcp-servers", settle: "agentmemory", evidence: "Connecting", view: () => <DialogMcp /> },
-  { name: "select-agent", settle: "Default primary agent", evidence: "Background subagent", view: () => <DialogAgent /> },
+  {
+    name: "select-agent",
+    settle: "Default primary agent",
+    evidence: "Background subagent",
+    view: () => <DialogAgent />,
+  },
   { name: "settings", settle: "Settings", view: () => <DialogConfig /> },
   { name: "connect-service", settle: "GitHub Copilot", evidence: "Popular", view: () => <DialogIntegration /> },
-  { name: "connect-github-copilot", settle: "Login with GitHub Copilot", evidence: "API key", view: () => <DialogIntegrationMethods integration={integrations[2]!} /> },
-  { name: "select-model", settle: "Claude Opus 5", evidence: "Gemini 3 Pro", view: () => <DialogModel order={[
-    { providerID: "anthropic", modelID: "claude-opus-5" },
-    { providerID: "anthropic", modelID: "claude-sonnet-5" },
-    { providerID: "anthropic", modelID: "claude-haiku-4-5" },
-    { providerID: "openai", modelID: "gpt-5-2" },
-    { providerID: "google", modelID: "gemini-3-pro" },
-  ]} /> },
-  { name: "select-variant", settle: "Select variant", evidence: "balanced", view: () => <DialogVariant variants={["max", "balanced", "fast"]} current="balanced" /> },
-  { name: "switch-session", settle: "Provider cache audit", evidence: "Theme migration", view: () => <DialogSessionList pinned={[sessionID]} messageCounts={{ [sessionID]: 1_204, ses_docs_capture: 88, ses_keymap_capture: 41, ses_theme_capture: 210 }} now={captureNow} /> },
-  { name: "session-goal", settle: "Set autonomous goal", evidence: "Activate the concrete goal dialog", view: () => <DialogSessionGoal sessionID={sessionID} currentGoal="Activate the concrete goal dialog" /> },
-  { name: "session-timeline", settle: "Fix shared cache accounting", evidence: "Verify baseline", view: () => <DialogTimeline sessionID={sessionID} onMove={() => {}} presentation={[
-    { id: "msg_active", title: "Fix shared cache accounting", age: "2 min ago", status: "Active", category: "Today" },
-    { id: "msg_test", title: "Add failing test", age: "8 min ago", status: "Done", category: "Today", done: true },
-    { id: "msg_verify", title: "Verify baseline", age: "14 min ago", status: "Done", category: "Today", done: true },
-  ]} /> },
-  { name: "subagents", settle: "Triage 2 failing tests", evidence: "Benchmark cache warm", view: () => <DialogSubagent sessionID="ses_subagent_capture" /> },
-  { name: "message-actions", settle: "Copy as markdown", evidence: "Revert to here", view: () => <DialogMessage sessionID={sessionID} messageID="msg_audit" shortcuts={{ editor: "⌃x e", fork: "⌃x f" }} /> },
-  { name: "fork-session", settle: "From this message", evidence: "message 88 of 88", view: () => <DialogFork sessionID={sessionID} boundary={{ messageID: "msg_audit", index: 42, total: 88 }} /> },
-  { name: "status", settle: "v1.18.4", evidence: "Durable store", view: () => <TelemetryProvider><DialogStatus version="v1.18.4" bunVersion="1.3.14" pluginCount={1} serviceSummary={{ configured: 6, connected: 5 }} /></TelemetryProvider> },
-  { name: "move-session", settle: "~/Workspace/Personal/YCoding", evidence: "~/Workspace/work/bkof", view: () => <DialogMoveSession projectID="proj_test" current={{ type: "directory", directory: "/tmp/ycoding/home/Workspace/Personal/YCoding", subdirectory: false }} initialDirectories={directories} onSelect={() => {}} /> },
-  { name: "rename-session", settle: "Provider cache audit", evidence: "Rename session", view: () => <DialogSessionRename sessionID={sessionID} currentTitle="Provider cache audit" /> },
-  { name: "name-copy", settle: "Provider cache audit (copy)", view: () => <DialogProjectCopyName value="Provider cache audit (copy)" onConfirm={() => {}} /> },
-  { name: "session-delete-failed", settle: "Could not delete", evidence: "Docs sync sweep", view: () => <DialogSessionDeleteFailed session="Provider cache audit" workspace="broken-workspace" failures={[{ session: "Provider cache audit", reason: "Store locked" }, { session: "Docs sync sweep", reason: "In use" }]} /> },
+  {
+    name: "connect-github-copilot",
+    settle: "Login with GitHub Copilot",
+    evidence: "API key",
+    view: () => <DialogIntegrationMethods integration={integrations[2]!} />,
+  },
+  {
+    name: "select-model",
+    settle: "Claude Opus 5",
+    evidence: "Gemini 3 Pro",
+    view: () => (
+      <DialogModel
+        order={[
+          { providerID: "anthropic", modelID: "claude-opus-5" },
+          { providerID: "anthropic", modelID: "claude-sonnet-5" },
+          { providerID: "anthropic", modelID: "claude-haiku-4-5" },
+          { providerID: "openai", modelID: "gpt-5-2" },
+          { providerID: "google", modelID: "gemini-3-pro" },
+        ]}
+      />
+    ),
+  },
+  {
+    name: "select-variant",
+    settle: "Select variant",
+    evidence: "balanced",
+    view: () => <DialogVariant variants={["max", "balanced", "fast"]} current="balanced" />,
+  },
+  {
+    name: "switch-session",
+    settle: "Provider cache audit",
+    evidence: "Theme migration",
+    view: () => (
+      <DialogSessionList
+        pinned={[sessionID]}
+        messageCounts={{ [sessionID]: 1_204, ses_docs_capture: 88, ses_keymap_capture: 41, ses_theme_capture: 210 }}
+        now={captureNow}
+      />
+    ),
+  },
+  {
+    name: "session-goal",
+    settle: "Set autonomous goal",
+    evidence: "Activate the concrete goal dialog",
+    view: () => <DialogSessionGoal sessionID={sessionID} currentGoal="Activate the concrete goal dialog" />,
+  },
+  {
+    name: "session-timeline",
+    settle: "Fix shared cache accounting",
+    evidence: "Verify baseline",
+    view: () => (
+      <DialogTimeline
+        sessionID={sessionID}
+        onMove={() => {}}
+        presentation={[
+          {
+            id: "msg_active",
+            title: "Fix shared cache accounting",
+            age: "2 min ago",
+            status: "Active",
+            category: "Today",
+          },
+          {
+            id: "msg_test",
+            title: "Add failing test",
+            age: "8 min ago",
+            status: "Done",
+            category: "Today",
+            done: true,
+          },
+          {
+            id: "msg_verify",
+            title: "Verify baseline",
+            age: "14 min ago",
+            status: "Done",
+            category: "Today",
+            done: true,
+          },
+        ]}
+      />
+    ),
+  },
+  {
+    name: "subagents",
+    settle: "Triage 2 failing tests",
+    evidence: "Benchmark cache warm",
+    view: () => <DialogSubagent sessionID="ses_subagent_capture" />,
+  },
+  {
+    name: "message-actions",
+    settle: "Copy as markdown",
+    evidence: "Revert to here",
+    view: () => (
+      <DialogMessage sessionID={sessionID} messageID="msg_audit" shortcuts={{ editor: "⌃x e", fork: "⌃x f" }} />
+    ),
+  },
+  {
+    name: "fork-session",
+    settle: "From this message",
+    evidence: "message 88 of 88",
+    view: () => <DialogFork sessionID={sessionID} boundary={{ messageID: "msg_audit", index: 42, total: 88 }} />,
+  },
+  {
+    name: "status",
+    settle: "v1.18.4",
+    evidence: "Durable store",
+    view: () => (
+      <TelemetryProvider>
+        <DialogStatus
+          version="v1.18.4"
+          bunVersion="1.3.14"
+          pluginCount={1}
+          serviceSummary={{ configured: 6, connected: 5 }}
+        />
+      </TelemetryProvider>
+    ),
+  },
+  {
+    name: "move-session",
+    settle: "~/Workspace/Personal/YCoding",
+    evidence: "~/Workspace/work/bkof",
+    view: () => (
+      <DialogMoveSession
+        projectID="proj_test"
+        current={{ type: "directory", directory: "/tmp/ycoding/home/Workspace/Personal/YCoding", subdirectory: false }}
+        initialDirectories={directories}
+        onSelect={() => {}}
+      />
+    ),
+  },
+  {
+    name: "rename-session",
+    settle: "Provider cache audit",
+    evidence: "Rename session",
+    view: () => <DialogSessionRename sessionID={sessionID} currentTitle="Provider cache audit" />,
+  },
+  {
+    name: "name-copy",
+    settle: "Provider cache audit (copy)",
+    view: () => <DialogProjectCopyName value="Provider cache audit (copy)" onConfirm={() => {}} />,
+  },
+  {
+    name: "session-delete-failed",
+    settle: "Could not delete",
+    evidence: "Docs sync sweep",
+    view: () => (
+      <DialogSessionDeleteFailed
+        session="Provider cache audit"
+        workspace="broken-workspace"
+        failures={[
+          { session: "Provider cache audit", reason: "Store locked" },
+          { session: "Docs sync sweep", reason: "In use" },
+        ]}
+      />
+    ),
+  },
   { name: "export-options", settle: "Export session", view: () => <DialogExportOptions defaultThinking /> },
-  { name: "export-result", settle: "Export complete", evidence: "1.2 MB", view: () => <DialogExportResult path="~/Downloads/provider-cache-audit.md" size="1.2 MB" /> },
-  { name: "workspace-changes", settle: "Workspace changes", view: () => <DialogWorkspaceFileChanges title="Workspace changes" message="Keep the current changes before moving the session?" files={[{ file: "packages/tui/src/ui/dialog.tsx", status: "modified", additions: 12, deletions: 4 }]} onSelect={() => {}} /> },
-  { name: "select-theme", settle: "tokyonight", evidence: "←/→ preview", view: () => <DialogThemeList themes={["ycoding", "tokyonight", "osaka-jade", "vesper", "catppuccin"]} current="ycoding" defaultTheme="ycoding" /> },
-  { name: "retry-action", settle: "429 rate limited", evidence: "Cancel the turn", view: () => <DialogRetryAction title="Provider connection" message="Could not connect to the provider. Check your network and credentials." label="Open provider settings" link="https://opencode.ai/go" request={{ provider: "Anthropic", error: "429 rate limited", retryAfter: "retry after 30s" }} /> },
-  { name: "help", settle: "Keyboard shortcuts", evidence: "Cycle variant", view: () => <DialogHelp shortcuts={helpShortcuts} /> },
-  { name: "stash", settle: "cache-accounting-wip", evidence: "⌃x k drop", view: () => <DialogStash onSelect={() => {}} /> },
-  { name: "run-skill", settle: "Scoped Go implementation", evidence: "Penpot UX/UI work", view: () => <DialogSkill onSelect={() => {}} /> },
+  {
+    name: "export-result",
+    settle: "Export complete",
+    evidence: "1.2 MB",
+    view: () => <DialogExportResult path="~/Downloads/provider-cache-audit.md" size="1.2 MB" />,
+  },
+  {
+    name: "workspace-changes",
+    settle: "Workspace changes",
+    view: () => (
+      <DialogWorkspaceFileChanges
+        title="Workspace changes"
+        message="Keep the current changes before moving the session?"
+        files={[{ file: "packages/tui/src/ui/dialog.tsx", status: "modified", additions: 12, deletions: 4 }]}
+        onSelect={() => {}}
+      />
+    ),
+  },
+  {
+    name: "select-theme",
+    settle: "tokyonight",
+    evidence: "←/→ preview",
+    view: () => (
+      <DialogThemeList
+        themes={["ycoding", "tokyonight", "osaka-jade", "vesper", "catppuccin"]}
+        current="ycoding"
+        defaultTheme="ycoding"
+      />
+    ),
+  },
+  {
+    name: "retry-action",
+    settle: "429 rate limited",
+    evidence: "Cancel the turn",
+    view: () => (
+      <DialogRetryAction
+        title="Provider connection"
+        message="Could not connect to the provider. Check your network and credentials."
+        label="Open provider settings"
+        link="https://opencode.ai/go"
+        request={{ provider: "Anthropic", error: "429 rate limited", retryAfter: "retry after 30s" }}
+      />
+    ),
+  },
+  {
+    name: "help",
+    settle: "Keyboard shortcuts",
+    evidence: "Cycle variant",
+    view: () => <DialogHelp shortcuts={helpShortcuts} />,
+  },
+  {
+    name: "stash",
+    settle: "cache-accounting-wip",
+    evidence: "⌃x k drop",
+    view: () => <DialogStash onSelect={() => {}} />,
+  },
+  {
+    name: "run-skill",
+    settle: "Scoped Go implementation",
+    evidence: "Penpot UX/UI work",
+    view: () => <DialogSkill onSelect={() => {}} />,
+  },
   { name: "debug", settle: "Renderer stats", evidence: "Console", view: () => <DialogDebug /> },
 ] as const
 
 test("the variant dialog renders only Grok's four offered effort IDs", async () => {
   const app = await testRender(
-    () => <DialogProviders><DialogVariant variants={["low", "medium", "high", "xhigh"]} current="high" /></DialogProviders>,
+    () => (
+      <DialogProviders>
+        <DialogVariant variants={["low", "medium", "high", "xhigh"]} current="high" />
+      </DialogProviders>
+    ),
     { width: 100, height: 30 },
   )
   app.renderer.start()
@@ -145,13 +349,32 @@ test("OAuth authorization details remain visible in a short, narrow terminal", a
   oauthStatus = "pending"
   function OAuthFixture() {
     const dialog = useDialog()
-    onMount(() => void beginOAuth(integrations[2], { id: "github", type: "oauth", label: "Login with GitHub Copilot" }, dialog))
+    onMount(
+      () =>
+        void beginOAuth(integrations[2], { id: "github", type: "oauth", label: "Login with GitHub Copilot" }, dialog),
+    )
     return null
   }
 
-  for (const viewport of [{ width: 40, height: 12 }, { width: 120, height: 12 }]) {
+  for (const viewport of [
+    { width: 40, height: 12 },
+    { width: 120, height: 12 },
+  ]) {
     let copied: string | undefined
-    const app = await testRender(() => <DialogProviders clipboard={{ write: async (value) => { copied = value } }}><OAuthFixture /></DialogProviders>, { ...viewport, kittyKeyboard: true })
+    const app = await testRender(
+      () => (
+        <DialogProviders
+          clipboard={{
+            write: async (value) => {
+              copied = value
+            },
+          }}
+        >
+          <OAuthFixture />
+        </DialogProviders>
+      ),
+      { ...viewport, kittyKeyboard: true },
+    )
     app.renderer.start()
     try {
       await app.waitForFrame((frame) => frame.includes("Waiting for authorization"))
@@ -187,13 +410,25 @@ test("auto OAuth keeps polling while accepting a manual code and cancels only wh
   oauthStatus = "pending"
   function OAuthFixture() {
     const dialog = useDialog()
-    onMount(() => void beginOAuth(integrations[2], { id: "github", type: "oauth", label: "Login with GitHub Copilot" }, dialog))
+    onMount(
+      () =>
+        void beginOAuth(integrations[2], { id: "github", type: "oauth", label: "Login with GitHub Copilot" }, dialog),
+    )
     return null
   }
-  const app = await testRender(() => <DialogProviders><OAuthFixture /></DialogProviders>, { width: 80, height: 18, kittyKeyboard: true })
+  const app = await testRender(
+    () => (
+      <DialogProviders>
+        <OAuthFixture />
+      </DialogProviders>
+    ),
+    { width: 80, height: 18, kittyKeyboard: true },
+  )
   app.renderer.start()
   try {
-    await app.waitForFrame((frame) => frame.includes("Waiting for authorization") && frame.includes("enter authorization code"))
+    await app.waitForFrame(
+      (frame) => frame.includes("Waiting for authorization") && frame.includes("enter authorization code"),
+    )
     app.mockInput.pressKey("e")
     await app.waitForFrame((frame) => frame.includes("Authorization code"))
     expect(oauthCancelled).toEqual([])
@@ -222,10 +457,20 @@ test("auto OAuth without manual capability has no code action", async () => {
   oauthStatus = "pending"
   function OAuthFixture() {
     const dialog = useDialog()
-    onMount(() => void beginOAuth(integrations[2], { id: "github", type: "oauth", label: "Login with GitHub Copilot" }, dialog))
+    onMount(
+      () =>
+        void beginOAuth(integrations[2], { id: "github", type: "oauth", label: "Login with GitHub Copilot" }, dialog),
+    )
     return null
   }
-  const app = await testRender(() => <DialogProviders><OAuthFixture /></DialogProviders>, { width: 80, height: 18, kittyKeyboard: true })
+  const app = await testRender(
+    () => (
+      <DialogProviders>
+        <OAuthFixture />
+      </DialogProviders>
+    ),
+    { width: 80, height: 18, kittyKeyboard: true },
+  )
   app.renderer.start()
   try {
     await app.waitForFrame((frame) => frame.includes("Waiting for authorization"))
@@ -246,10 +491,20 @@ test("automatic completion while manual code entry is open settles without cance
   oauthStatus = "pending"
   function OAuthFixture() {
     const dialog = useDialog()
-    onMount(() => void beginOAuth(integrations[2], { id: "github", type: "oauth", label: "Login with GitHub Copilot" }, dialog))
+    onMount(
+      () =>
+        void beginOAuth(integrations[2], { id: "github", type: "oauth", label: "Login with GitHub Copilot" }, dialog),
+    )
     return null
   }
-  const app = await testRender(() => <DialogProviders><OAuthFixture /></DialogProviders>, { width: 80, height: 18, kittyKeyboard: true })
+  const app = await testRender(
+    () => (
+      <DialogProviders>
+        <OAuthFixture />
+      </DialogProviders>
+    ),
+    { width: 80, height: 18, kittyKeyboard: true },
+  )
   app.renderer.start()
   try {
     await app.waitForFrame((frame) => frame.includes("enter authorization code"))
@@ -273,10 +528,20 @@ test("escape from manual code entry cancels its one owned attempt", async () => 
   oauthStatus = "pending"
   function OAuthFixture() {
     const dialog = useDialog()
-    onMount(() => void beginOAuth(integrations[2], { id: "github", type: "oauth", label: "Login with GitHub Copilot" }, dialog))
+    onMount(
+      () =>
+        void beginOAuth(integrations[2], { id: "github", type: "oauth", label: "Login with GitHub Copilot" }, dialog),
+    )
     return null
   }
-  const app = await testRender(() => <DialogProviders><OAuthFixture /></DialogProviders>, { width: 80, height: 18, kittyKeyboard: true })
+  const app = await testRender(
+    () => (
+      <DialogProviders>
+        <OAuthFixture />
+      </DialogProviders>
+    ),
+    { width: 80, height: 18, kittyKeyboard: true },
+  )
   app.renderer.start()
   try {
     await app.waitForFrame((frame) => frame.includes("enter authorization code"))
@@ -306,7 +571,14 @@ test("the Connect integration menu opens the custom endpoint dialog", async () =
     )
   }
 
-  const app = await testRender(() => <DialogProviders><Connect /></DialogProviders>, { width: 100, height: 35, kittyKeyboard: true, useMouse: true })
+  const app = await testRender(
+    () => (
+      <DialogProviders>
+        <Connect />
+      </DialogProviders>
+    ),
+    { width: 100, height: 35, kittyKeyboard: true, useMouse: true },
+  )
   app.renderer.start()
   await app.waitForFrame((frame) => frame.includes("Connect a service"))
   await app.mockInput.typeText("Custom OpenAI-compatible endpoint")
@@ -329,7 +601,14 @@ test("a provider's profiles offer default selection instead of an active profile
     return <SyncLocation />
   }
 
-  const app = await testRender(() => <DialogProviders><Connect /></DialogProviders>, { width: 100, height: 35, kittyKeyboard: true, useMouse: true })
+  const app = await testRender(
+    () => (
+      <DialogProviders>
+        <Connect />
+      </DialogProviders>
+    ),
+    { width: 100, height: 35, kittyKeyboard: true, useMouse: true },
+  )
   app.renderer.start()
   try {
     await app.waitForFrame((frame) => frame.includes("Linked · Claude Max, Work"))
@@ -367,8 +646,8 @@ test("profile activation closes the dialog before profile lists finish refreshin
     const dialog = useDialog()
     const data = useData()
     const workIsActive = createMemo(() =>
-      data.location
-        .integration.list()
+      data.location.integration
+        .list()
         ?.find((item) => item.id === "anthropic")
         ?.connections.some(
           (connection) => connection.type === "credential" && connection.label === "Work" && connection.active,
@@ -388,12 +667,19 @@ test("profile activation closes the dialog before profile lists finish refreshin
     )
   }
 
-  const app = await testRender(() => <DialogProviders><Connect /></DialogProviders>, {
-    width: 100,
-    height: 35,
-    kittyKeyboard: true,
-    useMouse: true,
-  })
+  const app = await testRender(
+    () => (
+      <DialogProviders>
+        <Connect />
+      </DialogProviders>
+    ),
+    {
+      width: 100,
+      height: 35,
+      kittyKeyboard: true,
+      useMouse: true,
+    },
+  )
   app.renderer.start()
   try {
     await app.waitForFrame((frame) => frame.includes("Linked · Claude Max, Work"))
@@ -409,6 +695,10 @@ test("profile activation closes the dialog before profile lists finish refreshin
     activationDialogCloseMs = performance.now() - profileActivationResponseAt
     const frame = app.captureCharFrame()
     expect(frame).toContain("Default profile changed")
+    await app.waitForFrame(() => profileRefreshPaths.length === 3)
+    expect(profileRefreshPaths.toSorted()).toEqual(["/api/integration", "/api/model/default", "/api/provider"])
+    expect(app.captureCharFrame()).toContain("Work profile inactive")
+    for (const resolve of profileRefreshResolvers) resolve()
     await app.waitForFrame(() => profileRefreshPaths.length === 4)
     expect(profileRefreshPaths.toSorted()).toEqual([
       "/api/integration",
@@ -416,7 +706,6 @@ test("profile activation closes the dialog before profile lists finish refreshin
       "/api/model/default",
       "/api/provider",
     ])
-    expect(app.captureCharFrame()).toContain("Work profile inactive")
     for (const resolve of profileRefreshResolvers) resolve()
     await profileListUpdated
     expect(displayedWorkProfileActive).toBe(true)
@@ -429,7 +718,9 @@ test("profile activation closes the dialog before profile lists finish refreshin
   }
 })
 
-const designChecks: Partial<Record<(typeof states)[number]["name"], { title: string; row: number; column: number; text: string }>> = {
+const designChecks: Partial<
+  Record<(typeof states)[number]["name"], { title: string; row: number; column: number; text: string }>
+> = {
   "mcp-servers": { title: "MCP servers", row: 7, column: 6, text: "agentmemory" },
   "select-agent": { title: "Select agent", row: 7, column: 6, text: "build" },
   settings: { title: "Settings", row: 8, column: 3, text: "Appearance" },
@@ -492,17 +783,17 @@ function DialogProviders(props: { children: JSX.Element; clipboard?: ClipboardSe
               <ToastProvider>
                 <RouteProvider initialRoute={{ type: "session", sessionID }}>
                   <ClientProvider api={createApi(transport.fetch)}>
-                      <DataProvider>
-                        <LocationProvider>
-                          <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-                            <LocalProvider>
-                              <PromptStashProvider>
-                                <DialogProvider>{props.children}</DialogProvider>
-                              </PromptStashProvider>
-                            </LocalProvider>
-                          </ThemeProvider>
-                        </LocationProvider>
-                      </DataProvider>
+                    <DataProvider>
+                      <LocationProvider>
+                        <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+                          <LocalProvider>
+                            <PromptStashProvider>
+                              <DialogProvider>{props.children}</DialogProvider>
+                            </PromptStashProvider>
+                          </LocalProvider>
+                        </ThemeProvider>
+                      </LocationProvider>
+                    </DataProvider>
                   </ClientProvider>
                 </RouteProvider>
               </ToastProvider>
@@ -531,7 +822,14 @@ async function capture(dialogState: (typeof states)[number], viewport: (typeof v
     return <SyncLocation />
   }
 
-  const app = await testRender(() => <DialogProviders><DialogFixture /></DialogProviders>, viewport)
+  const app = await testRender(
+    () => (
+      <DialogProviders>
+        <DialogFixture />
+      </DialogProviders>
+    ),
+    viewport,
+  )
   app.renderer.start()
   await app.waitForFrame((frame) => frame.includes(dialogState.settle))
 
@@ -554,7 +852,10 @@ async function capture(dialogState: (typeof states)[number], viewport: (typeof v
       expectAt(rows, origin.row + design.row - 1, origin.column + design.column, design.text)
       expectAt(rows, origin.row + 1, origin.column + 91, "esc")
     }
-    await Bun.write(path.join(renders, `dialog-remaining-${dialogState.name}-${viewport.width}x${viewport.height}.txt`), rows.join("\n"))
+    await Bun.write(
+      path.join(renders, `dialog-remaining-${dialogState.name}-${viewport.width}x${viewport.height}.txt`),
+      rows.join("\n"),
+    )
   } finally {
     app.renderer.destroy()
   }
@@ -566,10 +867,23 @@ function expectAt(rows: string[], row: number, column: number, text: string) {
 
 async function route(url: URL, request: Request) {
   if (url.pathname === "/api/integration/github-copilot/connect/oauth")
-    return json({ location, data: { attemptID: "attempt_layout", url: "https://auth.example.test/authorize?client_id=synthetic-client&scope=profile", instructions: "Enter code: TEST-ONLY", mode: "auto", ...(oauthManualCode ? { manualCode: true } : {}), time: { created: 1, expires: 2 } } })
+    return json({
+      location,
+      data: {
+        attemptID: "attempt_layout",
+        url: "https://auth.example.test/authorize?client_id=synthetic-client&scope=profile",
+        instructions: "Enter code: TEST-ONLY",
+        mode: "auto",
+        ...(oauthManualCode ? { manualCode: true } : {}),
+        time: { created: 1, expires: 2 },
+      },
+    })
   if (url.pathname === "/api/integration/github-copilot/connect/oauth/attempt_layout" && request.method === "GET")
     return json({ location, data: { status: oauthStatus, time: { created: 1, expires: 2 } } })
-  if (url.pathname === "/api/integration/github-copilot/connect/oauth/attempt_layout/complete" && request.method === "POST") {
+  if (
+    url.pathname === "/api/integration/github-copilot/connect/oauth/attempt_layout/complete" &&
+    request.method === "POST"
+  ) {
     const input: unknown = await request.json()
     if (input && typeof input === "object" && "code" in input && typeof input.code === "string")
       oauthSubmitted.push(input.code)
@@ -623,28 +937,72 @@ async function route(url: URL, request: Request) {
   if (url.pathname === "/api/integration") return json({ location, data: integrations })
   if (url.pathname === "/api/skill") return json({ location, data: skills })
   if (url.pathname === "/api/fs/list") return json({ location, data: [] })
-  if (url.pathname === "/api/fs/find") return json({ data: [{ path: "packages/tui/test/screen/dialog-remaining-capture.test.tsx" }] })
+  if (url.pathname === "/api/fs/find")
+    return json({ data: [{ path: "packages/tui/test/screen/dialog-remaining-capture.test.tsx" }] })
   if (url.pathname === "/api/mcp/resource") return json({ location, data: { resources: [], templates: [] } })
   if (url.pathname === "/api/project/proj_test/directories") return json(directories)
   if (url.pathname === "/api/project-copy/proj_test/refresh") return json({})
   if (url.pathname === "/api/server") return json({ urls: ["http://127.0.0.1:4096"] })
-  if ([`/api/session/${sessionID}/pending`, `/api/session/${sessionID}/permission`, `/api/session/${sessionID}/form`, `/api/session/${sessionID}/todo`, `/api/session/${sessionID}/skills`, `/api/session/${sessionID}/guardrail/request`, "/api/reference", "/api/command", "/api/shell", "/api/permission/request", "/api/form/request"].includes(url.pathname)) return json({ location, data: [] })
+  if (
+    [
+      `/api/session/${sessionID}/pending`,
+      `/api/session/${sessionID}/permission`,
+      `/api/session/${sessionID}/form`,
+      `/api/session/${sessionID}/todo`,
+      `/api/session/${sessionID}/skills`,
+      `/api/session/${sessionID}/guardrail/request`,
+      "/api/reference",
+      "/api/command",
+      "/api/shell",
+      "/api/permission/request",
+      "/api/form/request",
+    ].includes(url.pathname)
+  )
+    return json({ location, data: [] })
   if (url.pathname === "/api/session/active") return json({ data: {} })
   if (url.pathname === `/api/session/${sessionID}/autonomy`) return json({ data: { mode: "normal", yolo: false } })
-  if (url.pathname === `/api/session/${sessionID}/subagent`) return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
-  if (url.pathname === "/api/session/ses_subagent_capture/subagent") return json({ data: subagents, summary: { total: 4, active: 2, running: 1, waiting: 1 }, cursor: {} })
+  if (url.pathname === `/api/session/${sessionID}/subagent`)
+    return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
+  if (url.pathname === "/api/session/ses_subagent_capture/subagent")
+    return json({ data: subagents, summary: { total: 4, active: 2, running: 1, waiting: 1 }, cursor: {} })
   return undefined
 }
 
 const captureNow = 1_800_000_000_000
-const session = { id: sessionID, title: "Provider cache audit", projectID: "proj_test", location: { directory }, agent: "build", model: { providerID: "anthropic", id: "claude-opus-5" }, time: { created: captureNow - 120_000, updated: captureNow - 120_000 } }
+const session = {
+  id: sessionID,
+  title: "Provider cache audit",
+  projectID: "proj_test",
+  location: { directory },
+  agent: "build",
+  model: { providerID: "anthropic", id: "claude-opus-5" },
+  time: { created: captureNow - 120_000, updated: captureNow - 120_000 },
+}
 const sessions = [
   session,
-  { ...session, id: "ses_docs_capture", title: "Docs sync sweep", time: { created: captureNow - 3_600_000, updated: captureNow - 3_600_000 } },
-  { ...session, id: "ses_keymap_capture", title: "Keymap audit", time: { created: captureNow - 86_400_000, updated: captureNow - 86_400_000 } },
-  { ...session, id: "ses_theme_capture", title: "Theme migration", time: { created: captureNow - 259_200_000, updated: captureNow - 259_200_000 } },
+  {
+    ...session,
+    id: "ses_docs_capture",
+    title: "Docs sync sweep",
+    time: { created: captureNow - 3_600_000, updated: captureNow - 3_600_000 },
+  },
+  {
+    ...session,
+    id: "ses_keymap_capture",
+    title: "Keymap audit",
+    time: { created: captureNow - 86_400_000, updated: captureNow - 86_400_000 },
+  },
+  {
+    ...session,
+    id: "ses_theme_capture",
+    title: "Theme migration",
+    time: { created: captureNow - 259_200_000, updated: captureNow - 259_200_000 },
+  },
 ]
-const messages = [{ id: "msg_audit", type: "user" as const, text: "Concrete timeline message", time: { created: 1 } }, { id: "msg_review", type: "user" as const, text: "Concrete fork boundary", time: { created: 2 } }]
+const messages = [
+  { id: "msg_audit", type: "user" as const, text: "Concrete timeline message", time: { created: 1 } },
+  { id: "msg_review", type: "user" as const, text: "Concrete fork boundary", time: { created: 2 } },
+]
 const agents = [
   { id: "build", description: "Default primary agent" },
   { id: "GSD", description: "Get shit done: orchestration-only delivery" },
@@ -652,8 +1010,22 @@ const agents = [
   { id: "analyze", description: "Code analysis and review" },
   { id: "brainstorm", description: "Ideation and design" },
   { id: "general", description: "Background subagent" },
-].map((agent) => ({ ...agent, name: agent.id, mode: "primary" as const, hidden: false, permissions: [], request: { headers: {}, body: {} } }))
-const model = (input: { id: string; providerID: string; name: string; family: string; context: number; enabled?: boolean }) => ({
+].map((agent) => ({
+  ...agent,
+  name: agent.id,
+  mode: "primary" as const,
+  hidden: false,
+  permissions: [],
+  request: { headers: {}, body: {} },
+}))
+const model = (input: {
+  id: string
+  providerID: string
+  name: string
+  family: string
+  context: number
+  enabled?: boolean
+}) => ({
   id: input.id,
   modelID: input.id,
   providerID: input.providerID,
@@ -668,11 +1040,36 @@ const model = (input: { id: string; providerID: string; name: string; family: st
   limit: { context: input.context, output: 32_000 },
 })
 const models = [
-  model({ id: "claude-opus-5", providerID: "anthropic", name: "Claude Opus 5", family: "deep reasoning", context: 200_000 }),
-  model({ id: "claude-sonnet-5", providerID: "anthropic", name: "Claude Sonnet 5", family: "balanced", context: 200_000 }),
-  model({ id: "claude-haiku-4-5", providerID: "anthropic", name: "Claude Haiku 4.5", family: "fast", context: 200_000 }),
+  model({
+    id: "claude-opus-5",
+    providerID: "anthropic",
+    name: "Claude Opus 5",
+    family: "deep reasoning",
+    context: 200_000,
+  }),
+  model({
+    id: "claude-sonnet-5",
+    providerID: "anthropic",
+    name: "Claude Sonnet 5",
+    family: "balanced",
+    context: 200_000,
+  }),
+  model({
+    id: "claude-haiku-4-5",
+    providerID: "anthropic",
+    name: "Claude Haiku 4.5",
+    family: "fast",
+    context: 200_000,
+  }),
   model({ id: "gpt-5-2", providerID: "openai", name: "GPT-5.2", family: "", context: 400_000 }),
-  model({ id: "gemini-3-pro", providerID: "google", name: "Gemini 3 Pro", family: "connect first", context: 1_000_000, enabled: false }),
+  model({
+    id: "gemini-3-pro",
+    providerID: "google",
+    name: "Gemini 3 Pro",
+    family: "connect first",
+    context: 1_000_000,
+    enabled: false,
+  }),
 ]
 const providers = [
   { id: "anthropic", name: "Anthropic" },
@@ -682,19 +1079,69 @@ const providers = [
 const credential = (label: string) => [{ type: "credential" as const, id: `cred_${label}`, label, active: true }]
 const integrations = [
   { id: "ycoding", name: "YCoding Go", methods: [{ type: "key" as const, label: "API key" }], connections: [] },
-  { id: "openai", name: "OpenAI", methods: [{ type: "key" as const, label: "API key" }], connections: credential("default") },
-  { id: "github-copilot", name: "GitHub Copilot", methods: [{ id: "github", type: "oauth" as const, label: "Login with GitHub Copilot" }, { type: "key" as const, label: "API key" }], connections: [] },
-  { id: "anthropic", name: "Claude", methods: [{ type: "key" as const, label: "API key" }], connections: [...credential("Claude Max"), { type: "credential" as const, id: "cred_Work", label: "Work", active: false }] },
+  {
+    id: "openai",
+    name: "OpenAI",
+    methods: [{ type: "key" as const, label: "API key" }],
+    connections: credential("default"),
+  },
+  {
+    id: "github-copilot",
+    name: "GitHub Copilot",
+    methods: [
+      { id: "github", type: "oauth" as const, label: "Login with GitHub Copilot" },
+      { type: "key" as const, label: "API key" },
+    ],
+    connections: [],
+  },
+  {
+    id: "anthropic",
+    name: "Claude",
+    methods: [{ type: "key" as const, label: "API key" }],
+    connections: [
+      ...credential("Claude Max"),
+      { type: "credential" as const, id: "cred_Work", label: "Work", active: false },
+    ],
+  },
   { id: "google", name: "Google", methods: [{ type: "key" as const, label: "API key" }], connections: [] },
   { id: "302ai", name: "302.AI", methods: [{ type: "key" as const, label: "API key" }], connections: [] },
-  { id: "amazon-bedrock", name: "Amazon Bedrock", methods: [{ type: "key" as const, label: "API key" }], connections: [] },
+  {
+    id: "amazon-bedrock",
+    name: "Amazon Bedrock",
+    methods: [{ type: "key" as const, label: "API key" }],
+    connections: [],
+  },
 ]
 const skills = [
-  { id: "go-developer", name: "go-developer", description: "Scoped Go implementation", location: `${worktree}/.ycoding/skills/go-developer/SKILL.md`, content: "" },
-  { id: "writing-test", name: "writing-test", description: "Markdown QA plans", location: "/tmp/ycoding/home/.agents/skills/writing-test/SKILL.md", content: "" },
-  { id: "penpot", name: "penpot", description: "Penpot UX/UI work", location: "/tmp/ycoding/home/.agents/skills/penpot/SKILL.md", content: "" },
+  {
+    id: "go-developer",
+    name: "go-developer",
+    description: "Scoped Go implementation",
+    location: `${worktree}/.ycoding/skills/go-developer/SKILL.md`,
+    content: "",
+  },
+  {
+    id: "writing-test",
+    name: "writing-test",
+    description: "Markdown QA plans",
+    location: "/tmp/ycoding/home/.agents/skills/writing-test/SKILL.md",
+    content: "",
+  },
+  {
+    id: "penpot",
+    name: "penpot",
+    description: "Penpot UX/UI work",
+    location: "/tmp/ycoding/home/.agents/skills/penpot/SKILL.md",
+    content: "",
+  },
 ]
-const subagent = (input: { id: string; description: string; state: "waiting" | "running" | "completed" | "cancelled"; elapsed: number; progress?: string }) => ({
+const subagent = (input: {
+  id: string
+  description: string
+  state: "waiting" | "running" | "completed" | "cancelled"
+  elapsed: number
+  progress?: string
+}) => ({
   sessionID: input.id,
   parentID: "ses_subagent_capture",
   description: input.description,
@@ -708,7 +1155,13 @@ const subagent = (input: { id: string; description: string; state: "waiting" | "
 })
 const subagents = [
   subagent({ id: "test-triage", description: "Triage 2 failing tests", state: "waiting", elapsed: 120_000 }),
-  subagent({ id: "docs-sync", description: "Sync provider docs", state: "running", elapsed: 134_000, progress: "74% hit · 2m14s" }),
+  subagent({
+    id: "docs-sync",
+    description: "Sync provider docs",
+    state: "running",
+    elapsed: 134_000,
+    progress: "74% hit · 2m14s",
+  }),
   subagent({ id: "keymap-audit", description: "Audit duplicate keybinds", state: "completed", elapsed: 48_000 }),
   subagent({ id: "bench-run", description: "Benchmark cache warm", state: "cancelled", elapsed: 30_000 }),
 ]
