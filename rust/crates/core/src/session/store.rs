@@ -8,11 +8,27 @@ use ycoding_store::{
 #[derive(Clone)]
 pub struct Service {
     pub(crate) client: Client,
+    artifact_source: Option<crate::resources::project_artifact::source::Service>,
 }
 
 impl Service {
     pub fn new(client: Client) -> Self {
-        Self { client }
+        Self {
+            client,
+            artifact_source: None,
+        }
+    }
+
+    pub fn with_artifact_source(
+        mut self,
+        source: crate::resources::project_artifact::source::Service,
+    ) -> Self {
+        self.artifact_source = Some(source);
+        self
+    }
+
+    pub fn artifact_source(&self) -> Option<&crate::resources::project_artifact::source::Service> {
+        self.artifact_source.as_ref()
     }
 
     pub fn get(&self, id: &session::Id) -> Result<Option<session::Info>, Error> {

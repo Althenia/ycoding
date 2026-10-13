@@ -101,6 +101,7 @@ struct State {
 struct Entry {
     id: u64,
     scope: Scope,
+    types: Option<Vec<String>>,
     queue: Arc<Queue>,
 }
 
@@ -227,6 +228,30 @@ impl Feed {
         after: Option<u64>,
         wake: impl Fn() + Send + Sync + 'static,
     ) -> Result<Subscriber, ResumeError> {
+        self.subscribe_inner(scope, after, None, wake)
+    }
+
+    pub fn subscribe_types(
+        &self,
+        scope: Scope,
+        types: &[&str],
+        wake: impl Fn() + Send + Sync + 'static,
+    ) -> Result<Subscriber, ResumeError> {
+        self.subscribe_inner(
+            scope,
+            None,
+            Some(types.iter().map(|name| (*name).into()).collect()),
+            wake,
+        )
+    }
+
+    fn subscribe_inner(
+        &self,
+        scope: Scope,
+        after: Option<u64>,
+        types: Option<Vec<String>>,
+        wake: impl Fn() + Send + Sync + 'static,
+    ) -> Result<Subscriber, ResumeError> {
         let mut state = lock(&self.0.state);
         let mut items = VecDeque::new();
         if let Some(after) = after {
@@ -245,7 +270,11 @@ impl Feed {
             items = state
                 .ring
                 .iter()
-                .filter(|item| item.position > after && matches(&scope, item))
+                .filter(|item| {
+                    item.position > after
+                        && matches(&scope, item)
+                        && matches_types(types.as_deref(), item)
+                })
                 .cloned()
                 .collect();
             if items.len() > self.0.capacity {
@@ -265,6 +294,7 @@ impl Feed {
         state.entries.push(Entry {
             id,
             scope,
+            types,
             queue: queue.clone(),
         });
         Ok(Subscriber {
@@ -291,7 +321,9 @@ impl Feed {
                     state.ring.push_back(item.clone());
                 }
                 state.entries.retain(|entry| {
-                    if !matches(&entry.scope, &item) {
+                    if !matches(&entry.scope, &item)
+                        || !matches_types(entry.types.as_deref(), &item)
+                    {
                         return true;
                     }
                     let mut backlog = lock(&entry.queue.state);
@@ -339,6 +371,16 @@ fn matches(scope: &Scope, item: &Item) -> bool {
         (Scope::Session(id), Payload::Durable(event)) => id.as_lossless() == &event.aggregate_id,
         (Scope::Session(id), Payload::Ephemeral(event)) => event.session.as_ref() == Some(id),
     }
+}
+
+fn matches_types(types: Option<&[String]>, item: &Item) -> bool {
+    types.is_none_or(|types| {
+        let event_type = match &item.payload {
+            Payload::Durable(event) => event.type_.as_str(),
+            Payload::Ephemeral(event) => Some(event.data.name()),
+        };
+        types.iter().any(|name| Some(name.as_str()) == event_type)
+    })
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

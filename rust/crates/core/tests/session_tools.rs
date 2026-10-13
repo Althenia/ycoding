@@ -965,6 +965,122 @@ async fn subagent_launch_is_background_runs_real_runner_and_records_child_ceilin
 }
 
 #[tokio::test]
+async fn managed_subagent_launch_records_source_provenance_at_the_parent_tool_call() {
+    use ycoding_core::resources::project_artifact::store::ManualWriteInput;
+    use ycoding_core::resources::{
+        command,
+        project_artifact::{accounting, source, source_registry, store::Paths},
+        skill,
+    };
+    use ycoding_core::tools::registry::Tool;
+    use ycoding_schema::{project, project_artifact};
+    let h = Harness::new(TitleMode::Local, "{}").await;
+    let client = h.fixture.authority.store.client();
+    let registry = Arc::new(Mutex::new(source_registry::Registry::default()));
+    let accounting = accounting::Service::new(client.clone(), "secret".into());
+    let artifacts = ycoding_core::resources::project_artifact::store::Service::new(
+        client.clone(),
+        Paths {
+            data: h.fixture.root.join("data"),
+            home: h.fixture.root.join("home"),
+            config: h.fixture.root.join("artifact-config"),
+        },
+        registry.clone(),
+    )
+    .with_accounting(accounting.clone());
+    let written = artifacts.write_manual(ManualWriteInput { scope: project_artifact::ScopeSelector::Project, project_id: Some(project::Id::decode(&JsonValue::String("project".into())).unwrap()), id: "explore", definition: &project_artifact::Definition::decode(&parse_json(r#"{"kind":"agent","name":"Explore","description":"Managed exploration","system":"Review safely.","mode":"subagent","permissions":[]}"#).unwrap()).unwrap(), expected: None, now: 100 }).unwrap();
+    let mut standard = (*h.agents).clone();
+    standard.remove(&"explore".into());
+    let source = source::Service::new(
+        source::Options {
+            client: client.clone(),
+            store: artifacts,
+            accounting,
+            registry,
+            location: h
+                .store
+                .get(&h.context().session_id)
+                .unwrap()
+                .unwrap()
+                .location,
+            project_id: project::Id::decode(&JsonValue::String("project".into())).unwrap(),
+            project_directory: "/workspace/project".into(),
+            data_root: h.fixture.root.join("data"),
+        },
+        source::Catalogs {
+            agents: standard,
+            commands: command::Service::default(),
+            skills: skill::Service::new(&h.fixture.root.join("cache")),
+        },
+    );
+    source.refresh().await;
+    let agents = Arc::new(source.catalogs().await.agents);
+    assert_eq!(
+        agents
+            .get(&"explore".into())
+            .unwrap()
+            .system
+            .as_ref()
+            .unwrap()
+            .as_str(),
+        Some("Review safely.")
+    );
+    let called = h
+        .store
+        .publish(ycoding_store::session::NewEvent {
+            id: "evt_managed_launch".into(),
+            aggregate_id: h.context().session_id.as_lossless().clone(),
+            created: 200,
+            type_: "session.tool.called.1".into(),
+            data: ObjectEncoder::new()
+                .field("sessionID", &h.context().session_id)
+                .field("assistantMessageID", &h.context().message_id)
+                .field("callID", &h.context().call_id)
+                .field("input", &JsonValue::Object(Default::default()))
+                .field("executed", &false)
+                .finish(),
+        })
+        .await
+        .unwrap();
+    let mut subagent = h.subagent(h.fixture.policy.clone());
+    subagent.store = subagent.store.with_artifact_source(source.clone());
+    subagent.agents = agents.clone();
+    subagent.preflight = Preflight::new(
+        subagent.store.clone(),
+        agents,
+        h.models.models.clone(),
+        h.models.credentials.clone(),
+    );
+    let output = within(subagent.settle(
+        parse_json(r#"{"agent":"explore","description":"Review","prompt":"Review this"}"#).unwrap(),
+        h.context(),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(
+        get(&output.structured, "status"),
+        &JsonValue::String("running".into())
+    );
+    let rows = client
+        .snapshot()
+        .unwrap()
+        .scan::<ycoding_store::artifacts::ActivationTable>(Bound::Unbounded, Bound::Unbounded, 10)
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].source.as_str(), Some("subagent-launch"));
+    assert_eq!(
+        rows[0].session_id.as_ref(),
+        Some(h.context().session_id.as_lossless())
+    );
+    assert_eq!(rows[0].agent_id.as_ref().unwrap().as_str(), Some("explore"));
+    assert_eq!(rows[0].version_id, *written.version_id.as_lossless());
+    assert_eq!(rows[0].boundary_seq, called.seq);
+    assert_eq!(rows[0].activated_at, called.created);
+    assert!(source.diagnostics().is_empty());
+    h.close().await;
+}
+
+#[tokio::test]
 async fn subagent_denial_invalid_variant_depth_and_ownership_reject_before_effect() {
     let h = Harness::new(TitleMode::Local, "{}").await;
     let initial = h.events();

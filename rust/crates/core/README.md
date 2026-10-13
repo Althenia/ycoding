@@ -2814,10 +2814,9 @@ artifact/version state in the same redb transaction. Degradation reevaluates in
 the Package finalization transaction, preserves a durable fallback when present,
 and records deduplicated automatic-governor feedback. Recovery uses the journal's
 model, agent, goal-mode and evaluation-time context.
-Source refresh orchestration must be provided by the Session runtime layer, and
-the artifact tool must be provided by the tool registry layer. This resource
-crate supplies source validation and the standard-source registry; it does not
-own Location subscriptions, Session history/autonomy or scoped adapter lifetimes.
+The Location owner constructs the source service and binds its catalogs,
+invocation consumers, refresh triggers, and execution subscription. The tool
+registry supplies the artifact-authoring tool.
 
 `legacy_cleanup::run` removes only direct legacy children with the exact
 lowercase basename suffix and positive `.ycoding-generated.json` ownership
@@ -2832,18 +2831,131 @@ native identity platforms return a failed report without mutation. The existing
 create table-backed progress or automatic startup cleanup.
 
 `source_registry::Registry` maintains replaceable, insertion-ordered Location
-snapshots with project isolation and managed-identity deduplication. `source`
-validates candidates against authoritative marker/content bytes and resolves
-standard-source provenance. These utilities do not refresh runtime resource
-snapshots, subscribe to Session execution events, publish durable activations,
-or evaluate the lifecycle governor. Core artifact Store and accounting services
-own those composition prerequisites. `instructions::KEY` and `CONTENT` supply
-the artifact-authoring instruction without a second persistence authority.
+snapshots with project isolation and managed-identity deduplication.
+`source::Service` owns one replaceable managed overlay per Location. `refresh`
+validates trial/active project candidates against marker identities, content
+digests, and parsed definitions, excludes plugins and inactive stages, and
+registers accepted candidates through the existing Skill, Command, and Agent
+adapters. Invalid, replaced, and removed candidates leave no retained overlay.
+Collisions require exact global shadow scope, origin version, and evidence
+digest. `replace_standard(Catalogs)` replaces the unmanaged discovery snapshot
+and refreshes the managed overlay; `catalogs()` returns the complete current
+services. Failed refreshes preserve the preceding published catalogs and
+provenance. Bounded `diagnostics()` categories expose collisions, refresh,
+activation, terminal-observation, stale-provenance, and governor failures without
+persisting payloads or paths.
+
+`provenance(kind, id)` returns source scope, scope/version identity, artifact
+kind/ID, expected revision, and expected digest. Global attribution requires
+an exact standard marker and matching current Store version. The TypeScript
+source's precedence is preserved: an accepted project overlay can supply the
+catalog definition while a matching global standard source supplies provenance.
+Refresh observes the currently published catalogs; when an overlay hides the
+global path, a subsequent refresh attributes that visible project source.
+An authored user/agent version cannot acquire origin fields through
+`confirm_shadow`: both backends' origin constraint requires fork/promotion
+provenance. A confirmed fork supplies valid shadow evidence.
+
+`activate(ActivationInput)` accepts `AgentSelected`, `Command`, `SkillTool`, and
+`SubagentLaunch` sources. Agent selection supplies its committed sequence and
+activation time. Commands resolve the original durable input-admission event,
+including after promotion; tools resolve the exact assistant-message/call-ID
+`session.tool.called` event. Managed invocations without that boundary fail with
+`Managed activation requires a durable invocation`; unmanaged IDs are no-ops.
+Activation IDs use the TypeScript SHA-256 identity, and exact retries retain the
+original sequence and timestamp. `session-skill` publications use fresh UUID
+activation IDs. `session::store::Service::with_artifact_source(source)` binds
+runner Skill references and subagent launch accounting. Pass the same source to
+`builtin::skill::load_local(info, policy, context, Some(&source))` for skill-tool
+accounting; resource reads do not create activations. Tool accounting failures
+remain best effort and observable through diagnostics.
+
+`start(&event_feed::Feed)` subscribes to only execution started, succeeded,
+failed, and interrupted facts before they enter the bounded subscriber queue.
+The owned `Governor` serializes terminal submissions on blocking workers, checks
+the Session's directory and workspace identity, captures goal mode/start time,
+and reads the latest assistant plus markers at or above the completed compaction
+floor. It attributes managed tool calls from captured activations, counts
+standard invocations and completed/failed tools, records tokens and clamped
+latency, and evaluates each observed version once through
+`store::Service::evaluate_governor` with exact provenance expectations. No
+lifecycle rules are duplicated. Terminal identity is the latest assistant ID or
+the durable boundary when no assistant exists. Duplicate identities are skipped
+after successful accounting; conflicting persisted facts are rejected.
+
+`Governor::flush()` waits for accepted execution facts through the current feed
+watermark; `close().await` drains that boundary, joins in-flight submissions,
+unsubscribes, and removes the Location registry snapshot. Feed overflow or worker
+failure is an explicit close/flush error, not successful accounting. Like the
+TypeScript source, a newly constructed service does not replay historical
+execution facts or restore process-local start times, terminal identities, or
+managed-tool classifications. Accounting still reads durable open activations;
+conflicting repeated terminal observations cannot insert a second record.
+
+### Location composition handoff
+
+- Share the Core Store client, one accounting service, and one standard-source
+  registry. Construct `store::Service::new(client, Paths, registry)` with
+  `with_accounting(accounting)`, then one `source::Service::new(Options, Catalogs)`
+  for each Location. Supply its exact Location reference, project identity/root,
+  and managed data root.
+- Bind `source.start(&Core.events)` before admitting or resuming execution, retain
+  the returned Governor, and await initial refresh before exposing catalogs.
+  Feed the returned Agent/Command/Skill services to catalog readers, runner
+  resolution, Skill discovery, and subagent preflight. Catalogs are snapshots:
+  existing immutable Arcs do not change when the service publishes a replacement.
+- After configuration reload, rediscover standard resources and await
+  `replace_standard`. After each committed artifact mutation, await refresh and
+  publish the resulting catalogs; global authoring/promotion also requires
+  standard-file rediscovery. Bind these operations to `ArtifactServices.refresh`.
+  Its current synchronous `Fn()` callback cannot await an async refresh itself;
+  the composition adapter must own and join refresh work and fence subsequent
+  catalog reads, or provide an awaited callback in the runtime handler layer.
+  Refresh uses blocking Store/Package operations; execute it on an owned blocking
+  worker with the Tokio handle driving its asynchronous discovery.
+- On Location eviction or process shutdown, stop new invocations/refreshes,
+  drain/interrupt owned Session execution, await pending refreshes, then await
+  Governor close while Store, accounting, and feed are alive. Release catalogs,
+  source, and finally the shared Store/feed. Do not abort or discard the Governor
+  handle as a substitute for close.
+
+### Session operation handoff
+
+The runtime does not serve `session.command`, `switchAgent`, or `session.skill`.
+Their artifact attribution uses these existing Core entrypoints:
+
+- Command: capture `source.provenance(command_kind, command_id)` before admission,
+  attach `provenance.message()` as user metadata `projectArtifact`, admit the
+  input durably, then call `source.activate(ActivationInput)` with
+  `ActivationSource::Command { message_id: input_id, call_id: None }`. Retain the
+  captured provenance in the admitted input; promotion is not the invocation
+  boundary.
+- Agent selection: create `session.agent.selected.1` with the selected agent and
+  call `source.publish_activation(NewEvent).await`. It attaches provenance and
+  commits the event, projection, and activation in one Store transaction. For a
+  larger owning transaction, call `ycoding_store::session::append`,
+  `session::projector::fold`, `source.activation_at(&provenance, &session_id,
+Some(agent_id), "agent-selected", event.seq, activated_at)`, and
+  `source.activate_in_transaction(tx, &activation)` inside that same transaction.
+  Include `provenance.message()` in event data and reject the transaction on any
+  failure; never call ordinary `activate` after publishing an AgentSelected fact.
+- Session Skill: resolve permission, catalog membership, instructions, and active
+  Skill status under the Session's activation serialization, then use
+  `session::skill::activate(&bound_store, &session_id, fields, now).await` for
+  runner-style activation. It publishes `session.skill.activated.1` with artifact
+  provenance and a `session-skill` accounting row atomically. A handler supplying
+  an explicit message ID uses its `msg_` to `evt_` event identity and the larger
+  transaction form above with source `"session-skill"`, setting
+  `activation.message_id` to that ID before accounting. Decide resume/admit-only
+  behavior outside artifact accounting.
+
+`instructions::KEY` and `CONTENT` supply artifact-authoring guidance without a
+second persistence authority.
 
 Run the focused real-filesystem checks from `rust`:
 
 ```sh
-cargo test --locked -p ycoding-core --test 'project_artifact_*'
+CARGO_BUILD_JOBS=3 ~/.cache/ycoding/cargo-gate.sh cargo test --locked -p ycoding-core --test 'project_artifact_*'
 ```
 
 ## Jobs

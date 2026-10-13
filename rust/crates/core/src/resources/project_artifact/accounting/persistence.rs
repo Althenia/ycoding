@@ -106,30 +106,33 @@ impl Service {
         &self,
         input: &project_artifact::Activation,
     ) -> Result<project_artifact::Activation, Error> {
+        let input = input.clone();
+        self.client
+            .submit(move |tx| Self::activate_in_transaction(tx, &input))?
+            .wait()
+    }
+    pub fn activate_in_transaction(
+        tx: &mut Write<'_>,
+        input: &project_artifact::Activation,
+    ) -> Result<project_artifact::Activation, Error> {
         let row = activation_row(input);
         let output = input.clone();
-        self.client
-            .submit(move |tx| {
-                let existing = tx.get::<artifacts::ActivationTable>(&key(&row.id))?;
-                if let Some(existing) = existing {
-                    if existing != row {
-                        return Err(reject(tx, "Conflicting activation ID"));
-                    }
-                    return Ok(output);
-                }
-                let (index, identity) = activation_identity(&row);
-                if let Some(existing) =
-                    rows::<artifacts::ActivationTable>(tx, index, &identity)?.first()
-                {
-                    if existing != &row {
-                        return Err(reject(tx, "Conflicting activation identity"));
-                    }
-                    return Ok(output);
-                }
-                artifacts::ActivationTable::insert(tx, &row)?;
-                Ok(output)
-            })?
-            .wait()
+        let existing = tx.get::<artifacts::ActivationTable>(&key(&row.id))?;
+        if let Some(existing) = existing {
+            if existing != row {
+                return Err(reject(tx, "Conflicting activation ID"));
+            }
+            return Ok(output);
+        }
+        let (index, identity) = activation_identity(&row);
+        if let Some(existing) = rows::<artifacts::ActivationTable>(tx, index, &identity)?.first() {
+            if existing != &row {
+                return Err(reject(tx, "Conflicting activation identity"));
+            }
+            return Ok(output);
+        }
+        artifacts::ActivationTable::insert(tx, &row)?;
+        Ok(output)
     }
     pub fn observe(
         &self,

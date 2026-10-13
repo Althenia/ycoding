@@ -456,11 +456,9 @@ impl Local {
             {
                 continue;
             }
-            publish(
+            super::skill::activate(
                 &services.store,
                 &session.id,
-                None,
-                "session.skill.activated",
                 ObjectEncoder::new()
                     .field("id", &info.id)
                     .field("name", &info.name)

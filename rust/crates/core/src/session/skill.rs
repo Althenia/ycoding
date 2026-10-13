@@ -11,6 +11,36 @@ pub trait Resolver: Send + Sync {
     fn instructions<'a>(&'a self, info: &'a skill::Info) -> InstructionsFuture<'a>;
 }
 
+pub async fn activate(
+    store: &super::store::Service,
+    session_id: &ycoding_schema::session::Id,
+    fields: JsonValue,
+    now: i64,
+) -> Result<(), ycoding_store::Error> {
+    let JsonValue::Object(mut data) = fields else {
+        return Err(ycoding_store::Error::Rejected(
+            "Skill event fields must be an object",
+        ));
+    };
+    data.insert(
+        "sessionID".into(),
+        ycoding_schema::DomainEncode::encode(session_id),
+    );
+    let event = ycoding_store::session::NewEvent {
+        id: super::projector::random_event_id()?.as_lossless().clone(),
+        aggregate_id: session_id.as_lossless().clone(),
+        created: now,
+        type_: "session.skill.activated.1".into(),
+        data: JsonValue::Object(data),
+    };
+    if let Some(source) = store.artifact_source() {
+        source.publish_activation(event).await?;
+        return Ok(());
+    }
+    store.publish(event).await?;
+    Ok(())
+}
+
 pub fn selected(metadata: Option<&JsonObject>) -> Vec<skill::Id> {
     let Some(JsonValue::Array(skills)) =
         metadata.and_then(|metadata| metadata.get(&"skills".into()))

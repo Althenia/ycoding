@@ -7,7 +7,9 @@ use crate::{
     },
 };
 use std::{fs, path::Path};
-use ycoding_schema::{DomainEncode, JsonValue, LosslessString, ObjectEncoder, mcp_skill, skill};
+use ycoding_schema::{
+    DomainDecode, DomainEncode, JsonValue, LosslessString, ObjectEncoder, mcp_skill, skill,
+};
 
 pub struct Output {
     pub name: skill::Name,
@@ -33,6 +35,7 @@ pub async fn load_local(
     info: &skill::Info,
     policy: &LeafPolicy,
     context: Context,
+    artifact_source: Option<&crate::resources::project_artifact::source::Service>,
 ) -> Result<Output, Failure> {
     policy
         .assert(
@@ -82,6 +85,27 @@ pub async fn load_local(
     };
     files.sort_by(|left, right| left.encode_utf16().cmp(right.encode_utf16()));
     files.truncate(10);
+    if let Some(source) = artifact_source {
+        use crate::resources::project_artifact::source::{ActivationInput, ActivationSource};
+        if source
+            .activate(ActivationInput {
+                kind: ycoding_schema::project_artifact::Kind::decode(&JsonValue::String(
+                    "skill".into(),
+                ))
+                .expect("fixed kind"),
+                id: info.id.clone(),
+                session_id: context.session_id.clone(),
+                agent_id: Some(context.agent.clone()),
+                source: ActivationSource::SkillTool {
+                    message_id: context.message_id.as_lossless().clone(),
+                    call_id: Some(context.call_id.clone()),
+                },
+            })
+            .is_err()
+        {
+            source.record_activation_failure();
+        }
+    }
     Ok(Output {
         name: info.name.clone(),
         directory: directory.to_string_lossy().into_owned(),

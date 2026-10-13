@@ -9,6 +9,11 @@ use std::{
 };
 use ycoding_schema::{DomainDecode, DomainEncode, JsonValue, project, project_artifact};
 
+mod service;
+pub use service::{
+    ActivationInput, ActivationSource, Catalogs, Governor, Options, Provenance, Service,
+};
+
 pub struct Candidate<'a> {
     pub kind: project_artifact::Kind,
     pub id: project_artifact::Id,

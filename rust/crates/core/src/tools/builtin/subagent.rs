@@ -240,6 +240,30 @@ impl Tool for Subagent {
                     .map_err(failure)?;
                 return Err(Failure::Cancelled);
             }
+            if let Some(source) = self.store.artifact_source() {
+                use crate::resources::project_artifact::source::{
+                    ActivationInput, ActivationSource,
+                };
+                use ycoding_schema::DomainDecode;
+                if source
+                    .activate(ActivationInput {
+                        kind: ycoding_schema::project_artifact::Kind::decode(&JsonValue::String(
+                            "agent".into(),
+                        ))
+                        .expect("fixed kind"),
+                        id: agent.clone(),
+                        session_id: context.session_id.clone(),
+                        agent_id: Some(agent.clone()),
+                        source: ActivationSource::SubagentLaunch {
+                            message_id: context.message_id.as_lossless().clone(),
+                            call_id: Some(context.call_id.clone()),
+                        },
+                    })
+                    .is_err()
+                {
+                    source.record_activation_failure();
+                }
+            }
             (self.activate)(context.clone(), agent).await;
             let JsonValue::Object(structured) = ObjectEncoder::new()
                 .field("sessionID", &child.session_id)
