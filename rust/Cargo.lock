@@ -5211,6 +5211,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "fff-search",
+ "flate2",
  "icu_collator",
  "icu_normalizer",
  "icu_properties",
@@ -5229,6 +5230,7 @@ dependencies = [
  "ring",
  "rmcp",
  "serde_json",
+ "tar",
  "tokio",
  "tokio-tungstenite 0.30.0",
  "url",
@@ -5237,6 +5239,7 @@ dependencies = [
  "ycoding-ai",
  "ycoding-schema",
  "ycoding-store",
+ "zip",
 ]
 
 [[package]]

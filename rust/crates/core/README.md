@@ -3117,6 +3117,75 @@ loopback HTTP, the native Code Mode interpreter, and explicit instruction/histor
 consumer seams. Their assertions and schema projections derive from committed
 TypeScript tool and registry tests; they do not certify a composed Session runner.
 
+## Repository cache
+
+`platform::repository_cache::Service::new(roots.repos.clone(), roots.state.clone(), git)`
+is a global owner over the shared `Arc<platform::git::Service>`.
+`ensure(EnsureInput { reference, refresh, branch })` is blocking; call it on the
+blocking executor from async consumers. The repository parser supplies normalized
+host/path identity and the checkout path `<repos>/<host split on :>/<segments>`.
+Origins are compared with the parsed actual clone remote, including clone URL
+overrides. Stale directories, files, and mismatched or missing origins are replaced.
+Clones use depth 100. Reuse without refresh or a requested branch change returns
+`Cached` without fetching or resetting. Refresh fetches all remotes with pruning,
+force-fetches and checks out a requested remote branch, then resets to that branch,
+the default remote branch, the current branch, or `HEAD`, in that order. Clone can
+select a tag; refresh of an explicit name requires a remote branch. Empty branch
+input is treated as absent. Results include identity, path, status, head and branch;
+validation, clone, fetch, checkout, reset, cache filesystem, and lock failures have
+distinct error variants carrying the TypeScript boundary's fields and messages.
+
+Every ensure holds a native file lock keyed by `repository-cache:<localPath>` under
+`<state>/locks/repository-cache` for that call only, with a five-minute acquisition
+timeout. Locks serialize the same target across threads, service instances and
+processes without blocking unrelated targets; closing the file releases ownership,
+including process exit. Lock files remain as unlocked coordination entries. This
+uses native ownership rather than the TypeScript heartbeat-directory lock format.
+Composition retains one global service and schedules refresh ensures for accepted
+Git sources in each Location's Reference service, keeping its source order,
+branch-conflict handling and nonblocking materialization/error reporting.
+
+## Ripgrep binary
+
+`platform::ripgrep_binary::Service::new(roots.bin.clone())` constructs the global
+lazy acquisition owner; share it with `Arc` and await `filepath()` when a search
+consumer needs the executable. Acquisition first searches `PATH`/`Path` plus the
+global bin directory for executable `rg` (`rg.exe` on Windows), then accepts an
+existing cached regular file `<cache>/bin/rg[.exe]`. Discovery honors quoted PATH
+entries, Unix user/group execute permissions, and Windows current-directory and
+PATHEXT precedence. Empty PATH does not search the current directory on Unix.
+It does not inspect versions or repair execute permissions on cached binaries.
+Successes and failures are retained
+for the service lifetime. Concurrent callers share one acquisition; cancellation
+of a waiter does not cancel that work. Dropping the owner cancels pending async
+work; an already-started blocking extraction finishes its scoped cleanup.
+
+Downloads pin version `15.1.0` and the seven TypeScript architecture/OS mappings,
+including Linux x64 musl, Linux arm64 GNU, Darwin arm64/x64, and Windows
+arm64/ia32/x64 MSVC. `Target::for_key` exposes their triples, filenames and release
+URLs. Archives live temporarily in the bin directory; gzip tar and deflated ZIP
+extract into a scoped sibling directory, require the expected
+`ripgrep-15.1.0-<triple>/rg[.exe]` file, and copy it to the cache. Unix installs set
+mode `0755`. Successful extraction removes the archive best effort; failed
+extraction retains it and cleans up its temporary directory.
+
+The standard `HttpDownload` uses validated TLS, permits HTTPS requests and redirects
+only, and requires a successful HTTP status. Acquisition rejects an empty body.
+The URL and version are pinned, but TypeScript supplies no release checksum or signature;
+there is no artifact authenticity check beyond TLS, nor verification of system or
+cached executable content. `with_download` supplies an explicit trusted transport
+and platform seam for offline stand-ins; production uses `new`, not a loopback
+transport. Search composition passes the resolved path to
+`platform::filesystem::search::Backend::{Ripgrep,Automatic}` and shares that
+Location search service with glob/grep and filesystem consumers.
+
+The focused offline boundaries use local `file://` Git remotes, subprocess-isolated
+PATH values and loopback HTTP stand-ins:
+
+```sh
+CARGO_BUILD_JOBS=3 ~/.cache/ycoding/cargo-gate.sh cargo test --locked --offline -p ycoding-core --test repository_cache --test ripgrep_binary --test reference_parity --test discovery_repository --test git_parity
+```
+
 ## Event feed
 
 `event_feed::Feed::attach(&Client)` publishes every durable Session event after its

@@ -8,6 +8,8 @@ pub mod patch;
 pub mod process;
 pub mod project_copy;
 pub mod pty;
+pub mod repository_cache;
+pub mod ripgrep_binary;
 pub mod sandbox;
 pub mod shell;
 pub mod worktree;
