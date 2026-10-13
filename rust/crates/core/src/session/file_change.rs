@@ -1,5 +1,5 @@
 use super::{key, projector::record_error, store::Service};
-use std::ops::Bound;
+use std::{cmp::Ordering, ops::Bound};
 use ycoding_schema::{LosslessString, ObjectDecoder, schema::NonNegativeInt, session};
 use ycoding_store::{
     Error, IndexOrder, IndexQuery, KeyPart, Write,
@@ -31,6 +31,10 @@ impl Service {
                 },
             )?;
             if page.is_empty() {
+                changes.sort_by(|left: &FileChange, right| {
+                    text_order(&left.path, &right.path)
+                        .then_with(|| text_order(&left.session_id, &right.session_id))
+                });
                 return Ok(changes);
             }
             after = page.last().map(|entry| entry.cursor.clone());
@@ -49,6 +53,15 @@ impl Service {
             }
         }
     }
+}
+
+fn text_order(left: &LosslessString, right: &LosslessString) -> Ordering {
+    char::decode_utf16(left.code_units())
+        .map(|character| character.unwrap_or(char::REPLACEMENT_CHARACTER))
+        .cmp(
+            char::decode_utf16(right.code_units())
+                .map(|character| character.unwrap_or(char::REPLACEMENT_CHARACTER)),
+        )
 }
 
 pub(crate) fn apply(

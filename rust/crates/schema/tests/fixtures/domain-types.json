@@ -11598,6 +11598,30 @@
     "negativeZeros": []
   },
   {
+    "name": "InstructionEntry.Key",
+    "input": "\".leading\"",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "InstructionEntry.Key",
+    "input": "\"_leading\"",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "InstructionEntry.Key",
+    "input": "\"-leading\"",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "InstructionEntry.Key",
+    "input": "\"0.valid_key-1\"",
+    "output": "\"0.valid_key-1\"",
+    "negativeZeros": []
+  },
+  {
     "name": "InstructionEntry.Info",
     "input": "{\"key\":\"entry\",\"value\":{\"k\":\"v\"}}",
     "output": "{\"key\":\"entry\",\"value\":{\"k\":\"v\"}}",

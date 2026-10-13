@@ -9,7 +9,9 @@ impl DomainDecode for Key {
     fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
         let s = LosslessString::decode_at(v, p)?;
         if s.as_str().is_some_and(|x| {
-            !x.is_empty()
+            x.as_bytes()
+                .first()
+                .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
                 && x.bytes()
                     .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(&b))
         }) {

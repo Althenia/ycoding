@@ -140,6 +140,10 @@ pub enum Failure {
         message: ycoding_core::ycoding_schema::LosslessString,
     },
     Unavailable(String),
+    Unknown {
+        message: String,
+        reference: String,
+    },
     ServiceUnavailable {
         service: &'static str,
         message: String,
@@ -501,7 +505,7 @@ impl Failure {
                 encoded(v5::SessionNotFoundError {
                     tag: 1,
                     session_id: convert::text(&id),
-                    message: convert::text("Session not found"),
+                    message: convert::text(&format!("Session not found: {id}")),
                 })
             }
             Failure::SessionNotFound(_) => invalid("Session not found", "not_found"),
@@ -643,6 +647,14 @@ impl Failure {
             Failure::ServiceUnavailable { message, .. } => {
                 Failure::Unavailable(message).payload(descriptor)
             }
+            Failure::Unknown { message, reference } if declared(v5::UnknownError::full_name()) => {
+                encoded(v5::UnknownError {
+                    tag: 1,
+                    message: convert::text(&message),
+                    r#ref: Some(convert::text(&reference)),
+                })
+            }
+            Failure::Unknown { message, .. } => Failure::Unavailable(message).payload(descriptor),
             Failure::Unavailable(message) if declared(v5::ServiceUnavailableError::full_name()) => {
                 encoded(v5::ServiceUnavailableError {
                     tag: 1,

@@ -2,6 +2,10 @@ use crate::{
     convert,
     dispatch::{Failure, Invocation},
 };
+use std::{
+    collections::hash_map::RandomState,
+    hash::{BuildHasher, Hasher},
+};
 use ycoding_core::ycoding_schema::{
     DomainDecode, DomainEncode, LosslessString, ObjectEncoder, provider_request,
     schema::NonNegativeInt, session, session_captured_changes, session_compaction, token_usage,
@@ -105,7 +109,29 @@ pub async fn captured_inputs(
     let page = core
         .sessions
         .captured_inputs(&id, after, limit)
-        .map_err(|error| failure(error, &id))?;
+        .map_err(|error| {
+            if let Error::Record(record) = &error
+                && let Some(decode) = record
+                    .downcast_ref::<ycoding_core::session::captured_changes::MessageDecodeError>(
+                )
+            {
+                let reference = format!(
+                    "err_{:08x}",
+                    RandomState::new().build_hasher().finish() as u32
+                );
+                tracing::error!(
+                    r#ref = reference,
+                    session_id = convert::readable(id.as_lossless()),
+                    message_id = convert::readable(&decode.message_id),
+                    "failed to decode captured change input"
+                );
+                return Failure::Unknown {
+                    message: "Unexpected server error. Check server logs for details.".into(),
+                    reference,
+                };
+            }
+            failure(error, &id)
+        })?;
     Ok(v5::SessionCapturedInputsResult {
         data: wire_captured(&page)?,
     })

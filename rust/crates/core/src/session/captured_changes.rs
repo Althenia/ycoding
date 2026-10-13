@@ -6,7 +6,8 @@ use super::{
 };
 use std::ops::Bound;
 use ycoding_schema::{
-    DomainDecode, JsonValue, LosslessString, ObjectEncoder, session, session_captured_changes,
+    DecodeError, DomainDecode, JsonValue, LosslessString, ObjectEncoder, schema::NonNegativeInt,
+    session, session_captured_changes,
 };
 use ycoding_store::{
     Error, IndexOrder,
@@ -19,6 +20,24 @@ const PAGE: usize = 128;
 const FILE_TOOLS: [&str; 3] = ["edit", "patch", "apply_patch"];
 const SUBAGENT: &str = "subagent";
 const SUBAGENT_CONTROL: &str = "subagent_control";
+
+#[derive(Debug)]
+pub struct MessageDecodeError {
+    pub message_id: LosslessString,
+    source: DecodeError,
+}
+
+impl std::fmt::Display for MessageDecodeError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("failed to decode captured change input")
+    }
+}
+
+impl std::error::Error for MessageDecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
 
 impl Service {
     pub fn captured_inputs(
@@ -67,13 +86,25 @@ impl Service {
                     .take(limit + 1 - rows.len()),
             );
         }
-        let next = (rows.len() > limit).then(|| rows[limit - 1].seq as f64);
+        let next = (rows.len() > limit).then(|| rows[limit - 1].seq);
         rows.truncate(limit);
-        let page = ObjectEncoder::new()
-            .field("data", &JsonValue::Array(rows.iter().map(input).collect()))
-            .optional("next", &next)
-            .finish();
-        session_captured_changes::Page::decode(&page).map_err(record_error)
+        Ok(session_captured_changes::Page {
+            data: rows
+                .iter()
+                .map(|row| {
+                    session_captured_changes::Input::decode(&input(row)).map_err(|source| {
+                        Error::Record(Box::new(MessageDecodeError {
+                            message_id: row.id.clone(),
+                            source,
+                        }))
+                    })
+                })
+                .collect::<Result<_, Error>>()?,
+            next: next
+                .map(NonNegativeInt::new)
+                .transpose()
+                .map_err(record_error)?,
+        })
     }
 }
 
