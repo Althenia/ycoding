@@ -6,16 +6,16 @@ use ycoding_core::{
     event_feed, platform::browser::service::Lifecycle, ycoding_schema::session_id::SessionId,
 };
 
+pub(super) type Release =
+    Arc<dyn Fn(SessionId, Lifecycle) -> Boxed<Result<(), Failure>> + Send + Sync>;
+
 pub(super) struct Owner {
     stop: watch::Sender<bool>,
     task: Option<tokio::task::JoinHandle<Result<(), Failure>>>,
 }
 
 impl Owner {
-    pub fn start(
-        feed: event_feed::Feed,
-        release: Arc<dyn Fn(SessionId, Lifecycle) -> Boxed<Result<(), Failure>> + Send + Sync>,
-    ) -> Result<Self, Failure> {
+    pub fn start(feed: event_feed::Feed, release: Release) -> Result<Self, Failure> {
         let notify = Arc::new(Notify::new());
         let notified = notify.clone();
         let subscriber = feed

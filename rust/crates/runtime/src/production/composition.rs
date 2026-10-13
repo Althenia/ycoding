@@ -10,10 +10,12 @@ use std::{
 };
 use tokio::{runtime::Handle, sync::oneshot};
 
+type Owner = (oneshot::Sender<()>, JoinHandle<Result<(), Failure>>);
+
 pub(super) struct Composition {
     handle: Handle,
     closed: AtomicBool,
-    owner: Mutex<Option<(oneshot::Sender<()>, JoinHandle<Result<(), Failure>>)>>,
+    owner: Mutex<Option<Owner>>,
 }
 
 impl Composition {

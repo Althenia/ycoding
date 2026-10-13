@@ -82,96 +82,6 @@ fn living_log(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{Failure, living_log};
-    use ycoding_core::{
-        session::{list::Query, store::Service},
-        ycoding_schema::{parse_json, session},
-        ycoding_store::{
-            Catalog, Error, Metadata, Options, Store, TableDeclaration, project, session::NewEvent,
-        },
-    };
-
-    #[tokio::test]
-    async fn status_lifecycle_skips_a_session_deleted_between_inventory_and_log_read() {
-        let tables = ycoding_core::ycoding_store::session::TABLES
-            .iter()
-            .chain(ycoding_core::ycoding_store::resources::TABLES)
-            .chain(ycoding_core::ycoding_store::project::TABLES)
-            .copied()
-            .chain([
-                TableDeclaration::of::<ycoding_core::ycoding_store::analytics::DeliveryTable>(),
-                TableDeclaration::of::<ycoding_core::ycoding_store::analytics::IntentTable>(),
-            ])
-            .collect::<Vec<_>>();
-        let store = Store::disposable(
-            Options::core(),
-            Catalog::new(1, Box::leak(tables.into_boxed_slice())),
-            Metadata::new([24; 16], 1),
-        )
-        .unwrap();
-        store
-            .submit(|tx| {
-                project::ProjectTable::insert(
-                    tx,
-                    &project::Project {
-                        id: "prj_fixture".into(),
-                        worktree: "/fixture".into(),
-                        vcs: None,
-                        name: None,
-                        icon_url: None,
-                        icon_url_override: None,
-                        icon_color: None,
-                        time_created: 1,
-                        time_updated: 1,
-                        time_initialized: None,
-                        sandboxes: vec![],
-                        commands: None,
-                    },
-                )
-            })
-            .unwrap()
-            .await
-            .unwrap();
-        let sessions = Service::new(store.client());
-        for id in ["ses_removed", "ses_retained"] {
-            sessions.create(NewEvent {
-                id: format!("evt_create_{id}").into(),
-                aggregate_id: id.into(),
-                created: 1,
-                type_: "session.created.2".into(),
-                data: parse_json(&format!(r#"{{"sessionID":"{id}","projectID":"prj_fixture","location":{{"directory":"/fixture"}},"title":"Fixture","created":1}}"#)).unwrap(),
-            }).await.unwrap();
-        }
-        let listed = sessions.list(&Query::default()).unwrap();
-        assert_eq!(listed.len(), 2);
-        let mut removed = false;
-        let mut retained = Vec::new();
-        for info in listed {
-            if !removed {
-                sessions
-                    .remove(&session::Id::new("ses_removed").unwrap())
-                    .await
-                    .unwrap();
-                removed = true;
-            }
-            if living_log(|after| sessions.log(&info.id, after, 512)).unwrap() {
-                retained.push(info.id);
-            }
-        }
-        assert_eq!(retained, vec![session::Id::new("ses_retained").unwrap()]);
-        assert!(matches!(
-            living_log(|_| Err(Error::Domain {
-                kind: "storage",
-                message: "fixture failure"
-            })),
-            Err(Failure::Connector { code: 10, .. })
-        ));
-        store.shutdown().unwrap();
-    }
-}
-
 pub fn session(invocation: &Invocation) -> Result<(session::Info, Arc<LocationServices>), Failure> {
     let Some(v5::scope::Target::Session(id)) = &invocation.scope.target else {
         return Err(error(4, "Session scope required"));
@@ -461,4 +371,94 @@ pub async fn list(
             .collect(),
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Failure, living_log};
+    use ycoding_core::{
+        session::{list::Query, store::Service},
+        ycoding_schema::{parse_json, session},
+        ycoding_store::{
+            Catalog, Error, Metadata, Options, Store, TableDeclaration, project, session::NewEvent,
+        },
+    };
+
+    #[tokio::test]
+    async fn status_lifecycle_skips_a_session_deleted_between_inventory_and_log_read() {
+        let tables = ycoding_core::ycoding_store::session::TABLES
+            .iter()
+            .chain(ycoding_core::ycoding_store::resources::TABLES)
+            .chain(ycoding_core::ycoding_store::project::TABLES)
+            .copied()
+            .chain([
+                TableDeclaration::of::<ycoding_core::ycoding_store::analytics::DeliveryTable>(),
+                TableDeclaration::of::<ycoding_core::ycoding_store::analytics::IntentTable>(),
+            ])
+            .collect::<Vec<_>>();
+        let store = Store::disposable(
+            Options::core(),
+            Catalog::new(1, Box::leak(tables.into_boxed_slice())),
+            Metadata::new([24; 16], 1),
+        )
+        .unwrap();
+        store
+            .submit(|tx| {
+                project::ProjectTable::insert(
+                    tx,
+                    &project::Project {
+                        id: "prj_fixture".into(),
+                        worktree: "/fixture".into(),
+                        vcs: None,
+                        name: None,
+                        icon_url: None,
+                        icon_url_override: None,
+                        icon_color: None,
+                        time_created: 1,
+                        time_updated: 1,
+                        time_initialized: None,
+                        sandboxes: vec![],
+                        commands: None,
+                    },
+                )
+            })
+            .unwrap()
+            .await
+            .unwrap();
+        let sessions = Service::new(store.client());
+        for id in ["ses_removed", "ses_retained"] {
+            sessions.create(NewEvent {
+                id: format!("evt_create_{id}").into(),
+                aggregate_id: id.into(),
+                created: 1,
+                type_: "session.created.2".into(),
+                data: parse_json(&format!(r#"{{"sessionID":"{id}","projectID":"prj_fixture","location":{{"directory":"/fixture"}},"title":"Fixture","created":1}}"#)).unwrap(),
+            }).await.unwrap();
+        }
+        let listed = sessions.list(&Query::default()).unwrap();
+        assert_eq!(listed.len(), 2);
+        let mut removed = false;
+        let mut retained = Vec::new();
+        for info in listed {
+            if !removed {
+                sessions
+                    .remove(&session::Id::new("ses_removed").unwrap())
+                    .await
+                    .unwrap();
+                removed = true;
+            }
+            if living_log(|after| sessions.log(&info.id, after, 512)).unwrap() {
+                retained.push(info.id);
+            }
+        }
+        assert_eq!(retained, vec![session::Id::new("ses_retained").unwrap()]);
+        assert!(matches!(
+            living_log(|_| Err(Error::Domain {
+                kind: "storage",
+                message: "fixture failure"
+            })),
+            Err(Failure::Connector { code: 10, .. })
+        ));
+        store.shutdown().unwrap();
+    }
 }

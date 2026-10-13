@@ -16,9 +16,11 @@ pub struct Record {
     pub id: project_artifact::Id,
     pub path: Option<PathBuf>,
 }
+type Generations = Vec<(u64, Vec<Record>)>;
+
 #[derive(Default)]
 pub struct Registry {
-    snapshots: Vec<(String, Vec<(u64, Vec<Record>)>)>,
+    snapshots: Vec<(String, Generations)>,
     generation: u64,
 }
 impl Registry {
