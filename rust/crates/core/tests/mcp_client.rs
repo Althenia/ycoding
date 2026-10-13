@@ -54,6 +54,243 @@ impl Drop for Fixture {
 }
 
 #[tokio::test]
+async fn ajv_compilable_output_schemas_validate_through_paginated_client_calls_and_refresh() {
+    let cases = [
+        (
+            "array",
+            json!({"type":"array","items":{"type":"integer"},"minItems":1,"uniqueItems":true}),
+            json!([1, 2]),
+            json!([1, "2"]),
+        ),
+        (
+            "enum",
+            json!({"enum":["ready","done"]}),
+            json!("ready"),
+            json!("other"),
+        ),
+        (
+            "union",
+            json!({"anyOf":[{"type":"integer"},{"type":"string","pattern":"^ok$"}]}),
+            json!("ok"),
+            json!(false),
+        ),
+        (
+            "one",
+            json!({"oneOf":[{"type":"number"},{"type":"integer"}]}),
+            json!(1.5),
+            json!(1),
+        ),
+        (
+            "all",
+            json!({"allOf":[{"type":"integer"},{"minimum":2}],"not":{"const":3}}),
+            json!(2),
+            json!(3),
+        ),
+        (
+            "ref",
+            json!({"$defs":{"value":{"type":"integer"}},"$ref":"#/$defs/value"}),
+            json!(2),
+            json!("2"),
+        ),
+        (
+            "additional",
+            json!({"type":"object","additionalProperties":{"type":"integer"}}),
+            json!({"a":2}),
+            json!({"a":"2"}),
+        ),
+        (
+            "patterns",
+            json!({"type":"object","patternProperties":{"^x":{"type":"integer"}},"additionalProperties":false}),
+            json!({"x1":2}),
+            json!({"other":2}),
+        ),
+        (
+            "conditional",
+            json!({"if":{"properties":{"a":{"const":true}}},"then":{"required":["b"]},"else":{"required":["c"]}}),
+            json!({"a":true,"b":1}),
+            json!({"a":true}),
+        ),
+        (
+            "tuple",
+            json!({"type":"array","prefixItems":[{"type":"string"},{"type":"integer"}],"items":false}),
+            json!(["a", 1]),
+            json!(["a", 1, 2]),
+        ),
+        (
+            "contains",
+            json!({"type":"array","contains":{"const":1},"minContains":2,"maxContains":2}),
+            json!([1, 1, 2]),
+            json!([1, 2]),
+        ),
+        (
+            "unevaluated",
+            json!({"type":"object","allOf":[{"properties":{"a":{"type":"integer"}}}],"unevaluatedProperties":false}),
+            json!({"a":1}),
+            json!({"b":1}),
+        ),
+        (
+            "dependent",
+            json!({"type":"object","dependentRequired":{"a":["b"]}}),
+            json!({"a":1,"b":2}),
+            json!({"a":1}),
+        ),
+        (
+            "format",
+            json!({"type":"string","format":"email"}),
+            json!("a@example.org"),
+            json!("a@localhost"),
+        ),
+        (
+            "length",
+            json!({"type":"string","minLength":1,"maxLength":1}),
+            json!("💡"),
+            json!("💡💡"),
+        ),
+        (
+            "nullable",
+            json!({"type":"integer","nullable":true}),
+            json!(null),
+            json!("1"),
+        ),
+        (
+            "draft7",
+            json!({"$schema":"http://json-schema.org/draft-07/schema#","definitions":{"value":{"type":"integer"}},"$ref":"#/definitions/value","minimum":2}),
+            json!(2),
+            json!(1),
+        ),
+        (
+            "draft6",
+            json!({"$schema":"https://json-schema.org/draft-06/schema#","type":"array","items":[{"type":"string"}],"additionalItems":false}),
+            json!(["a"]),
+            json!(["a", 1]),
+        ),
+        (
+            "draft2019",
+            json!({"$schema":"https://json-schema.org/draft/2019-09/schema#","type":"object","properties":{"a":true},"unevaluatedProperties":false}),
+            json!({"a":1}),
+            json!({"b":1}),
+        ),
+        (
+            "relaxed",
+            json!({"title":42,"required":["a","a"],"properties":{"a":{"type":"integer"}},"unknownKeyword":true}),
+            json!({"a":1}),
+            json!({"a":"1"}),
+        ),
+    ];
+    let fixture = Fixture::new();
+    let source = fixture.0.join("schemas.mjs");
+    fs::write(&source, format!(r##"
+const cases = {}
+let changed = false
+const write = (message) => process.stdout.write(JSON.stringify(message) + "\n")
+let buffer = ""
+for await (const chunk of Bun.stdin.stream()) {{
+  buffer += new TextDecoder().decode(chunk)
+  while (buffer.includes("\n")) {{
+    const index = buffer.indexOf("\n")
+    const request = JSON.parse(buffer.slice(0,index))
+    buffer = buffer.slice(index+1)
+    const reply = (result) => write({{jsonrpc:"2.0",id:request.id,result}})
+    if (request.method === "initialize") reply({{protocolVersion:"2025-11-25",serverInfo:{{name:"schemas",version:"1"}},capabilities:{{tools:{{}}}}}})
+    if (request.method === "tools/list") {{
+      const offset = Number(request.params?.cursor ?? 0)
+      reply({{tools:[...cases.slice(offset,offset+2).map(([name,original])=>{{const schema = changed && name === "enum" ? {{enum:["other"]}} : original;return {{name,inputSchema:{{type:"object"}},outputSchema:{{type:"object",properties:{{value:schema}},required:["value"],...Object.fromEntries(["$schema","$defs","definitions"].filter(key=>key in schema).map(key=>[key,schema[key]]))}}}}}}),...(offset===0 ? [{{name:"unresolved",inputSchema:{{type:"object"}},outputSchema:{{type:"object",properties:{{value:{{$ref:"#/$defs/missing"}}}}}}}},{{name:"malformed",inputSchema:{{type:"object"}},outputSchema:{{type:"object",properties:{{value:{{pattern:"["}}}}}}}}] : [])],...(offset+2 < cases.length ? {{nextCursor:String(offset+2)}} : {{}})}})
+    }}
+    if (request.method === "tools/call") {{
+      if (request.params.name === "change") {{changed = true;reply({{content:[]}});continue}}
+      if (request.params.arguments.missing) {{reply({{content:[]}});continue}}
+      const entry = cases.find(([name])=>name === request.params.name)
+      reply({{content:[],structuredContent:{{value:entry ? entry[request.params.arguments.invalid ? 3 : 2] : 1}},...(request.params.arguments.error ? {{isError:true}} : {{}})}})
+    }}
+  }}
+}}
+"##, serde_json::to_string(&cases).unwrap())).unwrap();
+    let config = ServerConfig::decode(
+        &parse_json(&json!({"type":"local","command":["bun",source]}).to_string()).unwrap(),
+    )
+    .unwrap();
+    let connection = Connection::connect(
+        "schemas",
+        &config,
+        &fixture.0,
+        "1.0.0",
+        &BTreeMap::new(),
+        Hooks::default(),
+    )
+    .await
+    .unwrap();
+    for _ in 0..2 {
+        let tools = connection.tools().await.unwrap();
+        assert_eq!(tools.len(), cases.len() + 2);
+        for (name, _, valid, _) in &cases {
+            assert_eq!(
+                connection
+                    .call_tool(name, json!({}), None)
+                    .await
+                    .unwrap()
+                    .structured,
+                Some(json!({"value":valid})),
+                "{name}"
+            );
+            let error = connection
+                .call_tool(name, json!({"invalid":true}), None)
+                .await
+                .expect_err(name);
+            assert!(
+                error
+                    .to_string()
+                    .contains("Structured content does not match the tool's output schema"),
+                "{name}: {error}"
+            );
+            assert!(matches!(error, Error::Rpc { code: -32602, .. }), "{name}");
+        }
+        for name in ["unresolved", "malformed"] {
+            assert_eq!(
+                connection
+                    .call_tool(name, json!({}), None)
+                    .await
+                    .unwrap()
+                    .structured,
+                Some(json!({"value":1}))
+            );
+            assert_eq!(
+                connection
+                    .call_tool(name, json!({"missing":true}), None)
+                    .await,
+                Err(Error::Rpc {
+                    code: -32600,
+                    message: format!(
+                        "Tool {name} has an output schema but did not return structured content"
+                    )
+                })
+            );
+        }
+        assert!(
+            connection
+                .call_tool("array", json!({"invalid":true,"error":true}), None)
+                .await
+                .unwrap()
+                .is_error
+        );
+    }
+    connection
+        .call_tool("change", json!({}), None)
+        .await
+        .unwrap();
+    connection.tools().await.unwrap();
+    assert!(connection.call_tool("enum", json!({}), None).await.is_err());
+    assert_eq!(
+        connection
+            .call_tool("enum", json!({"invalid":true}), None)
+            .await
+            .unwrap()
+            .structured,
+        Some(json!({"value":"other"}))
+    );
+    connection.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn real_sdk_stdio_initializes_and_retains_paginated_output_schemas() {
     let fixture = Fixture::new();
     let connection = Connection::connect(
@@ -105,7 +342,7 @@ async fn real_sdk_stdio_initializes_and_retains_paginated_output_schemas() {
     );
     assert_eq!(
         connection.call_tool("first", json!({}), None).await,
-        Err(Error::OutputSchema)
+        Err(Error::Rpc {code:-32602,message:"Structured content does not match the tool's output schema: data/value must be string".into()})
     );
     assert!(connection.prompts().await.unwrap().is_empty());
     assert!(connection.resources().await.unwrap().is_empty());

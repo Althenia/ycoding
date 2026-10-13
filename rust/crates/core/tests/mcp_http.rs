@@ -116,7 +116,7 @@ async fn real_http_json_and_sse_catalog_call_prompt_resource_and_skill_flow() {
         assert_eq!(connection.tools().await.unwrap().len(), 2);
         assert_eq!(
             connection.call_tool("first", json!({}), None).await,
-            Err(Error::OutputSchema)
+            Err(Error::Rpc {code:-32602,message:"Structured content does not match the tool's output schema: data/value must be string".into()})
         );
         assert_eq!(
             connection
@@ -285,7 +285,7 @@ async fn output_schema_string_lengths_count_unicode_code_points_not_utf16_units(
     connection.tools().await.unwrap();
     assert_eq!(
         connection.call_tool("first", json!({}), None).await,
-        Err(Error::OutputSchema)
+        Err(Error::Rpc {code:-32602,message:"Structured content does not match the tool's output schema: data/value must NOT have fewer than 2 characters".into()})
     );
     connection.close().await.unwrap();
     server.close().await;

@@ -16,6 +16,7 @@ license = "AGPL-3.0-only"
 publish = false
 
 [workspace.dependencies]
+jsonschema = { version = "=0.58.6", default-features = false }
 encoding_rs = "=0.8.35"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 chrono-tz = { version = "=0.10.4", default-features = false }

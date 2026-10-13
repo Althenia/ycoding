@@ -99,18 +99,40 @@ directory `uri`, `name`, `mimeType`) and drop server-specific extras.
 `Service::read_resource` adds the `server` and requested `uri` to the result.
 `Error::NeedsAuth` carries the server name and renders as `MCP server requires
 authentication: <server>`. Unsupported resource list
-methods are remembered independently for resources and templates. Tool output
-schemas remain available across every page. Output validation reuses Forms
-primitive validation through `tools::policy::forms::validate_field` and supports
-object properties, required keys, boolean `additionalProperties`, primitive types,
-and the implemented primitive constraints. A schema that cannot be compiled by
-this validator remains in the catalog but disables validation for that tool;
-other tools keep their validation. This is not an AJV-complete JSON Schema
-implementation. RPC errors,
+methods are remembered independently for resources and templates. RPC errors,
 tool `isError`, structured content, text, image/audio, resource links, and embedded
 resources retain distinct outcomes. The raw MCP client does not grant tool or
 skill permission, register Session tools, or bypass guardrails; `builtin::mcp`
 registers the catalog as registry tools.
+
+Tool output validation uses `jsonschema` 0.58.6 with offline reference resolution.
+An absent or non-string `$schema` selects draft 2020-12; declared 2019-09 selects
+that draft; declared draft-06 or draft-07 selects draft-07 with validation of
+keywords adjacent to `$ref`. Known formats are asserted, unknown formats are
+ignored, and `email`, `uuid`, and `regex` use Core ECMAScript adapters. Validation
+does not coerce values, insert defaults, or remove additional properties. Tool
+output schemas remain available across every catalog page. Compiled validators
+are reused by calls and unchanged catalog refreshes; changed schemas are
+recompiled and absent tools release their cached validators.
+
+Invalid structured content returns RPC code `-32602` with the message
+`Structured content does not match the tool's output schema: <details>`.
+Details collect validation failures with `data<instancePath>` prefixes.
+Missing structured content returns `-32600` with
+`Tool <name> has an output schema but did not return structured content`.
+Results marked `isError` bypass output validation. Validator-construction
+failures retain the schema in the catalog and tolerate structured content
+without validation; the structured-content presence requirement still applies.
+
+This validator differs from the TypeScript MCP client's AJV configuration:
+`jsonschema` meta-validates schemas after normalization, and any schema it
+rejects at construction leaves that tool's structured results unvalidated.
+`patternProperties` uses the crate's best-effort ECMAScript regex engine;
+some `ajv-formats` extensions are unsupported or have different semantics,
+and error details and ordering are not universally AJV-equivalent. The MCP
+transport rejects lone UTF-16 surrogates in schemas, keys, and instances rather
+than replacing them; domain `JsonValue` retains those code units losslessly.
+Valid surrogate pairs are preserved and string lengths count Unicode code points.
 
 Skills discovery retrieves metadata only. Static manifests validate names, URI
 containment, unique resources, inclusion of `SKILL.md`, the 512-resource limit,
@@ -128,8 +150,7 @@ to the `*_by` producers.
 Browser launch and background tool-job/Session delivery remain caller-owned.
 The optional elicitation callback is caller-owned; the service does not create
 Forms or manage URL-completion acknowledgements. Service catalog ordering is
-lexical; transport strings use the SDK's UTF-8 representation and cannot retain
-lone UTF-16 surrogates.
+lexical.
 
 Run the focused checks from `rust` with
 `cargo test --locked -p ycoding-core --test 'mcp_*'`.

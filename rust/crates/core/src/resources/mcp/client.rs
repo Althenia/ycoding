@@ -246,7 +246,7 @@ pub struct Connection {
     catalog_timeout: Duration,
     execution_timeout: Duration,
     resource_methods: Mutex<(bool, bool)>,
-    output_schemas: Mutex<BTreeMap<String, Value>>,
+    output_schemas: Mutex<BTreeMap<String, output_schema::Cached>>,
 }
 
 impl Connection {
@@ -758,6 +758,11 @@ impl Connection {
             )
             .await?;
         let mut schemas = BTreeMap::new();
+        let previous = self
+            .output_schemas
+            .lock()
+            .map_err(|_| Error::Closed)?
+            .clone();
         for tool in &mut tools {
             let name = tool["name"]
                 .as_str()
@@ -766,10 +771,9 @@ impl Connection {
             if !tool["inputSchema"].is_object() {
                 return Err(Error::InvalidResult("tool.inputSchema"));
             }
-            if let Some(schema) = tool.get("outputSchema")
-                && output_schema::check(schema).is_ok()
-            {
-                schemas.insert(name, schema.clone());
+            if let Some(schema) = tool.get("outputSchema") {
+                let cached = output_schema::cached(schema, previous.get(&name));
+                schemas.insert(name, cached);
             }
         }
         *self.output_schemas.lock().map_err(|_| Error::Closed)? = schemas;
@@ -936,11 +940,20 @@ impl Connection {
             .map_err(|_| Error::Closed)?
             .get(name)
             .cloned();
-        if let Some(schema) = schema {
+        if let Some(schema) = schema
+            && result["isError"] != true
+        {
             if let Some(structured) = result.get("structuredContent") {
-                output_schema::validate(&schema, structured)?;
-            } else if result["isError"] != true {
-                return Err(Error::OutputSchema);
+                if let Some(validator) = schema.validator {
+                    output_schema::validate(&validator, structured)?;
+                }
+            } else {
+                return Err(Error::Rpc {
+                    code: -32600,
+                    message: format!(
+                        "Tool {name} has an output schema but did not return structured content"
+                    ),
+                });
             }
         }
         tool_result(&result)
