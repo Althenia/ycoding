@@ -420,6 +420,7 @@ pub async fn side_create(
             ))),
         },
         request_id: invocation.request_id.clone(),
+        remote: invocation.remote,
     };
     crate::session_services::synthetic(
         child,

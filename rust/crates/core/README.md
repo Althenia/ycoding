@@ -1691,6 +1691,17 @@ trailing `.git` or `.git/`, and trailing slashes, and lowercases the host.
 `session::store::Service::record_project` inserts a Project row and optionally a
 directory row, each only when absent, in one transaction.
 
+`session::attachment_admission` serves `Service::materialize_attachment`, the
+TypeScript prompt admission rules. A managed `ycoding-attachment://sha256/` URI
+reuses the stored blob with a detected MIME type, falling back to the content and
+MIME type recorded by an earlier `session.input.admitted.1` event when the stored
+copy is unavailable. A `data:` URL decodes canonical base64 or percent-encoded
+UTF-8. A `file:` URI reads a file, honours positive integer `start` and `end`
+line bounds for text, and turns a directory into a sorted listing with MIME type
+`application/x-directory`. Content above 20 MiB is refused; MIME detection uses
+the TypeScript signatures and text heuristic; images are normalized to the
+supplied limits; the result is imported into the managed Store.
+
 `session::attachment_read` serves `Service::attachment_read`. It accepts only a
 64-character lowercase hexadecimal digest, requires the Session, and finds the
 first managed file with that digest in the Session's user messages, then in its

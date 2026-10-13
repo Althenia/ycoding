@@ -455,6 +455,7 @@ impl Fixture {
             },
             urls: vec![],
             subscriptions: Subscriptions::default(),
+            uploads: Default::default(),
         })
     }
     pub async fn configure_platform(&mut self, config: &str) {

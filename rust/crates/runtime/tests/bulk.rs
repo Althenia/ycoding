@@ -98,6 +98,7 @@ async fn results_over_the_typed_message_bound_are_refused_with_a_typed_error() {
             services: services(LocalAuth::disabled(), false),
             urls: Vec::new(),
             subscriptions: ycoding_runtime::Subscriptions::default(),
+            uploads: Default::default(),
         });
         let descriptor = operation("server.get");
         let settled = dispatcher

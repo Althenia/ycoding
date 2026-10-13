@@ -14,6 +14,10 @@ pub(crate) fn register(dispatcher: &mut Dispatcher) -> Result<(), RegistrationEr
     dispatcher.handle("remote.get", get)?;
     dispatcher.handle("remote.enroll", enroll)?;
     dispatcher.handle("remote.set", set)?;
+    dispatcher.handle(
+        "session.attachment.upload",
+        crate::session_attachment_upload::upload,
+    )?;
     Ok(())
 }
 

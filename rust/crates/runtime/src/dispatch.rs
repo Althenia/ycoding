@@ -13,6 +13,7 @@ pub struct Invocation {
     pub connection_id: String,
     pub scope: v5::Scope,
     pub request_id: String,
+    pub remote: bool,
 }
 
 impl Invocation {
@@ -343,7 +344,7 @@ impl Dispatcher {
             return None;
         }
         let request_id = request.request_id.clone();
-        let outcome = run(entry, environment, connection_id, request).await;
+        let outcome = run(entry, environment, connection_id, request, false).await;
         Some(settle(&entry.descriptor, request_id, outcome))
     }
 
@@ -386,7 +387,7 @@ impl Dispatcher {
             Ok(()) if entry.descriptor.streaming == v5::Streaming::Events as i32 => Err(
                 Failure::Unavailable("Canonical remote stream binding is not ready".into()),
             ),
-            Ok(()) => run(entry, environment, connection_id, request).await,
+            Ok(()) => run(entry, environment, connection_id, request, true).await,
             Err(error) => Err(error),
         };
         Some(settle(&entry.descriptor, request_id, outcome))
@@ -405,6 +406,7 @@ async fn run(
     environment: Arc<Environment>,
     connection_id: String,
     request: v5::Request,
+    remote: bool,
 ) -> Result<Body, Failure> {
     (entry.authorize)(&environment, &request)?;
     let handler = entry.handler.as_ref().ok_or_else(|| {
@@ -419,6 +421,7 @@ async fn run(
             connection_id,
             scope: request.scope,
             request_id: request.request_id,
+            remote,
         },
         request.payload,
     )

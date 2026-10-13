@@ -254,7 +254,9 @@ async fn connect(
         services: environment.services.clone(),
         urls: environment.urls.clone(),
         subscriptions: crate::Subscriptions::default(),
+        uploads: Default::default(),
     });
+    let _staged = crate::session_attachment_upload::Release(environment.clone());
     let core = environment.services.core.as_ref().ok_or(Error::Setup)?;
     core.sessions
         .list(&ycoding_core::session::list::Query::default())

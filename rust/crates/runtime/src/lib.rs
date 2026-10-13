@@ -34,6 +34,7 @@ mod platform_services;
 mod production;
 mod project;
 mod project_copy;
+mod prompt_attachments;
 mod provider_usage;
 mod pty;
 mod pty_stream;
@@ -42,6 +43,7 @@ mod remote_derived;
 mod server;
 mod services;
 mod session_attachment;
+mod session_attachment_upload;
 mod session_autonomy;
 mod session_create;
 mod session_helpers;
@@ -74,3 +76,4 @@ pub use services::{
     Subscriptions, UsagePricer,
 };
 pub use services::{IntegrationResolver, IntegrationServices, McpResolver};
+pub use session_attachment_upload::{Appended, Clock, Piece, Staging};

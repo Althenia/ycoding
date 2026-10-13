@@ -121,16 +121,6 @@ async fn command(
     let (location, catalogs, services) = services(&invocation, &id)?;
     let payload = request.payload;
     let command = convert::domain(&payload.command)?;
-    if payload
-        .files
-        .as_ref()
-        .is_some_and(|files| !files.items.is_empty())
-    {
-        return Err(Failure::InvalidField {
-            field: "files",
-            message: "Command attachment resolution is unavailable".into(),
-        });
-    }
     let platform = core.platform.as_ref().ok_or_else(|| {
         Failure::Unavailable("Location platform services are not composed".into())
     })?(services.runner.location())
@@ -160,6 +150,23 @@ async fn command(
         Some(2) => "queue",
         _ => "steer",
     };
+    // A reused command ID returns the admitted record without resolving attachments again.
+    let admitted_before = core
+        .sessions
+        .pending(&message_id)
+        .map_err(|_| Failure::Unavailable("Session store unavailable".into()))?
+        .is_some()
+        || core
+            .sessions
+            .message(&message_id)
+            .map_err(|_| Failure::Unavailable("Session store unavailable".into()))?
+            .is_some();
+    let files = match payload.files {
+        Some(files) if !admitted_before && !files.items.is_empty() => {
+            Some(crate::prompt_attachments::materialize(&invocation, &id, &files.items).await?)
+        }
+        files => files.map(|_| Vec::new()),
+    };
     let admitted = services
         .runner
         .command(
@@ -175,7 +182,7 @@ async fn command(
                 input: session_pending::Message::User(session_pending::UserMessage {
                     data: session_pending::UserData {
                         text: "".into(),
-                        files: None,
+                        files,
                         agents: payload
                             .agents
                             .map(|agents| agents.items.iter().map(convert::agent_domain).collect())

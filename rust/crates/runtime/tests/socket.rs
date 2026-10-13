@@ -781,6 +781,7 @@ async fn every_local_operation_answers_with_a_declared_typed_outcome() {
                 "session.active",
                 "session.archive",
                 "session.attachment.read",
+                "session.attachment.upload",
                 "session.autonomy.get",
                 "session.autonomy.set",
                 "session.background",
@@ -885,6 +886,7 @@ async fn every_local_operation_answers_with_a_declared_typed_outcome() {
             services: services(LocalAuth::disabled(), false),
             urls: Vec::new(),
             subscriptions: ycoding_runtime::Subscriptions::default(),
+            uploads: Default::default(),
         });
         let mut local = 0;
         let mut unavailable = 0;

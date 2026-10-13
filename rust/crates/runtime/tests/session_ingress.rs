@@ -853,6 +853,120 @@ async fn managed_command_admits_artifact_provenance_and_records_its_activation()
     fixture.close().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn command_attachments_materialize_once_into_managed_files() {
+    let (fixture, _) = fixture("http://127.0.0.1:1").await;
+    std::fs::write(
+        std::path::Path::new(&fixture.directory).join("brief.txt"),
+        "brief",
+    )
+    .unwrap();
+    let (server, mut client) = open(&fixture).await;
+    let id = fixture.root.clone();
+    let command = |uris: &[String]| v5::SessionCommandRequest {
+        params: v5::SessionCommandRequestParams {
+            session_id: text(&id),
+        },
+        payload: v5::SessionCommandRequestPayload {
+            id: Some(text("msg_command_attachments")),
+            command: text("review"),
+            arguments: Some(text("files")),
+            agent: None,
+            model: None,
+            files: Some(v5::SessionCommandRequestPayloadFiles {
+                items: uris
+                    .iter()
+                    .map(|uri| v5::PromptInputFileAttachment {
+                        uri: text(uri),
+                        name: Some(text("attached")),
+                        description: None,
+                        mention: None,
+                    })
+                    .collect(),
+            }),
+            agents: None,
+            delivery: Some(2),
+            resume: Some(false),
+        },
+    };
+    let brief =
+        url::Url::from_file_path(std::path::Path::new(&fixture.directory).join("brief.txt"))
+            .unwrap()
+            .to_string();
+    let admitted: v5::SessionCommandResult = ask(
+        &mut client,
+        "session.command",
+        scope(&id),
+        command(&[brief, "data:,inline command".into()]),
+    )
+    .await;
+    let files = &admitted.data.data.files.as_ref().unwrap().items;
+    let store = attachment_store::Store::new(fixture.path.join("data/ycoding")).unwrap();
+    let content = |file: &v5::PromptFileAttachment| {
+        store
+            .read(
+                &ycoding_core::ycoding_schema::prompt::ManagedAttachmentContent {
+                    digest: ycoding_core::ycoding_schema::prompt::AttachmentDigest(
+                        units(&file.content.digest).as_str().into(),
+                    ),
+                    bytes: ycoding_core::ycoding_schema::schema::NonNegativeInt::new(
+                        file.content.bytes as i64,
+                    )
+                    .unwrap(),
+                    path: units(&file.content.path).as_str().into(),
+                },
+            )
+            .unwrap()
+    };
+    assert_eq!(
+        files
+            .iter()
+            .map(|file| (
+                content(file),
+                units(&file.mime),
+                file.name.as_ref().map(units)
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (
+                b"brief".to_vec(),
+                "text/plain".into(),
+                Some("attached".into())
+            ),
+            (
+                b"inline command".to_vec(),
+                "text/plain".into(),
+                Some("attached".into())
+            ),
+        ]
+    );
+    fn count(path: &std::path::Path) -> usize {
+        std::fs::read_dir(path).map_or(0, |entries| {
+            entries
+                .map(|entry| entry.unwrap().path())
+                .map(|path| if path.is_dir() { count(&path) } else { 1 })
+                .sum()
+        })
+    }
+    let stored = count(&fixture.path.join("data/ycoding/attachments"));
+    assert_eq!(stored, 2);
+    let retried: v5::SessionCommandResult = ask(
+        &mut client,
+        "session.command",
+        scope(&id),
+        command(&["data:,not imported".into()]),
+    )
+    .await;
+    assert_eq!(retried, admitted);
+    assert_eq!(
+        count(&fixture.path.join("data/ycoding/attachments")),
+        stored
+    );
+    drop(client);
+    server.shutdown().await.unwrap();
+    fixture.close().await;
+}
+
 #[test]
 fn every_session_ingress_descriptor_has_a_handler() {
     let dispatcher = ycoding_runtime::standard().unwrap();

@@ -18,6 +18,7 @@ async fn remote_client_append_requires_consent_and_preserves_bounded_web_samples
         services: services(LocalAuth::disabled(), true),
         urls: vec![],
         subscriptions: Subscriptions::default(),
+        uploads: Default::default(),
     });
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

@@ -97,6 +97,7 @@ fn environment(control: Control) -> Arc<Environment> {
         services,
         urls: Vec::new(),
         subscriptions: Subscriptions::default(),
+        uploads: Default::default(),
     })
 }
 

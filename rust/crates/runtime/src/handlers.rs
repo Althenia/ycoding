@@ -236,24 +236,39 @@ async fn session_prompt(
     let core = invocation.core()?;
     let session_id = invocation.session(&request.params.session_id)?;
     let payload = request.payload;
-    if payload
-        .files
-        .as_ref()
-        .is_some_and(|files| !files.items.is_empty())
-    {
-        return Err(Failure::Unavailable(
-            "file attachment resolution is not wired to the local bridge".into(),
-        ));
-    }
     let delivery = match payload.delivery {
         Some(delivery) if delivery == v5::SessionPromptRequestPayloadDelivery::Queue as i32 => {
             "queue"
         }
         _ => "steer",
     };
+    let event_id =
+        ids::event_id().map_err(|_| Failure::Unavailable("event ID generation failed".into()))?;
+    let id = match payload.id {
+        Some(id) => session_message::Id::decode(&JsonValue::String(convert::domain(&id)?))
+            .map_err(|_| Failure::Invalid("invalid input ID".into()))?,
+        None => session_message::Id::from_event(&event_id),
+    };
+    // A reused input ID returns the admitted record without resolving its attachments again.
+    let admitted_before = core
+        .sessions
+        .pending(&id)
+        .map_err(|error| store_failure(error, &session_id))?
+        .is_some()
+        || core
+            .sessions
+            .message(&id)
+            .map_err(|error| store_failure(error, &session_id))?
+            .is_some();
+    let files = match payload.files {
+        Some(files) if !admitted_before && !files.items.is_empty() => Some(
+            crate::prompt_attachments::materialize(&invocation, &session_id, &files.items).await?,
+        ),
+        files => files.map(|_| Vec::new()),
+    };
     let data = session_pending::UserData {
         text: convert::domain(&payload.text)?,
-        files: payload.files.map(|_| Vec::new()),
+        files,
         agents: payload
             .agents
             .map(|agents| {
@@ -268,13 +283,6 @@ async fn session_prompt(
             .metadata
             .map(|metadata| convert::metadata_domain(&metadata.entries))
             .transpose()?,
-    };
-    let event_id =
-        ids::event_id().map_err(|_| Failure::Unavailable("event ID generation failed".into()))?;
-    let id = match payload.id {
-        Some(id) => session_message::Id::decode(&JsonValue::String(convert::domain(&id)?))
-            .map_err(|_| Failure::Invalid("invalid input ID".into()))?,
-        None => session_message::Id::from_event(&event_id),
     };
     let admitted = core
         .execution

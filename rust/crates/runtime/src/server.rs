@@ -85,6 +85,7 @@ pub async fn serve_with(
             services,
             urls: vec![format!("http://{address}")],
             subscriptions: Subscriptions::default(),
+            uploads: Default::default(),
         }),
         shutdown: shutdown.clone(),
         drain,

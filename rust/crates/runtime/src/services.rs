@@ -290,6 +290,7 @@ pub struct Environment {
     pub services: Services,
     pub urls: Vec<String>,
     pub subscriptions: Subscriptions,
+    pub uploads: crate::session_attachment_upload::Staging,
 }
 
 #[derive(Debug, Default)]

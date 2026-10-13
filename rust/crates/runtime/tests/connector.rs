@@ -103,6 +103,7 @@ fn environment(control: Option<Control>) -> Arc<Environment> {
         services,
         urls: Vec::new(),
         subscriptions: Subscriptions::default(),
+        uploads: Default::default(),
     })
 }
 
@@ -271,6 +272,7 @@ async fn remote_global_form_selection_is_rejected_before_backend_resolution() {
         services: settings,
         urls: vec![],
         subscriptions: Subscriptions::default(),
+        uploads: Default::default(),
     });
     let error = failure(
         standard()

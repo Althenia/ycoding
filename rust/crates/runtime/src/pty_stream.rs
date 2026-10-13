@@ -65,6 +65,7 @@ pub async fn upgrade(
             target: Some(v5::scope::Target::Location(convert::text(directory))),
         },
         request_id: String::new(),
+        remote: false,
     };
     let directory = convert::text(directory);
     let workspace = scope.workspace_id.as_deref().map(convert::text);
