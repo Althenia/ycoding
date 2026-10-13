@@ -25,10 +25,12 @@ export const RELEASES: readonly ReleaseEntry[] = [
     version: "0.10.6",
     date: "2026-10-13",
     title: "Muse (Meta) subscriptions and quota",
-    tags: ["Added"],
+    tags: ["Added", "Changed"],
     changes: [
       { tag: "Added", text: "Muse (Meta) provider: connect a Meta Muse Code subscription through /connect with a device-code login, or use a Meta Model API key or META_API_KEY. YCoding lists the models your account can use, with their context limits and effort levels, and runs them with tools and reasoning." },
       { tag: "Added", text: "Muse subscription quota appears in provider usage as live 5-hour window and weekly percentages with reset times, updated from each Muse response." },
+      { tag: "Changed", text: "Built-in agents use checkpoint-based testing guidance: plan required tests before building, then run focused tests at feature checkpoints and full checks at integration or merge checkpoints." },
+      { tag: "Changed", text: "Built-in agent display names are capitalized; their IDs remain unchanged." },
     ],
   },
   {
