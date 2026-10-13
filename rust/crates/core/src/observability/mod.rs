@@ -24,6 +24,7 @@ use std::{
 };
 use tracing::Level;
 use tracing_subscriber::layer::SubscriberExt;
+use ycoding_schema::DomainEncode;
 
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 
@@ -283,17 +284,19 @@ impl Worker {
                 continue;
             };
             if !matches!(
-                event.event_type.as_str(),
+                event.data.name(),
                 "agent.updated" | "catalog.updated" | "command.updated" | "config.updated"
             ) {
                 continue;
             }
-            let data = serde_json::from_str::<Value>(&ycoding_schema::stringify_json(&event.data))
-                .unwrap_or(Value::String("[REDACTED]".into()));
+            let data = serde_json::from_str::<Value>(&ycoding_schema::stringify_json(
+                &event.data.encode(),
+            ))
+            .unwrap_or(Value::String("[REDACTED]".into()));
             let event = self.shared.redactor.clean("event", json!({
                 "id": event.id.to_utf8().unwrap_or_default(),
                 "created": format!("DateTime.Utc({})", chrono::DateTime::<Utc>::from_timestamp_millis(event.created).map(|time|time.to_rfc3339_opts(SecondsFormat::Millis,true)).unwrap_or_default()),
-                "type": event.event_type,
+                "type": event.data.name(),
                 "data": data,
             }));
             self.log(Record {

@@ -11,7 +11,7 @@ use std::{
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use ycoding_core::{
-    event_feed::{Ephemeral, Feed},
+    event_feed::{Data, Ephemeral, Feed},
     observability::{self, Options},
     resources::config::Roots,
 };
@@ -125,14 +125,24 @@ fn bootstrap_child() {
                 "command.updated",
                 "config.updated",
                 "mcp.status.changed",
-                "test.updated",
+                "skill.updated",
             ] {
                 feed.publish(Ephemeral {
                     id: format!("event-{kind}").into(),
                     created: 7,
-                    event_type: kind.into(),
                     session: None,
-                    data: parse_json("{}").unwrap(),
+                    location: None,
+                    metadata: None,
+                    data: Data::decode(
+                        kind,
+                        &parse_json(if kind == "mcp.status.changed" {
+                            r#"{"server":"fixture"}"#
+                        } else {
+                            "{}"
+                        })
+                        .unwrap(),
+                    )
+                    .unwrap(),
                 });
             }
         }
@@ -339,7 +349,7 @@ fn listed_events_are_observed_and_listener_is_released() {
         text.lines()
             .all(|line| line.contains("event.created=DateTime.Utc(1970-01-01T00:00:00.007Z)"))
     );
-    assert!(!text.contains("mcp.status.changed") && !text.contains("test.updated"));
+    assert!(!text.contains("mcp.status.changed") && !text.contains("skill.updated"));
 }
 
 #[test]

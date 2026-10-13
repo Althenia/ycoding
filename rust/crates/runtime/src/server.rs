@@ -7,10 +7,11 @@ use crate::{
 };
 use axum::{
     Router,
+    body::Bytes,
     extract::{State, WebSocketUpgrade},
     http::{HeaderMap, StatusCode, header::WWW_AUTHENTICATE},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
 };
 use std::{
     io,
@@ -95,6 +96,9 @@ pub async fn serve_with(
     let router = Router::new()
         .route(ROUTE, get(upgrade))
         .route("/api/pty/{id}/connect", get(crate::pty_stream::upgrade))
+        .route("/api/health", get(health))
+        .route("/health", get(health))
+        .route("/api/service/stop", post(stop))
         .with_state(shared);
     let task = tokio::spawn(
         axum::serve(listener, router)
@@ -138,6 +142,52 @@ impl Server {
                 )
             })
     }
+}
+
+async fn health(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
+    if !shared.environment.services.auth.authorized(&headers) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            [(WWW_AUTHENTICATE, "Basic realm=\"Secure Area\"")],
+        )
+            .into_response();
+    }
+    (
+        StatusCode::OK,
+        [("content-type", "application/json")],
+        crate::launch::health_json(&shared.environment.services.identity),
+    )
+        .into_response()
+}
+
+async fn stop(State(shared): State<Arc<Shared>>, headers: HeaderMap, body: Bytes) -> Response {
+    if !shared.environment.services.auth.authorized(&headers) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            [(WWW_AUTHENTICATE, "Basic realm=\"Secure Area\"")],
+        )
+            .into_response();
+    }
+    let target = std::str::from_utf8(&body)
+        .ok()
+        .and_then(|body| ycoding_core::ycoding_schema::parse_json(body).ok())
+        .and_then(|value| crate::launch::json_string(&value, "instanceID"));
+    let Some(target) = target else {
+        return (
+            StatusCode::BAD_REQUEST,
+            [("content-type", "application/json")],
+            "{\"code\":\"invalid_request\"}",
+        )
+            .into_response();
+    };
+    let accepted =
+        crate::health::request_stop(&shared.environment.services.identity.source_epoch, &target);
+    (
+        StatusCode::OK,
+        [("content-type", "application/json")],
+        format!("{{\"accepted\":{accepted}}}"),
+    )
+        .into_response()
 }
 
 async fn upgrade(

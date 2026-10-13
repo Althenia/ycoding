@@ -22,6 +22,7 @@ mod integration;
 mod integration_convert;
 mod isolated_browser;
 mod keep_awake;
+pub mod launch;
 mod locations;
 mod log;
 mod mcp;

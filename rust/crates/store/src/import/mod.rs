@@ -264,6 +264,75 @@ pub fn stage(
     result
 }
 
+pub fn copy_source(source: &Path, copy: &Path) -> Result<(), Error> {
+    if copy.try_exists()? {
+        return Err(Error::Source("copy already exists"));
+    }
+    let files = ["", "-wal", "-journal"]
+        .into_iter()
+        .map(|suffix| {
+            let mut from = source.as_os_str().to_os_string();
+            from.push(suffix);
+            let mut to = copy.as_os_str().to_os_string();
+            to.push(suffix);
+            (PathBuf::from(from), PathBuf::from(to))
+        })
+        .collect::<Vec<_>>();
+    let before = files
+        .iter()
+        .map(|(from, _)| {
+            if from.try_exists()? {
+                digest::file(from).map(Some)
+            } else {
+                Ok(None)
+            }
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    if before[0].is_none() {
+        return Err(Error::Source("source is missing"));
+    }
+    for ((from, to), fingerprint) in files.iter().zip(&before) {
+        if let Some(fingerprint) = fingerprint {
+            std::fs::copy(from, to)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(to, std::fs::Permissions::from_mode(0o600))?;
+            }
+            if digest::file(to)? != *fingerprint {
+                return Err(Error::Source("source changed during copy"));
+            }
+        }
+    }
+    for ((from, _), fingerprint) in files.iter().zip(&before) {
+        let after = if from.try_exists()? {
+            Some(digest::file(from)?)
+        } else {
+            None
+        };
+        if after != *fingerprint {
+            return Err(Error::Source("source changed during copy"));
+        }
+    }
+    let db = Connection::open_with_flags(
+        copy,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    let (busy, _, _) = db.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, i64>(2)?,
+        ))
+    })?;
+    if busy != 0 {
+        return Err(Error::Source("copied WAL checkpoint is busy"));
+    }
+    db.execute_batch("PRAGMA journal_mode=DELETE")?;
+    db.close().map_err(|(_, error)| Error::Sqlite(error))?;
+    Ok(())
+}
+
 fn checkpoint(
     progress: &mut dyn FnMut(Progress) -> ControlFlow<()>,
     phase: Progress,

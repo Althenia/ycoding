@@ -44,16 +44,20 @@ The obsolete files `tui.json` and `kv.json` have no effect. Project-local `.ycod
 
 The beta channel keeps its own data directory and imports a copy of existing data on first start without changing stable data.
 
-YCoding resolves directories through `xdg-basedir` and appends the `ycoding` namespace.
+Stable YCoding uses the `ycoding` namespace. The Rust runtime's `beta` channel uses `ycoding-beta` for configuration, state, data, cache, and temporary files. XDG bases must be absolute; unset or relative bases use the home-directory fallbacks below. `ycoding-runtime --paths` emits the resolved `namespace`, `config`, `state`, `data`, `cache`, and `serviceFilename` as JSON without creating directories or starting a server; the beta TypeScript CLI can consume this same namespace authority.
 
 | Purpose                        | Base                                                     |
 | ------------------------------ | -------------------------------------------------------- |
-| Configuration                  | `$XDG_CONFIG_HOME/ycoding`, or the platform XDG fallback |
-| State and service registration | `$XDG_STATE_HOME/ycoding`, or the platform XDG fallback  |
-| Data and logs                  | `$XDG_DATA_HOME/ycoding`, or the platform XDG fallback   |
-| Cache                          | `$XDG_CACHE_HOME/ycoding`, or the platform XDG fallback  |
+| Configuration                  | `$XDG_CONFIG_HOME/<namespace>`, or `~/.config/<namespace>` |
+| State and service registration | `$XDG_STATE_HOME/<namespace>`, or `~/.local/state/<namespace>` |
+| Data and logs                  | `$XDG_DATA_HOME/<namespace>`, or `~/.local/share/<namespace>` |
+| Cache                          | `$XDG_CACHE_HOME/<namespace>`, or `~/.cache/<namespace>` |
 
 `YCODING_CONFIG_DIR` overrides the global configuration directory used by the process.
+
+The Rust beta runtime stores its database at `$XDG_DATA_HOME/ycoding-beta/ycoding.redb` (fallback `~/.local/share/ycoding-beta/ycoding.redb`). On first start it imports the stable `$XDG_DATA_HOME/ycoding/ycoding.db` (fallback `~/.local/share/ycoding/ycoding.db`) through the Store SQLite importer. It copies the SQLite file and any WAL or rollback journal into a private, uniquely named directory under `$TMPDIR/ycoding-beta` (the OS temporary directory when unset). SHA-256 fingerprints checked before and after copying reject a concurrently changing source. SQLite recovery and WAL checkpointing run only against the copy; the stable files are never opened through SQLite, checkpointed, or written by the beta runtime. Stable credentials and other stored data remain private in the copy and imported database.
+
+The importer validates the exact supported SQLite schema, imports into a disposable candidate beside the beta database, verifies records and provenance, closes the candidate, then publishes it by rename within the beta data directory. Successful import writes the atomic private marker `$XDG_STATE_HOME/ycoding-beta/stable-import-v1.json` (fallback `~/.local/state/ycoding-beta/stable-import-v1.json`) containing `{complete:true,version:1,imported:true}`. A stable database that is absent on first start records `{complete:true,version:1,imported:false}` before initializing an empty beta database; that choice survives a crash and does not import a stable database that appears later. Subsequent starts do not import again. If shutdown or a crash occurs before import publication, retry uses a fresh copy; if it occurs after publication but before the marker, verified database provenance allows recreating the marker without overwriting the imported data. POSIX publication syncs the data directory before syncing the marker and its state directory. Invalid markers and a missing database named by an imported marker fail startup instead of silently initializing an empty database. An invalid or changing stable source fails startup without a marker or a published beta database; retry after the source is valid and quiescent. Crash-abandoned private scratch directories and candidates are not discovery state.
 
 ## Installation and release channels
 
@@ -1382,13 +1386,25 @@ This prevents branch builds of YCoding from colliding with another product proce
 
 When a configured port is occupied, edit the channel-specific service file and choose another integer from `1` to `65535`. `ycoding --standalone` is a temporary alternative that starts a private server instead of the managed service.
 
-One managed service owns a file-backed database at a time, across installation channels and ports. The `latest`, `beta`, and `prod` channels share `ycoding.db`, so only one of their managed services runs at once. Before unsupported-database recovery and application startup, the service acquires an OS process lock at `<database>.service.lock`; a contender whose database is already owned exits without replacing the active service. The lock is released when the owning process exits. In-memory databases are not locked.
+One managed service owns a file-backed database at a time, across ports. The TypeScript service acquires an OS process lock at `<database>.service.lock` before recovery and application startup. The Rust launcher holds `<data directory>/runtime.lock` through database import, composition, serving, and shutdown; a contender whose namespace is already owned exits successfully without replacing the active registration, including while the owner is starting. Beta and stable have separate data and lock paths. The OS releases each lock when its owning process exits.
 
 Database initialization adds a partial index for Session IDs whose autonomy goal status is `active`. Its migration preserves existing Session, message, and event records and does not change the database format.
 
 The matching registration file is stored in the YCoding state directory. It contains the service instance ID, version, URL, PID, and private password. Do not hand-edit a live registration file.
 
 Managed-service startup checks readiness more frequently during its initial wait, then uses a slower polling cadence. Polling delays are capped by the remaining startup wait and do not shorten the backoff between server spawn attempts. Both Effect and Promise clients return only a healthy, compatible service in the `ready` state.
+
+### Rust runtime executable
+
+The Rust workspace builds a `ycoding-runtime` executable from `rust/crates/runtime`. It runs from an arbitrary extracted path with no adjacent runtime files. It accepts an optional leading `serve` followed by `--hostname <host>`, `--port <port>`, `--service`, `--stdio`, and repeatable `--cors <origin>` flags; `--service` and `--stdio` cannot be combined. `--hostname` defaults to `127.0.0.1`. An explicit `--port` is a single bind in `0` to `65535` (`0` selects an ephemeral port); with no port, a non-service process binds the first free port from `4096`, and a service process uses the channel default port above. In service mode the channel file in the global config directory supplies `hostname`, `port`, and `password`, with arguments taking precedence, and the channel comes from `YCODING_CHANNEL` (default `local`). The version comes from `YCODING_VERSION` (default: the crate version).
+
+The password resolves from the service file in service mode, otherwise from `YCODING_PASSWORD` then `YCODING_SERVER_PASSWORD`; when no source supplies one the process generates one, persists it into the service file in service mode, and prints it as `server password <password>` only in default mode. HTTP and WebSocket requests authenticate with Basic auth as user `ycoding`. A generated password is never printed in service or stdio mode. In stdio mode the binary captures the lease password while single-threaded, removes both password variables from its process environment, then creates the Tokio runtime; tool subprocesses cannot inherit those lease variables.
+
+Bootstrap initializes the resolved roots, installs Core observability with its guard retained through shutdown, opens the Store, composes `Core::production`, and binds the TCP listener before publishing readiness. Stdio mode prints exactly one line `{"url":"http://<address>"}`; default and service modes print `server listening on http://<address>`. Authenticated `GET /health` is the bootstrap/readiness surface; `GET /api/health` serves the TypeScript service-discovery contract. Both reject missing or incorrect Basic auth with `401` and return `200` with `{healthy: true, version, pid, sourceEpoch}` when ready. `/ws/v5/local` serves the v5 socket and typed `health.get` with the same identity.
+
+Service registration contains exactly `id`, `version`, `url`, `pid`, and `password`. The launcher writes a unique `0600` temporary file, syncs it, and atomically renames it into the state directory after readiness. The beta service filename is `service-a295e0bdde1938d1fbfd343e5a3e569e868e1465.json` and its default port is `34393`. The service checks registration ownership every five seconds and shuts down when any of these fields changes or the file becomes unreadable. Clean shutdown removes the registration only when all five fields still match this process's registration; JSON formatting and property order do not change ownership. Discovery reads only registration, checks authenticated health and PID/version agreement, and gates the required version. Ensure reuses a compatible ready service, replaces a version mismatch through the exact instance identity, and does not kill slow-starting contenders.
+
+Shutdown is graceful: `SIGINT`, `SIGTERM`, stdin close in stdio mode, loss of service registration, or accepted `health.stop` stops acceptance, drains/closes wire connections, shuts down Core maintenance, closes the Store, and removes only owned registration. `POST /api/service/stop` accepts the TypeScript `ServiceStatus.StopRequest` body `{instanceID}`; typed v5 `health.stop` uses the same identity. Only the exact managed instance can return `{accepted:true}`. An unmanaged runtime or stale identity returns `{accepted:false}`; malformed HTTP input returns `400`. The v5 stop Result is sent before initiating shutdown, or shutdown proceeds when that requesting connection is lost. Normal shutdown exits `0`; usage errors exit `2`; startup/runtime failures exit `1`, and service-mode failures also write a private diagnostic to `YCODING_SERVICE_STARTUP_ERROR_FILE` when set.
 
 ## Chrome extension connection
 

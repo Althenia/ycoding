@@ -127,6 +127,10 @@ pub(crate) async fn run(
     mut shutdown: watch::Receiver<bool>,
 ) {
     let epoch = shared.next_epoch();
+    let stop = crate::health::ConnectionStop::new(
+        &shared.environment.services.identity.source_epoch,
+        &epoch,
+    );
     let config = Config {
         local_role: v5::PeerRole::Server,
         peer_role: v5::PeerRole::LocalClient,
@@ -175,6 +179,18 @@ pub(crate) async fn run(
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
         for frame in driver.pump() {
+            let stopped = if stop.pending() {
+                v5::Frame::decode(frame.as_slice())
+                    .ok()
+                    .and_then(|frame| match frame.body {
+                        Some(v5::frame::Body::Result(result)) if result.operation_id == 3017 => {
+                            Some(result.request_id)
+                        }
+                        _ => None,
+                    })
+            } else {
+                None
+            };
             if !send(
                 &mut socket,
                 ws::Message::Binary(frame.into()),
@@ -183,6 +199,9 @@ pub(crate) async fn run(
             .await
             {
                 return;
+            }
+            if let Some(request) = stopped {
+                stop.sent(&request);
             }
         }
         if let Some(close) = driver.close.take() {
