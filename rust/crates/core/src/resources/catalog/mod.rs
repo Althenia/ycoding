@@ -9,6 +9,7 @@ mod discovery;
 pub mod models_dev;
 mod variants;
 pub use discovery::{Composition, DiscoveryDiagnostic};
+pub(crate) use variants::for_effort;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProviderRecord {

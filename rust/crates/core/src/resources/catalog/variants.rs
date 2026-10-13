@@ -135,7 +135,7 @@ fn manual(id: &str) -> bool {
         .unwrap_or(0);
     major < 4 || (major == 4 && minor < 6)
 }
-fn for_effort(npm: &str, id: &str, effort: &str) -> Option<JsonValue> {
+pub(crate) fn for_effort(npm: &str, id: &str, effort: &str) -> Option<JsonValue> {
     let effort = JsonValue::String(effort.into());
     let direct = object(&[("reasoningEffort", effort.clone())]);
     if npm == "@ai-sdk/openai-compatible" && id.contains("deepseek") {

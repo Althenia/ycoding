@@ -12,6 +12,7 @@ pub mod instruction_discovery;
 pub mod mcp;
 pub mod memory;
 pub mod model;
+pub mod muse;
 pub mod project_artifact;
 pub mod reference;
 pub mod skill;

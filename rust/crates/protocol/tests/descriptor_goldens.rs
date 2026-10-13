@@ -1,6 +1,28 @@
 use ycoding_protocol::{WireConnection, WireError, v5};
 
 #[test]
+fn muse_response_stream_appends_source_ordinal_without_renumbering() {
+    for (name, ordinal) in [
+        ("PROVIDERUSAGE_SOURCE_PROVIDER_API", 1),
+        ("PROVIDERUSAGE_SOURCE_LOCAL_CLIENT_RPC", 2),
+        ("PROVIDERUSAGE_SOURCE_RESPONSE_HEADERS", 3),
+        ("PROVIDERUSAGE_SOURCE_PROVIDER_INTERNAL_API", 4),
+        ("PROVIDERUSAGE_SOURCE_LOCAL_SESSION", 5),
+        ("PROVIDERUSAGE_SOURCE_RESPONSE_STREAM", 6),
+    ] {
+        let source = v5::ProviderUsageSource::from_str_name(name).unwrap();
+        assert_eq!(source as i32, ordinal);
+        assert_eq!(
+            v5::ProviderUsageSource::try_from(ordinal)
+                .unwrap()
+                .as_str_name(),
+            name
+        );
+    }
+    assert!(v5::ProviderUsageSource::try_from(7).is_err());
+}
+
+#[test]
 fn digest_bearing_negatives_keep_specific_rejection_reasons() {
     let manifest = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

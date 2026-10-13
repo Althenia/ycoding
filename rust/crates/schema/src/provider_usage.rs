@@ -5,7 +5,7 @@ use crate::{
 use crate::{provider, schema::NonNegativeInt};
 macro_rules! literal_type{($name:ident[$($item:literal),+])=>{#[derive(Clone,Debug,PartialEq)]pub struct $name(pub LosslessString);impl DomainDecode for $name{fn decode_at(v:&JsonValue,p:&JsonPath)->Result<Self,DecodeError>{domain::literal_enum(v,&[$($item),+],p).map(Self)}}impl DomainEncode for $name{fn encode(&self)->JsonValue{self.0.encode()}}}}
 literal_type!(Status["available","stale","unsupported","unauthorized","error"]);
-literal_type!(Source["provider_api","local_client_rpc","response_headers","provider_internal_api","local_session"]);
+literal_type!(Source["provider_api","local_client_rpc","response_headers","response_stream","provider_internal_api","local_session"]);
 literal_type!(Stability["stable","client_contract","observed","best_effort"]);
 literal_type!(Unit["percent","usd","requests","tokens","count"]);
 fn nonempty(v: &JsonValue, p: &JsonPath) -> Result<LosslessString, DecodeError> {
@@ -110,6 +110,7 @@ impl DomainDecode for Snapshot {
                     "provider_api",
                     "local_client_rpc",
                     "response_headers",
+                    "response_stream",
                     "provider_internal_api",
                     "local_session",
                 ],
@@ -152,6 +153,7 @@ impl DomainDecode for Observation {
                     "provider_api",
                     "local_client_rpc",
                     "response_headers",
+                    "response_stream",
                     "provider_internal_api",
                     "local_session",
                 ],

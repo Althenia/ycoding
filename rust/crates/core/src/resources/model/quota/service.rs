@@ -163,6 +163,9 @@ impl Service {
                 }
             });
         let profile_source = selected.and_then(|selected| {
+            if provider.0 == "muse".into() {
+                return Some(super::super::account_identity(selected));
+            }
             let value = selected.secret().domain().ok()?;
             match value {
                 credential::Value::OAuth(oauth)
@@ -177,6 +180,38 @@ impl Service {
                 _ => None,
             }
         });
+        if provider.0 == "muse".into() {
+            if credential_id.is_some() && selected.is_none() {
+                return unavailable(
+                    provider,
+                    &label,
+                    now,
+                    "unsupported",
+                    "No supported credential is configured",
+                );
+            }
+            let observation = ycoding_ai::muse::Runtime::shared().ok().and_then(|r| {
+                r.observation(profile_source.as_ref().and_then(LosslessString::as_str))
+            });
+            if let Some(observation) = observation {
+                let _ = self.observe(observation, profile_source.clone());
+            }
+            if let Ok(observations) = self.observations.lock()
+                && let Some(observed) =
+                    observations.get(&(provider.clone(), profile_source.clone()))
+            {
+                let mut observed = observed.clone();
+                if saved.len() > 1 {
+                    observed.profile = selected.map(|c| c.label().clone());
+                }
+                return observed;
+            }
+            let mut snapshot = ycoding_ai::muse::unreported(now);
+            if saved.len() > 1 {
+                snapshot.profile = selected.map(|c| c.label().clone());
+            }
+            return snapshot;
+        }
         if !refresh
             && (profile_source.is_some() || credential_id.is_none())
             && let Ok(observations) = self.observations.lock()
@@ -850,6 +885,9 @@ fn unavailable(
     snapshot
 }
 fn label(provider: &provider::Id) -> String {
+    if provider.0 == "muse".into() {
+        return "Muse (Meta)".into();
+    }
     if provider.0 == "anthropic".into() {
         return "Claude".into();
     }

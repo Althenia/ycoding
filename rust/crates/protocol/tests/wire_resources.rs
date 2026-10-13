@@ -53,6 +53,28 @@ fn typescript_provider_request_corpus_preserves_required_empty_maps() {
 }
 
 #[test]
+fn muse_response_stream_snapshot_round_trips_through_strict_wire_validation() {
+    let value = v5::ProviderUsageSnapshot {
+        provider_id: encode_lossless(&"muse".encode_utf16().collect::<Vec<_>>()),
+        label: encode_lossless(&"Muse (Meta)".encode_utf16().collect::<Vec<_>>()),
+        profile: None,
+        status: 1,
+        source: 6,
+        stability: 3,
+        updated_at: 0,
+        windows: v5::ProviderUsageSnapshotWindows { items: vec![] },
+        message: None,
+    };
+    let bytes = value.encode_to_vec();
+    let decoded = decode_strict::<v5::ProviderUsageSnapshot>(&bytes).unwrap();
+    assert_eq!(decoded.source, 6);
+    assert_eq!(decoded, value);
+    assert_eq!(decoded.encode_to_vec(), bytes);
+    let unknown = v5::ProviderUsageSnapshot { source: 7, ..value };
+    assert!(decode_strict::<v5::ProviderUsageSnapshot>(&unknown.encode_to_vec()).is_err());
+}
+
+#[test]
 fn typescript_permission_and_typed_error_corpus_preserves_closed_enums() {
     let permission = hex("0a030a012a12020a001801");
     let value = v5::PermissionRule {

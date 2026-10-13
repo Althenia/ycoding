@@ -221,9 +221,19 @@ impl Local {
             .map(|credential| credential.secret().domain())
             .transpose()
             .map_err(|_| error("provider.auth", "Provider credentials are invalid"))?;
-        let model = match (&services.cursor, cursor_package(&resolved.info)) {
-            (Some(host), true) => cursor::route::model(&resolved.info, secret.as_ref(), host),
-            _ => model::from_catalog_model(&resolved.info, secret.as_ref()),
+        let model = if resolved.info.provider_id.0 == "muse".into() {
+            crate::resources::muse::from_catalog_model(
+                &resolved.info,
+                secret.as_ref(),
+                connection.as_ref(),
+                ycoding_ai::muse::Runtime::shared()
+                    .map_err(|_| error("provider.auth", "Muse provider unavailable"))?,
+            )
+        } else {
+            match (&services.cursor, cursor_package(&resolved.info)) {
+                (Some(host), true) => cursor::route::model(&resolved.info, secret.as_ref(), host),
+                _ => model::from_catalog_model(&resolved.info, secret.as_ref()),
+            }
         }
         .map_err(|_| error("model.unavailable", "Selected model route is unavailable"))?;
         let binding = binding

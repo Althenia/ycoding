@@ -1,4 +1,4 @@
-export const CONTRACT_DIGEST = "3c9f3019dba21adb00581405d9b964ced625f7efccf6c45364f50eff5be210b3"
+export const CONTRACT_DIGEST = "e3238fd637ff970d40e48943e88fe4b2599ebabe17a77adf48d6a6b3b000ceb0"
 export const messages = {
   "ycoding.v5.Empty": {
     oneofs: 0,
@@ -50663,7 +50663,7 @@ export const enums = {
   "ycoding.v5.Project_Vcs": [1, 2],
   "ycoding.v5.ProviderNotFoundError__tag": [1],
   "ycoding.v5.ProviderUsage_Status": [1, 2, 3, 4, 5],
-  "ycoding.v5.ProviderUsage_Source": [1, 2, 3, 4, 5],
+  "ycoding.v5.ProviderUsage_Source": [1, 2, 3, 4, 5, 6],
   "ycoding.v5.ProviderUsage_Stability": [1, 2, 3, 4],
   "ycoding.v5.ProviderUsage_Unit": [1, 2, 3, 4, 5],
   "ycoding.v5.Reference_LocalSource_type": [1],

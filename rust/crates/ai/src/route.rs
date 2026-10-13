@@ -71,6 +71,7 @@ impl Endpoint {
 pub enum Transport {
     Native,
     Http(Framing),
+    Muse(Arc<crate::muse::Connection>),
     RunPodJobs,
     WebSocket(Arc<websocket::JsonTransport>),
     Process(Arc<dyn ProcessAttempt>),
@@ -633,9 +634,13 @@ impl Executor {
                     redaction: prepared,
                 })
             }
-            Transport::Http(framing) => {
+            Transport::Http(_) | Transport::Muse(_) => {
                 let mut tracker = Tracker::new(&prepared, "http-json", self.observer.clone());
-                let response = match self.execute(&prepared).await {
+                let result = match &prepared.request.model.route.transport {
+                    Transport::Muse(connection) => connection.execute(self, &prepared).await,
+                    _ => self.execute(&prepared).await,
+                };
+                let response = match result {
                     Ok(response) => response,
                     Err(error) => {
                         tracker.settle(false, false, None);
@@ -643,9 +648,11 @@ impl Executor {
                     }
                 };
                 let status = response.status().as_u16();
-                let framing = match framing {
-                    Framing::Sse => Decoder::Sse(Sse::default()),
-                    Framing::AwsEventStream => Decoder::Aws(AwsEventStream::default()),
+                let framing = match &prepared.request.model.route.transport {
+                    Transport::Http(Framing::AwsEventStream) => {
+                        Decoder::Aws(AwsEventStream::default())
+                    }
+                    _ => Decoder::Sse(Sse::default()),
                 };
                 Ok(EventStream {
                     native: None,
@@ -828,9 +835,9 @@ impl EventStream {
                         match decoder {
                             Decoder::Sse(parser) => {
                                 for frame in parser.push(&bytes) {
-                                    self.frames.push_back(parse_json(&frame).map_err(|_| {
-                                        Error::output("Invalid provider stream event")
-                                    })?);
+                                    if let Some(frame) = decode_frame(&frame, &self.redaction)? {
+                                        self.frames.push_back(frame);
+                                    }
                                 }
                             }
                             Decoder::Aws(parser) => match parser.push(&bytes) {
@@ -844,6 +851,20 @@ impl EventStream {
                         continue;
                     }
                     tracker.settle(true, true, Some(*status));
+                    if matches!(
+                        self.redaction.request.model.route.transport,
+                        Transport::Muse(_)
+                    ) {
+                        if let Decoder::Sse(parser) = decoder {
+                            for frame in parser.finish_muse() {
+                                if let Some(frame) = decode_frame(&frame, &self.redaction)? {
+                                    self.frames.push_back(frame);
+                                }
+                            }
+                        }
+                        self.transport = StreamTransport::Buffered;
+                        continue;
+                    }
                 }
                 StreamTransport::WebSocket(connection) => {
                     if let Some(frame) = connection.next().await? {
@@ -866,6 +887,27 @@ impl EventStream {
         }
     }
 }
+fn decode_frame(frame: &str, prepared: &Prepared) -> Result<Option<JsonValue>, Error> {
+    let quota = frame
+        .trim_start()
+        .strip_prefix('{')
+        .and_then(|v| v.trim_start().strip_prefix("\"type\""))
+        .and_then(|v| v.trim_start().strip_prefix(':'))
+        .and_then(|v| {
+            v.trim_start()
+                .strip_prefix("\"response.subscription_usage\"")
+        })
+        .is_some_and(|v| v.trim_start().starts_with([',', '}']));
+    match parse_json(frame) {
+        Ok(frame) => Ok(Some(frame)),
+        Err(_) if matches!(prepared.request.model.route.transport, Transport::Muse(_)) && quota => {
+            tracing::warn!("invalid Muse subscription usage event");
+            Ok(None)
+        }
+        Err(_) => Err(Error::output("Invalid provider stream event")),
+    }
+}
+
 impl Drop for StreamTransport {
     fn drop(&mut self) {
         if let StreamTransport::Http {

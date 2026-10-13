@@ -286,6 +286,7 @@ fn supports_prompt_cache_key(route: &str) -> bool {
     matches!(
         route,
         "openai-chat"
+            | "muse-responses"
             | "openai-responses"
             | "openai-responses-websocket"
             | "openai-codex-responses"

@@ -14,6 +14,21 @@ pub fn from_catalog_model(
     info: &model::Info,
     credential: Option<&credential::Value>,
 ) -> Result<Model, Error> {
+    if info.provider_id.0 == "muse".into() {
+        return super::super::muse::from_catalog_model(
+            info,
+            credential,
+            None,
+            ycoding_ai::muse::Runtime::shared().map_err(|_| Error::InvalidSettings)?,
+        );
+    }
+    from_catalog_model_base(info, credential)
+}
+
+pub(crate) fn from_catalog_model_base(
+    info: &model::Info,
+    credential: Option<&credential::Value>,
+) -> Result<Model, Error> {
     let package = info.package.as_ref().ok_or(Error::UnsupportedPackage)?;
     let family = family(package)?;
     let native = package.as_str().is_some_and(|p| !p.starts_with("aisdk:"));

@@ -15,6 +15,7 @@ Provider-native request lowering and incremental response settlement. This crate
   - [Usage](#usage)
   - [API](#api)
 - [GitHub Copilot bundled adapter](#github-copilot-bundled-adapter)
+- [Muse (Meta) subscription adapter](#muse-meta-subscription-adapter)
 - [Cursor wire boundary](#cursor-wire-boundary)
 - [Framing and lifetime](#framing-and-lifetime)
 - [Cache and tool boundaries](#cache-and-tool-boundaries)
@@ -40,7 +41,15 @@ Construct an Anthropic route with `Route::anthropic_provider` or `Route::anthrop
 
 Inject a configured `reqwest::Client` into `Executor`. The optional `Executor::http_client` constructor disables ambient proxies and automatic redirects. HTTP requests use fresh connections. `Executor::stream` returns an owned `EventStream`; pull events with `next`, or use `generate` to assemble the ordered assistant message. Drop the stream to interrupt its transport. `generate_object` forces a named tool and returns the JSON input; the caller validates a dynamic output schema.
 
-The route executor performs exactly one physical attempt and reports attempt `1`. It never retries a request, reconnects after an SSE `retry:` directive, or converts a WebSocket continuation rejection into an HTTP request. The Session runner owns bounded retries, backoff, interruption during backoff, and exactly one durable terminal settlement per started logical Step. Use the typed provider-error reason, context-overflow classification, retry-after value, and rate-limit scopes to apply that policy upstream.
+The route executor reports attempt `1`. Muse's OAuth transport remints a rejected inference key once on HTTP 401; other routes perform exactly one physical attempt. The executor never reconnects after an SSE `retry:` directive or converts a WebSocket continuation rejection into an HTTP request. The Session runner owns bounded retries, backoff, interruption during backoff, and exactly one durable terminal settlement per started logical Step. Use the typed provider-error reason, context-overflow classification, retry-after value, and rate-limit scopes to apply that policy upstream.
+
+## Muse (Meta) subscription adapter
+
+`muse::route(Connection)` uses OpenAI Responses lowering and the `openai` metadata namespace. Direct keys bypass minting. OAuth connections bind lazy key minting to stored credential ID and generation, coalesce concurrent mints, and retry inference once after a 401 with a newly minted key. Expired or rejected account tokens require `/connect`; no refresh grant is sent. Mint and discovery requests have a ten-second deadline and disable redirects and automatic retries. A Runtime owns the process-session UUID and redacted key cache.
+
+Requests use the minted base URL's `/responses` endpoint, `x-client-id: tbh:exec`, and equal `x-tbh-session-id` and `x-meta-ai-gateway-session-id` headers. Defaults use `store: false` and encrypted reasoning inclusion. Reasoning remains reasoning, and encrypted state replays in the complete input rather than through `previous_response_id`.
+
+The stream drains trailing `response.subscription_usage` events after response completion, including an unterminated final data line. Invalid quota events are ignored with a payload-free warning. Only normalized Schema observations are retained, keyed by the Core-supplied account identity; credentials, emails, subscription tiers and raw quota payloads are excluded. `normalize_usage` preserves absent metrics and reported zero. Core owns usage reads and profile presentation; quota reads never mint or fetch.
 
 <a id="openai-family"></a>
 

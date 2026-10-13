@@ -145,7 +145,14 @@ export function resourceSourceIdentity(ast: SchemaAST.AST, hint: string) {
 }
 
 export function resourceContract() {
-  return wireContract(resourceEndpoints(), resourceIDs, resourceSourceIdentity, middlewareErrors)
+  const contract = wireContract(resourceEndpoints(), resourceIDs, resourceSourceIdentity, middlewareErrors)
+  const sources = contract.enums.get("ProviderUsage_Source")
+  if (sources)
+    contract.enums.set("ProviderUsage_Source", [
+      ...sources.filter((source) => source !== "response_stream"),
+      ...sources.filter((source) => source === "response_stream"),
+    ])
+  return contract
 }
 
 export function resourceSharedSet() {

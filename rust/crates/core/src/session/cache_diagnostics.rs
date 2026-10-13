@@ -39,6 +39,7 @@ fn mechanism(route_id: &str, provider_id: &str, cached: bool) -> &'static str {
         }
         "bedrock-converse" | "ai-sdk:@ai-sdk/amazon-bedrock" => "bedrock-cache-point",
         "openai-chat"
+        | "muse-responses"
         | "openai-responses"
         | "openai-responses-websocket"
         | "github-copilot-chat"

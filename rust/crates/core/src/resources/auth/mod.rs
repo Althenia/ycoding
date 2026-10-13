@@ -22,6 +22,7 @@ pub mod claude;
 pub mod cursor;
 pub mod google;
 pub mod integration;
+pub mod muse;
 pub mod opencode;
 pub mod page;
 
@@ -67,6 +68,7 @@ pub enum DeviceFlow {
     Copilot { enterprise: Option<String> },
     Openai,
     Xai,
+    Muse,
 }
 impl fmt::Debug for DeviceFlow {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -114,6 +116,7 @@ impl Client {
                 "github-copilot" => "https://github.com",
                 "cursor" => "https://api2.cursor.sh",
                 "anthropic" => "https://claude.ai",
+                "muse" => "https://auth.meta.com",
                 _ => return Err(Error::Rejected),
             },
             version,
@@ -150,6 +153,7 @@ impl Client {
             DeviceFlow::Copilot { .. } => "github-copilot",
             DeviceFlow::Openai => "openai",
             DeviceFlow::Xai => "xai",
+            DeviceFlow::Muse => "muse",
         }
         .into();
         let attempt = self.start_device(flow, now()?).await?;
@@ -294,12 +298,36 @@ impl Client {
                 "/device/code",
                 &[("client_id", XAI_CLIENT), ("scope", XAI_SCOPE)],
             ),
+            DeviceFlow::Muse => self.form(
+                "/oidc/device/authorization/",
+                &[("client_id", muse::CLIENT_ID)],
+            ),
         };
         let (status, value) = self.send(request).await?;
         if !status.is_success() {
             return Err(Error::Rejected);
         }
         let (url, instructions, code, user_code, interval, expires) = match &flow {
+            DeviceFlow::Muse => {
+                let uri = string(&value, "verification_uri")?;
+                let user = string(&value, "user_code")?;
+                let expires = number(&value, "expires_in").ok_or(Error::Rejected)?;
+                (
+                    value
+                        .get("verification_uri_complete")
+                        .and_then(Value::as_str)
+                        .unwrap_or(uri)
+                        .into(),
+                    format!("Enter code: {user}"),
+                    string(&value, "device_code")?.into(),
+                    user.into(),
+                    number(&value, "interval")
+                        .filter(|n| n.is_finite() && *n > 0.0)
+                        .unwrap_or(5.0)
+                        * 1000.0,
+                    now.saturating_add((expires * 1000.0) as i64),
+                )
+            }
             DeviceFlow::Copilot { .. } => {
                 let uri = string(&value, "verification_uri")?;
                 let user = string(&value, "user_code")?;
@@ -466,6 +494,13 @@ impl Client {
             .ok_or(Error::InvalidCredential)?;
         if integration == "github-copilot" {
             return Ok(stored);
+        }
+        if integration == "muse" {
+            return if value.expires.get() == 0 || value.expires.get() > now {
+                Ok(stored)
+            } else {
+                Err(Error::ProfileUnavailable)
+            };
         }
         if !matches!(integration, "openai" | "xai" | "cursor") {
             return Err(Error::Rejected);
@@ -927,8 +962,40 @@ impl DeviceAttempt {
             DeviceFlow::Copilot { .. } => self.client.json("/login/oauth/access_token", json!({"client_id":COPILOT_CLIENT,"device_code":self.code,"grant_type":DEVICE_GRANT})),
             DeviceFlow::Openai => self.client.json("/api/accounts/deviceauth/token", json!({"device_auth_id":self.code,"user_code":self.user_code})),
             DeviceFlow::Xai => self.client.form("/token", &[("client_id", XAI_CLIENT), ("device_code", &self.code), ("grant_type", DEVICE_GRANT)]),
+            DeviceFlow::Muse => self.client.form("/oidc/device/token/", &[("grant_type", DEVICE_GRANT), ("device_code", &self.code), ("client_id", muse::CLIENT_ID)]),
         };
         let (status, tokens) = self.client.send(request).await?;
+        if matches!(self.flow, DeviceFlow::Muse)
+            && status.is_success()
+            && tokens
+                .get("access_token")
+                .and_then(Value::as_str)
+                .is_some_and(|v| !v.is_empty())
+        {
+            let refresh = match tokens.get("refresh_token") {
+                None => "",
+                Some(value) => value.as_str().ok_or(Error::Rejected)?,
+            };
+            let expires = match tokens.get("expires_in") {
+                None => 0,
+                Some(value) => {
+                    let seconds = value
+                        .as_f64()
+                        .filter(|v| v.is_finite())
+                        .ok_or(Error::Rejected)?;
+                    NonNegativeInt::decode(&JsonValue::Number(now as f64 + seconds * 1000.0))
+                        .map_err(|_| Error::Rejected)?
+                        .get()
+                }
+            };
+            return Ok(Poll::Complete(oauth_secret(
+                "device",
+                string(&tokens, "access_token")?,
+                refresh,
+                expires,
+                None,
+            )?));
+        }
         if matches!(self.flow, DeviceFlow::Openai) {
             if status.is_success() {
                 let (status, tokens) = self
@@ -1015,7 +1082,11 @@ impl DeviceAttempt {
         }
     }
     fn wait(&mut self, now: i64) -> Poll {
-        self.next_poll = now.saturating_add(self.interval).saturating_add(3000);
+        self.next_poll = if matches!(self.flow, DeviceFlow::Muse) {
+            now.saturating_add(self.interval).min(self.expires)
+        } else {
+            now.saturating_add(self.interval).saturating_add(3000)
+        };
         Poll::WaitUntil(self.next_poll)
     }
 }

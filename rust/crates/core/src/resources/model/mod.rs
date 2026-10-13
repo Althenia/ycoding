@@ -8,6 +8,7 @@ use ycoding_schema::{DomainEncode, LosslessString, model, provider};
 pub mod quota;
 mod route;
 pub use route::from_catalog_model;
+pub(crate) use route::from_catalog_model_base;
 pub fn account_identity(credential: &credential::Info) -> LosslessString {
     let material = super::catalog::object(&[
         ("integrationID", credential.integration_id().encode()),

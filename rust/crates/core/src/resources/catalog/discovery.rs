@@ -181,6 +181,21 @@ impl Catalog {
                 }
             }
         }
+        let mut muse = crate::resources::muse::Service::new(
+            ycoding_ai::muse::Runtime::shared().map_err(|_| models_dev::Error::Request)?,
+        );
+        muse.reconcile(
+            &mut catalog,
+            credentials,
+            &std::env::vars().collect(),
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .await?;
+        if muse.source().is_none() {
+            diagnostics.push(DiscoveryDiagnostic {
+                provider_id: provider::Id("muse".into()),
+            });
+        }
         catalog.configure(documents)?;
         Ok(Composition {
             catalog,

@@ -54,6 +54,14 @@ impl Sse {
         self.data.clear();
         Vec::new()
     }
+    pub(crate) fn finish_muse(&mut self) -> Vec<String> {
+        let mut frames = vec![];
+        if !self.line.is_empty() {
+            self.complete_line(&mut frames);
+        }
+        self.complete_line(&mut frames);
+        frames
+    }
 }
 #[derive(Default)]
 pub struct AwsEventStream {

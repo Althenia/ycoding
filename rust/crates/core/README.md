@@ -2122,6 +2122,10 @@ variant overlays merge recursively; arrays replace and header names merge
 case-insensitively. Disabled/denied providers, unavailable profiles, model defaults,
 release ordering, and small-model selection remain catalog-owned.
 
+Muse (Meta) uses `auth::muse::register` (or `builtin` with a version) for remote-capable Meta device login, direct Meta Model API keys and `META_API_KEY`. Device polling starts immediately, respects pending/slow-down intervals and stops at authorization expiry. Optional refresh tokens are stored without enabling a refresh grant; missing expiry is zero (unknown). `resources::muse::Service::reconcile` discovers credential-specific `/muse-code/models` inventories and republishes them through Catalog account-generation fences. Retain the service, call `refresh` on connection updates and `reconcile` on sixty-second boundaries to preserve same-account inventory on transient discovery failures; failed reconciliation does not settle its hashed source fingerprint. `Catalog::compose` runs initial Muse reconciliation, and an unconnected provider has no models.
+
+Muse catalog rows require integer context/output limits and text output, and exclude hidden or explicitly non-tool models. Names, families, release dates, modalities and supported effort variants are preserved; sampling metadata and prices are not invented. The Session runner routes Muse through `resources::muse::from_catalog_model` with its stored connection, preserving profile-bound minting, Responses reasoning metadata and full encrypted replay. Direct-key resolution is also available through `model::from_catalog_model`.
+
 Create one `model::Resolver` per Location with its composed catalog. Resolution
 returns the selected catalog identity and projected model; `from_catalog_model`
 constructs supported native AI routes with the distinct provider API model ID.
@@ -2139,6 +2143,8 @@ provider source/stability labels survive normalization. Retain the service and
 join `shutdown` to dispose its workers. Pure normalizers cover Claude, Codex,
 Copilot quota lanes, Cursor, OpenRouter, OpenCode Go, Grok, Z.ai, and OpenAI/Meta
 organization buckets.
+
+Muse quota observations use `source: response_stream`, `stability: observed`, percent windows and millisecond reset times. The usage adapter reads normalized observations only, isolates profiles by account identity, and returns `Quota is reported after the next Muse response` when no quota has arrived. Refresh performs no Muse network request or credential write. Account replacement invalidates the displayed observation; unknown percentages and reset times remain absent.
 
 `with_version` supplies provider client-version headers. `with_configuration`
 reads the latest `provider_usage.codex_app_server` configuration and starts its
