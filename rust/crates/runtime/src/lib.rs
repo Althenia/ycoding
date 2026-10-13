@@ -4,6 +4,7 @@ mod browser;
 mod browser_convert;
 mod catalog_convert;
 mod catalog_ops;
+mod config_ops;
 mod connection;
 pub mod connector;
 mod convert;

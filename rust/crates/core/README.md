@@ -224,7 +224,7 @@ The following TS internal IDs are excluded:
 | `ycoding.command`                                                                                                                                                                            | `resources/command/mod.rs::Service::from_documents` loads configured commands; it does not register the TS bundled `init`/`review` templates from `packages/core/src/plugin/command.ts`.                                                  |
 | `ycoding.skill`                                                                                                                                                                              | `resources/skill/mod.rs::Service::from_entries` discovers configured sources; it does not register the TS bundled YCoding/report skills from `packages/core/src/plugin/skill.ts`.                                                         |
 | `ycoding.system-prompt.openai`, `ycoding.system-prompt.google`, `ycoding.system-prompt.anthropic`, `ycoding.system-prompt.kimi`, `ycoding.system-prompt.arcee`, `ycoding.system-prompt.meta` | `session/runner/mod.rs` assembles instructions and the selected agent system prompt, not the six model-family prompt selectors in `packages/core/src/plugin/system-prompt.ts`.                                                            |
-| `ycoding.provider.dynamic`                                                                                                                                                                   | `Configuration::reject_obsolete` rejects executable/npm provider configuration; `resources/model/mod.rs::family` is a closed native route set.                                                                                            |
+| `ycoding.provider.dynamic`                                                                                                                                                                   | Executable custom-provider loading is unsupported. `config::ENDPOINT_PACKAGES` admits only two declarative native endpoint identities; `resources/model/mod.rs::family` selects their fixed native routes.                                |
 
 The channel also defines ordered domain/context/tool transforms and hooks,
 bounded receipt-owned event subscriptions, and generation-scoped resource
@@ -1859,6 +1859,8 @@ defined whole field. An omitted field does not overwrite a lower-priority value.
 1. Existing global `.claude` and `.agents` directories, then their upward sources
    from the Location toward the filesystem root, remain discovery entries only.
 2. Global `ycoding.json`, then `ycoding.jsonc`, then the global directory entry.
+   An existing global `.ycoding` directory follows with the same two filenames
+   and its directory entry, so every persistent MCP target is a reload source.
 3. The explicit file, followed by its file entry, including a missing file.
 4. Upward `ycoding.json` and `ycoding.jsonc` documents and file entries, ordered
    from the filesystem root toward the Location. Discovery crosses Git boundaries.
@@ -1898,12 +1900,80 @@ units; invalid optional agent fields and array items retain valid siblings.
 Malformed permissions append deny rules after valid rules, and malformed
 guardrails become `{ "enabled": true }`. These diagnostics carry `failClosed`.
 
-Any `plugins` declaration or string-valued provider/model `package` declaration
-rejects its entire document with an actionable diagnostic. Executable JS/TS/npm
+Provider-level `providers.<id>.package` accepts exactly
+`aisdk:@ai-sdk/openai-compatible` and `@ycoding-ai/ai/providers/runpod` as
+declarative native route identities. The shared `config::ENDPOINT_PACKAGES`
+definition drives endpoint writes, validation, catalog integration identity and
+the process-extension guard. Other string packages, model-level packages,
+`plugins`, `npm`, `plugin`, and singular `provider` declarations reject their
+entire document with an actionable diagnostic. Executable JS/TS/npm provider
 configuration is neither translated nor partially loaded. Other valid documents
 remain available. Prototype names such as `__proto__` are ordinary lossless keys
 subject to validation; configuration cannot acquire inherited settings through
 JavaScript prototype mutation.
+
+### Backend configuration mutations
+
+`Configuration::write_provider(scope, input)` and `write_mcp(scope, name, config)`
+select files from backend roots; callers cannot supply filenames. Global scope
+uses `Roots.config`, and project scope uses the loaded Location directory.
+Provider writes choose the first existing `ycoding.json` or `ycoding.jsonc`.
+MCP writes choose the first regular file among `ycoding.json`, `ycoding.jsonc`,
+`.ycoding/ycoding.json`, and `.ycoding/ycoding.jsonc`. Both create `ycoding.json`
+when no candidate exists. Disabled project discovery rejects project writes.
+
+Native JSONC edits retain unrelated keys, comments, BOMs, line endings and
+existing formatting. Writes serialize by target and replace a synced temporary
+file atomically. Provider writes reject implementation collisions and invalid
+endpoint/model input, apply only supplied model fields, and retain explicit
+false values. OpenAI endpoints select chat or Responses; Runpod Jobs endpoints
+require `https://api.runpod.ai/v2/<ENDPOINT_ID>` and an Ollama or vLLM worker.
+Duplicate model IDs, URL credentials and secret-bearing endpoint parameters
+are invalid. Provider configuration accepts no credential key or profile.
+MCP definitions persist their typed command, environment, headers, OAuth,
+working directory, timeout and flags in `mcp.servers.<name>`.
+
+Mutation authorization is explicit through
+`Configuration::with_mutation_policy(MutationPolicy)`: configuration callbacks
+receive the selected scope and target, and package callbacks receive the npm
+selector. A plain `Configuration::load` denies mutations. Runtime production
+grants global/project configuration writes and presentation-package installation
+to its LOCAL_CLIENT-only operations. A project grant does not grant global scope.
+
+Reload remains owned by the composition runtime. Each generation adds its
+configured native endpoints to the authentication Draft through
+`Draft::register_endpoints`; its existing registration handle retains those
+API-key and configured environment methods. Credentials are connected separately.
+
+### Frontend presentation packages
+
+`resources::frontend_package::Service` validates registry package selectors and
+requires installation-policy approval before touching the cache. It runs the
+installed `npm` executable with scoped cache directories under
+`Roots.cache/packages/<selector>`, preserves npm registry/auth configuration,
+installs dependencies and bin links, and disables lifecycle scripts. This is
+presentation-package installation, not process-extension or dynamic-provider
+activation; Rust does not import or execute the TUI entrypoint.
+
+The service retains the npm distribution archive, verifies its SHA-512 integrity,
+and returns its lowercase SHA-256 digest with the exact package name/version,
+absolute installed root, and root-relative TUI entrypoint plus its file digest.
+It resolves `./tui` exports and wildcard/conditional targets, or a `tui`
+file/directory entry when exports are absent. Assets are not enumerated.
+Same-selector requests serialize across tasks and hold an installation file
+lock; cached receipts bind the selector and archive digest, and reuse rechecks
+distribution and installed-file integrity. Missing entrypoints, traversal,
+archive links and escaping installed links fail. Archive processing is bounded
+to 64 MiB compressed, 256 MiB expanded and 65,536 files; npm commands have a
+120-second deadline and bounded output. Errors expose only closed codes, not npm
+output or credentials.
+
+Focused configuration and package checks run from `rust`:
+
+```sh
+cargo test --locked -p ycoding-core --test config_ops
+cargo test --locked -p ycoding-core --lib resources::frontend_package::tests
+```
 
 ### Runtime and development roots
 

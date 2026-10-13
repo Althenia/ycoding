@@ -59,6 +59,55 @@ cargo test --locked -p ycoding-runtime --test catalog_ops
 cargo test --locked -p ycoding-core --test generate_text
 ```
 
+## Backend configuration operations
+
+The standard dispatcher serves `provider.configure` (2060), `mcp.configure`
+(2061), and `frontendPackage.resolve` (2062). All require LOCAL_CLIENT and a
+backend-resolved Location; remote-client and relay dispatch reject them.
+`Core.platform` supplies the generation's configuration and cache roots,
+`Core.catalogs.refresh` replaces its configuration/catalog generation, and
+`Core.integrations` supplies the resulting real registration. Configuration
+scope selects a backend global/project target independently of Location scope.
+
+Production attaches `Configuration::with_mutation_policy(...)` while building
+each generation and permits global writes, project writes and registry
+presentation-package installation. Non-production constructions deny them until
+an explicit mutation policy grants the corresponding operation. Location/path
+validation and package validation still apply; a project-only grant never
+authorizes a global write.
+
+Provider configuration preserves JSONC, selects the native compatible or Runpod
+implementation, validates collisions, reloads and confirms real integration
+registration without client polling. It neither writes credentials nor activates
+a profile. Those actions remain on `integration.connect.key` and
+`credential.activate`. MCP configuration preserves JSONC and persists the typed
+definition before reload. Global nested `.ycoding` targets participate in global
+discovery after the top-level global files. Reload success does not assert that an external MCP
+server connected. `mcp.add` remains live-only.
+
+Pre-write failures return `ConfigurationWriteError`; a completed write followed
+by failed reload or registration returns `ConfigurationPartialFailure` with its
+target and stage. Results and errors contain no MCP environment, headers, OAuth
+secret, raw error text or subprocess output. Cancellation/transport loss may
+leave an uncertain mutation; do not automatically replay it.
+
+Package resolution uses Core's `resources::frontend_package`, not the extension
+supervisor. Installation requires `npm` on the backend PATH, uses its npm
+configuration, installs dependencies with lifecycle scripts disabled, and returns
+a verified backend-local descriptor with archive and entrypoint SHA-256 digests.
+Cache reuse revalidates the archive and installed files. Assets are absent. A
+same-host TUI may load that entrypoint; this grants neither remote asset transfer
+nor backend JSX/plugin execution.
+
+`tests/config_ops.rs` exercises all three operations through real production
+composition, registration and MCP read models, plus closed partial failures,
+scope policy and remote rejection. Its presentation fixture is packed and
+installed locally with npm offline; no registry traffic is used.
+
+```sh
+cargo test --locked -p ycoding-runtime --test config_ops
+```
+
 ## Location resources and debug reads
 
 `fs.read` resolves the request Location through `Core.platform` and serves one file through `PlatformServices.filesystem` as an asset with its extension MIME type. Paths that escape the Location lexically or through a symlink, directories, missing files and a request directory that disagrees with the scope return `InvalidRequestError`.

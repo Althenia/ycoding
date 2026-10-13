@@ -585,9 +585,8 @@ impl Catalog {
                 );
                 record.provider = provider::Info::decode(&encoded)?;
                 if record.provider.integration_id.is_none()
-                    && (matches!(
-                        record.provider.package.as_str(),
-                        Some("aisdk:@ai-sdk/openai-compatible" | "@ycoding-ai/ai/providers/runpod")
+                    && (super::config::is_native_endpoint_package(
+                        &record.provider.package.encode(),
                     ) || field(item, "env").is_some())
                 {
                     record.provider.integration_id =

@@ -422,3 +422,234 @@ pub(super) fn parse(text: &str) -> Result<JsonValue, String> {
     }
     parse_json(&parser.output).map_err(|error| error.to_string())
 }
+
+struct Span {
+    start: usize,
+    end: usize,
+    properties: Option<Vec<(LosslessString, Span)>>,
+    close: usize,
+    trailing_comma: bool,
+}
+
+struct Syntax {
+    scanner: Scanner,
+    token: Token,
+    end: usize,
+}
+
+impl Syntax {
+    fn advance(&mut self) {
+        self.token = self.scanner.next(&mut Vec::new());
+        self.end = self.scanner.position;
+    }
+
+    fn value(&mut self) -> Result<Span, String> {
+        let start = self.token.offset;
+        if self.token.kind == Kind::OpenObject {
+            self.advance();
+            let mut properties = Vec::new();
+            let mut trailing_comma = false;
+            while self.token.kind != Kind::CloseObject {
+                let JsonValue::String(key) =
+                    parse_json(&self.token.text).map_err(|error| error.to_string())?
+                else {
+                    return Err("Invalid property".into());
+                };
+                self.advance();
+                self.advance();
+                properties.push((key, self.value()?));
+                trailing_comma = self.token.kind == Kind::Comma;
+                if trailing_comma {
+                    self.advance();
+                }
+            }
+            let span = Span {
+                start,
+                end: self.end,
+                properties: Some(properties),
+                close: self.token.offset,
+                trailing_comma,
+            };
+            self.advance();
+            return Ok(span);
+        }
+        if self.token.kind == Kind::OpenArray {
+            self.advance();
+            while self.token.kind != Kind::CloseArray {
+                self.value()?;
+                if self.token.kind == Kind::Comma {
+                    self.advance();
+                }
+            }
+            let span = Span {
+                start,
+                end: self.end,
+                properties: None,
+                close: self.token.offset,
+                trailing_comma: false,
+            };
+            self.advance();
+            return Ok(span);
+        }
+        let span = Span {
+            start,
+            end: self.end,
+            properties: None,
+            close: self.end,
+            trailing_comma: false,
+        };
+        self.advance();
+        Ok(span)
+    }
+}
+
+pub(super) fn modify(text: &str, path: &[String], value: &JsonValue) -> Result<String, String> {
+    parse(text.trim_start_matches('\u{feff}'))?;
+    let units = text.encode_utf16().collect::<Vec<_>>();
+    let mut scanner = Scanner {
+        units: units.clone(),
+        position: usize::from(units.first() == Some(&0xfeff)),
+    };
+    let token = scanner.next(&mut Vec::new());
+    let end = scanner.position;
+    let mut syntax = Syntax {
+        scanner,
+        token,
+        end,
+    };
+    let root = syntax.value()?;
+    let mut parent = &root;
+    for (index, segment) in path.iter().enumerate() {
+        let properties = parent
+            .properties
+            .as_ref()
+            .ok_or("Invalid object structure")?;
+        if let Some((_, child)) = properties
+            .iter()
+            .rev()
+            .find(|(key, _)| key == &LosslessString::from(segment.as_str()))
+        {
+            if index == path.len() - 1 {
+                let mut updated = units.clone();
+                updated.splice(child.start..child.end, stringify_json(value).encode_utf16());
+                return String::from_utf16(&updated).map_err(|error| error.to_string());
+            }
+            parent = child;
+            continue;
+        }
+        let nested = path[index + 1..]
+            .iter()
+            .rev()
+            .fold(value.clone(), |value, key| {
+                let mut object = ycoding_schema::JsonObject::new();
+                object.insert(key.as_str().into(), value);
+                JsonValue::Object(object)
+            });
+        let property = format!(
+            "{}: {}",
+            stringify_json(&JsonValue::String(segment.as_str().into())),
+            stringify_json(&nested)
+        );
+        let mut updated = units.clone();
+        let multiline = units[parent.start..parent.close].contains(&10);
+        if multiline {
+            let line = units[..parent.close]
+                .iter()
+                .rposition(|unit| *unit == 10)
+                .map_or(parent.close, |index| index + 1);
+            let close_indent = &units[line..parent.close];
+            let insertion = if close_indent.iter().all(|unit| matches!(unit, 9 | 32)) {
+                line
+            } else {
+                parent.close
+            };
+            let indent = properties
+                .first()
+                .and_then(|(_, span)| {
+                    let line = units[..span.start].iter().rposition(|unit| *unit == 10)? + 1;
+                    let key_start = units[line..span.start]
+                        .iter()
+                        .position(|unit| *unit == 34)?
+                        + line;
+                    Some(String::from_utf16_lossy(&units[line..key_start]))
+                })
+                .unwrap_or_else(|| format!("{}  ", String::from_utf16_lossy(close_indent)));
+            let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
+            let property = format!(
+                "{}: {}",
+                stringify_json(&JsonValue::String(segment.as_str().into())),
+                pretty(&nested, &indent, newline)
+            );
+            let addition = format!(
+                "{indent}{property}{}{newline}",
+                if parent.trailing_comma { "," } else { "" }
+            );
+            updated.splice(insertion..insertion, addition.encode_utf16());
+        } else if properties.is_empty() {
+            let line = units[..parent.start]
+                .iter()
+                .rposition(|unit| *unit == 10)
+                .map_or(0, |index| index + 1);
+            let indentation = units[line..parent.start]
+                .iter()
+                .take_while(|unit| matches!(unit, 9 | 32))
+                .copied()
+                .collect::<Vec<_>>();
+            let indentation = String::from_utf16_lossy(&indentation);
+            let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
+            let indent = format!("{indentation}  ");
+            let property = format!(
+                "{}: {}",
+                stringify_json(&JsonValue::String(segment.as_str().into())),
+                pretty(&nested, &indent, newline)
+            );
+            updated.splice(
+                parent.close..parent.close,
+                format!("{newline}{indent}{property}{newline}{indentation}").encode_utf16(),
+            );
+        } else {
+            let addition = format!(
+                "{}{property}{}",
+                if properties.is_empty() { "" } else { " " },
+                if parent.trailing_comma { "," } else { "" }
+            );
+            updated.splice(parent.close..parent.close, addition.encode_utf16());
+        }
+        if let Some((_, last)) = properties.last()
+            && !parent.trailing_comma
+        {
+            updated.splice(last.end..last.end, [44]);
+        }
+        let updated = String::from_utf16(&updated).map_err(|error| error.to_string())?;
+        parse(updated.trim_start_matches('\u{feff}'))?;
+        return Ok(updated);
+    }
+    Err("Missing path".into())
+}
+
+fn pretty(value: &JsonValue, indentation: &str, newline: &str) -> String {
+    let indent = format!("{indentation}  ");
+    match value {
+        JsonValue::Object(object) if !object.is_empty() => format!(
+            "{{{newline}{}{newline}{indentation}}}",
+            object
+                .iter()
+                .map(|(key, value)| format!(
+                    "{indent}{}: {}",
+                    stringify_json(&JsonValue::String(key.clone())),
+                    pretty(value, &indent, newline)
+                ))
+                .collect::<Vec<_>>()
+                .join(&format!(",{newline}"))
+        ),
+        JsonValue::Array(values) if !values.is_empty() => format!(
+            "[{newline}{}{newline}{indentation}]",
+            values
+                .iter()
+                .map(|value| format!("{indent}{}", pretty(value, &indent, newline)))
+                .collect::<Vec<_>>()
+                .join(&format!(",{newline}"))
+        ),
+        _ => stringify_json(value),
+    }
+}

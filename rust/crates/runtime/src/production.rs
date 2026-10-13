@@ -628,7 +628,8 @@ impl Factory {
             .into();
         let disk = Arc::new(
             config::Configuration::load(options)
-                .map_err(|_| unavailable("Location configuration"))?,
+                .map_err(|_| unavailable("Location configuration"))?
+                .with_mutation_policy(config::MutationPolicy(Arc::new(|_| true))),
         );
         let reference = location::Ref::decode(
             &ycoding_core::ycoding_schema::ObjectEncoder::new()
@@ -900,7 +901,8 @@ impl Factory {
                 }),
             )
             .map_err(|_| unavailable("integration events"))?;
-        let auth = self.globals.auth.clone();
+        let mut auth = self.globals.auth.clone();
+        auth.register_endpoints(&prepared.models.catalog());
         let auth_registration = integrations
             .transform(move |draft| draft.extend(&auth))
             .map_err(|_| unavailable("native integrations"))?;

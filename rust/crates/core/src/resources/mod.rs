@@ -8,6 +8,7 @@ pub mod credential;
 pub mod cursor;
 pub mod decision;
 pub mod discovery;
+pub mod frontend_package;
 pub mod generate;
 pub mod image;
 pub mod instruction_discovery;

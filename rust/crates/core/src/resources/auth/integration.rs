@@ -92,6 +92,37 @@ pub struct Draft {
     order: Vec<LosslessString>,
 }
 impl Draft {
+    pub fn register_endpoints(&mut self, catalog: &crate::resources::catalog::Catalog) {
+        for record in &catalog.providers {
+            if !crate::resources::config::is_native_endpoint_package(
+                &record.provider.package.encode(),
+            ) {
+                continue;
+            }
+            let id = record.provider.integration_id.as_ref().map_or_else(
+                || record.provider.id.0.clone(),
+                |id| id.as_lossless().clone(),
+            );
+            self.update(id.clone(), |reference| {
+                reference.name = record.provider.name.clone()
+            });
+            self.method(
+                id.clone(),
+                integration::Method::Key(integration::KeyMethod {
+                    label: Some("API key".into()),
+                }),
+            );
+            if !record.environment.is_empty() {
+                self.method(
+                    id,
+                    integration::Method::Env(integration::EnvMethod {
+                        names: record.environment.clone(),
+                    }),
+                );
+            }
+        }
+    }
+
     pub fn extend(&mut self, other: &Self) {
         for id in &other.order {
             if !self.entries.contains_key(id) {

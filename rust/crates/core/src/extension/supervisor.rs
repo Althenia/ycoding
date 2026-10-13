@@ -191,16 +191,12 @@ impl Configuration {
         }) {
             return Err(Error::InvalidConfiguration);
         }
-        for key in ["plugins", "plugin", "npm"] {
+        for key in ["plugins", "plugin", "npm", "provider"] {
             if configuration.latest(key).is_some() {
                 return Err(Error::ObsoleteConfiguration);
             }
         }
-        if configuration
-            .values("providers")
-            .chain(configuration.values("provider"))
-            .any(obsolete_provider)
-        {
+        if configuration.values("providers").any(obsolete_provider) {
             return Err(Error::ObsoleteConfiguration);
         }
         Ok(())
@@ -319,12 +315,25 @@ fn config_strings(value: Option<&JsonValue>) -> Result<Vec<String>, Error> {
 }
 fn obsolete_provider(value: &JsonValue) -> bool {
     match value {
+        JsonValue::Object(providers) => providers
+            .iter()
+            .any(|(_, value)| obsolete_provider_value(value, true)),
+        _ => obsolete_provider_value(value, false),
+    }
+}
+fn obsolete_provider_value(value: &JsonValue, provider: bool) -> bool {
+    match value {
         JsonValue::Object(object) => object.iter().any(|(key, value)| {
-            key.as_str()
+            (key.as_str()
                 .is_some_and(|key| ["npm", "package", "plugin"].contains(&key))
-                || obsolete_provider(value)
+                && !(provider
+                    && key.as_str() == Some("package")
+                    && crate::resources::config::is_native_endpoint_package(value)))
+                || obsolete_provider_value(value, false)
         }),
-        JsonValue::Array(items) => items.iter().any(obsolete_provider),
+        JsonValue::Array(items) => items
+            .iter()
+            .any(|value| obsolete_provider_value(value, false)),
         _ => false,
     }
 }

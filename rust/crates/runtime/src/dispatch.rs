@@ -125,6 +125,12 @@ pub enum Failure {
         force_required: bool,
     },
     IntegrationAuthorization,
+    ConfigurationWrite(ycoding_core::resources::config::WriteError),
+    ConfigurationPartial {
+        target: ycoding_core::resources::config::Target,
+        registration: bool,
+    },
+    FrontendPackage(ycoding_core::resources::frontend_package::Error),
     IntegrationCodeRequired,
     WellKnownDiscovery(String),
     McpServerNotFound(ycoding_core::ycoding_schema::LosslessString),
@@ -531,6 +537,33 @@ impl Failure {
         }
         let declared = |name: String| descriptor.error_types.contains(&name);
         match self {
+            Failure::ConfigurationWrite(error) => encoded(v5::ConfigurationWriteError {
+                tag: 1,
+                code: match error {
+                    ycoding_core::resources::config::WriteError::InvalidConfig => 1,
+                    ycoding_core::resources::config::WriteError::ScopeNotAllowed => 2,
+                    ycoding_core::resources::config::WriteError::ProviderCollision => 3,
+                    ycoding_core::resources::config::WriteError::WriteFailed => 4,
+                },
+            }),
+            Failure::ConfigurationPartial {
+                target,
+                registration,
+            } => encoded(v5::ConfigurationPartialFailure {
+                tag: 1,
+                target: crate::config_ops::target(&target),
+                stage: if registration { 2 } else { 1 },
+            }),
+            Failure::FrontendPackage(error) => encoded(v5::FrontendPackageError {
+                tag: 1,
+                code: match error {
+                    ycoding_core::resources::frontend_package::Error::InvalidPackage => 1,
+                    ycoding_core::resources::frontend_package::Error::PermissionDenied => 2,
+                    ycoding_core::resources::frontend_package::Error::InstallFailed => 3,
+                    ycoding_core::resources::frontend_package::Error::EntrypointMissing => 4,
+                    ycoding_core::resources::frontend_package::Error::IntegrityFailed => 5,
+                },
+            }),
             Failure::CommandNotFound(command) if declared(v5::CommandNotFoundError::full_name()) => {
                 encoded(v5::CommandNotFoundError {
                     tag: 1,

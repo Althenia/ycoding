@@ -1066,6 +1066,46 @@ catalog metadata for that provider model. This lets self-hosted OpenAI-compatibl
 report their real context/input/output limits and named request variants without duplicating
 every model in YCoding configuration.
 
+### Rust backend endpoint configuration
+
+The Rust backend accepts provider-level `providers.<id>.package` declarations
+exactly for `aisdk:@ai-sdk/openai-compatible` and
+`@ycoding-ai/ai/providers/runpod`. These select fixed native implementations;
+they do not execute npm provider packages. Other string packages, model-level
+`package`, singular `provider`, and executable `plugins`, `npm` or `plugin`
+declarations are rejected.
+
+Local v5 clients can use `provider.configure` to persist an endpoint in global
+or project configuration. The backend selects the target, preserves unrelated
+JSONC comments/settings, validates endpoint URLs and implementation collisions,
+reloads and confirms integration registration. OpenAI-compatible endpoints accept
+chat or Responses and optional model discovery; Runpod Jobs endpoints select
+Ollama or vLLM. Supplied model fields are merged without erasing omitted fields.
+The request cannot contain an API key or credential profile. Connect and activate
+credentials separately through `integration.connect.key` and `credential.activate`.
+
+`mcp.configure` persists a typed server definition in `mcp.servers.<name>` and
+reloads it. Environment values, headers and OAuth secrets remain in that
+configuration definition. Reload success is not an external connection check;
+`mcp.add` is live-only.
+
+Provider writes prefer `ycoding.json` then `ycoding.jsonc` in the selected
+directory. MCP writes prefer those files, then `.ycoding/ycoding.json` and
+`.ycoding/ycoding.jsonc`. Both use `ycoding.json` when no candidate exists. Global
+scope uses the backend configuration directory and project scope uses its
+Location directory. Production permits both scopes for local clients; remote
+clients cannot invoke these operations. Rust discovery includes an existing
+`.ycoding` directory under the global configuration directory after its
+top-level JSON/JSONC sources, so the nested MCP targets are reloaded too.
+A written file whose reload or
+registration fails is reported as an explicit partial failure with its target.
+
+`frontendPackage.resolve` is also local-only. It installs npm registry
+presentation packages into the backend cache, requires npm on the backend PATH,
+disables installation scripts, and returns an exact package identity with
+archive/file digests and a verified TUI entrypoint. It does not load backend
+extensions or transfer package assets to a remote browser.
+
 ### Runpod Serverless Jobs workers
 
 Select **Runpod Serverless endpoint** from `/connect` to add each Jobs endpoint as a

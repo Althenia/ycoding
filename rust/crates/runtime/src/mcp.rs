@@ -10,6 +10,7 @@ use ycoding_protocol::v5;
 
 pub fn register(dispatcher: &mut Dispatcher) -> Result<(), RegistrationError> {
     dispatcher.handle("mcp.add", add)?;
+    dispatcher.handle("mcp.configure", crate::config_ops::configure_mcp)?;
     dispatcher.handle("mcp.connect", connect)?;
     dispatcher.handle("mcp.disconnect", disconnect)?;
     dispatcher.handle("mcp.list", list)?;

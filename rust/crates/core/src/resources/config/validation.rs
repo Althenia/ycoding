@@ -816,32 +816,48 @@ fn obsolete_paths(input: &JsonValue) -> Vec<JsonPath> {
         return Vec::new();
     };
     let mut paths = Vec::new();
-    for key in ["plugins", "plugin", "npm"] {
+    for key in ["plugins", "plugin", "npm", "provider"] {
         if object.get(&key.into()).is_some() {
             paths.push(JsonPath::default().key(key));
         }
     }
     if let Some(JsonValue::Object(providers)) = object.get(&"providers".into()) {
         for (name, value) in providers.iter() {
-            let JsonValue::Object(provider) = value else {
-                continue;
-            };
             let path = JsonPath::default().key("providers").key(name.clone());
-            if matches!(provider.get(&"package".into()), Some(JsonValue::String(_))) {
-                paths.push(path.key("package"));
-            }
-            if let Some(JsonValue::Object(models)) = provider.get(&"models".into()) {
-                for (name, value) in models.iter() {
-                    if let JsonValue::Object(model) = value
-                        && matches!(model.get(&"package".into()), Some(JsonValue::String(_)))
-                    {
-                        paths.push(path.key("models").key(name.clone()).key("package"));
-                    }
-                }
-            }
+            obsolete_provider_paths(value, &path, true, &mut paths);
         }
     }
     paths
+}
+
+fn obsolete_provider_paths(
+    value: &JsonValue,
+    path: &JsonPath,
+    provider: bool,
+    paths: &mut Vec<JsonPath>,
+) {
+    match value {
+        JsonValue::Object(object) => {
+            for (key, value) in object.iter() {
+                let path = path.key(key.clone());
+                if matches!(key.as_str(), Some("npm" | "plugin"))
+                    || (key.as_str() == Some("package")
+                        && matches!(value, JsonValue::String(_))
+                        && !(provider && super::is_native_endpoint_package(value)))
+                {
+                    paths.push(path);
+                    continue;
+                }
+                obsolete_provider_paths(value, &path, false, paths);
+            }
+        }
+        JsonValue::Array(values) => {
+            for (index, value) in values.iter().enumerate() {
+                obsolete_provider_paths(value, &path.index(index), false, paths);
+            }
+        }
+        _ => (),
+    }
 }
 
 fn repair_security(

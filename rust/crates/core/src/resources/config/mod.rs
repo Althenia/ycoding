@@ -6,9 +6,14 @@ use std::{
 use ycoding_schema::{JsonValue, config::Diagnostic};
 
 mod jsonc;
+mod operations;
 mod roots;
 mod validation;
 mod variable;
+pub use operations::{
+    ENDPOINT_PACKAGES, Endpoint, EndpointApi, EndpointModel, EndpointWorker, Mutation,
+    MutationPolicy, ProviderConfiguration, Scope, Target, WriteError, is_native_endpoint_package,
+};
 pub use roots::Roots;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -33,12 +38,13 @@ pub struct LoadOptions {
     pub env: BTreeMap<String, String>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Configuration {
     pub event_source: crate::event_feed::EventSource,
     pub entries: Vec<Entry>,
     pub diagnostics: Vec<Diagnostic>,
     options: LoadOptions,
+    mutation_policy: Option<MutationPolicy>,
 }
 
 impl Configuration {
@@ -53,6 +59,7 @@ impl Configuration {
             event_source: Default::default(),
             diagnostics,
             options,
+            mutation_policy: None,
         })
     }
     pub fn reload(&mut self) -> Result<(), Error> {
@@ -230,6 +237,11 @@ fn discover(options: &LoadOptions) -> Result<(Vec<Entry>, Vec<Diagnostic>), Erro
         &mut entries,
         &mut diagnostics,
     )?;
+    let nested_global = options.roots.config.join(".ycoding");
+    options.roots.check(&nested_global)?;
+    if nested_global.is_dir() {
+        load_directory(&nested_global, options, &mut entries, &mut diagnostics)?;
+    }
     if let Some(file) = &options.file {
         load_file(file, options, &mut entries, &mut diagnostics)?;
         entries.push(Entry::File(file.clone()));
