@@ -16,3 +16,5 @@ ycoding api session.rename --data '{"params":{"sessionID":"ses_example"},"payloa
 `ycoding remote` submits backend enrollment and connection controls. Enabling the connector grants the enrolled machine owner access to every existing and future backend Session. The CLI reads the redacted device projection, never the runtime's private `remote-device.json`.
 
 `ycoding run -f <file>` submits an absolute file URI, including for large images, rather than base64-inline content. The source remains caller-owned: the CLI neither deletes nor replaces it. Keep it available until durable admission is confirmed; reconcile an unknown admission against the Session before removing it.
+
+`ycoding mcp add` submits `mcp.configure` to the managed backend with the requested project or global scope and reports the backend-selected configuration target. Backend validation, permissions, atomic writes and Location reload own the mutation. TUI registry packages resolve through `frontendPackage.resolve`; the backend returns the verified entrypoint asset, and package requests use the current managed endpoint.

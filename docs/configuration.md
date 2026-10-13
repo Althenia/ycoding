@@ -1118,6 +1118,10 @@ reloads it. Environment values, headers and OAuth secrets remain in that
 configuration definition. Reload success is not an external connection check;
 `mcp.add` is live-only.
 
+`ycoding mcp add` calls `mcp.configure` on the managed backend with project scope,
+or global scope when `--global` is supplied. The CLI reports the backend-selected
+target and does not edit a frontend-local configuration file.
+
 Provider writes prefer `ycoding.json` then `ycoding.jsonc` in the selected
 directory. MCP writes prefer those files, then `.ycoding/ycoding.json` and
 `.ycoding/ycoding.jsonc`. Both use `ycoding.json` when no candidate exists. Global
@@ -1134,6 +1138,10 @@ presentation packages into the backend cache, requires npm on the backend PATH,
 disables installation scripts, and returns an exact package identity with
 archive/file digests and a verified TUI entrypoint. It does not load backend
 extensions or transfer package assets to a remote browser.
+
+The TUI's registry package resolver uses this operation and imports the returned
+entrypoint asset path. Managed service reconnection resolves the current endpoint
+before a package request; a rejected package never produces a local entrypoint.
 
 ### Runpod Serverless Jobs workers
 

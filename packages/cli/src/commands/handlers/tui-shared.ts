@@ -1,12 +1,12 @@
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Global } from "@ycoding-ai/core/global"
-import { Npm } from "@ycoding-ai/core/npm"
 import { run } from "@ycoding-ai/tui"
 import { Context, Deferred, Effect, FileSystem, Option } from "effect"
 import { Config } from "../../config"
 import { ServerConnection } from "../../services/server-connection"
 import { UpdatePreflight } from "../../services/update-preflight"
 import { Updater } from "../../services/updater"
+import { resolveFrontendPackage } from "../../services/frontend-package"
 
 export interface Input {
   readonly directory: Option.Option<string>
@@ -34,7 +34,9 @@ export const runTui = Effect.fnUntraced(function* (input: Input) {
       )
     },
   }).pipe(
-    Effect.tapError(() => Effect.promise(() => preflight.fail("YCoding update could not start the new background service"))),
+    Effect.tapError(() =>
+      Effect.promise(() => preflight.fail("YCoding update could not start the new background service")),
+    ),
   )
   const updateNotice = yield* Deferred.make<string | undefined>()
   yield* updater
@@ -42,7 +44,6 @@ export const runTui = Effect.fnUntraced(function* (input: Input) {
     .pipe(Effect.ensuring(Deferred.succeed(updateNotice, undefined)), Effect.forkScoped)
   preflight.loading()
   const config = yield* Config.Service
-  const npm = yield* Npm.Service
   const fileSystem = yield* FileSystem.FileSystem
   const runServicePromise = Effect.runPromiseWith(Context.make(FileSystem.FileSystem, fileSystem))
   const context = yield* Effect.context<FileSystem.FileSystem>()
@@ -78,7 +79,8 @@ export const runTui = Effect.fnUntraced(function* (input: Input) {
       update: (update) => runPromise(config.update(update)),
     },
     packages: {
-      resolve: (spec) => runPromise(npm.add(spec, { subpaths: ["tui"] }).pipe(Effect.map((result) => result.entrypoint))),
+      resolve: async (spec) =>
+        resolveFrontendPackage(service ? await runServicePromise(service.reconnect()) : server.endpoint, spec),
     },
     terminalHandoff: () => preflight.finish(),
     log,
