@@ -11,13 +11,17 @@ use ycoding_core::{
         credential, model,
     },
     session::{
+        execution::Runner,
         run_coordinator::Coordinator,
         runner::{Local, Services, WallClock},
+        skill::{InstructionsFuture, Resolver, SkillsFuture},
         store::Service,
     },
     tools::registry::Registry,
 };
-use ycoding_schema::{DomainDecode, parse_json, session, session_message, session_pending};
+use ycoding_schema::{
+    DomainDecode, DomainEncode, parse_json, session, session_message, session_pending, skill,
+};
 
 #[path = "session_support/guardrails.rs"]
 mod guardrails;
@@ -171,7 +175,28 @@ fn local_services(
     clock: Arc<dyn ycoding_core::session::runner::Clock>,
     instructions: Vec<ycoding_core::instructions::Source>,
 ) -> Local {
-    local_hosted(store, catalog, agents, registry, clock, instructions, None)
+    local_services_with_skill_resolver(store, catalog, agents, registry, clock, instructions, None)
+}
+
+fn local_services_with_skill_resolver(
+    store: &ycoding_store::Store,
+    catalog: Catalog,
+    agents: Vec<ycoding_schema::agent::Info>,
+    registry: Arc<Registry>,
+    clock: Arc<dyn ycoding_core::session::runner::Clock>,
+    instructions: Vec<ycoding_core::instructions::Source>,
+    skill_resolver: Option<Arc<dyn Resolver>>,
+) -> Local {
+    local_hosted_with_skill_resolver(
+        store,
+        catalog,
+        agents,
+        registry,
+        clock,
+        instructions,
+        None,
+        skill_resolver,
+    )
 }
 
 fn local_hosted(
@@ -182,6 +207,28 @@ fn local_hosted(
     clock: Arc<dyn ycoding_core::session::runner::Clock>,
     instructions: Vec<ycoding_core::instructions::Source>,
     cursor: Option<ycoding_core::resources::cursor::route::Host>,
+) -> Local {
+    local_hosted_with_skill_resolver(
+        store,
+        catalog,
+        agents,
+        registry,
+        clock,
+        instructions,
+        cursor,
+        None,
+    )
+}
+
+fn local_hosted_with_skill_resolver(
+    store: &ycoding_store::Store,
+    catalog: Catalog,
+    agents: Vec<ycoding_schema::agent::Info>,
+    registry: Arc<Registry>,
+    clock: Arc<dyn ycoding_core::session::runner::Clock>,
+    instructions: Vec<ycoding_core::instructions::Source>,
+    cursor: Option<ycoding_core::resources::cursor::route::Host>,
+    skill_resolver: Option<Arc<dyn Resolver>>,
 ) -> Local {
     Local::new(Services {
         store: Service::new(store.client()),
@@ -207,6 +254,7 @@ fn local_hosted(
         guardrails: guardrails::guardrails(store),
         helpers: Default::default(),
         cursor,
+        skill_resolver,
     })
 }
 
@@ -428,6 +476,576 @@ fn event_types(store: &ycoding_store::Store) -> Vec<String> {
 const TEXT: &str = "data: {\"id\":\"reply\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Answer\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"reply\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n";
 const EMPTY: &str = "data: {\"id\":\"empty\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
 const TOOL: &str = "data: {\"id\":\"tool\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_fixture\",\"type\":\"function\",\"function\":{\"name\":\"echo\",\"arguments\":\"{\\\"value\\\":\\\"observed\\\"}\"}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"tool\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n";
+
+struct FixtureSkills(Vec<skill::Info>);
+impl Resolver for FixtureSkills {
+    fn list(&self) -> SkillsFuture<'_> {
+        let skills = self.0.clone();
+        Box::pin(async move { Ok(skills) })
+    }
+
+    fn instructions<'a>(&'a self, info: &'a skill::Info) -> InstructionsFuture<'a> {
+        Box::pin(async move {
+            Ok(format!(
+                "<skill_content name=\"{}\">\n{}\nBase directory: /skills/{}/\n</skill_content>",
+                info.name.as_str().unwrap(),
+                info.content.as_str().unwrap(),
+                info.id.as_str().unwrap()
+            )
+            .into())
+        })
+    }
+}
+
+fn fixture_skill(id: &str, name: &str, content: &str) -> skill::Info {
+    skill::Info::decode(
+        &parse_json(&format!(
+            r#"{{"id":"{id}","name":"{name}","location":"/skills/{id}/SKILL.md","content":"{content}"}}"#
+        ))
+        .unwrap(),
+    )
+    .unwrap()
+}
+
+fn skill_local(store: &ycoding_store::Store, endpoint: &str, skills: Vec<skill::Info>) -> Local {
+    let mut catalog = Catalog::new(
+        models_dev::normalize(
+            &parse_json(include_str!(
+                "../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"openai","model":"gpt-reasoning"}},"providers":{{"openai":{{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
+    local_services_with_skill_resolver(
+        store,
+        catalog,
+        vec![agent::empty("build".into())],
+        registry(),
+        Arc::new(WallClock),
+        Vec::new(),
+        Some(Arc::new(FixtureSkills(skills))),
+    )
+}
+
+async fn admit_selected_skill(
+    service: &Service,
+    id: &str,
+    text: &str,
+    delivery: &str,
+    selected: &str,
+    created: i64,
+) {
+    service
+        .admit(ycoding_core::session::pending::Request {
+            id: session_message::Id::new(id).unwrap(),
+            session_id: session::Id::new("ses_one").unwrap(),
+            input: session_pending::Message::decode(
+                &parse_json(&format!(
+                    r#"{{"type":"user","data":{{"text":"{text}","metadata":{{"skills":[{{"id":"{selected}"}}]}}}},"delivery":"{delivery}"}}"#
+                ))
+                .unwrap(),
+            )
+            .unwrap(),
+            event_id: ycoding_schema::event::Id::new(format!("evt_{id}")).unwrap(),
+            created,
+        })
+        .await
+        .unwrap();
+}
+
+fn skill_history_order(messages: &[session_message::Info]) -> Vec<String> {
+    messages
+        .iter()
+        .filter_map(|message| match message {
+            session_message::Info::User(user) => Some(user.text.to_utf8().unwrap()),
+            session_message::Info::Skill(skill) => Some(skill.text.to_utf8().unwrap()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn promotion_skill_order(events: &[String]) -> Vec<&str> {
+    events
+        .iter()
+        .filter_map(|event| match event.as_str() {
+            "session.input.promoted.1" => Some("user"),
+            "session.skill.activated.1" => Some("skill"),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn skill_mentions_and_selected_ids_activate_after_promotion_before_request() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    let (endpoint, mut requests, server) = server(vec![TEXT, TEXT]).await;
+    let skills = Arc::new(FixtureSkills(vec![
+        fixture_skill("audit", "Audit", "Audit all changed boundaries."),
+        fixture_skill("selected", "Selected", "Explicit selection instructions."),
+    ]));
+    let mut catalog = Catalog::new(
+        models_dev::normalize(
+            &parse_json(include_str!(
+                "../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"openai","model":"gpt-reasoning"}},"providers":{{"openai":{{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
+    let local = local_services_with_skill_resolver(
+        &store,
+        catalog,
+        vec![agent::empty("build".into())],
+        registry(),
+        Arc::new(WallClock),
+        Vec::new(),
+        Some(skills),
+    );
+    let input = session_pending::Message::decode(
+        &parse_json(r#"{"type":"user","data":{"text":"Review $audit, then report","metadata":{"source":"test"}},"delivery":"steer"}"#).unwrap(),
+    )
+    .unwrap();
+    let input = Runner::prepare_input(&local, input).await.unwrap();
+    assert!(
+        ycoding_schema::stringify_json(&input.encode())
+            .contains(r#""skills":[{"id":"audit","name":"Audit"}]"#)
+    );
+    service
+        .admit(ycoding_core::session::pending::Request {
+            id: session_message::Id::new("msg_mention").unwrap(),
+            session_id: session::Id::new("ses_one").unwrap(),
+            input,
+            event_id: ycoding_schema::event::Id::new("evt_mention").unwrap(),
+            created: 10,
+        })
+        .await
+        .unwrap();
+    let coordinator = Coordinator::new(Arc::new(local));
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    assert!(
+        ycoding_schema::stringify_json(&requests.recv().await.unwrap())
+            .contains("Audit all changed boundaries.")
+    );
+    service
+        .admit_input(ycoding_core::session::pending::Request {
+            id: session_message::Id::new("msg_selected").unwrap(),
+            session_id: session::Id::new("ses_one").unwrap(),
+            input: session_pending::Message::decode(
+                &parse_json(r#"{"type":"user","data":{"text":"Use the selected guidance","metadata":{"skills":[{"id":"selected"}]}},"delivery":"steer"}"#).unwrap(),
+            )
+            .unwrap(),
+            event_id: ycoding_schema::event::Id::new("evt_selected").unwrap(),
+            created: 20,
+        })
+        .await
+        .unwrap();
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    assert!(
+        ycoding_schema::stringify_json(&requests.recv().await.unwrap())
+            .contains("Explicit selection instructions.")
+    );
+    let events = event_types(&store);
+    let activations = events
+        .iter()
+        .enumerate()
+        .filter_map(|(index, event)| (event == "session.skill.activated.1").then_some(index))
+        .collect::<Vec<_>>();
+    let promotions = events
+        .iter()
+        .enumerate()
+        .filter_map(|(index, event)| (event == "session.input.promoted.1").then_some(index))
+        .collect::<Vec<_>>();
+    assert_eq!(activations.len(), 2);
+    assert_eq!(promotions.len(), 2);
+    assert!(promotions[0] < activations[0]);
+    assert!(promotions[1] < activations[1]);
+    let messages = service
+        .context(&session::Id::new("ses_one").unwrap())
+        .unwrap();
+    let skills = messages
+        .iter()
+        .enumerate()
+        .filter_map(|(index, message)| {
+            matches!(message, session_message::Info::Skill(_)).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let users = messages
+        .iter()
+        .enumerate()
+        .filter_map(|(index, message)| {
+            matches!(message, session_message::Info::User(_)).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(skills.len(), 2);
+    assert_eq!(users.len(), 2);
+    assert!(users[0] < skills[0]);
+    assert!(users[1] < skills[1]);
+    let statuses = service
+        .skills(&session::Id::new("ses_one").unwrap(), &[])
+        .unwrap();
+    assert_eq!(statuses.len(), 2);
+    assert!(
+        statuses
+            .iter()
+            .all(|status| status.state == ycoding_schema::session_skill_status::State::Active)
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn steer_batch_promotes_and_activates_each_input_in_admission_order_before_request() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    let (endpoint, mut requests, server) = server(vec![TEXT]).await;
+    let local = skill_local(
+        &store,
+        &endpoint,
+        vec![
+            fixture_skill("first-skill", "First", "FIRST-SKILL-INSTRUCTIONS"),
+            fixture_skill("second-skill", "Second", "SECOND-SKILL-INSTRUCTIONS"),
+        ],
+    );
+    admit_selected_skill(
+        &service,
+        "msg_first_steer",
+        "FIRST-USER-INPUT",
+        "steer",
+        "first-skill",
+        10,
+    )
+    .await;
+    admit_selected_skill(
+        &service,
+        "msg_second_steer",
+        "SECOND-USER-INPUT",
+        "steer",
+        "second-skill",
+        20,
+    )
+    .await;
+    let coordinator = Coordinator::new(Arc::new(local));
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    let request = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    let positions = [
+        request.find("FIRST-USER-INPUT").unwrap(),
+        request.find("FIRST-SKILL-INSTRUCTIONS").unwrap(),
+        request.find("SECOND-USER-INPUT").unwrap(),
+        request.find("SECOND-SKILL-INSTRUCTIONS").unwrap(),
+    ];
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+    assert_eq!(
+        promotion_skill_order(&event_types(&store)),
+        ["user", "skill", "user", "skill"]
+    );
+    assert_eq!(
+        skill_history_order(
+            &service
+                .context(&session::Id::new("ses_one").unwrap())
+                .unwrap()
+        ),
+        [
+            "FIRST-USER-INPUT",
+            r#"<skill_content name="First">
+FIRST-SKILL-INSTRUCTIONS
+Base directory: /skills/first-skill/
+</skill_content>"#,
+            "SECOND-USER-INPUT",
+            r#"<skill_content name="Second">
+SECOND-SKILL-INSTRUCTIONS
+Base directory: /skills/second-skill/
+</skill_content>"#,
+        ]
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn later_steer_skill_failure_keeps_only_that_and_later_inputs_pending() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    let local = skill_local(
+        &store,
+        "http://127.0.0.1:1",
+        vec![
+            fixture_skill("first-skill", "First", "FIRST-SKILL-INSTRUCTIONS"),
+            fixture_skill("last-skill", "Last", "LAST-SKILL-INSTRUCTIONS"),
+        ],
+    );
+    admit_selected_skill(
+        &service,
+        "msg_first_steer",
+        "FIRST-USER-INPUT",
+        "steer",
+        "first-skill",
+        10,
+    )
+    .await;
+    admit_selected_skill(
+        &service,
+        "msg_missing_steer",
+        "MISSING-USER-INPUT",
+        "steer",
+        "missing-skill",
+        20,
+    )
+    .await;
+    admit_selected_skill(
+        &service,
+        "msg_last_steer",
+        "LAST-USER-INPUT",
+        "steer",
+        "last-skill",
+        30,
+    )
+    .await;
+    let coordinator = Coordinator::new(Arc::new(local));
+    let error = coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap_err();
+    let ycoding_core::session::run_coordinator::Error::Runner(failure) = error else {
+        panic!("skill failure was not a runner error")
+    };
+    assert_eq!(failure.r#type.as_str(), Some("skill.unavailable"));
+    assert_eq!(
+        failure.message.as_str(),
+        Some("Skill unavailable: missing-skill")
+    );
+    assert_eq!(
+        service
+            .pending_list(&session::Id::new("ses_one").unwrap())
+            .unwrap()
+            .iter()
+            .map(|pending| pending.id.as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["msg_missing_steer", "msg_last_steer"]
+    );
+    assert_eq!(
+        promotion_skill_order(&event_types(&store)),
+        ["user", "skill"]
+    );
+    assert_eq!(
+        skill_history_order(
+            &service
+                .context(&session::Id::new("ses_one").unwrap())
+                .unwrap()
+        ),
+        [
+            "FIRST-USER-INPUT",
+            r#"<skill_content name="First">
+FIRST-SKILL-INSTRUCTIONS
+Base directory: /skills/first-skill/
+</skill_content>"#,
+        ]
+    );
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn queued_input_is_promoted_and_activated_before_the_following_steers() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    let (endpoint, mut requests, server) = server(vec![TEXT]).await;
+    let local = skill_local(
+        &store,
+        &endpoint,
+        vec![
+            fixture_skill("queued-skill", "Queued", "QUEUED-SKILL-INSTRUCTIONS"),
+            fixture_skill("steer-skill", "Steer", "STEER-SKILL-INSTRUCTIONS"),
+        ],
+    );
+    admit_selected_skill(
+        &service,
+        "msg_queued",
+        "QUEUED-USER-INPUT",
+        "queue",
+        "queued-skill",
+        10,
+    )
+    .await;
+    admit_selected_skill(
+        &service,
+        "msg_steer",
+        "STEER-USER-INPUT",
+        "steer",
+        "steer-skill",
+        20,
+    )
+    .await;
+    let coordinator = Coordinator::new(Arc::new(local));
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    let request = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+    let positions = [
+        request.find("QUEUED-USER-INPUT").unwrap(),
+        request.find("QUEUED-SKILL-INSTRUCTIONS").unwrap(),
+        request.find("STEER-USER-INPUT").unwrap(),
+        request.find("STEER-SKILL-INSTRUCTIONS").unwrap(),
+    ];
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+    assert_eq!(
+        promotion_skill_order(&event_types(&store)),
+        ["user", "skill", "user", "skill"]
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn denied_selected_skills_remain_pending_without_activation_or_provider_requests() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    let mut catalog = Catalog::new(
+        models_dev::normalize(
+            &parse_json(include_str!(
+                "../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    catalog.configure(&[parse_json(r#"{"model":{"providerID":"openai","model":"gpt-reasoning"},"providers":{"openai":{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{"apiKey":"fixture","baseURL":"http://127.0.0.1:1"}}}}"#).unwrap()]).unwrap();
+    let mut agent = agent::empty("build".into());
+    agent.permissions = ycoding_schema::permission::Ruleset::decode(
+        &parse_json(r#"[{"action":"skill","resource":"audit","effect":"deny"}]"#).unwrap(),
+    )
+    .unwrap();
+    let local = local_services_with_skill_resolver(
+        &store,
+        catalog,
+        vec![agent],
+        registry(),
+        Arc::new(WallClock),
+        Vec::new(),
+        Some(Arc::new(FixtureSkills(vec![fixture_skill(
+            "audit",
+            "Audit",
+            "Audit all changed boundaries.",
+        )]))),
+    );
+    service
+        .admit( ycoding_core::session::pending::Request {
+            id: session_message::Id::new("msg_denied").unwrap(),
+            session_id: session::Id::new("ses_one").unwrap(),
+            input: session_pending::Message::decode(
+                &parse_json(r#"{"type":"user","data":{"text":"Audit this","metadata":{"skills":[{"id":"audit"}]}},"delivery":"steer"}"#).unwrap(),
+            )
+            .unwrap(),
+            event_id: ycoding_schema::event::Id::new("evt_denied").unwrap(),
+            created: 10,
+        })
+        .await
+        .unwrap();
+    let coordinator = Coordinator::new(Arc::new(local));
+    let error = coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Permission denied: skill (audit)")
+    );
+    assert_eq!(
+        service
+            .pending_list(&session::Id::new("ses_one").unwrap())
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        service
+            .context(&session::Id::new("ses_one").unwrap())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !event_types(&store)
+            .iter()
+            .any(|event| event == "session.skill.activated.1")
+    );
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn unavailable_selected_skills_remain_pending_without_activation_or_provider_requests() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    let mut catalog = Catalog::new(
+        models_dev::normalize(
+            &parse_json(include_str!(
+                "../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    catalog.configure(&[parse_json(r#"{"model":{"providerID":"openai","model":"gpt-reasoning"},"providers":{"openai":{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{"apiKey":"fixture","baseURL":"http://127.0.0.1:1"}}}}"#).unwrap()]).unwrap();
+    let local = local_services_with_skill_resolver(
+        &store,
+        catalog,
+        vec![agent::empty("build".into())],
+        registry(),
+        Arc::new(WallClock),
+        Vec::new(),
+        Some(Arc::new(FixtureSkills(Vec::new()))),
+    );
+    service
+        .admit( ycoding_core::session::pending::Request {
+            id: session_message::Id::new("msg_unavailable").unwrap(),
+            session_id: session::Id::new("ses_one").unwrap(),
+            input: session_pending::Message::decode(
+                &parse_json(r#"{"type":"user","data":{"text":"Audit this","metadata":{"skills":[{"id":"missing"}]}},"delivery":"steer"}"#).unwrap(),
+            )
+            .unwrap(),
+            event_id: ycoding_schema::event::Id::new("evt_unavailable").unwrap(),
+            created: 10,
+        })
+        .await
+        .unwrap();
+    let coordinator = Coordinator::new(Arc::new(local));
+    let error = coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("Skill unavailable: missing"));
+    assert_eq!(
+        service
+            .pending_list(&session::Id::new("ses_one").unwrap())
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        service
+            .context(&session::Id::new("ses_one").unwrap())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !event_types(&store)
+            .iter()
+            .any(|event| event == "session.skill.activated.1")
+    );
+    coordinator.shutdown().await.unwrap();
+}
 
 #[tokio::test]
 async fn actual_location_runner_streams_one_physical_request_and_projects_a_terminal_assistant() {
@@ -1908,6 +2526,7 @@ fn analysis_local(
         guardrails: guardrails::guardrails(store),
         helpers: Default::default(),
         cursor: None,
+        skill_resolver: None,
     })
 }
 

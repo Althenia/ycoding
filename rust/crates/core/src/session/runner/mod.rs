@@ -11,6 +11,7 @@ use super::{
     cache_diagnostics, compaction_gate, continuation, execution, history, live_state,
     orchestration, projector, prompt_cache, provider_request,
     run_coordinator::{Drain, DrainRequest, Error, Outcome, RunFuture},
+    skill,
     store::Service,
     usage,
 };
@@ -31,7 +32,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 use ycoding_ai::{llm, provider_error, route::Executor};
-use ycoding_schema::{JsonValue, ObjectEncoder, session, session_message};
+use ycoding_schema::{
+    DomainDecode, JsonObject, JsonValue, ObjectEncoder, instruction, session, session_message,
+    session_pending, skill as skill_schema,
+};
 
 pub trait Clock: Send + Sync {
     fn now(&self) -> i64;
@@ -65,6 +69,7 @@ pub struct Services {
     pub guardrails: crate::process::guardrails::Guardrails,
     pub helpers: crate::tools::policy::helper::Settings,
     pub cursor: Option<crate::resources::cursor::route::Host>,
+    pub skill_resolver: Option<Arc<dyn skill::Resolver>>,
 }
 
 struct Work {
@@ -249,6 +254,146 @@ impl Local {
         })
     }
 
+    async fn resolve_requested_skills(
+        &self,
+        session: &session::Info,
+        agent: &ycoding_schema::agent::Info,
+        inputs: &[ycoding_store::session::Pending],
+    ) -> Result<Vec<(skill_schema::Info, ycoding_schema::LosslessString)>, Error> {
+        let services = &self.0.services;
+        let mut requested = Vec::new();
+        let mut has_mentions = false;
+        for input in inputs
+            .iter()
+            .filter(|input| input.type_.as_str() == Some("user"))
+        {
+            let data = session_pending::UserData::decode(&input.data)
+                .map_err(|_| error("skill.unavailable", "Pending skill metadata is invalid"))?;
+            requested.extend(skill::selected(data.metadata.as_ref()));
+            has_mentions |= data.text.code_units().any(|unit| unit == u16::from(b'$'));
+        }
+        let Some(resolver) = &services.skill_resolver else {
+            if requested.is_empty() {
+                return Ok(Vec::new());
+            }
+            return Err(error(
+                "skill.unavailable",
+                "Session skill catalog is unavailable",
+            ));
+        };
+        if requested.is_empty() && !has_mentions {
+            return Ok(Vec::new());
+        }
+        let catalog = resolver
+            .list()
+            .await
+            .map_err(|_| error("skill.unavailable", "Session skills could not be listed"))?;
+        let available = catalog
+            .iter()
+            .map(|skill| skill.id.clone())
+            .collect::<Vec<_>>();
+        for input in inputs
+            .iter()
+            .filter(|input| input.type_.as_str() == Some("user"))
+        {
+            let data = session_pending::UserData::decode(&input.data)
+                .map_err(|_| error("skill.unavailable", "Pending skill metadata is invalid"))?;
+            requested.extend(skill::selected(data.metadata.as_ref()));
+            requested.extend(skill::mentions(&data.text, &available));
+        }
+        let mut ids = Vec::new();
+        for id in requested {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut permissions = agent.permissions.clone();
+        permissions.extend(
+            session
+                .permission_ceiling
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .cloned(),
+        );
+        let mut resolved = Vec::new();
+        for id in ids {
+            let Some(info) = catalog.iter().find(|info| info.id == id) else {
+                return Err(error(
+                    "skill.unavailable",
+                    &format!("Skill unavailable: {}", id.to_utf8().unwrap_or_default()),
+                ));
+            };
+            if crate::tools::policy::evaluate(&"skill".into(), &id, &permissions)
+                .effect
+                .0
+                .as_str()
+                == Some("deny")
+            {
+                return Err(error(
+                    "permission.rejected",
+                    &format!(
+                        "Permission denied: skill ({})",
+                        id.to_utf8().unwrap_or_default()
+                    ),
+                ));
+            }
+            let content = resolver.instructions(info).await.map_err(|_| {
+                error(
+                    "skill.unavailable",
+                    "Skill instructions could not be loaded",
+                )
+            })?;
+            resolved.push((info.clone(), content));
+        }
+        Ok(resolved)
+    }
+
+    async fn activate_skills(
+        &self,
+        session: &session::Info,
+        assembly: &super::instruction_assembly::Assembly,
+        skills: Vec<(skill_schema::Info, ycoding_schema::LosslessString)>,
+    ) -> Outcome {
+        let services = &self.0.services;
+        let instruction_keys = assembly
+            .current
+            .iter()
+            .filter_map(|(key, _)| instruction::Key::decode(&JsonValue::String(key.clone())).ok())
+            .collect::<Vec<_>>();
+        for (info, content) in skills {
+            if services
+                .store
+                .skills(&session.id, &instruction_keys)?
+                .iter()
+                .any(|status| {
+                    status.id == info.id
+                        && status.state == ycoding_schema::session_skill_status::State::Active
+                })
+            {
+                continue;
+            }
+            publish(
+                &services.store,
+                &session.id,
+                None,
+                "session.skill.activated",
+                ObjectEncoder::new()
+                    .field("id", &info.id)
+                    .field("name", &info.name)
+                    .field("text", &content)
+                    .optional("conflicts", &info.conflicts)
+                    .finish(),
+                services.clock.now(),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
     async fn run(&self, request: DrainRequest) -> Outcome {
         let services = &self.0.services;
         let mut step = 1u64;
@@ -260,6 +405,8 @@ impl Local {
         let mut gate_rounds = 0u8;
         let mut overflow = None;
         let mut restart: Option<(session_message::Id, u32)> = None;
+        let mut request_skills: Vec<(skill_schema::Info, ycoding_schema::LosslessString)> =
+            Vec::new();
         loop {
             let pending = services.store.pending_list(&request.session_id)?;
             let eligible = services.store.has_eligible_pending(&request.session_id)?;
@@ -317,31 +464,6 @@ impl Local {
                 .prepare_instructions(&session.id, &sources, services.clock.now())
                 .await
                 .map_err(|_| error("instructions", "Session instructions could not be prepared"))?;
-            let promoted = if pending.iter().any(|pending| {
-                pending
-                    .delivery
-                    .as_ref()
-                    .and_then(|delivery| delivery.as_str())
-                    == Some("steer")
-            }) {
-                services
-                    .store
-                    .promote_steers(&session.id, services.clock.now())
-                    .await?
-                    > 0
-            } else if eligible && !continuation {
-                services
-                    .store
-                    .promote_next_queued(&session.id, services.clock.now())
-                    .await?
-            } else {
-                false
-            };
-            if promoted {
-                step = 1;
-                recovery = false;
-                recovery_used = false;
-            }
             let assembly = services
                 .store
                 .assemble_instructions(&session.id, &sources)
@@ -351,6 +473,62 @@ impl Local {
                         "Session instructions could not be assembled",
                     )
                 })?;
+            let mut to_promote = if eligible && !continuation {
+                pending
+                    .iter()
+                    .find(|pending| {
+                        pending
+                            .delivery
+                            .as_ref()
+                            .and_then(|delivery| delivery.as_str())
+                            == Some("queue")
+                    })
+                    .cloned()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            to_promote.extend(
+                pending
+                    .iter()
+                    .filter(|pending| {
+                        pending
+                            .delivery
+                            .as_ref()
+                            .and_then(|delivery| delivery.as_str())
+                            == Some("steer")
+                    })
+                    .cloned(),
+            );
+            let mut promoted = 0;
+            let mut promoted_skills = Vec::new();
+            if !to_promote.is_empty() && !services.store.has_pending_compaction(&session.id)? {
+                for input in to_promote {
+                    let prepared = self
+                        .resolve_requested_skills(&session, &agent, std::slice::from_ref(&input))
+                        .await?;
+                    match services
+                        .store
+                        .promote_input(&session.id, &input.id, services.clock.now())
+                        .await?
+                    {
+                        super::pending::Promotion::Promoted
+                        | super::pending::Promotion::Reconciled => promoted += 1,
+                        super::pending::Promotion::Missing => break,
+                    }
+                    promoted_skills.extend(prepared.clone());
+                    self.activate_skills(&session, &assembly, prepared).await?;
+                }
+            }
+            if promoted > 0 {
+                request_skills = promoted_skills;
+                step = 1;
+                recovery = false;
+                recovery_used = false;
+            }
+            self.activate_skills(&session, &assembly, request_skills.clone())
+                .await?;
             self.observe_context(
                 &session.id,
                 agent.steps.as_ref().map(|maximum| maximum.get() as u64),
@@ -1548,6 +1726,57 @@ impl Local {
 }
 
 impl execution::Runner for Local {
+    fn prepare_input(&self, input: session_pending::Message) -> execution::PrepareInputFuture<'_> {
+        let resolver = self.0.services.skill_resolver.clone();
+        Box::pin(async move {
+            let session_pending::Message::User(mut user) = input else {
+                return Ok(input);
+            };
+            let Some(resolver) = resolver else {
+                return Ok(session_pending::Message::User(user));
+            };
+            let catalog = resolver
+                .list()
+                .await
+                .map_err(|_| error("skill.unavailable", "Session skills could not be listed"))?;
+            let available = catalog
+                .iter()
+                .map(|skill| skill.id.clone())
+                .collect::<Vec<_>>();
+            let mentioned = skill::mentions(&user.data.text, &available);
+            if mentioned.is_empty() {
+                return Ok(session_pending::Message::User(user));
+            }
+            let selected = skill::selected(user.data.metadata.as_ref());
+            let additions = mentioned
+                .iter()
+                .filter(|id| !selected.contains(id))
+                .filter_map(|id| catalog.iter().find(|candidate| &candidate.id == id))
+                .map(|skill| {
+                    ObjectEncoder::new()
+                        .field("id", &skill.id)
+                        .field("name", &skill.name)
+                        .finish()
+                })
+                .filter_map(|value| match value {
+                    JsonValue::Object(object) => Some(JsonValue::Object(object)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            if additions.is_empty() {
+                return Ok(session_pending::Message::User(user));
+            }
+            let metadata = user.data.metadata.get_or_insert_with(JsonObject::new);
+            let skills = match metadata.get(&"skills".into()) {
+                Some(JsonValue::Array(skills)) => skills.clone(),
+                _ => Vec::new(),
+            };
+            let mut skills = skills;
+            skills.extend(additions);
+            metadata.insert("skills".into(), JsonValue::Array(skills));
+            Ok(session_pending::Message::User(user))
+        })
+    }
     fn drain(&self, request: DrainRequest) -> RunFuture {
         let local = self.clone();
         Box::pin(async move { local.run(request).await })

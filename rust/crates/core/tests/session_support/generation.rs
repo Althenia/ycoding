@@ -725,6 +725,7 @@ pub fn local_with_settings(store: &Store, endpoint: &str, helpers: helper::Setti
         instructions: Vec::new(),
         analysis: None,
         cursor: None,
+        skill_resolver: None,
         clock: Arc::new(WallClock),
         executor: Arc::new(ycoding_ai::route::Executor::new(
             ycoding_ai::route::Executor::http_client().unwrap(),

@@ -13,12 +13,21 @@ use super::{
 use crate::{job, tools::builtin::shell::JobShells};
 use std::{
     future::Future,
+    pin::Pin,
     sync::{Arc, Mutex, OnceLock},
 };
-use ycoding_schema::{ObjectEncoder, location, session, session_error, session_message};
+use ycoding_schema::{
+    ObjectEncoder, location, session, session_error, session_message, session_pending,
+};
 use ycoding_store::session::{NewEvent, Pending, TaskTable};
 
+pub type PrepareInputFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<session_pending::Message, Error>> + Send + 'a>>;
+
 pub trait Runner: Send + Sync + 'static {
+    fn prepare_input(&self, input: session_pending::Message) -> PrepareInputFuture<'_> {
+        Box::pin(async move { Ok(input) })
+    }
     fn drain(&self, request: DrainRequest) -> RunFuture;
     fn settled(&self, _id: session::Id, _outcome: Outcome) -> RunFuture {
         Box::pin(async { Ok(()) })
@@ -52,6 +61,7 @@ static EXECUTION: OnceLock<Execution> = OnceLock::new();
 
 pub struct Execution {
     store: Service,
+    locations: Arc<dyn Locations>,
     jobs: job::Jobs,
     coordinator: Coordinator,
 }
@@ -65,7 +75,7 @@ impl Execution {
     ) -> Result<&'static Self, Error> {
         let coordinator = Coordinator::new(Arc::new(RuntimeDrain {
             store: store.clone(),
-            locations,
+            locations: locations.clone(),
             jobs: jobs.clone(),
             steer,
             orchestration: orchestration::Service::new(store.clone(), Arc::new(ProcessExecution)),
@@ -74,6 +84,7 @@ impl Execution {
         EXECUTION
             .set(Self {
                 store,
+                locations,
                 jobs,
                 coordinator,
             })
@@ -149,7 +160,27 @@ impl Execution {
         self.coordinator.with_transition(id, effect).await
     }
 
-    pub async fn prompt(&self, request: Request, resume: Option<bool>) -> Result<Pending, Error> {
+    pub async fn prompt(
+        &self,
+        mut request: Request,
+        resume: Option<bool>,
+    ) -> Result<Pending, Error> {
+        let prior = self.store.pending(&request.id)?.is_some()
+            || self.store.message(&request.id)?.is_some();
+        if !prior
+            && matches!(
+                &request.input,
+                session_pending::Message::User(user)
+                    if user.data.text.code_units().any(|unit| unit == u16::from(b'$'))
+            )
+            && let Some(session) = self.store.get(&request.session_id)?
+        {
+            request.input = self
+                .locations
+                .get(&session.location)?
+                .prepare_input(request.input)
+                .await?;
+        }
         let id = request.session_id.clone();
         let admitted = self.store.admit_input(request).await?;
         if resume != Some(false) && admitted.wake {

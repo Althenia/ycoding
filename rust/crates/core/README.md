@@ -1300,6 +1300,16 @@ folds append the `skill` message and record deactivations.
 loading the transcript: it reads only skill, agent-switch, completed-compaction
 and assistant rows that carry a completed `skill` tool or a deactivation, decodes
 none of the others, and applies the rows in sequence order.
+`session::skill` parses exact known `$id` references with the TypeScript delimiter
+rules and reads explicit IDs from `metadata.skills`. `runner::Services::skill_resolver`
+supplies the current catalog and full instruction text. `Execution::prompt` invokes
+the Location runner's `prepare_input` hook only for new user IDs containing `$`,
+so retries retain their original metadata. Before promotion, the runner resolves
+selected and mentioned skills and rejects unavailable or denied skills while the
+input remains pending. After promotion, it publishes each new activation message
+before the first model request. Duplicate active skills are not published again.
+A host constructing `runner::Services` injects its Location-scoped resolver through
+`skill_resolver`.
 
 ## Workspace memory, attachments, and images
 

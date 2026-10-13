@@ -1,13 +1,14 @@
 use std::sync::{Arc, Mutex};
 use tokio::sync::{Semaphore, mpsc};
 use ycoding_core::session::{
-    execution::{Execution, Locations, Runner, Terminal, terminal},
+    execution::{Execution, Locations, PrepareInputFuture, Runner, Terminal, terminal},
     pending::Request,
     run_coordinator::{DrainRequest, Error, InterruptReason, RunFuture},
     store::Service,
 };
 use ycoding_schema::{
-    DomainDecode, location, parse_json, session, session_message, session_pending,
+    DomainDecode, JsonObject, JsonValue, location, parse_json, session, session_message,
+    session_pending,
 };
 
 #[path = "session_support/mod.rs"]
@@ -27,8 +28,23 @@ struct Gate {
     started: mpsc::UnboundedSender<(session::Id, bool)>,
     permits: Arc<Semaphore>,
     store: Service,
+    prepared: Arc<Mutex<usize>>,
 }
 impl Runner for Gate {
+    fn prepare_input(&self, input: session_pending::Message) -> PrepareInputFuture<'_> {
+        let prepared = self.prepared.clone();
+        Box::pin(async move {
+            *prepared.lock().unwrap() += 1;
+            let session_pending::Message::User(mut user) = input else {
+                return Ok(input);
+            };
+            user.data
+                .metadata
+                .get_or_insert_with(JsonObject::new)
+                .insert("prepared".into(), JsonValue::Bool(true));
+            Ok(session_pending::Message::User(user))
+        })
+    }
     fn drain(&self, request: DrainRequest) -> RunFuture {
         let started = self.started.clone();
         let permits = self.permits.clone();
@@ -54,6 +70,7 @@ async fn process_global_execution_routes_session_placement_only_at_drain_and_adv
         started,
         permits: Arc::new(Semaphore::new(0)),
         store: service.clone(),
+        prepared: Arc::new(Mutex::new(0)),
     });
     let locations = Arc::new(LocationMap {
         locations: Arc::new(Mutex::new(Vec::new())),
@@ -132,8 +149,10 @@ async fn process_global_execution_routes_session_placement_only_at_drain_and_adv
                 id: session_message::Id::new("msg_queue").unwrap(),
                 session_id: id.clone(),
                 input: session_pending::Message::decode(
-                    &parse_json(r#"{"type":"user","data":{"text":"queued"},"delivery":"queue"}"#)
-                        .unwrap(),
+                    &parse_json(
+                        r#"{"type":"user","data":{"text":"Use $audit"},"delivery":"queue"}"#,
+                    )
+                    .unwrap(),
                 )
                 .unwrap(),
                 event_id: ycoding_schema::event::Id::new("evt_queue").unwrap(),
@@ -143,6 +162,17 @@ async fn process_global_execution_routes_session_placement_only_at_drain_and_adv
         )
         .await
         .unwrap();
+    assert!(
+        ycoding_schema::stringify_json(
+            &service
+                .pending(&session_message::Id::new("msg_queue").unwrap())
+                .unwrap()
+                .unwrap()
+                .data
+        )
+        .contains("prepared")
+    );
+    assert_eq!(*runner.prepared.lock().unwrap(), 1);
     assert_eq!(receiver.recv().await.unwrap(), (id.clone(), false));
     let admitted = execution
         .prompt(
@@ -165,7 +195,8 @@ async fn process_global_execution_routes_session_placement_only_at_drain_and_adv
     runner.permits.add_permits(2);
     execution.await_idle(&id).await;
     assert_eq!(receiver.recv().await.unwrap(), (id.clone(), false));
-    assert_eq!(locations.locations.lock().unwrap().len(), 4);
+    assert_eq!(locations.locations.lock().unwrap().len(), 5);
+    assert_eq!(*runner.prepared.lock().unwrap(), 1);
     execution.shutdown().await.unwrap();
 }
 

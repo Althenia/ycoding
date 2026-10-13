@@ -16,6 +16,7 @@ use ycoding_core::{
         context_manifest,
         run_coordinator::Coordinator,
         runner::{Local, Services, WallClock},
+        skill::{InstructionsFuture, Resolver, SkillsFuture},
         store::Service,
         summary_toon::{self, Memory},
     },
@@ -26,7 +27,7 @@ use ycoding_core::{
 };
 use ycoding_schema::{
     DomainDecode, JsonValue, parse_json, session, session_compaction, session_message,
-    session_pending,
+    session_pending, skill,
 };
 use ycoding_store::session::{
     ContextState, ContextStateTable, ManifestTable, Message, MessageTable, Revision, RevisionTable,
@@ -135,6 +136,14 @@ fn local(store: &ycoding_store::Store, endpoint: &str) -> Local {
     local_with(store, endpoint, Default::default())
 }
 
+fn local_with_skill_resolver(
+    store: &ycoding_store::Store,
+    endpoint: &str,
+    skill_resolver: Arc<dyn Resolver>,
+) -> Local {
+    local_with_resolver(store, endpoint, Default::default(), Some(skill_resolver))
+}
+
 fn pinned(reference: &str) -> helper::Settings {
     helper::Settings {
         compaction_scopes: BTreeMap::from([(
@@ -148,6 +157,15 @@ fn pinned(reference: &str) -> helper::Settings {
 }
 
 fn local_with(store: &ycoding_store::Store, endpoint: &str, helpers: helper::Settings) -> Local {
+    local_with_resolver(store, endpoint, helpers, None)
+}
+
+fn local_with_resolver(
+    store: &ycoding_store::Store,
+    endpoint: &str,
+    helpers: helper::Settings,
+    skill_resolver: Option<Arc<dyn Resolver>>,
+) -> Local {
     let models =
         include_str!("../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json")
             .replacen("\"context\": 128000", "\"context\": 6000", 1)
@@ -197,6 +215,7 @@ fn local_with(store: &ycoding_store::Store, endpoint: &str, helpers: helper::Set
         guardrails: guardrails::guardrails(store),
         helpers,
         cursor: None,
+        skill_resolver,
     })
 }
 
@@ -373,6 +392,83 @@ fn helper_reply(through_sequence: i64) -> String {
         important_identifiers: vec![],
         continuation: "Continue".into(),
     }))
+}
+
+struct SkillFixture(skill::Info);
+impl Resolver for SkillFixture {
+    fn list(&self) -> SkillsFuture<'_> {
+        let skill = self.0.clone();
+        Box::pin(async move { Ok(vec![skill]) })
+    }
+
+    fn instructions<'a>(&'a self, info: &'a skill::Info) -> InstructionsFuture<'a> {
+        Box::pin(async move {
+            Ok(format!(
+                "<skill_content name=\"{}\">\n{}\n</skill_content>",
+                info.name.as_str().unwrap(),
+                info.content.as_str().unwrap()
+            )
+            .into())
+        })
+    }
+}
+
+#[tokio::test]
+async fn current_input_skill_is_reactivated_after_completed_compaction_before_request() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    seed_context(&store);
+    seed_history(
+        &store,
+        format!(
+            "OLD-HISTORY-MARKER {}",
+            "earlier answer detail. ".repeat(1_200)
+        ),
+    );
+    service
+        .admit(ycoding_core::session::pending::Request {
+            id: session_message::Id::new("msg_skill_input").unwrap(),
+            session_id: session::Id::new("ses_one").unwrap(),
+            input: session_pending::Message::decode(
+                &parse_json(r#"{"type":"user","data":{"text":"Use audit","metadata":{"skills":[{"id":"audit"}]}},"delivery":"steer"}"#).unwrap(),
+            )
+            .unwrap(),
+            event_id: ycoding_schema::event::Id::new("evt_skill_input").unwrap(),
+            created: 2,
+        })
+        .await
+        .unwrap();
+    let info = skill::Info::decode(
+        &parse_json(r#"{"id":"audit","name":"Audit","location":"/skills/audit/SKILL.md","content":"REQUIRED-AUDIT-INSTRUCTIONS"}"#).unwrap(),
+    )
+    .unwrap();
+    let (endpoint, mut requests, server) = server(vec![helper_reply(6), sse("Answer")]).await;
+    let coordinator = Coordinator::new(Arc::new(local_with_skill_resolver(
+        &store,
+        &endpoint,
+        Arc::new(SkillFixture(info)),
+    )));
+    within(coordinator.run(&session::Id::new("ses_one").unwrap()))
+        .await
+        .unwrap();
+    let helper = ycoding_schema::stringify_json(&within(requests.recv()).await.unwrap());
+    let step = ycoding_schema::stringify_json(&within(requests.recv()).await.unwrap());
+    within(server).await.unwrap();
+    assert!(helper.contains("Output exactly one TOON document"));
+    assert!(step.contains("REQUIRED-AUDIT-INSTRUCTIONS"));
+    let recorded = events(&store);
+    assert_eq!(count(&recorded, "session.compaction.ended.2"), 1);
+    assert_eq!(count(&recorded, "session.input.promoted.1"), 1);
+    assert_eq!(count(&recorded, "session.skill.activated.1"), 2);
+    let statuses = service
+        .skills(&session::Id::new("ses_one").unwrap(), &[])
+        .unwrap();
+    assert_eq!(statuses.len(), 1);
+    assert_eq!(
+        statuses[0].state,
+        ycoding_schema::session_skill_status::State::Active
+    );
+    coordinator.shutdown().await.unwrap();
 }
 
 #[tokio::test]

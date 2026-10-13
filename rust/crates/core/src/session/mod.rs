@@ -49,6 +49,7 @@ pub mod retention;
 pub mod revert;
 pub mod run_coordinator;
 pub mod runner;
+pub mod skill;
 pub mod skill_status;
 pub mod snapshot;
 pub mod store;

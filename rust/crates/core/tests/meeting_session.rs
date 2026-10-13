@@ -171,6 +171,7 @@ fn local(
         guardrails: guardrails::guardrails(store),
         helpers: Default::default(),
         cursor: None,
+        skill_resolver: None,
     })
 }
 

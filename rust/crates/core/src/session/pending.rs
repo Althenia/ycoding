@@ -27,6 +27,13 @@ pub struct Admitted {
     pub wake: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Promotion {
+    Promoted,
+    Reconciled,
+    Missing,
+}
+
 pub(crate) fn conflict() -> Error {
     Error::Domain {
         kind: "input_identity",
@@ -135,27 +142,56 @@ impl Service {
     }
 
     pub async fn promote_steers(&self, id: &session::Id, now: i64) -> Result<usize, Error> {
-        self.promote_delivery(id, "steer", now).await
+        let steers = self
+            .pending_list(id)?
+            .into_iter()
+            .filter(|pending| {
+                pending
+                    .delivery
+                    .as_ref()
+                    .and_then(|delivery| delivery.as_str())
+                    == Some("steer")
+            })
+            .collect::<Vec<_>>();
+        let mut promoted = 0;
+        for pending in steers {
+            match self.promote_input(id, &pending.id, now).await? {
+                Promotion::Promoted => promoted += 1,
+                Promotion::Reconciled => {}
+                Promotion::Missing => break,
+            }
+        }
+        Ok(promoted)
     }
 
     pub async fn promote_next_queued(&self, id: &session::Id, now: i64) -> Result<bool, Error> {
-        self.promote_delivery(id, "queue", now)
-            .await
-            .map(|count| count > 0)
+        let Some(pending) = self.pending_list(id)?.into_iter().find(|pending| {
+            pending
+                .delivery
+                .as_ref()
+                .and_then(|delivery| delivery.as_str())
+                == Some("queue")
+        }) else {
+            return Ok(false);
+        };
+        Ok(matches!(
+            self.promote_input(id, &pending.id, now).await?,
+            Promotion::Promoted | Promotion::Reconciled
+        ))
     }
 
-    async fn promote_delivery(
+    pub async fn promote_input(
         &self,
         id: &session::Id,
-        delivery: &'static str,
+        input_id: &ycoding_schema::LosslessString,
         now: i64,
-    ) -> Result<usize, Error> {
+    ) -> Result<Promotion, Error> {
         let id = id.as_lossless().clone();
+        let input_id = input_id.clone();
         self.client
             .submit(move |tx| {
                 let prefix = key(&id);
                 let mut after = None;
-                let mut selected = Vec::new();
                 loop {
                     let rows = tx.index_range::<PendingTable>(
                         "session_pending_session_admitted_seq_idx",
@@ -172,43 +208,36 @@ impl Service {
                         .iter()
                         .any(|row| row.record.type_.as_str() == Some("compaction"))
                     {
-                        return Ok(0);
+                        return Ok(Promotion::Missing);
                     }
-                    if rows.is_empty() {
+                    let Some(last) = rows.last() else {
                         break;
-                    }
-                    after = rows.last().map(|row| row.cursor.clone());
-                    selected.extend(
-                        rows.into_iter()
-                            .filter(|row| {
-                                row.record
-                                    .delivery
-                                    .as_ref()
-                                    .and_then(|value| value.as_str())
-                                    == Some(delivery)
-                            })
-                            .map(|row| row.record),
-                    );
+                    };
+                    after = Some(last.cursor.clone());
                 }
-                if delivery == "queue" {
-                    selected.truncate(1);
+                let Some(pending) = tx.get::<PendingTable>(&key(&input_id))? else {
+                    return Ok(match tx.get::<MessageTable>(&key(&input_id))? {
+                        Some(message) if message.session_id == id => Promotion::Reconciled,
+                        _ => Promotion::Missing,
+                    });
+                };
+                if pending.session_id != id || pending.type_.as_str() == Some("compaction") {
+                    return Ok(Promotion::Missing);
                 }
-                for row in &selected {
-                    super::projector::append(
-                        tx,
-                        &NewEvent {
-                            id: super::projector::random_event_id()?.as_lossless().clone(),
-                            aggregate_id: id.clone(),
-                            created: now,
-                            type_: "session.input.promoted.1".into(),
-                            data: ObjectEncoder::new()
-                                .field("sessionID", &id)
-                                .field("inputID", &row.id)
-                                .finish(),
-                        },
-                    )?;
-                }
-                Ok(selected.len())
+                super::projector::append(
+                    tx,
+                    &NewEvent {
+                        id: super::projector::random_event_id()?.as_lossless().clone(),
+                        aggregate_id: id.clone(),
+                        created: now,
+                        type_: "session.input.promoted.1".into(),
+                        data: ObjectEncoder::new()
+                            .field("sessionID", &id)
+                            .field("inputID", &pending.id)
+                            .finish(),
+                    },
+                )?;
+                Ok(Promotion::Promoted)
             })?
             .await
     }
