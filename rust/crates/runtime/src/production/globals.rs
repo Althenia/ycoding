@@ -29,6 +29,9 @@ pub(super) struct Globals {
     pub sessions: browser::bridge::SessionCheck,
     pub meetings: Meetings,
     pub watcher: Arc<ycoding_core::platform::filesystem::watcher::Service>,
+    pub computer: Arc<ycoding_core::platform::computer::service::Coordinator>,
+    computer_client: Arc<ycoding_core::platform::computer::bridged::Client>,
+    controls: tokio::sync::Mutex<Option<super::controls::Owner>>,
     worker: Mutex<Option<catalog::models_dev::RefreshWorker>>,
 }
 
@@ -42,18 +45,30 @@ impl Globals {
         reports: bool,
     ) -> Result<Arc<Self>, Failure> {
         let composition = if reports {
-            Composition::start_reports(client.clone(), production.configuration.roots.data.join("analytics"))?
+            Composition::start_reports(
+                client.clone(),
+                production.configuration.roots.data.join("analytics"),
+            )?
         } else {
             Composition::start()?
         };
-        let catalog = Arc::new(catalog::models_dev::Service::new(production.catalog.clone())
-            .map_err(|_| unavailable("model catalog"))?);
-        catalog.event_source.bind(events.clone(), None)
+        let catalog = Arc::new(
+            catalog::models_dev::Service::new(production.catalog.clone())
+                .map_err(|_| unavailable("model catalog"))?,
+        );
+        catalog
+            .event_source
+            .bind(events.clone(), None)
             .map_err(|_| unavailable("model catalog events"))?;
-        let providers = model::ProviderContext::new(production.configuration.env.clone(), env!("CARGO_PKG_VERSION"))
-            .map_err(|_| unavailable("provider context"))?;
-        let cursor = auth::cursor::Store::new(auth::Client::provider("cursor", env!("CARGO_PKG_VERSION"))
-            .map_err(|_| unavailable("Cursor account store"))?);
+        let providers = model::ProviderContext::new(
+            production.configuration.env.clone(),
+            env!("CARGO_PKG_VERSION"),
+        )
+        .map_err(|_| unavailable("provider context"))?;
+        let cursor = auth::cursor::Store::new(
+            auth::Client::provider("cursor", env!("CARGO_PKG_VERSION"))
+                .map_err(|_| unavailable("Cursor account store"))?,
+        );
         let preparation = auth::Preparation {
             cursor: Some(cursor),
             providers: Some(providers.clone()),
@@ -65,11 +80,12 @@ impl Globals {
             auth::Client::provider("anthropic", env!("CARGO_PKG_VERSION"))
                 .map_err(|_| unavailable("Claude account store"))?,
         );
-        let quota = model::quota::Service::new(credentials.clone(), model::quota::Endpoints::provider())
-            .map_err(|_| unavailable("provider usage"))?
-            .with_version(env!("CARGO_PKG_VERSION"))
-            .with_auth(preparation.clone(), Some(accounts.clone()))
-            .with_store(client.clone());
+        let quota =
+            model::quota::Service::new(credentials.clone(), model::quota::Endpoints::provider())
+                .map_err(|_| unavailable("provider usage"))?
+                .with_version(env!("CARGO_PKG_VERSION"))
+                .with_auth(preparation.clone(), Some(accounts.clone()))
+                .with_store(client.clone());
         let claude = model::ClaudeHost {
             accounts: accounts.clone(),
             credentials: credentials.clone(),
@@ -78,14 +94,19 @@ impl Globals {
             settings: Default::default(),
         };
         let mut auth = auth::integration::Draft::default();
-        preparation.register(&mut auth, &production.configuration.env, Some(&accounts))
+        preparation
+            .register(&mut auth, &production.configuration.env, Some(&accounts))
             .map_err(|_| unavailable("native account methods"))?;
-        let mut account_catalog = catalog::AccountCatalog::new(preparation.clone(), production.configuration.env.clone())
-            .map_err(|_| unavailable("account catalog"))?;
+        let mut account_catalog =
+            catalog::AccountCatalog::new(preparation.clone(), production.configuration.env.clone())
+                .map_err(|_| unavailable("account catalog"))?;
         account_catalog.claude = Some(accounts);
         let wellknown = Arc::new(auth::integration::WellKnown::new(
-            discovery::wellknown::Service::new(client.clone(), production.configuration.env.clone())
-                .map_err(|_| unavailable("wellknown source"))?,
+            discovery::wellknown::Service::new(
+                client.clone(),
+                production.configuration.env.clone(),
+            )
+            .map_err(|_| unavailable("wellknown source"))?,
         ));
         let roots = &production.configuration.roots;
         // Like the TypeScript accounting layer, cohort buckets use a fresh secret per process.
@@ -94,11 +115,15 @@ impl Globals {
             .collect::<Result<String, _>>()
             .map_err(|_| unavailable("artifact accounting secret"))?;
         let accounting = project_artifact::accounting::Service::new(client.clone(), secret);
-        let sources = Arc::new(Mutex::new(project_artifact::source_registry::Registry::default()));
+        let sources = Arc::new(Mutex::new(
+            project_artifact::source_registry::Registry::default(),
+        ));
         let artifacts = project_artifact::store::Service::new(
             client.clone(),
             project_artifact::store::Paths {
-                data: roots.data.clone(), home: roots.home.clone(), config: roots.config.clone(),
+                data: roots.data.clone(),
+                home: roots.home.clone(),
+                config: roots.config.clone(),
             },
             sources.clone(),
         )
@@ -107,46 +132,183 @@ impl Globals {
         let store = Service::new(client);
         let sessions: browser::bridge::SessionCheck = Arc::new(move |id| {
             ycoding_core::ycoding_schema::session::Id::new(id.as_lossless().clone())
-                .ok().and_then(|id| store.get(&id).ok().flatten())
+                .ok()
+                .and_then(|id| store.get(&id).ok().flatten())
                 .is_some_and(|session| session.time.archived.is_none())
         });
-        let browser = browser::service::Service::new(credentials, admission.clone(), sessions.clone(), Default::default());
+        let browser = browser::service::Service::new(
+            credentials,
+            admission.clone(),
+            sessions.clone(),
+            Default::default(),
+        );
         #[cfg(unix)]
-        let isolated_executor: Arc<dyn browser::isolated::Executor> = Arc::new(browser::chrome_executor::IsolatedChrome::installed());
+        let isolated_executor: Arc<dyn browser::isolated::Executor> =
+            Arc::new(browser::chrome_executor::IsolatedChrome::installed());
         #[cfg(not(unix))]
         let isolated_executor: Arc<dyn browser::isolated::Executor> = Arc::new(UnsupportedIsolated);
-        let repositories = Arc::new(repository_cache::Service::new(roots.repos.clone(), roots.state.clone(), git));
-        let ripgrep = Arc::new(ripgrep_binary::Service::new(roots.bin.clone())
-            .map_err(|_| unavailable("ripgrep acquisition"))?);
+        let platform = match std::env::consts::OS {
+            "macos" => "darwin",
+            "windows" => "win32",
+            other => other,
+        };
+        // Like the TypeScript computer service, the native helper app sits beside the executable.
+        let application = std::env::current_exe()
+            .ok()
+            .and_then(|executable| {
+                executable.parent().map(|directory| {
+                    directory.join(ycoding_core::platform::computer::macos::HELPER_APPLICATION)
+                })
+            })
+            .ok_or_else(|| unavailable("computer helper location"))?;
+        let computer_client = Arc::new(ycoding_core::platform::computer::bridged::Client {
+            native: Arc::new(ycoding_core::platform::computer::macos::NativeClient::new(
+                platform,
+                application,
+                Arc::new(ycoding_core::platform::computer::macos::LaunchServices),
+                std::time::Duration::from_secs(30),
+            )),
+            electron: Arc::new(
+                ycoding_core::platform::computer::electron::Bridge::new(Arc::new(
+                    ycoding_core::platform::computer::electron::NativeRuntime,
+                ))
+                .map_err(|_| unavailable("computer Electron bridge"))?,
+            ),
+            platform: platform.into(),
+        });
+        let computer = ycoding_core::platform::computer::service::Coordinator::new(
+            computer_client.clone(),
+            platform,
+        );
+        let paired = browser.clone();
+        let native = computer.clone();
+        let controls = composition.run(async {
+            super::controls::Owner::start(
+                events.clone(),
+                Arc::new(move |session, lifecycle| {
+                    let paired = paired.clone();
+                    let native = native.clone();
+                    Box::pin(async move {
+                        let browser = paired
+                            .lifecycle(&session, lifecycle)
+                            .await
+                            .map_err(|_| unavailable("paired browser Session release"));
+                        let computer = native
+                            .release_session(
+                                &session
+                                    .as_lossless()
+                                    .to_utf8()
+                                    .map_err(|_| unavailable("Session identity"))?,
+                            )
+                            .await
+                            .map_err(|_| unavailable("computer Session release"));
+                        browser.and(computer)
+                    })
+                }),
+            )
+        })?;
+        let repositories = Arc::new(repository_cache::Service::new(
+            roots.repos.clone(),
+            roots.state.clone(),
+            git,
+        ));
+        let ripgrep = Arc::new(
+            ripgrep_binary::Service::new(roots.bin.clone())
+                .map_err(|_| unavailable("ripgrep acquisition"))?,
+        );
         // The refresh worker is the only owner started here; starting it last keeps every
         // earlier failure free of started work beyond the composition runtime, which Drop joins.
         let worker = composition.run(async {
-            catalog.get().await.map_err(|_| unavailable("model catalog"))?;
+            catalog
+                .get()
+                .await
+                .map_err(|_| unavailable("model catalog"))?;
             Ok(catalog.start())
         })?;
         Ok(Arc::new(Self {
-            composition, catalog, providers, preparation,
+            composition,
+            catalog,
+            providers,
+            preparation,
             accounts: tokio::sync::Mutex::new(account_catalog),
-            claude, wellknown, auth, repositories, ripgrep,
-            artifacts, accounting, sources, browser, isolated_executor, admission, sessions,
+            claude,
+            wellknown,
+            auth,
+            repositories,
+            ripgrep,
+            artifacts,
+            accounting,
+            sources,
+            browser,
+            isolated_executor,
+            admission,
+            sessions,
             meetings: Meetings::new(production.meeting),
-            watcher: Arc::new(ycoding_core::platform::filesystem::watcher::Service::new(true)),
+            watcher: Arc::new(ycoding_core::platform::filesystem::watcher::Service::new(
+                true,
+            )),
+            computer,
+            computer_client,
+            controls: tokio::sync::Mutex::new(Some(controls)),
             worker: Mutex::new(worker),
         }))
     }
 
     pub async fn close(&self) -> Result<(), Failure> {
-        let worker = self.worker.lock().unwrap_or_else(PoisonError::into_inner).take();
-        if let Some(worker) = worker {
-            worker.shutdown().await.map_err(|_| unavailable("model catalog worker"))?;
-        }
+        let worker = self
+            .worker
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        let worker = match worker {
+            Some(worker) => worker
+                .shutdown()
+                .await
+                .map_err(|_| unavailable("model catalog worker")),
+            None => Ok(()),
+        };
+        let controls = match self.controls.lock().await.take() {
+            Some(controls) => controls.close().await,
+            None => Ok(()),
+        };
         self.browser.shutdown();
-        self.claude.quota.shutdown().await.map_err(|_| unavailable("provider usage"))?;
+        let computer = self
+            .computer
+            .shutdown()
+            .await
+            .map_err(|_| unavailable("computer coordinator"));
+        let helper = self
+            .computer_client
+            .shutdown()
+            .await
+            .map_err(|_| unavailable("computer helper"));
+        let quota = self
+            .claude
+            .quota
+            .shutdown()
+            .await
+            .map_err(|_| unavailable("provider usage"));
         self.providers.shutdown().await;
-        if let Some(cursor) = &self.preparation.cursor {
-            cursor.shutdown().await.map_err(|_| unavailable("Cursor accounts"))?;
-        }
-        self.claude.accounts.shutdown().await.map_err(|_| unavailable("Claude accounts"))
+        let cursor = match &self.preparation.cursor {
+            Some(cursor) => cursor
+                .shutdown()
+                .await
+                .map_err(|_| unavailable("Cursor accounts")),
+            None => Ok(()),
+        };
+        let claude = self
+            .claude
+            .accounts
+            .shutdown()
+            .await
+            .map_err(|_| unavailable("Claude accounts"));
+        worker
+            .and(controls)
+            .and(computer)
+            .and(helper)
+            .and(quota)
+            .and(cursor)
+            .and(claude)
     }
 }
 
@@ -154,8 +316,14 @@ impl Globals {
 struct UnsupportedIsolated;
 #[cfg(not(unix))]
 impl browser::isolated::Executor for UnsupportedIsolated {
-    fn launch(&self, _: browser::isolated::Launch, _: tokio::sync::watch::Receiver<bool>) ->
-        ycoding_core::platform::computer::Future<'_, Result<Arc<dyn browser::isolated::Runtime>, browser::isolated::ExecutorError>> {
+    fn launch(
+        &self,
+        _: browser::isolated::Launch,
+        _: tokio::sync::watch::Receiver<bool>,
+    ) -> ycoding_core::platform::computer::Future<
+        '_,
+        Result<Arc<dyn browser::isolated::Runtime>, browser::isolated::ExecutorError>,
+    > {
         Box::pin(async {
             Err(browser::isolated::ExecutorError {
                 message: "Isolated browser requires macOS arm64".into(),

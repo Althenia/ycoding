@@ -576,6 +576,7 @@ async fn plugin_list_places_native_pre_capabilities_then_extensions_then_native_
             "ycoding.tool.websearch",
             "ycoding.tool.write",
             "ycoding.tool.goal",
+            "ycoding.tool.decision",
             "ycoding.tool.browser",
             "ycoding.tool.worktree",
             "trusted-process",

@@ -440,7 +440,7 @@ async fn real_runner_flow_preserves_order_follow_watermark_cursor_and_full_value
             attachments: Arc::new(attachment_store::Store::new(root.join("attachments")).unwrap()), instructions: Vec::new(), analysis: None,
             clock: Arc::new(WallClock), executor: Arc::new(Executor::new(Executor::http_client().unwrap())),
             compaction: Default::default(), guardrails: location.guardrails.clone(), helpers: Default::default(), cursor: None, skill_resolver: None, claude: None, auth: None,
-            configuration: None, image_analyzer: None, extensions: Vec::new(),
+            configuration: None, image_analyzer: None, extensions: Vec::new(), session_tools: None,
         });
         let coordinator = Coordinator::new(Arc::new(runner));
         let server = start(support::services(LocalAuth::disabled(), true), standard().unwrap()).await;

@@ -142,7 +142,10 @@ async fn production_flow() {
         content: None,
         env: BTreeMap::from([
             ("OPENAI_API_KEY".into(), "synthetic-key".into()),
-            ("XDG_DATA_HOME".into(), root.join("xdg-data").to_str().unwrap().into()),
+            (
+                "XDG_DATA_HOME".into(),
+                root.join("xdg-data").to_str().unwrap().into(),
+            ),
         ]),
     };
     assert!(
@@ -158,7 +161,9 @@ async fn production_flow() {
     let store = Store::initialize(
         root.join("store.redb"),
         Options::core(),
-        ycoding_core::ycoding_store::import::catalog(ycoding_core::ycoding_store::import::DatabaseKind::Core),
+        ycoding_core::ycoding_store::import::catalog(
+            ycoding_core::ycoding_store::import::DatabaseKind::Core,
+        ),
         Metadata::new([8; 16], 1),
     )
     .unwrap();
@@ -281,15 +286,36 @@ async fn production_flow() {
         .unwrap();
     let seeded = SessionStore::new(store.client());
     for (id, type_, data) in [
-        ("evt_interrupted_run", "session.execution.started.1", r#"{"sessionID":"ses_interrupted"}"#),
-        ("evt_interrupted_step", "session.step.started.1", r#"{"sessionID":"ses_interrupted","assistantMessageID":"msg_interrupted","agent":"god","model":{"providerID":"openai","id":"gpt-runtime"}}"#),
+        (
+            "evt_interrupted_run",
+            "session.execution.started.1",
+            r#"{"sessionID":"ses_interrupted"}"#,
+        ),
+        (
+            "evt_interrupted_step",
+            "session.step.started.1",
+            r#"{"sessionID":"ses_interrupted","assistantMessageID":"msg_interrupted","agent":"god","model":{"providerID":"openai","id":"gpt-runtime"}}"#,
+        ),
     ] {
-        seeded.publish(NewEvent { id: id.into(), aggregate_id: "ses_interrupted".into(), created: 2, type_: type_.into(), data: parse_json(data).unwrap() }).await.unwrap();
+        seeded
+            .publish(NewEvent {
+                id: id.into(),
+                aggregate_id: "ses_interrupted".into(),
+                created: 2,
+                type_: type_.into(),
+                data: parse_json(data).unwrap(),
+            })
+            .await
+            .unwrap();
     }
     let xdg = root.join("xdg-data");
-    let meeting_directory = discovery::directory(&root.join("project"), Some(&xdg), &roots.home).unwrap();
+    let meeting_directory =
+        discovery::directory(&root.join("project"), Some(&xdg), &roots.home).unwrap();
     let meetings = MeetingDatabase::open(&meeting_directory.join("meetings.redb")).unwrap();
-    meetings.create_meeting("meeting_seed", "Seeded", "ses_analysis").await.unwrap();
+    meetings
+        .create_meeting("meeting_seed", "Seeded", "ses_analysis")
+        .await
+        .unwrap();
     meetings.close().await.unwrap();
     let other_meeting = discovery::directory(&root.join("other"), Some(&xdg), &roots.home).unwrap();
     std::fs::create_dir_all(&other_meeting).unwrap();
@@ -343,14 +369,29 @@ async fn production_flow() {
         Some("interrupted"),
         "startup must settle the unterminated Step before serving"
     );
-    assert_eq!(events(&store, "ses_interrupted", "session.execution.failed.1").len(), 1);
+    assert_eq!(
+        events(&store, "ses_interrupted", "session.execution.failed.1").len(),
+        1
+    );
     assert!(core.catalogs.is_some(), "production catalogs must resolve");
-    assert!(core.integrations.is_some(), "production integrations must resolve");
-    assert!(core.provider_usage.is_some(), "production quota must resolve");
+    assert!(
+        core.integrations.is_some(),
+        "production integrations must resolve"
+    );
+    assert!(
+        core.provider_usage.is_some(),
+        "production quota must resolve"
+    );
     assert!(core.mcp.is_some(), "production MCP must resolve");
-    assert!(core.artifacts.is_some(), "production artifacts must resolve");
+    assert!(
+        core.artifacts.is_some(),
+        "production artifacts must resolve"
+    );
     assert!(core.browser.is_some(), "production browser must resolve");
-    assert!(core.isolated_browser.is_some(), "production isolated browser must resolve");
+    assert!(
+        core.isolated_browser.is_some(),
+        "production isolated browser must resolve"
+    );
     assert!(core.platform.is_some(), "production platform must resolve");
     let (_, services) = core
         .locations
@@ -370,24 +411,56 @@ async fn production_flow() {
         (&roots.home, &roots.config),
         "skill scope must classify against the backend roots"
     );
-    assert!(Arc::ptr_eq(&(core.mcp.as_ref().unwrap())(&info).unwrap(), &composed.mcp));
-    assert!(Arc::ptr_eq(&(core.platform.as_ref().unwrap())(&reference).unwrap(), &composed.platform));
-    assert!(Arc::ptr_eq(&(core.isolated_browser.as_ref().unwrap())(&reference).unwrap(), &composed.isolated));
+    assert!(Arc::ptr_eq(
+        &(core.mcp.as_ref().unwrap())(&info).unwrap(),
+        &composed.mcp
+    ));
+    assert!(Arc::ptr_eq(
+        &(core.platform.as_ref().unwrap())(&reference).unwrap(),
+        &composed.platform
+    ));
+    assert!(Arc::ptr_eq(
+        &(core.isolated_browser.as_ref().unwrap())(&reference).unwrap(),
+        &composed.isolated
+    ));
     let integrations = (core.integrations.as_ref().unwrap())(&info).unwrap();
     let usage = (core.provider_usage.as_ref().unwrap())(&info).unwrap();
-    assert!(usage.providers.iter().any(|id| id.0.as_str() == Some("openai")));
+    assert!(
+        usage
+            .providers
+            .iter()
+            .any(|id| id.0.as_str() == Some("openai"))
+    );
     let artifacts = (core.artifacts.as_ref().unwrap())(&info).unwrap();
     std::fs::create_dir_all(root.join("unrecorded")).unwrap();
-    let unrecorded = location::Info::decode(&parse_json(&format!(r#"{{"directory":"{0}","project":{{"id":"prj_unrecorded","directory":"{0}"}}}}"#, root.join("unrecorded").to_str().unwrap())).unwrap()).unwrap();
-    let unrecorded_reference = location::Ref { directory: unrecorded.directory.clone(), workspace_id: None };
-    assert!((core.catalogs.as_ref().unwrap())(&unrecorded).is_err(), "registered catalogs must answer unavailable for an unrecorded Location");
+    let unrecorded = location::Info::decode(
+        &parse_json(&format!(
+            r#"{{"directory":"{0}","project":{{"id":"prj_unrecorded","directory":"{0}"}}}}"#,
+            root.join("unrecorded").to_str().unwrap()
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    let unrecorded_reference = location::Ref {
+        directory: unrecorded.directory.clone(),
+        workspace_id: None,
+    };
+    assert!(
+        (core.catalogs.as_ref().unwrap())(&unrecorded).is_err(),
+        "registered catalogs must answer unavailable for an unrecorded Location"
+    );
     assert!((core.integrations.as_ref().unwrap())(&unrecorded).is_err());
     assert!((core.mcp.as_ref().unwrap())(&unrecorded).is_err());
     assert!((core.provider_usage.as_ref().unwrap())(&unrecorded).is_err());
     assert!((core.artifacts.as_ref().unwrap())(&unrecorded).is_none());
     assert!((core.platform.as_ref().unwrap())(&unrecorded_reference).is_err());
     assert!((core.isolated_browser.as_ref().unwrap())(&unrecorded_reference).is_err());
-    assert!(services.agents.get(&"meeting-intelligence".into()).is_some());
+    assert!(
+        services
+            .agents
+            .get(&"meeting-intelligence".into())
+            .is_some()
+    );
     let descriptor = std::fs::read_to_string(meeting_directory.join("bridge.json")).unwrap();
     assert!(!other_meeting.join("bridge.json").exists());
     assert!(
@@ -452,13 +525,32 @@ async fn production_flow() {
         .unwrap();
     let other_info = other.info.clone();
     assert!(
-        !other.production.as_ref().unwrap().tools.materialize(&other.agents.default().unwrap().permissions).definitions.iter().any(|tool| tool.name.as_str() == Some("meeting_history")),
+        !other
+            .production
+            .as_ref()
+            .unwrap()
+            .tools
+            .materialize(&other.agents.default().unwrap().permissions)
+            .definitions
+            .iter()
+            .any(|tool| tool.name.as_str() == Some("meeting_history")),
         "a Location whose Meeting runtime failed to start keeps working without it"
     );
-    assert_eq!(std::fs::read_to_string(other_meeting.join("runtime.lock")).unwrap(), foreign_lock);
+    assert_eq!(
+        std::fs::read_to_string(other_meeting.join("runtime.lock")).unwrap(),
+        foreign_lock
+    );
     let other_integrations = (core.integrations.as_ref().unwrap())(&other_info).unwrap();
-    assert!(Arc::ptr_eq(integrations.wellknown.as_ref().unwrap(), other_integrations.wellknown.as_ref().unwrap()));
-    assert!(Arc::ptr_eq(&usage.quota, &(core.provider_usage.as_ref().unwrap())(&other_info).unwrap().quota));
+    assert!(Arc::ptr_eq(
+        integrations.wellknown.as_ref().unwrap(),
+        other_integrations.wellknown.as_ref().unwrap()
+    ));
+    assert!(Arc::ptr_eq(
+        &usage.quota,
+        &(core.provider_usage.as_ref().unwrap())(&other_info)
+            .unwrap()
+            .quota
+    ));
     let other_artifacts = (core.artifacts.as_ref().unwrap())(&other_info).unwrap();
     assert_eq!(
         other
@@ -517,6 +609,26 @@ async fn production_flow() {
     assert_eq!(usage.data.cost, Some(0.75023));
     let report: v5::SessionUsageReportResult = support::success(wire.call("session.usageReport", support::session_scope("ses_production"), v5::SessionUsageReportRequest { params: v5::SessionUsageReportRequestParams { session_id: support::text("ses_production") }, query: v5::SessionUsageReportRequestQuery { group: v5::SessionUsageReportRequestQueryGroup::SessionUsagereportRequestQueryGroupModel as i32, time_zone: None, from: None, to: None, offset: None, limit: None, sort: None, order: None } }.encode_to_vec()).await);
     assert_eq!(report.data.total.cost, Some(0.75023));
+    let telemetry: v5::TelemetryListResult = support::success(
+        wire.call(
+            "telemetry.list",
+            v5::Scope {
+                target: Some(v5::scope::Target::Machine(v5::Empty {})),
+            },
+            v5::TelemetryListRequest {
+                query: v5::TelemetryListRequestQuery {
+                    limit: Some(10),
+                    before: None,
+                },
+            }
+            .encode_to_vec(),
+        )
+        .await,
+    );
+    assert!(
+        telemetry.data.data.items.is_empty(),
+        "the production analytics engine serves telemetry reads"
+    );
     assert_eq!(
         store
             .client()
@@ -650,15 +762,25 @@ async fn production_flow() {
     assert_eq!(
         names,
         vec![
+            "browser",
+            "computer",
+            "decision",
             "edit",
             "glob",
+            "goal",
             "grep",
             "meeting_history",
             "memory",
             "patch",
             "project_artifact",
+            "question",
             "read",
             "shell",
+            "subagent",
+            "subagent_control",
+            "subagent_report",
+            "task_complete",
+            "todowrite",
             "webfetch",
             "websearch",
             "worktree",
@@ -700,6 +822,15 @@ async fn production_flow() {
         "shell",
         "every Location must share the one process-global Jobs owner"
     );
+    let todos = tools
+        .invoke(
+            "todowrite",
+            parse_json(r#"{"todos":[{"content":"Verify the composition","status":"pending","priority":"high"}]}"#).unwrap(),
+            Context::new("ses_production", "god", "msg_tool", "call_todos").unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(todos.error.is_none(), "{:?}", todos.error);
     let fetched = tools
         .invoke(
             "webfetch",
@@ -722,6 +853,14 @@ async fn production_flow() {
     let request = received.recv().await.unwrap();
     let encoded = ycoding_core::ycoding_schema::stringify_json(&request);
     assert!(encoded.contains("Respond with the verification result"));
+    assert!(
+        encoded.contains(r#""name":"subagent""#),
+        "Session tools reach the model"
+    );
+    assert!(
+        !encoded.contains("subagent_report"),
+        "a root Session is not offered the managed-child report tool"
+    );
     assert!(encoded.contains("configured-agent"));
     assert!(encoded.contains("\"temperature\":0.2"));
     let ycoding_core::ycoding_schema::JsonValue::Object(body) = &request else {
@@ -784,15 +923,20 @@ async fn production_flow() {
     let definition = ycoding_core::ycoding_schema::project_artifact::Definition::decode(&parse_json(r#"{"kind":"skill","name":"Review","description":"Reusable review","content":"Review the current change."}"#).unwrap()).unwrap();
     let preview = artifacts
         .store
-        .preview_manual(ycoding_core::resources::project_artifact::store::ManualPreviewInput {
-            id: "review",
-            definition: &definition,
-            expected: None,
-            now: now(),
-        })
+        .preview_manual(
+            ycoding_core::resources::project_artifact::store::ManualPreviewInput {
+                id: "review",
+                definition: &definition,
+                expected: None,
+                now: now(),
+            },
+        )
         .unwrap();
     assert!(
-        other_artifacts.store.confirm_manual(&preview.token, now()).is_ok(),
+        other_artifacts
+            .store
+            .confirm_manual(&preview.token, now())
+            .is_ok(),
         "every Location must share one artifact source and confirmation owner"
     );
     core.locations.reload(&info).unwrap();
@@ -805,9 +949,28 @@ async fn production_flow() {
         .locations
         .session(&session::Id::new("ses_production").unwrap())
         .unwrap();
-    assert!(!Arc::ptr_eq(&reloaded.production.as_ref().unwrap().tools, &services.production.as_ref().unwrap().tools));
-    assert!(reloaded.production.as_ref().unwrap().tools.materialize(&reloaded.agents.default().unwrap().permissions).definitions.iter().any(|tool| tool.name.as_str() == Some("meeting_history")));
-    prompt_input(core.execution, "ses_analysis", "evt_analysis_prompt", "Summarize the seeded meeting").await;
+    assert!(!Arc::ptr_eq(
+        &reloaded.production.as_ref().unwrap().tools,
+        &services.production.as_ref().unwrap().tools
+    ));
+    assert!(
+        reloaded
+            .production
+            .as_ref()
+            .unwrap()
+            .tools
+            .materialize(&reloaded.agents.default().unwrap().permissions)
+            .definitions
+            .iter()
+            .any(|tool| tool.name.as_str() == Some("meeting_history"))
+    );
+    prompt_input(
+        core.execution,
+        "ses_analysis",
+        "evt_analysis_prompt",
+        "Summarize the seeded meeting",
+    )
+    .await;
     core.execution
         .resume(&session::Id::new("ses_analysis").unwrap())
         .await
@@ -816,14 +979,151 @@ async fn production_flow() {
     let encoded = stringify_json(&request);
     assert!(encoded.contains("You analyze meetings and propose engineering plans"));
     assert!(encoded.contains("Summarize the seeded meeting"));
-    assert!(!encoded.contains("\"tools\""), "analysis requests must carry no tools");
+    assert!(
+        !encoded.contains("\"tools\""),
+        "analysis requests must carry no tools"
+    );
     let JsonValue::Object(body) = &request else {
         panic!("provider request must be an object");
     };
     let Some(JsonValue::Array(messages)) = body.get(&"messages".into()) else {
         panic!("provider request must carry messages");
     };
-    assert_eq!(messages.len(), 2, "analysis keeps only its system prompt and the bounded input");
+    assert_eq!(
+        messages.len(),
+        2,
+        "analysis keeps only its system prompt and the bounded input"
+    );
+
+    let browser_status = tools
+        .invoke(
+            "browser",
+            parse_json(r#"{"operation":"status"}"#).unwrap(),
+            Context::new("ses_production", "god", "msg_tool", "call_browser_status").unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(browser_status.error.is_none(), "{:?}", browser_status.error);
+    assert!(
+        core.isolated_browser.as_ref().unwrap()(&location::Ref {
+            directory: info.directory.clone(),
+            workspace_id: info.workspace_id.clone(),
+        })
+        .unwrap()
+        .status(
+            &ycoding_core::ycoding_schema::session_id::SessionId::new("ses_production").unwrap()
+        )
+        .await
+        .unwrap()
+        .instance_id
+        .is_none(),
+        "Location composition does not launch Chrome"
+    );
+
+    prompt_input(
+        core.execution,
+        "ses_other_location",
+        "evt_advisory_first",
+        "Establish a completed boundary",
+    )
+    .await;
+    core.execution
+        .resume(&session::Id::new("ses_other_location").unwrap())
+        .await
+        .unwrap();
+    while received.try_recv().is_ok() {}
+    std::fs::write(root.join("other/ycoding.json"), r#"{"agents":{"god":{"description":"other agent"}},"compaction":{"advisory":{"consider_percent":1,"strongly_advised_percent":2}}}"#).unwrap();
+    core.locations.reload(&other_info).unwrap();
+    store
+        .submit(|tx| {
+            ycoding_core::ycoding_store::session::RevisionTable::put(
+                tx,
+                &ycoding_core::ycoding_store::session::Revision {
+                    session_id: "ses_other_location".into(),
+                    revision: 0,
+                    parent_revision: None,
+                    manifest_digest: None,
+                    covered_through_message_id: None,
+                    covered_through_seq: None,
+                    activation_event_id: None,
+                    activation_sequence: None,
+                    time_created: 0,
+                },
+            )?;
+            ycoding_core::ycoding_store::session::ContextStateTable::put(
+                tx,
+                &ycoding_core::ycoding_store::session::ContextState {
+                    session_id: "ses_other_location".into(),
+                    status: "active".into(),
+                    revision: 0,
+                    manifest_digest: None,
+                    covered_through_message_id: None,
+                    covered_through_seq: None,
+                    activated_event_id: None,
+                    time_activated: None,
+                    error_code: None,
+                },
+            )
+        })
+        .unwrap()
+        .await
+        .unwrap();
+    prompt_input(
+        core.execution,
+        "ses_other_location",
+        "evt_advisory_second",
+        &format!("Continue after the advisory {}", "x".repeat(20_000)),
+    )
+    .await;
+    core.execution
+        .resume(&session::Id::new("ses_other_location").unwrap())
+        .await
+        .unwrap();
+    let advisory = events(
+        &store,
+        "ses_other_location",
+        "session.compaction.admitted.2",
+    );
+    assert_eq!(
+        advisory.len(),
+        1,
+        "the production runner consumes its compaction Advisor once on rising pressure"
+    );
+    let job_id =
+        ycoding_core::ycoding_schema::ObjectDecoder::new(&advisory[0].data, &Default::default())
+            .unwrap()
+            .field("jobID")
+            .unwrap();
+    assert_eq!(
+        core.sessions
+            .compaction_job(&job_id)
+            .unwrap()
+            .unwrap()
+            .trigger
+            .as_str(),
+        Some("advised")
+    );
+    assert!(
+        core.sessions
+            .compaction_pending(&session::Id::new("ses_other_location").unwrap())
+            .await
+            .unwrap()
+            .is_empty(),
+        "advisory work must settle, not remain queued forever"
+    );
+    let advisory_requests = std::iter::from_fn(|| received.try_recv().ok())
+        .map(|request| stringify_json(&request))
+        .collect::<Vec<_>>();
+    assert!(
+        advisory_requests
+            .iter()
+            .any(|request| request.contains("Continue after the advisory"))
+    );
+    assert!(
+        advisory_requests
+            .iter()
+            .all(|request| !request.contains(r#""name":"conversation_compact""#))
+    );
 
     let platform = composed.platform.clone();
     let background = tools
@@ -845,11 +1145,19 @@ async fn production_flow() {
         .get();
     let (release_held, held_reply) = oneshot::channel();
     *hold.lock().await = Some(held_reply);
-    prompt_input(core.execution, "ses_production", "evt_inflight_prompt", "Keep working until shutdown").await;
+    prompt_input(
+        core.execution,
+        "ses_production",
+        "evt_inflight_prompt",
+        "Keep working until shutdown",
+    )
+    .await;
     core.execution
         .wake(&session::Id::new("ses_production").unwrap())
         .unwrap();
-    assert!(stringify_json(&received.recv().await.unwrap()).contains("Keep working until shutdown"));
+    assert!(
+        stringify_json(&received.recv().await.unwrap()).contains("Keep working until shutdown")
+    );
     server.shutdown().await.unwrap();
     core.shutdown().await.unwrap();
     assert!(core.execution.active().is_empty());
@@ -876,8 +1184,15 @@ async fn production_flow() {
     );
     assert!(!meeting_directory.join("bridge.json").exists());
     assert!(!meeting_directory.join("runtime.lock").exists());
-    assert_eq!(std::fs::read_to_string(other_meeting.join("runtime.lock")).unwrap(), foreign_lock);
-    assert!(core.locations.location(&directory.clone().into(), None).is_err());
+    assert_eq!(
+        std::fs::read_to_string(other_meeting.join("runtime.lock")).unwrap(),
+        foreign_lock
+    );
+    assert!(
+        core.locations
+            .location(&directory.clone().into(), None)
+            .is_err()
+    );
     assert_eq!(
         events(&store, "ses_interrupted", "session.step.started.1").len(),
         1,
@@ -896,7 +1211,13 @@ async fn prompt_input(execution: &Execution, session: &str, event: &str, text: &
             ycoding_core::session::pending::Request {
                 id: session_message::Id::from_event(&event),
                 session_id: session::Id::new(session).unwrap(),
-                input: session_pending::Message::decode(&parse_json(&format!(r#"{{"type":"user","delivery":"steer","data":{{"text":"{text}"}}}}"#)).unwrap()).unwrap(),
+                input: session_pending::Message::decode(
+                    &parse_json(&format!(
+                        r#"{{"type":"user","delivery":"steer","data":{{"text":"{text}"}}}}"#
+                    ))
+                    .unwrap(),
+                )
+                .unwrap(),
                 event_id: event,
                 created: now(),
             },
@@ -913,7 +1234,11 @@ fn now() -> i64 {
         .as_millis() as i64
 }
 
-fn events(store: &Store, session: &str, type_: &str) -> Vec<ycoding_core::ycoding_store::session::Event> {
+fn events(
+    store: &Store,
+    session: &str,
+    type_: &str,
+) -> Vec<ycoding_core::ycoding_store::session::Event> {
     let prefix = tuple_key(&[
         KeyPart::String(&session.into()),
         KeyPart::String(&type_.into()),

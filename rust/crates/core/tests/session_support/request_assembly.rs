@@ -61,6 +61,7 @@ fn services(
         configuration: Some(configuration),
         image_analyzer: None,
         extensions: Vec::new(),
+        session_tools: None,
     }
 }
 

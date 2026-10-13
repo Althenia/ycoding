@@ -70,7 +70,11 @@ fn fixture(global: &str, project_configuration: &str) -> Fixture {
     )
 }
 
-fn fixture_with(global: &str, project_configuration: &str, env: BTreeMap<String, String>) -> Fixture {
+fn fixture_with(
+    global: &str,
+    project_configuration: &str,
+    env: BTreeMap<String, String>,
+) -> Fixture {
     let root = std::env::temp_dir().join(format!(
         "composition-cases-{}-{}-{}",
         std::process::id(),
@@ -89,7 +93,9 @@ fn fixture_with(global: &str, project_configuration: &str, env: BTreeMap<String,
     let store = Store::initialize(
         root.join("store.redb"),
         Options::core(),
-        ycoding_core::ycoding_store::import::catalog(ycoding_core::ycoding_store::import::DatabaseKind::Core),
+        ycoding_core::ycoding_store::import::catalog(
+            ycoding_core::ycoding_store::import::DatabaseKind::Core,
+        ),
         Metadata::new([3; 16], 1),
     )
     .unwrap();
@@ -125,16 +131,38 @@ fn fixture_with(global: &str, project_configuration: &str, env: BTreeMap<String,
     let feed = Feed::attach(&client);
     let publisher = feed.clone();
     let options = config::LoadOptions {
-        directory: directory.clone(), roots: roots.clone(), project: true, file: None, content: None,
+        directory: directory.clone(),
+        roots: roots.clone(),
+        project: true,
+        file: None,
+        content: None,
         env: env.clone(),
     };
     let credentials = credential::Service::new(client.clone());
     let git = Arc::new(git::Service::new(16 * 1024 * 1024));
-    let globals = globals::Globals::start(client.clone(), &Production {
-        configuration: options,
-        catalog: models_dev::Options { source: "https://models.dev".into(), cache: roots.cache.join("models.json"), file: None, bundled: Some(parse_json(MODELS).unwrap()), fetch: false, user_agent: "ycoding-test".into() },
-        cursor: None, steer: None, ripgrep: "rg".into(), meeting: false,
-    }, credentials.clone(), feed.clone(), git.clone(), false).unwrap();
+    let globals = globals::Globals::start(
+        client.clone(),
+        &Production {
+            configuration: options,
+            catalog: models_dev::Options {
+                source: "https://models.dev".into(),
+                cache: roots.cache.join("models.json"),
+                file: None,
+                bundled: Some(parse_json(MODELS).unwrap()),
+                fetch: false,
+                user_agent: "ycoding-test".into(),
+            },
+            cursor: None,
+            steer: None,
+            ripgrep: "rg".into(),
+            meeting: false,
+        },
+        credentials.clone(),
+        feed.clone(),
+        git.clone(),
+        false,
+    )
+    .unwrap();
     Fixture {
         factory: Arc::new(Factory {
             options: config::LoadOptions {
@@ -160,6 +188,7 @@ fn fixture_with(global: &str, project_configuration: &str, env: BTreeMap<String,
             ripgrep: "rg".into(),
             globals,
             locations: Default::default(),
+            orchestration: Default::default(),
             generations: Default::default(),
         }),
         store,
@@ -242,7 +271,12 @@ fn configuration_precedence_and_project_disable_feed_the_agent_catalog() {
     let description = |f: &Fixture| {
         let prepared = f
             .factory
-            .prepare(&f.directory().to_str().unwrap().into(), None, &"prj_one".into(), &f.directory().to_str().unwrap().into())
+            .prepare(
+                &f.directory().to_str().unwrap().into(),
+                None,
+                &"prj_one".into(),
+                &f.directory().to_str().unwrap().into(),
+            )
             .unwrap();
         prepared
             .configuration
@@ -553,13 +587,17 @@ fn eviction_pins_leases_resets_the_deadline_and_reloads_configuration() {
     let tools = lease.production.as_ref().unwrap().tools.clone();
     drop(lease);
     assert_eq!(
-        locations.evict_idle(Instant::now() + Duration::from_secs(7200)).unwrap(),
+        locations
+            .evict_idle(Instant::now() + Duration::from_secs(7200))
+            .unwrap(),
         0
     );
     drop(cloned);
     let released = Instant::now();
     assert_eq!(
-        locations.evict_idle(released + Duration::from_secs(3599)).unwrap(),
+        locations
+            .evict_idle(released + Duration::from_secs(3599))
+            .unwrap(),
         0
     );
     let reacquired = f.services(&locations);
@@ -580,12 +618,16 @@ fn eviction_pins_leases_resets_the_deadline_and_reloads_configuration() {
         Some("first")
     );
     assert_eq!(
-        locations.evict_idle(released + Duration::from_secs(7200)).unwrap(),
+        locations
+            .evict_idle(released + Duration::from_secs(7200))
+            .unwrap(),
         0
     );
     drop(reacquired);
     assert_eq!(
-        locations.evict_idle(Instant::now() + Duration::from_secs(3601)).unwrap(),
+        locations
+            .evict_idle(Instant::now() + Duration::from_secs(3601))
+            .unwrap(),
         1
     );
     let fresh = f.services(&locations);
@@ -685,7 +727,12 @@ async fn native_memory_guardrail_limits_forms_questions_and_saved_permissions_ar
     );
     let prepared = f
         .factory
-        .prepare(&f.directory().to_str().unwrap().into(), None, &"prj_one".into(), &f.directory().to_str().unwrap().into())
+        .prepare(
+            &f.directory().to_str().unwrap().into(),
+            None,
+            &"prj_one".into(),
+            &f.directory().to_str().unwrap().into(),
+        )
         .unwrap();
     assert!(!prepared.configuration.guardrails.enabled);
     assert_eq!(prepared.configuration.guardrails.limits.shells, 2);
@@ -796,7 +843,12 @@ fn custom_guardrails_deny_and_unreadable_rules_stay_fail_closed() {
     .unwrap();
     let prepared = f
         .factory
-        .prepare(&f.directory().to_str().unwrap().into(), None, &"prj_one".into(), &f.directory().to_str().unwrap().into())
+        .prepare(
+            &f.directory().to_str().unwrap().into(),
+            None,
+            &"prj_one".into(),
+            &f.directory().to_str().unwrap().into(),
+        )
         .unwrap();
     let layers = (prepared.configuration.guardrails.custom)();
     assert!(layers.iter().any(|layer| !layer.invalid_files.is_empty()));
@@ -1026,7 +1078,9 @@ async fn snapshot_configuration_controls_real_git_capture() {
         .unwrap();
     assert!(services.snapshots(&info).capture().is_none());
     drop(services);
-    locations.evict_idle(Instant::now() + Duration::from_secs(3601)).unwrap();
+    locations
+        .evict_idle(Instant::now() + Duration::from_secs(3601))
+        .unwrap();
     std::fs::write(f.directory().join("ycoding.json"), r#"{"snapshots":true}"#).unwrap();
     let services = f.services(&locations);
     assert!(services.snapshots(&info).capture().is_some());
@@ -1408,7 +1462,15 @@ async fn retention_runs_at_boot_waits_an_hour_after_settlement_reloads_global_an
     );
     assert_eq!(second.milliseconds, 3_600_000);
     assert!(held.iter().any(|sleep| sleep.milliseconds == 60_000));
-    release(&maintenance.globals, &maintenance.credentials, None, None, Some(&maintenance)).await.unwrap();
+    release(
+        &maintenance.globals,
+        &maintenance.credentials,
+        None,
+        None,
+        Some(&maintenance),
+    )
+    .await
+    .unwrap();
     assert!(maintenance.task.lock().unwrap().is_none());
 }
 
@@ -1462,13 +1524,24 @@ async fn retention_configuration_failure_preserves_data_and_recovers_on_the_next
             .unwrap()
             .is_none()
     );
-    release(&maintenance.globals, &maintenance.credentials, None, None, Some(&maintenance)).await.unwrap();
+    release(
+        &maintenance.globals,
+        &maintenance.credentials,
+        None,
+        None,
+        Some(&maintenance),
+    )
+    .await
+    .unwrap();
 }
 
 fn extension_configuration(journal: &std::path::Path, permissions: &str) -> String {
     format!(
         r#"{{"permissions":{permissions},"extensions":[{{"identity":"trusted","executable":"/usr/bin/python3","args":["{child}","lifecycle","{journal}"],"grants":[{{"family":"tools","namespace":"trusted","tools":["echo"],"action":"extension.echo","resources":["demo"]}}]}}]}}"#,
-        child = concat!(env!("CARGO_MANIFEST_DIR"), "/../core/tests/extension_child.py"),
+        child = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../core/tests/extension_child.py"
+        ),
         journal = journal.display()
     )
 }
@@ -1575,7 +1648,10 @@ fn location_reload_and_close_reap_extension_processes() {
     locations.evict_idle(Instant::now()).unwrap();
     let both = started(&journal);
     assert_eq!(both.len(), 2, "reload starts a fresh generation");
-    assert!(!alive(both[0]), "the replaced generation's process must be reaped");
+    assert!(
+        !alive(both[0]),
+        "the replaced generation's process must be reaped"
+    );
     assert!(alive(both[1]));
     locations.close().unwrap();
     assert!(!alive(both[1]), "Location close must reap the process");
@@ -1613,13 +1689,99 @@ fn configured_mcp_tools_register_through_the_location_watcher() {
         .iter()
         .any(|tool| tool.name.as_str() == Some("table_lookup"))
     {
-        assert!(Instant::now() < deadline, "the MCP watcher never registered the tool");
+        assert!(
+            Instant::now() < deadline,
+            "the MCP watcher never registered the tool"
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
     drop(services);
     locations.close().unwrap();
     let _ = std::fs::remove_file(&state);
     let _ = std::fs::remove_file(state.with_extension("log"));
+}
+
+#[tokio::test]
+async fn durable_session_deletion_releases_the_shared_browser_admission() {
+    let f = fixture("{}", "{}");
+    let id = ycoding_core::ycoding_schema::session_id::SessionId::new("ses_one").unwrap();
+    f.factory.globals.browser.start(&id).await.unwrap();
+    assert_eq!(
+        f.factory.globals.admission.current("ses_one"),
+        Some(ycoding_core::platform::browser::admission::Mode::Selected)
+    );
+    f.sessions()
+        .remove(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while f.factory.globals.admission.current("ses_one").is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the process-global lifecycle owner must release deleted Session admission");
+    f.factory.globals.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn control_lifecycle_keeps_processing_after_release_failure_and_reports_it_on_close() {
+    let f = fixture("{}", "{}");
+    let (send, mut received) = mpsc::unbounded_channel();
+    let owner = controls::Owner::start(
+        f.feed.clone(),
+        Arc::new(move |session, lifecycle| {
+            send.send((session, lifecycle)).unwrap();
+            Box::pin(async move {
+                if matches!(
+                    lifecycle,
+                    ycoding_core::platform::browser::service::Lifecycle::Moved
+                ) {
+                    return Err(unavailable("test control release"));
+                }
+                Ok(())
+            })
+        }),
+    )
+    .unwrap();
+    let store = f.sessions();
+    for (index, kind, data) in [
+        (
+            0,
+            "session.moved.1",
+            format!(
+                r#"{{"sessionID":"ses_one","location":{{"directory":"{}"}}}}"#,
+                f.directory().display()
+            ),
+        ),
+        (1, "session.archived.2", r#"{"sessionID":"ses_one"}"#.into()),
+    ] {
+        store
+            .publish(ycoding_core::ycoding_store::session::NewEvent {
+                id: format!("evt_control_{index}").into(),
+                aggregate_id: "ses_one".into(),
+                created: crate::ids::now_millis(),
+                type_: kind.into(),
+                data: parse_json(&data).unwrap(),
+            })
+            .await
+            .unwrap();
+    }
+    store
+        .remove(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    for kind in ["Moved", "Archived", "Deleted"] {
+        let (session, lifecycle) = tokio::time::timeout(Duration::from_secs(5), received.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(session.as_lossless().as_str(), Some("ses_one"));
+        assert_eq!(format!("{lifecycle:?}"), kind);
+    }
+    assert!(
+        matches!(owner.close().await, Err(Failure::Unavailable(message)) if message == "test control release unavailable")
+    );
 }
 
 fn description(services: &LocationServices) -> Option<String> {
@@ -1638,7 +1800,10 @@ fn next_generation(f: &Fixture, locations: &Locations, after: u64) -> Arc<Locati
             return current;
         }
         drop(current);
-        assert!(Instant::now() < deadline, "configuration change was not reloaded");
+        assert!(
+            Instant::now() < deadline,
+            "configuration change was not reloaded"
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
 }
@@ -1695,14 +1860,18 @@ fn managed_project_artifacts_overlay_the_location_catalogs() {
     f.factory
         .globals
         .artifacts
-        .write_manual(ycoding_core::resources::project_artifact::store::ManualWriteInput {
-            scope: ycoding_core::ycoding_schema::project_artifact::ScopeSelector::Project,
-            project_id: Some(ycoding_core::ycoding_schema::project::Id::new("prj_one").unwrap()),
-            id: "review",
-            definition: &definition,
-            expected: None,
-            now: crate::ids::now_millis(),
-        })
+        .write_manual(
+            ycoding_core::resources::project_artifact::store::ManualWriteInput {
+                scope: ycoding_core::ycoding_schema::project_artifact::ScopeSelector::Project,
+                project_id: Some(
+                    ycoding_core::ycoding_schema::project::Id::new("prj_one").unwrap(),
+                ),
+                id: "review",
+                definition: &definition,
+                expected: None,
+                now: crate::ids::now_millis(),
+            },
+        )
         .unwrap();
     let locations = f.locations();
     let services = f.services(&locations);

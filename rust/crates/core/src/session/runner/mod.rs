@@ -88,6 +88,7 @@ pub struct Services {
     pub configuration: Option<Arc<crate::resources::config::Configuration>>,
     pub image_analyzer: Option<super::image_analyzer::Service>,
     pub extensions: Vec<Arc<crate::extension::Extension>>,
+    pub session_tools: Option<crate::tools::context::consumers::SessionTools>,
 }
 
 struct Work {
@@ -895,6 +896,22 @@ impl Local {
             } else {
                 materialized.definitions.clone()
             };
+            if let Some(tools) = services.session_tools.as_ref().filter(|_| !text_only) {
+                let context = Context {
+                    session_id: session.id.clone(),
+                    agent: agent.id.clone(),
+                    message_id: match inputs.last() {
+                        Some(message) => message.clone(),
+                        None => session_message::Id::from_event(&projector::random_event_id()?),
+                    },
+                    call_id: "session.tools".into(),
+                    progress: None,
+                    cancellation: Default::default(),
+                };
+                tools.decorate(&context, &mut prepared.tools).map_err(|_| {
+                    error("session.tools", "Session tool definitions are unavailable")
+                })?;
+            }
             if text_only {
                 prepared.tool_choice = Some(llm::ToolChoice::None);
             }
@@ -936,6 +953,7 @@ impl Local {
             let context_window = resolved.info.limit.context.get();
             let gate = self
                 .ensure_within_limit(compaction::GateInput {
+                    agent: &agent.id,
                     session: &session,
                     selection: &selection,
                     context_window,

@@ -1,9 +1,6 @@
 use super::{Factory, unavailable};
 use crate::{dispatch::Failure, locations::ServiceSet};
-use std::{
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{path::PathBuf, sync::Arc};
 use ycoding_core::{
     platform::{
         filesystem::{collation, mutation},
@@ -39,6 +36,8 @@ pub(super) fn compose(
     configuration: Arc<config::Configuration>,
     memory: Arc<memory::Service>,
     platform: &crate::services::PlatformServices,
+    isolated: &Arc<ycoding_core::platform::browser::isolated::Service>,
+    computer: &Arc<ycoding_core::platform::computer::service::Service>,
 ) -> Result<(Arc<Registry>, Registration), Failure> {
     let directory = std::fs::canonicalize(PathBuf::from(
         services
@@ -68,6 +67,23 @@ pub(super) fn compose(
     ));
     let search = platform.search.clone();
     let entries: Vec<(String, Arc<dyn Tool>)> = vec![
+        (
+            "browser".into(),
+            Arc::new(ycoding_core::tools::builtin::browser::Browser {
+                paired: Arc::new(factory.globals.browser.clone()),
+                isolated: Some(Arc::new(isolated.clone())),
+                paths: paths.clone(),
+                policy: policy.clone(),
+            }),
+        ),
+        (
+            "computer".into(),
+            Arc::new(ycoding_core::tools::builtin::computer::Computer {
+                service: computer.clone(),
+                paths: paths.clone(),
+                policy: policy.clone(),
+            }),
+        ),
         (
             "shell".into(),
             Arc::new(Shell {
@@ -140,25 +156,31 @@ pub(super) fn compose(
         ),
         (
             "glob".into(),
-            Arc::new(AcquiredSearch { binary: factory.globals.ripgrep.clone(), tool: Search {
-                kind: Kind::Glob,
-                directory: paths.directory.clone(),
-                data: paths.data.clone(),
-                service: search.clone(),
-                ripgrep: factory.ripgrep.clone(),
-                policy: policy.clone(),
-            }}),
+            Arc::new(AcquiredSearch {
+                binary: factory.globals.ripgrep.clone(),
+                tool: Search {
+                    kind: Kind::Glob,
+                    directory: paths.directory.clone(),
+                    data: paths.data.clone(),
+                    service: search.clone(),
+                    ripgrep: factory.ripgrep.clone(),
+                    policy: policy.clone(),
+                },
+            }),
         ),
         (
             "grep".into(),
-            Arc::new(AcquiredSearch { binary: factory.globals.ripgrep.clone(), tool: Search {
-                kind: Kind::Grep,
-                directory: paths.directory.clone(),
-                data: paths.data.clone(),
-                service: search,
-                ripgrep: factory.ripgrep.clone(),
-                policy: policy.clone(),
-            }}),
+            Arc::new(AcquiredSearch {
+                binary: factory.globals.ripgrep.clone(),
+                tool: Search {
+                    kind: Kind::Grep,
+                    directory: paths.directory.clone(),
+                    data: paths.data.clone(),
+                    service: search,
+                    ripgrep: factory.ripgrep.clone(),
+                    policy: policy.clone(),
+                },
+            }),
         ),
         (
             "webfetch".into(),
@@ -208,12 +230,29 @@ struct AcquiredSearch {
     tool: Search,
 }
 impl Tool for AcquiredSearch {
-    fn definition(&self, name: &str) -> ToolDefinition { self.tool.definition(name) }
-    fn permission(&self) -> Option<&str> { self.tool.permission() }
+    fn definition(&self, name: &str) -> ToolDefinition {
+        self.tool.definition(name)
+    }
+    fn permission(&self) -> Option<&str> {
+        self.tool.permission()
+    }
     fn settle(&self, input: JsonValue, context: Context) -> ToolFuture<'_> {
         Box::pin(async move {
-            let ripgrep = self.binary.filepath().await.map_err(|_| registry::Failure::message("ripgrep acquisition failed"))?;
-            Search { kind: self.tool.kind, directory: self.tool.directory.clone(), data: self.tool.data.clone(), service: self.tool.service.clone(), ripgrep, policy: self.tool.policy.clone() }.settle(input, context).await
+            let ripgrep = self
+                .binary
+                .filepath()
+                .await
+                .map_err(|_| registry::Failure::message("ripgrep acquisition failed"))?;
+            Search {
+                kind: self.tool.kind,
+                directory: self.tool.directory.clone(),
+                data: self.tool.data.clone(),
+                service: self.tool.service.clone(),
+                ripgrep,
+                policy: self.tool.policy.clone(),
+            }
+            .settle(input, context)
+            .await
         })
     }
 }

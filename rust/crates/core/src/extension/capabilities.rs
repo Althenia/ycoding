@@ -57,6 +57,7 @@ pub const PRE: &[&str] = &[
     "ycoding.tool.websearch",
     "ycoding.tool.write",
     "ycoding.tool.goal",
+    "ycoding.tool.decision",
     "ycoding.tool.browser",
     "ycoding.tool.worktree",
 ];

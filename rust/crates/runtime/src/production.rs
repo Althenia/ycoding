@@ -1,9 +1,10 @@
+mod composition;
+mod controls;
+mod globals;
+mod meeting;
 #[cfg(test)]
 mod tests;
 mod tools;
-mod composition;
-mod globals;
-mod meeting;
 
 use crate::{
     Configuration, Core, LocationServices, Locations, SnapshotSettings, dispatch::Failure,
@@ -18,9 +19,9 @@ use ycoding_core::{
     platform::git,
     process::guardrails::{Limits, Paths, Settings},
     resources::{
-        agent, attachment_store,
+        agent, attachment_store, auth,
         catalog::{self, models_dev},
-        config, credential, cursor, memory, model, auth, command, reference, skill, generate, mcp,
+        command, config, credential, cursor, generate, mcp, memory, model, reference, skill,
     },
     session::{
         autonomy, compaction_policy, execution, goal, instruction_sources, orchestration,
@@ -70,6 +71,8 @@ pub struct Composed {
     pub integrations: auth::integration::Registry,
     pub mcp: Arc<mcp::Service>,
     pub isolated: Arc<ycoding_core::platform::browser::isolated::Service>,
+    pub computer: Arc<ycoding_core::platform::computer::service::Service>,
+    paired: Arc<ycoding_core::platform::browser::service::Service>,
     pub commands: Arc<command::Service>,
     pub references: Arc<reference::Service>,
     pub skills: Arc<tokio::sync::Mutex<skill::Service>>,
@@ -80,11 +83,14 @@ pub struct Composed {
     launch: ycoding_core::extension::Launch,
     pub(crate) generation: u64,
     tasks: Mutex<Vec<JoinHandle<()>>>,
-    governor: tokio::sync::Mutex<Option<ycoding_core::resources::project_artifact::source::Governor>>,
+    governor:
+        tokio::sync::Mutex<Option<ycoding_core::resources::project_artifact::source::Governor>>,
     mcp_tools: tokio::sync::Mutex<Option<ycoding_core::tools::builtin::mcp::McpTools>>,
+    controls: tokio::sync::Mutex<Option<controls::Owner>>,
     _auth_registration: auth::integration::Registration,
     _registration: Registration,
     _meeting: Option<Registration>,
+    _session_tools: Option<Registration>,
 }
 
 pub(crate) struct Prepared {
@@ -110,6 +116,7 @@ pub(crate) struct Factory {
     ripgrep: std::path::PathBuf,
     globals: Arc<globals::Globals>,
     locations: std::sync::OnceLock<crate::locations::WeakLocations>,
+    orchestration: std::sync::OnceLock<orchestration::Service>,
     generations: std::sync::atomic::AtomicU64,
 }
 
@@ -130,7 +137,14 @@ impl Core {
         let credentials = credential::Service::new(client.clone());
         let events = Feed::attach(&client);
         let git = Arc::new(git::Service::new(16 * 1024 * 1024));
-        let globals = match globals::Globals::start(client.clone(), &production, credentials.clone(), events.clone(), git.clone(), true) {
+        let globals = match globals::Globals::start(
+            client.clone(),
+            &production,
+            credentials.clone(),
+            events.clone(),
+            git.clone(),
+            true,
+        ) {
             Ok(globals) => globals,
             Err(error) => {
                 if credentials.shutdown().await.is_err() {
@@ -140,10 +154,27 @@ impl Core {
             }
         };
         let mut started = Started::default();
-        match Self::bootstrap(client, production, credentials.clone(), events, git, globals.clone(), &mut started).await {
+        match Self::bootstrap(
+            client,
+            production,
+            credentials.clone(),
+            events,
+            git,
+            globals.clone(),
+            &mut started,
+        )
+        .await
+        {
             Ok(core) => Ok(core),
             Err(error) => {
-                let released = release(&globals, &credentials, started.execution, started.locations.as_ref(), started.maintenance.as_deref()).await;
+                let released = release(
+                    &globals,
+                    &credentials,
+                    started.execution,
+                    started.locations.as_ref(),
+                    started.maintenance.as_deref(),
+                )
+                .await;
                 if released.is_err() {
                     tracing::error!("releasing owners after a failed bootstrap failed");
                 }
@@ -161,7 +192,11 @@ impl Core {
         globals: Arc<globals::Globals>,
         started: &mut Started,
     ) -> Result<Self, Failure> {
-        let snapshots = globals.catalog.get().await.map_err(|_| unavailable("model catalog"))?;
+        let snapshots = globals
+            .catalog
+            .get()
+            .await
+            .map_err(|_| unavailable("model catalog"))?;
         let feed = events.clone();
         let factory = Arc::new(Factory {
             options: production.configuration,
@@ -182,6 +217,7 @@ impl Core {
             ripgrep: production.ripgrep,
             globals,
             locations: Default::default(),
+            orchestration: Default::default(),
             generations: Default::default(),
         });
         let mut global = factory.options.clone();
@@ -234,17 +270,35 @@ impl Core {
         )
         .map_err(|_| unavailable("process-global Session execution"))?;
         started.execution = Some(execution);
-        let orchestration = orchestration::Service::new(sessions.clone(), Arc::new(crate::services::LocalExecution(execution)));
-        orchestration.reconcile_stale().await.map_err(|_| unavailable("stale tasks"))?;
-        orchestration.dispatch_notifications().await.map_err(|_| unavailable("notification outbox"))?;
+        let orchestration = orchestration::Service::new(
+            sessions.clone(),
+            Arc::new(crate::services::LocalExecution(execution)),
+        );
+        let _ = factory.orchestration.set(orchestration.clone());
+        orchestration
+            .reconcile_stale()
+            .await
+            .map_err(|_| unavailable("stale tasks"))?;
+        orchestration
+            .dispatch_notifications()
+            .await
+            .map_err(|_| unavailable("notification outbox"))?;
         let publisher = factory.publisher.clone();
         let credentials = factory.credentials.clone();
         let pricing_locations = locations.clone();
         let resolver_locations = locations.clone();
         let catalog_roots = factory.options.roots.clone();
         let catalogs = Arc::new(move |info: &location::Info| {
-            let services = resolver_locations.location(info.directory.as_lossless(), info.workspace_id.as_ref().map(|id| id.as_lossless())).map_err(|_| "Location services unavailable".to_owned())?;
-            let composed = services.production.as_ref().ok_or_else(|| "Production services unavailable".to_owned())?;
+            let services = resolver_locations
+                .location(
+                    info.directory.as_lossless(),
+                    info.workspace_id.as_ref().map(|id| id.as_lossless()),
+                )
+                .map_err(|_| "Location services unavailable".to_owned())?;
+            let composed = services
+                .production
+                .as_ref()
+                .ok_or_else(|| "Production services unavailable".to_owned())?;
             let held = services.clone();
             let refresh_locations = resolver_locations.clone();
             let refresh_info = info.clone();
@@ -252,71 +306,160 @@ impl Core {
                 let locations = refresh_locations.clone();
                 let info = refresh_info.clone();
                 Box::pin(async move {
-                    tokio::task::spawn_blocking(move || locations.reload(&info)).await.map_err(|_| "Location reload worker failed".to_owned())?
+                    tokio::task::spawn_blocking(move || locations.reload(&info))
+                        .await
+                        .map_err(|_| "Location reload worker failed".to_owned())?
                         .map_err(|_| "Location reload failed".to_owned())
                 })
             });
             let ready: crate::services::CatalogTask = Arc::new(move || {
                 let held = held.clone();
-                Box::pin(async move { let _ = held; Ok(()) })
+                Box::pin(async move {
+                    let _ = held;
+                    Ok(())
+                })
             });
             Ok(crate::services::CatalogServices {
-                models: composed.models.clone(), agents: services.agents.clone(),
-                commands: composed.commands.clone(), references: composed.references.clone(), skills: composed.skills.clone(),
+                models: composed.models.clone(),
+                agents: services.agents.clone(),
+                commands: composed.commands.clone(),
+                references: composed.references.clone(),
+                skills: composed.skills.clone(),
                 roots: catalog_roots.clone(),
-                diagnostics: composed.configuration.diagnostics.iter().chain(&composed.extension_diagnostics).cloned().collect(),
+                diagnostics: composed
+                    .configuration
+                    .diagnostics
+                    .iter()
+                    .chain(&composed.extension_diagnostics)
+                    .cloned()
+                    .collect(),
                 plugins: composed.plugins.clone(),
-                ready, refresh, generate: composed.generate.clone(),
+                ready,
+                refresh,
+                generate: composed.generate.clone(),
             })
         });
         let integration_locations = locations.clone();
         let integration_globals = factory.globals.clone();
         let integrations = Arc::new(move |info: &location::Info| {
-            let services = integration_locations.location(info.directory.as_lossless(), info.workspace_id.as_ref().map(|id| id.as_lossless())).map_err(|_| "Location services unavailable".to_owned())?;
+            let services = integration_locations
+                .location(
+                    info.directory.as_lossless(),
+                    info.workspace_id.as_ref().map(|id| id.as_lossless()),
+                )
+                .map_err(|_| "Location services unavailable".to_owned())?;
             Ok(crate::services::IntegrationServices {
-                registry: services.production.as_ref().ok_or_else(|| "Production services unavailable".to_owned())?.integrations.clone(),
+                registry: services
+                    .production
+                    .as_ref()
+                    .ok_or_else(|| "Production services unavailable".to_owned())?
+                    .integrations
+                    .clone(),
                 wellknown: Some(integration_globals.wellknown.clone()),
             })
         });
         let mcp_locations = locations.clone();
         let mcp = Arc::new(move |info: &location::Info| {
-            let services = mcp_locations.location(info.directory.as_lossless(), info.workspace_id.as_ref().map(|id| id.as_lossless())).map_err(|_| "Location services unavailable".to_owned())?;
-            Ok(services.production.as_ref().ok_or_else(|| "Production services unavailable".to_owned())?.mcp.clone())
+            let services = mcp_locations
+                .location(
+                    info.directory.as_lossless(),
+                    info.workspace_id.as_ref().map(|id| id.as_lossless()),
+                )
+                .map_err(|_| "Location services unavailable".to_owned())?;
+            Ok(services
+                .production
+                .as_ref()
+                .ok_or_else(|| "Production services unavailable".to_owned())?
+                .mcp
+                .clone())
         });
         let platform_locations = locations.clone();
         let platform = Arc::new(move |reference: &location::Ref| {
-            let services = platform_locations.location(reference.directory.as_lossless(), reference.workspace_id.as_ref().map(|id| id.as_lossless())).map_err(|_| "Location services unavailable".to_owned())?;
-            Ok(services.production.as_ref().ok_or_else(|| "Production services unavailable".to_owned())?.platform.clone())
+            let services = platform_locations
+                .location(
+                    reference.directory.as_lossless(),
+                    reference.workspace_id.as_ref().map(|id| id.as_lossless()),
+                )
+                .map_err(|_| "Location services unavailable".to_owned())?;
+            Ok(services
+                .production
+                .as_ref()
+                .ok_or_else(|| "Production services unavailable".to_owned())?
+                .platform
+                .clone())
         });
         let isolated_locations = locations.clone();
         let isolated = Arc::new(move |reference: &location::Ref| {
-            let services = isolated_locations.location(reference.directory.as_lossless(), reference.workspace_id.as_ref().map(|id| id.as_lossless())).map_err(|_| "Location services unavailable".to_owned())?;
-            Ok(services.production.as_ref().ok_or_else(|| "Production services unavailable".to_owned())?.isolated.clone())
+            let services = isolated_locations
+                .location(
+                    reference.directory.as_lossless(),
+                    reference.workspace_id.as_ref().map(|id| id.as_lossless()),
+                )
+                .map_err(|_| "Location services unavailable".to_owned())?;
+            Ok(services
+                .production
+                .as_ref()
+                .ok_or_else(|| "Production services unavailable".to_owned())?
+                .isolated
+                .clone())
         });
         let usage_locations = locations.clone();
         let quota = Arc::new(factory.globals.claude.quota.clone());
         let provider_usage = Arc::new(move |info: &location::Info| {
-            let services = usage_locations.location(info.directory.as_lossless(), info.workspace_id.as_ref().map(|id| id.as_lossless())).map_err(|_| "Location services unavailable".to_owned())?;
-            let composed = services.production.as_ref().ok_or_else(|| "Production services unavailable".to_owned())?;
-            Ok(crate::services::ProviderUsageServices { quota: quota.clone(), providers: composed.models.catalog().providers.iter().map(|record| record.provider.id.clone()).collect() })
+            let services = usage_locations
+                .location(
+                    info.directory.as_lossless(),
+                    info.workspace_id.as_ref().map(|id| id.as_lossless()),
+                )
+                .map_err(|_| "Location services unavailable".to_owned())?;
+            let composed = services
+                .production
+                .as_ref()
+                .ok_or_else(|| "Production services unavailable".to_owned())?;
+            Ok(crate::services::ProviderUsageServices {
+                quota: quota.clone(),
+                providers: composed
+                    .models
+                    .catalog()
+                    .providers
+                    .iter()
+                    .map(|record| record.provider.id.clone())
+                    .collect(),
+            })
         });
         let artifacts = factory.globals.artifacts.clone();
         let artifact_locations = locations.clone();
         let artifacts = Arc::new(move |info: &location::Info| {
-            let held = artifact_locations.location(info.directory.as_lossless(), info.workspace_id.as_ref().map(|id| id.as_lossless())).ok()?;
+            let held = artifact_locations
+                .location(
+                    info.directory.as_lossless(),
+                    info.workspace_id.as_ref().map(|id| id.as_lossless()),
+                )
+                .ok()?;
             let locations = artifact_locations.clone();
             let info = info.clone();
-            Some(crate::services::ArtifactServices { store: artifacts.clone(), refresh: Arc::new(move || {
-                let _held = &held;
-                if locations.reload(&info).is_err() {
-                    tracing::error!("project artifact Location refresh failed");
-                }
-            }) })
+            Some(crate::services::ArtifactServices {
+                store: artifacts.clone(),
+                refresh: Arc::new(move || {
+                    let _held = &held;
+                    if locations.reload(&info).is_err() {
+                        tracing::error!("project artifact Location refresh failed");
+                    }
+                }),
+            })
         });
         let browser = factory.globals.browser.clone();
         let maintenance = Arc::new(Maintenance::new(&factory));
         started.maintenance = Some(maintenance.clone());
-        maintenance.start(sessions.clone(), execution, locations.clone(), factory, orchestration.clone()).await?;
+        maintenance
+            .start(
+                sessions.clone(),
+                execution,
+                locations.clone(),
+                factory,
+                orchestration.clone(),
+            )
+            .await?;
         Ok(Self {
             integrations: Some(integrations),
             mcp: Some(mcp),
@@ -347,10 +490,26 @@ impl Core {
 
     pub async fn shutdown(&self) -> Result<(), Failure> {
         if let Some(maintenance) = &self.maintenance {
-            return release(&maintenance.globals, &maintenance.credentials, Some(self.execution), Some(&self.locations), Some(maintenance.as_ref())).await;
+            return release(
+                &maintenance.globals,
+                &maintenance.credentials,
+                Some(self.execution),
+                Some(&self.locations),
+                Some(maintenance.as_ref()),
+            )
+            .await;
         }
-        let execution = self.execution.shutdown().await.map_err(|_| unavailable("Session execution"));
-        let jobs = self.execution.jobs().shutdown().await.map_err(|_| unavailable("Jobs"));
+        let execution = self
+            .execution
+            .shutdown()
+            .await
+            .map_err(|_| unavailable("Session execution"));
+        let jobs = self
+            .execution
+            .jobs()
+            .shutdown()
+            .await
+            .map_err(|_| unavailable("Jobs"));
         execution.and(jobs).and(self.locations.close())
     }
 }
@@ -367,11 +526,18 @@ async fn release(
     let results = [
         globals.meetings.shutdown().await,
         match execution {
-            Some(execution) => execution.shutdown().await.map_err(|_| unavailable("Session execution")),
+            Some(execution) => execution
+                .shutdown()
+                .await
+                .map_err(|_| unavailable("Session execution")),
             None => Ok(()),
         },
         match execution {
-            Some(execution) => execution.jobs().shutdown().await.map_err(|_| unavailable("Jobs")),
+            Some(execution) => execution
+                .jobs()
+                .shutdown()
+                .await
+                .map_err(|_| unavailable("Jobs")),
             None => Ok(()),
         },
         match maintenance {
@@ -380,7 +546,10 @@ async fn release(
         },
         locations.map_or(Ok(()), Locations::close),
         globals.close().await,
-        credentials.shutdown().await.map_err(|_| unavailable("credentials")),
+        credentials
+            .shutdown()
+            .await
+            .map_err(|_| unavailable("credentials")),
         globals.composition.close(),
     ];
     results.into_iter().find(Result::is_err).unwrap_or(Ok(()))
@@ -413,13 +582,25 @@ impl Factory {
         );
         let mut catalog = self.globals.composition.run(async {
             let mut accounts = self.globals.accounts.lock().await;
-            let documents = disk.entries.iter().filter_map(|entry| match entry {
-                config::Entry::Document { info, .. } => Some(info.clone()),
-                _ => None,
-            }).collect::<Vec<_>>();
-            catalog::Catalog::compose_with_accounts(self.snapshots.clone(), &documents, &self.credentials, &mut accounts, crate::ids::now_millis(), false)
-                .await.map(|composition| composition.catalog)
-                .map_err(|_| unavailable("configured account catalog"))
+            let documents = disk
+                .entries
+                .iter()
+                .filter_map(|entry| match entry {
+                    config::Entry::Document { info, .. } => Some(info.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            catalog::Catalog::compose_with_accounts(
+                self.snapshots.clone(),
+                &documents,
+                &self.credentials,
+                &mut accounts,
+                crate::ids::now_millis(),
+                false,
+            )
+            .await
+            .map(|composition| composition.catalog)
+            .map_err(|_| unavailable("configured account catalog"))
         })?;
         for record in &mut catalog.providers {
             if record
@@ -447,7 +628,11 @@ impl Factory {
             }
         }
         let mut configuration = self.configuration(&disk)?;
-        let path = |text: &LosslessString| text.to_utf8().map(std::path::PathBuf::from).map_err(|_| unavailable("Location directory"));
+        let path = |text: &LosslessString| {
+            text.to_utf8()
+                .map(std::path::PathBuf::from)
+                .map_err(|_| unavailable("Location directory"))
+        };
         let location_directory = path(directory)?;
         let roots = &self.options.roots;
         let source = ycoding_core::resources::project_artifact::source::Service::new(
@@ -456,18 +641,29 @@ impl Factory {
                 store: self.globals.artifacts.clone(),
                 accounting: self.globals.accounting.clone(),
                 registry: self.globals.sources.clone(),
-                location: location::Ref::decode(&ycoding_core::ycoding_schema::ObjectEncoder::new()
-                    .field("directory", directory)
-                    .optional("workspaceID", &workspace.cloned())
-                    .finish()).map_err(|_| unavailable("Location identity"))?,
-                project_id: ycoding_core::ycoding_schema::project::Id::new(project_id.clone()).map_err(|_| unavailable("Project identity"))?,
+                location: location::Ref::decode(
+                    &ycoding_core::ycoding_schema::ObjectEncoder::new()
+                        .field("directory", directory)
+                        .optional("workspaceID", &workspace.cloned())
+                        .finish(),
+                )
+                .map_err(|_| unavailable("Location identity"))?,
+                project_id: ycoding_core::ycoding_schema::project::Id::new(project_id.clone())
+                    .map_err(|_| unavailable("Project identity"))?,
                 project_directory: path(project_directory)?,
                 data_root: roots.data.clone(),
             },
             ycoding_core::resources::project_artifact::source::Catalogs {
                 agents: (*configuration.agents).clone(),
-                commands: command::Service::from_entries(&disk.entries, &mut vec![]).map_err(|_| unavailable("command catalog"))?,
-                skills: skill::Service::from_entries(&disk.entries, &location_directory, &roots.home, &roots.cache).map_err(|_| unavailable("skill catalog"))?,
+                commands: command::Service::from_entries(&disk.entries, &mut vec![])
+                    .map_err(|_| unavailable("command catalog"))?,
+                skills: skill::Service::from_entries(
+                    &disk.entries,
+                    &location_directory,
+                    &roots.home,
+                    &roots.cache,
+                )
+                .map_err(|_| unavailable("skill catalog"))?,
             },
         );
         let catalogs = self.globals.composition.run(async {
@@ -487,8 +683,8 @@ impl Factory {
 
     fn configuration(&self, disk: &config::Configuration) -> Result<Configuration, Failure> {
         let roots = &self.options.roots;
-        let mut builtins = agent::builtin::catalog(roots)
-            .map_err(|_| unavailable("built-in agent catalog"))?;
+        let mut builtins =
+            agent::builtin::catalog(roots).map_err(|_| unavailable("built-in agent catalog"))?;
         if self.globals.meetings.enabled() {
             builtins.push(ycoding_core::session::analysis::analysis_agent());
         }
@@ -554,11 +750,21 @@ impl Factory {
         prepared: Prepared,
         boot: bool,
     ) -> Result<Composed, Failure> {
-        self.globals.composition.run(self.compose_started(services, prepared, boot))
+        self.globals
+            .composition
+            .run(self.compose_started(services, prepared, boot))
     }
 
-    async fn compose_started(&self, services: &crate::locations::ServiceSet, prepared: Prepared, boot: bool) -> Result<Composed, Failure> {
-        let generation = self.generations.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    async fn compose_started(
+        &self,
+        services: &crate::locations::ServiceSet,
+        prepared: Prepared,
+        boot: bool,
+    ) -> Result<Composed, Failure> {
+        let generation = self
+            .generations
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
         let roots = &self.options.roots;
         let directory = std::path::PathBuf::from(
             services
@@ -606,48 +812,204 @@ impl Factory {
             })
             .map_err(|_| unavailable("workspace memory"))?,
         );
-        let integrations = auth::integration::Registry::prepared(self.credentials.clone(), self.options.env.clone(), self.globals.preparation.clone(), Some(self.globals.claude.clone()));
-        integrations.bind_events(self.events.clone(), Some(location::Ref { directory: services.info.directory.clone(), workspace_id: services.info.workspace_id.clone() }))
+        let integrations = auth::integration::Registry::prepared(
+            self.credentials.clone(),
+            self.options.env.clone(),
+            self.globals.preparation.clone(),
+            Some(self.globals.claude.clone()),
+        );
+        integrations
+            .bind_events(
+                self.events.clone(),
+                Some(location::Ref {
+                    directory: services.info.directory.clone(),
+                    workspace_id: services.info.workspace_id.clone(),
+                }),
+            )
             .map_err(|_| unavailable("integration events"))?;
         let auth = self.globals.auth.clone();
-        let auth_registration = integrations.transform(move |draft| draft.extend(&auth))
+        let auth_registration = integrations
+            .transform(move |draft| draft.extend(&auth))
             .map_err(|_| unavailable("native integrations"))?;
-        self.globals.wellknown.attach(&integrations).await.map_err(|_| unavailable("wellknown integrations"))?;
-        let mcp = Arc::new(mcp::Service::new(&prepared.disk.entries, directory.clone(), env!("CARGO_PKG_VERSION").into(), self.options.env.clone(), mcp::client::Hooks {
-            credentials: Some(self.credentials.clone()), integrations: Some(integrations.clone()), ..Default::default()
-        }).map_err(|_| unavailable("MCP service"))?);
-        mcp.bind_events(self.events.clone(), Some(location::Ref { directory: services.info.directory.clone(), workspace_id: services.info.workspace_id.clone() })).map_err(|_| unavailable("MCP events"))?;
-        let shell = Arc::new(ycoding_core::platform::shell::Shell::new(roots, directory.clone(), services.info.project.id.as_lossless().as_str().ok_or_else(|| unavailable("Project identity"))?, self.client.clone()).await.map_err(|_| unavailable("Location shell"))?);
-        shell.event_source.bind(self.events.clone(), Some(location::Ref { directory: services.info.directory.clone(), workspace_id: services.info.workspace_id.clone() })).map_err(|_| unavailable("shell events"))?;
+        self.globals
+            .wellknown
+            .attach(&integrations)
+            .await
+            .map_err(|_| unavailable("wellknown integrations"))?;
+        let mcp = Arc::new(
+            mcp::Service::new(
+                &prepared.disk.entries,
+                directory.clone(),
+                env!("CARGO_PKG_VERSION").into(),
+                self.options.env.clone(),
+                mcp::client::Hooks {
+                    credentials: Some(self.credentials.clone()),
+                    integrations: Some(integrations.clone()),
+                    ..Default::default()
+                },
+            )
+            .map_err(|_| unavailable("MCP service"))?,
+        );
+        mcp.bind_events(
+            self.events.clone(),
+            Some(location::Ref {
+                directory: services.info.directory.clone(),
+                workspace_id: services.info.workspace_id.clone(),
+            }),
+        )
+        .map_err(|_| unavailable("MCP events"))?;
+        let shell = Arc::new(
+            ycoding_core::platform::shell::Shell::new(
+                roots,
+                directory.clone(),
+                services
+                    .info
+                    .project
+                    .id
+                    .as_lossless()
+                    .as_str()
+                    .ok_or_else(|| unavailable("Project identity"))?,
+                self.client.clone(),
+            )
+            .await
+            .map_err(|_| unavailable("Location shell"))?,
+        );
+        shell
+            .event_source
+            .bind(
+                self.events.clone(),
+                Some(location::Ref {
+                    directory: services.info.directory.clone(),
+                    workspace_id: services.info.workspace_id.clone(),
+                }),
+            )
+            .map_err(|_| unavailable("shell events"))?;
         let pty = Arc::new(ycoding_core::platform::pty::Pty::new(directory.clone()));
-        pty.event_source.bind(self.events.clone(), Some(location::Ref { directory: services.info.directory.clone(), workspace_id: services.info.workspace_id.clone() })).map_err(|_| unavailable("PTY events"))?;
-        let copies = Arc::new(ycoding_core::platform::project_copy::Copies::new(&directory, self.git.clone(), self.client.clone(), self.publisher.clone()).map_err(|_| unavailable("project copies"))?);
+        pty.event_source
+            .bind(
+                self.events.clone(),
+                Some(location::Ref {
+                    directory: services.info.directory.clone(),
+                    workspace_id: services.info.workspace_id.clone(),
+                }),
+            )
+            .map_err(|_| unavailable("PTY events"))?;
+        let copies = Arc::new(
+            ycoding_core::platform::project_copy::Copies::new(
+                &directory,
+                self.git.clone(),
+                self.client.clone(),
+                self.publisher.clone(),
+            )
+            .map_err(|_| unavailable("project copies"))?,
+        );
         let search_globals = self.globals.clone();
         let vcs = repository.is_some();
         let platform = Arc::new(crate::services::PlatformServices {
-            shell, pty, tickets: Mutex::new(Default::default()), config: prepared.disk.clone(),
-            filesystem: Arc::new(ycoding_core::platform::filesystem::Location::new(&directory).map_err(|_| unavailable("Location filesystem"))?),
-            search: Arc::new(ycoding_core::platform::filesystem::search::Service::deferred(&directory, Arc::new(move || {
-                let binary = search_globals.composition.run(async { search_globals.ripgrep.filepath().await.map_err(|_| unavailable("ripgrep acquisition")) }).map_err(|_| std::io::Error::other("ripgrep acquisition failed"))?;
-                Ok(ycoding_core::platform::filesystem::search::Backend::Automatic { vcs, binary })
-            })).map_err(|_| unavailable("Location search"))?),
-            git: self.git.clone(), copies,
+            shell,
+            pty,
+            tickets: Mutex::new(Default::default()),
+            config: prepared.disk.clone(),
+            filesystem: Arc::new(
+                ycoding_core::platform::filesystem::Location::new(&directory)
+                    .map_err(|_| unavailable("Location filesystem"))?,
+            ),
+            search: Arc::new(
+                ycoding_core::platform::filesystem::search::Service::deferred(
+                    &directory,
+                    Arc::new(move || {
+                        let binary = search_globals
+                            .composition
+                            .run(async {
+                                search_globals
+                                    .ripgrep
+                                    .filepath()
+                                    .await
+                                    .map_err(|_| unavailable("ripgrep acquisition"))
+                            })
+                            .map_err(|_| std::io::Error::other("ripgrep acquisition failed"))?;
+                        Ok(
+                            ycoding_core::platform::filesystem::search::Backend::Automatic {
+                                vcs,
+                                binary,
+                            },
+                        )
+                    }),
+                )
+                .map_err(|_| unavailable("Location search"))?,
+            ),
+            git: self.git.clone(),
+            copies,
         });
         let commands = prepared.commands.clone();
-        let references = Arc::new(reference::Service::from_entries(&prepared.disk.entries, &directory, roots, &mut vec![]).map_err(|_| unavailable("reference catalog"))?);
+        let references = Arc::new(
+            reference::Service::from_entries(
+                &prepared.disk.entries,
+                &directory,
+                roots,
+                &mut vec![],
+            )
+            .map_err(|_| unavailable("reference catalog"))?,
+        );
         for reference in references.list() {
-            if let ycoding_core::ycoding_schema::reference::Source::Git(source) = &reference.source {
+            if let ycoding_core::ycoding_schema::reference::Source::Git(source) = &reference.source
+            {
                 let source = source.clone();
                 let repositories = self.globals.repositories.clone();
                 tokio::task::spawn_blocking(move || {
-                    let reference = ycoding_core::platform::repository_cache::parse_remote(source.repository.as_str().ok_or_else(|| unavailable("reference repository"))?, None).map_err(|_| unavailable("reference repository"))?;
-                    repositories.ensure(ycoding_core::platform::repository_cache::EnsureInput { reference: &reference, refresh: false, branch: source.branch.as_ref().and_then(|branch| branch.as_str()) }).map_err(|_| unavailable("reference acquisition"))
-                }).await.map_err(|_| unavailable("reference acquisition worker"))??;
+                    let reference = ycoding_core::platform::repository_cache::parse_remote(
+                        source
+                            .repository
+                            .as_str()
+                            .ok_or_else(|| unavailable("reference repository"))?,
+                        None,
+                    )
+                    .map_err(|_| unavailable("reference repository"))?;
+                    repositories
+                        .ensure(ycoding_core::platform::repository_cache::EnsureInput {
+                            reference: &reference,
+                            refresh: false,
+                            branch: source.branch.as_ref().and_then(|branch| branch.as_str()),
+                        })
+                        .map_err(|_| unavailable("reference acquisition"))
+                })
+                .await
+                .map_err(|_| unavailable("reference acquisition worker"))??;
             }
         }
         let skills = prepared.skills.clone();
-        let isolated = ycoding_core::platform::browser::isolated::Service::new(self.globals.isolated_executor.clone(), self.globals.admission.clone(), self.globals.sessions.clone(), Default::default());
-        let (registry, registration) = tools::compose(self, services, prepared.disk.clone(), memory.clone(), &platform)?;
+        let isolated = ycoding_core::platform::browser::isolated::Service::new(
+            self.globals.isolated_executor.clone(),
+            self.globals.admission.clone(),
+            self.globals.sessions.clone(),
+            Default::default(),
+        );
+        let computer = Arc::new(self.globals.computer.service());
+        let isolated_control = Arc::downgrade(&isolated);
+        let controls = controls::Owner::start(
+            self.events.clone(),
+            Arc::new(move |session, _| {
+                let isolated = isolated_control.upgrade();
+                Box::pin(async move {
+                    match isolated {
+                        Some(isolated) => isolated
+                            .release_session(&session)
+                            .await
+                            .map_err(|_| unavailable("isolated browser Session release")),
+                        None => Ok(()),
+                    }
+                })
+            }),
+        )?;
+        let (registry, registration) = tools::compose(
+            self,
+            services,
+            prepared.disk.clone(),
+            memory.clone(),
+            &platform,
+            &isolated,
+            &computer,
+        )?;
         let clock: Arc<dyn runner::Clock> = Arc::new(runner::WallClock);
         let instruction_clock = clock.clone();
         let mut instructions = ycoding_core::instructions::builtins::load(
@@ -668,34 +1030,35 @@ impl Factory {
                 max_bytes: None,
             },
         ));
-        let cursor_host = || self
-            .cursor
-            .as_ref()
-            .map(|cursor| {
-                let context = cursor::context::build(
-                    &directory,
-                    &[],
-                    &cursor::context::Environment {
-                        global_config_dir: roots.config.clone(),
-                        cache_dir: roots.cache.clone(),
-                        home: roots.home.clone(),
-                        project_discovery_disabled: !self.options.project,
-                    },
-                );
-                Ok(cursor::route::Host {
-                    identity: cursor.identity.clone(),
-                    context: RequestContext::new(
-                        context
-                            .encode()
-                            .map_err(|_| unavailable("Cursor context"))?,
-                    )
-                    .map_err(|_| unavailable("Cursor context"))?,
-                    runtime: cursor.runtime.clone(),
-                    known_mcp_servers: context.known_mcp_servers,
-                    extensions: Default::default(),
+        let cursor_host = || {
+            self.cursor
+                .as_ref()
+                .map(|cursor| {
+                    let context = cursor::context::build(
+                        &directory,
+                        &[],
+                        &cursor::context::Environment {
+                            global_config_dir: roots.config.clone(),
+                            cache_dir: roots.cache.clone(),
+                            home: roots.home.clone(),
+                            project_discovery_disabled: !self.options.project,
+                        },
+                    );
+                    Ok(cursor::route::Host {
+                        identity: cursor.identity.clone(),
+                        context: RequestContext::new(
+                            context
+                                .encode()
+                                .map_err(|_| unavailable("Cursor context"))?,
+                        )
+                        .map_err(|_| unavailable("Cursor context"))?,
+                        runtime: cursor.runtime.clone(),
+                        known_mcp_servers: context.known_mcp_servers,
+                        extensions: Default::default(),
+                    })
                 })
-            })
-            .transpose();
+                .transpose()
+        };
         let cursor = cursor_host()?;
         let compaction = prepared
             .disk
@@ -709,46 +1072,91 @@ impl Factory {
         );
         let helpers = policy::helper::Settings::from_configuration(&prepared.disk)
             .map_err(|_| unavailable("helper model configuration"))?;
-        let meeting = self.globals.meetings.attach(&self.client, roots, self.options.env.get("XDG_DATA_HOME").map(std::path::Path::new), meeting::Target {
-            reference: location::Ref { directory: services.info.directory.clone(), workspace_id: services.info.workspace_id.clone() },
-            project: ycoding_core::ycoding_schema::project::Id::new(services.info.project.id.as_lossless().clone())
-                .map_err(|_| unavailable("Project identity"))?,
-            directory: &directory,
-            mcp: mcp.clone(),
-        }).await;
-        let meeting_history = meeting.as_ref()
-            .map(|meeting| ycoding_core::meeting::history::register(&registry, meeting.database.clone()))
+        let meeting = self
+            .globals
+            .meetings
+            .attach(
+                &self.client,
+                roots,
+                self.options
+                    .env
+                    .get("XDG_DATA_HOME")
+                    .map(std::path::Path::new),
+                meeting::Target {
+                    reference: location::Ref {
+                        directory: services.info.directory.clone(),
+                        workspace_id: services.info.workspace_id.clone(),
+                    },
+                    project: ycoding_core::ycoding_schema::project::Id::new(
+                        services.info.project.id.as_lossless().clone(),
+                    )
+                    .map_err(|_| unavailable("Project identity"))?,
+                    directory: &directory,
+                    mcp: mcp.clone(),
+                },
+            )
+            .await;
+        let meeting_history = meeting
+            .as_ref()
+            .map(|meeting| {
+                ycoding_core::meeting::history::register(&registry, meeting.database.clone())
+            })
             .transpose()
             .map_err(|_| unavailable("meeting history tool"))?;
+        let helper_models = Arc::new(policy::helper::Models {
+            models: prepared.models.clone(),
+            credentials: self.credentials.clone(),
+            auth: self.globals.preparation.clone(),
+            cursor: cursor_host()?,
+            claude: Some(self.globals.claude.clone()),
+            store: Service::new(self.client.clone()),
+            settings: helpers.clone(),
+        });
         let image_analyzer = ycoding_core::session::image_analyzer::Service::new(
             prepared.disk.clone(),
-            Arc::new(policy::helper::Models {
-                models: prepared.models.clone(),
-                credentials: self.credentials.clone(),
-                auth: self.globals.preparation.clone(),
-                cursor: cursor_host()?,
-                claude: Some(self.globals.claude.clone()),
-                store: Service::new(self.client.clone()),
-                settings: helpers.clone(),
-            }),
+            helper_models.clone(),
             self.executor.clone(),
         );
-        let snapshots: Arc<dyn ycoding_core::session::revert::Snapshots + Send + Sync> = Arc::new(ycoding_core::session::snapshot::GitSnapshots::new(
-            self.git.clone(),
-            roots.data.clone(),
-            services.info.project.id.as_lossless().to_utf8().map_err(|_| unavailable("Project identity"))?,
-            project.clone(),
-            directory.clone(),
-            prepared.configuration.snapshots.enabled,
-        ));
-        let reference = location::Ref { directory: services.info.directory.clone(), workspace_id: services.info.workspace_id.clone() };
+        let session_tools = self.session_tools(services, &prepared, &compaction, helper_models);
+        let session_registration = session_tools
+            .as_ref()
+            .map(|tools| {
+                registry.register(
+                    tools.clone().entries(),
+                    ycoding_core::tools::registry::Options::direct(),
+                )
+            })
+            .transpose()
+            .map_err(|_| unavailable("Session tool registration"))?;
+        let snapshots: Arc<dyn ycoding_core::session::revert::Snapshots + Send + Sync> =
+            Arc::new(ycoding_core::session::snapshot::GitSnapshots::new(
+                self.git.clone(),
+                roots.data.clone(),
+                services
+                    .info
+                    .project
+                    .id
+                    .as_lossless()
+                    .to_utf8()
+                    .map_err(|_| unavailable("Project identity"))?,
+                project.clone(),
+                directory.clone(),
+                prepared.configuration.snapshots.enabled,
+            ));
+        let reference = location::Ref {
+            directory: services.info.directory.clone(),
+            workspace_id: services.info.workspace_id.clone(),
+        };
         let launch = ycoding_core::extension::Launch {
             rules: configured_rules(&prepared.disk, &roots.home)?,
             cancellation: Default::default(),
         };
         // The governor, extensions, MCP tool watcher and generation tasks start after every
         // fallible step, so a failed compose cannot leave them running.
-        let governor = prepared.source.start(&self.events).map_err(|_| unavailable("project artifact governor"))?;
+        let governor = prepared
+            .source
+            .start(&self.events)
+            .map_err(|_| unavailable("project artifact governor"))?;
         let leaf = Arc::new(ycoding_core::tools::context::policy::LeafPolicy {
             permissions: services.permissions.clone(),
             guardrails: services.guardrails.clone(),
@@ -757,13 +1165,15 @@ impl Factory {
             Arc::new(mcp.as_ref().clone()),
             registry.clone(),
             leaf.clone(),
-            execution::Execution::global().map(|execution| ycoding_core::tools::builtin::mcp::Background {
-                jobs: execution.jobs().clone(),
-                notifier: runner::mcp_notifier(
-                    Service::new(self.client.clone()),
-                    Arc::new(runner::WallClock),
-                    Arc::new(move |id| execution.wake(id)),
-                ),
+            execution::Execution::global().map(|execution| {
+                ycoding_core::tools::builtin::mcp::Background {
+                    jobs: execution.jobs().clone(),
+                    notifier: runner::mcp_notifier(
+                        Service::new(self.client.clone()),
+                        Arc::new(runner::WallClock),
+                        Arc::new(move |id| execution.wake(id)),
+                    ),
+                }
             }),
         );
         let activation = Arc::new(ycoding_core::extension::Activation::new(
@@ -775,10 +1185,17 @@ impl Factory {
             ycoding_core::extension::Host {
                 mcp: Some(Arc::new(mcp.as_ref().clone())),
                 integrations: Some(integrations.clone()),
-                sessions: Some(ycoding_core::extension::SessionHost { store: Service::new(self.client.clone()), location: reference.clone() }),
+                sessions: Some(ycoding_core::extension::SessionHost {
+                    store: Service::new(self.client.clone()),
+                    location: reference.clone(),
+                }),
             },
         ));
-        if activation.event_source.bind(self.events.clone(), Some(reference)).is_err() {
+        if activation
+            .event_source
+            .bind(self.events.clone(), Some(reference))
+            .is_err()
+        {
             if governor.close().await.is_err() {
                 tracing::error!("project artifact governor close after a failed compose failed");
             }
@@ -789,7 +1206,13 @@ impl Factory {
             tracing::error!(%error, "process extension configuration rejected");
             extension_diagnostics.push(extension_diagnostic(None, error));
         }
-        extension_diagnostics.extend(activation.failures().await.into_iter().map(|(identity, error)| extension_diagnostic(Some(&identity), error)));
+        extension_diagnostics.extend(
+            activation
+                .failures()
+                .await
+                .into_iter()
+                .map(|(identity, error)| extension_diagnostic(Some(&identity), error)),
+        );
         let plugins = activation.plugin_list().await;
         let extensions = activation.extensions().await;
         let mut tasks = vec![self.watch(&prepared.disk, generation, services.info.clone())];
@@ -820,6 +1243,7 @@ impl Factory {
             configuration: Some(prepared.disk.clone()),
             image_analyzer: Some(image_analyzer),
             extensions,
+            session_tools,
             clock,
             executor: self.executor.clone(),
             compaction: compaction_policy::resolve(&compaction),
@@ -831,7 +1255,10 @@ impl Factory {
             skill_resolver: Some(Arc::new(SkillResolver(skills.clone()))),
         });
         let generate = Arc::new(generate::Service {
-            models: prepared.models.clone(), credentials: self.credentials.clone(), integrations: integrations.clone(), executor: self.executor.clone(),
+            models: prepared.models.clone(),
+            credentials: self.credentials.clone(),
+            integrations: integrations.clone(),
+            executor: self.executor.clone(),
             cursor: None,
         });
         Ok(Composed {
@@ -842,14 +1269,29 @@ impl Factory {
             memory,
             runner,
             steer: self.steer.clone(),
-            platform, integrations, mcp, isolated, commands, references, skills, generate,
-            activation, extension_diagnostics, plugins, launch, generation,
+            platform,
+            integrations,
+            mcp,
+            isolated,
+            computer,
+            commands,
+            references,
+            skills,
+            generate,
+            paired: self.globals.browser.clone(),
+            activation,
+            extension_diagnostics,
+            plugins,
+            launch,
+            generation,
             tasks: Mutex::new(tasks),
             governor: tokio::sync::Mutex::new(Some(governor)),
             mcp_tools: tokio::sync::Mutex::new(Some(mcp_tools)),
+            controls: tokio::sync::Mutex::new(Some(controls)),
             _auth_registration: auth_registration,
             _registration: registration,
             _meeting: meeting_history,
+            _session_tools: session_registration,
         })
     }
 }
@@ -857,20 +1299,56 @@ impl Factory {
 impl Factory {
     // Watches this generation's configuration sources. A debounced change rebuilds the
     // Location while this generation is current; a failed rebuild keeps it and keeps watching.
-    fn watch(&self, disk: &config::Configuration, generation: u64, info: location::Info) -> JoinHandle<()> {
+    fn watch(
+        &self,
+        disk: &config::Configuration,
+        generation: u64,
+        info: location::Info,
+    ) -> JoinHandle<()> {
         use ycoding_core::platform::filesystem::watcher::{Input, Kind};
-        let directories = disk.entries.iter().filter_map(|entry| match entry {
-            config::Entry::Directory(path) | config::Entry::AgentsDirectory(path) | config::Entry::ClaudeDirectory(path) => Some(path.clone()),
-            _ => None,
-        }).collect::<Vec<_>>();
-        let files = disk.entries.iter().filter_map(|entry| match entry {
-            config::Entry::File(path) | config::Entry::Document { path: Some(path), .. } => Some(path.clone()),
-            _ => None,
-        }).filter(|file| !directories.iter().any(|directory| file.starts_with(directory))).collect::<Vec<_>>();
-        let subscriptions = directories.into_iter().map(|path| (path, Kind::Directory))
+        let directories = disk
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                config::Entry::Directory(path)
+                | config::Entry::AgentsDirectory(path)
+                | config::Entry::ClaudeDirectory(path) => Some(path.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let files = disk
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                config::Entry::File(path)
+                | config::Entry::Document {
+                    path: Some(path), ..
+                } => Some(path.clone()),
+                _ => None,
+            })
+            .filter(|file| {
+                !directories
+                    .iter()
+                    .any(|directory| file.starts_with(directory))
+            })
+            .collect::<Vec<_>>();
+        let subscriptions = directories
+            .into_iter()
+            .map(|path| (path, Kind::Directory))
             .chain(files.into_iter().map(|path| (path, Kind::File)))
-            .filter_map(|(path, kind)| self.globals.watcher.subscribe(Input { path, kind, ignore: vec![] })
-                .map_err(|error| tracing::warn!(%error, "configuration source cannot be watched")).ok())
+            .filter_map(|(path, kind)| {
+                self.globals
+                    .watcher
+                    .subscribe(Input {
+                        path,
+                        kind,
+                        ignore: vec![],
+                    })
+                    .map_err(
+                        |error| tracing::warn!(%error, "configuration source cannot be watched"),
+                    )
+                    .ok()
+            })
             .collect::<Vec<_>>();
         let locations = self.locations.get().cloned();
         tokio::spawn(async move {
@@ -896,15 +1374,101 @@ impl Factory {
                         Err(_) => break,
                     }
                 }
-                let Some(locations) = locations.upgrade() else { return };
+                let Some(locations) = locations.upgrade() else {
+                    return;
+                };
                 let info = info.clone();
-                match tokio::task::spawn_blocking(move || locations.reload_generation(&info, generation)).await {
+                match tokio::task::spawn_blocking(move || {
+                    locations.reload_generation(&info, generation)
+                })
+                .await
+                {
                     Ok(Ok(_)) => return,
-                    Ok(Err(_)) => tracing::error!("configuration reload failed; the current Location generation stays active"),
+                    Ok(Err(_)) => tracing::error!(
+                        "configuration reload failed; the current Location generation stays active"
+                    ),
                     Err(_) => tracing::error!("configuration reload worker failed"),
                 }
             }
         })
+    }
+}
+
+impl Factory {
+    // The model-facing Session controls need the process-global execution and orchestration
+    // owners, which exist only once the production bootstrap installed them.
+    fn session_tools(
+        &self,
+        services: &crate::locations::ServiceSet,
+        prepared: &Prepared,
+        compaction: &[compaction_policy::Info],
+        models: Arc<policy::helper::Models>,
+    ) -> Option<ycoding_core::tools::context::consumers::SessionTools> {
+        use ycoding_core::tools::{
+            builtin::subagent::Subagent,
+            context::consumers::{SessionDependencies, SessionTools},
+        };
+        let execution = execution::Execution::global()?;
+        let orchestration = self.orchestration.get()?.clone();
+        let store = Service::new(self.client.clone()).with_artifact_source(prepared.source.clone());
+        let source = prepared.source.clone();
+        let feed = self.events.clone();
+        let location = location::Ref {
+            directory: services.info.directory.clone(),
+            workspace_id: services.info.workspace_id.clone(),
+        };
+        Some(SessionTools::new(SessionDependencies {
+            subagent: Subagent {
+                store: Service::new(self.client.clone()),
+                orchestration: Arc::new(orchestration),
+                preflight: orchestration::Preflight::new(
+                    store.clone(),
+                    services.agents.clone(),
+                    prepared.models.clone(),
+                    self.credentials.clone(),
+                ),
+                execution: Arc::new(execution),
+                policy: Arc::new(ycoding_core::tools::context::policy::LeafPolicy {
+                    permissions: services.permissions.clone(),
+                    guardrails: services.guardrails.clone(),
+                }),
+                jobs: execution.jobs().clone(),
+                agents: services.agents.clone(),
+                config: prepared.disk.clone(),
+                collator: Arc::new(ycoding_core::platform::filesystem::collation::compare),
+                activate: Arc::new(move |context, agent| {
+                    let source = source.clone();
+                    Box::pin(async move {
+                        if source.activate(ycoding_core::resources::project_artifact::source::ActivationInput {
+                            kind: ycoding_core::ycoding_schema::project_artifact::Kind::decode(&JsonValue::String("agent".into())).expect("fixed artifact kind"),
+                            id: agent.clone(),
+                            session_id: context.session_id,
+                            agent_id: Some(agent),
+                            source: ycoding_core::resources::project_artifact::source::ActivationSource::SubagentLaunch {
+                                message_id: context.message_id.as_lossless().clone(),
+                                call_id: Some(context.call_id),
+                            },
+                        }).is_err() {
+                            source.record_activation_failure();
+                        }
+                    })
+                }),
+            },
+            forms: services.forms.clone(),
+            decisions: Arc::new(ycoding_core::resources::decision::Service {
+                store,
+                agents: services.agents.clone(),
+                models,
+                executor: self.executor.clone(),
+            }),
+            publish: Arc::new(move |event| {
+                let mut publication = crate::services::ephemeral(&event)?;
+                publication.location = Some(location.clone());
+                feed.publish(publication);
+                Ok(())
+            }),
+            compaction: compaction_policy::resolve(compaction),
+        }))
     }
 }
 
@@ -964,12 +1528,21 @@ impl execution::Runner for LocationRunner {
     ) -> RunFuture {
         let lease = self.0.clone();
         Box::pin(async move {
-            execution::Runner::settled(
-                &lease.production.as_ref().expect("production runner").runner,
-                id,
-                outcome,
-            )
-            .await
+            let composed = lease.production.as_ref().expect("production runner");
+            let lifecycle = match &outcome {
+                Ok(()) => ycoding_core::platform::browser::service::Lifecycle::ExecutionSucceeded,
+                Err(run_coordinator::Error::Interrupted(_)) => {
+                    ycoding_core::platform::browser::service::Lifecycle::ExecutionInterrupted
+                }
+                Err(_) => ycoding_core::platform::browser::service::Lifecycle::ExecutionFailed,
+            };
+            let browser_id =
+                ycoding_core::ycoding_schema::session_id::SessionId::new(id.as_lossless().clone())
+                    .map_err(|_| run_coordinator::Error::Closed)?;
+            let released = composed.paired.lifecycle(&browser_id, lifecycle).await;
+            let settled = execution::Runner::settled(&composed.runner, id, outcome).await;
+            released.map_err(|_| run_coordinator::Error::Closed)?;
+            settled
         })
     }
 }
@@ -1003,7 +1576,14 @@ impl Maintenance {
         factory: Arc<Factory>,
         orchestration: orchestration::Service,
     ) -> Result<(), Failure> {
-        let mut cleanup = ycoding_core::session::cleanups::Maintenance::start(ycoding_core::session::cleanups::Cleanups::process(factory.client.clone(), &factory.options.roots)).await.map_err(|_| unavailable("session cleanup startup"))?;
+        let mut cleanup = ycoding_core::session::cleanups::Maintenance::start(
+            ycoding_core::session::cleanups::Cleanups::process(
+                factory.client.clone(),
+                &factory.options.roots,
+            ),
+        )
+        .await
+        .map_err(|_| unavailable("session cleanup startup"))?;
         if !cleanup.startup().failures.is_empty() {
             if cleanup.close().await.is_err() {
                 tracing::error!("session cleanup shutdown failed");
@@ -1013,16 +1593,29 @@ impl Maintenance {
         *self.cleanups.lock().await = Some(cleanup);
         let notify = Arc::new(tokio::sync::Notify::new());
         let notified = notify.clone();
-        let subscriber = factory.events.subscribe(ycoding_core::event_feed::Scope::Global, None, move || notified.notify_one())
+        let subscriber = factory
+            .events
+            .subscribe(ycoding_core::event_feed::Scope::Global, None, move || {
+                notified.notify_one()
+            })
             .map_err(|_| unavailable("task notifications subscription"))?;
-        *self.notifications.lock().unwrap_or_else(PoisonError::into_inner) = Some(tokio::spawn(notifications(
+        *self
+            .notifications
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(tokio::spawn(notifications(
             self.stop.subscribe(),
             factory.events.clone(),
             subscriber,
             notify,
             orchestration,
         )));
-        self.spawn(sessions, locations, factory, Arc::new(runner::WallClock), Arc::new(move || execution.active()));
+        self.spawn(
+            sessions,
+            locations,
+            factory,
+            Arc::new(runner::WallClock),
+            Arc::new(move || execution.active()),
+        );
         Ok(())
     }
 
@@ -1052,7 +1645,12 @@ impl Maintenance {
                             {
                                 Ok(sweep) => {
                                     let client = factory.client.clone();
-                                    if tokio::task::spawn_blocking(move || client.analytics().and_then(|analytics| analytics.purge())).await.is_err() {
+                                    if tokio::task::spawn_blocking(move || {
+                                        client.analytics().and_then(|analytics| analytics.purge())
+                                    })
+                                    .await
+                                    .is_err()
+                                    {
                                         tracing::error!("retention analytics purge worker failed");
                                     }
                                     if !sweep.failures.is_empty() {
@@ -1088,19 +1686,32 @@ impl Maintenance {
 
     async fn stop(&self) -> Result<(), Failure> {
         self.stop.send_replace(true);
-        let task = self.task.lock().unwrap_or_else(PoisonError::into_inner).take();
-        let notifications = self.notifications.lock().unwrap_or_else(PoisonError::into_inner).take();
+        let task = self
+            .task
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        let notifications = self
+            .notifications
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
         let results = [
             match task {
                 Some(task) => task.await.map_err(|_| unavailable("runtime maintenance")),
                 None => Ok(()),
             },
             match notifications {
-                Some(task) => task.await.map_err(|_| unavailable("task notifications worker")),
+                Some(task) => task
+                    .await
+                    .map_err(|_| unavailable("task notifications worker")),
                 None => Ok(()),
             },
             match self.cleanups.lock().await.take() {
-                Some(mut cleanups) => cleanups.close().await.map_err(|_| unavailable("session cleanup shutdown")),
+                Some(mut cleanups) => cleanups
+                    .close()
+                    .await
+                    .map_err(|_| unavailable("session cleanup shutdown")),
                 None => Ok(()),
             },
         ];
@@ -1132,7 +1743,9 @@ async fn notifications(
                 Err(_) => {
                     updated = true;
                     let notified = notify.clone();
-                    match feed.subscribe(ycoding_core::event_feed::Scope::Global, None, move || notified.notify_one()) {
+                    match feed.subscribe(ycoding_core::event_feed::Scope::Global, None, move || {
+                        notified.notify_one()
+                    }) {
                         Ok(resubscribed) => subscriber = resubscribed,
                         Err(_) => {
                             tracing::error!("task notification subscription failed");
@@ -1144,16 +1757,25 @@ async fn notifications(
             }
         }
         if updated && orchestration.dispatch_notifications().await.is_err() {
-            tracing::error!("subagent notification outbox dispatch failed; retrying after the next task update");
+            tracing::error!(
+                "subagent notification outbox dispatch failed; retrying after the next task update"
+            );
         }
     }
 }
 
 impl Composed {
     pub(crate) fn in_use(&self) -> bool {
-        Arc::strong_count(&self.platform) > 1 || Arc::strong_count(&self.mcp) > 1 || Arc::strong_count(&self.isolated) > 1
+        // The browser tool of this generation holds one isolated-browser reference.
+        Arc::strong_count(&self.platform) > 1
+            || Arc::strong_count(&self.mcp) > 1
+            || Arc::strong_count(&self.isolated) > 2
     }
     pub(crate) async fn close(&self) -> Result<(), Failure> {
+        let controls = match self.controls.lock().await.take() {
+            Some(controls) => controls.close().await,
+            None => Ok(()),
+        };
         let tasks = std::mem::take(&mut *self.tasks.lock().unwrap_or_else(PoisonError::into_inner));
         for task in &tasks {
             task.abort();
@@ -1171,15 +1793,52 @@ impl Composed {
             tracing::error!(?error, "MCP tool watcher ended with an error");
         }
         let governor = match self.governor.lock().await.take() {
-            Some(governor) => governor.close().await.map_err(|_| unavailable("project artifact governor")),
+            Some(governor) => governor
+                .close()
+                .await
+                .map_err(|_| unavailable("project artifact governor")),
             None => Ok(()),
         };
-        let isolated = self.isolated.shutdown().await.map_err(|_| unavailable("isolated browser shutdown"));
-        let mcp = self.mcp.shutdown().await.map_err(|_| unavailable("MCP shutdown"));
-        let shell = self.platform.shell.shutdown().await.map_err(|_| unavailable("shell shutdown"));
-        let pty = self.platform.pty.shutdown().await.map_err(|_| unavailable("PTY shutdown"));
-        let integrations = self.integrations.shutdown().await.map_err(|_| unavailable("integration shutdown"));
-        governor.and(isolated).and(mcp).and(shell).and(pty).and(integrations)
+        let isolated = self
+            .isolated
+            .shutdown()
+            .await
+            .map_err(|_| unavailable("isolated browser shutdown"));
+        let computer = self
+            .computer
+            .release_location()
+            .await
+            .map_err(|_| unavailable("computer Location release"));
+        let mcp = self
+            .mcp
+            .shutdown()
+            .await
+            .map_err(|_| unavailable("MCP shutdown"));
+        let shell = self
+            .platform
+            .shell
+            .shutdown()
+            .await
+            .map_err(|_| unavailable("shell shutdown"));
+        let pty = self
+            .platform
+            .pty
+            .shutdown()
+            .await
+            .map_err(|_| unavailable("PTY shutdown"));
+        let integrations = self
+            .integrations
+            .shutdown()
+            .await
+            .map_err(|_| unavailable("integration shutdown"));
+        controls
+            .and(governor)
+            .and(isolated)
+            .and(computer)
+            .and(mcp)
+            .and(shell)
+            .and(pty)
+            .and(integrations)
     }
 }
 
@@ -1197,8 +1856,14 @@ impl Drop for Maintenance {
 struct SkillResolver(Arc<tokio::sync::Mutex<ycoding_core::resources::skill::Service>>);
 
 async fn reconcile(sessions: &Service, client: &Client) -> Result<(), Failure> {
-    sessions.reconcile_interrupted(crate::ids::now_millis()).await.map_err(|_| unavailable("interrupted steps"))?;
-    let reconciled = ycoding_core::platform::shell::ledger::Ledger::new(client.clone()).reconcile(ycoding_core::platform::shell::ledger::TERMINATE_GRACE).await.map_err(|_| unavailable("shell ledger"))?;
+    sessions
+        .reconcile_interrupted(crate::ids::now_millis())
+        .await
+        .map_err(|_| unavailable("interrupted steps"))?;
+    let reconciled = ycoding_core::platform::shell::ledger::Ledger::new(client.clone())
+        .reconcile(ycoding_core::platform::shell::ledger::TERMINATE_GRACE)
+        .await
+        .map_err(|_| unavailable("shell ledger"))?;
     if reconciled.process_list_unavailable || !reconciled.signal_failures.is_empty() {
         return Err(unavailable("shell process reconciliation"));
     }
@@ -1233,11 +1898,17 @@ fn configured_rules(
     disk: &config::Configuration,
     home: &std::path::Path,
 ) -> Result<Vec<ycoding_core::ycoding_schema::permission::Rule>, Failure> {
-    let home = home.to_str().ok_or_else(|| unavailable("home directory"))?.into();
+    let home = home
+        .to_str()
+        .ok_or_else(|| unavailable("home directory"))?
+        .into();
     disk.entries
         .iter()
         .filter_map(|entry| match entry {
-            config::Entry::Document { info: JsonValue::Object(document), .. } => document.get(&"permissions".into()),
+            config::Entry::Document {
+                info: JsonValue::Object(document),
+                ..
+            } => document.get(&"permissions".into()),
             _ => None,
         })
         .map(|value| {

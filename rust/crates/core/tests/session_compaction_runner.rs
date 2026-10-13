@@ -803,6 +803,7 @@ fn services(
         configuration: None,
         image_analyzer: None,
         extensions: Vec::new(),
+        session_tools: None,
         claude: None,
         auth: None,
     }

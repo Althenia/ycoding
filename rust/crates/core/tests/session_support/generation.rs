@@ -731,6 +731,7 @@ pub fn local_with_settings(store: &Store, endpoint: &str, helpers: helper::Setti
         configuration: None,
         image_analyzer: None,
         extensions: Vec::new(),
+        session_tools: None,
         claude: None,
         auth: None,
         clock: Arc::new(WallClock),

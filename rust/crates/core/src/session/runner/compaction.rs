@@ -37,6 +37,7 @@ pub(super) enum Gate {
 }
 
 pub(super) struct GateInput<'a> {
+    pub agent: &'a ycoding_schema::agent::Id,
     pub session: &'a session::Info,
     pub selection: &'a model::Ref,
     pub context_window: i64,
@@ -81,6 +82,71 @@ impl Local {
             && provider_input.is_none_or(|total| total < cap)
             && provider_total.is_none_or(|total| total < cap)
         {
+            if let Some(tools) = &services.session_tools {
+                let admitted = tools
+                    .conversation_compact
+                    .observe(
+                        crate::tools::builtin::conversation_compact::Context {
+                            session: &input.session.id,
+                            agent: input.agent,
+                            capabilities: Some(capabilities),
+                            request: input.request,
+                        },
+                        |trigger, estimate| {
+                            let Some((boundary, seq)) = self
+                                .latest_complete_boundary(&input.session.id)
+                                .map_err(|_| compaction_job::CompactionError::Conflict {
+                                    id: None,
+                                    message: "Compaction boundary is unavailable".into(),
+                                })?
+                            else {
+                                return Err(compaction_job::CompactionError::Conflict {
+                                    id: None,
+                                    message: "No completed compaction boundary is available".into(),
+                                });
+                            };
+                            let revision = services
+                                .store
+                                .client
+                                .snapshot()?
+                                .get::<ContextStateTable>(&crate::session::key(
+                                    input.session.id.as_lossless(),
+                                ))?
+                                .map_or(0, |state| state.revision);
+                            Ok(compaction_job::AdmitInput {
+                                id: None,
+                                session: input.session.id.clone(),
+                                trigger,
+                                requested_through_message: boundary,
+                                requested_through_seq: seq,
+                                base_context_revision: revision,
+                                target_max_input_tokens: compaction_gate::target_input_tokens(
+                                    input.context_window,
+                                    policy,
+                                ),
+                                config_digest: crate::session::compaction_policy::admission_digest(
+                                    policy,
+                                ),
+                                pressure: Some(session_compaction::Pressure {
+                                    estimated_input_tokens: non_negative(estimate),
+                                    safe_input_tokens: non_negative(cap),
+                                }),
+                            })
+                        },
+                    )
+                    .await;
+                match admitted {
+                    Ok(Some(job)) => {
+                        self.settle(&input, &job).await?;
+                        return Ok(Gate::Restart);
+                    }
+                    Ok(None) => {}
+                    Err(compaction_job::CompactionError::Store(failure)) => {
+                        return Err(failure.into());
+                    }
+                    Err(_) => tracing::warn!("Advisory compaction admission is unavailable"),
+                }
+            }
             return Ok(Gate::Proceed);
         }
         if *input.admissions >= MAXIMUM_GATE_ADMISSIONS {
