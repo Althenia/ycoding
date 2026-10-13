@@ -14,6 +14,72 @@ fn form(id: &str, session: &str, fields: &str) -> form::Info {
 }
 
 #[tokio::test]
+async fn global_forms_need_no_session_and_remain_location_owned() {
+    let fixture = Fixture::default();
+    let service = Forms::new(fixture.authority(), fixture.publisher());
+    let other = Forms::new(fixture.authority(), fixture.publisher());
+    let input = form(
+        "frm_global_reply",
+        "global",
+        r#"[{"key":"name","type":"string","required":true}]"#,
+    );
+    let wait = service.ask(input.clone()).unwrap();
+    assert_eq!(service.get(&input.id).unwrap(), input);
+    assert_eq!(service.state(&input.id).unwrap(), form::State::Pending);
+    assert_eq!(service.list(None), vec![input.clone()]);
+    assert_eq!(service.list(Some(&"global".into())), vec![input.clone()]);
+    assert!(service.list(Some(&"ses_other".into())).is_empty());
+    assert!(other.list(None).is_empty());
+    assert_eq!(other.get(&input.id), Err(Error::NotFound));
+    assert_eq!(other.state(&input.id), Err(Error::NotFound));
+    let answer = form::Answer::decode(&parse_json(r#"{"name":"Ava"}"#).unwrap()).unwrap();
+    assert_eq!(other.reply(&input.id, answer.clone()), Err(Error::NotFound));
+    assert_eq!(other.cancel(&input.id), Err(Error::NotFound));
+    assert_eq!(service.state(&input.id).unwrap(), form::State::Pending);
+    service.reply(&input.id, answer.clone()).unwrap();
+    assert_eq!(wait.await.unwrap(), form::State::Answered(answer.clone()));
+    assert_eq!(
+        service.state(&input.id).unwrap(),
+        form::State::Answered(answer)
+    );
+    assert!(service.list(None).is_empty());
+
+    let cancelled = form(
+        "frm_global_cancel",
+        "global",
+        r#"[{"key":"setup","type":"external","url":"https://example.test/setup"}]"#,
+    );
+    let wait = service.ask(cancelled.clone()).unwrap();
+    service.cancel(&cancelled.id).unwrap();
+    assert_eq!(wait.await.unwrap(), form::State::Cancelled);
+    assert_eq!(
+        service.state(&cancelled.id).unwrap(),
+        form::State::Cancelled
+    );
+    assert!(service.list(None).is_empty());
+    assert_eq!(service.cancel(&cancelled.id), Err(Error::AlreadySettled));
+    let events = fixture.events.lock().unwrap();
+    assert_eq!(
+        events.iter().map(|event| event.type_).collect::<Vec<_>>(),
+        [
+            "form.created",
+            "form.replied",
+            "form.created",
+            "form.cancelled"
+        ]
+    );
+    assert_eq!(
+        events[1].data,
+        parse_json(r#"{"id":"frm_global_reply","sessionID":"global","answer":{"name":"Ava"}}"#)
+            .unwrap()
+    );
+    assert_eq!(
+        events[3].data,
+        parse_json(r#"{"id":"frm_global_cancel","sessionID":"global"}"#).unwrap()
+    );
+}
+
+#[tokio::test]
 async fn form_answer_cancel_retention_and_publication_failure() {
     let fixture = Fixture::default();
     let now = Arc::new(AtomicU64::new(1));

@@ -91,6 +91,111 @@ fn declared(descriptor: &v5::OperationDescriptor, payload: &v5::TypedPayload) ->
     descriptor.error_types.contains(&payload.type_name)
 }
 
+async fn global_form_publication(cancel: bool) {
+    use support::wire::{ask, form_scope, location_scope, query, refuse};
+    use ycoding_core::event_feed::{Payload, Scope};
+    use ycoding_core::ycoding_schema::{DomainDecode, form, parse_json};
+
+    bounded(async {
+        let directory = if cancel { "/project/global-cancel" } else { "/project/global-reply" };
+        let foreign = if cancel { "/project/global-cancel-other" } else { "/project/global-reply-other" };
+        let id = if cancel { "frm_global_cancel_socket" } else { "frm_global_reply_socket" };
+        insert_project(&format!("prj_{id}_own"), directory).await;
+        insert_project(&format!("prj_{id}_other"), foreign).await;
+        let core = &world().core;
+        let own = core.locations.location(&directory.into(), None).unwrap();
+        let other = core.locations.location(&foreign.into(), None).unwrap();
+        let global = core.events.subscribe(Scope::Global, None, || {}).unwrap();
+        let session = core.events.subscribe(Scope::Session(ycoding_core::ycoding_schema::session::Id::new("ses_global_form_observer_socket").unwrap()), None, || {}).unwrap();
+        let input = form::Info::decode(&parse_json(&format!(r#"{{"id":"{id}","sessionID":"global","title":"MCP input","fields":[{{"key":"name","type":"string","required":true}}]}}"#)).unwrap()).unwrap();
+        let wait = own.forms.ask(input.clone()).unwrap();
+        let server = start(services(LocalAuth::disabled(), true), standard().unwrap()).await;
+        let mut client = Client::open(server.address(), &[]).await.unwrap();
+        let listed: v5::FormRequestListResult = ask(&mut client, "form.request.list", location_scope(directory), v5::FormRequestListRequest { query: query(directory, None) }).await;
+        assert_eq!(listed.data.items.len(), 1);
+        assert_eq!(units(&listed.data.items[0].id), id);
+        assert_eq!(units(&listed.data.items[0].session_id), "global");
+        let hidden: v5::FormRequestListResult = ask(&mut client, "form.request.list", location_scope(foreign), v5::FormRequestListRequest { query: query(foreign, None) }).await;
+        assert!(hidden.data.items.is_empty());
+        assert_eq!(other.forms.get(&input.id), Err(ycoding_core::tools::policy::forms::Error::NotFound));
+        assert_eq!(other.forms.cancel(&input.id), Err(ycoding_core::tools::policy::forms::Error::NotFound));
+        assert_eq!(other.forms.reply(&input.id, form::Answer::decode(&parse_json(r#"{"name":"Ava"}"#).unwrap()).unwrap()), Err(ycoding_core::tools::policy::forms::Error::NotFound));
+        let _: v5::InvalidRequestError = refuse(&mut client, "session.form.list", form_scope("global"), v5::SessionFormListRequest { params: v5::SessionFormListRequestParams { session_id: text("global") } }).await;
+        let settlement = if cancel {
+            own.forms.cancel(&input.id)
+        } else {
+            own.forms.reply(&input.id, form::Answer::decode(&parse_json(r#"{"name":"Ava"}"#).unwrap()).unwrap())
+        };
+        settlement.expect("global Form settlement must publish without a real Session");
+        let settled = wait.await.unwrap();
+        assert_eq!(own.forms.state(&input.id).unwrap(), settled);
+        assert!(own.forms.list(None).is_empty());
+        let drained: v5::FormRequestListResult = ask(&mut client, "form.request.list", location_scope(directory), v5::FormRequestListRequest { query: query(directory, None) }).await;
+        assert!(drained.data.items.is_empty());
+        let expected = if cancel { "form.cancelled" } else { "form.replied" };
+        let events = std::iter::from_fn(|| global.next().unwrap()).filter_map(|item| {
+            let Payload::Ephemeral(event) = &item.payload else { return None; };
+            if !["form.created", expected].contains(&event.event_type.as_str()) { return None; }
+            let path = Default::default();
+            let data = ycoding_core::ycoding_schema::ObjectDecoder::new(&event.data, &path).unwrap();
+            let form_id = if event.event_type == "form.created" { data.field::<form::Info>("form").unwrap().id } else { data.field::<form::Id>("id").unwrap() };
+            (form_id == input.id).then(|| event.clone())
+        }).collect::<Vec<_>>();
+        assert_eq!(events.iter().map(|event| event.event_type.as_str()).collect::<Vec<_>>(), ["form.created", expected]);
+        assert!(events.iter().all(|event| event.session.is_none()));
+        assert!(session.next().unwrap().is_none());
+        server.shutdown().await.unwrap();
+    }).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn global_form_reply_is_location_listed_and_published_without_a_session() {
+    global_form_publication(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn global_form_cancel_is_location_listed_and_published_without_a_session() {
+    global_form_publication(true).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn only_form_settlement_events_accept_the_global_owner_sentinel() {
+    use ycoding_core::event_feed::{Payload, Scope};
+    use ycoding_core::tools::policy::Event;
+    use ycoding_core::ycoding_schema::{parse_json, session};
+
+    let core = &world().core;
+    let id = session::Id::new("ses_form_event_owner_socket").unwrap();
+    let subscriber = core
+        .events
+        .subscribe(Scope::Session(id.clone()), None, || {})
+        .unwrap();
+    for kind in ["form.replied", "form.cancelled", "session.status"] {
+        (core.publisher)(Event {
+            type_: kind,
+            data: parse_json(
+                r#"{"sessionID":"ses_form_event_owner_socket","id":"frm_owner","answer":{}}"#,
+            )
+            .unwrap(),
+        })
+        .unwrap();
+        let item = subscriber.next().unwrap().unwrap();
+        let Payload::Ephemeral(event) = &item.payload else {
+            panic!("expected ephemeral publication");
+        };
+        assert_eq!(event.session.as_ref(), Some(&id));
+        assert_eq!(event.event_type, kind);
+    }
+    assert!(
+        (core.publisher)(Event {
+            type_: "session.status",
+            data: parse_json(r#"{"sessionID":"global"}"#).unwrap(),
+        })
+        .is_err()
+    );
+    assert!(subscriber.next().unwrap().is_none());
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn authenticated_connection_serves_typed_bootstrap_operations() {
     bounded(async {

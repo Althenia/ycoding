@@ -17,7 +17,7 @@ use ycoding_core::session::{
     store::Service as SessionStore,
 };
 use ycoding_core::tools::policy;
-use ycoding_core::ycoding_schema::{JsonPath, ObjectDecoder};
+use ycoding_core::ycoding_schema::{JsonPath, LosslessString, ObjectDecoder};
 use ycoding_core::ycoding_schema::{location, session};
 use ycoding_core::ycoding_store::Client;
 use ycoding_protocol::connection::Budgets;
@@ -185,6 +185,19 @@ pub type CatalogProvider =
 fn ephemeral(event: &policy::Event) -> Result<Ephemeral, String> {
     let path = JsonPath::default();
     let object = ObjectDecoder::new(&event.data, &path).map_err(|error| error.to_string())?;
+    let session = match object
+        .optional::<LosslessString>("sessionID")
+        .map_err(|error| error.to_string())?
+    {
+        Some(id)
+            if ["form.replied", "form.cancelled"].contains(&event.type_)
+                && id.as_str() == Some("global") =>
+        {
+            None
+        }
+        Some(id) => Some(session::Id::new(id).map_err(|error| error.to_string())?),
+        None => None,
+    };
     Ok(Ephemeral {
         id: ids::event_id()
             .map_err(|error| error.to_string())?
@@ -192,9 +205,7 @@ fn ephemeral(event: &policy::Event) -> Result<Ephemeral, String> {
             .clone(),
         created: ids::now_millis(),
         event_type: event.type_.into(),
-        session: object
-            .optional::<session::Id>("sessionID")
-            .map_err(|error| error.to_string())?,
+        session,
         data: event.data.clone(),
     })
 }
