@@ -189,7 +189,7 @@ fn failure(error: Error) -> Failure {
         Error::DepthLimit(limit) => {
             Failure::Invalid(format!("Subagent depth limit reached ({limit})"))
         }
-        Error::Store(_) | Error::Execution(_) => {
+        Error::Store(_) | Error::Execution(_) | Error::Cancelled => {
             Failure::Unavailable("Session orchestration unavailable".into())
         }
     }
@@ -197,4 +197,17 @@ fn failure(error: Error) -> Failure {
 
 fn unrepresentable() -> Failure {
     Failure::Unavailable("stored task is not representable on the wire".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Error, Failure, failure};
+
+    #[test]
+    fn cancelled_orchestration_uses_the_declared_unavailable_result() {
+        assert_eq!(
+            failure(Error::Cancelled),
+            Failure::Unavailable("Session orchestration unavailable".into())
+        );
+    }
 }

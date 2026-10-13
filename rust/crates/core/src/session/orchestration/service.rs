@@ -61,6 +61,7 @@ pub enum Error {
     InvalidRequest(String),
     Store(ycoding_store::Error),
     Execution(run_coordinator::Error),
+    Cancelled,
 }
 
 impl std::fmt::Display for Error {
@@ -76,6 +77,7 @@ impl std::fmt::Display for Error {
             }
             Self::Store(error) => write!(formatter, "{error}"),
             Self::Execution(error) => write!(formatter, "{error}"),
+            Self::Cancelled => write!(formatter, "Subagent launch cancelled"),
         }
     }
 }
@@ -153,6 +155,15 @@ impl Service {
     pub fn get(&self, parent_id: &session::Id, child_id: &session::Id) -> Result<Task, Error> {
         Ok(task_from_row(&self.owned(parent_id, child_id)?)?)
     }
+    pub fn managed(&self, child_id: &session::Id) -> Result<bool, Error> {
+        Ok(self.task(child_id)?.is_some())
+    }
+    pub fn release_reservation(&self, child_id: &session::Id) {
+        self.held
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(child_id.as_lossless());
+    }
 
     pub fn list(&self, parent_id: &session::Id) -> Result<Vec<Task>, Error> {
         self.require_session(parent_id)?;
@@ -199,12 +210,25 @@ impl Service {
     }
 
     pub async fn launch(&self, input: LaunchInput) -> Result<Task, Error> {
+        self.launch_with_cancellation(input, &crate::tools::code_mode::Cancellation::default())
+            .await
+    }
+
+    pub async fn launch_with_cancellation(
+        &self,
+        input: LaunchInput,
+        cancellation: &crate::tools::code_mode::Cancellation,
+    ) -> Result<Task, Error> {
         let ids = Launch::new(
             &input.parent_id,
             &input.parent_assistant_message_id,
             &input.tool_call_id,
         );
-        let _guard = self.lock(ids.child_id.as_lossless()).await;
+        let _guard = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => return Err(Error::Cancelled),
+            guard = self.lock(ids.child_id.as_lossless()) => guard,
+        };
         let parent = self
             .sessions
             .get(&input.parent_id)?
@@ -228,14 +252,14 @@ impl Service {
                 )));
             }
             if existing.state.as_str() == Some("starting") {
-                let reservation = self.reserve(&input).await?;
+                let reservation = self.reserve(&input, cancellation).await?;
                 let task = self.start(&ids, &input.prompt).await?;
                 self.hold(&ids, reservation);
                 return Ok(task);
             }
             return Ok(task_from_row(&existing)?);
         }
-        let reservation = self.reserve(&input).await?;
+        let reservation = self.reserve(&input, cancellation).await?;
         let now = now();
         let ceiling = ceiling::inherit(
             parent.permission_ceiling.as_ref(),
@@ -744,19 +768,31 @@ impl Service {
         Ok(())
     }
 
-    async fn reserve(&self, input: &LaunchInput) -> Result<Reservation, Error> {
-        super::preflight::reserve(
+    async fn reserve(
+        &self,
+        input: &LaunchInput,
+        cancellation: &crate::tools::code_mode::Cancellation,
+    ) -> Result<Reservation, Error> {
+        let call = super::preflight::ToolCall {
+            agent: input.prepared.agent.clone(),
+            message_id: input.parent_assistant_message_id.as_lossless().clone(),
+            call_id: input.tool_call_id.clone().into(),
+        };
+        let reservation = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => return Err(Error::Cancelled),
+            reservation = super::preflight::reserve(
             &input.guardrails,
             &input.parent_id,
             &input.prepared.agent,
             &input.description,
-            &super::preflight::ToolCall {
-                agent: input.prepared.agent.clone(),
-                message_id: input.parent_assistant_message_id.as_lossless().clone(),
-                call_id: input.tool_call_id.clone().into(),
-            },
-        )
-        .await
+            &call,
+            ) => reservation?,
+        };
+        if cancellation.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        Ok(reservation)
     }
 
     fn hold(&self, ids: &Launch, reservation: Reservation) {

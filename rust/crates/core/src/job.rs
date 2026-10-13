@@ -333,6 +333,18 @@ impl Jobs {
         }
         Some(info)
     }
+    pub(crate) fn mark_cancelled(&self, id: &str) -> Option<Info> {
+        let mut state = self.0.lock();
+        let job = state.jobs.get_mut(id)?;
+        if job.info.status == Status::Running {
+            job.blocking.clear();
+            job.info.status = Status::Cancelled;
+            job.info.completed_at = Some(crate::platform::now() as u64);
+            job.task = None;
+            job.done.send_replace(Some(job.info.clone()));
+        }
+        Some(job.info.clone())
+    }
 
     pub fn close(&self) {
         self.0.abort_all();

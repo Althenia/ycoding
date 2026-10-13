@@ -359,6 +359,7 @@ pub fn fold(tx: &mut Write<'_>, event: &Event) -> Result<(), Error> {
         Some("session.provider.request.recorded.1") => {
             super::provider_request::apply(tx, &object, &event.aggregate_id)?
         }
+        Some("session.usage.recorded.1") => super::usage::apply(tx, &object, &event.aggregate_id)?,
         Some(
             "session.compaction.admitted.2"
             | "session.compaction.started.2"

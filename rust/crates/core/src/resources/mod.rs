@@ -6,6 +6,7 @@ pub mod command;
 pub mod config;
 pub mod credential;
 pub mod cursor;
+pub mod decision;
 pub mod discovery;
 pub mod generate;
 pub mod image;

@@ -174,7 +174,7 @@ pub fn normalize(resource: &str, content: &Content, limits: Limits) -> Result<Co
     }
     Err(size_error())
 }
-fn decode_base64(text: &str) -> Vec<u8> {
+pub(crate) fn decode_base64(text: &str) -> Vec<u8> {
     let mut output = Vec::new();
     let mut buffer = 0_u32;
     let mut bits = 0;

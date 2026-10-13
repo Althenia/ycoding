@@ -23,6 +23,7 @@ pub trait SkillHistory: Send + Sync {
     ) -> ConsumerFuture<'_, Option<ActiveSkill>>;
 }
 
+#[derive(Clone)]
 pub struct SessionTools {
     pub subagent: Arc<dyn Tool>,
     pub subagent_control: Arc<dyn Tool>,
@@ -31,10 +32,84 @@ pub struct SessionTools {
     pub question: Arc<dyn Tool>,
     pub decision: Arc<dyn Tool>,
     pub todowrite: Arc<dyn Tool>,
-    pub conversation_compact: Arc<dyn Tool>,
+    pub conversation_compact: Arc<crate::tools::builtin::conversation_compact::Advisor>,
     pub task_complete: Arc<dyn Tool>,
+    subagent_adapter: Arc<crate::tools::builtin::subagent::Subagent>,
+    orchestration: Arc<crate::session::orchestration::Service>,
+}
+pub struct SessionDependencies {
+    pub subagent: crate::tools::builtin::subagent::Subagent,
+    pub forms: crate::tools::policy::forms::Forms,
+    pub decisions: Arc<crate::resources::decision::Service>,
+    pub publish: crate::tools::policy::Publisher,
+    pub compaction: crate::session::compaction_policy::Resolved,
 }
 impl SessionTools {
+    pub fn new(dependencies: SessionDependencies) -> Self {
+        use crate::tools::builtin::{
+            decision::Decision, goal::Goal, question::Question, subagent_control::SubagentControl,
+            subagent_report::SubagentReport, task_complete::TaskComplete, todowrite::TodoWrite,
+        };
+        let subagent = Arc::new(dependencies.subagent);
+        Self {
+            subagent: subagent.clone(),
+            subagent_control: Arc::new(SubagentControl {
+                orchestration: subagent.orchestration.clone(),
+                policy: subagent.policy.clone(),
+            }),
+            subagent_report: Arc::new(SubagentReport {
+                orchestration: subagent.orchestration.clone(),
+                execution: subagent.execution.clone(),
+                jobs: subagent.jobs.clone(),
+            }),
+            goal: Arc::new(Goal {
+                autonomy: crate::session::autonomy::Service::new(subagent.store.client.clone()),
+                policy: subagent.policy.clone(),
+            }),
+            question: Arc::new(Question {
+                forms: dependencies.forms,
+                policy: subagent.policy.clone(),
+            }),
+            decision: Arc::new(Decision {
+                decisions: dependencies.decisions,
+                policy: subagent.policy.clone(),
+            }),
+            todowrite: Arc::new(TodoWrite {
+                store: subagent.store.clone(),
+                policy: subagent.policy.clone(),
+                publish: dependencies.publish,
+            }),
+            task_complete: Arc::new(TaskComplete),
+            conversation_compact: Arc::new(
+                crate::tools::builtin::conversation_compact::Advisor::new(
+                    subagent.store.clone(),
+                    dependencies.compaction,
+                ),
+            ),
+            orchestration: subagent.orchestration.clone(),
+            subagent_adapter: subagent,
+        }
+    }
+    pub fn decorate(
+        &self,
+        context: &Context,
+        definitions: &mut Vec<ycoding_ai::llm::ToolDefinition>,
+    ) -> Result<(), Failure> {
+        if !self
+            .orchestration
+            .managed(&context.session_id)
+            .map_err(|error| Failure::message(error.to_string()))?
+        {
+            definitions.retain(|definition| definition.name.as_str() != Some("subagent_report"));
+        }
+        if let Some(subagent) = definitions
+            .iter_mut()
+            .find(|definition| definition.name.as_str() == Some("subagent"))
+        {
+            subagent.description = self.subagent_adapter.description_for(context)?;
+        }
+        Ok(())
+    }
     pub fn entries(self) -> Vec<(String, Arc<dyn Tool>)> {
         vec![
             ("subagent".into(), self.subagent),
@@ -44,7 +119,6 @@ impl SessionTools {
             ("question".into(), self.question),
             ("decision".into(), self.decision),
             ("todowrite".into(), self.todowrite),
-            ("conversation_compact".into(), self.conversation_compact),
             ("task_complete".into(), self.task_complete),
         ]
     }

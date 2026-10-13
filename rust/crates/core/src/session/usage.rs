@@ -116,3 +116,36 @@ fn safe(value: Option<f64>) -> f64 {
         .filter(|value| value.is_finite() && *value >= 0.0)
         .unwrap_or(0.0)
 }
+
+pub(crate) fn apply(
+    tx: &mut ycoding_store::Write<'_>,
+    object: &ycoding_schema::ObjectDecoder<'_>,
+    id: &ycoding_schema::LosslessString,
+) -> Result<(), ycoding_store::Error> {
+    use ycoding_store::session::SessionTable;
+    let cost: ycoding_schema::money::Usd = object
+        .field("cost")
+        .map_err(super::projector::record_error)?;
+    let tokens: token_usage::Info = object
+        .field("tokens")
+        .map_err(super::projector::record_error)?;
+    let key = super::key(id);
+    let Some(mut row) = tx.get::<SessionTable>(&key)? else {
+        return Err(ycoding_store::Error::Rejected("Session not found"));
+    };
+    let add = |current: i64, value: f64| {
+        if !value.is_finite() || value < 0.0 || value.fract() != 0.0 || value > i64::MAX as f64 {
+            return Err(ycoding_store::Error::Rejected("Invalid token usage"));
+        }
+        current
+            .checked_add(value as i64)
+            .ok_or(ycoding_store::Error::Rejected("Token usage overflow"))
+    };
+    row.cost += cost.get();
+    row.tokens_input = add(row.tokens_input, tokens.input.get())?;
+    row.tokens_output = add(row.tokens_output, tokens.output.get())?;
+    row.tokens_reasoning = add(row.tokens_reasoning, tokens.reasoning.get())?;
+    row.tokens_cache_read = add(row.tokens_cache_read, tokens.cache.read.get())?;
+    row.tokens_cache_write = add(row.tokens_cache_write, tokens.cache.write.get())?;
+    SessionTable::put(tx, &row)
+}
