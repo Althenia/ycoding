@@ -120,14 +120,27 @@ fn row_error(table: &'static str, row: u64, error: crate::Error) -> Error {
     }
 }
 
+pub(super) fn task_owner_migrated(db: &Connection) -> Result<bool, Error> {
+    Ok(db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM migration WHERE id = ?1)",
+        ["20261014011041_task-owner"],
+        |row| row.get(0),
+    )?)
+}
+
 fn walk<T: TableSpec>(
     db: &Connection,
     progress: ProgressFn<'_>,
     decode: fn(&read::Row<'_, '_>) -> Result<T::Record, Error>,
     mut consume: impl FnMut(T::Record, u64) -> Result<(), Error>,
 ) -> Result<TableSummary, Error> {
+    let columns = if T::NAME == "session_task" && !task_owner_migrated(db)? {
+        "*, NULL AS owner_pid, NULL AS owner_started"
+    } else {
+        "*"
+    };
     let mut query = db.prepare(&format!(
-        "SELECT rowid AS _import_rowid,* FROM {} ORDER BY rowid",
+        "SELECT rowid AS _import_rowid,{columns} FROM {} ORDER BY rowid",
         T::NAME
     ))?;
     let mut rows = query.query([])?;

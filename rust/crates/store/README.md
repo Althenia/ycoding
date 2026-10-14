@@ -145,9 +145,9 @@ The inventory below uses the current `packages/core/src/database/schema.gen.ts` 
 The unreleased version-1 `session_task` record includes nullable `owner_pid`
 (`i64`) and `owner_started` (lossless string) fields after `attempt_started`.
 Presence tags preserve each SQL NULL independently and start-time text is stored
-without normalization. The SQLite importer requires the exact TS `owner_pid`
-integer and `owner_started` text column inventory and copies both values; it
-neither claims an owner nor publishes events or starts execution. No user-data
+without normalization. SQLite task sources without the owner migration import
+both fields as NULL; migrated sources preserve both values. Import neither
+claims an owner nor publishes events or starts execution. No redb user-data
 migration or earlier task-record fallback is defined for this unreleased format.
 
 Record codec version 1 begins with byte `01`, followed by each record's declared fields in order. Signed integers use eight-byte big-endian two's-complement values; reals preserve all eight IEEE-754 bytes, including negative zero. Optional values have `00`/`01` presence tags, so SQL NULL is distinct from JSON null, zero, false, and an empty string. Stored integer booleans remain integers; unchecked SQL columns are not narrowed to `bool` or nonnegative counters.
@@ -433,6 +433,18 @@ KV set preserves the first creation time, replaces the value, and updates modifi
 | `session_provider_state_link_time_check`                  | integer `time_created >= 0`                                                                                                                                    | Same consumer                            |
 
 ## Offline SQLite import
+
+Core sources use `database_format = current-2026-08-04` and one of two exact
+`session_task` inventories. A source without the
+`migration.id = 20261014011041_task-owner` row must omit both `owner_pid` and
+`owner_started`; import supplies SQL NULL for these two new redb projection
+fields during loading, validation and verification. A source with that migration
+row must include both nullable columns, and import preserves their values.
+Partial pairs, migration/column mismatches, and every unrelated table or column
+inventory difference are refused before candidate creation. Migration rows are
+retained verbatim; import does not run or record a SQLite migration. Both source
+variants use the same redb catalog and task codec. Bootstrap and Meeting source
+contracts are unchanged.
 
 `import::stage(Request { source, candidate, kind, metadata }, progress)` imports an offline synthetic or explicitly selected SQLite source into a staged redb candidate and resumes recognizable interrupted staging. It does not activate a database, fence launchers, select recovery roots, or modify SQLite. `DatabaseKind::Core` requires the exact 47 main tables from `packages/core/src/database/schema.gen.ts` and the two bootstrap tables created in that same SQLite file by `database/migration.ts`. `DatabaseKind::Bootstrap` accepts only `migration` and `database_format`. `DatabaseKind::Meeting` uses the separately owned Meeting catalog described below. Every source table has an existing compiled redb owner; `resource_sequence`, analytics bookkeeping and importer provenance are redb-owned additions, not source tables.
 

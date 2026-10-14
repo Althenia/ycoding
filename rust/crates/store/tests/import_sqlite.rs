@@ -38,11 +38,6 @@ impl Fixture {
                 db.execute_batch(&source[pair[0] + 1..pair[1]].replace("\\`", "`"))
                     .unwrap();
             }
-            db.execute_batch(
-                "ALTER TABLE session_task ADD owner_pid integer;
-                 ALTER TABLE session_task ADD owner_started text;",
-            )
-            .unwrap();
         }
         db.execute_batch(
             "CREATE TABLE migration (id TEXT PRIMARY KEY, time_completed INTEGER NOT NULL);
@@ -92,10 +87,202 @@ fn rows() -> &'static str {
      INSERT INTO event VALUES ('event','aggregate',-1,0,'test','{\"empty\":\"\"}');"
 }
 
+fn task_owner_schema(db: &Connection) {
+    db.execute_batch(
+        "ALTER TABLE session_task ADD owner_pid integer;
+         ALTER TABLE session_task ADD owner_started text;
+         INSERT INTO migration VALUES ('20261014011041_task-owner', 1);",
+    )
+    .unwrap();
+}
+
+fn stable_task(db: &Connection) {
+    db.execute_batch(
+        "INSERT INTO project (id,worktree,time_created,time_updated,sandboxes) VALUES ('p','/synthetic',1,1,'[]');
+         INSERT INTO session (id,project_id,directory,title,time_created,time_updated) VALUES ('parent','p','/synthetic','parent',1,1), ('child','p','/synthetic','child',1,1);
+         INSERT INTO session_task (session_id,parent_id,parent_assistant_message_id,tool_call_id,input_id,description,agent,model,prompt_digest,background,delivery,state,time_created,time_updated)
+         VALUES ('child','parent','assistant','call','input','task','build','{\"providerID\":\"test\",\"id\":\"test\"}','digest',1,'steer','running',1,1);",
+    )
+    .unwrap();
+}
+
+#[test]
+fn stable_task_rows_import_missing_owners_as_null_without_changing_source() {
+    let fixture = Fixture::new();
+    let db = fixture.create(DatabaseKind::Core);
+    stable_task(&db);
+    drop(db);
+    let source = fixture.source();
+    let candidate = fixture.candidate();
+    let original = std::fs::read(&source).unwrap();
+    assert!(matches!(
+        import::stage(
+            fixture.request(DatabaseKind::Core, &source, &candidate),
+            |phase| {
+                if phase == Progress::Loaded("session_task") {
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
+                }
+            }
+        ),
+        Err(import::Error::Cancelled)
+    ));
+    let report = import::stage(
+        fixture.request(DatabaseKind::Core, &source, &candidate),
+        |_| ControlFlow::Continue(()),
+    )
+    .unwrap();
+    assert_eq!(
+        report
+            .tables
+            .iter()
+            .find(|table| table.name == "session_task")
+            .unwrap()
+            .rows,
+        1
+    );
+    assert_eq!(std::fs::read(&source).unwrap(), original);
+    for _ in 0..2 {
+        let store = Store::open(
+            &candidate,
+            Options::core(),
+            import::catalog(DatabaseKind::Core),
+        )
+        .unwrap();
+        let snapshot = store.snapshot().unwrap();
+        let row = snapshot
+            .scan::<session::TaskTable>(Bound::Unbounded, Bound::Unbounded, 1)
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(row.owner_pid, None);
+        assert_eq!(row.owner_started, None);
+        assert_eq!(row.state.as_str(), Some("running"));
+        assert_eq!(row.revision, 0);
+        let migrations = snapshot
+            .scan::<artifacts::MigrationTable>(Bound::Unbounded, Bound::Unbounded, 10)
+            .unwrap();
+        assert_eq!(migrations.len(), 1);
+        assert_eq!(migrations[0].id.as_str(), Some("baseline"));
+        assert!(
+            snapshot
+                .scan::<session::EventTable>(Bound::Unbounded, Bound::Unbounded, 1)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            snapshot
+                .scan::<session::NotificationTable>(Bound::Unbounded, Bound::Unbounded, 1)
+                .unwrap()
+                .is_empty()
+        );
+        drop(snapshot);
+        store.shutdown().unwrap();
+    }
+}
+
+#[test]
+fn task_owner_inventory_accepts_only_complete_migration_selected_variants() {
+    for (journal, columns) in [
+        (false, "ALTER TABLE session_task ADD owner_pid integer;"),
+        (false, "ALTER TABLE session_task ADD owner_started text;"),
+        (
+            false,
+            "ALTER TABLE session_task ADD owner_pid integer; ALTER TABLE session_task ADD owner_started text;",
+        ),
+        (true, ""),
+        (true, "ALTER TABLE session_task ADD owner_pid integer;"),
+        (true, "ALTER TABLE session_task ADD owner_started text;"),
+    ] {
+        let fixture = Fixture::new();
+        let db = fixture.create(DatabaseKind::Core);
+        db.execute_batch(columns).unwrap();
+        if journal {
+            db.execute_batch("INSERT INTO migration VALUES ('20261014011041_task-owner',1);")
+                .unwrap();
+        }
+        drop(db);
+        let source = fixture.source();
+        let candidate = fixture.candidate();
+        let original = std::fs::read(&source).unwrap();
+        assert!(
+            matches!(
+                import::stage(
+                    fixture.request(DatabaseKind::Core, &source, &candidate),
+                    |_| ControlFlow::Continue(())
+                ),
+                Err(import::Error::Source(
+                    "column inventory differs from the exact compiled baseline"
+                ))
+            ),
+            "journal={journal}, columns={columns}"
+        );
+        assert!(!candidate.exists());
+        assert_eq!(std::fs::read(source).unwrap(), original);
+    }
+    for migrated in [false, true] {
+        for malformed in [
+            "ALTER TABLE session_task ADD unrelated text;",
+            "ALTER TABLE session_task DROP COLUMN progress;",
+            "ALTER TABLE project ADD unrelated text;",
+            "CREATE TABLE unrelated (id text);",
+        ] {
+            let fixture = Fixture::new();
+            let db = fixture.create(DatabaseKind::Core);
+            if migrated {
+                task_owner_schema(&db);
+            }
+            db.execute_batch(malformed).unwrap();
+            drop(db);
+            let source = fixture.source();
+            let candidate = fixture.candidate();
+            let original = std::fs::read(&source).unwrap();
+            assert!(
+                matches!(
+                    import::stage(
+                        fixture.request(DatabaseKind::Core, &source, &candidate),
+                        |_| ControlFlow::Continue(())
+                    ),
+                    Err(import::Error::Source(_))
+                ),
+                "migrated={migrated}, malformed={malformed}"
+            );
+            assert!(!candidate.exists());
+            assert_eq!(std::fs::read(source).unwrap(), original);
+        }
+    }
+}
+
+#[test]
+fn migrated_task_owner_columns_reject_unrepresentable_values_without_nulling_them() {
+    for (update, column) in [
+        ("owner_pid=1.5", "owner_pid"),
+        ("owner_started=X'FF'", "owner_started"),
+    ] {
+        let fixture = Fixture::new();
+        let db = fixture.create(DatabaseKind::Core);
+        task_owner_schema(&db);
+        stable_task(&db);
+        db.execute_batch(&format!("UPDATE session_task SET {update};"))
+            .unwrap();
+        drop(db);
+        let source = fixture.source();
+        let candidate = fixture.candidate();
+        let original = std::fs::read(&source).unwrap();
+        assert!(
+            matches!(import::stage(fixture.request(DatabaseKind::Core, &source, &candidate), |_| ControlFlow::Continue(())), Err(import::Error::Row { table: "session_task", column: Some(actual), .. }) if actual == column)
+        );
+        assert!(import::sealed(&candidate, DatabaseKind::Core).is_err());
+        assert_eq!(std::fs::read(source).unwrap(), original);
+    }
+}
+
 #[test]
 fn task_owners_round_trip_through_sqlite_import_and_reopen() {
     let fixture = Fixture::new();
     let db = fixture.create(DatabaseKind::Core);
+    task_owner_schema(&db);
     db.execute_batch(
         "INSERT INTO project (id,worktree,time_created,time_updated,sandboxes) VALUES ('p','/synthetic',1,1,'[]');
          INSERT INTO session (id,project_id,directory,title,time_created,time_updated) VALUES ('parent','p','/synthetic','parent',1,1);",

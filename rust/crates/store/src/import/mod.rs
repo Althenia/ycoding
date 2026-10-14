@@ -606,6 +606,7 @@ fn validate_source(db: &Connection, kind: DatabaseKind) -> Result<(), Error> {
     if db.query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))? != "ok" {
         return Err(Error::Source("SQLite integrity check failed"));
     }
+    let task_owner_migrated = kind == DatabaseKind::Core && mappings::task_owner_migrated(db)?;
     for table in mappings::tables(kind) {
         let mut columns = db
             .prepare(&format!("PRAGMA table_xinfo('{}')", table.name))?
@@ -639,7 +640,13 @@ fn validate_source(db: &Connection, kind: DatabaseKind) -> Result<(), Error> {
             != table
                 .columns
                 .iter()
-                .map(|column| (*column).to_owned())
+                .copied()
+                .filter(|column| {
+                    table.name != "session_task"
+                        || task_owner_migrated
+                        || !["owner_pid", "owner_started"].contains(column)
+                })
+                .map(str::to_owned)
                 .collect()
         {
             return Err(Error::Source(
