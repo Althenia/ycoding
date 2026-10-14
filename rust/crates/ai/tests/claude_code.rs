@@ -377,6 +377,37 @@ impl Account for FixtureAccount {
     }
 }
 
+#[test]
+fn claude_code_server_tool_errors_are_provider_executed_results() {
+    let route = claude_code::route(Arc::new(FixtureAccount::default()), settings());
+    let request = Request::new(route.model("claude-fixture"));
+    for name in ["web_search", "web_fetch", "code_execution"] {
+        let mut parser = route.protocol.parser(&request.resolved());
+        let frame = parse_json(&format!(r#"{{"type":"content_block_start","index":0,"content_block":{{"type":"{name}_tool_result","tool_use_id":"server_1","content":{{"type":"{name}_tool_result_error","error_code":"unavailable"}}}}}}"#)).unwrap();
+        let events = parser.push(&frame).unwrap();
+        let result = events
+            .iter()
+            .find_map(|event| match event {
+                Event::ToolResult(result) => Some(result),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(result.id.as_str(), Some("server_1"));
+        assert_eq!(result.name.as_str(), Some(name));
+        assert_eq!(result.provider_executed, Some(true));
+        assert_eq!(
+            result.result,
+            ycoding_ai::llm::ToolResultValue::Error(
+                parse_json(&format!(
+                    r#"{{"type":"{name}_tool_result_error","error_code":"unavailable"}}"#
+                ))
+                .unwrap()
+            )
+        );
+        assert!(result.output.is_none());
+    }
+}
+
 struct Fixture {
     base: String,
     requests: Arc<Mutex<Vec<String>>>,

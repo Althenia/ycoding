@@ -12,6 +12,10 @@ use ycoding_schema::{
 
 const OPAQUE_COMPACTION_ITEM: &str = "opaqueCompactionItem";
 
+#[cfg(test)]
+#[path = "../../../tests/session_support/mod.rs"]
+mod test_support;
+
 struct Fragment {
     id: LosslessString,
     ordinal: usize,
@@ -374,6 +378,27 @@ impl Publisher {
                 let ordinal = tool.ordinal;
                 let result_state =
                     self.captured(result.provider_metadata.as_ref(), ordinal, "tool-result");
+                if matches!(result.result, llm::ToolResultValue::Error(_)) {
+                    self.event(
+                        "session.tool.failed",
+                        ObjectEncoder::new()
+                            .field("callID", &result.id)
+                            .field("executed", &true)
+                            .field(
+                                "error",
+                                &ycoding_schema::session_error::Error {
+                                    r#type: "tool.execution".into(),
+                                    message: result.result.to_text(),
+                                },
+                            )
+                            .field("result", &result.result.to_json())
+                            .optional("resultState", &result_state)
+                            .finish(),
+                        now,
+                    )
+                    .await?;
+                    return Ok(None);
+                }
                 let output = result
                     .output
                     .or_else(|| llm::ToolOutput::from_result(&result.result))
@@ -654,5 +679,120 @@ fn phase(state: Option<&JsonObject>) -> Option<LosslessString> {
             Some(phase.clone())
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Publisher, test_support};
+    use crate::session::{run_coordinator::Error, store::Service};
+    use ycoding_ai::llm::{Event, ToolCall, ToolOutput, ToolResult, ToolResultValue};
+    use ycoding_schema::{
+        DomainDecode, DomainEncode, JsonValue, parse_json, session, session_message,
+    };
+
+    #[tokio::test]
+    async fn provider_tool_results_prioritize_errors_and_validate_non_error_outputs() {
+        for (result, output, expected) in [
+            (
+                ToolResultValue::Error(JsonValue::String("Unavailable".into())),
+                Some(ToolOutput {
+                    structured: JsonValue::Null,
+                    content: vec![],
+                }),
+                "failed",
+            ),
+            (
+                ToolResultValue::Json(parse_json(r#"{"value":1}"#).unwrap()),
+                None,
+                "success",
+            ),
+            (ToolResultValue::Json(JsonValue::Null), None, "invalid"),
+        ] {
+            let store = test_support::store();
+            let service = Service::new(store.client());
+            service.publish(ycoding_store::session::NewEvent {
+                id: "evt_started".into(), aggregate_id: "ses_one".into(), created: 2,
+                type_: "session.step.started.1".into(),
+                data: parse_json(r#"{"sessionID":"ses_one","assistantMessageID":"msg_step","agent":"build","model":{"providerID":"openai","id":"gpt-5.6"}}"#).unwrap(),
+            }).await.unwrap();
+            let mut publisher = Publisher::new(
+                service.clone(),
+                crate::event_feed::Feed::attach(&store.client()),
+                ycoding_schema::location::Ref::decode(
+                    &parse_json(r#"{"directory":"/project"}"#).unwrap(),
+                )
+                .unwrap(),
+                session::Id::new("ses_one").unwrap(),
+                session_message::Id::new("msg_step").unwrap(),
+                "openai".into(),
+            );
+            publisher
+                .push(
+                    Event::ToolCall(ToolCall {
+                        id: "server_1".into(),
+                        name: "web_search".into(),
+                        input: parse_json("{}").unwrap(),
+                        provider_executed: Some(true),
+                        provider_metadata: None,
+                    }),
+                    3,
+                )
+                .await
+                .unwrap();
+            let settled = publisher
+                .push(
+                    Event::ToolResult(ToolResult {
+                        id: "server_1".into(),
+                        name: "web_search".into(),
+                        result,
+                        cache: None,
+                        provider_executed: Some(true),
+                        provider_metadata: None,
+                        output,
+                    }),
+                    4,
+                )
+                .await;
+            if expected == "invalid" {
+                let Error::Runner(error) = settled.unwrap_err() else {
+                    panic!("expected malformed provider output")
+                };
+                assert_eq!(error.r#type.as_str(), Some("provider.invalid-output"));
+                assert_eq!(
+                    error.message.as_str(),
+                    Some("Provider structured tool output is not an object")
+                );
+                continue;
+            }
+            assert!(settled.unwrap().is_none());
+            let (_, session_message::Info::Assistant(assistant)) = service
+                .message(&session_message::Id::new("msg_step").unwrap())
+                .unwrap()
+                .unwrap()
+            else {
+                panic!()
+            };
+            let session_message::AssistantContent::Tool(tool) = &assistant.content[0] else {
+                panic!()
+            };
+            assert_eq!(tool.executed, Some(true));
+            assert!(tool.time.completed.is_some());
+            match &tool.state {
+                session_message::ToolState::Error(error) => {
+                    assert_eq!(expected, "failed");
+                    assert_eq!(error.error.message.as_str(), Some("Unavailable"));
+                    assert_eq!(error.result, Some(JsonValue::String("Unavailable".into())));
+                }
+                session_message::ToolState::Completed(output) => {
+                    assert_eq!(expected, "success");
+                    assert_eq!(
+                        output.structured.encode(),
+                        parse_json(r#"{"value":1}"#).unwrap()
+                    );
+                }
+                _ => panic!("provider result did not settle"),
+            }
+        }
     }
 }

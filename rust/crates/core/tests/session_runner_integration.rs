@@ -2050,6 +2050,106 @@ fn anthropic_local(store: &ycoding_store::Store, endpoint: &str, api_key: &str) 
 }
 
 #[tokio::test]
+async fn provider_executed_error_result_settles_the_tool_and_step_and_replays() {
+    const ERROR: &str = concat!(
+        "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"server_tool_use\",\"id\":\"search_1\",\"name\":\"web_search\",\"input\":{}}}\n\n",
+        "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+        "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"web_search_tool_result\",\"tool_use_id\":\"search_1\",\"content\":{\"type\":\"web_search_tool_result_error\",\"error_code\":\"max_uses_exceeded\"}}}\n\n",
+        "data: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"text\",\"text\":\"Search unavailable\"}}\n\n",
+        "data: {\"type\":\"content_block_stop\",\"index\":2}\n\n",
+        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\n",
+        "data: {\"type\":\"message_stop\"}\n\n",
+    );
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, mut requests, server) = server(vec![ERROR, ONE_HOUR]).await;
+    let coordinator = Coordinator::new(Arc::new(anthropic_local(&store, &endpoint, "fixture")));
+    let id = session::Id::new("ses_one").unwrap();
+    let result = coordinator.run(&id).await;
+    assert!(
+        result.is_ok(),
+        "provider tool error must not fail the Step: {result:?}"
+    );
+    let assistant = last_assistant(&service);
+    assert!(assistant.error.is_none());
+    assert!(assistant.time.completed.is_some());
+    let session_message::AssistantContent::Tool(tool) = &assistant.content[0] else {
+        panic!("missing provider tool")
+    };
+    assert_eq!(tool.executed, Some(true));
+    assert!(tool.time.completed.is_some());
+    assert_eq!(
+        tool.provider_result_state.as_ref().unwrap().encode(),
+        parse_json(r#"{"blockType":"web_search_tool_result"}"#).unwrap()
+    );
+    let session_message::ToolState::Error(failed) = &tool.state else {
+        panic!("provider error was not projected as a failed tool")
+    };
+    let payload =
+        parse_json(r#"{"type":"web_search_tool_result_error","error_code":"max_uses_exceeded"}"#)
+            .unwrap();
+    assert_eq!(failed.result.as_ref(), Some(&payload));
+    assert_eq!(failed.error.r#type.as_str(), Some("tool.execution"));
+    assert_eq!(
+        failed.error.message,
+        ycoding_schema::stringify_json(&payload).into()
+    );
+    let types = event_types(&store);
+    assert_eq!(
+        types
+            .iter()
+            .filter(|kind| kind.as_str() == "session.tool.failed.1")
+            .count(),
+        1
+    );
+    assert_eq!(
+        types
+            .iter()
+            .filter(|kind| kind.as_str() == "session.step.ended.1")
+            .count(),
+        1
+    );
+    assert!(!types.iter().any(|kind| matches!(
+        kind.as_str(),
+        "session.step.failed.1" | "session.tool.success.1"
+    )));
+    requests.recv().await.unwrap();
+    admit_input(&service, "retry_search", "Continue", "steer").await;
+    coordinator.run(&id).await.unwrap();
+    let ycoding_schema::JsonValue::Object(replay) = requests.recv().await.unwrap() else {
+        panic!("request is not an object")
+    };
+    let Some(ycoding_schema::JsonValue::Array(messages)) = replay.get(&"messages".into()) else {
+        panic!("missing replay messages")
+    };
+    let result = messages
+        .iter()
+        .filter_map(|message| match message {
+            ycoding_schema::JsonValue::Object(message) => message.get(&"content".into()),
+            _ => None,
+        })
+        .filter_map(|content| match content {
+            ycoding_schema::JsonValue::Array(content) => Some(content),
+            _ => None,
+        })
+        .flatten()
+        .find(|part| match part {
+            ycoding_schema::JsonValue::Object(part) => {
+                part.get(&"tool_use_id".into())
+                    == Some(&ycoding_schema::JsonValue::String("search_1".into()))
+            }
+            _ => false,
+        });
+    assert_eq!(
+        result,
+        Some(&parse_json(r#"{"type":"web_search_tool_result","tool_use_id":"search_1","content":{"type":"web_search_tool_result_error","error_code":"max_uses_exceeded"}}"#).unwrap())
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn captured_reasoning_state_replays_only_for_the_same_model_and_account() {
     let store = support::store();
     let service = Service::new(store.client());

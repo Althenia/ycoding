@@ -314,6 +314,8 @@ Live frames are the local Protocol payloads. Durable events carry their aggregat
 
 ### Steps and provider attempts
 
+Provider-executed tool error results settle the tool as `session.tool.failed` with `executed: true`, the provider result, and any captured result state. They do not fail the Step. Non-error results require valid tool output; malformed output still fails the Step.
+
 Native HTTP/SSE framing ignores `retry:` reconnect hints without closing or replaying the active response. It preserves subsequent content, completion, usage, and read errors across byte boundaries and mixed LF/CRLF line endings. Empty SSE data and `[DONE]` markers are not provider completion. A normalized stream that ends without a terminal event fails as a transport read error and follows the bounded recovery policy; it never synthesizes success or executes an unfinished tool call.
 
 Responses routes reconcile assistant text from deltas, finalized text/content parts, completed message items, and the terminal response output. Completion snapshots append only missing text; repeated snapshots do not duplicate text or streamed tool calls. Content-part identity and assistant phase are preserved. A snapshot that contradicts already streamed text fails as invalid provider output rather than rewriting delivered content. A valid answer supplied only at completion is a normal response, not terminal silence, and creates no extra recovery request.

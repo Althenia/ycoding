@@ -105,7 +105,10 @@ pub fn convert(
                                     }
                                     part.clone()
                                 }).collect() }.result()),
-                                session_message::ToolState::Error(state) => Some(llm::ToolResultValue::Error(ycoding_schema::ObjectEncoder::new().field("error", &state.error).field("structured", &state.structured).field("content", &state.content).finish())),
+                                session_message::ToolState::Error(state) => Some(llm::ToolResultValue::Error(match (tool.executed, state.result.as_ref()) {
+                                    (Some(true), Some(result)) => result.clone(),
+                                    _ => ycoding_schema::ObjectEncoder::new().field("error", &state.error).field("structured", &state.structured).field("content", &state.content).finish(),
+                                })),
                                 _ => None,
                             };
                             if let Some(result) = result {
