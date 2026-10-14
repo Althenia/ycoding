@@ -42,7 +42,7 @@ Supported presentation surfaces are the terminal application and the SolidJS rem
 
 ### 2. Current runtime architecture
 
-Supported contracts are the current session, configuration, plugin, client, event, and TUI paths.
+The beta runs a local Rust backend with redb durable storage and binary revision 5 operations. The native CLI launches its embedded runtime; the full TUI, Mini, and remote web client are presentation clients. Rust Core owns Session execution, tools, providers, permissions, guardrails, resources, and persistence. See [architecture](./architecture.md).
 
 New changes extend current contracts; there is one current runtime. Changing stored data requires an explicit, tested migration.
 
@@ -57,7 +57,7 @@ Durable state owns prompt admission, session history, instructions, compaction r
 The runtime supports three explicit modes:
 
 - `normal`: standard interactive execution;
-- `yolo` (`0-3`): `0` manual, `1` auto-approves ask permissions and ordinary guardrail reviews, `2` also auto-answers questions/forms (`true` → `2`); `3` retains its numeric level and currently behaves like `2`. Active `goal` grants answers and ask permissions at `0`, while ordinary guardrail auto-approval requires `1` or higher;
+- `yolo` (`0-3`): `0` manual, `1` auto-approves ask permissions and ordinary guardrail reviews, `2` also auto-answers questions/forms; `3` retains its numeric level and currently behaves like `2`. Active `goal` grants answers and ask permissions at `0`, while ordinary guardrail auto-approval requires `1` or higher;
 - `goal`: repeated progress toward a durable goal until completion, stop, or a bounded no-progress terminal state.
 
 Autonomy remains visible, inspectable, interruptible, and subject to permission ceilings and Session guardrails. Effective YOLO 1-3 auto-approves ordinary guardrail reviews; YOLO 0, including an active `goal`, keeps reviews enforced. Hard reviews always require a fresh human decision and cannot be bypassed by autonomy or reusable approval. The expanded AUTONOMY sidebar shows who decides Permissions, Guardrails, and Questions at the effective YOLO level and active goal (`ask you`, `auto`, or `auto · goal`). Completion claims require verification evidence.
@@ -75,12 +75,13 @@ Customization is a product capability. Supported domains include:
 - agents and subagents;
 - commands;
 - skills and instruction sources;
-- hooks and plugins;
+- trusted process extensions with host-granted tools, hooks, and resource capabilities;
+- terminal presentation plugins;
 - TUI slots;
 - MCP servers and tools;
 - project and global artifacts;
 - model providers;
-- opt-in local meeting capture and intelligence through `ycoding meeting`, its page-owned consent-led audio capture, and its runtime and TUI plugins;
+- opt-in local meeting capture and intelligence through `ycoding meeting`, its page-owned consent-led audio capture, Rust Meeting service, and TUI presentation;
 - Session guardrails and provider-usage sources.
 
 Project artifacts provide managed scope, lifecycle, validation, provenance, and rollback for reusable agent behavior.
@@ -91,13 +92,13 @@ Provider integration optimizes cost and cache reuse without changing semantic be
 
 Priorities include stable prompt prefixes, provider-specific cache controls, accurate cache telemetry, normalized usage and quota reporting, bounded retries, and explicit incompatibility handling. A cache optimization is incomplete if it lowers correctness or hides provider errors. Provider-usage diagnostics must not block model execution or expose credentials.
 
-OpenCode Zen and OpenCode Go remain named as such only because they are external provider identities.
+The beta supports OpenAI (API key and Codex subscription), Anthropic (API key and Claude Code subscription), OpenRouter, Cursor, Meta (Muse and API key), Cline (`cline-pass`), Z.ai, MiniMax, Kimi, and OpenAI-compatible custom endpoints. Other configured providers receive an unsupported-provider diagnostic and are excluded from the catalog; unrelated valid settings remain available. Dynamic npm provider execution is unsupported.
 
 The hidden decision agent provides structured judgments only when an agent calls the `decision` tool. Main, child, and side-chat Sessions can use it within their effective permissions. The agent chooses when a bounded judgment is useful and supplies authorized evidence and typed questions. The helper uses a configured decision or Session model through its normal authentication route, including supported subscription routes. Confidence is a self-reported, uncalibrated estimate, not a calibrated probability. Insufficient evidence yields an explicit refusal, not a forced choice. Judgments do not execute tools, override owner selections, grant permission, certify completion, or change the user's objective; explicit autonomy and human-only hard reviews remain enforced. See [configuration](./configuration.md#decisions).
 
 ### 8. Documentation and distribution
 
-The stable product ships from `main`. The Rust backend ships as a separate beta release channel from `rust-backend`, starting at `0.11.0-beta.1`. Beta tags use `vX.Y.Z-beta.N`, publish GitHub prereleases that are never latest, and deploy the beta site at `beta.ycoding.althenia.app`. Beta installs keep their own data directory and import a copy of existing data on first start without changing stable data. See [installation and release channels](./configuration.md#installation-and-release-channels) for opt-in, update selection, and switching back to stable.
+The stable product ships from `main`. The Rust backend's opt-in beta channel starts at `0.11.0-beta.1`, with `vX.Y.Z-beta.N` version names and the beta site address `beta.ycoding.althenia.app`. The installer selects published beta prereleases separately from stable. Beta uses the `ycoding-beta` namespace and imports stable Session data and per-Location Meeting history through private copies without changing stable data. Each import runs once; switching channels does not merge subsequent histories or copy configuration and preferences. See [installation and release channels](./configuration.md#installation-and-release-channels) for opt-in, update selection, and switching back to stable.
 
 The terminal executable is distributed as native release archives with SHA-256 checksums; each release also attaches the `LICENSE` and `NOTICE` files as separate assets listed in the checksum file, never as archive entries. Source archives are provided by GitHub Releases. A `v<version>` tag verifies the TUI and web application, builds and smoke-tests native artifacts, deploys web to Cloudflare after required checks, and publishes one TUI GitHub Release only after deployment succeeds. Deployment requires a `CLOUDFLARE_API_TOKEN` GitHub Actions secret. A manual workflow run prepares artifacts without publishing or deploying. Each release ships one shared note at `docs/releases/v<version>.md`, which is also attached to the GitHub Release.
 
@@ -140,7 +141,7 @@ The web palette's provider/model action opens the current composer's existing pr
 ## Compatibility policy
 
 - **Durable data:** preserve current data or provide an explicit tested migration.
-- **Protocol and client:** generated Client output must match the assembled public `HttpApi`.
+- **Protocol and client:** beta clients and runtime must match the canonical revision 5 descriptors and contract digest. Generate bindings through their owning commands.
 - **Plugins:** current contracts only; breaking changes require Schema, API, tests, and documentation updates.
 - **Configuration:** current Schema is authoritative; rejected keys are not accepted through hidden fallback paths.
 - **External providers:** preserve provider-owned IDs, URLs, credentials, and names required for interoperability.

@@ -7,9 +7,9 @@
 
 **A terminal-first coding agent that runs on your own machine.** YCoding keeps every Session durable, lets you decide how much it may do on its own, and puts the same local runtime in your browser and on your phone when you step away from the terminal.
 
-Your repository, shell, tools, and model calls stay in the local `ycoding` process. The web app is a remote control for that process, not a hosted agent.
+Your repository, shell, tools, and model calls stay on your machine. In the Rust-backend beta, `ycoding` launches the local Rust runtime; the terminal and web app control it through the same revision 5 contract. The web app is a remote control, not a hosted agent.
 
-Latency and client-timing telemetry stays in local SQLite and is disabled until you enable the machine-wide consent choice; token and cost usage remain available independently.
+Latency and client-timing telemetry stays in local storage and is disabled until you enable the machine-wide consent choice; token and cost usage remain available independently.
 
 <p align="center">
   <img src="./assets/showcase/ycoding-showcase.png" alt="YCoding in a terminal, a desktop browser, and a phone: the terminal shows a Session paused on a guardrail review, the browser shows the remote Session conversation, and the phone shows a guardrail review and a question waiting for an answer" width="900">
@@ -21,10 +21,10 @@ Latency and client-timing telemetry stays in local SQLite and is disabled until 
 - **Autonomy you choose.** YOLO 0 is manual; 1 auto-approves ask permissions and ordinary guardrail reviews; 2 also answers questions/forms; 3 keeps its numeric level and currently behaves like 2. Set a `/goal` to continue until completion, stop, or exhausted attempts, with automatic answers and ask permissions even at YOLO 0.
 - **Guardrails across the whole Session family.** High-impact actions such as writes outside the workspace, force pushes, or destructive commands require review in the main Session and every subagent. Ordinary reviews auto-approve at YOLO 1-3; hard reviews always need a human, even at YOLO 3.
 - **Background subagents.** Delegate work to durable child Sessions that inherit your permission limits, and watch their progress in the Session rail.
-- **Use your accounts side by side.** Keep several named profiles per provider — API keys or subscription sign-ins such as Claude Code, ChatGPT, or GitHub Copilot — and pick one per Session or subagent with `profile#provider/model#variant`. See [provider profiles](./docs/configuration.md#provider-profiles).
-- **Many providers.** OpenAI, Anthropic, Google, GitHub Copilot, Muse (Meta), OpenRouter, xAI, Amazon Bedrock, Azure, Mistral, Groq, and more, plus any OpenAI-compatible endpoint.
+- **Use your accounts side by side.** Keep several named profiles per provider — API keys or subscription sign-ins such as Claude Code, Codex, or Muse — and pick one per Session or subagent with `profile#provider/model#variant`. See [provider profiles](./docs/configuration.md#provider-profiles).
+- **Beta providers.** OpenAI (API key and Codex subscription), Anthropic (API key and Claude Code subscription), OpenRouter, Cursor, Meta (Muse and API key), Cline (`cline-pass`), Z.ai, MiniMax, Kimi, and OpenAI-compatible custom endpoints. Other provider configurations load with an unsupported-provider diagnostic.
 - **Your phone as a remote.** The Focus workspace puts Sessions, Usage, and Settings in a collapsible desktop rail or a three-item phone bar, with explicit New session and Back actions. Enroll your machine once, then read transcripts, send prompts, and answer permissions, guardrail reviews, and questions from any browser or the installable phone app, with opt-in push alerts when a Session needs you.
-- **Repository-native customization.** Agents, commands, skills, hooks, plugins, and MCP servers live next to your code.
+- **Repository-native customization.** Agents, commands, skills, trusted process extensions, and MCP servers live next to your code; presentation plugins customize the terminal. See [repository resources](./docs/repository-resources.md).
 - **Browser and computer control.** Work in [paired Chrome tabs or agent-owned tabs](./docs/browser-extension.md) and in [scoped macOS windows](./docs/computer-use.md), with per-site and per-tool permissions.
 - **Workspace memory.** Save and search [linked Markdown knowledge](./docs/memory.md) with an offline graph, kept separate from transcripts and prompts.
 - **Next-message prediction.** Run `/suggest [hint]` in the TUI or web composer to get a suggested next message from recent conversation text, optionally with project or global memory: fill, never send.
@@ -65,7 +65,11 @@ The Rust backend ships through a separate beta channel, starting at `0.11.0-beta
 curl -fsSL https://beta.ycoding.althenia.app/install.sh | sh -s -- --beta
 ```
 
-`--beta` or `YCODING_CHANNEL=beta` selects the newest published, non-draft beta prerelease. `YCODING_VERSION` still pins an exact version. The beta keeps its own data directory and imports a copy of existing data on first start without changing stable data. On a beta build, `ycoding update` selects the higher of the newest beta and newest stable; a newer stable supersedes the beta. Stable builds never update to a beta automatically.
+`--beta` or `YCODING_CHANNEL=beta` selects the newest published, non-draft beta prerelease. `YCODING_VERSION` still pins an exact version. The beta uses the `ycoding-beta` configuration, state, data, and cache namespace. On first start it imports a private copy of stable Session data; each Meeting Location imports its stable history when first opened with Meeting enabled. Stable files remain unchanged, and later stable changes are not merged into beta data. See [first-start import](./docs/configuration.md#global-directories) and [Meeting storage](./docs/configuration.md#meeting-capture).
+
+Configure providers and terminal preferences in the beta configuration directory. Runtime JavaScript/npm plugins are unsupported in beta; use explicit trusted process extensions or MCP servers, and keep TUI presentation plugins in `cli.json`. Beta and stable data remain separate when switching channels.
+
+On a beta build, `ycoding update` selects the higher of the newest beta and newest stable; a newer stable supersedes the beta. Stable builds never update to a beta automatically. Use the matching beta web client and enrolled backend together; revision 5 connections require matching contracts.
 
 Switch back with the normal stable installer:
 
@@ -114,14 +118,15 @@ See the [guardrail guide](./docs/guardrails-and-provider-usage.md#session-guardr
 <details>
 <summary>Build from source</summary>
 
-With **a current Bun release** installed:
+With **a current Bun release**, **Rust 1.98 or newer**, and **Protocol Buffers `protoc`** installed (`PROTOC` selects its executable):
 
 ```sh
 bun install --frozen-lockfile
+cargo build --locked --manifest-path rust/Cargo.toml -p ycoding-runtime --bin ycoding-runtime
 bun run dev
 ```
 
-Build and smoke-test the terminal application, then install it locally on macOS or Linux:
+Source execution uses `rust/target/debug/ycoding-runtime` by default; `YCODING_RUNTIME_EXECUTABLE` selects another local build. Build and smoke-test the terminal application on its matching native host, then install it locally on macOS or Linux:
 
 ```sh
 bun run build:tui

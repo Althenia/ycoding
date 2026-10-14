@@ -25,10 +25,6 @@ The same directory structure is supported globally under the YCoding configurati
 ├── skills/
 │   └── backend-practices/
 │       └── SKILL.md
-├── plugin/
-│   └── project.ts
-├── plugins/
-│   └── policy.js
 ├── guardrails/
 │   └── production.md
 └── themes/
@@ -45,13 +41,13 @@ Supported project resource domains are:
 - agents;
 - commands;
 - skills;
-- runtime plugins and hooks;
+- explicit trusted process extensions in runtime configuration;
 - terminal themes.
 - custom guardrail rule files.
 
 Maintained built-in agent Markdown frontmatter is the source for each built-in's description, mode, color, and request temperature. Visible primary and subagent built-ins use role-specific temperatures from 0.4 to 0.6. Their shared prompt requires current todo state and tool calls constructed from supplied schemas or discovered signatures rather than capability prose. Invalid-input results identify fields to correct only after the preceding call is known not to have mutated state; denial and unavailability are distinct, and uncertain mutations are never automatically replayed. Effective permissions remain runtime defaults and policies, not agent-file frontmatter. Configured Markdown agents continue to use the normal configuration merge.
 
-There is no generic `.ycoding/tool` loader. Custom tools must be provided by a plugin or MCP server.
+There is no generic `.ycoding/tool` loader. Custom tools must be provided by a trusted process extension or MCP server. Runtime JS/TS files under `.ycoding/plugin` or `.ycoding/plugins` are not a beta discovery surface; terminal presentation plugins belong in global `cli.json`.
 
 ## Built-in workspace memory
 
@@ -86,7 +82,7 @@ Resource-specific rules:
 | Agents     | Recursive `agent/**/*.md` and `agents/**/*.md` inside YCoding config directories.                                             |
 | Commands   | Recursive `command/**/*.md` and `commands/**/*.md` inside YCoding config directories.                                         |
 | Skills     | Root `*.md` and recursive `**/SKILL.md` under each skill source.                                                              |
-| Plugins    | Direct children only: `plugin/*.{ts,js}` and `plugins/*.{ts,js}`.                                                             |
+| Extensions | Explicit ordered `extensions` entries in runtime JSON/JSONC; no executable-file auto-discovery.                               |
 | Themes     | Direct `themes/*.json` files.                                                                                                 |
 | Guardrails | Direct children only: `guardrails/*.md` under the global config directory and every discovered repository `Config.Directory`. |
 
@@ -107,7 +103,7 @@ The detailed sections below are authoritative. This index makes scope, recursion
 | Agents               | `<global config>/agent/**/*.md`, `<global config>/agents/**/*.md`; `.ycoding/agent/**/*.md`, `.ycoding/agents/**/*.md`                                        | Recursive. ID is the path below `agent` or `agents` without `.md`.                                                                           | Markdown body is `system`. Frontmatter: `model`, `request.headers`, `request.body`, `description`, `mode` (`subagent` \| `primary` \| `all`), `hidden`, `color`, `steps`, `disabled`, `permissions`. | Same ID updates the earlier or built-in definition; request objects merge and permission rules append. Every frontmatter field is unset when omitted; the body is optional.              |
 | Commands             | `<global config>/command/**/*.md`, `<global config>/commands/**/*.md`; `.ycoding/command/**/*.md`, `.ycoding/commands/**/*.md`                                | Recursive. Name is the path below `command` or `commands` without `.md`.                                                                     | Markdown body is required `template`. Frontmatter: `description`, `agent`, `model`, `subtask`.                                                                                                       | Configured or Markdown command with the same name wins over an MCP prompt. Every frontmatter field is unset when omitted.                                                                |
 | Skills               | `<global config>/skill` and `skills`; ancestor `.ycoding/skill` and `skills`; compatible `.claude/skills`, `.agents/skills`; configured local/HTTP(S) sources | Direct root `*.md` or recursive `**/SKILL.md`. Root-file ID is filename; `SKILL.md` ID is its directory.                                     | Markdown is the skill content. Frontmatter: `name`, `description`, `slash`, `metadata`; recognized metadata includes `ycoding/slash`, `ycoding/autoinvoke`, and conflict lists.                      | `name` defaults to the ID. Other fields are unset when omitted. Compatibility roots contribute skills only and are re-read on demand.                                                    |
-| Plugins              | `<global config>/plugin/*.{ts,js}`, `<global config>/plugins/*.{ts,js}`; equivalent `.ycoding` paths                                                          | Direct children only; nested files are not auto-discovered. Plugin identity is supplied by its exported plugin definition.                   | TypeScript or JavaScript module; options come from JSON `{ package, options }`.                                                                                                                      | JSON directives run after auto-discovered files and can remove exact, `*`, or `<prefix>.*` IDs. There is no Markdown body or frontmatter format.                                         |
+| Extensions           | Ordered runtime `extensions` configuration                                                                                                                    | Explicit executable and identity; no filename scan.                                                                                          | Identity, absolute executable, optional args, and explicit host grants.                                                                                                                              | Duplicate identities replace in place. Unsupported executable plugin/npm declarations fail the document closed. See [process extensions](#plugins).                                      |
 | Themes               | `<global config>/themes/*.json`; `.ycoding/themes/*.json`                                                                                                     | Direct children only. ID is filename without `.json`.                                                                                        | Theme JSON shape is owned by the `ThemeFile` schema in `packages/tui/src/theme/schema.ts`.                                                                                                           | Global, broad ancestor, then nearer project files load in order; later equal IDs replace earlier files.                                                                                  |
 | Ambient instructions | `<global config>/AGENTS.md`; project-root-to-current-directory `AGENTS.md` files                                                                              | Direct `AGENTS.md` file at each discovered level; no recursive filename glob. There is no derived instruction ID exposed as a resource name. | Whole file is instruction content, truncated per `instruction_max_bytes`.                                                                                                                            | Broader context precedes narrower context. Top-level JSON `instructions` is Schema-accepted but is not a current discovery source.                                                       |
 | Guardrails           | `<global config>/guardrails/*.md`; each discovered repository `Config.Directory` `/guardrails/*.md`                                                           | Direct children only; one file is one rule and its `id` comes from frontmatter.                                                              | Body is operator-facing explanation. Frontmatter is `id`, `enabled`, `decision` (`allow` \| `ask` \| `deny`), `actions`, `resources`, `reason`, `priority`.                                          | `enabled` defaults to `true`; `priority` defaults to `0`. Nearest repository layer, then broader repository, then global. See the dedicated guardrail document for reply/reuse behavior. |
@@ -240,7 +236,7 @@ Supported fields:
 
 The body is required because it supplies `template`.
 
-Commands may use the runtime command-template features supported by `packages/core/src/command.ts`, including argument text and shell interpolation. Treat shell interpolation as real shell execution under the selected permission policy.
+Commands use Rust Core's command-template evaluator (`rust/crates/core/src/resources/command`), including argument text and shell interpolation. Treat shell interpolation as real shell execution under the selected permission policy.
 
 MCP prompts also appear as commands. A configured or Markdown command with the same name takes priority over an MCP prompt.
 
@@ -334,85 +330,51 @@ Skill availability is filtered through the selected agent's `skill` permission r
 
 ## Plugins
 
-The [meeting runtime](./meeting-intelligence.md) has separate runtime and TUI entrypoints. Native `/meeting` commands register through the TUI keymap and `/meeting start` prints the authenticated live page address for page-owned capture; the read-only `meeting_history` tool uses the runtime tool transform.
+The beta has two extension boundaries: trusted backend process extensions and terminal presentation plugins. Runtime executable `plugins`, `plugin`, `npm`, and singular `provider` declarations reject the affected configuration document with a diagnostic; there is no mapping to process extensions. Native provider package identities select compiled routes, not executable npm modules.
 
-Trusted Effect/Promise plugins have `context.mcp.servers()`, `tools()`, `readResource({server, uri})`, and `callTool({server, name, args?})`. These reuse the current Location's MCP services and errors, not a separate registry, authentication flow or annotation-based authorization.
+### Trusted process extensions
 
-Plugins extend runtime domains and can register tools, hooks, agents, commands, skills, integrations, references, provider transforms, and Session behavior.
+Configure `extensions` in `ycoding.json` or `ycoding.jsonc`:
 
-### Auto-discovered files
-
-Project and global YCoding config directories auto-discover direct files only:
-
-```text
-.ycoding/plugin/project.ts
-.ycoding/plugins/policy.js
+```jsonc
+{
+  "extensions": [
+    {
+      "identity": "company-review",
+      "executable": "/opt/company/bin/review-extension",
+      "args": [],
+      "grants": [
+        {
+          "family": "tools",
+          "namespace": "company",
+          "tools": ["review"],
+          "action": "company_review",
+          "resources": ["**"],
+        },
+      ],
+    },
+  ],
+}
 ```
 
-Nested files are not auto-discovered.
+The executable must be an allowed native process, not a JS/TS file or Node/Bun/npm/npx launcher. Declarations validate before launch. Duplicate identities replace definitions in place, preserving registration order. The host supplies the Location and grants; the child cannot select them. Grants bound host capability calls, not the process's ambient filesystem or network authority: these are trusted processes, not sandboxes.
 
-### Effect plugin
+Location composition launches configured processes before a Session exists. Explicit `extension.launch` or grant-action `deny` and `ask` rules block launch; no matching rule allows configuration-trusted launch. Calls independently enforce the calling Session's permissions and inherited ceilings. Extensions negotiate the private v5 stdio descriptor, register one validated generation, and use typed tool, hook/transform, resource, event, MCP, Session, provider-attempt, and OAuth capabilities only within host grants. There is no generic application API or credential/database forwarding.
 
-```ts
-import { define } from "@ycoding-ai/plugin/effect/plugin"
-import { Effect } from "effect"
+Replacement and shutdown stop intake, cancel/drain owned calls, revoke registrations, and join child cleanup. A lost transmitted call has an explicit unknown outcome; the supervisor does not restart or replay it. See the [process-extension contract](../specs/process-extension-v5.md) for supported families, schemas, limits, and deadlines.
 
-export default define({
-  id: "company.project-policy",
-  effect: Effect.fn(function* (ctx) {
-    yield* ctx.tool.transform((draft) => {
-      // Register or modify declared tool behavior.
-    })
-  }),
-})
-```
-
-The Effect plugin function runs in a managed Scope. Registrations are cleaned up when the plugin is reloaded or disabled.
-
-### Promise plugin
-
-```ts
-import { define } from "@ycoding-ai/plugin/promise/plugin"
-
-export default define({
-  id: "company.project-policy",
-  async setup(ctx) {
-    // Register Promise-plugin behavior.
-    return async () => {
-      // Optional cleanup.
-    }
-  },
-})
-```
-
-### Plugin context
-
-Current plugin domains are:
-
-- `agent`;
-- `aisdk`;
-- `catalog`;
-- `command`;
-- `event`;
-- `integration`;
-- `plugin` Client API;
-- `reference`;
-- `session`;
-- `skill`;
-- `tool`.
-
-Plugin options come from `{ package, options }` configuration entries.
+The opt-in Rust Meeting service is composed by the backend, not loaded through this process-extension channel. Its TUI entrypoint is presentation-only. `/meeting start` exposes the consent-led live page, and the backend registers `meeting_history` and a restricted analysis agent for Meeting-enabled Locations. See [Meeting capture](./configuration.md#meeting-capture).
 
 ### Ordered enablement and removal
 
-Runtime JSON configuration can add, configure, or remove plugins:
+Terminal-side plugins use global `cli.json`:
 
 ```jsonc
 {
   "plugins": [
     "company.project-policy",
     { "package": "@company/ycoding-plugin", "options": { "mode": "strict" } },
-    "./plugins/local.ts",
+    "./presentation/local.ts",
     "-ycoding.unwanted",
   ],
 }
@@ -420,23 +382,11 @@ Runtime JSON configuration can add, configure, or remove plugins:
 
 A remove selector can be an exact ID, `*`, or a prefix ending in `.*`.
 
-Explicit JSON plugin operations are applied after auto-discovered files, so configuration can disable an auto-discovered or built-in plugin.
-
-Terminal-side plugins use global `cli.json`, separately from runtime plugin discovery. TUI startup first applies built-in enable/disable selectors in configuration order, then exposes the Home and Session shell before loading optional plugins. Disabled built-in UI is not mounted during startup. Optional directives retain their configuration order, including enable and remove operations on optional plugins; loading and failure states are available in Status.
+Selectors support exact IDs, `*`, and prefixes ending in `.*`. TUI startup first applies built-in enable/disable selectors in configuration order, then exposes the Home and Session shell before loading optional plugins. Disabled built-in UI is not mounted during startup. Optional directives retain their configuration order, including enable and remove operations on optional plugins; loading and failure states are available in Status. Registry packages resolve through the backend's local-only `frontendPackage.resolve`; they require npm on its PATH and execute as trusted presentation code, with installation scripts disabled and package/entrypoint integrity checked.
 
 ## Hooks
 
-Hooks are a plugin API, not a standalone repository file format.
-
-The current runtime hook domains are:
-
-- AI SDK hooks;
-- Session hooks;
-- Tool hooks.
-
-A plugin registers hooks through its domain context. Hook registrations are scoped to the active plugin generation and are removed during plugin reload.
-
-Session context hooks receive the selected catalog model plus the resolved executable `routeID`. The route identity can differ for the same catalog reference after credential-aware provider resolution, so route-specific context behavior must use `routeID` rather than infer transport capability from the model reference. A Session context hook that fails emits a Session-scoped warning and adds a model-visible notice that its changes may be incomplete; the remaining context hooks still run, and the request proceeds.
+Backend hooks use the process-extension channel's typed, host-granted transform stages. Tool before/after hooks and Session context preparation remain scoped to their captured generation; output is revalidated before consumption. A failed tool cannot become successful through an after hook. A context-hook failure emits a Session-scoped warning and adds a model-visible notice that its changes may be incomplete; other hooks and request preparation continue. See the [process-extension contract](../specs/process-extension-v5.md).
 
 Do not create `.ycoding/hooks.json`, `.ycoding/hooks/`, or a top-level `hooks` config key; the current runtime does not discover them.
 
@@ -454,13 +404,13 @@ Custom tools must not depend on destructive summary replacement.
 
 Custom tools must be supplied through:
 
-1. a YCoding plugin using the Tool domain;
+1. a trusted process extension with explicit tool grants;
 2. an MCP server under `mcp.servers`;
 3. a built-in runtime tool.
 
-This distinction is intentional: plugin and MCP lifecycles provide validation, permissions, cancellation, and cleanup that arbitrary source-file loading would bypass.
+Process-extension and MCP lifecycles provide validation, permissions, cancellation, and cleanup; arbitrary source-file loading is unsupported.
 
-The built-in `browser` tool is registered through the same Location-scoped internal plugin lifecycle. Omitted mode operates eligible tabs in the paired Chrome profile, including the active tab; explicit `mode: "owned"` operates Session-created Chrome tabs, and explicit `mode: "isolated"` operates an already-started Session-owned isolated browser. No mode starts pairing or falls back to another. The tool never exposes pairing to the model and applies per-site browser permissions to profile reads and hard human review to profile mutations at execution. See [`browser-extension.md`](./browser-extension.md) and the [isolated-browser contract](../specs/isolated-browser.md).
+The built-in `browser` tool is registered by Rust production's Location tool composition. Omitted mode operates eligible tabs in the paired Chrome profile, including the active tab; explicit `mode: "owned"` operates Session-created Chrome tabs, and explicit `mode: "isolated"` operates an already-started Session-owned isolated browser. No mode starts pairing or falls back to another. The tool never exposes pairing to the model. Site/tool permissions and custom denials remain enforced; browser and computer operations skip guardrail reviews. See [`browser-extension.md`](./browser-extension.md) and the [isolated-browser contract](../specs/isolated-browser.md).
 
 ## Themes
 
@@ -552,11 +502,11 @@ Use the TUI project-artifact manager for lifecycle operations when provenance an
 
 ## Reload behavior
 
-Global and `.ycoding` directories are watched. Creating, modifying, renaming, or deleting agent, command, plugin, skill, config, or theme files triggers the relevant reload path.
+Global and `.ycoding` directories are watched. Agent, command, skill, and runtime-config changes rebuild the affected Location generation, including its configured process extensions and MCP tool catalog. Theme discovery and `cli.json` presentation settings remain TUI-owned.
 
 Important limits:
 
-- plugin auto-discovery is one directory level deep;
+- process extensions require explicit configuration;
 - theme discovery is one directory level deep;
 - agents and commands are recursive;
 - skills use root `*.md` or recursive `SKILL.md`;

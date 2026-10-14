@@ -4,99 +4,241 @@ import { RELEASES, changeTagCounts } from "./changelog"
 const TAGS = ["Added", "Changed", "Fixed"] as const
 
 describe("release entries", () => {
-  test("lists v0.10.7 background Chrome and computer use first", () => {
+  test("lists v0.11.0-beta.1 Rust-backend beta first", () => {
     expect(RELEASES[0]).toEqual({
+      version: "0.11.0-beta.1",
+      date: "2026-10-14",
+      title: "Rust-backend beta",
+      tags: ["Added", "Changed"],
+      changes: [
+        {
+          tag: "Added",
+          text: "Try the Rust-backend beta with curl -fsSL https://beta.ycoding.althenia.app/install.sh | sh -s -- --beta. Beta uses separate configuration, state, data, and cache directories under ycoding-beta; stable remains a separate channel.",
+        },
+        {
+          tag: "Added",
+          text: "On first beta start, import a private copy of stable Session data. When a Location first opens with Meeting enabled, import its stable Meeting history too, including transcripts, findings, summaries, plans, and proposals. Stable files remain unchanged; each import runs once, without merging later stable changes.",
+        },
+        {
+          tag: "Changed",
+          text: "The terminal, Mini, and remote web client control the local Rust runtime through revision 5 connections. Repository work, tools, model requests, durable Sessions, goals, and background subagents run on your machine.",
+        },
+        {
+          tag: "Changed",
+          text: "Native terminal and Node CLI builds include the Rust runtime; the installed computer-use app stays beside ycoding. Startup can use the bundled model catalog when cached data is unavailable, including when the catalog service cannot be reached; diagnostics preserve stdio readiness.",
+        },
+        {
+          tag: "Changed",
+          text: "CLI file attachments use file references and remain caller-owned until admission is confirmed. Meeting control uses the Rust backend and restores recorded Meeting history from its redb store.",
+        },
+        {
+          tag: "Changed",
+          text: "Remote enrollment and connection controls are backend-owned. Enabling access grants the enrolled owner access to every existing and future Session on that backend.",
+        },
+        {
+          tag: "Changed",
+          text: "ycoding mcp add persists and reloads server definitions through the backend and reports its selected configuration file. TUI registry packages resolve through the verified presentation-package cache.",
+        },
+        {
+          tag: "Changed",
+          text: 'Breaking Change: ycoding api accepts operation names and typed request JSON. Replace HTTP method/path arguments with calls such as ycoding api health.get or ycoding api session.rename --data \'{"params":{"sessionID":"ses_example"},"payload":{"title":"Example"}}\'.',
+        },
+        {
+          tag: "Changed",
+          text: "Beta providers are OpenAI (API key and Codex subscription), Anthropic (API key and Claude Code subscription), OpenRouter, Cursor, Meta (Muse and API key), Cline (cline-pass), Z.ai, MiniMax, Kimi, and OpenAI-compatible custom endpoints. Configurations naming other providers load with an unsupported-provider diagnostic.",
+        },
+        {
+          tag: "Changed",
+          text: "Runtime customization uses explicit trusted process extensions and MCP servers. Runtime JavaScript/npm plugins are unsupported; terminal presentation plugins stay in cli.json.",
+        },
+        {
+          tag: "Changed",
+          text: "On a beta build, ycoding update selects the higher of the newest beta and newest stable release. Stable builds stay on stable automatically. Configure accounts and preferences in the beta directory, use the matching beta web client and backend, and switch back with the stable installer; histories remain separate.",
+        },
+      ],
+    })
+  })
+
+  test("lists v0.10.7 background Chrome and computer use first", () => {
+    expect(RELEASES[1]).toEqual({
       version: "0.10.7",
       date: "2026-10-13",
       title: "Background Chrome and computer use",
       tags: ["Changed"],
       changes: [
-        { tag: "Changed", text: "Chrome control keeps working in the background with real input: clicks and scrolls on a background tab or in an unfocused or minimized window are trusted mouse input that carry user activation, so popups, clipboard access, and file pickers work without bringing the tab forward. While YCoding controls a tab, the page reports itself visible and is not background-throttled; detaching ends this." },
+        {
+          tag: "Changed",
+          text: "Chrome control keeps working in the background with real input: clicks and scrolls on a background tab or in an unfocused or minimized window are trusted mouse input that carry user activation, so popups, clipboard access, and file pickers work without bringing the tab forward. While YCoding controls a tab, the page reports itself visible and is not background-throttled; detaching ends this.",
+        },
         { tag: "Changed", text: "Browser action results no longer include the input field." },
-        { tag: "Changed", text: "macOS computer use runs one persistent YCoding Computer Use helper per YCoding process over a private local socket instead of launching the helper for every operation." },
-        { tag: "Changed", text: "When a background app brings itself to the front in response to a computer-use click or key press, YCoding puts your original app and window back in front within the same action." },
+        {
+          tag: "Changed",
+          text: "macOS computer use runs one persistent YCoding Computer Use helper per YCoding process over a private local socket instead of launching the helper for every operation.",
+        },
+        {
+          tag: "Changed",
+          text: "When a background app brings itself to the front in response to a computer-use click or key press, YCoding puts your original app and window back in front within the same action.",
+        },
       ],
     })
   })
 
   test("lists v0.10.6 Muse (Meta) subscriptions, quota, and built-in agent updates first", () => {
-    expect(RELEASES[1]).toEqual({
+    expect(RELEASES[2]).toEqual({
       version: "0.10.6",
       date: "2026-10-13",
       title: "Muse (Meta) subscriptions and quota",
       tags: ["Added", "Changed", "Fixed"],
       changes: [
-        { tag: "Added", text: "Muse (Meta) provider: connect a Meta Muse Code subscription through /connect with a device-code login, or use a Meta Model API key or META_API_KEY. YCoding lists the models your account can use, with their context limits and effort levels, and runs them with tools and reasoning." },
-        { tag: "Added", text: "Muse subscription quota appears in provider usage as live 5-hour window and weekly percentages with reset times, updated from each Muse response." },
-        { tag: "Changed", text: "Built-in agents use checkpoint-based testing guidance: plan required tests before building, then run focused tests at feature checkpoints and full checks at integration or merge checkpoints." },
+        {
+          tag: "Added",
+          text: "Muse (Meta) provider: connect a Meta Muse Code subscription through /connect with a device-code login, or use a Meta Model API key or META_API_KEY. YCoding lists the models your account can use, with their context limits and effort levels, and runs them with tools and reasoning.",
+        },
+        {
+          tag: "Added",
+          text: "Muse subscription quota appears in provider usage as live 5-hour window and weekly percentages with reset times, updated from each Muse response.",
+        },
+        {
+          tag: "Changed",
+          text: "Built-in agents use checkpoint-based testing guidance: plan required tests before building, then run focused tests at feature checkpoints and full checks at integration or merge checkpoints.",
+        },
         { tag: "Changed", text: "Built-in agent display names are capitalized; their IDs remain unchanged." },
-        { tag: "Fixed", text: "Claude Sonnet 5.5 and Haiku 5.5 use their 512-token prompt-cache minimum and supported one-hour cache TTL in diagnostics and adaptive cache selection." },
+        {
+          tag: "Fixed",
+          text: "Claude Sonnet 5.5 and Haiku 5.5 use their 512-token prompt-cache minimum and supported one-hour cache TTL in diagnostics and adaptive cache selection.",
+        },
       ],
     })
   })
 
   test("lists v0.10.5 MCP protocol 2026-07-28, lasting MCP sign-ins, and quieter guardrails first", () => {
-    expect(RELEASES[2]).toEqual({
+    expect(RELEASES[3]).toEqual({
       version: "0.10.5",
       date: "2026-10-13",
       title: "MCP protocol 2026-07-28, lasting MCP sign-ins, and quieter guardrails",
       tags: ["Changed", "Fixed"],
       changes: [
-        { tag: "Changed", text: "Tabs controlled by YCoding through the Chrome extension show the Ⓨ mark before the page title instead of the [YCoding] text, and the in-page cursor label shows the YCoding mark." },
-        { tag: "Changed", text: "The worktree tool no longer asks for permission by default; the read-only BTW advisor still asks." },
-        { tag: "Changed", text: "Guardrails review fewer harmless commands: read-only commands (including after cd or || exit), read-only parts of mixed commands, interpreter script paths such as python3 ~/script.py, and program text in python3 heredocs no longer trigger an outside-repository review. Hard reviews and real outside writes are unchanged." },
-        { tag: "Changed", text: "A shell started while the session family already runs its maximum number of shells waits up to 60 seconds for a free slot, in arrival order, instead of failing at once. Change the wait with guardrails.shell_wait_seconds. When the wait ends without a slot, the error names the limit and the running shells." },
-        { tag: "Changed", text: "MCP servers connect with protocol revision 2026-07-28 over stdio and Streamable HTTP when the server supports it, and fall back to the 2025-11-25 handshake otherwise. MCP OAuth sign-in validates the authorization server's issuer, and a stored MCP credential is used only with the authorization server that issued it." },
-        { tag: "Fixed", text: "OAuth-authorized remote MCP servers stay signed in when their authorization server rotates refresh tokens, including when several connections or Locations share the same sign-in." },
+        {
+          tag: "Changed",
+          text: "Tabs controlled by YCoding through the Chrome extension show the Ⓨ mark before the page title instead of the [YCoding] text, and the in-page cursor label shows the YCoding mark.",
+        },
+        {
+          tag: "Changed",
+          text: "The worktree tool no longer asks for permission by default; the read-only BTW advisor still asks.",
+        },
+        {
+          tag: "Changed",
+          text: "Guardrails review fewer harmless commands: read-only commands (including after cd or || exit), read-only parts of mixed commands, interpreter script paths such as python3 ~/script.py, and program text in python3 heredocs no longer trigger an outside-repository review. Hard reviews and real outside writes are unchanged.",
+        },
+        {
+          tag: "Changed",
+          text: "A shell started while the session family already runs its maximum number of shells waits up to 60 seconds for a free slot, in arrival order, instead of failing at once. Change the wait with guardrails.shell_wait_seconds. When the wait ends without a slot, the error names the limit and the running shells.",
+        },
+        {
+          tag: "Changed",
+          text: "MCP servers connect with protocol revision 2026-07-28 over stdio and Streamable HTTP when the server supports it, and fall back to the 2025-11-25 handshake otherwise. MCP OAuth sign-in validates the authorization server's issuer, and a stored MCP credential is used only with the authorization server that issued it.",
+        },
+        {
+          tag: "Fixed",
+          text: "OAuth-authorized remote MCP servers stay signed in when their authorization server rotates refresh tokens, including when several connections or Locations share the same sign-in.",
+        },
       ],
     })
   })
 
   test("lists v0.10.4 Session retention, directory-wide guardrail approvals, and bounded reads first", () => {
-    expect(RELEASES[3]).toEqual({
+    expect(RELEASES[4]).toEqual({
       version: "0.10.4",
       date: "2026-10-12",
       title: "Automatic Session retention and directory-wide guardrail approvals",
       tags: ["Added", "Changed", "Fixed"],
       changes: [
-        { tag: "Added", text: "Idle Sessions are deleted automatically. A root Session and all of its subagents are removed, with their history, once every member has been idle for more than 7 days. Pinned Sessions, Sessions with an active goal, suspended or running Sessions, Sessions with unsent input, and Sessions another Session was forked from are kept. Change the number of days with session_retention.days in your global configuration. Freed database space is returned to disk in small batches, and attachment files are not deleted." },
-        { tag: "Changed", text: "Choosing Allow for this session on an outside-repository guardrail review now approves that request's outside directory (and everything inside it) for the Session and its subagents, and is remembered after a restart. Hard reviews still always ask." },
-        { tag: "Changed", text: "Guardrails ask about work outside the repository less often: heredoc text, commit and PR message text, and URLs are no longer treated as paths, and the repository's main checkout and its other worktrees count as inside the repository." },
-        { tag: "Changed", text: "Long Sessions and large databases stay faster: starting each run, goal continuation, subagent completion, outstanding-failure status, and remote-compaction steps read only the messages they need, and SQLite keeps its query statistics up to date." },
-        { tag: "Fixed", text: "Shell redirections written without a space, such as cmd>/path/file, or next to 2>&1 are reviewed when they write outside the repository." },
+        {
+          tag: "Added",
+          text: "Idle Sessions are deleted automatically. A root Session and all of its subagents are removed, with their history, once every member has been idle for more than 7 days. Pinned Sessions, Sessions with an active goal, suspended or running Sessions, Sessions with unsent input, and Sessions another Session was forked from are kept. Change the number of days with session_retention.days in your global configuration. Freed database space is returned to disk in small batches, and attachment files are not deleted.",
+        },
+        {
+          tag: "Changed",
+          text: "Choosing Allow for this session on an outside-repository guardrail review now approves that request's outside directory (and everything inside it) for the Session and its subagents, and is remembered after a restart. Hard reviews still always ask.",
+        },
+        {
+          tag: "Changed",
+          text: "Guardrails ask about work outside the repository less often: heredoc text, commit and PR message text, and URLs are no longer treated as paths, and the repository's main checkout and its other worktrees count as inside the repository.",
+        },
+        {
+          tag: "Changed",
+          text: "Long Sessions and large databases stay faster: starting each run, goal continuation, subagent completion, outstanding-failure status, and remote-compaction steps read only the messages they need, and SQLite keeps its query statistics up to date.",
+        },
+        {
+          tag: "Fixed",
+          text: "Shell redirections written without a space, such as cmd>/path/file, or next to 2>&1 are reviewed when they write outside the repository.",
+        },
       ],
     })
   })
 
   test("lists v0.10.3 bounded derived reads, output delivery, and parent-session question answers first", () => {
-    expect(RELEASES[4]).toEqual({
+    expect(RELEASES[5]).toEqual({
       version: "0.10.3",
       date: "2026-10-12",
       title: "Bounded reads and parent-session subagent answers",
       tags: ["Changed", "Fixed"],
       changes: [
-        { tag: "Changed", text: "Answer a waiting subagent's full question from its parent Session's notice or the open Subagents list. Your literal answer is sent to the child question—not as a prompt or command—and resumes the child; your ordinary draft is kept and pending approvals still take precedence." },
-        { tag: "Changed", text: "Large Session skill, diagnostic, usage, and captured-change reads now use bounded batches while preserving their complete results and totals. This does not limit full model context or canonical transcript copy and export." },
-        { tag: "Fixed", text: "Captured shell output stays ordered and drains before command completion, even when output consumers fall behind." },
-        { tag: "Changed", text: "Live Session updates are admitted only for the matching event type and Location, so unrelated project events do not accumulate in the Session listener." },
+        {
+          tag: "Changed",
+          text: "Answer a waiting subagent's full question from its parent Session's notice or the open Subagents list. Your literal answer is sent to the child question—not as a prompt or command—and resumes the child; your ordinary draft is kept and pending approvals still take precedence.",
+        },
+        {
+          tag: "Changed",
+          text: "Large Session skill, diagnostic, usage, and captured-change reads now use bounded batches while preserving their complete results and totals. This does not limit full model context or canonical transcript copy and export.",
+        },
+        {
+          tag: "Fixed",
+          text: "Captured shell output stays ordered and drains before command completion, even when output consumers fall behind.",
+        },
+        {
+          tag: "Changed",
+          text: "Live Session updates are admitted only for the matching event type and Location, so unrelated project events do not accumulate in the Session listener.",
+        },
       ],
     })
   })
 
   test("lists v0.10.2 prompt drafts, guardrail exemptions, and mobile fixes first", () => {
-    expect(RELEASES[5]).toEqual({
+    expect(RELEASES[6]).toEqual({
       version: "0.10.2",
       date: "2026-10-12",
       title: "Prompt drafts, quieter guardrails, and mobile fixes",
       tags: ["Added", "Changed", "Fixed"],
       changes: [
-        { tag: "Added", text: "Turn a rough intent into a full prompt with /prompt <intent> in the TUI or web composer. A dialog lets you choose Start a task, Steer, Queue follow-up, or Goal objective (Steer and Queue follow-up appear inside a Session) and include Project memory (this repository) or Global memory (shared knowledge). The draft fills an empty composer for review and is never sent automatically: Goal objective fills /goal …, and Queue follow-up marks the draft so it is sent as queued. On the landing or new-session screen, Start a task and Goal objective create the Session first. Choose the helper model with efficiency.helper_models.prompt; its requests appear in usage as prompt." },
-        { tag: "Changed", text: "Guardrails no longer ask to review work outside the repository when it touches YCoding's own config, data, cache, state, temporary, bin, log, or repos directories, or a path your external_directory permission allows. Paths set to ask or deny are still reviewed, and hard reviews such as deleting the project or destructive Git still always ask." },
-        { tag: "Changed", text: "Session lists, today's spend, usage reports, and the start of each model request read faster on large histories. The first start after upgrading builds the new database indexes once." },
-        { tag: "Fixed", text: "Instructions updated notices stay where the instructions changed, just before the reply that first used them, instead of sticking to the bottom of the transcript. This holds live and after reopening a Session, and the remote web shows the same notices." },
-        { tag: "Fixed", text: "On phones and tablets, web sheets and dropdowns such as Agent and model, the model list, Select Color Scheme, and the command palette size to their content instead of filling the screen, and their options keep a normal row height." },
-        { tag: "Fixed", text: "With the on-screen keyboard open, the web composer sits directly above the keyboard, and the Sessions, Usage, and Settings bar no longer takes space between them." },
-        { tag: "Fixed", text: "The web Hide composer control has its own row and no longer covers the text you are typing." },
+        {
+          tag: "Added",
+          text: "Turn a rough intent into a full prompt with /prompt <intent> in the TUI or web composer. A dialog lets you choose Start a task, Steer, Queue follow-up, or Goal objective (Steer and Queue follow-up appear inside a Session) and include Project memory (this repository) or Global memory (shared knowledge). The draft fills an empty composer for review and is never sent automatically: Goal objective fills /goal …, and Queue follow-up marks the draft so it is sent as queued. On the landing or new-session screen, Start a task and Goal objective create the Session first. Choose the helper model with efficiency.helper_models.prompt; its requests appear in usage as prompt.",
+        },
+        {
+          tag: "Changed",
+          text: "Guardrails no longer ask to review work outside the repository when it touches YCoding's own config, data, cache, state, temporary, bin, log, or repos directories, or a path your external_directory permission allows. Paths set to ask or deny are still reviewed, and hard reviews such as deleting the project or destructive Git still always ask.",
+        },
+        {
+          tag: "Changed",
+          text: "Session lists, today's spend, usage reports, and the start of each model request read faster on large histories. The first start after upgrading builds the new database indexes once.",
+        },
+        {
+          tag: "Fixed",
+          text: "Instructions updated notices stay where the instructions changed, just before the reply that first used them, instead of sticking to the bottom of the transcript. This holds live and after reopening a Session, and the remote web shows the same notices.",
+        },
+        {
+          tag: "Fixed",
+          text: "On phones and tablets, web sheets and dropdowns such as Agent and model, the model list, Select Color Scheme, and the command palette size to their content instead of filling the screen, and their options keep a normal row height.",
+        },
+        {
+          tag: "Fixed",
+          text: "With the on-screen keyboard open, the web composer sits directly above the keyboard, and the Sessions, Usage, and Settings bar no longer takes space between them.",
+        },
+        {
+          tag: "Fixed",
+          text: "The web Hide composer control has its own row and no longer covers the text you are typing.",
+        },
         { tag: "Fixed", text: "Opening the web model list with hundreds of models no longer freezes the page." },
         { tag: "Fixed", text: "The web Sessions screen no longer reserves empty space beneath the loading cards." },
       ],
@@ -104,205 +246,382 @@ describe("release entries", () => {
   })
 
   test("retains v0.10.1 on-demand suggestions and read receipts", () => {
-    expect(RELEASES[6]).toEqual({
+    expect(RELEASES[7]).toEqual({
       version: "0.10.1",
       date: "2026-10-11",
       title: "On-demand suggestions and read receipts",
       tags: ["Changed", "Fixed"],
       changes: [
-        { tag: "Changed", text: "Ask for a suggested next message with /suggest in the TUI or web composer, optionally followed by text to steer it, for example /suggest focus on the failing tests. A dialog lets you include Project memory (this repository) and Global memory (shared knowledge); both start unselected, and a selected scope is read when the agent may read memory with or without asking. Suggestions appear only on request, never automatically after a reply, and you are told when no suggestion can be made for the latest reply. Running /suggest shows a fresh suggestion even after you dismissed one. The prediction.enabled and prediction.memory settings are removed; existing configurations that still set them keep working, and Status lists the ignored keys." },
-        { tag: "Changed", text: "The TUI receipt beneath your prompt animates a dot trail while sending, shows ✓ once the prompt is accepted (✓ Queued for queued input), and shows ✓✓ once the model has read it, both while the Session runs and after it finishes. The web keeps its static receipt labels." },
-        { tag: "Fixed", text: "After compaction, the TUI transcript restarts at the compaction divider, whether you watched the compaction finish or reopened the Session. Returning from a subagent no longer leaves an old divider below newer messages, and the divider numbers each compression and totals the saved tokens across the Session's full history." },
+        {
+          tag: "Changed",
+          text: "Ask for a suggested next message with /suggest in the TUI or web composer, optionally followed by text to steer it, for example /suggest focus on the failing tests. A dialog lets you include Project memory (this repository) and Global memory (shared knowledge); both start unselected, and a selected scope is read when the agent may read memory with or without asking. Suggestions appear only on request, never automatically after a reply, and you are told when no suggestion can be made for the latest reply. Running /suggest shows a fresh suggestion even after you dismissed one. The prediction.enabled and prediction.memory settings are removed; existing configurations that still set them keep working, and Status lists the ignored keys.",
+        },
+        {
+          tag: "Changed",
+          text: "The TUI receipt beneath your prompt animates a dot trail while sending, shows ✓ once the prompt is accepted (✓ Queued for queued input), and shows ✓✓ once the model has read it, both while the Session runs and after it finishes. The web keeps its static receipt labels.",
+        },
+        {
+          tag: "Fixed",
+          text: "After compaction, the TUI transcript restarts at the compaction divider, whether you watched the compaction finish or reopened the Session. Returning from a subagent no longer leaves an old divider below newer messages, and the divider numbers each compression and totals the saved tokens across the Session's full history.",
+        },
       ],
     })
   })
 
   test("retains v0.10.0 merged profiles, Meeting, prediction, and Focus workspace", () => {
-    expect(RELEASES[7]).toMatchObject({
+    expect(RELEASES[8]).toMatchObject({
       version: "0.10.0",
       date: "2026-10-11",
       title: "Concurrent profiles, Meeting, prediction, and a Focus workspace",
       tags: ["Added", "Changed", "Fixed"],
     })
-    expect(RELEASES[7]?.changes).toContainEqual({
+    expect(RELEASES[8]?.changes).toContainEqual({
       tag: "Fixed",
       text: "Remote web requests no longer wait on each other in the relay: independent requests are authorized without holding one another back. Reads, including several reads of one Session, proceed independently; mutations keep arrival order per Session; a cancel waits only for its own request; and agent responses are not held behind status or event processing. Every request is still authorized.",
     })
-    expect(RELEASES[7]?.changes).toContainEqual({
+    expect(RELEASES[8]?.changes).toContainEqual({
       tag: "Changed",
       text: "Prompts show a receipt beneath the bubble. The web shows a static receipt: Sending until the prompt is admitted, Processing while the Session is running, Queued for queued input, and Sent or Read when the Session is idle. The TUI animates a dot trail while sending, shows ✓ once the prompt is admitted (✓ Queued for queued input), and ✓✓ once the model has read it, both while running and after the Session settles.",
     })
-    expect(RELEASES[7]?.changes.map((change) => change.text).join("\n")).not.toContain("Load earlier child changes")
-    expect(RELEASES[7]?.changes.map((change) => change.text).join("\n")).not.toContain("scope tool")
+    expect(RELEASES[8]?.changes.map((change) => change.text).join("\n")).not.toContain("Load earlier child changes")
+    expect(RELEASES[8]?.changes.map((change) => change.text).join("\n")).not.toContain("scope tool")
   })
 
   test("retains v0.9.5 model decisions and remote recovery", () => {
-    expect(RELEASES[8]).toEqual({
+    expect(RELEASES[9]).toEqual({
       version: "0.9.5",
       date: "2026-10-08",
       title: "Model-powered decisions and resilient remote access",
       tags: ["Added", "Fixed"],
       changes: [
-        { tag: "Added", text: "Use an existing configured model for classification, fixed-option choices, and rubric scores through the decision tool. Select its helper model with agents.decision.model or efficiency.helper_models.decision; results use validated TOON and estimated confidence, not native probabilities." },
-        { tag: "Added", text: "Opt into model-based guardrail classification, initial agent/model routing, and goal continuation with min_confidence. Native OpenAI Decisions and TypeSafe Jev retain min_probability; deterministic denials, explicit selections, and human-only reviews remain authoritative." },
-        { tag: "Fixed", text: "Keep enabled remote access recovering after startup failures, connector-lock contention, socket outages, and failed credential rotation. Authentication and connection attempts have 30-second deadlines; rejected credentials still require attention. Update the connected machine to apply these recovery changes." },
-        { tag: "Fixed", text: "Turn Remote connection off while connecting, errored, or waiting for enablement. Disabling aborts pending authentication and cancels recovery; late replies cannot turn it back on." },
-        { tag: "Fixed", text: "Read failure messages in expanded generic tool responses while sensitive response details remain redacted." },
+        {
+          tag: "Added",
+          text: "Use an existing configured model for classification, fixed-option choices, and rubric scores through the decision tool. Select its helper model with agents.decision.model or efficiency.helper_models.decision; results use validated TOON and estimated confidence, not native probabilities.",
+        },
+        {
+          tag: "Added",
+          text: "Opt into model-based guardrail classification, initial agent/model routing, and goal continuation with min_confidence. Native OpenAI Decisions and TypeSafe Jev retain min_probability; deterministic denials, explicit selections, and human-only reviews remain authoritative.",
+        },
+        {
+          tag: "Fixed",
+          text: "Keep enabled remote access recovering after startup failures, connector-lock contention, socket outages, and failed credential rotation. Authentication and connection attempts have 30-second deadlines; rejected credentials still require attention. Update the connected machine to apply these recovery changes.",
+        },
+        {
+          tag: "Fixed",
+          text: "Turn Remote connection off while connecting, errored, or waiting for enablement. Disabling aborts pending authentication and cancels recovery; late replies cannot turn it back on.",
+        },
+        {
+          tag: "Fixed",
+          text: "Read failure messages in expanded generic tool responses while sensitive response details remain redacted.",
+        },
       ],
     })
   })
 
   test("retains v0.9.4 independent Claude profiles and native decisions", () => {
-    expect(RELEASES[9]).toEqual({
+    expect(RELEASES[10]).toEqual({
       version: "0.9.4",
       date: "2026-10-07",
       title: "Independent Claude accounts and native decisions",
       tags: ["Added", "Changed"],
       changes: [
-        { tag: "Added", text: "Connect several Claude accounts as independent named profiles. Model requests, token refresh, and subscription usage stay with the selected account, while the ordinary Claude CLI login remains separate." },
-        { tag: "Added", text: "Use native OpenAI Decisions or TypeSafe Jev for bounded classification and scoring through the decision tool, with native answers, probabilities, and reported usage. These integrations require API keys rather than subscription authentication." },
-        { tag: "Added", text: "Opt into decision policies for guardrail risk classification, initial agent/model routing, and goal continuation. Explicit selections, deterministic denials, and human-only hard reviews remain authoritative; automatic goal stopping records stopped, never completed." },
-        { tag: "Changed", text: "Reconnect existing linked Claude profiles after upgrading to sign in to each account independently; profile names remain available. Claude account sign-in requires the claude executable on PATH." },
-        { tag: "Added", text: "Enter an authorization code in the terminal while a capable browser sign-in attempt keeps polling. Each attempt accepts one manual submission; Escape cancels the pending attempt." },
+        {
+          tag: "Added",
+          text: "Connect several Claude accounts as independent named profiles. Model requests, token refresh, and subscription usage stay with the selected account, while the ordinary Claude CLI login remains separate.",
+        },
+        {
+          tag: "Added",
+          text: "Use native OpenAI Decisions or TypeSafe Jev for bounded classification and scoring through the decision tool, with native answers, probabilities, and reported usage. These integrations require API keys rather than subscription authentication.",
+        },
+        {
+          tag: "Added",
+          text: "Opt into decision policies for guardrail risk classification, initial agent/model routing, and goal continuation. Explicit selections, deterministic denials, and human-only hard reviews remain authoritative; automatic goal stopping records stopped, never completed.",
+        },
+        {
+          tag: "Changed",
+          text: "Reconnect existing linked Claude profiles after upgrading to sign in to each account independently; profile names remain available. Claude account sign-in requires the claude executable on PATH.",
+        },
+        {
+          tag: "Added",
+          text: "Enter an authorization code in the terminal while a capable browser sign-in attempt keeps polling. Each attempt accepts one manual submission; Escape cancels the pending attempt.",
+        },
       ],
     })
   })
 
   test("retains v0.9.3 remote navigation, attention refresh, transcript recovery, and terminal OAuth layout", () => {
-    expect(RELEASES[10]).toEqual({
+    expect(RELEASES[11]).toEqual({
       version: "0.9.3",
       date: "2026-10-07",
       title: "Session navigation and attachment fixes",
       tags: ["Changed", "Fixed"],
       changes: [
-        { tag: "Changed", text: "Use five remote destinations—Sessions, Conversation for the logo and new-session landing, Session for the selected transcript, Usage, and Settings. Session links use `/remote/session?session_id=<id>&device_id=<id>`; project plus buttons keep their repository and origin in the URL and lock repository choice, while Conversation lets you choose a repository. The Session breadcrumb has no New conversation action; drafts and reader position remain available when moving between routes." },
-        { tag: "Fixed", text: "Keep first-prompt image and command file uploads intact when opening a newly created Session; opening the selected Session does not repeat the selection." },
-        { tag: "Fixed", text: "Open System alerts on the owning active online machine, even without a notice ID; an unknown, revoked, or offline machine is unavailable and never falls back to the currently selected machine. Sign-in redirects retain the Session and device query." },
-        { tag: "Fixed", text: "Match the Running and recent loading skeletons to the Session cards they replace, preserving the carousel's reserved layout." },
-        { tag: "Fixed", text: "Ignore an older Session snapshot without a warning while preserving the live reply; report genuine snapshot read failures." },
-        { tag: "Fixed", text: "Refresh cached connector attention after execution succeeds, fails, or is interrupted so resolved requests do not leave a Session marked Waiting for you; update the connected machine to apply the change." },
-        { tag: "Fixed", text: "Center terminal OAuth authorization details so the authorization URL, instructions or code, waiting status, copy hint, and Escape control remain visible in short, narrow terminals." },
+        {
+          tag: "Changed",
+          text: "Use five remote destinations—Sessions, Conversation for the logo and new-session landing, Session for the selected transcript, Usage, and Settings. Session links use `/remote/session?session_id=<id>&device_id=<id>`; project plus buttons keep their repository and origin in the URL and lock repository choice, while Conversation lets you choose a repository. The Session breadcrumb has no New conversation action; drafts and reader position remain available when moving between routes.",
+        },
+        {
+          tag: "Fixed",
+          text: "Keep first-prompt image and command file uploads intact when opening a newly created Session; opening the selected Session does not repeat the selection.",
+        },
+        {
+          tag: "Fixed",
+          text: "Open System alerts on the owning active online machine, even without a notice ID; an unknown, revoked, or offline machine is unavailable and never falls back to the currently selected machine. Sign-in redirects retain the Session and device query.",
+        },
+        {
+          tag: "Fixed",
+          text: "Match the Running and recent loading skeletons to the Session cards they replace, preserving the carousel's reserved layout.",
+        },
+        {
+          tag: "Fixed",
+          text: "Ignore an older Session snapshot without a warning while preserving the live reply; report genuine snapshot read failures.",
+        },
+        {
+          tag: "Fixed",
+          text: "Refresh cached connector attention after execution succeeds, fails, or is interrupted so resolved requests do not leave a Session marked Waiting for you; update the connected machine to apply the change.",
+        },
+        {
+          tag: "Fixed",
+          text: "Center terminal OAuth authorization details so the authorization URL, instructions or code, waiting status, copy hint, and Escape control remain visible in short, narrow terminals.",
+        },
       ],
     })
   })
 
   test("retains v0.9.2 submitted prompt visibility", () => {
-    expect(RELEASES[11]).toEqual({
+    expect(RELEASES[12]).toEqual({
       version: "0.9.2",
       date: "2026-10-06",
       title: "Keep submitted prompts visible",
       tags: ["Fixed"],
       changes: [
-        { tag: "Fixed", text: "Keep submitted Web prompts and commands visible when an older pending-input refresh arrives after the send acknowledgement. Admission and promotion update the same bubble without duplicating or resending the input, and the composer keeps focus." },
+        {
+          tag: "Fixed",
+          text: "Keep submitted Web prompts and commands visible when an older pending-input refresh arrives after the send acknowledgement. Admission and promotion update the same bubble without duplicating or resending the input, and the composer keeps focus.",
+        },
       ],
     })
   })
 
   test("retains v0.9.1 Cursor models and machine-local Web diagnostics", () => {
-    expect(RELEASES[12]).toEqual({
+    expect(RELEASES[13]).toEqual({
       version: "0.9.1",
       date: "2026-10-05",
       title: "Cursor models and machine-local Web diagnostics",
       tags: ["Added", "Changed"],
       changes: [
-        { tag: "Added", text: "Inspect and copy anonymous Web latency timings in Settings, including local queue time, remote settlement time, and supported browser long tasks. While connected, bounded batches are saved in the selected machine's local SQLite for seven-day readout; the hosted relay does not store them. Update YCoding on the connected machine to enable saved reports; an older machine keeps the tab-local report and shows an unsupported state." },
-        { tag: "Changed", text: "Cursor's request context follows YCoding project and global configuration for rules and available skills, and advertises only permitted subagents. Existing Cursor credentials and model execution remain available." },
-        { tag: "Changed", text: "Choose Cursor context sizes as separate models, including 500k and 1M when offered, with low, medium, high, and xhigh effort choices. A saved variant label that Cursor no longer offers needs a fresh selection." },
-        { tag: "Changed", text: "Choose models on the web from recent valid choices first, then the selected model's provider and remaining providers. Recents stay in this browser and do not change a Session's selected model." },
-        { tag: "Changed", text: "Identify Claude Code subscription requests as CLI version 2.1.289 by default; an explicit version override still applies." },
+        {
+          tag: "Added",
+          text: "Inspect and copy anonymous Web latency timings in Settings, including local queue time, remote settlement time, and supported browser long tasks. While connected, bounded batches are saved in the selected machine's local SQLite for seven-day readout; the hosted relay does not store them. Update YCoding on the connected machine to enable saved reports; an older machine keeps the tab-local report and shows an unsupported state.",
+        },
+        {
+          tag: "Changed",
+          text: "Cursor's request context follows YCoding project and global configuration for rules and available skills, and advertises only permitted subagents. Existing Cursor credentials and model execution remain available.",
+        },
+        {
+          tag: "Changed",
+          text: "Choose Cursor context sizes as separate models, including 500k and 1M when offered, with low, medium, high, and xhigh effort choices. A saved variant label that Cursor no longer offers needs a fresh selection.",
+        },
+        {
+          tag: "Changed",
+          text: "Choose models on the web from recent valid choices first, then the selected model's provider and remaining providers. Recents stay in this browser and do not change a Session's selected model.",
+        },
+        {
+          tag: "Changed",
+          text: "Identify Claude Code subscription requests as CLI version 2.1.289 by default; an explicit version override still applies.",
+        },
       ],
     })
   })
 
   test("retains the v0.9.0 runtime and remote cutover", () => {
-    expect(RELEASES[13]).toEqual({
+    expect(RELEASES[14]).toEqual({
       version: "0.9.0",
       date: "2026-10-04",
       title: "Reliable shell recovery and remote protocol v4",
       tags: ["Added", "Changed", "Fixed"],
       changes: [
-        { tag: "Added", text: "Reconcile verified background shells after a managed server crash and mark an owed completion notice as lost Session attention, without replaying the command. Process listing must be available to verify ownership." },
-        { tag: "Changed", text: "Upgrade the remote connector and managed local server together for WebSocket v4, then refresh open browser tabs after the matching relay and web deployment. Older v3 clients cannot connect; existing device enrollment stays valid." },
-        { tag: "Changed", text: "Update `ycoding api` operation IDs and permission/question event subscribers to the current unprefixed names; regenerate Client integrations. The old names have no aliases." },
-        { tag: "Changed", text: "Use the semantic `theme` surface in custom TUI theme consumers. Built-in palettes retain their values, and selected endpoint actions have readable contrast." },
-        { tag: "Changed", text: "Back up the local database before upgrading: inactive account/share tables are removed and a shell ledger is added. Rollback requires a backup if shell rows still need reconciliation." },
-        { tag: "Changed", text: "`ycoding update --force` restarts the server after a failed outstanding-work read and reports that running work may be interrupted; without force, it leaves the server running." },
-        { tag: "Changed", text: "Remove imports of the unproduced IDE event subpath and the non-resolving CLI daemon export; neither has a replacement alias." },
-        { tag: "Fixed", text: "Describe local tool-result images to text-only models instead of forwarding unsupported image parts." },
-        { tag: "Fixed", text: "Keep a rejected terminal shell command in the editor with explicit Retry and Discard choices, without replaying a second Enter." },
-        { tag: "Fixed", text: "Keep repeated Conversation–Office switches and viewport changes from triggering virtual-row ResizeObserver loop errors." },
+        {
+          tag: "Added",
+          text: "Reconcile verified background shells after a managed server crash and mark an owed completion notice as lost Session attention, without replaying the command. Process listing must be available to verify ownership.",
+        },
+        {
+          tag: "Changed",
+          text: "Upgrade the remote connector and managed local server together for WebSocket v4, then refresh open browser tabs after the matching relay and web deployment. Older v3 clients cannot connect; existing device enrollment stays valid.",
+        },
+        {
+          tag: "Changed",
+          text: "Update `ycoding api` operation IDs and permission/question event subscribers to the current unprefixed names; regenerate Client integrations. The old names have no aliases.",
+        },
+        {
+          tag: "Changed",
+          text: "Use the semantic `theme` surface in custom TUI theme consumers. Built-in palettes retain their values, and selected endpoint actions have readable contrast.",
+        },
+        {
+          tag: "Changed",
+          text: "Back up the local database before upgrading: inactive account/share tables are removed and a shell ledger is added. Rollback requires a backup if shell rows still need reconciliation.",
+        },
+        {
+          tag: "Changed",
+          text: "`ycoding update --force` restarts the server after a failed outstanding-work read and reports that running work may be interrupted; without force, it leaves the server running.",
+        },
+        {
+          tag: "Changed",
+          text: "Remove imports of the unproduced IDE event subpath and the non-resolving CLI daemon export; neither has a replacement alias.",
+        },
+        {
+          tag: "Fixed",
+          text: "Describe local tool-result images to text-only models instead of forwarding unsupported image parts.",
+        },
+        {
+          tag: "Fixed",
+          text: "Keep a rejected terminal shell command in the editor with explicit Retry and Discard choices, without replaying a second Enter.",
+        },
+        {
+          tag: "Fixed",
+          text: "Keep repeated Conversation–Office switches and viewport changes from triggering virtual-row ResizeObserver loop errors.",
+        },
       ],
     })
   })
 
   test("retains the previous TUI release after v0.9.0", () => {
-    expect(RELEASES[14]).toEqual({
+    expect(RELEASES[15]).toEqual({
       version: "0.8.12",
       date: "2026-10-03",
       title: "Large images and actionable input requests",
       tags: ["Changed", "Fixed"],
       changes: [
-        { tag: "Fixed", text: "Fix valid large images being rejected when attached from the terminal or remote web. Resizing and existing attachment size limits remain enforced. Update the connected machine to apply this fix remotely." },
-        { tag: "Changed", text: "Improve agent guidance to request missing information, decisions, and required reviews through actionable questions, so pending requests use the existing attention alerts instead of ending with a text-only request. Permission and guardrail approvals keep their existing rules." },
+        {
+          tag: "Fixed",
+          text: "Fix valid large images being rejected when attached from the terminal or remote web. Resizing and existing attachment size limits remain enforced. Update the connected machine to apply this fix remotely.",
+        },
+        {
+          tag: "Changed",
+          text: "Improve agent guidance to request missing information, decisions, and required reviews through actionable questions, so pending requests use the existing attention alerts instead of ending with a text-only request. Permission and guardrail approvals keep their existing rules.",
+        },
       ],
     })
-    expect(RELEASES[15]).toEqual({
+    expect(RELEASES[16]).toEqual({
       version: "0.8.11",
       date: "2026-10-02",
       title: "Specific and reliable System alerts",
       tags: ["Added", "Fixed"],
       changes: [
-        { tag: "Added", text: "Turn on System alerts from the notification center. When alerts cannot reach this device, the bell panel says why and offers Turn on System alerts or Re-enable." },
-        { tag: "Fixed", text: "Reopen a Session whose edited-file changes are still loaded without crashing the terminal app." },
-        { tag: "Fixed", text: "Name the Session and what it needs in every System alert, such as \"YCoding — approval needed\" with the Session title. Alerts cover permission requests, questions, guardrail reviews, guardrail blocks, failed runs, and finished work. Update the connected machine to include Session titles." },
+        {
+          tag: "Added",
+          text: "Turn on System alerts from the notification center. When alerts cannot reach this device, the bell panel says why and offers Turn on System alerts or Re-enable.",
+        },
+        {
+          tag: "Fixed",
+          text: "Reopen a Session whose edited-file changes are still loaded without crashing the terminal app.",
+        },
+        {
+          tag: "Fixed",
+          text: 'Name the Session and what it needs in every System alert, such as "YCoding — approval needed" with the Session title. Alerts cover permission requests, questions, guardrail reviews, guardrail blocks, failed runs, and finished work. Update the connected machine to include Session titles.',
+        },
         { tag: "Fixed", text: "Mark a notice read when you open its System alert." },
         { tag: "Fixed", text: "Stop a remote reconnect from alerting every failed Session again at once." },
-        { tag: "Fixed", text: "Send one summary alert when more than 20 alerts arrive in a minute, instead of dropping the rest." },
-        { tag: "Fixed", text: "Alert again when a Session with an unread notice needs something new, or at least 10 minutes after its last alert." },
-        { tag: "Fixed", text: "Keep push alerts working after occasional delivery failures, and hold a work-finished push for up to an hour while the device is asleep." },
-        { tag: "Fixed", text: "Show the alert from an open page when push does not confirm delivery, and keep shown alerts when the workspace reconnects to the same machine or closes." },
+        {
+          tag: "Fixed",
+          text: "Send one summary alert when more than 20 alerts arrive in a minute, instead of dropping the rest.",
+        },
+        {
+          tag: "Fixed",
+          text: "Alert again when a Session with an unread notice needs something new, or at least 10 minutes after its last alert.",
+        },
+        {
+          tag: "Fixed",
+          text: "Keep push alerts working after occasional delivery failures, and hold a work-finished push for up to an hour while the device is asleep.",
+        },
+        {
+          tag: "Fixed",
+          text: "Show the alert from an open page when push does not confirm delivery, and keep shown alerts when the workspace reconnects to the same machine or closes.",
+        },
         { tag: "Fixed", text: "Alert on guardrail blocks while YCoding is closed." },
-        { tag: "Fixed", text: "Keep a second YCoding connector on the same machine from repeatedly taking over the remote connection." },
-        { tag: "Fixed", text: "Show \"YCoding — alerts paused\" when the browser drops push alerts for this device and they cannot be renewed." },
+        {
+          tag: "Fixed",
+          text: "Keep a second YCoding connector on the same machine from repeatedly taking over the remote connection.",
+        },
+        {
+          tag: "Fixed",
+          text: 'Show "YCoding — alerts paused" when the browser drops push alerts for this device and they cannot be renewed.',
+        },
       ],
     })
-    expect(RELEASES[16]).toEqual({
+    expect(RELEASES[17]).toEqual({
       version: "0.8.10",
       date: "2026-10-02",
       title: "Keep working while background tasks run",
       tags: ["Changed"],
       changes: [
-        { tag: "Changed", text: "Keep working on the remaining tasks in the main session while a subagent or background shell is still running, instead of waiting idle until it finishes. Background work still notifies you when it completes." },
-        { tag: "Changed", text: "Always choose a model variant when starting a subagent if that model offers variants. Match the variant to the task, and use a stronger variant only when the task needs it." },
+        {
+          tag: "Changed",
+          text: "Keep working on the remaining tasks in the main session while a subagent or background shell is still running, instead of waiting idle until it finishes. Background work still notifies you when it completes.",
+        },
+        {
+          tag: "Changed",
+          text: "Always choose a model variant when starting a subagent if that model offers variants. Match the variant to the task, and use a stronger variant only when the task needs it.",
+        },
       ],
     })
-    expect(RELEASES[17]).toEqual({
+    expect(RELEASES[18]).toEqual({
       version: "0.8.9",
       date: "2026-10-02",
       title: "Skills follow the prompt that invokes them",
       tags: ["Fixed"],
       changes: [
-        { tag: "Fixed", text: "Show a skill invoked with $skill directly after the prompt that requested it, from the landing screen and inside a Session, in the terminal, web, and model history. Update the connected machine to use this behavior remotely." },
-        { tag: "Fixed", text: "Give an explicitly invoked skill the same content as a skill the agent loads itself: its name, instructions, base directory, and supporting files, so the agent can use the skill's references without loading it again." },
-        { tag: "Fixed", text: "Show an invoked skill's Loaded row in the terminal transcript as soon as the skill activates." },
+        {
+          tag: "Fixed",
+          text: "Show a skill invoked with $skill directly after the prompt that requested it, from the landing screen and inside a Session, in the terminal, web, and model history. Update the connected machine to use this behavior remotely.",
+        },
+        {
+          tag: "Fixed",
+          text: "Give an explicitly invoked skill the same content as a skill the agent loads itself: its name, instructions, base directory, and supporting files, so the agent can use the skill's references without loading it again.",
+        },
+        {
+          tag: "Fixed",
+          text: "Show an invoked skill's Loaded row in the terminal transcript as soon as the skill activates.",
+        },
       ],
     })
-    expect(RELEASES[18]).toEqual({
+    expect(RELEASES[19]).toEqual({
       version: "0.8.8",
       date: "2026-10-01",
       title: "Responsive prompts and reliable model selection",
       tags: ["Changed", "Fixed"],
       changes: [
-        { tag: "Fixed", text: "Recover pending approval notifications when terminal notification support becomes ready, focus moves away, or the connection returns, without repeating a sound that already played." },
-        { tag: "Fixed", text: "Keep permission and guardrail decisions visible while reviewing large commands. Command details scroll inside a bounded terminal panel instead of pushing approval choices off-screen." },
-        { tag: "Fixed", text: "Choose agents and models on desktop and mobile even when the connected machine offers more than 500 models. Catalog failures show their reason and a Retry action." },
-        { tag: "Fixed", text: "Keep the web and terminal composers editable while prompts are sending. Delivery outcomes and safe retries stay with the submitted message without erasing a newer draft. Retrying an admitted command reuses its original input without rerunning its template." },
-        { tag: "Fixed", text: "Load explicitly invoked local $skill instructions in the runtime before the first model request across CLI, terminal, and web prompts, without relying on the model to choose a tool. Queued skills wait for their prompt, and configured permission denies stop activation." },
-        { tag: "Changed", text: "Show web prompt delivery through a static receipt beneath the message instead of a loading animation beside its text." },
-        { tag: "Changed", text: "Allow explicit shell timeouts up to one hour. The default remains ten minutes, and foreground commands still move to the background after five minutes." },
+        {
+          tag: "Fixed",
+          text: "Recover pending approval notifications when terminal notification support becomes ready, focus moves away, or the connection returns, without repeating a sound that already played.",
+        },
+        {
+          tag: "Fixed",
+          text: "Keep permission and guardrail decisions visible while reviewing large commands. Command details scroll inside a bounded terminal panel instead of pushing approval choices off-screen.",
+        },
+        {
+          tag: "Fixed",
+          text: "Choose agents and models on desktop and mobile even when the connected machine offers more than 500 models. Catalog failures show their reason and a Retry action.",
+        },
+        {
+          tag: "Fixed",
+          text: "Keep the web and terminal composers editable while prompts are sending. Delivery outcomes and safe retries stay with the submitted message without erasing a newer draft. Retrying an admitted command reuses its original input without rerunning its template.",
+        },
+        {
+          tag: "Fixed",
+          text: "Load explicitly invoked local $skill instructions in the runtime before the first model request across CLI, terminal, and web prompts, without relying on the model to choose a tool. Queued skills wait for their prompt, and configured permission denies stop activation.",
+        },
+        {
+          tag: "Changed",
+          text: "Show web prompt delivery through a static receipt beneath the message instead of a loading animation beside its text.",
+        },
+        {
+          tag: "Changed",
+          text: "Allow explicit shell timeouts up to one hour. The default remains ten minutes, and foreground commands still move to the background after five minutes.",
+        },
       ],
     })
-    expect(RELEASES[19]).toEqual({
+    expect(RELEASES[20]).toEqual({
       version: "0.8.7",
       date: "2026-10-01",
       title: "Cursor cache reporting",
@@ -314,7 +633,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[20]).toEqual({
+    expect(RELEASES[21]).toEqual({
       version: "0.8.6",
       date: "2026-10-01",
       title: "Quieter attention notifications",
@@ -326,7 +645,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[21]).toEqual({
+    expect(RELEASES[22]).toEqual({
       version: "0.8.5",
       date: "2026-10-01",
       title: "Machine memory and steadier Session status",
@@ -342,7 +661,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[22]).toEqual({
+    expect(RELEASES[23]).toEqual({
       version: "0.8.4",
       date: "2026-10-01",
       title: "Forced update restarts and steadier Session catalogs",
@@ -366,7 +685,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[23]).toEqual({
+    expect(RELEASES[24]).toEqual({
       version: "0.8.3",
       date: "2026-10-01",
       title: "Cursor models and quotas",
@@ -390,7 +709,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[24]).toEqual({
+    expect(RELEASES[25]).toEqual({
       version: "0.8.2",
       date: "2026-10-01",
       title: "Cursor provider",
@@ -410,7 +729,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[25]).toEqual({
+    expect(RELEASES[26]).toEqual({
       version: "0.8.1",
       date: "2026-10-01",
       title: "Instant remote view transitions",
@@ -438,7 +757,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[26]).toEqual({
+    expect(RELEASES[27]).toEqual({
       version: "0.8.0",
       date: "2026-10-01",
       title: "Multiplexed remote delivery and windowed transcripts",
@@ -1308,7 +1627,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 30)).toEqual([
+    expect(versions.slice(0, 31)).toEqual([
+      "0.11.0-beta.1",
       "0.10.7",
       "0.10.6",
       "0.10.5",
@@ -1339,7 +1659,6 @@ describe("release entries", () => {
       "0.7.18",
       "0.7.16",
       "0.7.15",
-
     ])
     expect(new Set(versions).size).toBe(versions.length)
     const sorted = [...versions].sort((a, b) => compare(b, a))

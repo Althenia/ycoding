@@ -1,15 +1,8 @@
 # Configuration reference
 
-Native runtime builds embed the models.dev snapshot selected by `MODELS_DEV_API_JSON`, or the CLI's checked-in snapshot when unset. Model discovery reads the configured catalog file or cache first, then uses the bundled snapshot when disk data is unavailable. Catalog refresh remains best effort. Startup composition failures report their stage on stderr and retain the `production composition failed` startup error; stdout is reserved for the stdio readiness protocol.
+This document specifies configuration for the Rust-backend beta. Rust Core validates runtime JSON/JSONC; the terminal owns `cli.json` presentation preferences. The beta uses explicit trusted process extensions, native provider routes, and revision 5 backend controls. See the [process-extension v5 contract](../specs/process-extension-v5.md) for grants and lifecycle rules.
 
-The Rust Core process-extension resolver accepts explicit `extensions` entries
-with executable/arguments, identity, and host-granted tool families/scopes. It
-validates declarations before launch and rejects obsolete executable plugin/npm
-configuration. The host supplies the stored Location directory and captured
-launch/tool authority. See the [process-extension v5 contract](../specs/process-extension-v5.md)
-for fields, precedence, validation, and deadlines.
-
-This document is the canonical configuration reference for the current YCoding repository. It is derived from the live Schema and runtime discovery code.
+Runtime builds embed the models.dev snapshot selected by the CLI's `MODELS_DEV_API_JSON`, or its checked-in snapshot when unset. Model discovery prefers configured file/cache data, then the bundled snapshot when disk data is unavailable; refresh is best effort. Bootstrap failures report the composition stage on stderr and retain the `production composition failed` startup error while stdio stdout remains reserved for readiness.
 
 ## Configure by task
 
@@ -20,7 +13,7 @@ This document is the canonical configuration reference for the current YCoding r
 | Control agent authority                   | [Permissions](#permissions), [agents](#agents), [guardrails](#guardrail-configuration-and-custom-files).                                                                   |
 | Extend repository behavior                | [Commands](#commands), [skills and instructions](#skills-and-ambient-instructions), [plugins](#plugins-and-hooks), [MCP](#mcp).                                            |
 | Manage context and knowledge              | [Compaction](#compaction-and-experimental-settings), [workspace memory](#workspace-memory), [provider efficiency](#provider-efficiency).                                   |
-| Adjust presentation and service operation | [CLI/TUI](#cli-tui-configuration), [managed service](#managed-service-configuration).                                                                                      |
+| Adjust presentation and service operation | [CLI/TUI](#clitui-configuration), [managed service](#managed-service-configuration).                                                                                       |
 
 Runtime settings belong in `ycoding.json` or `ycoding.jsonc`; terminal preferences belong in `cli.json`. These surfaces do not substitute for each other.
 
@@ -34,11 +27,11 @@ Setting `enabled: false` preserves existing files. Enabling memory does not crea
 
 YCoding has three independent configuration surfaces:
 
-| Surface                       | Files                                                                                                         | Scope                                                                                                                                  |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Runtime configuration         | `ycoding.json`, `ycoding.jsonc`, `.ycoding/ycoding.json`, `.ycoding/ycoding.jsonc`                            | Models, agents, permissions, MCP, providers, plugins, skills, commands, references, compaction, formatters, LSP, and runtime behavior. |
-| CLI/TUI configuration         | `cli.json` in the YCoding global config directory                                                             | Theme, keybindings, notifications, prompt behavior, transcript presentation, mouse, and terminal integration.                          |
-| Managed-service configuration | `service.json`, `service-local.json`, or `service-<channel-hash>.json` in the YCoding global config directory | Managed background-server hostname, port, and private password.                                                                        |
+| Surface                       | Files                                                                                                         | Scope                                                                                                                                             |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Runtime configuration         | `ycoding.json`, `ycoding.jsonc`, `.ycoding/ycoding.json`, `.ycoding/ycoding.jsonc`                            | Models, agents, permissions, MCP, providers, process extensions, skills, commands, references, compaction, formatters, LSP, and runtime behavior. |
+| CLI/TUI configuration         | `cli.json` in the YCoding global config directory                                                             | Theme, keybindings, notifications, prompt behavior, transcript presentation, mouse, and terminal integration.                                     |
+| Managed-service configuration | `service.json`, `service-local.json`, or `service-<channel-hash>.json` in the YCoding global config directory | Managed background-server hostname, port, and private password.                                                                                   |
 
 The obsolete files `tui.json` and `kv.json` have no effect. Project-local `.ycoding/tui.json` is not a supported configuration source.
 
@@ -46,7 +39,7 @@ The obsolete files `tui.json` and `kv.json` have no effect. Project-local `.ycod
 
 The beta channel keeps its own data directory and imports a copy of existing data on first start without changing stable data.
 
-Stable YCoding uses the `ycoding` namespace. The Rust runtime's `beta` channel uses `ycoding-beta` for configuration, state, data, cache, and temporary files. XDG bases must be absolute; unset or relative bases use the home-directory fallbacks below. `ycoding-runtime --paths` emits the resolved `namespace`, `config`, `state`, `data`, `cache`, and `serviceFilename` as JSON without creating directories or starting a server; the beta TypeScript CLI can consume this same namespace authority.
+Stable YCoding uses the `ycoding` namespace. The Rust runtime's `beta` channel uses `ycoding-beta` for configuration, state, data, cache, and temporary files. XDG bases must be absolute; unset or relative bases use the home-directory fallbacks below. `ycoding-runtime --paths` emits the resolved `namespace`, `config`, `state`, `data`, `cache`, and `serviceFilename` as JSON without creating directories or starting a server. Configuration and terminal preferences are channel-local; stable files are not copied automatically. Project `ycoding.json`/`ycoding.jsonc` files still participate in discovery.
 
 | Purpose                        | Base                                                           |
 | ------------------------------ | -------------------------------------------------------------- |
@@ -75,11 +68,13 @@ The installer accepts `--beta` or `YCODING_CHANNEL=beta` to select the newest pu
 
 ### Native computer helper
 
-Native computer use has no JSON/JSONC configuration or helper-path environment override. A packaged macOS executable resolves `YCoding Computer Use.app` beside itself. Release installation places the verified executable and app bundle in `~/.local/bin`. Every computer operation launches the app bundle. The first desktop operation requests Accessibility access, the first capture requests Screen Recording access, and the first iTerm, Finder, Safari, or Chrome operation requests Automation access to that application; macOS lists **YCoding Computer Use** under Privacy & Security, and the operation succeeds after the user allows it and retries. The release workflow signs the app with the release signing identity `YCoding Code Signing`, a self-signed certificate that is not an Apple Developer ID and does not notarize the app. The app's designated requirement names the bundle identifier `app.ycoding.computer-use` and that certificate, so it stays the same across releases signed this way; macOS and the user still decide whether a grant applies. An ad-hoc signed release has a different requirement that pins one build, so after installing the first release signed with this identity, macOS may ask for authorization again: if an operation still reports a denied permission, remove the existing **YCoding Computer Use** entry from each Privacy & Security list with **−**, and allow the new entry that the next operation adds. An archive downloaded with a web browser carries the `com.apple.quarantine` attribute; after extracting it, run `xattr -dr com.apple.quarantine <extracted-folder>` before starting `ycoding`. The curl installer and `ycoding update` download without that attribute.
+Native computer use has no JSON/JSONC setting or helper-path environment override. The CLI supplies the frontend executable as native asset owner; `YCoding Computer Use.app` stays beside `ycoding`, including installations in `~/.local/bin`, while Rust runs from its extracted path. The backend retains one helper process over a private socket. Desktop access needs Accessibility, capture needs Screen Recording, and iTerm/Finder/Safari/Chrome control needs Automation authorization for that app; allow **YCoding Computer Use** in Privacy & Security and retry.
+
+The release workflow uses the `YCoding Code Signing` identity, a self-signed code-signing certificate rather than notarized Apple Developer ID signing. The designated requirement names `app.ycoding.computer-use` and its certificate; macOS decides whether existing grants apply. Ad-hoc builds pin one build and require renewed grants: remove denied entries with **−** and allow the entry added by the rebuilt app. Browser-downloaded archives carry quarantine; after extraction use `xattr -dr com.apple.quarantine <extracted-folder>` before launch. The installer and updater download without that attribute.
 
 Safari `webbrowser.eval`, `webbrowser.back`, `webbrowser.forward`, and `webbrowser.reload` require Safari's **Develop > Allow JavaScript from Apple Events** setting; Chrome `webbrowser.eval` requires Chrome's **View > Developer > Allow JavaScript from Apple Events** setting. When these calls fail, they report `native_failure` with an unknown outcome and a message that points to the setting.
 
-For source development on macOS, run `bun run build:computer-use` explicitly before `bun dev`. The build writes the app bundle to the repository-ignored `packages/core/.cache/computer-use/` directory; Bun source execution resolves that fixed path. Set `YCODING_MACOS_SIGNING_IDENTITY` to a code-signing identity in your keychain to sign the build with it and keep privacy grants across rebuilds; a self-signed certificate that your login keychain trusts for code signing is sufficient, and each developer creates their own, never committing it to the repository; without it the build is ad-hoc signed, and after each rebuild you remove the existing **YCoding Computer Use** Privacy & Security entry so the next operation adds it again. Runtime startup never compiles or installs the app, and it never writes beside the user's Bun executable. Windows and Linux expose no native computer capabilities. See [Native computer use](./computer-use.md).
+For macOS source development, build the helper explicitly with `bun run build:computer-use`. To exercise installed asset resolution, build/install a native artifact containing the app and run its packaged checks. Set `YCODING_MACOS_SIGNING_IDENTITY` to your own stable signing identity to preserve privacy grants where macOS permits; without it builds are ad-hoc signed and require renewed entries. Runtime startup does not compile/install the app or write beside Bun. Windows and Linux expose no native computer capabilities. See [Native computer use](./computer-use.md).
 
 On POSIX systems, YCoding restricts its log directory to mode `0700` and the active YCoding log file to `0600`, whether that file is new or pre-existing. Startup repairs more-permissive modes without deleting or rewriting existing log content.
 
@@ -89,7 +84,7 @@ When `$XDG_CONFIG_HOME` is `~/.config`, the global JSONC source is `~/.config/yc
 
 ## Runtime configuration discovery and precedence
 
-Configuration entries are assembled from lowest to highest priority. For scalar values, the latest document that defines the field wins. Agents, commands, providers, plugins, permissions, and similar domains apply their own ordered merge behavior.
+Configuration entries are assembled from lowest to highest priority. For scalar values, the latest document that defines the field wins. Agents, commands, providers, extensions, permissions, and similar domains apply their own ordered merge behavior.
 
 The document order is:
 
@@ -122,7 +117,7 @@ Both JSON and JSONC support:
 - environment substitution with `{env:NAME}`;
 - file substitution with `{file:path}`.
 
-Only an unparsable JSON/JSONC document is skipped as a whole. For a parsed document, the runtime drops removed or unknown keys and the smallest schema-invalid unit, preserving unrelated settings. Invalid named MCP server, provider, command, or reference values drop only that entry; invalid agent fields are dropped individually when the agent remains structurally valid. Invalid permission rules fail closed: a readable nonempty action is denied on every resource, and an unreadable action or non-array ruleset denies every action in that global or agent ruleset. Valid rules retain their order, followed by the recovered denies, so later rules in the same ruleset cannot override recovery; normal precedence between configuration scopes is unchanged. Any invalid `guardrails` value becomes `{ "enabled": true }`, using default limits. The runtime logs `ignored config file with invalid JSON` for unparsable documents and one `recovered config item` warning per dropped or fail-closed item. The Location-scoped `GET /api/config/diagnostics` endpoint returns the document `path`, `reason`, and short `message`, plus `jsonPath` for parsed items and `failClosed: true` for security recovery. The TUI shows error toasts and lists diagnostics under Configuration in Status, with wrapping JSON-path/message details and a `fails closed` marker.
+Unparsable JSON/JSONC and unsupported executable-plugin declarations skip the affected document. Ordinary unknown keys and invalid values are recovered at the smallest valid boundary, preserving unrelated settings. Invalid named MCP server, provider, command, or reference values drop that entry; invalid agent fields can be dropped individually. Invalid permissions fail closed with action-wide or scope-wide denies appended after valid rules. Invalid `guardrails` values become `{ "enabled": true }` with default limits. Location-scoped `config.diagnostics` returns document path, reason, message, parsed-item `jsonPath`, and `failClosed` for security recovery. TUI Status lists Configuration diagnostics and their fail-closed marker.
 
 `{file:path}` is resolved relative to the containing configuration file. Absolute paths and `~/` are supported. The referenced file is trimmed and inserted as a JSON string fragment. A `{file:...}` token inside a `//` comment is not resolved.
 
@@ -165,6 +160,15 @@ After the public site and a native release are published, `curl -fsSL https://yc
 
 `ycoding` opens the interactive terminal interface. `ycoding --model <[profile#]provider/model[#variant]> "prompt"` executes a direct non-interactive run instead. `ycoding run --help` lists the explicit run command's options. These paths share the existing durable Session execution and permission handling.
 
+`ycoding api <operation> [--data <request-json>]` invokes a local-role v5 operation by its diagnostic name, not an HTTP method/path. Supply the complete typed request object, including `params`, `query`, and/or `payload` required by that operation. Results print as JSON; event streams print one JSON event per line. For example:
+
+```sh
+ycoding api health.get
+ycoding api session.rename --data '{"params":{"sessionID":"ses_example"},"payload":{"title":"Example"}}'
+```
+
+CLI attachment admission uses backend-readable file references. The caller retains its source files until admission is confirmed; the backend materializes the durable managed copy. Unknown admission outcomes require reconciliation or explicit retry, not removal of the source.
+
 The installed executable includes `ycoding service start`, `restart`, `status`, `stop`, `get`, `set`, and `unset` for the managed background server. `ycoding service --help` lists these controls. `status` reports the running endpoint or `stopped` without starting a server. `restart` interrupts executing Sessions; let their work finish before restarting to apply an update.
 
 **Keep machine awake** is an opt-in, runtime-only control in the TUI command palette and the web client's **Settings → Machine** section. The TUI Status dialog also reports its state. It controls the selected backend machine, not the phone or browser viewing it. On macOS it prevents idle system sleep while enabled; closing the lid or requesting sleep manually still allows sleep. Disabling it or stopping, restarting, updating, or crashing the backend releases the inhibitor. Each backend starts with it off. Linux and Windows report unsupported. There is no saved preference or automatic re-enabling, and the web control requires a reachable machine.
@@ -173,7 +177,7 @@ The TUI palette, Status dialog, and web control report **Checking** until the ba
 
 `ycoding update` checks GitHub Releases and replaces an installed release only after verifying its archive checksum and contents. It checks every archive entry, accepting only regular files and directories and rejecting links, devices, absolute or parent-relative paths, unsafe or duplicate names, entries above the size limit, and archives with more than 1024 entries; it requires the files the release version needs and extracts only those, so additional archive entries are ignored and never written. In a terminal it redraws one progress line: a download bar with percentage and megabytes when the release reports its size (otherwise the megabytes received), then checksum verification and installation; redirected output prints each phase once. macOS releases from 0.2.0 through 0.7.0 contain `ycoding` and `ycoding-computer-helper`; 0.7.1 contains those files plus the signed `ycoding-computer-helper.app` bundle. Later macOS releases contain `ycoding`, the `YCoding Computer Use.app` bundle, and `ycoding-chrome-extension`; the installer and updater require the app's signature to verify (`codesign --verify --deep --strict`) but do not compare its signing identity with the installed app's, and macOS may request renewed Privacy & Security authorization when an update changes the app's signing identity, as described under native computer use; installing one removes a sibling `ycoding-computer-helper` and `ycoding-computer-helper.app`. Self-update preserves and restores the installed files and apps together if replacement fails. Explicit rollback to a published pre-0.2.0 macOS version accepts its historical single-file archive and leaves any sibling helper unchanged. Linux releases through 0.7.1 are single-file, and later Linux releases add `ycoding-chrome-extension`; installing a later release on either platform replaces that folder and restores it if replacement fails. Self-update supports macOS arm64/x64 and Linux x64, matching the shell installer. Development builds must be rebuilt locally: `bun run build:tui` writes the executable, the macOS `YCoding Computer Use.app`, and `ycoding-chrome-extension` together under `dist/tui/<target>/bin`, and `bun run install:local` copies all of them into `~/.local/bin` on macOS and Linux. It fails without changing the installation when the build is incomplete or the macOS app fails signature verification, and replaces each installed item by rename so a running `ycoding` keeps its open executable. Each build re-signs the app ad hoc unless `YCODING_MACOS_SIGNING_IDENTITY` names a signing identity. After installing, `install:local` reads the installed app's actual signature and prints whether it is ad-hoc signed, in which case each build has a different code requirement and you remove the old **YCoding Computer Use** Privacy & Security entries and allow the new one when prompted, or signed by a named certificate, in which case macOS decides whether existing grants apply. Windows users must exit YCoding and replace the executable from the release ZIP manually.
 
-After `ycoding update` installs a release, it applies the release to the running background server without opening the TUI. It looks for a background server of any version; when none is running it prints `No background server is running; nothing to restart`. Otherwise it reads the server's work with `GET /api/session/outstanding` and counts the Sessions in its `running` list: Sessions with an executing drain or a live background shell. When none is running it restarts the server through the managed restart that `ycoding service restart` uses, so the replacement starts from the newly installed executable, and prints `Restarted the background server`. Admitted inputs, settled shell notices, subagent notices, and active goals that are not running do not delay the restart. A restart interrupts executing Sessions and a server start never resumes them, so a server with running Sessions keeps running: the command prints how many Sessions have running work and that `ycoding service restart` applies the update once they finish. `ycoding update --force` (`-f`) restarts the server even while Sessions are running: it prints `Interrupting <n> running Session(s) to restart the background server...` with the number of running Sessions read just before the restart, then `Restarted the background server`; without running Sessions the flag changes nothing. When the outstanding-work read fails or takes longer than five seconds, an unforced update leaves the server running and reports `ycoding service restart`. With `--force`, the command reports that running work could not be checked and restarts anyway, potentially interrupting it. Neither outcome changes the exit status. A failed restart leaves the update installed, reports the failure and `ycoding service restart` on standard error, and exits with status 1. A failed or rolled-back install, and an installation that is already current, never query or restart the server. The executable that runs `ycoding update` performs these steps, not the release it installs, so an update run by a release without them installs the new release but still requires `ycoding service restart` or opening the TUI to run it in the background server.
+After `ycoding update` installs a release, it checks the running service with `session.outstanding`. An executing drain or live background shell counts as running work. With no running work it restarts the service from the installed executable; pending inputs, settled notices, and non-running goals do not delay that restart. Running work leaves the service unchanged and directs the user to `ycoding service restart`; `--force` permits a graceful restart that interrupts it. A failed or five-second timed-out work read keeps the service running unless forced. A failed restart leaves the installation in place and exits 1. No running service means no restart, and an unchanged or rolled-back installation never queries or restarts it. The executable performing the update owns these checks.
 
 The background update check resolves the newest release from the same GitHub Releases source and only announces its availability with the explicit `ycoding update` command. It never downloads release assets, installs an update, replaces executables, or restarts the application. An omitted `autoupdate`, `true`, and `"notify"` all enable notice-only checks for patch, minor, and major releases; `false` disables the check. Installation requires the user to run `ycoding update`.
 
@@ -206,40 +210,40 @@ channel's Meeting directory.
 
 Meeting requires the native Bun-built `ycoding` executable. The Node CLI excludes Meeting; `meeting` and `serve --meeting` exit nonzero with an error directing you to the native executable, without starting a meeting server or arming capture.
 
-`ycoding meeting [directory] [--no-open]` starts a private server with the bundled meeting runtime for the directory (default: the current directory), arms a meeting, and opens or prints its local live page; it reuses a meeting runtime that already serves the directory. `ycoding serve --meeting` starts a server with the same runtime plugin. The live page owns browser-tab audio capture using its per-bridge view key, with fresh participant consent and an optional microphone; no capture extension or pairing is required. Keep it open while recording. Speech prerequisites and recording consent are described in [meeting intelligence](./meeting-intelligence.md#ycoding-meeting).
+`ycoding meeting [directory] [--no-open]` starts a private Rust server for the directory (default: the current directory), arms a meeting, and opens or prints its local live page; it reuses an existing reachable Meeting bridge. `ycoding serve --meeting` enables the same backend service for composed Locations. The page owns browser-tab audio capture under its separate view key, with fresh participant consent and an optional microphone; no capture extension or pairing is required. Keep it open while recording. See [meeting intelligence](./meeting-intelligence.md#ycoding-meeting) for speech prerequisites and consent.
 
 ### Remote access
 
 `ycoding remote` gives the authenticated owner of an enrolled machine access to every Session in that machine's backend through a relay deployment. The local process keeps execution authority; see [Runtime behavior](./runtime.md#remote-relay-agent) for backend-derived Location, authorization, reconnection, and frame-bounding rules.
 
-The connected Web workspace automatically sends bounded, content-free timing batches to its selected machine through that authenticated relay. Only the local Server stores these samples in SQLite: reads include at most 10,000 rows from the last seven days, and expired rows are pruned while the Server runs or at its next start. The relay retains no samples. Settings → Web latency shows the last 60 tab-local measurements and can read saved rows from the selected machine; clearing the tab report does not delete SQLite rows. Account and relay-local timings remain tab-local. See [remote runtime behavior](./runtime.md#remote-relay-agent) for bounds and failure states.
+With machine-wide consent enabled, the connected Web workspace sends bounded content-free timing batches through the authenticated relay. The local backend retains at most 10,000 samples for 30 days; the relay stores none. Settings → Web latency shows the last 60 tab-local measurements and reads saved rows from the selected machine through `telemetry.list`. Account and relay-local timings remain tab-local. See [telemetry](./runtime.md#telemetry) for consent, bounds, and failure states.
 
 The standalone terminal artifact and the full CLI expose the same remote subcommands and handlers. Remote access does not require a separate full-CLI installation.
 
 In the browser, **New session** selects from existing repositories recorded by that backend. Open a missing repository locally, then use **Refresh repositories**. New Sessions use the selected directory's configured `default_agent` and `model` when no Session-specific selection exists; configure providers and credentials on the machine. The browser does not accept an arbitrary directory or create repositories.
 
-| Command                                                                               | Purpose                                                                                                                                              |
-| ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ycoding remote enroll <enrollmentID> [--name <name>] [--relay <origin>] [--replace]` | Enroll this machine with a relay. The one-use enrollment code is read from the terminal, never argv.                                                 |
-| `ycoding remote connect [--relay <origin>] [--server <url> \| --standalone]`          | Turn on the resolved server's remote connection and return once it is on; `--standalone` stays in the foreground until Ctrl-C.                       |
-| `ycoding remote disconnect [--server <url> \| --standalone]`                          | Turn off the resolved server's remote connection.                                                                                                    |
-| `ycoding remote status [--server <url> \| --standalone]`                              | Read enrollment, redacted credential validity and connection state from the resolved backend. An unenrolled backend reports that it is not enrolled. |
-| `ycoding remote sessions [--server <url> \| --standalone]`                            | List every Session in the backend through its authoritative Location.                                                                                |
+| Command                                                                               | Purpose                                                                                                                                               |
+| ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ycoding remote enroll <enrollmentID> [--name <name>] [--relay <origin>] [--replace]` | Enroll this machine with a relay. The one-use enrollment code is read from the terminal, never argv.                                                  |
+| `ycoding remote connect [--relay <origin>] [--server <url> \| --standalone]`          | Turn on the resolved server's remote connection and return once it is on; `--standalone` stays in the foreground until Ctrl-C.                        |
+| `ycoding remote disconnect [--server <url> \| --standalone]`                          | Turn off the resolved server's remote connection.                                                                                                     |
+| `ycoding remote status [--server <url> \| --standalone]`                              | Read enrollment, redacted credential validity, and connection state from the resolved backend; an unenrolled backend reports that it is not enrolled. |
+| `ycoding remote sessions [--server <url> \| --standalone]`                            | List every Session in the backend through its authoritative Location.                                                                                 |
 
 `ycoding remote enroll` requires a relay origin, and `--replace` is required before an existing device identity can be overwritten. `ycoding remote connect` requires an enrolled device and refuses to bridge a local server over a LAN or public-network endpoint.
 
-The machine's remote connection belongs to the Rust runtime. The managed background service hosts it, so it stays enabled while that service runs, including when no TUI is open; a `--standalone` private server hosts its own connection for its lifetime. The CLI reads and switches it through authenticated v5 `remote.get` and `remote.set` (`{ enabled }`). `off` means disabled, `connecting` means enabled and starting or recovering, `on` means the relay socket is open, and `error` means setup or authentication requires attention; an optional message supplies details. Turning it on grants the machine owner access to every existing and future Session on that backend. The runtime stores the on/off choice atomically in `remote.json` under the YCoding state directory, restores it when it starts, and stops the connection without clearing that choice when it shuts down; an unreadable stored choice reports an error instead of connecting. The CLI reads enrollment only through the redacted `remote.get` projection and submits the hidden one-use code through `remote.enroll`.
+The Rust runtime owns the remote connection for its lifetime, including when no TUI is open. CLI/TUI controls use authenticated `remote.get` and `remote.set` (`{ enabled }`). States are `off`, `connecting`, `on`, and `error`; the Remote connection toggle enables from off and disables from the other states. Enabling grants the enrolled owner access to every existing and future backend Session. An unenrolled machine directs the user to `ycoding remote enroll <enrollmentID>`. The backend persists the on/off choice in private `remote.json`, restores it at startup, and closes the connector at shutdown without clearing the choice. Unreadable preferences report an error rather than silently connecting. Device enrollment is backend-owned and stored in private `remote-device.json`; its relay origin is pinned.
 
-The runtime owns connection retry and credential refresh. Disabling or shutting down cancels recovery and prevents late connection work from reopening the connector. Missing or invalid enrollment, rejected device credentials and relay-origin mismatch remain actionable errors rather than automatic reenrollment. `ycoding remote connect` requires a private loopback backend, checks an optional relay override against the backend's enrolled origin and waits up to 30 seconds for the connected state. After repairing a terminal setup or authentication error, an explicit connect makes a fresh attempt. The backend runtime lock owns the single service process; the CLI does not acquire a connector lock.
+The runtime owns retry and credential refresh. Disabling/shutdown cancels recovery and fences late connection work. Invalid enrollment, rejected credentials, and relay-origin mismatch require attention, not automatic reenrollment. `ycoding remote connect` requires a private loopback backend, validates a relay override against the enrolled origin, and waits up to 30 seconds for on. An explicit connect retries repaired setup. The backend runtime lock owns the service; the CLI acquires no connector lock and never reads private device credentials.
 
 Local state lives outside any repository checkout:
 
-| File                 | Location                                          | Contents                                                                                                                     |
-| -------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `remote-device.json` | Global state directory: `$XDG_STATE_HOME/ycoding` | The device identity: device ID, name, relay origin, P-256 public key, P-256 private key, and the rotated refresh credential. |
-| `remote.json`        | Global state directory: `$XDG_STATE_HOME/ycoding` | The machine's remote connection on/off choice, written atomically by the local server.                                       |
+| File                 | Location                         | Contents                                                                    |
+| -------------------- | -------------------------------- | --------------------------------------------------------------------------- |
+| `remote-device.json` | Channel's global state directory | Private device identity, pinned relay origin, keys, and refresh credential. |
+| `remote.json`        | Channel's global state directory | Backend-owned connection on/off preference.                                 |
 
-The runtime owns the private state files and writes them atomically. The CLI never reads `remote-device.json`, generates a device key, signs a challenge or refreshes a credential. The device private key remains on the backend machine, and credentials travel only in request bodies and the WebSocket upgrade header, never in a URL, a flag or an environment variable. A malformed file fails explicitly and is left in place for the operator.
+The runtime writes private state atomically. The CLI reads only redacted enrollment from `remote.get` and submits the hidden one-use code through `remote.enroll`; it does not read the identity file, generate device keys, sign challenges, or refresh credentials. The private key stays on the backend; credentials use request bodies and upgrade headers, never URL/argv/environment. Malformed files fail explicitly and remain for the operator.
 
 Relay sign-in is restricted by a server-only allowlist. `GOOGLE_ALLOWED_EMAILS` holds comma-, whitespace-, or newline-separated Google addresses matched exactly after trimming and lowercasing, with no wildcards or domain suffixes, and it is never returned through an API, a redirect, a log, or the browser bundle. Admission requires a configured entry, a Google-verified email, and an exact match; a missing or empty list denies every Google sign-in. The relay deployment also supplies `GOOGLE_CLIENT_ID` and the `GOOGLE_CLIENT_SECRET` secret.
 
@@ -247,7 +251,7 @@ Provisioning is an operator action in `infra/cloudflare`. `wrangler.jsonc` selec
 
 ## Rejected configuration keys
 
-A rejected key is dropped with a diagnostic; the rest of its document still loads. Rejected keys are:
+Ordinary unknown or removed keys are dropped individually with a diagnostic. Executable-plugin declarations are a separate fail-closed boundary: `plugins`, `plugin`, `npm`, singular `provider`, and executable provider packages reject the affected document. Native provider package identities are accepted without executing npm code. Other individually rejected keys include:
 
 ```text
 logLevel
@@ -255,14 +259,12 @@ server
 command
 reference
 snapshot
-plugin
 autoshare
 disabled_providers
 enabled_providers
 small_model
 mode
 agent
-provider
 permission
 tools
 attachment
@@ -270,46 +272,46 @@ layout
 decisions
 ```
 
-Removed or unknown keys are dropped individually without discarding unrelated settings. Each dropped item is logged and exposed through `GET /api/config/diagnostics` with its document path, JSON path, reason, and message; security recovery also carries `failClosed: true`. The TUI reports ignored documents, dropped items, and fail-closed recovery with distinct error toasts and Configuration entries in Status.
+Individually dropped items appear in `config.diagnostics` with document path, JSON path, reason, and message; security recovery carries `failClosed: true`. Executable-plugin rejection reports an ignored document instead of a partial load. The TUI shows Configuration diagnostics in Status.
 
 The MCP shape where server names appear directly under `mcp` is also rejected. Use `mcp.servers`.
 
 ## Complete top-level runtime fields
 
-| Field                   | Type                                  | Purpose                                                                                     |
-| ----------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `$schema`               | string                                | Optional editor metadata only.                                                              |
-| `shell`                 | string                                | Preferred shell for terminal and shell execution.                                           |
-| `shell_sandbox`         | `disabled`, `optional`, or `required` | Shell isolation policy.                                                                     |
-| `shell_memory_limit_mb` | non-negative integer                  | Default shell command process-tree memory limit in MiB; zero disables the default.          |
-| `model`                 | model selector                        | Default model.                                                                              |
-| `default_agent`         | string                                | Default selectable primary agent.                                                           |
-| `autoupdate`            | boolean or `notify`                   | Notice-only update checks; `false` disables checks. Installation is always manual.          |
-| `share`                 | `manual`, `auto`, or `disabled`       | Session sharing policy accepted by Schema.                                                  |
-| `enterprise.url`        | string                                | Enterprise sharing endpoint accepted by Schema.                                             |
-| `username`              | string                                | Display and telemetry identity.                                                             |
-| `permissions`           | permission rules                      | Global ordered tool permission rules.                                                       |
-| `agents`                | record                                | Built-in overrides and custom agents.                                                       |
-| `snapshots`             | boolean                               | Undo/revert snapshot behavior.                                                              |
-| `watcher.ignore`        | string array                          | Watcher ignore patterns.                                                                    |
-| `formatter`             | boolean or formatter record           | Built-in formatter enablement and overrides.                                                |
-| `lsp`                   | boolean or LSP record                 | Built-in language-server enablement and overrides.                                          |
-| `attachments`           | object                                | Attachment processing, currently image limits and resizing.                                 |
-| `tool_output`           | object                                | Tool-output truncation limits.                                                              |
-| `mcp`                   | object                                | MCP defaults and named servers.                                                             |
-| `compaction`            | object                                | Selective-compaction retention, budget, manifest, and advisory policy.                      |
-| `session_retention`     | object                                | Global-only idle Session family deletion; see [Session retention](#session-retention).      |
-| `skills`                | string array                          | Additional skill directories or HTTP(S) sources.                                            |
-| `commands`              | record                                | Named slash commands.                                                                       |
-| `instructions`          | string array                          | Accepted by Schema, but no current runtime consumer reads this field. Do not rely on it.    |
-| `instruction_max_bytes` | positive integer                      | Maximum bytes loaded from each ambient instruction file; default 51,200, maximum 1,048,576. |
-| `references`            | record                                | Named local or Git context sources.                                                         |
-| `plugins`               | array                                 | Ordered plugin additions, options, and removals.                                            |
-| `providers`             | record                                | Provider and model overrides.                                                               |
-| `memory`                | object                                | On-demand workspace knowledge enablement, base path, and concept/bundle limits.             |
-| `efficiency`            | object                                | Helper-model, prompt-cache, and provider-continuation policy.                               |
-| `image_analyzer`        | object                                | Image analysis fallback for text-only models.                                               |
-| `experimental`          | object                                | Subagent depth and resource policies.                                                       |
+| Field                   | Type                                  | Purpose                                                                                            |
+| ----------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `$schema`               | string                                | Optional editor metadata only.                                                                     |
+| `shell`                 | string                                | Preferred shell for terminal and shell execution.                                                  |
+| `shell_sandbox`         | `disabled`, `optional`, or `required` | Shell isolation policy.                                                                            |
+| `shell_memory_limit_mb` | non-negative integer                  | Default shell command process-tree memory limit in MiB; zero disables the default.                 |
+| `model`                 | model selector                        | Default model.                                                                                     |
+| `default_agent`         | string                                | Default selectable primary agent.                                                                  |
+| `autoupdate`            | boolean or `notify`                   | Notice-only update checks; `false` disables checks. Installation is always manual.                 |
+| `share`                 | `manual`, `auto`, or `disabled`       | Session sharing policy accepted by Schema.                                                         |
+| `enterprise.url`        | string                                | Enterprise sharing endpoint accepted by Schema.                                                    |
+| `username`              | string                                | Display and telemetry identity.                                                                    |
+| `permissions`           | permission rules                      | Global ordered tool permission rules.                                                              |
+| `agents`                | record                                | Built-in overrides and custom agents.                                                              |
+| `snapshots`             | boolean                               | Undo/revert snapshot behavior.                                                                     |
+| `watcher.ignore`        | string array                          | Watcher ignore patterns.                                                                           |
+| `formatter`             | boolean or formatter record           | Built-in formatter enablement and overrides.                                                       |
+| `lsp`                   | boolean or LSP record                 | Built-in language-server enablement and overrides.                                                 |
+| `attachments`           | object                                | Attachment processing, currently image limits and resizing.                                        |
+| `tool_output`           | object                                | Tool-output truncation limits.                                                                     |
+| `mcp`                   | object                                | MCP defaults and named servers.                                                                    |
+| `compaction`            | object                                | Selective-compaction retention, budget, manifest, and advisory policy.                             |
+| `session_retention`     | object                                | Global-only idle Session family deletion; see [Session retention](#session-retention).             |
+| `skills`                | string array                          | Additional skill directories or HTTP(S) sources.                                                   |
+| `commands`              | record                                | Named slash commands.                                                                              |
+| `instructions`          | string array                          | Accepted by Schema, but no current runtime consumer reads this field. Do not rely on it.           |
+| `instruction_max_bytes` | positive integer                      | Maximum bytes loaded from each ambient instruction file; default 51,200, maximum 1,048,576.        |
+| `references`            | record                                | Named local or Git context sources.                                                                |
+| `extensions`            | array                                 | Explicit trusted process definitions and host grants; see [plugins and hooks](#plugins-and-hooks). |
+| `providers`             | record                                | Provider and model overrides.                                                                      |
+| `memory`                | object                                | On-demand workspace knowledge enablement, base path, and concept/bundle limits.                    |
+| `efficiency`            | object                                | Helper-model, prompt-cache, and provider-continuation policy.                                      |
+| `image_analyzer`        | object                                | Image analysis fallback for text-only models.                                                      |
+| `experimental`          | object                                | Subagent depth and resource policies.                                                              |
 
 ### Shell memory limits
 
@@ -350,7 +352,7 @@ The field reference below expands the overview. `unset` means the field is optio
 | `instruction_max_bytes`                           | positive integer `<= 1048576`                                                  | `51200`         | Per-ambient-instruction UTF-8 byte cap.                                                          |
 | `commands`                                        | record of `Config.Command`                                                     | unset           | Inline slash commands.                                                                           |
 | `references`                                      | record of `Config.Reference.Entry`                                             | unset           | Named local or Git context sources.                                                              |
-| `plugins`                                         | (`string` \| `{ package: string, options?: Record<string, unknown> }`)[]       | unset           | Ordered runtime plugin directives.                                                               |
+| `extensions`                                      | process-definition array                                                       | unset           | Identity, absolute executable, arguments, and explicit host grants.                              |
 | `providers`                                       | record of `Config.Provider`                                                    | unset           | Provider/model overrides.                                                                        |
 | `provider_usage`                                  | `Config.ProviderUsage`                                                         | unset           | Read-only provider-usage client bridge.                                                          |
 | `efficiency`                                      | `Config.Efficiency`                                                            | runtime-derived | Helper-model, cache, and continuation policy.                                                    |
@@ -427,17 +429,11 @@ The field reference below expands the overview. `unset` means the field is optio
 
 ### Provider-usage reporting
 
-`provider_usage` configures only the optional Codex app-server fields above. Its output appears separately as **Codex app-server** with unknown account attribution; it does not replace or inherit a stored profile's quota. Provider usage refreshes use credentials already stored for the matching YCoding integration; they do not discover credentials from another application's files, keychain, or browser cookies. GitHub Copilot reuses the OAuth credential configured for `github-copilot`.
-
-After unsuccessful Copilot model discovery, YCoding removes previously discovered Copilot model entries so stale models cannot remain selectable.
-
-Copilot model discovery identifies itself as the `vscode-chat` integration, which the Copilot models endpoint requires before returning the account's model catalog.
-
-For `github.com` accounts, the read-only, best-effort refresh queries `GET https://api.github.com/copilot_internal/user`. A paid plan's `premium_interactions` bucket is presented as **AI credits** used against its monthly allotment; enabled, reported overage is **Extra usage**. Free-plan Chat and Completions windows appear only when a finite allowance is reported. Org-managed seats can report a personal AI-credit count without a per-seat percentage; when billing access permits, `GET /user/orgs` and the organization billing usage summary add separate **Org credits** (the whole org's gross credit quantity) and **Org spend** (the whole org's billed net amount). Billing lookup failures do not remove personal credit data. No account email, token, or raw response reaches Protocol or the TUI.
+`provider_usage` configures only the optional Codex app-server fields above. Its output appears separately as **Codex app-server** with unknown account attribution; it does not replace or inherit a stored profile's quota. Provider usage refreshes use credentials already stored for the matching YCoding integration; they do not discover credentials from another application's files, keychain, or browser cookies.
 
 OpenRouter always attempts `GET https://openrouter.ai/api/v1/credits` with its configured account key, even without management metadata. When permitted, **Credits** measures lifetime usage against purchased credits and **Balance** is remaining credit; a 401/403 on this optional call leaves balance absent while `/key` spend remains available. `/key` supplies measured Today, This Week, and This Month spend and a Key Limit only for capped keys. Its current-window used amount is the cap minus `limit_remaining`, not lifetime key usage.
 
-Claude Code OAuth exposes Session, Weekly, model-scoped weekly, and Extra usage from Anthropic's usage endpoint; Codex OAuth or a configured app-server exposes Session, Weekly, Spark, reset credits, and Extra usage. A stored xAI Grok OAuth login exposes the shared weekly pool and pay-as-you-go cap; a stored OpenCode Go key exposes its account-wide Session, Weekly, and Monthly percentages; and a stored Z.ai or Z.ai Coding Plan key exposes Session, Weekly, and Web Searches. These provider-internal metrics are best effort. The Usage view separately shows **YCoding local** Today spend from retained, priced provider requests for available Claude, OpenAI/Codex, Grok, OpenCode Go, and OpenCode Zen providers. This provider-wide local amount is not attributed to a credential profile, does not read another application's session logs, and is not an account-wide provider charge; unpriced requests cannot create a dollar amount, while a recorded $0.00 remains a measured zero. Missing values stay unreported.
+Claude Code OAuth exposes Session, Weekly, model-scoped weekly, and Extra usage from Anthropic's usage endpoint; Codex OAuth or a configured app-server exposes Session, Weekly, Spark, reset credits, and Extra usage. Stored Z.ai or Z.ai Coding Plan keys expose Session, Weekly, and Web Searches when reported. Muse quota comes from inference-response observations. These provider-internal metrics are best effort. The Usage view separately shows **YCoding local** Today spend from retained, priced requests for supported providers. This provider-wide local amount is not attributed to a credential profile, does not read another application's session logs, and is not an account-wide provider charge; unpriced requests cannot create a dollar amount, while a recorded $0.00 remains a measured zero. Missing values stay unreported.
 
 ## Model selectors
 
@@ -457,9 +453,9 @@ or an explicit object:
 }
 ```
 
-The variant is optional; omission uses the selected model's settings and is not a named variant. YCoding does not create `default` or `base` variants for omission. Every explicit variant ID must be offered by the selected model, or model resolution fails with `VariantUnavailableError`; source-offered IDs retain their names and settings. An offered `none` variant can select reasoning effort `none` on OpenAI models or disable thinking on DeepSeek. The TUI variant cycle includes an offered `none` variant.
+The variant is optional; omission uses the selected model's settings and is not a named variant. YCoding does not create `default` or `base` variants for omission. Every explicit variant ID must be offered by the selected model, or model resolution fails with `VariantUnavailableError`; source-offered IDs retain their names and settings. An offered `none` variant can select reasoning effort `none` on OpenAI models. The TUI variant cycle includes an offered `none` variant.
 
-Catalog reasoning variants reach the provider request in each provider's own format: DeepSeek variants send `thinking: { type: "enabled" | "disabled" }` and the requested `reasoning_effort`, which DeepSeek maps server-side; native OpenRouter variants send their `reasoning` object (`effort`, `enabled`, or `max_tokens`), merged with any configured OpenRouter reasoning options.
+Catalog reasoning variants reach the provider request in its own format. Native OpenRouter variants send their `reasoning` object (`effort`, `enabled`, or `max_tokens`), merged with configured OpenRouter reasoning options.
 
 ## Provider efficiency
 
@@ -642,7 +638,7 @@ Configure the goal pre-prompt with `agents.goal.system`. This helper synthesizes
 
 An unavailable configured model, failed provider request, or empty calculation leaves the prior goal unchanged. The runtime does not fall back to raw input or another model on that failure. The user replaces objectives explicitly; ordinary chat and agent goal-tool calls cannot rewrite them.
 
-For titles, goals, and decision judgments, an explicit model on the matching hidden agent takes precedence over `efficiency.helper_models.<role>`; a missing value or `session` uses the current Session model. Local selective-compaction manifests resolve `helper_models.compaction.main` for main chats and `.subagent` for child Sessions before creating the helper child. An explicit configured compaction model takes precedence over the agent-pinned model; a missing value or `session` retains the existing `agent model`, then owner-Session-model precedence. A subagent owner's `session` value means that subagent's own model. An explicitly selected helper model without a profile uses that provider's default profile, even when the helper owner selected another profile; inheriting the whole Session model retains its profile. Local jobs reuse a deterministic taskless child Session with the hidden primary `compaction` agent, the selected model, and provider/cache identity isolated from the owner. On a ChatGPT/Codex Responses route, remote compaction uses the owner Session's model regardless of the helper selection; if remote compaction fails, the same job uses the configured local helper. Direct OpenAI and eligible Copilot Responses can compact inline on their Session model without calling a helper. This changes no configuration shape.
+For titles, goals, and decision judgments, an explicit model on the hidden agent precedes `efficiency.helper_models.<role>`; a missing value or `session` uses the Session model. Local compaction selects `.compaction.main` or `.subagent` before creating its taskless helper child. An explicit compaction helper precedes the agent-pinned model; missing/`session` retains agent-model then owner-model precedence. A child owner's `session` means its own model. An explicit helper without a profile uses the provider default; inheritance of the full Session model retains its profile. Compaction helper identity/cache state is isolated from the owner. Codex remote compaction uses the owner model; failure falls back to the configured local helper. Direct OpenAI can compact inline on its Session model.
 
 ## Permissions
 
@@ -790,31 +786,13 @@ Relative local paths resolve from the containing configuration file.
 
 ## Plugins and hooks
 
-The native-only [meeting runtime](./meeting-intelligence.md#configuration) configures speech, processing, analysis, knowledge bindings and retention through runtime plugin `options`. Its TUI entrypoint belongs in global `cli.json` `plugins`; there is no top-level `meeting` configuration key. In the native Bun-built executable, `ycoding meeting [directory] [--no-open]` loads the bundled runtime plugin without a `plugins` entry; it uses the meeting data directory's saved `settings.json`, or the documented defaults. `ycoding serve --meeting` starts a server with that plugin. Plugin loading never downloads weights or starts recording.
+Runtime customization uses explicit `extensions` entries with `identity`, absolute `executable`, optional `args`, and host-granted capabilities. Duplicate identities replace in place. Native process validation rejects JS/TS executables and Node/Bun/npm/npx launchers. Configured processes start while composing their Location under configuration trust; explicit launch or grant-action `ask`/`deny` rules block startup. Tool calls independently enforce the calling Session's permissions and ceilings. Grants constrain host calls, not ambient OS authority. See [repository resources](./repository-resources.md#plugins) for an example and the [process-extension contract](../specs/process-extension-v5.md) for schemas, failure outcomes, and cleanup.
 
-Plugins are applied in order.
+Executable runtime `plugins`, `plugin`, `npm`, singular `provider`, or non-native provider-package declarations reject the affected configuration document. Dynamic npm provider execution and runtime plugin-file auto-discovery are unsupported. Hooks use typed process-extension stages; there is no top-level `hooks` configuration key.
 
-```jsonc
-{
-  "plugins": [
-    "ycoding.some-built-in",
-    { "package": "@example/ycoding-plugin", "options": { "strict": true } },
-    "./.ycoding/plugins/local.ts",
-    "-ycoding.unwanted-plugin",
-  ],
-}
-```
+TUI presentation plugins use global `cli.json` `plugins`, with ordered enable/remove selectors. They do not compose backend tools or execution. `frontendPackage.resolve` resolves trusted presentation packages on the backend for local clients; npm must be on its PATH, installation scripts are disabled, and archive/entrypoint integrity is verified.
 
-Rules:
-
-- a string adds a built-in ID, package, or file;
-- `{ package, options }` adds a plugin with options;
-- relative files resolve from the containing config file;
-- a leading `-` disables/removes a matching plugin ID;
-- `*` and `<prefix>.*` selectors are supported;
-- local `.ycoding/plugin/*.ts|js` and `.ycoding/plugins/*.ts|js` files are auto-discovered.
-
-Hooks are registered by plugins. There is no top-level `hooks` configuration key. Current hook domains are AI SDK, Session, and Tool.
+Meeting speech, processing, analysis, knowledge bindings, and retention use the channel's per-Location Meeting `settings.json`. `ycoding meeting` and `ycoding serve --meeting` enable Rust Meeting services without a runtime plugin declaration or a top-level `meeting` key; enabling them does not download weights or start recording. See [Meeting capture](#meeting-capture).
 
 ## MCP
 
@@ -908,6 +886,8 @@ Each failed or authorization-blocked connection logs an `mcp connect failed` war
 YCoding reads the `ycoding` configuration namespace only. Copy required MCP definitions explicitly into the current configuration format.
 
 ## Providers and models
+
+The beta's supported providers are OpenAI (API key and Codex subscription), Anthropic (API key and Claude Code subscription), OpenRouter, Cursor, Meta (Muse and API key), Cline (`cline-pass`), Z.ai, MiniMax, Kimi, and OpenAI-compatible custom endpoints. The native catalog includes the regional and coding-plan IDs for Z.ai, MiniMax, and Kimi. Configurations naming other providers load with an unsupported-provider diagnostic and exclude those entries while retaining unrelated valid settings; choosing an excluded provider cannot start model work.
 
 The TUI's custom-endpoint dialog sends `provider.configure` to the backend's global configuration target and waits for its registered result before connecting or activating a credential profile. Credential material is excluded from that configuration request. Provider and model read models refresh after configuration and credential settlement; partial failure remains visible instead of being reported as a completed save. The frontend writes its own preferences and UI history under its frontend XDG state root and does not initialize backend data or cache directories to resolve those paths.
 
@@ -1110,8 +1090,8 @@ Local v5 clients can use `provider.configure` to persist an endpoint in global
 or project configuration. The backend selects the target, preserves unrelated
 JSONC comments/settings, validates endpoint URLs and implementation collisions,
 reloads and confirms integration registration. OpenAI-compatible endpoints accept
-chat or Responses and optional model discovery; Runpod Jobs endpoints select
-Ollama or vLLM. Supplied model fields are merged without erasing omitted fields.
+chat or Responses and optional model discovery. Supplied model fields are merged
+without erasing omitted fields.
 The request cannot contain an API key or credential profile. Connect and activate
 credentials separately through `integration.connect.key` and `credential.activate`.
 
@@ -1120,9 +1100,7 @@ reloads it. Environment values, headers and OAuth secrets remain in that
 configuration definition. Reload success is not an external connection check;
 `mcp.add` is live-only.
 
-`ycoding mcp add` calls `mcp.configure` on the managed backend with project scope,
-or global scope when `--global` is supplied. The CLI reports the backend-selected
-target and does not edit a frontend-local configuration file.
+`ycoding mcp add` uses `mcp.configure` with project scope, or global scope with `--global`. It reports the backend-selected target; it does not edit a frontend-local configuration file.
 
 Provider writes prefer `ycoding.json` then `ycoding.jsonc` in the selected
 directory. MCP writes prefer those files, then `.ycoding/ycoding.json` and
@@ -1141,99 +1119,7 @@ disables installation scripts, and returns an exact package identity with
 archive/file digests and a verified TUI entrypoint. It does not load backend
 extensions or transfer package assets to a remote browser.
 
-The TUI's registry package resolver uses this operation and imports the returned
-entrypoint asset path. Managed service reconnection resolves the current endpoint
-before a package request; a rejected package never produces a local entrypoint.
-
-### Runpod Serverless Jobs workers
-
-Select **Runpod Serverless endpoint** from `/connect` to add each Jobs endpoint as a
-separate provider ID. Enter its endpoint-root URL, choose the `vllm` or `ollama`
-worker, and add the served model ID. The dialog highlights the selected worker
-with a filled background. For vLLM, use the exact name served by the
-worker (including any served-name override); for Ollama, the model entry labels
-the worker-configured model. Enable tool calling for the entry only when the
-deployed model and worker support it. Name the endpoint's credential profile and
-enter a Runpod API key; additional profiles for that provider can be selected
-and activated through `/connect`. Give each endpoint a distinct provider ID to
-show all configured endpoint models in the model picker and switch between them
-without changing the endpoint configuration. Endpoint registration does not
-enumerate an account's deployments or discover model IDs automatically.
-
-For Runpod Serverless Jobs endpoints running `runpod-workers/worker-ollama` or
-`runpod-workers/worker-vllm`, select `@ycoding-ai/ai/providers/runpod` and
-set `settings.worker` explicitly to `ollama` or `vllm`. Set `settings.baseURL` to the
-endpoint root `https://api.runpod.ai/v2/<ENDPOINT_ID>` (not `/runsync`, `/openai/v1`,
-or a load-balancer URL). Supply `RUNPOD_API_KEY` in the process environment or
-configure `settings.apiKey`. Example for the Ollama worker:
-
-```jsonc
-{
-  "providers": {
-    "runpod": {
-      "package": "@ycoding-ai/ai/providers/runpod",
-      "settings": { "worker": "ollama", "baseURL": "https://api.runpod.ai/v2/<ENDPOINT_ID>" },
-      "models": {
-        "worker": {
-          "name": "Ollama worker",
-          "capabilities": { "tools": true, "input": ["text"], "output": ["text"] },
-          "limit": { "context": 32768, "output": 4096 },
-        },
-      },
-    },
-  },
-}
-```
-
-For the vLLM worker, use the same package and endpoint-root format:
-
-```jsonc
-{
-  "providers": {
-    "runpod-vllm": {
-      "package": "@ycoding-ai/ai/providers/runpod",
-      "settings": { "worker": "vllm", "baseURL": "https://api.runpod.ai/v2/<ENDPOINT_ID>" },
-      "models": {
-        "worker": {
-          "modelID": "<SERVED_MODEL_NAME>",
-          "name": "vLLM worker",
-          "capabilities": { "tools": true, "input": ["text"], "output": ["text"] },
-        },
-      },
-    },
-  },
-}
-```
-
-Set `modelID` to the model name served by vLLM and set `capabilities.tools`
-according to the deployed model. Tool calling requires the worker's vLLM server
-to be configured for the model's tool format, including `ENABLE_AUTO_TOOL_CHOICE`
-and an appropriate `TOOL_CALL_PARSER` for automatic tool calls. Set model
-context/output limits to the deployed model's actual limits; the Ollama example
-numbers are illustrative, not discovered by the adapter.
-
-Both worker types send non-streaming text chat through `POST /runsync` and yield
-output only when the job completes. Ollama uses `input.messages` and `input.options`,
-supports automatic function tools when the deployed model supports them, and uses
-the worker-configured `HF_MODEL`/`OLLAMA_MODEL`. It sends the initial system
-instruction first and represents later instruction updates as escaped user text
-in their chronological positions. vLLM uses its generic
-`input.route: "/v1/chat/completions"` proxy and an OpenAI Chat request body:
-model name, messages, tool definitions, tool-call history, tool results, and
-generation options. It parses vLLM's non-streaming Chat completion response and
-normalizes tool calls and usage. Ollama does not support required/named tool choice;
-structured output, media, and streaming are unsupported in this adapter. When
-`/runsync` returns `IN_QUEUE` or `IN_PROGRESS`, the adapter polls
-`GET /status/<job-id>` once per second until the job completes or fails; it
-does not resubmit the prompt. Interrupting the Session stops the wait.
-
-The Jobs routes send no OpenAI prompt-cache options. vLLM's automatic prefix
-cache is configured on the worker, not through this client; YCoding reports
-cached prompt tokens only when the worker includes `usage.prompt_tokens_details.cached_tokens`.
-Ollama's model store/keep-alive and Runpod's cached model downloads are distinct
-from prompt-prefix caching; Ollama worker responses do not report cache-hit tokens.
-
-OpenCode Zen and OpenCode Go remain external provider identities. Their provider IDs, URLs, credentials, and model selectors are not renamed to YCoding.
+TUI registry-package loading resolves the current managed endpoint before calling `frontendPackage.resolve` and imports the verified returned entrypoint. A rejected package produces no local entrypoint.
 
 ## Formatter, LSP, attachment, and output settings
 
@@ -1426,7 +1312,7 @@ Attention sound names are `default`, `question`, `permission`, `error`, `done`, 
 
 `keybinds.session_task_pin_toggle` defaults to `p` and pins or unpins the selected child task while the TUI Subagents composer list is focused.
 
-The TUI `plugins` array has the same string or `{ package, options }` shape, but it configures terminal-side plugins rather than Core runtime plugins.
+The TUI `plugins` array accepts strings or `{ package, options }` and configures presentation plugins. Backend customization uses `extensions` instead.
 
 Built-in TUI selectors settle before optional plugin loading; see [terminal plugin ordering](./repository-resources.md#ordered-enablement-and-removal). Optional plugins do not delay the Home or Session shell. Status lists their loading and failure states.
 
@@ -1465,9 +1351,7 @@ This prevents branch builds of YCoding from colliding with another product proce
 
 When a configured port is occupied, edit the channel-specific service file and choose another integer from `1` to `65535`. `ycoding --standalone` is a temporary alternative that starts a private server instead of the managed service.
 
-One managed service owns a file-backed database at a time, across ports. The Rust launcher holds `<data directory>/runtime.lock` through database import, composition, serving, and shutdown; a contender whose namespace is already owned exits successfully without replacing the active registration, including while the owner is starting. Beta and stable have separate data and lock paths. The OS releases each lock when its owning process exits. Database refusal and recovery belong to backend bootstrap; the CLI does not open or relocate database files.
-
-Database initialization adds a partial index for Session IDs whose autonomy goal status is `active`. Its migration preserves existing Session, message, and event records and does not change the database format.
+One managed service owns a file-backed database at a time, across ports. The Rust launcher holds `<data directory>/runtime.lock` through database import, composition, serving, and shutdown; a contender whose namespace is already owned exits successfully without replacing the active registration, including while the owner is starting. Beta and stable have separate data and lock paths. The OS releases each lock when its owning process exits. Store open validates the complete catalog and codecs; an incompatible or unreadable store fails startup unchanged.
 
 The matching registration file is stored in the YCoding state directory. It contains the service instance ID, version, URL, PID, and private password. Do not hand-edit a live registration file.
 
@@ -1475,13 +1359,11 @@ Managed-service startup checks readiness more frequently during its initial wait
 
 ### Rust runtime executable
 
-Native CLI builds embed a host-target `ycoding-runtime` payload inside `ycoding`; the release archive contains no separate runtime executable. Before launch, the CLI verifies or extracts its exact payload into `<bin>/runtime/<frontend version>/<SHA-256>/ycoding-runtime` (`.exe` on Windows), with private executable permissions. This versioned layout keeps an existing service executable intact during an update. The CLI supplies its build version and channel to the runtime and discovers the backend through its private registration. Backend observability initializes in the runtime; the CLI does not configure a backend OTLP exporter in its own process.
+The native CLI embeds the `ycoding-runtime` executable and extracts it into a version-and-SHA-256-addressed private path before launch; a cached payload must match the embedded digest. Source execution requires a built `rust/target/debug/ycoding-runtime` or `YCODING_RUNTIME_EXECUTABLE`. Native payload builds require a matching host. No runtime file is added to the release archive.
 
-Source execution uses `rust/target/debug/ycoding-runtime`, or the executable selected by `YCODING_RUNTIME_EXECUTABLE`. This source-only setting does not override an installed binary's embedded payload. Build the source runtime before launching the source CLI. `ycoding serve --meeting` passes `--meeting` directly to the Rust launcher.
+The extracted path is `<bin>/runtime/<frontend version>/<SHA-256>/ycoding-runtime` (`.exe` on Windows), preserving an existing service executable during update. Source-only `YCODING_RUNTIME_EXECUTABLE` does not override an installed embedded payload. Backend observability starts in Rust, not the CLI process. `--frontend-executable` binds installed native assets to the frontend directory, so the computer-use app stays beside `ycoding`; without it, helper-dependent operations report `helper_unavailable` rather than guessing another asset owner.
 
-Every CLI launch supplies `--frontend-executable <absolute frontend executable path>`. The runtime uses that executable's directory for native installed assets, so the computer-use app stays beside `ycoding` while the runtime runs from its versioned extraction directory. Without this flag, helper-dependent computer operations report `helper_unavailable`; no runtime-directory or environment-variable lookup supplies a substitute asset owner.
-
-The Rust workspace builds a `ycoding-runtime` executable from `rust/crates/runtime`. It runs from an arbitrary extracted path with no adjacent runtime files. It accepts an optional leading `serve` followed by `--hostname <host>`, `--port <port>`, `--service`, `--stdio`, repeatable `--cors <origin>`, and `--meeting` flags; `--service` and `--stdio` cannot be combined. `--meeting` is off by default and starts one Meeting runtime for each Location the server composes. `--hostname` defaults to `127.0.0.1`. An explicit `--port` is a single bind in `0` to `65535` (`0` selects an ephemeral port); with no port, a non-service process binds the first free port from `4096`, and a service process uses the channel default port above. In service mode the channel file in the global config directory supplies `hostname`, `port`, and `password`, with arguments taking precedence, and the channel comes from `YCODING_CHANNEL` (default `local`). The version comes from `YCODING_VERSION` (default: the crate version).
+The Rust executable accepts an optional leading `serve`, `--hostname <host>`, `--port <port>`, `--service`, `--stdio`, repeatable `--cors <origin>`, `--meeting`, `--paths`, and `--frontend-executable <path>`. The CLI supplies its own frontend executable path for native assets. `--service` and `--stdio` cannot combine. Meeting is off by default. Hostname defaults to `127.0.0.1`; an explicit port is 0–65535 (0 is ephemeral). Without a port, a non-service process binds the first free port from 4096; service mode uses the channel default. Service configuration supplies hostname/port/password with arguments taking precedence. The CLI passes its installation version/channel; direct Rust launch uses `YCODING_VERSION` and `YCODING_CHANNEL` (defaults: crate version and `local`).
 
 The password resolves from the service file in service mode, otherwise from `YCODING_PASSWORD` then `YCODING_SERVER_PASSWORD`; when no source supplies one the process generates one, persists it into the service file in service mode, and prints it as `server password <password>` only in default mode. HTTP and WebSocket requests authenticate with Basic auth as user `ycoding`. A generated password is never printed in service or stdio mode. In stdio mode the binary captures the lease password while single-threaded, removes both password variables from its process environment, then creates the Tokio runtime; tool subprocesses cannot inherit those lease variables.
 
@@ -1519,7 +1401,7 @@ The URL must use HTTP or HTTPS without embedded credentials. Stop the paired Chr
 | ------------------------ | ---------------- | ------- | -------------------------------------------------------------------------------------------- |
 | `session_retention.days` | positive integer | `7`     | Delete a root Session family once every member has been idle for longer than this many days. |
 
-`session_retention` is global-only: the server reads it from the global configuration directory, `YCODING_CONFIG`, and `YCODING_CONFIG_CONTENT`, and ignores it in project configuration, because one SQLite database serves every project. Retention is read when a sweep runs; the first sweep loads it in the background. See [automatic Session retention](./runtime.md#automatic-session-retention) for family scope, exemptions, scheduling, and the cross-process limitation.
+`session_retention` is global-only: the backend reads global configuration, `YCODING_CONFIG`, and `YCODING_CONFIG_CONTENT`, ignoring project settings because one canonical Store serves every project. Each sweep reads retention configuration. See [automatic Session retention](./runtime.md#automatic-session-retention) for family scope, exemptions, and scheduling.
 
 ### Rust backend validation
 
@@ -1542,13 +1424,9 @@ The Rust configuration validator in `ycoding-core` accepts the same keys with th
 
 Unknown configuration keys are removed individually by the Rust validator, invalid named entries are removed as units, malformed permissions append deny rules after valid rules, and malformed guardrails become `{ "enabled": true }`; these recoveries are reported as configuration diagnostics.
 
-## Automatic SQLite space reclamation
+## Store maintenance
 
-Database initialization automatically converts `auto_vacuum=NONE` databases to `INCREMENTAL` using a one-time SQLite `VACUUM`. Later initializations reclaim at most 256 free pages without rebuilding the database. An existing `FULL` auto-vacuum setting is preserved. Each initialization then runs `PRAGMA optimize=0x10002`. These operations reclaim unused pages and refresh query-planner statistics; they do not delete records.
-
-After a [Session retention](#session-retention) sweep deletes any Session, the server reclaims every free page in bounded `PRAGMA incremental_vacuum(2048)` batches, yielding between batches, so no single write transaction holds the database lock for long. Each hourly sweep runs `PRAGMA optimize`.
-
-The initial conversion requires a write lock and may need temporary free disk space up to twice the database size. It can delay startup. If SQLite cannot obtain the lock within the five-second busy timeout, or the conversion fails, startup fails rather than silently skipping conversion; existing records remain intact and the next start retries. Keep a backup before upgrading a large database and close other writers during the first start.
+The beta's canonical database is redb; Session retention and projection cleanup use Store transactions, not SQLite vacuum or PRAGMA operations. The derived analytics engine owns usage/report tables and purge reconciliation. An unreadable or unsupported store fails startup without reset or replacement. Preserve a backup before an approved stored-data transition; stable import uses the [private-copy lifecycle](#global-directories).
 
 ## Runtime environment variables
 
@@ -1563,7 +1441,6 @@ Stable operator-facing variables:
 | `YCODING_DISABLE_PROJECT_CONFIG` | Alias for disabling project config discovery.              |
 | `YCODING_PASSWORD`               | Password for an explicitly connected or standalone server. |
 | `YCODING_SERVER_PASSWORD`        | Server-password alias.                                     |
-| `YCODING_DB`                     | Override database path.                                    |
 | `YCODING_MODELS_URL`             | Override model catalog URL.                                |
 | `YCODING_MODELS_PATH`            | Read model catalog from a local file.                      |
 | `YCODING_DISABLE_MODELS_FETCH`   | Disable model-catalog network refresh.                     |
@@ -1588,17 +1465,17 @@ Build, packaging, test, and internal diagnostic variables are not stable end-use
 
 YCoding watches runtime configuration directories and explicit files. Changes are debounced by 100 ms and publish `config.updated`.
 
-Agent, command, plugin, and skill files inside watched `.ycoding` or global config directories reload even when the JSON document list itself is unchanged.
+Agent, command, and skill files inside watched `.ycoding` or global config directories reload even when the JSON document list itself is unchanged. Production atomically replaces the Location generation, its configured process extensions, and MCP tool catalog; held work retains its captured generation until release.
 
 Ecosystem skill roots such as `~/.claude/skills` and `~/.agents/skills` are not watched. Skill files are re-read whenever skills are listed so edits and deletions are still reflected.
 
-Project `ycoding.json`, `ycoding.jsonc`, and `.ycoding` entries are watched only when they existed at the last discovery, so one created afterwards is not detected automatically. The TUI command palette's **Refresh models and providers** command calls `POST /api/provider/refresh` for the current Location. The server rediscovers every configuration source, publishes `config.updated` even when the document list is unchanged, and reruns provider model discovery such as `openai-models` catalogs; the refreshed catalog arrives through `catalog.updated`, and the TUI then reloads that Location's model and provider lists. Environment variables are read by the running server process and do not change through a refresh.
+The TUI's **Refresh models and providers** command calls `provider.refresh` for the current Location. The backend rediscovers sources, publishes `config.updated`, and refreshes provider discovery, including configured `openai-models` catalogs. Environment values come from the backend process and do not change through a refresh.
 
 CLI/TUI `cli.json` updates are serialized, written atomically through a temporary file, and preserve existing JSONC comments.
 
 ## Troubleshooting
 
-- Unparsable JSON/JSONC skips the affected document and logs `ignored config file with invalid JSON`. For parsed documents, removed or unknown keys and schema-invalid units are dropped individually, with one `recovered config item` warning each. Invalid permission rules become action-wide or scope-wide denies; invalid `guardrails` values keep guardrails enabled with default limits. Inspect `GET /api/config/diagnostics` or the TUI Status dialog for the document path, JSON path, reason, message, and `fails closed` marker. The TUI also shows an error toast when a diagnostic is loaded.
+- Inspect `config.diagnostics` or TUI Status for skipped documents, unsupported providers, recovered items, and fail-closed permission/guardrail recovery. Unsupported executable-plugin declarations reject the document; ordinary invalid entries do not discard unrelated valid settings.
 - A missing `{file:...}` reference fails configuration loading for that Location and surfaces as a configuration error; it does not skip only that document.
 - `instructions` is accepted but currently inactive; use `AGENTS.md` or skills.
 - `tui.json`, `kv.json`, `config.json`, and project `.ycoding/tui.json` are not read.
