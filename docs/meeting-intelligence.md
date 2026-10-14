@@ -152,7 +152,7 @@ Bounded retrieval is cached by server/capability/query; references persist indep
 
 ## Persistence, privacy and recovery
 
-Each canonical Location has an owner-only directory under `$XDG_DATA_HOME/ycoding/meeting`, defaulting to `~/.local/share/ycoding/meeting`. A separate SQLite database owns meeting metadata, transcripts, findings, summaries, plans, references, proposals, approvals and processing jobs. Schema initialization is transactional; future/unrelated schemas are rejected. The YCoding Session database is not migrated.
+Each canonical Location has an owner-only directory under `$XDG_DATA_HOME/ycoding/meeting`, defaulting to `~/.local/share/ycoding/meeting`. Beta installations use `ycoding-beta/meeting` under the same data base. Native control discovery follows the installation channel; both channels use the first 32 lowercase hexadecimal characters of the canonical Location path's SHA-256 as the directory key. A separate SQLite database owns meeting metadata, transcripts, findings, summaries, plans, references, proposals, approvals and processing jobs. Schema initialization is transactional; future/unrelated schemas are rejected. The YCoding Session database is not migrated.
 
 Raw audio is not stored. A packet acknowledgement means bounded **volatile admission**, not durable audio recovery. A crash can lose untranscribed audio while preserving completed transcripts and partial analysis. Recovery marks formerly recording meetings interrupted; re-arming and fresh live-page consent are required. A failed window can be retried only while retained in the process.
 

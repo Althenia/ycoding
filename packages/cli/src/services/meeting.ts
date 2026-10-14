@@ -2,17 +2,31 @@ import { createHash } from "node:crypto"
 import { lstat, readFile, realpath } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { InstallationChannel } from "../version"
 
-export async function meetingDirectory(directory: string, dataHome = process.env.XDG_DATA_HOME) {
+export async function meetingDirectory(
+  directory: string,
+  dataHome = process.env.XDG_DATA_HOME,
+  channel = InstallationChannel,
+) {
   const key = createHash("sha256")
     .update(await realpath(directory))
     .digest("hex")
     .slice(0, 32)
-  return path.join(dataHome ?? path.join(os.homedir(), ".local/share"), "ycoding/meeting", key)
+  return path.join(
+    dataHome ?? path.join(os.homedir(), ".local/share"),
+    channel === "beta" ? "ycoding-beta" : "ycoding",
+    "meeting",
+    key,
+  )
 }
 
-export async function connectControl(directory: string, dataHome = process.env.XDG_DATA_HOME) {
-  const file = path.join(await meetingDirectory(directory, dataHome), "bridge.json")
+export async function connectControl(
+  directory: string,
+  dataHome = process.env.XDG_DATA_HOME,
+  channel = InstallationChannel,
+) {
+  const file = path.join(await meetingDirectory(directory, dataHome, channel), "bridge.json")
   const info = await lstat(file)
   if (
     !info.isFile() ||
