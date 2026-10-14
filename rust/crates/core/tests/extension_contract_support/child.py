@@ -390,6 +390,11 @@ def transform(frame):
 
 
 def chunks(text):
+    if spec["provider"].get("responses"):
+        return [
+            {"type": "response.output_text.delta", "item_id": "msg", "delta": text},
+            {"type": "response.completed", "response": {"id": "resp_fixture", "status": "completed", "usage": {"input_tokens": 10, "output_tokens": 20}}},
+        ]
     return [
         {"choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}]},
         {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}},

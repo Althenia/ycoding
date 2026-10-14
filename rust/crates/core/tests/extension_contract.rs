@@ -1849,7 +1849,13 @@ struct ProviderRun {
 }
 
 // Runs one real Session step whose model route is the granted process provider.
-async fn provider_session(label: &str, outcome: &str, shutdown_mid_attempt: bool) -> ProviderRun {
+async fn provider_session(
+    label: &str,
+    package: &str,
+    responses: bool,
+    outcome: &str,
+    shutdown_mid_attempt: bool,
+) -> ProviderRun {
     let world = support::world::world();
     let directory = support::world::directory(label);
     let name: &'static str = Box::leak(format!("ses_provider_{label}").into_boxed_str());
@@ -1864,8 +1870,8 @@ async fn provider_session(label: &str, outcome: &str, shutdown_mid_attempt: bool
         support::configuration(
             &fixture.root,
             label,
-            json!({"provider": {"log": log, "outcomes": [outcome], "text": "Process answer"}}),
-            vec![family(v5::CapabilityFamily::Providers, &[BUNDLED_PROVIDER])],
+            json!({"provider": {"log": log, "outcomes": [outcome], "text": "Process answer", "responses": responses}}),
+            vec![family(v5::CapabilityFamily::Providers, &[package])],
         ),
         &registry,
         fixture.policy.clone(),
@@ -1876,7 +1882,7 @@ async fn provider_session(label: &str, outcome: &str, shutdown_mid_attempt: bool
     world.place(
         &directory,
         &fixture.root,
-        support::world::catalog("http://127.0.0.1:1", Some(BUNDLED_PROVIDER)),
+        support::world::catalog("http://127.0.0.1:1", Some(package)),
         registry.clone(),
     );
     world
@@ -1898,7 +1904,7 @@ async fn provider_session(label: &str, outcome: &str, shutdown_mid_attempt: bool
         let running = tokio::spawn(async move { execution.resume(&id).await });
         support::marker(&fixture.root, "provider-held").await;
         extension.shutdown().await;
-        assert!(ycoding_core::extension::provider::find(BUNDLED_PROVIDER).is_none());
+        assert!(ycoding_core::extension::provider::find(package).is_none());
         let _settled = tokio::time::timeout(WATCHDOG, running)
             .await
             .unwrap()
@@ -1930,7 +1936,7 @@ async fn provider_session(label: &str, outcome: &str, shutdown_mid_attempt: bool
 // shutdown during the streaming attempt settles the step once and reports no phantom usage.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn process_provider_serves_a_session_step_and_shutdown_mid_attempt_settles_once() {
-    let served = provider_session("served", "ok", false).await;
+    let served = provider_session("served", BUNDLED_PROVIDER, false, "ok", false).await;
     assert_eq!(
         served.log,
         1,
@@ -1949,7 +1955,7 @@ async fn process_provider_serves_a_session_step_and_shutdown_mid_attempt_settles
     assert_eq!(served.tokens["input"], 10.0, "{}", served.tokens);
     assert_eq!(served.tokens["output"], 20.0, "{}", served.tokens);
 
-    let interrupted = provider_session("held", "hang", true).await;
+    let interrupted = provider_session("held", BUNDLED_PROVIDER, false, "hang", true).await;
     assert_eq!(
         interrupted.log, 1,
         "a stopped generation is not retried by the host"
@@ -1967,6 +1973,32 @@ async fn process_provider_serves_a_session_step_and_shutdown_mid_attempt_settles
         0.0,
         "no usage is invented"
     );
+}
+
+// TEST-044: a process provider on the OpenAI family package serves a real Session step as the
+// openai-compatible package does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn process_provider_on_the_openai_package_serves_a_session_step() {
+    let served = provider_session("openai_family", "aisdk:@ai-sdk/openai", true, "ok", false).await;
+    assert_eq!(
+        served.log,
+        1,
+        "one child request for the one physical attempt: {:?}",
+        (&served.events, &served.failures)
+    );
+    assert_eq!(
+        (
+            flow::count(&served.events, "session.step.started"),
+            flow::count(&served.events, "session.step.ended"),
+            flow::count(&served.events, "session.step.failed")
+        ),
+        (1, 1, 0),
+        "{:?}",
+        (&served.events, &served.failures)
+    );
+    assert!(served.assistant);
+    assert_eq!(served.tokens["input"], 10.0, "{}", served.tokens);
+    assert_eq!(served.tokens["output"], 20.0, "{}", served.tokens);
 }
 
 // TEST-044: obsolete JS/TS/npm configuration is rejected and never disturbs the running generation.

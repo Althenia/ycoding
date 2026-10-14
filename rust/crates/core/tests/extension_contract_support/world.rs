@@ -95,7 +95,40 @@ impl World {
         let mut row = flow::record(id);
         row.directory = directory.into();
         self.client
-            .submit(move |tx| ycoding_store::session::SessionTable::insert(tx, &row))
+            .submit(move |tx| {
+                use ycoding_store::session::{
+                    ContextState, ContextStateTable, Revision, RevisionTable, SessionTable,
+                };
+                SessionTable::insert(tx, &row)?;
+                RevisionTable::insert(
+                    tx,
+                    &Revision {
+                        session_id: row.id.clone(),
+                        revision: 0,
+                        parent_revision: None,
+                        manifest_digest: None,
+                        covered_through_message_id: None,
+                        covered_through_seq: None,
+                        activation_event_id: None,
+                        activation_sequence: None,
+                        time_created: row.time_created,
+                    },
+                )?;
+                ContextStateTable::insert(
+                    tx,
+                    &ContextState {
+                        session_id: row.id.clone(),
+                        status: "active".into(),
+                        revision: 0,
+                        manifest_digest: None,
+                        covered_through_message_id: None,
+                        covered_through_seq: None,
+                        activated_event_id: None,
+                        time_activated: None,
+                        error_code: None,
+                    },
+                )
+            })
             .unwrap()
             .wait()
             .unwrap();
