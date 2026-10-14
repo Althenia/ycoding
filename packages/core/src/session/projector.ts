@@ -10,6 +10,8 @@ import { SessionEvent } from "./event"
 import { WorkspaceTable } from "../control-plane/workspace.sql"
 import { SessionMessage } from "./message"
 import { SessionSchema } from "./schema"
+import { AppProcess } from "../process"
+import { ShellLedger } from "../shell/ledger"
 import { SessionMessageUpdater } from "./message-updater"
 import { SessionPending } from "./pending"
 import { SessionPermissionCeiling } from "./permission-ceiling"
@@ -577,9 +579,11 @@ const incrementOrchestrationRevision = (db: DatabaseService, parentID: SessionSc
 const projectTask = Effect.fn("SessionProjector.projectTask")(function* (
   db: DatabaseService,
   event: typeof SessionEvent.Task.Updated.Type,
+  owner: ShellLedger.Process | undefined,
 ) {
   const change = event.data.change
   const time = DateTime.toEpochMillis(event.created)
+  const claim = { owner_pid: owner?.pid ?? null, owner_started: owner?.started ?? null }
   if (change.type === "launched") {
     const stored = yield* db
       .insert(SessionTaskTable)
@@ -597,6 +601,7 @@ const projectTask = Effect.fn("SessionProjector.projectTask")(function* (
         delivery: change.delivery,
         state: "starting",
         attempt_started: false,
+        ...claim,
         revision: 0,
         time_created: time,
         time_updated: time,
@@ -666,7 +671,7 @@ const projectTask = Effect.fn("SessionProjector.projectTask")(function* (
 
   if (change.type === "started") {
     if (task.state === "starting") {
-      yield* update({ state: "running" })
+      yield* update({ state: "running", ...claim })
       return
     }
     if (!["cancelled", "completed", "failed", "lost"].includes(task.state)) return yield* conflict()
@@ -679,6 +684,7 @@ const projectTask = Effect.fn("SessionProjector.projectTask")(function* (
       question_data: null,
       question_time: null,
       attempt_started: false,
+      ...claim,
     })
     return
   }
@@ -712,6 +718,7 @@ const projectTask = Effect.fn("SessionProjector.projectTask")(function* (
       question: null,
       question_data: null,
       question_time: null,
+      ...claim,
     })
     return
   }
@@ -756,6 +763,8 @@ const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const events = yield* EventRuntime.Service
     const db = (yield* Database.Service).db
+    const appProcess = yield* AppProcess.Service
+    const owner = yield* ShellLedger.identify(appProcess, process.pid)
     yield* events.project(SessionEvent.Created, (event) =>
       Effect.gen(function* () {
         const parentDaybreak = event.data.parentID
@@ -1060,7 +1069,7 @@ const layer = Layer.effectDiscard(
       InstructionState.apply(db, event.data.sessionID, event.durable.seq, event.data.delta),
     )
     yield* events.project(SessionEvent.ContextObserved, (event) => run(db, event))
-    yield* events.project(SessionEvent.Task.Updated, (event) => projectTask(db, event))
+    yield* events.project(SessionEvent.Task.Updated, (event) => projectTask(db, event, owner))
     yield* events.project(SessionEvent.Synthetic, (event) => run(db, event))
     yield* events.project(SessionEvent.Skill.Activated, (event) => run(db, event))
     yield* events.project(SessionEvent.Skill.Deactivated, (event) => run(db, event))
@@ -1340,4 +1349,4 @@ export const selectTranscriptForSession = (sessionID: SessionSchema.ID) =>
     return yield* selectTranscript(db, sessionID)
   })
 
-export const node = makeGlobalNode({ name: "session-projector", layer, deps: [EventRuntime.node, Database.node] })
+export const node = makeGlobalNode({ name: "session-projector", layer, deps: [EventRuntime.node, Database.node, AppProcess.node] })

@@ -30,5 +30,6 @@ export const migrations = (
     import("./migration/20261010015127_telemetry-consent"),
     import("./migration/20261011135037_session-usage-indexes"),
     import("./migration/20261012111530_session-active-goal"),
+    import("./migration/20261014011041_task-owner"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

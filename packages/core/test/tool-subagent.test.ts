@@ -9,6 +9,7 @@ import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { makeGlobalNode } from "@ycoding-ai/core/effect/app-node"
 import { Database } from "@ycoding-ai/core/database/database"
+import { AppProcess } from "@ycoding-ai/core/process"
 import { EventRuntime } from "@ycoding-ai/core/event"
 import { Form } from "@ycoding-ai/core/form"
 import { Location } from "@ycoding-ai/core/location"
@@ -138,6 +139,7 @@ const executionNode = makeGlobalNode({
 
 const subagentLayer = (database = Database.node) => AppNodeBuilder.build(
   LayerNode.group([
+    AppProcess.node,
     Database.node,
     EventRuntime.node,
     SessionAutonomy.node,
@@ -239,8 +241,12 @@ describe("SubagentTool", () => {
           const prepared = yield* SessionOrchestration.preflight(parent, { agent: Agent.ID.make("reviewer"), caller: toolIdentity.agent })
             .pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location)))
           const orchestration = (yield* PluginRuntime.Service).orchestration
-          return yield* orchestration.launch({ parentID: parent.id, parentAssistantMessageID: SessionMessage.ID.make("msg_restart_parent"),
+          const launched = yield* orchestration.launch({ parentID: parent.id, parentAssistantMessageID: SessionMessage.ID.make("msg_restart_parent"),
             toolCallID: "restart", agent: Agent.ID.make("reviewer"), description: "restart child", prompt: "initial", background: true, prepared })
+          yield* (yield* Database.Service).db.update(SessionTaskTable)
+            .set({ owner_pid: 2 ** 22 + 1, owner_started: "Thu Jan  1 00:00:00 1970" })
+            .where(eq(SessionTaskTable.session_id, launched.sessionID)).run().pipe(Effect.orDie)
+          return launched
         }).pipe(Effect.provide(boot.pipe(Layer.fresh)), Effect.scoped)
         const wakes = executionWakes.length
 
@@ -265,7 +271,7 @@ describe("SubagentTool", () => {
           const sent = yield* orchestration.send({ parentID: parent.id, childID: child.sessionID,
             messageID: SessionMessage.ID.make("msg_restart_queue"), text: "finish", delivery: "queue" })
           expect(sent.state).toBe("running")
-          yield* SessionTask.reconcileStaleTasks(db)
+          yield* SessionTask.reconcileStaleTasks(db, yield* AppProcess.Service)
           expect((yield* orchestration.get(parent.id, child.sessionID)).state).toBe("running")
           const locations = yield* LocationServiceMap.Service
           yield* locations.invalidate(parent.location)
@@ -275,7 +281,7 @@ describe("SubagentTool", () => {
             .pipe(Effect.provide(locations.get(parent.location)))
           const fresh = yield* orchestration.launch({ parentID: parent.id, parentAssistantMessageID: SessionMessage.ID.make("msg_restart_fresh"),
             toolCallID: "fresh", agent: Agent.ID.make("reviewer"), description: "fresh child", prompt: "new", background: true, prepared })
-          yield* SessionTask.reconcileStaleTasks(db)
+          yield* SessionTask.reconcileStaleTasks(db, yield* AppProcess.Service)
           expect((yield* orchestration.get(parent.id, fresh.sessionID)).state).toBe("running")
 
           const runner = Layer.succeed(SessionRunner.Service, SessionRunner.Service.of({ drain: ({ sessionID }) => Effect.gen(function* () {

@@ -6,6 +6,8 @@ import type { Database } from "../database/database"
 import { KeyedMutex } from "../effect/keyed-mutex"
 import { EventRuntime } from "../event"
 import { EventTable } from "../event/sql"
+import { AppProcess } from "../process"
+import { ShellLedger } from "../shell/ledger"
 import { SessionEvent } from "./event"
 import { SessionTaskNotificationTable, SessionTaskTable } from "./sql"
 
@@ -15,30 +17,43 @@ const staleStates = ["starting", "running", "waiting", "cancelling"] as const
 const reconciled = new WeakSet<DatabaseService>()
 const locks = KeyedMutex.makeUnsafe<DatabaseService>()
 
-export const reconcileStaleTasks = (db: DatabaseService) =>
+export const reconcileStaleTasks = (db: DatabaseService, appProcess: AppProcess.Interface) =>
   locks.withLock(db)(
     Effect.gen(function* () {
       if (reconciled.has(db)) return
       const events = yield* EventRuntime.Service
       const rows = yield* db
-        .select({ sessionID: SessionTaskTable.session_id, revision: SessionTaskTable.revision })
+        .select({
+          sessionID: SessionTaskTable.session_id,
+          revision: SessionTaskTable.revision,
+          ownerPid: SessionTaskTable.owner_pid,
+          ownerStarted: SessionTaskTable.owner_started,
+        })
         .from(SessionTaskTable)
         .where(inArray(SessionTaskTable.state, [...staleStates]))
         .orderBy(asc(SessionTaskTable.session_id))
         .all()
         .pipe(Effect.orDie)
-      for (const row of rows) {
-        yield* events.publish(
-          SessionEvent.Task.Updated,
-          {
-            sessionID: row.sessionID,
-            change: {
-              type: "lost",
-              excerpt: "The service restarted while the child task was active. Provider execution was not resumed.",
+      if (rows.length > 0) {
+        const snapshot = yield* ShellLedger.processes(appProcess).pipe(Effect.option)
+        if (snapshot._tag === "None") {
+          yield* Effect.logWarning("could not list processes; active child tasks were not reconciled")
+          return
+        }
+        for (const row of rows) {
+          if (ShellLedger.alive(snapshot.value, row.ownerPid, row.ownerStarted)) continue
+          yield* events.publish(
+            SessionEvent.Task.Updated,
+            {
+              sessionID: row.sessionID,
+              change: {
+                type: "lost",
+                excerpt: "The service restarted while the child task was active. Provider execution was not resumed.",
+              },
             },
-          },
-          { id: EventRuntime.ID.make(`evt_task_restart_lost_${row.sessionID}_${row.revision + 1}`) },
-        )
+            { id: EventRuntime.ID.make(`evt_task_restart_lost_${row.sessionID}_${row.revision + 1}`) },
+          )
+        }
       }
       reconciled.add(db)
     }),

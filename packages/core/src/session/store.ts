@@ -5,6 +5,7 @@ import { Context, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
 import { EventRuntime } from "../event"
+import { AppProcess } from "../process"
 import { SessionHistory } from "./history"
 import { MessageDecodeError } from "./error"
 import { SessionMessage } from "./message"
@@ -42,7 +43,8 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const { db } = yield* Database.Service
-    yield* SessionTask.reconcileStaleTasks(db)
+    const appProcess = yield* AppProcess.Service
+    yield* SessionTask.reconcileStaleTasks(db, appProcess)
     const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Info)
 
     return Service.of({
@@ -150,5 +152,5 @@ const layer = Layer.effect(
 export const node = makeGlobalNode({
   service: Service,
   layer,
-  deps: [Database.node, EventRuntime.node, SessionProjector.node],
+  deps: [Database.node, EventRuntime.node, SessionProjector.node, AppProcess.node],
 })

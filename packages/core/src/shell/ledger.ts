@@ -51,6 +51,9 @@ export const processes = (appProcess: AppProcess.Interface, pids?: readonly numb
       ),
     )
 
+export const alive = (snapshot: readonly Process[], pid: number | null, started: string | null) =>
+  pid !== null && started !== null && snapshot.some((item) => item.pid === pid && item.started === started)
+
 export const identify = (appProcess: AppProcess.Interface, pid: number) =>
   processes(appProcess, [pid]).pipe(
     Effect.map((found) => found.find((item) => item.pid === pid)),
@@ -144,9 +147,7 @@ export const reconcile = Effect.fn("ShellLedger.reconcile")(function* (
     return
   }
   yield* Effect.forEach(
-    rows.filter(
-      (row) => !snapshot.value.some((item) => item.pid === row.owner_pid && item.started === row.owner_started),
-    ),
+    rows.filter((row) => !alive(snapshot.value, row.owner_pid, row.owner_started)),
     (row) =>
       Effect.gen(function* () {
         if (survivors(row, snapshot.value)) yield* terminate(row, appProcess, graceMs)

@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "83e2f476-3cef-4caf-8ef7-6e9f883324a1",
+  "id": "86355c0d-1d15-4f05-8f58-3db81780dec5",
   "prevIds": [
-    "6861a3d6-4613-46b1-974e-d4781e5887ee"
+    "83e2f476-3cef-4caf-8ef7-6e9f883324a1"
   ],
   "ddl": [
     {
@@ -4277,6 +4277,26 @@
       "default": "false",
       "generated": null,
       "name": "attempt_started",
+      "entityType": "columns",
+      "table": "session_task"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "owner_pid",
+      "entityType": "columns",
+      "table": "session_task"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "owner_started",
       "entityType": "columns",
       "table": "session_task"
     },

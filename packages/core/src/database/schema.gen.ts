@@ -770,6 +770,8 @@ export default {
           \`question_data\` text,
           \`question_time\` integer,
           \`attempt_started\` integer DEFAULT false NOT NULL,
+          \`owner_pid\` integer,
+          \`owner_started\` text,
           \`revision\` integer DEFAULT 0 NOT NULL,
           \`time_created\` integer NOT NULL,
           \`time_updated\` integer NOT NULL,

@@ -642,6 +642,8 @@ export const SessionTaskTable = sqliteTable(
     question_data: text({ mode: "json" }).$type<Schema.Json>(),
     question_time: integer(),
     attempt_started: integer({ mode: "boolean" }).notNull().default(false),
+    owner_pid: integer(),
+    owner_started: text(),
     revision: integer().notNull().default(0),
     ...Timestamps,
   },
