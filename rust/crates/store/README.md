@@ -1,5 +1,17 @@
 # Operational storage engine
 
+## Compacted-history batch deletion
+
+`session::prune_messages` and `prune_events` delete typed rows strictly below a
+sequence while applying the caller's retention predicate. Limits are capped at
+200 messages and 1,000 events; zero is rejected. `PruneBatch` reports committed
+deletion counts and an exclusive resumable index cursor, including when the
+cursor row was deleted. Primary rows and all index memberships are removed in
+the same transaction; aggregate sequences, Session metadata, usage and unrelated
+tables remain unchanged. Core owns checkpoint eligibility and reference keeps.
+Failed transactions roll back the whole page. The helpers perform no database
+file compaction and require no catalog or record-codec changes.
+
 ## Derived Session cleanup transactions
 
 `session::cleanup_sessions(snapshot, cutoff, cursor)` returns at most 200 expired

@@ -7,7 +7,8 @@ use ycoding_schema::{
 use ycoding_store::{
     Error, IndexOrder, IndexQuery, KeyPart, Write,
     session::{
-        self as tables, Admission, EventTable, MessageTable, NewEvent, Pending, PendingTable,
+        self as tables, Admission, ContextStateTable, EventTable, MessageTable, NewEvent, Pending,
+        PendingTable,
     },
     tuple_key,
 };
@@ -301,6 +302,9 @@ impl Service {
                         }
                     };
                 }
+                if let Some(original) = pruned(tx, &record)? {
+                    return Ok(original);
+                }
                 let event = tables::append(
                     tx,
                     &NewEvent {
@@ -344,6 +348,48 @@ fn validate(row: Pending) -> Result<Pending, Error> {
     )
     .map_err(super::projector::record_error)?;
     Ok(row)
+}
+
+fn pruned(tx: &mut Write<'_>, record: &Pending) -> Result<Option<Pending>, Error> {
+    if !tx
+        .get::<ContextStateTable>(&key(&record.session_id))?
+        .is_some_and(|state| state.covered_through_seq.is_some())
+    {
+        return Ok(None);
+    }
+    let prefix = tuple_key(&[
+        KeyPart::String(&record.session_id),
+        KeyPart::String(&"session.input.promoted.1".into()),
+    ]);
+    let mut after = None;
+    loop {
+        let events = tx.index_range::<EventTable>(
+            "event_aggregate_type_seq_idx",
+            IndexQuery {
+                lower: Bound::Unbounded,
+                upper: Bound::Unbounded,
+                prefix: Some(&prefix),
+                order: IndexOrder::Ascending,
+                after: after.as_ref(),
+                limit: 128,
+            },
+        )?;
+        if let Some(event) = events.iter().find(|event| {
+            matches!(&event.record.data, ycoding_schema::JsonValue::Object(data)
+                if data.get(&"inputID".into()) == Some(&ycoding_schema::JsonValue::String(record.id.clone())))
+        }) {
+            let session = session::Id::new(record.session_id.clone())
+                .map_err(|error| Error::Record(Box::new(error)))?;
+            if super::revert::committed_after_in(tx, &session, event.record.seq)? {
+                return Ok(None);
+            }
+            return promoted(tx, record);
+        }
+        let Some(last) = events.last() else {
+            return Ok(None);
+        };
+        after = Some(last.cursor.clone());
+    }
 }
 
 fn promoted(tx: &mut Write<'_>, record: &Pending) -> Result<Option<Pending>, Error> {

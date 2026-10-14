@@ -31,6 +31,92 @@ mod support;
 #[path = "session_support/request_assembly.rs"]
 mod request_assembly;
 
+#[path = "session_support/checkpoint.rs"]
+mod checkpoint;
+
+#[tokio::test]
+async fn pruning_changes_neither_next_provider_request_nor_live_state() {
+    let (endpoint, mut requests, server) = server(vec![TEXT, TEXT]).await;
+    let mut outbound = Vec::new();
+    for prune in [false, true] {
+        let store = support::store();
+        let service = Service::new(store.client());
+        checkpoint::session(&store.client(), "ses_one");
+        checkpoint::user(&service, "ses_one", "First request", 1).await;
+        checkpoint::run(
+            &service,
+            "ses_one",
+            "First answer",
+            checkpoint::Outcome::Succeeded,
+            1,
+        )
+        .await;
+        checkpoint::user(&service, "ses_one", "Second request", 1).await;
+        let boundary = checkpoint::run(
+            &service,
+            "ses_one",
+            "Covered answer",
+            checkpoint::Outcome::Succeeded,
+            1,
+        )
+        .await;
+        checkpoint::compaction(
+            &store.client(),
+            &service,
+            "ses_one",
+            &boundary,
+            checkpoint::Compaction::Ended,
+            1,
+        )
+        .await;
+        let id = checkpoint::id("ses_one");
+        let before =
+            ycoding_core::session::live_state::capture(&store.snapshot().unwrap(), &id).unwrap();
+        if prune {
+            assert!(
+                service
+                    .prune_compacted(&id, 2, Vec::new)
+                    .await
+                    .unwrap()
+                    .messages
+                    > 0
+            );
+        }
+        assert_eq!(
+            ycoding_core::session::live_state::capture(&store.snapshot().unwrap(), &id).unwrap(),
+            before
+        );
+        admit_input(&service, "next", "Next request", "steer").await;
+        let coordinator = Coordinator::new(Arc::new(local_clock(
+            &store,
+            &endpoint,
+            registry(),
+            Arc::new(ImmediateClock(Default::default())),
+        )));
+        coordinator.run(&id).await.unwrap();
+        let request = requests.recv().await.unwrap();
+        let text = ycoding_schema::stringify_json(&request);
+        assert!(text.contains("conversation-checkpoint"));
+        assert!(text.contains("Next request"));
+        assert!(!text.contains("Covered answer"));
+        assert!(
+            !service
+                .log(&id, None, 512)
+                .unwrap()
+                .events
+                .iter()
+                .any(
+                    |event| ycoding_schema::stringify_json(&event.event.encode())
+                        .contains("session.execution.failed")
+                )
+        );
+        outbound.push(request);
+        coordinator.shutdown().await.unwrap();
+    }
+    server.await.unwrap();
+    assert_eq!(outbound[0], outbound[1]);
+}
+
 include!("tool_fixture.rs");
 
 async fn server(

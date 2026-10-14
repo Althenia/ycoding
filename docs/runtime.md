@@ -84,6 +84,21 @@ The root session list offers **pin/unpin** for the selected Session (`ctrl+f` by
 
 ### Automatic Session retention
 
+The compacted-history retention service prunes rows strictly below a valid local
+summary checkpoint with a matching ended job. Each bounded transaction rechecks
+Session existence, execution activity, staged revert, unchanged checkpoint
+digest and sequence, the boundary payload, the ended job and absence of active
+compaction jobs. Remote manifests never qualify. The first user, compaction
+messages and referenced fork points remain. Message-only events may be deleted;
+admission/promotion, instruction, compaction, revert, task, file-change and usage
+facts remain, along with latest execution/step facts, latest observations per
+source and facts referencing kept messages. Covered errors remain for seven
+days after their covering job ended. Sequence watermarks, live state, provider
+requests and usage totals are unchanged. Files and blobs are untouched;
+attachment references lost with pruned messages are unavailable through the
+Session. Retried pruned prompt IDs return their first admission unless a later
+committed revert exists.
+
 The server permanently deletes idle Session families. A family is one root Session (no parent) plus all of its descendants. It is deleted when the newest activity of every member — the later of `time_updated` and the execution-activity timestamp `time_active` — is older than the configured retention, 7 days by default; set it with the global-only [`session_retention.days`](./configuration.md#session-retention) key. Archive state does not affect retention.
 
 A family is kept whole when any member is pinned, has an active goal, is suspended, has an unconsumed pending input, or is executing in this process's `SessionExecution`, or when a Session outside the family is forked from a member.

@@ -203,6 +203,86 @@ pub fn delete_aggregate(tx: &mut Write<'_>, aggregate: &LosslessString) -> Resul
     tx.delete::<SequenceTable>(&prefix)
 }
 
+#[derive(Debug)]
+pub struct PruneBatch {
+    pub deleted: usize,
+    pub next: Option<IndexCursor>,
+}
+
+pub fn prune_messages(
+    tx: &mut Write<'_>,
+    session: &LosslessString,
+    below: i64,
+    after: Option<&IndexCursor>,
+    limit: usize,
+    retain: impl Fn(&Message) -> bool,
+) -> Result<PruneBatch, Error> {
+    prune_below::<MessageTable>(
+        tx,
+        "session_message_session_seq_idx",
+        session,
+        below,
+        after,
+        limit.min(200),
+        retain,
+    )
+}
+
+pub fn prune_events(
+    tx: &mut Write<'_>,
+    aggregate: &LosslessString,
+    below: i64,
+    after: Option<&IndexCursor>,
+    limit: usize,
+    retain: impl Fn(&Event) -> bool,
+) -> Result<PruneBatch, Error> {
+    prune_below::<EventTable>(
+        tx,
+        "event_aggregate_seq_idx",
+        aggregate,
+        below,
+        after,
+        limit.min(1000),
+        retain,
+    )
+}
+
+fn prune_below<T: TableSpec>(
+    tx: &mut Write<'_>,
+    index: &str,
+    owner: &LosslessString,
+    below: i64,
+    after: Option<&IndexCursor>,
+    limit: usize,
+    retain: impl Fn(&T::Record) -> bool,
+) -> Result<PruneBatch, Error> {
+    if limit == 0 {
+        return Err(tx.reject(Error::Rejected("pruning batch limit must be positive")));
+    }
+    let prefix = key(owner);
+    let upper = tuple_key(&[KeyPart::String(owner), KeyPart::I64(below)]);
+    let rows = tx.index_range::<T>(
+        index,
+        IndexQuery {
+            lower: Bound::Unbounded,
+            upper: Bound::Excluded(&upper),
+            prefix: Some(&prefix),
+            order: IndexOrder::Ascending,
+            after,
+            limit,
+        },
+    )?;
+    let next = (rows.len() == limit)
+        .then(|| rows.last().map(|row| row.cursor.clone()))
+        .flatten();
+    let mut deleted = 0;
+    for row in rows.into_iter().filter(|row| !retain(&row.record)) {
+        tx.delete::<T>(&T::primary_key(&row.record))?;
+        deleted += 1;
+    }
+    Ok(PruneBatch { deleted, next })
+}
+
 pub fn messages(
     snapshot: &Snapshot,
     session: &LosslessString,

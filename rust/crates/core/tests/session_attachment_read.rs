@@ -20,6 +20,55 @@ use ycoding_store::session::{Message, MessageTable};
 #[path = "session_support/mod.rs"]
 mod support;
 
+#[path = "session_support/checkpoint.rs"]
+mod checkpoint;
+
+#[tokio::test]
+async fn pruning_removes_only_the_session_attachment_reference_not_the_file() {
+    let temp = Temp::new();
+    let attachments = Store::new(temp.0.join("data")).unwrap();
+    let store = support::store();
+    let sessions = Service::new(store.client());
+    let scenario = checkpoint::scenario(&store.client(), &sessions, "ses_one", 1).await;
+    let content = attachments.import(b"covered attachment").unwrap();
+    let files = parse_json(&format!("[{}]", file(&content, "text/plain"))).unwrap();
+    store
+        .submit(move |tx| {
+            let mut row = tx
+                .get::<MessageTable>(&checkpoint::key(&scenario.ids.covered_user))?
+                .unwrap();
+            let ycoding_schema::JsonValue::Object(data) = &mut row.data else {
+                panic!()
+            };
+            data.insert("files".into(), files);
+            MessageTable::put(tx, &row)
+        })
+        .unwrap()
+        .await
+        .unwrap();
+    let id = checkpoint::id("ses_one");
+    assert_eq!(
+        sessions
+            .attachment_read(&attachments, &id, &digest(&content))
+            .unwrap()
+            .bytes,
+        b"covered attachment"
+    );
+    assert!(
+        sessions
+            .prune_compacted(&id, 2, Vec::new)
+            .await
+            .unwrap()
+            .messages
+            > 0
+    );
+    assert!(matches!(
+        sessions.attachment_read(&attachments, &id, &digest(&content)),
+        Err(ReadError::NotFound)
+    ));
+    assert_eq!(attachments.read(&content).unwrap(), b"covered attachment");
+}
+
 struct Temp(PathBuf);
 impl Temp {
     fn new() -> Self {

@@ -1,9 +1,16 @@
-use super::{history::Entry, key, model_history};
-use std::ops::Bound;
+use super::{history::Entry, key, model_history, store::Service};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::Bound,
+    sync::Arc,
+};
 use ycoding_schema::{JsonObject, JsonValue, LosslessString, session, session_message};
 use ycoding_store::{
-    Error, IndexOrder, IndexQuery, KeyPart, Snapshot,
-    session::{ContextState, ContextStateTable, JobTable},
+    Error, IndexCursor, IndexOrder, IndexQuery, KeyPart, Snapshot, TableSpec, Write,
+    session::{
+        ContextState, ContextStateTable, Event, EventTable, Job, JobTable, ManifestTable, Message,
+        MessageTable, PruneBatch, SessionTable, prune_events, prune_messages,
+    },
     tuple_key,
 };
 
@@ -98,13 +105,21 @@ fn ended_job(
     id: &session::Id,
     digest: &LosslessString,
 ) -> Result<Option<(LosslessString, i64)>, Error> {
+    Ok(ended_jobs(snapshot, id)?
+        .into_iter()
+        .filter(|(job, _)| job.manifest_digest.as_ref() == Some(digest))
+        .max_by_key(|(_, ended)| *ended)
+        .map(|(job, ended)| (job.id, ended)))
+}
+
+fn ended_jobs(snapshot: &Snapshot, id: &session::Id) -> Result<Vec<(Job, i64)>, Error> {
     let status = LosslessString::from("ended");
     let prefix = tuple_key(&[
         KeyPart::String(&status),
         KeyPart::Null,
         KeyPart::String(id.as_lossless()),
     ]);
-    let mut newest: Option<(LosslessString, i64)> = None;
+    let mut jobs = Vec::new();
     let mut after = None;
     loop {
         let rows = snapshot.index_range::<JobTable>(
@@ -119,19 +134,514 @@ fn ended_job(
             },
         )?;
         let Some(last) = rows.last() else {
-            return Ok(newest);
+            return Ok(jobs);
+        };
+        after = Some(last.cursor.clone());
+        jobs.extend(rows.into_iter().filter_map(|row| {
+            let ended = row.record.time_ended?;
+            Some((row.record, ended))
+        }));
+    }
+}
+
+const DAY: i64 = 24 * 60 * 60 * 1000;
+pub const ERROR_RETENTION: i64 = 7 * DAY;
+const SESSION_PAGE: usize = 200;
+const MESSAGE_BATCH: usize = 200;
+const EVENT_BATCH: usize = 1000;
+const CONTEXT_OBSERVED: &str = "session.context.observed.1";
+const LATEST_TYPES: [&str; 8] = [
+    CONTEXT_OBSERVED,
+    "session.execution.started.1",
+    "session.execution.succeeded.1",
+    "session.execution.interrupted.1",
+    "session.execution.failed.1",
+    "session.step.started.1",
+    "session.step.ended.1",
+    "session.step.failed.1",
+];
+const MESSAGE_EVENT_TYPES: [&str; 22] = [
+    "session.synthetic.1",
+    CONTEXT_OBSERVED,
+    "session.skill.activated.1",
+    "session.skill.deactivated.1",
+    "session.shell.started.1",
+    "session.shell.ended.1",
+    "session.step.started.1",
+    "session.step.ended.1",
+    "session.text.started.1",
+    "session.text.ended.1",
+    "session.reasoning.started.1",
+    "session.reasoning.ended.1",
+    "session.tool.input.started.1",
+    "session.tool.input.ended.1",
+    "session.tool.called.1",
+    "session.tool.progress.1",
+    "session.tool.success.1",
+    "session.retry.scheduled.1",
+    "session.input.consumed.1",
+    "session.execution.started.1",
+    "session.execution.succeeded.1",
+    "session.execution.interrupted.1",
+];
+const ERROR_EVENT_TYPES: [&str; 4] = [
+    "session.step.failed.1",
+    "session.tool.failed.1",
+    "session.execution.failed.1",
+    "session.compaction.failed.2",
+];
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Pruned {
+    pub messages: usize,
+    pub events: usize,
+}
+
+#[derive(Debug, Default)]
+pub struct Sweep {
+    pub pruned: Pruned,
+    pub failures: Vec<(session::Id, Error)>,
+}
+
+struct Target {
+    session: LosslessString,
+    digest: LosslessString,
+    through: i64,
+    boundary: Message,
+    job: LosslessString,
+    state: ContextState,
+}
+
+#[derive(Clone)]
+struct EventPlan {
+    floor: i64,
+    error_floor: i64,
+    latest: BTreeSet<i64>,
+    messages: BTreeSet<LosslessString>,
+    shells: BTreeSet<LosslessString>,
+}
+
+impl Service {
+    pub async fn prune_history<F>(&self, now: i64, active: F) -> Result<Sweep, Error>
+    where
+        F: Fn() -> Vec<session::Id> + Clone + Send + 'static,
+    {
+        let mut sweep = Sweep::default();
+        let mut after: Option<Vec<u8>> = None;
+        loop {
+            let page = self.client.snapshot()?.scan::<ContextStateTable>(
+                after.as_deref().map_or(Bound::Unbounded, Bound::Excluded),
+                Bound::Unbounded,
+                SESSION_PAGE,
+            )?;
+            let Some(last) = page.last() else {
+                return Ok(sweep);
+            };
+            after = Some(ContextStateTable::primary_key(last));
+            for state in page.into_iter().filter(|state| {
+                state.status.as_str() == Some("active") && state.manifest_digest.is_some()
+            }) {
+                let id = session::Id::new(state.session_id)
+                    .map_err(|error| Error::Record(Box::new(error)))?;
+                match self.prune_compacted(&id, now, active.clone()).await {
+                    Ok(pruned) => {
+                        sweep.pruned.messages += pruned.messages;
+                        sweep.pruned.events += pruned.events;
+                    }
+                    Err(error) => sweep.failures.push((id, error)),
+                }
+            }
+        }
+    }
+
+    pub async fn prune_compacted<F>(
+        &self,
+        id: &session::Id,
+        now: i64,
+        active: F,
+    ) -> Result<Pruned, Error>
+    where
+        F: Fn() -> Vec<session::Id> + Clone + Send + 'static,
+    {
+        let snapshot = self.client.snapshot()?;
+        let Some(checkpoint) = checkpoint(&snapshot, id)? else {
+            return Ok(Pruned::default());
+        };
+        let Some(boundary) = ycoding_store::session::messages(
+            &snapshot,
+            id.as_lossless(),
+            Bound::Included(checkpoint.through),
+            Bound::Included(checkpoint.through),
+            IndexOrder::Ascending,
+            None,
+            1,
+        )?
+        .into_iter()
+        .next() else {
+            return Ok(Pruned::default());
+        };
+        drop(snapshot);
+        let target = Arc::new(Target {
+            session: id.as_lossless().clone(),
+            digest: checkpoint.manifest_digest,
+            through: checkpoint.through,
+            boundary: boundary.record,
+            job: checkpoint.job,
+            state: checkpoint.state,
+        });
+        let messages = self
+            .batches(target.clone(), active.clone(), |tx, target, after| {
+                let first = first_user(tx, &target.session)?;
+                let forks = fork_points(tx, &target.session)?;
+                prune_messages(
+                    tx,
+                    &target.session,
+                    target.through,
+                    after,
+                    MESSAGE_BATCH,
+                    |row| {
+                        row.type_.as_str() == Some("compaction")
+                            || first.as_ref() == Some(&row.id)
+                            || forks.contains(&row.id)
+                    },
+                )
+            })
+            .await?;
+        let plan = Arc::new(event_plan(&self.client.snapshot()?, id, &target, now)?);
+        let events = self
+            .batches(target, active, move |tx, target, after| {
+                let mut plan = (*plan).clone();
+                kept_messages(tx, target, &mut plan)?;
+                prune_events(
+                    tx,
+                    &target.session,
+                    plan.floor,
+                    after,
+                    EVENT_BATCH,
+                    |event| !deletable(event, &plan),
+                )
+            })
+            .await?;
+        Ok(Pruned { messages, events })
+    }
+
+    async fn batches<F, S>(&self, target: Arc<Target>, active: F, step: S) -> Result<usize, Error>
+    where
+        F: Fn() -> Vec<session::Id> + Clone + Send + 'static,
+        S: Fn(&mut Write<'_>, &Target, Option<&IndexCursor>) -> Result<PruneBatch, Error>
+            + Clone
+            + Send
+            + 'static,
+    {
+        let mut deleted = 0;
+        let mut after = None;
+        loop {
+            let (target, active, step, cursor) =
+                (target.clone(), active.clone(), step.clone(), after.take());
+            let batch = self
+                .client
+                .submit(move |tx| {
+                    if !eligible(tx, &target, &active())? {
+                        return Ok(None);
+                    }
+                    step(tx, &target, cursor.as_ref()).map(Some)
+                })?
+                .await?;
+            let Some(batch) = batch else {
+                return Ok(deleted);
+            };
+            deleted += batch.deleted;
+            let Some(next) = batch.next else {
+                return Ok(deleted);
+            };
+            after = Some(next);
+            tokio::task::yield_now().await;
+        }
+    }
+}
+
+fn eligible(tx: &mut Write<'_>, target: &Target, active: &[session::Id]) -> Result<bool, Error> {
+    if active.iter().any(|id| id.as_lossless() == &target.session) {
+        return Ok(false);
+    }
+    let session_key = key(&target.session);
+    if tx
+        .get::<SessionTable>(&session_key)?
+        .is_none_or(|session| session.revert.is_some())
+    {
+        return Ok(false);
+    }
+    if !tx
+        .get::<ContextStateTable>(&session_key)?
+        .is_some_and(|state| state == target.state)
+    {
+        return Ok(false);
+    }
+    if !tx
+        .get::<MessageTable>(&key(&target.boundary.id))?
+        .is_some_and(|row| {
+            row.session_id == target.session
+                && row.seq == target.through
+                && row.data == target.boundary.data
+        })
+    {
+        return Ok(false);
+    }
+    if !tx.get::<JobTable>(&key(&target.job))?.is_some_and(|job| {
+        job.session_id == target.session
+            && job.manifest_digest.as_ref() == Some(&target.digest)
+            && job.status.as_str() == Some("ended")
+            && job.time_ended.is_some()
+    }) {
+        return Ok(false);
+    }
+    for status in ["pending", "running"] {
+        if compacting(tx, status, &target.session)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn compacting(tx: &mut Write<'_>, status: &str, session: &LosslessString) -> Result<bool, Error> {
+    let prefix = key(&LosslessString::from(status));
+    let mut after = None;
+    loop {
+        let rows = tx.index_range::<JobTable>(
+            "session_compaction_job_recovery_idx",
+            IndexQuery {
+                lower: Bound::Unbounded,
+                upper: Bound::Unbounded,
+                prefix: Some(&prefix),
+                order: IndexOrder::Ascending,
+                after: after.as_ref(),
+                limit: 128,
+            },
+        )?;
+        if rows.iter().any(|row| &row.record.session_id == session) {
+            return Ok(true);
+        }
+        let Some(last) = rows.last() else {
+            return Ok(false);
+        };
+        after = Some(last.cursor.clone());
+    }
+}
+
+fn first_user(
+    tx: &mut Write<'_>,
+    session: &LosslessString,
+) -> Result<Option<LosslessString>, Error> {
+    let prefix = tuple_key(&[KeyPart::String(session), KeyPart::String(&"user".into())]);
+    Ok(tx
+        .index_range::<MessageTable>(
+            "session_message_session_type_seq_idx",
+            IndexQuery {
+                lower: Bound::Unbounded,
+                upper: Bound::Unbounded,
+                prefix: Some(&prefix),
+                order: IndexOrder::Ascending,
+                after: None,
+                limit: 1,
+            },
+        )?
+        .into_iter()
+        .next()
+        .map(|row| row.record.id))
+}
+
+fn fork_points(
+    tx: &mut Write<'_>,
+    session: &LosslessString,
+) -> Result<BTreeSet<LosslessString>, Error> {
+    let mut points = BTreeSet::new();
+    let mut after: Option<Vec<u8>> = None;
+    loop {
+        let page = tx.scan::<SessionTable>(
+            after.as_deref().map_or(Bound::Unbounded, Bound::Excluded),
+            Bound::Unbounded,
+            SESSION_PAGE,
+        )?;
+        let Some(last) = page.last() else {
+            return Ok(points);
+        };
+        after = Some(SessionTable::primary_key(last));
+        points.extend(
+            page.into_iter()
+                .filter(|row| row.fork_session_id.as_ref() == Some(session))
+                .filter_map(|row| row.fork_message_id),
+        );
+    }
+}
+
+fn event_plan(
+    snapshot: &Snapshot,
+    id: &session::Id,
+    target: &Target,
+    now: i64,
+) -> Result<EventPlan, Error> {
+    let expired = ended_jobs(snapshot, id)?
+        .into_iter()
+        .filter(|(_, ended)| *ended <= now.saturating_sub(ERROR_RETENTION))
+        .filter_map(|(job, _)| job.manifest_digest)
+        .map(|digest| {
+            Ok(snapshot
+                .get::<ManifestTable>(&key(&digest))?
+                .and_then(|blob| covered_seq(blob.content.value())))
+        })
+        .collect::<Result<Vec<_>, Error>>()?
+        .into_iter()
+        .flatten()
+        .max();
+    Ok(EventPlan {
+        floor: target.through,
+        error_floor: target.through.min(expired.unwrap_or(0)),
+        latest: latest_events(snapshot, &target.session)?,
+        messages: BTreeSet::new(),
+        shells: BTreeSet::new(),
+    })
+}
+
+fn kept_messages(tx: &mut Write<'_>, target: &Target, plan: &mut EventPlan) -> Result<(), Error> {
+    let prefix = key(&target.session);
+    let upper = tuple_key(&[
+        KeyPart::String(&target.session),
+        KeyPart::I64(target.through),
+    ]);
+    let mut after = None;
+    loop {
+        let rows = tx.index_range::<MessageTable>(
+            "session_message_session_seq_idx",
+            IndexQuery {
+                lower: Bound::Unbounded,
+                upper: Bound::Excluded(&upper),
+                prefix: Some(&prefix),
+                order: IndexOrder::Ascending,
+                after: after.as_ref(),
+                limit: 128,
+            },
+        )?;
+        let Some(last) = rows.last() else {
+            break;
         };
         after = Some(last.cursor.clone());
         for row in rows {
-            let job = row.record;
-            let Some(ended) = job.time_ended else {
-                continue;
-            };
-            if job.manifest_digest.as_ref() == Some(digest)
-                && newest.as_ref().is_none_or(|(_, newest)| ended > *newest)
+            if row.record.type_.as_str() == Some("shell")
+                && let Some(JsonValue::String(shell)) = field(&row.record.data, "shellID")
             {
-                newest = Some((job.id, ended));
+                plan.shells.insert(shell.clone());
             }
+            plan.messages.insert(row.record.id);
         }
+    }
+    Ok(())
+}
+
+fn latest_events(snapshot: &Snapshot, session: &LosslessString) -> Result<BTreeSet<i64>, Error> {
+    let mut latest = BTreeSet::new();
+    for type_ in LATEST_TYPES
+        .iter()
+        .filter(|type_| **type_ != CONTEXT_OBSERVED)
+    {
+        let prefix = tuple_key(&[KeyPart::String(session), KeyPart::String(&(*type_).into())]);
+        latest.extend(
+            snapshot
+                .index_range::<EventTable>(
+                    "event_aggregate_type_seq_idx",
+                    IndexQuery {
+                        lower: Bound::Unbounded,
+                        upper: Bound::Unbounded,
+                        prefix: Some(&prefix),
+                        order: IndexOrder::Descending,
+                        after: None,
+                        limit: 1,
+                    },
+                )?
+                .into_iter()
+                .map(|row| row.record.seq),
+        );
+    }
+    let prefix = tuple_key(&[
+        KeyPart::String(session),
+        KeyPart::String(&CONTEXT_OBSERVED.into()),
+    ]);
+    let mut sources = BTreeMap::new();
+    let mut after = None;
+    loop {
+        let rows = snapshot.index_range::<EventTable>(
+            "event_aggregate_type_seq_idx",
+            IndexQuery {
+                lower: Bound::Unbounded,
+                upper: Bound::Unbounded,
+                prefix: Some(&prefix),
+                order: IndexOrder::Ascending,
+                after: after.as_ref(),
+                limit: 128,
+            },
+        )?;
+        let Some(last) = rows.last() else {
+            latest.extend(sources.into_values());
+            return Ok(latest);
+        };
+        after = Some(last.cursor.clone());
+        for row in rows {
+            let source = match field(&row.record.data, "source") {
+                Some(JsonValue::String(source)) => Some(source.clone()),
+                _ => None,
+            };
+            sources.insert(source, row.record.seq);
+        }
+    }
+}
+
+fn deletable(event: &Event, plan: &EventPlan) -> bool {
+    let type_ = event.type_.as_str().unwrap_or_default();
+    ((MESSAGE_EVENT_TYPES.contains(&type_) && event.seq < plan.floor)
+        || (ERROR_EVENT_TYPES.contains(&type_) && event.seq < plan.error_floor))
+        && !plan.latest.contains(&event.seq)
+        && !references(event, plan)
+}
+
+fn references(event: &Event, plan: &EventPlan) -> bool {
+    let names = |name: &str, set: &BTreeSet<LosslessString>| matches!(field(&event.data, name), Some(JsonValue::String(id)) if set.contains(id));
+    let projected = event
+        .id
+        .as_str()
+        .and_then(|id| id.get(4..))
+        .is_some_and(|suffix| {
+            plan.messages
+                .contains(&LosslessString::from(format!("msg_{suffix}").as_str()))
+        });
+    let inputs = matches!(
+        field(&event.data, "inputIDs"),
+        Some(JsonValue::Array(inputs)) if inputs
+            .iter()
+            .any(|input| matches!(input, JsonValue::String(id) if plan.messages.contains(id)))
+    );
+    let shell = matches!(
+        field(&event.data, "shell").and_then(|shell| field(shell, "id")),
+        Some(JsonValue::String(id)) if plan.shells.contains(id)
+    );
+    names("assistantMessageID", &plan.messages)
+        || names("activationMessageID", &plan.messages)
+        || projected
+        || inputs
+        || shell
+}
+
+fn covered_seq(manifest: &JsonValue) -> Option<i64> {
+    match field(manifest, "summary")
+        .and_then(|summary| field(summary, "coveredThrough"))
+        .and_then(|covered| field(covered, "seq"))
+    {
+        Some(JsonValue::Number(seq)) if *seq >= 0.0 && seq.fract() == 0.0 => Some(*seq as i64),
+        _ => None,
+    }
+}
+
+fn field<'a>(value: &'a JsonValue, name: &str) -> Option<&'a JsonValue> {
+    match value {
+        JsonValue::Object(object) => object.get(&name.into()),
+        _ => None,
     }
 }

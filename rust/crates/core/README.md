@@ -122,6 +122,31 @@ the floor return only that message or nothing and end paging. Instruction notice
 below the floor are omitted. A qualifying checkpoint or a copied checkpoint
 message disables the sole-first-user shortcut.
 
+`Service::prune_history(now, active)` sweeps qualifying checkpoints directly;
+`prune_compacted` handles one Session. These retention services are not activation
+or transcript-read side effects. Transactions scan at most 200 message candidates
+or 1,000 event candidates and resume with index cursors. Every batch rechecks
+Session existence, staged revert, executor activity, unchanged checkpoint digest
+and sequence, the boundary payload, the ended job and absence of pending/running
+jobs. Fork points and kept message/shell references are read in the transaction.
+Per-Session failures are returned without stopping the sweep. Repeated sweeps
+backfill existing checkpoints and count only actual deletions.
+
+Rows strictly below the boundary are deleted except the first user, all
+compaction messages and referenced fork points. Only message-only event types
+qualify; latest execution/step facts, latest observations per source and events
+referencing surviving messages remain. Admission/promotion, instruction,
+compaction, revert, task, file-change and usage facts remain. Error events expire
+below the largest local summary boundary covered by a job ended at least seven
+days ago, capped at the current checkpoint. Aggregate sequence, live state,
+usage totals and provider-request records are unchanged. The service does not
+compact the database file or delete files or blobs. Attachment references
+available only in deleted message rows cannot be read through the Session.
+
+Retrying a pruned promoted prompt recovers its original durable admission without
+recreating pending work. A later committed revert disables recovery; input-kind
+conflicts remain rejected.
+
 ## Derived Session retention and maintenance ownership
 
 `session::cleanups::Cleanups` removes only derived context exclusions, file-change

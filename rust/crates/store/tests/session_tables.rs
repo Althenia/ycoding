@@ -582,6 +582,103 @@ fn message(id: &str, seq: i64) -> session::Message {
 }
 
 #[test]
+fn pruning_batches_bound_resume_roll_back_and_preserve_the_sequence() {
+    let store = store();
+    store
+        .submit(|tx| {
+            session::SessionTable::insert(tx, &record("s"))?;
+            for seq in 1..=205 {
+                session::MessageTable::insert(tx, &message(&format!("msg_{seq}"), seq))?;
+            }
+            for seq in 0..1005 {
+                session::append(tx, &event(&format!("evt_{seq}")), None)?;
+            }
+            Ok(())
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    let count = || {
+        let snapshot = store.snapshot().unwrap();
+        (
+            snapshot
+                .scan::<session::MessageTable>(Bound::Unbounded, Bound::Unbounded, 2000)
+                .unwrap()
+                .len(),
+            snapshot
+                .scan::<session::EventTable>(Bound::Unbounded, Bound::Unbounded, 2000)
+                .unwrap()
+                .len(),
+        )
+    };
+    let sequence = session::latest_sequence(&store.snapshot().unwrap(), &"s".into()).unwrap();
+    let rejected = store
+        .submit(|tx| {
+            session::prune_messages(tx, &"s".into(), 205, None, usize::MAX, |_| false)?;
+            session::prune_events(tx, &"s".into(), 1004, None, usize::MAX, |_| false)?;
+            Err::<(), _>(tx.reject(Error::Rejected("abort pruning page")))
+        })
+        .unwrap()
+        .wait()
+        .unwrap_err();
+    assert!(matches!(rejected, Error::Rejected("abort pruning page")));
+    assert_eq!(count(), (205, 1005));
+    let (messages, events) = store
+        .submit(|tx| {
+            Ok((
+                session::prune_messages(tx, &"s".into(), 205, None, usize::MAX, |_| false)?,
+                session::prune_events(tx, &"s".into(), 1004, None, usize::MAX, |_| false)?,
+            ))
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert_eq!((messages.deleted, events.deleted), (200, 1000));
+    assert!(messages.next.is_some() && events.next.is_some());
+    let rest = store
+        .submit(move |tx| {
+            Ok((
+                session::prune_messages(
+                    tx,
+                    &"s".into(),
+                    205,
+                    messages.next.as_ref(),
+                    usize::MAX,
+                    |_| false,
+                )?,
+                session::prune_events(
+                    tx,
+                    &"s".into(),
+                    1004,
+                    events.next.as_ref(),
+                    usize::MAX,
+                    |_| false,
+                )?,
+            ))
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert_eq!((rest.0.deleted, rest.1.deleted), (4, 4));
+    assert!(rest.0.next.is_none() && rest.1.next.is_none());
+    assert_eq!(count(), (1, 1));
+    assert_eq!(
+        session::latest_sequence(&store.snapshot().unwrap(), &"s".into()).unwrap(),
+        sequence
+    );
+    let invalid = store
+        .submit(|tx| session::prune_messages(tx, &"s".into(), 205, None, 0, |_| false))
+        .unwrap()
+        .wait()
+        .unwrap_err();
+    assert!(matches!(
+        invalid,
+        Error::Rejected("pruning batch limit must be positive")
+    ));
+    assert_eq!(count(), (1, 1));
+}
+
+#[test]
 fn session_delete_cascades_messages_but_not_nonreferences() {
     let store = store();
     store
