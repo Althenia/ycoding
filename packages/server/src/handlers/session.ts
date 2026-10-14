@@ -14,6 +14,7 @@ import {
   AttachmentNotFoundError,
   AttachmentTooLargeError,
   InvalidCursorError,
+  HistoryPrunedError,
   MessageNotFoundError,
   ModelSwitchBlockedError,
   ServiceUnavailableError,
@@ -479,6 +480,15 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                     message: `Message not found: ${error.messageID}`,
                   }),
               ),
+              Effect.catchTag(
+                "Session.HistoryPrunedError",
+                (error) =>
+                  new HistoryPrunedError({
+                    sessionID: error.sessionID,
+                    messageID: error.messageID,
+                    message: error.message,
+                  }),
+              ),
             ),
           }
         }),
@@ -885,6 +895,15 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                     sessionID: error.sessionID,
                     messageID: error.messageID,
                     message: `Message not found: ${error.messageID}`,
+                  }),
+              ),
+              Effect.catchTag(
+                "Session.HistoryPrunedError",
+                (error) =>
+                  new HistoryPrunedError({
+                    sessionID: error.sessionID,
+                    messageID: error.messageID,
+                    message: error.message,
                   }),
               ),
               Effect.catchTag(

@@ -15,6 +15,7 @@ import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Session } from "@ycoding-ai/core/session"
+import { ContextManifest } from "@ycoding-ai/core/session/context-manifest"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionRetention } from "@ycoding-ai/core/session/retention"
@@ -203,6 +204,61 @@ const removed = (id: string) => rows(id).pipe(Effect.map((value) => expect(value
 const kept = (id: string) => rows(id).pipe(Effect.map((value) => expect(value.session).toBe(1)))
 
 describe("SessionRetention", () => {
+  it.effect("prunes history covered by the ended local compaction checkpoint of a retained Session", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const retention = yield* SessionRetention.Service
+      const id = "ses_compacted"
+      yield* seed({ id, updated: now, pinned: true })
+      const message = (seq: number) => ({ text: `message ${seq}`, time: { created: seq } })
+      for (const seq of [1, 2, 3]) {
+        yield* db.run(
+          sql`INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data)
+            VALUES (${`msg_compacted_${seq}`}, ${id}, 'synthetic', ${seq}, ${seq}, ${seq}, ${JSON.stringify(message(seq))})`,
+        )
+        yield* db.run(
+          sql`INSERT INTO event (id, aggregate_id, seq, created, type, data)
+            VALUES (${`evt_compacted_${seq}`}, ${id}, ${seq}, ${seq}, 'session.synthetic.1', ${JSON.stringify({ sessionID: id, text: `message ${seq}` })})`,
+        )
+      }
+      const content = {
+        summary: {
+          text: "Checkpoint",
+          coveredThrough: { messageID: "msg_compacted_2", seq: 2 },
+          digest: ContextManifest.payloadDigest(message(2)),
+        },
+      }
+      const manifest = ContextManifest.payloadDigest(content)
+      yield* db.run(
+        sql`INSERT INTO compaction_manifest_blob (digest, schema_version, content, input_tokens, retained_tokens, time_created)
+          VALUES (${manifest}, 1, ${JSON.stringify(content)}, 10, 1, 0)`,
+      )
+      yield* db.run(
+        sql`INSERT INTO session_context_revision (session_id, revision, parent_revision, manifest_digest, covered_through_message_id, covered_through_seq, time_created)
+          VALUES (${id}, 1, 0, ${manifest}, 'msg_compacted_2', 2, 0)`,
+      )
+      yield* db.run(
+        sql`INSERT INTO session_context_state (session_id, status, revision, manifest_digest, covered_through_message_id, covered_through_seq, activated_event_id, time_activated)
+          VALUES (${id}, 'active', 1, ${manifest}, 'msg_compacted_2', 2, 'evt_compacted_activation', 0)`,
+      )
+      yield* db.run(
+        sql`INSERT INTO session_compaction_job (id, session_id, trigger, requested_through_message_id, requested_through_seq, base_context_revision, target_max_input_tokens, config_digest, status, attempts, manifest_digest, time_created, time_started, time_ended)
+          VALUES ('cmp_compacted', ${id}, 'manual', 'msg_compacted_2', 2, 0, 10, ${"0".repeat(64)}, 'ended', 1, ${manifest}, 0, 0, 0)`,
+      )
+
+      yield* retention.pruneHistory()
+
+      expect(
+        yield* db.all<{ id: string }>(sql`SELECT id FROM session_message WHERE session_id = ${id} ORDER BY seq`),
+      ).toEqual([{ id: `msg_${id}` }, { id: "msg_compacted_2" }, { id: "msg_compacted_3" }])
+      expect(
+        yield* db.all<{ seq: number }>(sql`SELECT seq FROM event WHERE aggregate_id = ${id} ORDER BY seq`),
+      ).toEqual([{ seq: 0 }, { seq: 2 }, { seq: 3 }])
+      expect(yield* retention.pruneHistory()).toEqual({ messages: 0, events: 0 })
+      yield* kept(id)
+    }),
+  )
+
   it.effect("deletes an idle family with its events, projections, and orphaned blobs", () =>
     Effect.gen(function* () {
       yield* seed({ id: "ses_old_root", updated: old, instruction: "old root", manifest: "old manifest" })

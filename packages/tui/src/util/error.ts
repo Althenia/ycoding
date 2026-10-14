@@ -1,3 +1,4 @@
+import { isHistoryPrunedError } from "@ycoding-ai/client"
 import { isRecord } from "./record"
 
 type ConfigIssue = { message: string; path: string[] }
@@ -195,6 +196,7 @@ export function errorFormat(error: unknown): string {
 
 export function errorMessage(error: unknown): string {
   if (isMaxListenersNoise(error)) return ""
+  if (isHistoryPrunedError(error)) return "Message removed by compaction; use a later message."
   const blocked = formatModelSwitchBlocked(error)
   if (blocked) return blocked
   if (error instanceof Error) {

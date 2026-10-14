@@ -33,7 +33,7 @@ export const MessageHandler = HttpApiBuilder.group(Api, "server.message", (handl
       "session.messages",
       Effect.fn(function* (ctx) {
         const messages = yield* session
-          .messages({ sessionID: ctx.params.sessionID, order: "asc" })
+          .messages({ sessionID: ctx.params.sessionID, order: "asc", retained: true })
           .pipe(
             Effect.catchTag("Session.NotFoundError", (error) =>
               Effect.fail(

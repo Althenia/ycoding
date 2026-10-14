@@ -231,6 +231,7 @@ const table = sqliteTable("session", {
 ## Session core
 
 - Keep durable events minimal: record irreducible new facts and do not repeat state derivable by folding ordered aggregate history. Enrich projections and read models when consumers need self-contained views.
+- Prune message rows and message-only events below a valid local summary checkpoint only through the retention sweep, skipping executing, staged-revert, and active-compaction Sessions and re-checking in each batch transaction; never prune remote-manifest Sessions, and keep error events for 7 days.
 - Keep durable prompt admission separate from model execution. `Session.prompt(...)` admits one durable `session_pending` row before scheduling advisory `SessionExecution.wake(sessionID)` unless `resume: false` requests admit-only behavior.
 - The serialized runner promotes admitted inputs into visible user messages at safe boundaries, consuming the pending row in the same event transaction. `session_pending` stores only unconsumed work.
 - Reusing a Session ID adopts the existing Session. Reusing a prompt message ID returns the admitted durable record and wakes execution; the first admission wins and sending a prompt never fails on ID reuse. A prompt message ID belongs to one Session and one input kind, so reuse across Sessions or across input kinds is rejected.
@@ -281,7 +282,7 @@ const table = sqliteTable("session", {
 
 ## TUI transcript history
 
-- The TUI opens, reopens, and reconnects each Session with the newest 100 projected messages from `session.snapshot`, pages older history backward with its opaque cursor, discards durable events at or below the snapshot watermark, and stops paging at a resident completed compaction checkpoint. Copy and export read the complete canonical transcript explicitly; Find, Fork, and Timeline operate on loaded history.
+- The TUI opens, reopens, and reconnects each Session with the newest 100 projected messages from `session.snapshot`, pages older history backward with its opaque cursor, discards durable events at or below the snapshot watermark, and stops paging at a resident completed compaction checkpoint. Copy and export read the retained canonical transcript explicitly, starting at the checkpoint summary after pruning; Find, Fork, and Timeline operate on loaded history.
 - Navigation, resume, reconnect, and eviction invalidate or release resident transcript windows without changing durable history.
 - Every message-backed transcript row must verify that its message or assistant part is resident before mounting. An unresolved row must consume zero terminal lines and must not initialize child components that require Session context.
 - Timeline selection follows option identity, not list index, because new events can reorder options.

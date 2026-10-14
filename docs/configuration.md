@@ -1401,7 +1401,7 @@ The URL must use HTTP or HTTPS without embedded credentials. Stop the paired Chr
 
 ## Automatic SQLite space reclamation
 
-Database initialization automatically converts `auto_vacuum=NONE` databases to `INCREMENTAL` using a one-time SQLite `VACUUM`. Later initializations reclaim at most 256 free pages without rebuilding the database. An existing `FULL` auto-vacuum setting is preserved. Each initialization then runs `PRAGMA optimize=0x10002`. These operations reclaim unused pages and refresh query-planner statistics; they do not delete records.
+Database initialization automatically converts `auto_vacuum=NONE` databases to `INCREMENTAL` using a one-time SQLite `VACUUM`. Later initializations reclaim at most 256 free pages without rebuilding the database. An existing `FULL` auto-vacuum setting is preserved. Each initialization then runs `PRAGMA optimize=0x10002`. These operations reclaim unused pages and refresh query-planner statistics; they do not delete records. Pruning of compacted Session history (see [automatic Session retention](./runtime.md#automatic-session-retention)) triggers the same bounded incremental reclaim.
 
 After a [Session retention](#session-retention) sweep deletes any Session, the server reclaims every free page in bounded `PRAGMA incremental_vacuum(2048)` batches, yielding between batches, so no single write transaction holds the database lock for long. Each hourly sweep runs `PRAGMA optimize`.
 

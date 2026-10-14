@@ -93,6 +93,23 @@ describe("run session shared", () => {
     ])
   })
 
+  test("counts only user prompts when a compaction checkpoint message leads the retained history", () => {
+    const out = createSession([
+      {
+        id: "msg_compaction_digest",
+        type: "synthetic",
+        text: "<conversation-checkpoint>\n<summary>\nsummary\n</summary>\n</conversation-checkpoint>",
+        description: "Compaction checkpoint",
+        metadata: { compactionCheckpoint: { manifestDigest: "digest", through: 9 } },
+        time: { created: 1 },
+      },
+      userMessage("msg-user-1", "first retained prompt"),
+    ])
+
+    expect(out.first).toBe(false)
+    expect(out.turns.map((turn) => turn.prompt.text)).toEqual(["first retained prompt"])
+  })
+
   test("leaves attachment sources undefined when projected mentions are absent", () => {
     const out = createSession([
       userMessage("msg-user-1", "look @scan @note.ts", {

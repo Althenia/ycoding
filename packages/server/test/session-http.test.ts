@@ -6,6 +6,7 @@ import { sessionHttp } from "./session-http"
 import { SessionCompaction } from "../../schema/src/session-compaction"
 import { Agent } from "@ycoding-ai/core/agent"
 import { AgentNotSelectableError } from "@ycoding-ai/core/session/error"
+import { SessionMessage } from "@ycoding-ai/core/session/message"
 
 const parentID = Session.ID.make("ses_http_parent")
 const otherID = Session.ID.make("ses_http_other")
@@ -55,6 +56,29 @@ test("subagent list rejects malformed and cross-parent cursors before the paged 
     expect(await response.json()).toMatchObject({ _tag: "InvalidCursorError", message: "Invalid cursor" })
   }
   expect(pages).toEqual([])
+})
+
+test("fork and revert targets outside retained history map to HTTP 410", async () => {
+  const messageID = SessionMessage.ID.make("msg_http_pruned")
+  const pruned = new Session.HistoryPrunedError({ sessionID: parentID, messageID })
+  await using http = sessionHttp({
+    fork: () => Effect.fail(pruned),
+    revert: {
+      stage: () => Effect.fail(pruned),
+      clear: () => Effect.die("unused"),
+      commit: () => Effect.die("unused"),
+    },
+  })
+  for (const path of [`/api/session/${parentID}/fork`, `/api/session/${parentID}/revert/stage`]) {
+    const response = await http.json(path, "POST", { messageID })
+    expect(response.status).toBe(410)
+    expect(await response.json()).toEqual({
+      _tag: "HistoryPrunedError",
+      sessionID: parentID,
+      messageID,
+      message: pruned.message,
+    })
+  }
 })
 
 test("session skills keeps a missing Session as a typed 404", async () => {

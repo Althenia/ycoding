@@ -5,8 +5,9 @@ import type { SessionMessageInfo, YCodingEvent } from "@ycoding-ai/client"
 import { onMount } from "solid-js"
 import { ClientProvider } from "../../../src/context/client"
 import { DataProvider, useData } from "../../../src/context/data"
-import { createSessionRows } from "../../../src/routes/session/rows"
+import { createSessionRows, reduceSessionRows } from "../../../src/routes/session/rows"
 import { createApi, createEventStream, createFetch, json, sessionSnapshot, type FetchHandler } from "../../fixture/tui-client"
+import { compactionCheckpointMessage } from "../../fixture/session-history"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 
 const sessionID = "ses_windows"
@@ -94,6 +95,28 @@ test("a resident completed compaction stops paging and prunes its covered bounda
     expect(requests).toBe(2)
     expect(await fixture.data.session.message.find(sessionID, "msg_000001")).toBe(false)
     expect(requests).toBe(2)
+  } finally { fixture.destroy() }
+})
+
+test("a checkpoint-first oldest page stops paging, hides the checkpoint row, and keeps retained rows", async () => {
+  let requests = 0
+  const checkpoint = compactionCheckpointMessage()
+  const fixture = await mount((url) => {
+    if (!url.pathname.endsWith("/snapshot")) return undefined
+    requests++
+    return url.searchParams.has("before") ? sessionSnapshot(sessionID, [checkpoint, ...users(50, 100)], { before: "beyond_checkpoint" })
+      : sessionSnapshot(sessionID, users(100, 200), { before: "retained_older" })
+  })
+  try {
+    await fixture.data.session.message.sync(sessionID)
+    expect(fixture.data.session.message.history(sessionID)).toMatchObject({ checkpoint: false, before: "retained_older" })
+    await fixture.data.session.message.loadOlder(sessionID)
+    expect(fixture.data.session.message.list(sessionID).map((message) => message.id)).toEqual([checkpoint.id, ...users(50, 200).map((message) => message.id)])
+    expect(fixture.data.session.message.history(sessionID)).toMatchObject({ checkpoint: true })
+    expect(fixture.data.session.message.history(sessionID)?.before).toBeUndefined()
+    await fixture.data.session.message.loadOlder(sessionID)
+    expect(requests).toBe(2)
+    expect(reduceSessionRows(fixture.data.session.message.list(sessionID)).map((row) => row.type === "message" ? row.messageID : undefined)).toEqual(users(50, 200).map((message) => message.id))
   } finally { fixture.destroy() }
 })
 

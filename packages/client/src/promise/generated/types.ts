@@ -3892,6 +3892,15 @@ export type MessageNotFoundError = {
 export const isMessageNotFoundError = (value: unknown): value is MessageNotFoundError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "MessageNotFoundError"
 
+export type HistoryPrunedError = {
+  readonly _tag: "HistoryPrunedError"
+  readonly sessionID: string
+  readonly messageID: string
+  readonly message: string
+}
+export const isHistoryPrunedError = (value: unknown): value is HistoryPrunedError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "HistoryPrunedError"
+
 export type ModelSwitchBlockedError = {
   readonly _tag: "ModelSwitchBlockedError"
   readonly status: "blocked"

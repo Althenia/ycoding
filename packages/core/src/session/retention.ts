@@ -13,6 +13,7 @@ import { Location } from "../location"
 import { AbsolutePath } from "../schema"
 import { SessionEvent } from "./event"
 import { SessionExecution } from "./execution"
+import { SessionHistoryPruning } from "./history-pruning"
 import { SessionProjector } from "./projector"
 import type { SessionSchema } from "./schema"
 import { SessionTable } from "./sql"
@@ -28,6 +29,7 @@ const instructionEventType = EventRuntime.versionedType(
 
 export interface Interface {
   readonly cleanup: (now?: number) => Effect.Effect<number>
+  readonly pruneHistory: () => Effect.Effect<SessionHistoryPruning.Result>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionRetention") {}
@@ -197,6 +199,7 @@ const layer = (options?: Config.Options) =>
         )
 
       return Service.of({
+        pruneHistory: SessionHistoryPruning.make(db, execution.active).sweep,
         cleanup: Effect.fn("SessionRetention.cleanup")(function* (now?: number) {
           const settings = yield* config
           const days = Config.latest(yield* settings.entries(), "session_retention")?.days ?? defaultDays
@@ -256,14 +259,24 @@ const layer = (options?: Config.Options) =>
 const sweepLayer = Layer.effectDiscard(
   Effect.gen(function* () {
     const retention = yield* Service
-    yield* retention.cleanup().pipe(
-      Effect.catchCauseIf(
-        (cause) => !Cause.hasInterrupts(cause),
-        (cause) => Effect.logError("session retention sweep failed", { cause }),
-      ),
-      Effect.repeat(Schedule.spaced(Duration.hours(1))),
-      Effect.forkScoped,
-    )
+    yield* retention
+      .cleanup()
+      .pipe(
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterrupts(cause),
+          (cause) => Effect.logError("session retention sweep failed", { cause }),
+        ),
+        Effect.andThen(
+          retention.pruneHistory().pipe(
+            Effect.catchCauseIf(
+              (cause) => !Cause.hasInterrupts(cause),
+              (cause) => Effect.logError("session history pruning sweep failed", { cause }),
+            ),
+          ),
+        ),
+        Effect.repeat(Schedule.spaced(Duration.hours(1))),
+        Effect.forkScoped,
+      )
   }),
 )
 

@@ -1,6 +1,6 @@
 export * as SessionPending from "./pending"
 
-import { and, asc, eq } from "drizzle-orm"
+import { and, asc, eq, gt, sql } from "drizzle-orm"
 import { DateTime, Effect, Schema } from "effect"
 import {
   Compaction,
@@ -35,6 +35,14 @@ const decodeAdmittedEvent = Schema.decodeUnknownOption(SessionEvent.InputAdmitte
 const admittedEventType = Event.versionedType(
   SessionEvent.InputAdmitted.type,
   SessionEvent.InputAdmitted.durable.version,
+)
+const promotedEventType = Event.versionedType(
+  SessionEvent.InputPromoted.type,
+  SessionEvent.InputPromoted.durable.version,
+)
+const revertCommittedEventType = Event.versionedType(
+  SessionEvent.RevertEvent.Committed.type,
+  SessionEvent.RevertEvent.Committed.durable.version,
 )
 const inboxLocks = KeyedMutex.makeUnsafe<SessionSchema.ID>()
 
@@ -115,9 +123,56 @@ const promotedFromHistory = Effect.fn("SessionPending.promotedFromHistory")(func
     .where(eq(SessionMessageTable.id, id))
     .get()
     .pipe(Effect.orDie)
-  if (message === undefined) return undefined
+  if (message === undefined) return yield* prunedFromHistory(db, sessionID, id)
   if (message.session_id !== sessionID || (message.type !== "user" && message.type !== "synthetic"))
     return yield* Effect.die(new LifecycleConflict({ id }))
+  const admitted = yield* admittedRecord(db, sessionID, id)
+  // A projected message without an admitted event in this aggregate (for
+  // example fork-copied history) is not a retryable admission.
+  if (!admitted) return yield* Effect.die(new LifecycleConflict({ id }))
+  return admitted
+})
+
+const prunedFromHistory = Effect.fnUntraced(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  id: SessionMessage.ID,
+) {
+  const promoted = yield* db
+    .select({ seq: EventTable.seq })
+    .from(EventTable)
+    .where(
+      and(
+        eq(EventTable.aggregate_id, sessionID),
+        eq(EventTable.type, promotedEventType),
+        sql`json_extract(${EventTable.data}, '$.inputID') = ${id}`,
+      ),
+    )
+    .get()
+    .pipe(Effect.orDie)
+  if (!promoted) return undefined
+  const reverted = yield* db
+    .select({ seq: EventTable.seq })
+    .from(EventTable)
+    .where(
+      and(
+        eq(EventTable.aggregate_id, sessionID),
+        eq(EventTable.type, revertCommittedEventType),
+        gt(EventTable.seq, promoted.seq),
+      ),
+    )
+    .limit(1)
+    .get()
+    .pipe(Effect.orDie)
+  if (reverted) return undefined
+  return yield* admittedRecord(db, sessionID, id)
+})
+
+const admittedRecord = Effect.fnUntraced(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  id: SessionMessage.ID,
+) {
   const rows = yield* db
     .select()
     .from(EventTable)
@@ -137,9 +192,7 @@ const promotedFromHistory = Effect.fn("SessionPending.promotedFromHistory")(func
       ? User.make({ ...base, ...decoded.value.input })
       : Synthetic.make({ ...base, ...decoded.value.input })
   }
-  // A projected message without an admitted event in this aggregate (for
-  // example fork-copied history) is not a retryable admission.
-  return yield* Effect.die(new LifecycleConflict({ id }))
+  return undefined
 })
 
 /**

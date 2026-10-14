@@ -18,6 +18,7 @@ import {
   ConflictError,
   CommandEvaluationError,
   CommandNotFoundError,
+  HistoryPrunedError,
   InvalidCursorError,
   InvalidRequestError,
   MessageNotFoundError,
@@ -390,7 +391,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
             identifier: "session.snapshot",
             summary: "Get a session synchronization snapshot",
             description:
-              "Atomically retrieve the canonical projected messages and exact durable event watermark for one server process epoch. Optional limit and before page backward through projected messages.",
+              "Atomically retrieve the canonical projected messages and exact durable event watermark for one server process epoch. Optional limit and before page backward through projected messages. When the session has a completed compaction checkpoint, paging stops at the checkpoint: the oldest page begins with the synthetic checkpoint message and no cursor addresses history before it.",
           }),
         ),
     )
@@ -625,7 +626,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         params: { sessionID: Session.ID },
         payload: Schema.Struct({ messageID: SessionMessage.ID.pipe(Schema.optional) }),
         success: Schema.Struct({ data: Session.Info }),
-        error: [SessionNotFoundError, MessageNotFoundError],
+        error: [SessionNotFoundError, MessageNotFoundError, HistoryPrunedError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -633,7 +634,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
             identifier: "session.fork",
             summary: "Fork session",
             description:
-              "Create a child session by copying projected history from the parent. When messageID is supplied, copy messages before that boundary.",
+              "Create a child session by copying retained history from the parent. When messageID is supplied, copy messages before that boundary. A parent with a completed compaction checkpoint contributes a copy of its checkpoint message followed by the retained messages after it; a messageID that is not in that retained history fails with HistoryPrunedError (410).",
           }),
         ),
     )
@@ -947,14 +948,15 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         params: { sessionID: Session.ID },
         payload: Schema.Struct({ messageID: SessionMessage.ID, files: Schema.Boolean.pipe(Schema.optional) }),
         success: Schema.Struct({ data: Session.Revert }),
-        error: [MessageNotFoundError, SessionNotFoundError, SessionBusyError, UnknownError],
+        error: [MessageNotFoundError, HistoryPrunedError, SessionNotFoundError, SessionBusyError, UnknownError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
           OpenApi.annotations({
             identifier: "session.revert.stage",
             summary: "Stage session revert",
-            description: "Stage or move a reversible session boundary and optionally apply its file changes.",
+            description:
+              "Stage or move a reversible session boundary and optionally apply its file changes. A messageID that is not in the retained history after the session's completed compaction checkpoint fails with HistoryPrunedError (410).",
           }),
         ),
     )

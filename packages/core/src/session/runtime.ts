@@ -5,7 +5,7 @@ import { Event } from "@ycoding-ai/schema/event"
 import type { Model } from "@ycoding-ai/schema/model"
 import { Money } from "@ycoding-ai/schema/money"
 import { ID, type Admission, type Result } from "@ycoding-ai/schema/session-compaction"
-import { and, asc, desc, eq, gt, inArray, isNull, like, lt, or, sql, type SQL } from "drizzle-orm"
+import { and, asc, desc, eq, gt, gte, inArray, isNull, like, lt, or, sql, type SQL } from "drizzle-orm"
 import { Project } from "../project"
 import { Workspace } from "../workspace"
 import { CatalogModel } from "../model"
@@ -57,6 +57,7 @@ import {
   AgentNotFoundError,
   AgentNotSelectableError,
   AttachmentReadError,
+  HistoryPrunedError,
   InvalidCursorError,
   MessageDecodeError,
   NotFoundError,
@@ -190,7 +191,7 @@ export class OperationUnavailableError extends Schema.TaggedErrorClass<Operation
   },
 ) {}
 
-export { AttachmentReadError, InvalidCursorError, MessageDecodeError, NotFoundError }
+export { AttachmentReadError, HistoryPrunedError, InvalidCursorError, MessageDecodeError, NotFoundError }
 
 export const MaxAttachmentReadBytes = 10 * 1024 * 1024
 const CompactionHistoryLimit = 100
@@ -270,6 +271,7 @@ export type Error =
   | Command.NotFoundError
   | Command.EvaluationError
   | MessageNotFoundError
+  | HistoryPrunedError
   | SessionGenerate.Error
 
 export interface Interface {
@@ -279,7 +281,9 @@ export interface Interface {
   readonly create: (
     input: CreateInput,
   ) => Effect.Effect<SessionSchema.Info, NotFoundError | AgentNotSelectableError | SessionRunnerModel.Error>
-  readonly fork: (input: ForkInput) => Effect.Effect<SessionSchema.Info, NotFoundError | MessageNotFoundError>
+  readonly fork: (
+    input: ForkInput,
+  ) => Effect.Effect<SessionSchema.Info, NotFoundError | MessageNotFoundError | HistoryPrunedError>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info, NotFoundError>
   readonly snapshot: (
     sessionID: SessionSchema.ID,
@@ -315,6 +319,7 @@ export interface Interface {
       id: SessionMessage.ID
       direction: "previous" | "next"
     }
+    retained?: boolean
   }) => Effect.Effect<SessionMessage.Info[], NotFoundError | MessageDecodeError>
   readonly message: (input: {
     sessionID: SessionSchema.ID
@@ -464,7 +469,10 @@ export interface Interface {
       sessionID: SessionSchema.ID
       messageID: SessionMessage.ID
       files?: boolean
-    }) => Effect.Effect<Session.Revert, NotFoundError | MessageNotFoundError | BusyError | Snapshot.Error>
+    }) => Effect.Effect<
+      Session.Revert,
+      NotFoundError | MessageNotFoundError | HistoryPrunedError | BusyError | Snapshot.Error
+    >
     readonly clear: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | BusyError | Snapshot.Error>
     readonly commit: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | BusyError>
   }
@@ -1287,19 +1295,10 @@ const layer = Layer.effect(
       fork: Effect.fn("Session.fork")(function* (input) {
         const parent = yield* result.get(input.sessionID)
         const boundary = input.messageID
-          ? yield* db
-              .select({ seq: SessionMessageTable.seq })
-              .from(SessionMessageTable)
-              .where(
-                and(eq(SessionMessageTable.session_id, input.sessionID), eq(SessionMessageTable.id, input.messageID)),
-              )
-              .get()
-              .pipe(Effect.orDie)
+          ? yield* SessionRevert.boundary(db, { sessionID: input.sessionID, messageID: input.messageID })
           : undefined
-        if (input.messageID && !boundary)
-          return yield* new MessageNotFoundError({ sessionID: input.sessionID, messageID: input.messageID })
         const sessionID = SessionSchema.ID.create()
-        const parentSeq = boundary ? boundary.seq - 1 : yield* EventRuntime.latestSequence(db, parent.id)
+        const parentSeq = boundary === undefined ? yield* EventRuntime.latestSequence(db, parent.id) : boundary - 1
         const binding =
           (yield* db
             .select({ binding: SessionTable.profile_binding })
@@ -1307,13 +1306,19 @@ const layer = Layer.effect(
             .where(eq(SessionTable.id, parent.id))
             .get()
             .pipe(Effect.orDie))?.binding ?? undefined
-        yield* events.publishBatch([
-          {
-            definition: SessionEvent.Forked,
-            data: { sessionID, parentID: parent.id, parentSeq, from: input.messageID },
-          },
-          ...(binding ? [{ definition: SessionEvent.ProfileBound, data: { sessionID, binding } }] : []),
-        ])
+        yield* events
+          .publishBatch([
+            {
+              definition: SessionEvent.Forked,
+              data: { sessionID, parentID: parent.id, parentSeq, from: input.messageID },
+            },
+            ...(binding ? [{ definition: SessionEvent.ProfileBound, data: { sessionID, binding } }] : []),
+          ])
+          .pipe(
+            Effect.catchDefect((defect) =>
+              defect instanceof HistoryPrunedError ? Effect.fail(defect) : Effect.die(defect),
+            ),
+          )
         return yield* result.get(sessionID).pipe(Effect.orDie)
       }),
       get: Effect.fn("Session.get")(function* (sessionID) {
@@ -1687,14 +1692,17 @@ const layer = Layer.effect(
               .pipe(Effect.orDie)
           : undefined
         if (input.cursor && !anchor) return []
+        const floor = input.retained ? yield* SessionHistory.retainedFloor(db, input.sessionID) : undefined
         const boundary = anchor
           ? order === "asc"
             ? gt(SessionMessageTable.seq, anchor.seq)
             : lt(SessionMessageTable.seq, anchor.seq)
           : undefined
-        const where = boundary
-          ? and(eq(SessionMessageTable.session_id, input.sessionID), boundary)
-          : eq(SessionMessageTable.session_id, input.sessionID)
+        const where = and(
+          eq(SessionMessageTable.session_id, input.sessionID),
+          boundary,
+          floor ? gte(SessionMessageTable.seq, floor.seq) : undefined,
+        )
         const query = db
           .select()
           .from(SessionMessageTable)
@@ -1703,7 +1711,18 @@ const layer = Layer.effect(
         const rows = yield* (input.limit === undefined ? query.all() : query.limit(input.limit).all()).pipe(
           Effect.orDie,
         )
-        return yield* Effect.forEach(direction === "previous" ? rows.toReversed() : rows, decode)
+        const messages = yield* Effect.forEach(rows, decode)
+        const head = floor?.checkpoint ? SessionHistory.checkpointMessage(floor.checkpoint).message : undefined
+        const page = !head
+          ? messages
+          : order === "asc"
+            ? anchor
+              ? messages
+              : [head, ...messages].slice(0, input.limit)
+            : input.limit === undefined || messages.length < input.limit
+              ? [...messages, head]
+              : messages
+        return direction === "previous" ? page.toReversed() : page
       }),
       message: Effect.fn("Session.message")(function* (input) {
         const stored = yield* store.message(input.messageID)

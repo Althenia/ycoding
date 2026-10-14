@@ -39,6 +39,29 @@ export const latestCompaction = Effect.fnUntraced(function* (db: DatabaseService
     .pipe(Effect.orDie)
 })
 
+export const retainedFloor = Effect.fnUntraced(function* (db: DatabaseService, sessionID: SessionSchema.ID) {
+  const legacy = yield* latestCompaction(db, sessionID)
+  const checkpoint = yield* SessionContextState.checkpoint(db, sessionID)
+  return {
+    seq: Math.max(legacy?.seq ?? 0, checkpoint ? checkpoint.coveredThrough.seq + 1 : 0),
+    ...(checkpoint ? { checkpoint } : {}),
+  }
+})
+
+export function checkpointMessage(checkpoint: SessionContextState.Checkpoint) {
+  const entry = checkpointEntry(checkpoint)
+  return {
+    seq: entry.seq,
+    message: SessionMessage.Synthetic.make({
+      ...entry.message,
+      description: "Compaction checkpoint",
+      metadata: {
+        compactionCheckpoint: { manifestDigest: checkpoint.manifestDigest, through: checkpoint.coveredThrough.seq },
+      },
+    }),
+  }
+}
+
 const messageRows = Effect.fnUntraced(function* (
   db: DatabaseService,
   sessionID: SessionSchema.ID,
@@ -97,7 +120,7 @@ export const load = Effect.fn("SessionHistory.load")(function* (db: DatabaseServ
 
 export function latest<T extends SessionMessage.Type>(db: DatabaseService, sessionID: SessionSchema.ID, type: T) {
   return Effect.gen(function* () {
-    const compaction = yield* latestCompaction(db, sessionID)
+    const floor = yield* retainedFloor(db, sessionID)
     const row = yield* db
       .select()
       .from(SessionMessageTable)
@@ -105,7 +128,7 @@ export function latest<T extends SessionMessage.Type>(db: DatabaseService, sessi
         and(
           eq(SessionMessageTable.session_id, sessionID),
           eq(SessionMessageTable.type, type),
-          compaction ? gte(SessionMessageTable.seq, compaction.seq) : undefined,
+          gte(SessionMessageTable.seq, floor.seq),
         ),
       )
       .orderBy(desc(SessionMessageTable.seq))
@@ -123,16 +146,11 @@ export const recent = Effect.fn("SessionHistory.recent")(function* (
   sessionID: SessionSchema.ID,
   limit: number,
 ) {
-  const compaction = yield* latestCompaction(db, sessionID)
+  const floor = yield* retainedFloor(db, sessionID)
   const rows = yield* db
     .select()
     .from(SessionMessageTable)
-    .where(
-      and(
-        eq(SessionMessageTable.session_id, sessionID),
-        compaction ? gte(SessionMessageTable.seq, compaction.seq) : undefined,
-      ),
-    )
+    .where(and(eq(SessionMessageTable.session_id, sessionID), gte(SessionMessageTable.seq, floor.seq)))
     .orderBy(desc(SessionMessageTable.seq))
     .limit(limit)
     .all()
@@ -144,7 +162,7 @@ export const unsettledToolMessages = Effect.fn("SessionHistory.unsettledToolMess
   db: DatabaseService,
   sessionID: SessionSchema.ID,
 ) {
-  const compaction = yield* latestCompaction(db, sessionID)
+  const floor = yield* retainedFloor(db, sessionID)
   const rows = yield* db
     .select()
     .from(SessionMessageTable)
@@ -152,7 +170,7 @@ export const unsettledToolMessages = Effect.fn("SessionHistory.unsettledToolMess
       and(
         eq(SessionMessageTable.session_id, sessionID),
         eq(SessionMessageTable.type, "assistant"),
-        compaction ? gte(SessionMessageTable.seq, compaction.seq) : undefined,
+        gte(SessionMessageTable.seq, floor.seq),
         sql`exists (select 1 from json_each(${SessionMessageTable.data}, '$.content') as part
           where json_extract(part.value, '$.type') = 'tool'
             and json_extract(part.value, '$.state.status') in ('streaming', 'running'))`,
@@ -199,10 +217,10 @@ export const snapshotWindow = Effect.fn("SessionHistory.snapshotWindow")(functio
   limit: number,
   before?: number,
 ) {
-  const compaction = yield* latestCompaction(db, sessionID)
+  const floor = yield* retainedFloor(db, sessionID)
   const where = and(
     eq(SessionMessageTable.session_id, sessionID),
-    compaction ? gte(SessionMessageTable.seq, compaction.seq) : undefined,
+    gte(SessionMessageTable.seq, floor.seq),
     before === undefined ? undefined : lt(SessionMessageTable.seq, before),
   )
   const next = db
@@ -225,8 +243,10 @@ export const snapshotWindow = Effect.fn("SessionHistory.snapshotWindow")(functio
   )
   const oldest = decoded[0]?.seq
   const hasMore = Boolean(rows[0]?.hasMore)
-  const notices = (yield* InstructionState.transcriptNotices(db, sessionID)).filter((notice) => {
-    if (compaction && notice.seq < compaction.seq) return false
+  const notices = [
+    ...(floor.checkpoint ? [checkpointMessage(floor.checkpoint)] : []),
+    ...(yield* InstructionState.transcriptNotices(db, sessionID)).filter((notice) => notice.seq >= floor.seq),
+  ].filter((notice) => {
     if (before !== undefined && notice.seq >= before) return false
     if (oldest === undefined) return true
     if (notice.seq < oldest) return !hasMore
@@ -244,11 +264,14 @@ export const transcript = Effect.fn("SessionHistory.transcript")(function* (
   db: DatabaseService,
   sessionID: SessionSchema.ID,
 ) {
-  const compaction = yield* latestCompaction(db, sessionID)
-  const entries = yield* messageEntries(db, sessionID)
-  const notices = (yield* InstructionState.transcriptNotices(db, sessionID)).filter(
-    (notice) => compaction === undefined || notice.seq >= compaction.seq,
+  const floor = yield* retainedFloor(db, sessionID)
+  const entries = yield* Effect.forEach(yield* messageRows(db, sessionID, floor), (row) =>
+    decodeMessageRow(row).pipe(Effect.map((message) => ({ seq: row.seq, message }))),
   )
+  const notices = [
+    ...(floor.checkpoint ? [checkpointMessage(floor.checkpoint)] : []),
+    ...(yield* InstructionState.transcriptNotices(db, sessionID)).filter((notice) => notice.seq >= floor.seq),
+  ]
   return mergeTranscript(entries, notices)
 })
 
@@ -579,6 +602,21 @@ export const firstUserMessageIfOnly = Effect.fn("SessionHistory.firstUserMessage
   db: DatabaseService,
   sessionID: SessionSchema.ID,
 ) {
+  if (yield* SessionContextState.checkpoint(db, sessionID)) return undefined
+  const copiedCheckpoint = yield* db
+    .select({ id: SessionMessageTable.id })
+    .from(SessionMessageTable)
+    .where(
+      and(
+        eq(SessionMessageTable.session_id, sessionID),
+        eq(SessionMessageTable.type, "synthetic"),
+        sql`json_type(${SessionMessageTable.data}, '$.metadata.compactionCheckpoint') = 'object'`,
+      ),
+    )
+    .limit(1)
+    .get()
+    .pipe(Effect.orDie)
+  if (copiedCheckpoint) return undefined
   const rows = yield* db
     .select()
     .from(SessionMessageTable)

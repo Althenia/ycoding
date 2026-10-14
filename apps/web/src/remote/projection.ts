@@ -474,6 +474,7 @@ export function transcriptPartVisible(part: AssistantPart): boolean {
 
 export function transcriptMessageVisible(message: RemoteMessageView): boolean {
   if ((message.kind === "system" || message.kind === "synthetic") && (message.source === "session-state" || message.source === "team-view")) return false
+  if (isCheckpointSummary(message)) return false
   if (message.kind === "synthetic") return Boolean(message.description?.trim())
   if (message.kind === "compaction") return message.status === "running" || message.status === "completed" || message.status === "failed" && (message.failureCode === "cancelled" || message.failureCode === "superseded" || message.jobID === undefined && message.failureCode === "aborted")
   if (message.kind === "assistant") return message.parts.some(transcriptPartVisible) || message.completed !== undefined || message.error !== undefined || message.retry !== undefined
@@ -1493,7 +1494,11 @@ export function visibleTranscript(messages: readonly RemoteMessageView[]): reado
 }
 
 export function hasCompactionCheckpoint(messages: readonly RemoteMessageView[]): boolean {
-  return messages.some((message) => message.kind === "compaction" && message.status === "completed" && !!message.boundaryMessageID)
+  return messages.some((message) => message.kind === "compaction" && message.status === "completed" && !!message.boundaryMessageID || isCheckpointSummary(message))
+}
+
+function isCheckpointSummary(message: RemoteMessageView) {
+  return message.kind === "synthetic" && message.metadata?.compactionCheckpoint !== undefined
 }
 
 function pushMessage(view: SessionView, message: RemoteMessageView): SessionView {

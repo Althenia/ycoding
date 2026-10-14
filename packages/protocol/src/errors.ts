@@ -100,6 +100,16 @@ export class MessageNotFoundError extends Schema.TaggedErrorClass<MessageNotFoun
   { httpApiStatus: 404 },
 ) {}
 
+export class HistoryPrunedError extends Schema.TaggedErrorClass<HistoryPrunedError>()(
+  "HistoryPrunedError",
+  {
+    sessionID: Schema.String,
+    messageID: Schema.String,
+    message: Schema.String,
+  },
+  { httpApiStatus: 410 },
+) {}
+
 export class SkillNotFoundError extends Schema.TaggedErrorClass<SkillNotFoundError>()(
   "SkillNotFoundError",
   {

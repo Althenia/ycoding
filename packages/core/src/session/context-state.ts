@@ -1,7 +1,7 @@
 export * as SessionContextState from "./context-state"
 
 import { SessionCompaction } from "@ycoding-ai/schema/session-compaction"
-import { and, eq, lte } from "drizzle-orm"
+import { and, desc, eq, lte } from "drizzle-orm"
 import { Cause, Context, Data, Effect, Layer, Option, Schema } from "effect"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
@@ -239,6 +239,31 @@ export function selectEntries<Entry extends { readonly seq?: number; readonly me
     }
   })
 }
+
+export type Checkpoint = ModelSummary & { readonly timeEnded: number }
+
+export const checkpoint = Effect.fnUntraced(function* (db: DatabaseService, sessionID: SessionSchema.ID) {
+  const state = yield* findCurrent(db, sessionID)
+  if (!state || state.status !== "active") return undefined
+  const summary = yield* modelSummary(db, state)
+  if (!summary) return undefined
+  const job = yield* db
+    .select({ timeEnded: SessionCompactionJobTable.time_ended })
+    .from(SessionCompactionJobTable)
+    .where(
+      and(
+        eq(SessionCompactionJobTable.session_id, sessionID),
+        eq(SessionCompactionJobTable.status, "ended"),
+        eq(SessionCompactionJobTable.manifest_digest, summary.manifestDigest),
+      ),
+    )
+    .orderBy(desc(SessionCompactionJobTable.time_ended))
+    .limit(1)
+    .get()
+    .pipe(Effect.orDie)
+  if (!job || job.timeEnded === null) return undefined
+  return { ...summary, timeEnded: job.timeEnded } satisfies Checkpoint
+})
 
 export function filterEntries<Entry extends { readonly seq?: number; readonly message: SessionMessage.Info }>(
   db: DatabaseService,

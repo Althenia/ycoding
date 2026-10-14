@@ -23,7 +23,8 @@ export const MessageGroup = HttpApiGroup.make("server.message")
       OpenApi.annotations({
         identifier: "message.list",
         summary: "Get session messages",
-        description: "Retrieve every current projected message for a session in canonical ascending order.",
+        description:
+          "Retrieve every retained projected message for a session in canonical ascending order. When the session has a completed compaction checkpoint, the first message is a synthetic checkpoint message (description `Compaction checkpoint`, metadata `compactionCheckpoint: { manifestDigest, through }`) carrying the checkpoint summary, followed only by messages after the checkpoint boundary.",
       }),
     ),
   )

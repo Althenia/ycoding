@@ -96,7 +96,7 @@ for (const data of [messages, []]) {
       Effect.gen(function* () {
         const context = yield* Layer.build(
           application((input) => {
-            expect(input).toEqual({ sessionID, order: "asc" })
+            expect(input).toEqual({ sessionID, order: "asc", retained: true })
             return Effect.succeed(data)
           }),
         )

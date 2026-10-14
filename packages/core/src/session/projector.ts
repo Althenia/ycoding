@@ -33,6 +33,8 @@ import { EventTable } from "../event/sql"
 import { Money } from "@ycoding-ai/schema/money"
 import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
 import { SessionContextState } from "./context-state"
+import { HistoryPrunedError } from "./error"
+import { SessionHistory } from "./history"
 
 type DatabaseService = Database.Interface["db"]
 type CurrentDurableEvent = Extract<SessionEvent.Event, { readonly durable: object }>
@@ -155,6 +157,9 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
         .get()
         .pipe(Effect.orDie)
     : undefined
+  const checkpoint = yield* SessionContextState.checkpoint(db, event.data.parentID)
+  if (event.data.from && checkpoint && (!boundary || boundary.seq <= checkpoint.coveredThrough.seq))
+    return yield* Effect.die(new HistoryPrunedError({ sessionID: event.data.parentID, messageID: event.data.from }))
   if (event.data.from && !boundary)
     return yield* Effect.die(new Error(`Fork boundary message not found: ${event.data.from}`))
   const copied = yield* db
@@ -203,7 +208,24 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
     .pipe(Effect.orDie)
   if (!stored) return yield* Effect.die(new SessionAlreadyProjected())
 
-  let cursor = -1
+  if (checkpoint) {
+    const { id: _, type, ...data } = encodeMessage(SessionHistory.checkpointMessage(checkpoint).message)
+    yield* db
+      .insert(SessionMessageTable)
+      .values({
+        id: SessionMessage.ID.create(),
+        session_id: event.data.sessionID,
+        type,
+        seq: checkpoint.coveredThrough.seq,
+        time_created: checkpoint.timeActivated,
+        time_updated: checkpoint.timeActivated,
+        data,
+      })
+      .run()
+      .pipe(Effect.orDie)
+  }
+
+  let cursor = checkpoint?.coveredThrough.seq ?? -1
   while (copiedSeq !== undefined) {
     const rows = yield* db
       .select()

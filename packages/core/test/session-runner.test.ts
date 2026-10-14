@@ -60,6 +60,9 @@ import { ProviderRequestObserver } from "@ycoding-ai/core/session/provider-reque
 import { Money } from "@ycoding-ai/schema/money"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
+import { SessionContext } from "@ycoding-ai/core/session/context"
+import { SessionHistoryPruning } from "@ycoding-ai/core/session/history-pruning"
+import { SessionModelRequest } from "@ycoding-ai/core/session/model-request"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import type { LocationServices } from "@ycoding-ai/core/location-services"
 import { Job } from "@ycoding-ai/core/job"
@@ -879,6 +882,8 @@ const it = testEffect(
       SessionExecution.node,
       Session.node,
       AttachmentStore.node,
+      SessionContext.node,
+      SessionModelRequest.node,
     ]),
     [
       [LayerNodePlatform.llmClient, client],
@@ -1509,6 +1514,75 @@ describe("SessionRunnerLLM", () => {
       ).toEqual([Skill.ID.make("compacted-audit")])
       expect(JSON.stringify(requests.at(-1)!.messages)).toContain("Compacted audit full instructions")
       expect(JSON.stringify(requests.at(-1)!.messages)).not.toContain("Other audit instructions")
+    }),
+  )
+
+  const compactedConversation = (session: Session.Interface) =>
+    Effect.gen(function* () {
+      responses = [
+        reply.text("First answer", "text-first"),
+        reply.text("Second answer", "text-second"),
+        reply.text("Third answer", "text-third"),
+      ]
+      yield* admit(session, "First user request")
+      yield* session.resume(sessionID)
+      yield* admit(session, "Second user request")
+      yield* session.resume(sessionID)
+      compactionSummary = true
+      yield* session.compact({ sessionID })
+    })
+
+  it.effect("prunes compacted history without changing the next provider request", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const { db } = yield* Database.Service
+      yield* compactedConversation(session)
+      const context = yield* SessionContext.Service
+      const modelRequests = yield* SessionModelRequest.Service
+      const nextRequest = Effect.gen(function* () {
+        const loaded = yield* context.load(yield* context.select(sessionID))
+        return JSON.stringify((yield* modelRequests.prepare({ context: loaded, step: 1 })).request)
+      })
+      const unpruned = yield* nextRequest
+      expect(unpruned).toContain("conversation-checkpoint")
+      expect(unpruned).not.toContain("First answer")
+
+      const pruned = yield* SessionHistoryPruning.make(db, Effect.succeed(new Set())).prune(sessionID)
+      expect(pruned.messages).toBeGreaterThan(0)
+      expect(yield* nextRequest).toBe(unpruned)
+
+      yield* admit(session, "Third user request")
+      yield* session.resume(sessionID)
+      const sent = JSON.stringify(requests.at(-1)!.messages)
+      expect(sent).toContain("conversation-checkpoint")
+      expect(sent).toContain("Third user request")
+      expect(sent).not.toContain("First answer")
+      expect(yield* recordedEventTypes(sessionID)).not.toContain("session.execution.failed.1")
+    }),
+  )
+
+  it.effect("skips a running session and prunes it after the run settles without failing execution", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const { db } = yield* Database.Service
+      const execution = yield* SessionExecution.Service
+      yield* compactedConversation(session)
+      const pruning = SessionHistoryPruning.make(db, execution.active)
+      yield* admit(session, "Third user request")
+      streamGate = yield* Deferred.make<void>()
+      streamStarted = yield* Deferred.make<void>()
+      const running = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(streamStarted)
+      expect(yield* pruning.prune(sessionID)).toEqual({ messages: 0, events: 0 })
+      yield* Deferred.succeed(streamGate, undefined)
+      yield* Fiber.join(running)
+      expect((yield* pruning.prune(sessionID)).messages).toBeGreaterThan(0)
+      expect(yield* recordedEventTypes(sessionID)).not.toContain("session.execution.failed.1")
+      expect(JSON.stringify(requests.at(-1)!.messages)).toContain("Third user request")
+      expect((yield* session.messages({ sessionID, order: "desc", limit: 1 }))[0]).toMatchObject({
+        type: "assistant",
+        content: [{ type: "text", text: "Third answer" }],
+      })
     }),
   )
 

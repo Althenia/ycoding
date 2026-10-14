@@ -3,6 +3,7 @@ import { createEffect, on, onCleanup, type Accessor } from "solid-js"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { useData } from "../../context/data"
 import { useClient } from "../../context/client"
+import { isCompactionCheckpoint } from "../../util/session"
 
 export type PartRef = {
   messageID: string
@@ -328,7 +329,9 @@ export function createSessionRows(sessionID: Accessor<string>) {
 
 export function reduceSessionRows(messages: SessionMessageInfo[], inputs = new Set<string>(), idle = false) {
   const transcript = messages.filter(
-    (message) => !(message.type === "synthetic" && message.metadata?.decisionInputID !== undefined),
+    (message) =>
+      !(message.type === "synthetic" && message.metadata?.decisionInputID !== undefined) &&
+      !isCompactionCheckpoint(message),
   )
   const isInput = (message: SessionMessageInfo) => inputs.has(message.id)
   // An idle Session has stopped replying, so its last assistant message is terminal even when that

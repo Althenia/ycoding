@@ -43,6 +43,7 @@ import { useClient } from "./client"
 import { batch, createEffect, createSignal, onCleanup, untrack } from "solid-js"
 import { createPromptSubmissions } from "../prompt/submission"
 import { errorMessage } from "../util/error"
+import { isCompactionCheckpoint } from "../util/session"
 
 export type DataSessionHistory = {
   status: "loading" | "paging" | "ready" | "error"
@@ -725,7 +726,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       olderMessageIDs.get(sessionID)?.forEach((id) => {
         if (!residentIDs.has(id)) olderMessageIDs.get(sessionID)?.delete(id)
       })
-      const checkpoint = resident.some((message) => message.type === "compaction" && message.status === "completed")
+      const checkpoint = resident.some(
+        (message) => isCompactionCheckpoint(message) || (message.type === "compaction" && message.status === "completed"),
+      )
       if (checkpoint && store.session.history[sessionID]) setStore("session", "history", sessionID, { before: undefined, checkpoint: true })
       return resident
     }

@@ -6,6 +6,8 @@ import { Database } from "../database/database"
 import { EventRuntime } from "../event"
 import { RelativePath } from "../schema"
 import { Snapshot } from "../snapshot"
+import { SessionContextState } from "./context-state"
+import { HistoryPrunedError } from "./error"
 import { SessionEvent } from "./event"
 import { SessionMessage } from "./message"
 import { SessionSchema } from "./schema"
@@ -24,15 +26,26 @@ interface BoundaryInput {
   readonly messageID: SessionMessage.ID
 }
 
-const plan = Effect.fn("SessionRevert.plan")(function* (input: BoundaryInput) {
-  const db = (yield* Database.Service).db
-  const boundary = yield* db
-    .select({ seq: SessionMessageTable.seq })
+export const boundary = Effect.fn("SessionRevert.boundary")(function* (
+  db: Database.Interface["db"],
+  input: BoundaryInput,
+) {
+  const row = yield* db
+    .select({ sessionID: SessionMessageTable.session_id, seq: SessionMessageTable.seq })
     .from(SessionMessageTable)
-    .where(and(eq(SessionMessageTable.session_id, input.sessionID), eq(SessionMessageTable.id, input.messageID)))
+    .where(eq(SessionMessageTable.id, input.messageID))
     .get()
     .pipe(Effect.orDie)
-  if (!boundary) return yield* new MessageNotFoundError(input)
+  if (row && row.sessionID !== input.sessionID) return yield* new MessageNotFoundError(input)
+  const checkpoint = yield* SessionContextState.checkpoint(db, input.sessionID)
+  if (checkpoint && (!row || row.seq <= checkpoint.coveredThrough.seq)) return yield* new HistoryPrunedError(input)
+  if (!row) return yield* new MessageNotFoundError(input)
+  return row.seq
+})
+
+const plan = Effect.fn("SessionRevert.plan")(function* (input: BoundaryInput) {
+  const db = (yield* Database.Service).db
+  const seq = yield* boundary(db, input)
   const rows = yield* db
     .select()
     .from(SessionMessageTable)
@@ -40,7 +53,7 @@ const plan = Effect.fn("SessionRevert.plan")(function* (input: BoundaryInput) {
       and(
         eq(SessionMessageTable.session_id, input.sessionID),
         eq(SessionMessageTable.type, "assistant"),
-        gt(SessionMessageTable.seq, boundary.seq),
+        gt(SessionMessageTable.seq, seq),
       ),
     )
     .orderBy(asc(SessionMessageTable.seq))
