@@ -10,6 +10,1069 @@ use ycoding_store::{
     TableSpec, tuple_key,
 };
 
+mod store_flow_support;
+
+#[test]
+fn test_001_006_063_baseline_checkpoint_to_client_history_and_escaped_export() {
+    use std::ops::ControlFlow;
+    use ycoding_schema::{DomainEncode, JsonValue, parse_json, stringify_json};
+    use ycoding_store::{import, session};
+
+    let baseline = store_flow_support::Baseline::produce();
+    let source = baseline.core();
+    let original = std::fs::read(&source).unwrap();
+    let candidate = baseline.0.join("core.candidate.redb");
+    let request = || import::Request {
+        source: &source,
+        candidate: &candidate,
+        kind: import::DatabaseKind::Core,
+        metadata: metadata(),
+    };
+    assert!(matches!(
+        import::stage(request(), |phase| {
+            if phase == import::Progress::Loaded("credential") {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        }),
+        Err(import::Error::Cancelled)
+    ));
+    assert!(import::sealed(&candidate, import::DatabaseKind::Core).is_err());
+    assert_eq!(import::resume_metadata(&candidate).unwrap(), metadata());
+    let report = import::stage(request(), |_| ControlFlow::Continue(())).unwrap();
+    assert_eq!(report.tables.len(), 49);
+    assert_eq!(
+        import::sealed(&candidate, import::DatabaseKind::Core)
+            .unwrap()
+            .1,
+        report
+    );
+    assert_eq!(std::fs::read(&source).unwrap(), original);
+    let active = baseline.0.join("core.active.redb");
+    std::fs::hard_link(&candidate, &active).unwrap();
+    let store = Store::open(
+        &active,
+        Options::core(),
+        import::catalog(import::DatabaseKind::Core),
+    )
+    .unwrap();
+    assert!(
+        Store::open(
+            &active,
+            Options::core(),
+            import::catalog(import::DatabaseKind::Core)
+        )
+        .is_err()
+    );
+    let client = store.client();
+    let snapshot = client.snapshot().unwrap();
+    let expected = store_flow_support::logical_tables(&baseline.expected("core"));
+    let exported = store_flow_support::core_export(&snapshot);
+    assert_eq!(store_flow_support::logical_tables(&exported), expected);
+    let escaped = stringify_json(&exported);
+    assert!(escaped.contains("\\ud800"));
+    assert!(escaped.contains("\\udc00"));
+    assert_eq!(
+        store_flow_support::logical_tables(&parse_json(&escaped).unwrap()),
+        expected
+    );
+    let history = session::messages(
+        &snapshot,
+        &"ses_baseline_root".into(),
+        Bound::Unbounded,
+        Bound::Unbounded,
+        ycoding_store::IndexOrder::Ascending,
+        None,
+        10_000,
+    )
+    .unwrap();
+    assert!(!history.is_empty());
+    let projected = snapshot
+        .scan::<session::MessageTable>(Bound::Unbounded, Bound::Unbounded, 10_000)
+        .unwrap();
+    for message in history {
+        let original = projected
+            .iter()
+            .find(|row| row.id == message.record.id)
+            .unwrap();
+        assert_eq!(message.record, *original);
+        let info = message.record.info().unwrap().encode();
+        let JsonValue::Object(info) = info else {
+            panic!("logical history must be an object")
+        };
+        assert_eq!(
+            info.get(&"id".into()),
+            Some(&JsonValue::String(original.id.clone()))
+        );
+        if let JsonValue::Object(data) = &original.data
+            && let Some(metadata) = data.get(&"metadata".into())
+        {
+            assert_eq!(info.get(&"metadata".into()), Some(metadata));
+        }
+    }
+    drop(snapshot);
+    store.shutdown().unwrap();
+    let reopened = Store::open(
+        &active,
+        Options::core(),
+        import::catalog(import::DatabaseKind::Core),
+    )
+    .unwrap();
+    assert_eq!(
+        store_flow_support::logical_tables(&store_flow_support::core_export(
+            &reopened.client().snapshot().unwrap()
+        )),
+        expected
+    );
+    reopened.shutdown().unwrap();
+    assert_eq!(std::fs::read(source).unwrap(), original);
+    let source = baseline.0.join("meeting/meetings.sqlite");
+    let original = std::fs::read(&source).unwrap();
+    let candidate = baseline.0.join("meeting.candidate.redb");
+    let report = import::stage(
+        import::Request {
+            source: &source,
+            candidate: &candidate,
+            kind: import::DatabaseKind::Meeting,
+            metadata: Metadata::new([8; 16], 1),
+        },
+        |_| ControlFlow::Continue(()),
+    )
+    .unwrap();
+    assert_eq!(report.tables.len(), 9);
+    assert_eq!(
+        import::sealed(&candidate, import::DatabaseKind::Meeting)
+            .unwrap()
+            .1,
+        report
+    );
+    let meeting = Store::open(
+        &candidate,
+        Options::meeting(),
+        import::catalog(import::DatabaseKind::Meeting),
+    )
+    .unwrap();
+    let expected = store_flow_support::logical_tables(&baseline.expected("meeting"));
+    let export = store_flow_support::meeting_export(&meeting.client().snapshot().unwrap());
+    assert_eq!(store_flow_support::logical_tables(&export), expected);
+    assert_eq!(
+        store_flow_support::logical_tables(&parse_json(&stringify_json(&export)).unwrap()),
+        expected
+    );
+    assert!(matches!(
+        meeting
+            .client()
+            .snapshot()
+            .unwrap()
+            .scan::<session::MessageTable>(Bound::Unbounded, Bound::Unbounded, 1),
+        Err(Error::UnregisteredTable("session_message"))
+    ));
+    meeting.shutdown().unwrap();
+    assert_eq!(std::fs::read(source).unwrap(), original);
+    let source = baseline.0.join("stale.sqlite");
+    std::fs::write(&source, std::fs::read(baseline.core()).unwrap()).unwrap();
+    let candidate = baseline.0.join("stale.candidate.redb");
+    let request = || import::Request {
+        source: &source,
+        candidate: &candidate,
+        kind: import::DatabaseKind::Core,
+        metadata: metadata(),
+    };
+    assert!(matches!(
+        import::stage(request(), |phase| {
+            if phase == import::Progress::Loaded("credential") {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        }),
+        Err(import::Error::Cancelled)
+    ));
+    let before = std::fs::read(&candidate).unwrap();
+    rusqlite::Connection::open(&source)
+        .unwrap()
+        .execute(
+            "UPDATE credential SET label='Changed synthetic profile'",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        import::stage(request(), |_| ControlFlow::Continue(())),
+        Err(import::Error::SourceChanged)
+    ));
+    assert!(import::sealed(&candidate, import::DatabaseKind::Core).is_err());
+    assert_eq!(std::fs::read(candidate).unwrap(), before);
+    let JsonValue::Object(provenance) =
+        parse_json(&std::fs::read_to_string(baseline.0.join("provenance.json")).unwrap()).unwrap()
+    else {
+        panic!("expected provenance object")
+    };
+    let Some(JsonValue::Array(files)) = provenance.get(&"files".into()) else {
+        panic!("expected provenance files")
+    };
+    for file in files {
+        let JsonValue::Object(file) = file else {
+            panic!("expected provenance file")
+        };
+        let Some(JsonValue::String(name)) = file.get(&"file".into()) else {
+            panic!("expected relative file name")
+        };
+        let (digest, bytes) =
+            import::file_fingerprint(&baseline.0.join(name.as_str().unwrap())).unwrap();
+        assert_eq!(
+            file.get(&"sha256".into()),
+            Some(&JsonValue::String(digest.into()))
+        );
+        assert_eq!(
+            file.get(&"bytes".into()),
+            Some(&JsonValue::Number(bytes as f64))
+        );
+    }
+}
+
+#[test]
+fn test_003_replay_sequence_partitions_preserve_file_backed_canonical_events() {
+    use ycoding_store::session;
+    let root = Root::new();
+    let store =
+        Store::initialize(root.file(), Options::core(), flow_catalog(), metadata()).unwrap();
+    store.submit(flow_seed).unwrap().wait().unwrap();
+    let canonical = store
+        .snapshot()
+        .unwrap()
+        .scan::<session::EventTable>(Bound::Unbounded, Bound::Unbounded, 10)
+        .unwrap();
+    for _ in 0..3 {
+        assert!(matches!(
+            store
+                .submit(|tx| session::append(
+                    tx,
+                    &flow_event("admitted", "session.input.admitted.1"),
+                    Some(&session::Replay {
+                        seq: 0,
+                        owner_id: None,
+                        strict_owner: true,
+                    })
+                ))
+                .unwrap()
+                .wait()
+                .unwrap(),
+            session::Append::Replayed(_)
+        ));
+        assert_eq!(
+            store
+                .snapshot()
+                .unwrap()
+                .scan::<session::EventTable>(Bound::Unbounded, Bound::Unbounded, 10)
+                .unwrap(),
+            canonical
+        );
+    }
+    for (id, seq, kind) in [
+        ("duplicate", 0, "replay_diverged"),
+        ("out-of-order", -1, "replay_diverged"),
+        ("gap", 2, "sequence_mismatch"),
+    ] {
+        let result = store
+            .submit(move |tx| {
+                session::append(
+                    tx,
+                    &flow_event(id, "session.input.admitted.1"),
+                    Some(&session::Replay {
+                        seq,
+                        owner_id: None,
+                        strict_owner: true,
+                    }),
+                )
+            })
+            .unwrap()
+            .wait();
+        assert!(matches!(result, Err(Error::Domain { kind: actual, .. }) if actual == kind));
+        assert_eq!(
+            store
+                .snapshot()
+                .unwrap()
+                .scan::<session::EventTable>(Bound::Unbounded, Bound::Unbounded, 10)
+                .unwrap(),
+            canonical
+        );
+        flow_state(&store.snapshot().unwrap(), false);
+    }
+    store.shutdown().unwrap();
+    let store = Store::open(root.file(), Options::core(), flow_catalog()).unwrap();
+    assert_eq!(
+        store
+            .client()
+            .snapshot()
+            .unwrap()
+            .scan::<session::EventTable>(Bound::Unbounded, Bound::Unbounded, 10)
+            .unwrap(),
+        canonical
+    );
+    store.shutdown().unwrap();
+}
+
+#[test]
+fn test_065_coupled_domain_commit_at_65536_work_units_is_atomic() {
+    use ycoding_store::{analytics, session};
+    for delta in [-1_isize, 0, 1] {
+        let root = Root::new();
+        let store =
+            Store::initialize(root.file(), Options::core(), flow_catalog(), metadata()).unwrap();
+        store.submit(flow_seed).unwrap().wait().unwrap();
+        let result = store
+            .submit(move |tx| {
+                tx.put::<session::EventTable>(&session::Event {
+                    id: "promoted".into(),
+                    aggregate_id: "s".into(),
+                    seq: 1,
+                    created: 1,
+                    type_: "session.input.promoted.1".into(),
+                    data: flow_input().data,
+                })?;
+                tx.put::<session::SequenceTable>(&session::Sequence {
+                    aggregate_id: "s".into(),
+                    seq: 1,
+                    owner_id: None,
+                })?;
+                tx.put::<session::MessageTable>(&flow_message())?;
+                tx.delete::<session::PendingTable>(&tuple_key(&[KeyPart::String(
+                    &"msg_flow".into(),
+                )]))?;
+                tx.put::<session::SessionTable>(&session::Session {
+                    revert: Some(session::Document::new(
+                        ycoding_schema::parse_json(r#"{"messageID":"msg_flow"}"#).unwrap(),
+                    )?),
+                    ..flow_session()
+                })?;
+                let intent = analytics::Intent {
+                    source: "session".into(),
+                    identity: tuple_key(&[KeyPart::String(&"s".into())]),
+                    generation: 1,
+                    order: 1,
+                    delete: false,
+                };
+                let bytes = analytics::IntentTable::primary_key(&intent).len()
+                    + analytics::IntentTable::encode(&intent)?.len();
+                tx.put::<analytics::IntentTable>(&intent)?;
+                tx.put::<analytics::DeliveryTable>(&analytics::Delivery {
+                    identity: metadata().database_identity,
+                    source_generation: 1,
+                    generation: 1,
+                    order: 1,
+                    applied: 0,
+                    valid: true,
+                    rebuilding: false,
+                    intents: 1,
+                    bytes,
+                    privacy: 0,
+                    purges: vec![],
+                    purge_all: false,
+                })?;
+                for _ in 0..(65_536_usize - 7).checked_add_signed(delta).unwrap() {
+                    tx.get::<session::PendingTable>(&tuple_key(&[KeyPart::String(
+                        &"absent".into(),
+                    )]))?;
+                }
+                Ok(())
+            })
+            .unwrap()
+            .wait();
+        if delta > 0 {
+            assert!(matches!(
+                result,
+                Err(Error::Domain {
+                    kind: "transaction_work_limit",
+                    ..
+                })
+            ));
+        } else {
+            result.unwrap();
+        }
+        flow_state(&store.client().snapshot().unwrap(), delta <= 0);
+        assert!(!store.is_fenced());
+        store.shutdown().unwrap();
+        let store = Store::open(root.file(), Options::core(), flow_catalog()).unwrap();
+        flow_state(&store.client().snapshot().unwrap(), delta <= 0);
+        store.shutdown().unwrap();
+    }
+}
+
+fn flow_catalog() -> Catalog {
+    ycoding_store::import::catalog(ycoding_store::import::DatabaseKind::Core)
+}
+
+fn flow_session() -> ycoding_store::session::Session {
+    ycoding_store::session::Session {
+        id: "s".into(),
+        project_id: "p".into(),
+        workspace_id: None,
+        parent_id: None,
+        fork_session_id: None,
+        fork_message_id: None,
+        fork_seq: None,
+        directory: "/synthetic".into(),
+        path: None,
+        title: "Storage acceptance".into(),
+        cost: 0.0,
+        tokens_input: 0,
+        tokens_output: 0,
+        tokens_reasoning: 0,
+        tokens_cache_read: 0,
+        tokens_cache_write: 0,
+        revert: None,
+        permission: None,
+        autonomy: None,
+        autonomy_revision: 0,
+        orchestration_revision: 0,
+        agent: None,
+        model: None,
+        profile_binding: None,
+        daybreak: None,
+        time_created: 0,
+        time_updated: 0,
+        time_archived: None,
+        time_active: None,
+        time_pinned: None,
+        time_suspended: None,
+    }
+}
+
+fn flow_event(id: &str, kind: &str) -> ycoding_store::session::NewEvent {
+    ycoding_store::session::NewEvent {
+        id: id.into(),
+        aggregate_id: "s".into(),
+        created: 1,
+        type_: kind.into(),
+        data: ycoding_schema::parse_json(r#"{"text":"original","metadata":{"\ud800":"\udc00"}}"#)
+            .unwrap(),
+    }
+}
+
+fn flow_input() -> ycoding_store::session::Pending {
+    ycoding_store::session::Pending {
+        id: "msg_flow".into(),
+        session_id: "s".into(),
+        type_: "synthetic".into(),
+        data: flow_event("unused", "unused").data,
+        delivery: Some("steer".into()),
+        admitted_seq: 0,
+        time_created: 0,
+    }
+}
+
+fn flow_message() -> ycoding_store::session::Message {
+    ycoding_store::session::Message {
+        id: "msg_flow".into(),
+        session_id: "s".into(),
+        type_: "synthetic".into(),
+        seq: 1,
+        time_created: 1,
+        time_updated: 1,
+        data: flow_input().data,
+    }
+}
+
+fn flow_seed(tx: &mut ycoding_store::Write<'_>) -> Result<(), Error> {
+    use ycoding_store::{analytics, project, session};
+    project::ProjectTable::put(
+        tx,
+        &project::Project {
+            id: "p".into(),
+            worktree: "/synthetic".into(),
+            vcs: None,
+            name: None,
+            icon_url: None,
+            icon_url_override: None,
+            icon_color: None,
+            time_created: 0,
+            time_updated: 0,
+            time_initialized: None,
+            sandboxes: vec![],
+            commands: None,
+        },
+    )?;
+    session::SessionTable::put(tx, &flow_session())?;
+    tx.put::<analytics::DeliveryTable>(&analytics::Delivery {
+        identity: metadata().database_identity,
+        source_generation: 1,
+        generation: 1,
+        order: 0,
+        applied: 0,
+        valid: true,
+        rebuilding: false,
+        intents: 0,
+        bytes: 0,
+        privacy: 0,
+        purges: vec![],
+        purge_all: false,
+    })?;
+    session::append(
+        tx,
+        &flow_event("admitted", "session.input.admitted.1"),
+        None,
+    )?;
+    session::admit(tx, &flow_input())?;
+    Ok(())
+}
+
+fn flow_promote(
+    tx: &mut ycoding_store::Write<'_>,
+    mut barrier: impl FnMut(&str),
+) -> Result<(), Error> {
+    use ycoding_store::{analytics, session};
+    session::append(
+        tx,
+        &flow_event("promoted", "session.input.promoted.1"),
+        None,
+    )?;
+    barrier("event-sequence");
+    session::promote(tx, &flow_message())?;
+    barrier("message-pending-index");
+    let mut record = tx
+        .get::<session::SessionTable>(&tuple_key(&[KeyPart::String(&"s".into())]))?
+        .unwrap();
+    record.revert = Some(session::Document::new(
+        ycoding_schema::parse_json(r#"{"messageID":"msg_flow"}"#).unwrap(),
+    )?);
+    session::SessionTable::put(tx, &record)?;
+    barrier("revert");
+    analytics::record(
+        tx,
+        analytics::Change {
+            source: "session",
+            identity: tuple_key(&[KeyPart::String(&"s".into())]),
+            delete: false,
+        },
+    )?;
+    barrier("intent");
+    Ok(())
+}
+
+fn flow_state(snapshot: &ycoding_store::Snapshot, promoted: bool) {
+    use ycoding_store::{analytics, session};
+    let input_key = tuple_key(&[KeyPart::String(&"msg_flow".into())]);
+    assert_eq!(
+        snapshot.get::<session::PendingTable>(&input_key).unwrap(),
+        (!promoted).then(flow_input)
+    );
+    assert_eq!(
+        snapshot.get::<session::MessageTable>(&input_key).unwrap(),
+        promoted.then(flow_message)
+    );
+    assert_eq!(
+        session::latest_sequence(snapshot, &"s".into()).unwrap(),
+        i64::from(promoted)
+    );
+    assert_eq!(
+        snapshot
+            .scan::<session::EventTable>(Bound::Unbounded, Bound::Unbounded, 10)
+            .unwrap()
+            .len(),
+        1 + usize::from(promoted)
+    );
+    assert_eq!(
+        session::messages(
+            snapshot,
+            &"s".into(),
+            Bound::Unbounded,
+            Bound::Unbounded,
+            ycoding_store::IndexOrder::Ascending,
+            None,
+            10
+        )
+        .unwrap()
+        .len(),
+        usize::from(promoted)
+    );
+    let record = snapshot
+        .get::<session::SessionTable>(&tuple_key(&[KeyPart::String(&"s".into())]))
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.revert.is_some(), promoted);
+    assert_eq!(
+        snapshot
+            .scan::<analytics::IntentTable>(Bound::Unbounded, Bound::Unbounded, 10)
+            .unwrap()
+            .len(),
+        usize::from(promoted)
+    );
+}
+
+#[test]
+fn test_002_009_065_held_promotion_failure_retry_and_uncertain_receipt_reconcile() {
+    use ycoding_store::session;
+    let root = Root::new();
+    let store =
+        Store::initialize(root.file(), Options::core(), flow_catalog(), metadata()).unwrap();
+    store.submit(flow_seed).unwrap().wait().unwrap();
+    let (sent, observed) = mpsc::channel();
+    store.observe_events(move |events| {
+        sent.send(events.to_vec()).unwrap();
+        true
+    });
+    let before = store.snapshot().unwrap();
+    for failure in [true, false] {
+        let (reached, ready) = mpsc::channel();
+        let (release, barrier) = mpsc::channel();
+        let receipt = store
+            .submit(move |tx| {
+                flow_promote(tx, |_| {})?;
+                reached.send(()).unwrap();
+                barrier.recv_timeout(Duration::from_secs(30)).unwrap();
+                if failure {
+                    return Err(Error::Rejected("injected promotion commit failure"));
+                }
+                Ok(())
+            })
+            .unwrap();
+        ready.recv_timeout(Duration::from_secs(30)).unwrap();
+        flow_state(&store.snapshot().unwrap(), false);
+        flow_state(&before, false);
+        release.send(()).unwrap();
+        if failure {
+            assert!(matches!(
+                receipt.wait(),
+                Err(Error::Rejected("injected promotion commit failure"))
+            ));
+            flow_state(&store.snapshot().unwrap(), false);
+            assert!(matches!(
+                observed.try_recv(),
+                Err(mpsc::TryRecvError::Empty)
+            ));
+            continue;
+        }
+        drop(receipt);
+        let published = observed.recv_timeout(Duration::from_secs(30)).unwrap();
+        assert_eq!(published.len(), 1);
+        assert_eq!(published[0].id, LosslessString::from("promoted"));
+        assert_eq!(published[0].seq, 1);
+        flow_state(&store.snapshot().unwrap(), true);
+    }
+    drop(before);
+    store.shutdown().unwrap();
+    let store = Store::open(root.file(), Options::core(), flow_catalog()).unwrap();
+    flow_state(&store.client().snapshot().unwrap(), true);
+    let mut retry = flow_input();
+    retry.data = ycoding_schema::parse_json(r#"{"text":"changed"}"#).unwrap();
+    assert_eq!(
+        store
+            .submit(move |tx| session::admit(tx, &retry))
+            .unwrap()
+            .wait()
+            .unwrap(),
+        session::Admission::Promoted(flow_message())
+    );
+    flow_state(&store.snapshot().unwrap(), true);
+    store.shutdown().unwrap();
+}
+
+#[test]
+fn test_004_065_history_watermark_catchup_live_overlap_and_page_boundaries() {
+    use ycoding_store::{IndexOrder, session};
+    let root = Root::new();
+    let store =
+        Store::initialize(root.file(), Options::core(), flow_catalog(), metadata()).unwrap();
+    store.submit(flow_seed).unwrap().wait().unwrap();
+    let (sent, live) = mpsc::channel();
+    store.observe_events(move |events| {
+        sent.send(events.to_vec()).unwrap();
+        true
+    });
+    let held = store.client().snapshot().unwrap();
+    let watermark = session::latest_sequence(&held, &"s".into()).unwrap();
+    assert!(
+        session::messages(
+            &held,
+            &"s".into(),
+            Bound::Unbounded,
+            Bound::Unbounded,
+            IndexOrder::Ascending,
+            None,
+            100
+        )
+        .unwrap()
+        .is_empty()
+    );
+    store
+        .submit(|tx| {
+            flow_promote(tx, |_| {})?;
+            for seq in 2..=101 {
+                session::append(
+                    tx,
+                    &flow_event(&format!("event-{seq}"), "session.message.updated.1"),
+                    None,
+                )?;
+                session::MessageTable::put(
+                    tx,
+                    &session::Message {
+                        id: format!("message-{seq}").into(),
+                        seq,
+                        ..flow_message()
+                    },
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert_eq!(
+        session::latest_sequence(&held, &"s".into()).unwrap(),
+        watermark
+    );
+    assert!(
+        session::messages(
+            &held,
+            &"s".into(),
+            Bound::Unbounded,
+            Bound::Unbounded,
+            IndexOrder::Ascending,
+            None,
+            101
+        )
+        .unwrap()
+        .is_empty()
+    );
+    let fresh = store.client().snapshot().unwrap();
+    let catchup = fresh
+        .index_range::<session::EventTable>(
+            "event_aggregate_seq_idx",
+            ycoding_store::IndexQuery {
+                lower: Bound::Excluded(&tuple_key(&[
+                    KeyPart::String(&"s".into()),
+                    KeyPart::I64(watermark),
+                ])),
+                upper: Bound::Unbounded,
+                prefix: Some(&tuple_key(&[KeyPart::String(&"s".into())])),
+                order: IndexOrder::Ascending,
+                after: None,
+                limit: 102,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        catchup.iter().map(|row| row.record.seq).collect::<Vec<_>>(),
+        (1..=101).collect::<Vec<_>>()
+    );
+    let overlap = live.recv_timeout(Duration::from_secs(30)).unwrap();
+    assert_eq!(
+        overlap,
+        catchup
+            .iter()
+            .map(|row| row.record.clone())
+            .collect::<Vec<_>>()
+    );
+    for limit in [99, 100, 101] {
+        let first = session::messages(
+            &fresh,
+            &"s".into(),
+            Bound::Unbounded,
+            Bound::Unbounded,
+            IndexOrder::Descending,
+            None,
+            limit,
+        )
+        .unwrap();
+        assert_eq!(first.len(), limit);
+        let second = session::messages(
+            &fresh,
+            &"s".into(),
+            Bound::Unbounded,
+            Bound::Unbounded,
+            IndexOrder::Descending,
+            Some(&first.last().unwrap().cursor),
+            limit,
+        )
+        .unwrap();
+        assert_eq!(
+            first
+                .iter()
+                .chain(&second)
+                .map(|row| row.record.seq)
+                .collect::<Vec<_>>(),
+            (1..=101).rev().collect::<Vec<_>>()
+        );
+    }
+    let covered = session::latest_sequence(&fresh, &"s".into()).unwrap();
+    let visible = overlap
+        .into_iter()
+        .filter(|event| event.seq > covered)
+        .collect::<Vec<_>>();
+    assert!(visible.is_empty());
+    store
+        .submit(|tx| session::append(tx, &flow_event("live", "session.step.started.1"), None))
+        .unwrap()
+        .wait()
+        .unwrap();
+    let continued = live.recv_timeout(Duration::from_secs(30)).unwrap();
+    assert_eq!(continued.len(), 1);
+    assert_eq!(continued[0].seq, covered + 1);
+    drop((held, fresh));
+    store.shutdown().unwrap();
+}
+
+#[test]
+fn test_005_065_process_kill_coupled_promotion_barriers_reopen_only_committed_facts() {
+    for phase in [
+        "event-sequence",
+        "message-pending-index",
+        "revert",
+        "intent",
+        "committed",
+    ] {
+        let root = Root::new();
+        let store =
+            Store::initialize(root.file(), Options::core(), flow_catalog(), metadata()).unwrap();
+        store.submit(flow_seed).unwrap().wait().unwrap();
+        store.shutdown().unwrap();
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "store_flow_kill_worker",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("YCODING_STORE_FLOW_FILE", root.file())
+            .env("YCODING_STORE_FLOW_PHASE", phase)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (sender, receiver) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(stdout).lines() {
+                if line.unwrap() == "STORE-FLOW-BARRIER" {
+                    sender.send(()).unwrap();
+                    break;
+                }
+            }
+        });
+        let ready = receiver.recv_timeout(Duration::from_secs(30));
+        child.kill().unwrap();
+        let status = child.wait().unwrap();
+        reader.join().unwrap();
+        ready.unwrap();
+        assert!(!status.success());
+        let store = Store::open(root.file(), Options::core(), flow_catalog()).unwrap();
+        flow_state(&store.snapshot().unwrap(), phase == "committed");
+        if phase != "committed" {
+            store
+                .submit(|tx| flow_promote(tx, |_| {}))
+                .unwrap()
+                .wait()
+                .unwrap();
+        }
+        flow_state(&store.snapshot().unwrap(), true);
+        assert_eq!(
+            store
+                .submit(|tx| ycoding_store::session::admit(tx, &flow_input()))
+                .unwrap()
+                .wait()
+                .unwrap(),
+            ycoding_store::session::Admission::Promoted(flow_message())
+        );
+        flow_state(&store.snapshot().unwrap(), true);
+        store.shutdown().unwrap();
+    }
+}
+
+#[test]
+#[ignore = "subprocess-only process-kill barrier fixture"]
+fn store_flow_kill_worker() {
+    let store = Store::open(
+        std::env::var_os("YCODING_STORE_FLOW_FILE").unwrap(),
+        Options::core(),
+        flow_catalog(),
+    )
+    .unwrap();
+    let phase = std::env::var("YCODING_STORE_FLOW_PHASE").unwrap();
+    let barrier = |current: &str| {
+        if current == phase {
+            use std::io::{Read, Write};
+            println!("STORE-FLOW-BARRIER");
+            std::io::stdout().flush().unwrap();
+            std::io::stdin().read_exact(&mut [0]).unwrap();
+        }
+    };
+    if matches!(phase.as_str(), "admission" | "pre-wake" | "step") {
+        let inside = phase.clone();
+        store
+            .submit(move |tx| {
+                flow_seed(tx)?;
+                if inside == "admission" {
+                    use std::io::{Read, Write};
+                    println!("STORE-FLOW-BARRIER");
+                    std::io::stdout().flush().unwrap();
+                    std::io::stdin().read_exact(&mut [0]).unwrap();
+                }
+                Ok(())
+            })
+            .unwrap()
+            .wait()
+            .unwrap();
+        barrier("pre-wake");
+        store
+            .submit(|tx| {
+                flow_promote(tx, |_| {})?;
+                ycoding_store::session::append(
+                    tx,
+                    &flow_event("step", "session.step.started.1"),
+                    None,
+                )?;
+                Ok(())
+            })
+            .unwrap()
+            .wait()
+            .unwrap();
+        barrier("step");
+        return;
+    }
+    let inside = phase.clone();
+    store
+        .submit(move |tx| {
+            flow_promote(tx, |current| {
+                if current == inside {
+                    use std::io::{Read, Write};
+                    println!("STORE-FLOW-BARRIER");
+                    std::io::stdout().flush().unwrap();
+                    std::io::stdin().read_exact(&mut [0]).unwrap();
+                }
+            })
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    barrier("committed");
+}
+
+#[test]
+fn test_005_admission_pre_wake_and_step_kills_preserve_durable_input_identity() {
+    use ycoding_store::session;
+    for phase in ["admission", "pre-wake", "step"] {
+        let root = Root::new();
+        Store::initialize(root.file(), Options::core(), flow_catalog(), metadata())
+            .unwrap()
+            .shutdown()
+            .unwrap();
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "store_flow_kill_worker",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("YCODING_STORE_FLOW_FILE", root.file())
+            .env("YCODING_STORE_FLOW_PHASE", phase)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (sender, receiver) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(stdout).lines() {
+                if line.unwrap() == "STORE-FLOW-BARRIER" {
+                    sender.send(()).unwrap();
+                    break;
+                }
+            }
+        });
+        let ready = receiver.recv_timeout(Duration::from_secs(30));
+        child.kill().unwrap();
+        let status = child.wait().unwrap();
+        reader.join().unwrap();
+        ready.unwrap();
+        assert!(!status.success());
+        let store = Store::open(root.file(), Options::core(), flow_catalog()).unwrap();
+        let snapshot = store.client().snapshot().unwrap();
+        assert_eq!(
+            session::latest_sequence(&snapshot, &"s".into()).unwrap(),
+            match phase {
+                "admission" => -1,
+                "pre-wake" => 0,
+                _ => 2,
+            }
+        );
+        assert_eq!(
+            snapshot
+                .get::<session::PendingTable>(&tuple_key(&[KeyPart::String(&"msg_flow".into())]))
+                .unwrap(),
+            (phase == "pre-wake").then(flow_input)
+        );
+        assert_eq!(
+            snapshot
+                .get::<session::MessageTable>(&tuple_key(&[KeyPart::String(&"msg_flow".into())]))
+                .unwrap(),
+            (phase == "step").then(flow_message)
+        );
+        let events = snapshot
+            .scan::<session::EventTable>(Bound::Unbounded, Bound::Unbounded, 10)
+            .unwrap();
+        assert_eq!(
+            events.len(),
+            match phase {
+                "admission" => 0,
+                "pre-wake" => 1,
+                _ => 3,
+            }
+        );
+        drop(snapshot);
+        if phase == "admission" {
+            store.submit(flow_seed).unwrap().wait().unwrap();
+        }
+        if phase != "step" {
+            store
+                .submit(|tx| flow_promote(tx, |_| {}))
+                .unwrap()
+                .wait()
+                .unwrap();
+        }
+        assert_eq!(
+            store
+                .submit(|tx| session::admit(tx, &flow_input()))
+                .unwrap()
+                .wait()
+                .unwrap(),
+            session::Admission::Promoted(flow_message())
+        );
+        store.shutdown().unwrap();
+        let store = Store::open(root.file(), Options::core(), flow_catalog()).unwrap();
+        assert!(
+            store
+                .snapshot()
+                .unwrap()
+                .get::<session::PendingTable>(&tuple_key(&[KeyPart::String(&"msg_flow".into())]))
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            store
+                .snapshot()
+                .unwrap()
+                .get::<session::MessageTable>(&tuple_key(&[KeyPart::String(&"msg_flow".into())]))
+                .unwrap(),
+            Some(flow_message())
+        );
+        assert_eq!(
+            store
+                .snapshot()
+                .unwrap()
+                .scan::<session::EventTable>(Bound::Unbounded, Bound::Unbounded, 10)
+                .unwrap()
+                .iter()
+                .filter(|event| event.type_.as_str() == Some("session.input.promoted.1"))
+                .count(),
+            1
+        );
+        store.shutdown().unwrap();
+    }
+}
+
 struct Accounts;
 #[derive(Debug, PartialEq)]
 struct Account {

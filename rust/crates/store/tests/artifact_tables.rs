@@ -2315,6 +2315,202 @@ fn project_membership_restrict_is_latched_before_any_project_children_are_delete
 }
 
 struct TestFile(std::path::PathBuf);
+
+#[test]
+fn test_061_redb_journal_process_kill_reopen_and_reconcile_twice_preserves_accounting() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    for committed in [false, true] {
+        let file = TestFile::new();
+        let store = Store::initialize(
+            &file.0,
+            Options::core(),
+            combined(),
+            Metadata::new([9; 16], 7),
+        )
+        .unwrap();
+        store.submit(graph).unwrap().wait().unwrap();
+        store.shutdown().unwrap();
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "artifact_journal_kill_worker",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("YCODING_ARTIFACT_JOURNAL_FILE", &file.0)
+            .env(
+                "YCODING_ARTIFACT_JOURNAL_COMMITTED",
+                if committed { "yes" } else { "no" },
+            )
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (sent, ready) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(stdout).lines() {
+                if line.unwrap() == "JOURNAL-BARRIER" {
+                    sent.send(()).unwrap();
+                    break;
+                }
+            }
+        });
+        let reached = ready.recv_timeout(Duration::from_secs(30));
+        child.kill().unwrap();
+        let status = child.wait().unwrap();
+        reader.join().unwrap();
+        reached.unwrap();
+        assert!(!status.success());
+        let store = Store::open(&file.0, Options::core(), combined()).unwrap();
+        let snapshot = store.client().snapshot().unwrap();
+        let retained = snapshot
+            .get::<artifacts::OperationTable>(&strings(&["pop_one"]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            retained.phase.as_str(),
+            Some(if committed { "available" } else { "preparing" })
+        );
+        assert_eq!(retained.time_updated, i64::from(committed));
+        assert_eq!(
+            snapshot
+                .get::<artifacts::VersionTable>(&strings(&["pav_one"]))
+                .unwrap(),
+            Some(version())
+        );
+        assert_eq!(
+            snapshot
+                .get::<artifacts::WriteTable>(&artifacts::WriteTable::primary_key(&write()))
+                .unwrap(),
+            Some(write())
+        );
+        drop(snapshot);
+        for _ in 0..2 {
+            let reconciled = store
+                .submit(|tx| {
+                    artifacts::transition_operation(
+                        tx,
+                        &"pop_one".into(),
+                        artifacts::JournalPhase::Aborted,
+                        None,
+                        2,
+                    )
+                })
+                .unwrap()
+                .wait()
+                .unwrap()
+                .unwrap();
+            assert_eq!(reconciled.phase.as_str(), Some("aborted"));
+            assert_eq!(reconciled.time_updated, 2);
+            let snapshot = store.client().snapshot().unwrap();
+            assert!(
+                artifacts::operations_in_phase(
+                    &snapshot,
+                    artifacts::JournalPhase::Preparing,
+                    None,
+                    10
+                )
+                .unwrap()
+                .is_empty()
+            );
+            assert!(
+                artifacts::operations_in_phase(
+                    &snapshot,
+                    artifacts::JournalPhase::Available,
+                    None,
+                    10
+                )
+                .unwrap()
+                .is_empty()
+            );
+            assert_eq!(
+                artifacts::operations_in_phase(
+                    &snapshot,
+                    artifacts::JournalPhase::Aborted,
+                    None,
+                    10
+                )
+                .unwrap()
+                .len(),
+                1
+            );
+            assert_eq!(
+                snapshot
+                    .get::<artifacts::ArtifactTable>(&artifacts::ArtifactTable::primary_key(
+                        &artifact()
+                    ))
+                    .unwrap(),
+                Some(artifact())
+            );
+            assert_eq!(
+                snapshot
+                    .get::<artifacts::ActivationTable>(&strings(&["paa_one"]))
+                    .unwrap(),
+                Some(activation())
+            );
+            assert_eq!(
+                snapshot
+                    .get::<artifacts::WriteTable>(&artifacts::WriteTable::primary_key(&write()))
+                    .unwrap(),
+                Some(write())
+            );
+        }
+        store.shutdown().unwrap();
+        let store = Store::open(&file.0, Options::core(), combined()).unwrap();
+        assert_eq!(
+            store
+                .client()
+                .snapshot()
+                .unwrap()
+                .get::<artifacts::OperationTable>(&strings(&["pop_one"]))
+                .unwrap()
+                .unwrap()
+                .phase
+                .as_str(),
+            Some("aborted")
+        );
+        store.shutdown().unwrap();
+    }
+}
+
+#[test]
+#[ignore = "subprocess-only real redb journal crash fixture"]
+fn artifact_journal_kill_worker() {
+    fn barrier() {
+        use std::io::{Read, Write};
+        println!("JOURNAL-BARRIER");
+        std::io::stdout().flush().unwrap();
+        std::io::stdin().read_exact(&mut [0]).unwrap();
+    }
+    let store = Store::open(
+        std::env::var_os("YCODING_ARTIFACT_JOURNAL_FILE").unwrap(),
+        Options::core(),
+        combined(),
+    )
+    .unwrap();
+    let committed = std::env::var("YCODING_ARTIFACT_JOURNAL_COMMITTED").unwrap() == "yes";
+    store
+        .submit(move |tx| {
+            artifacts::transition_operation(
+                tx,
+                &"pop_one".into(),
+                artifacts::JournalPhase::Available,
+                None,
+                1,
+            )?;
+            if !committed {
+                barrier();
+            }
+            Ok(())
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    barrier();
+}
 impl TestFile {
     fn new() -> Self {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

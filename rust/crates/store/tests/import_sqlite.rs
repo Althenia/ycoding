@@ -275,6 +275,62 @@ fn existing_candidate_is_refused_without_touching_it() {
 }
 
 #[test]
+fn test_006_missing_empty_corrupt_sources_do_not_replace_or_seal_a_candidate() {
+    for bytes in [
+        None,
+        Some(b"".as_slice()),
+        Some(b"not a SQLite database".as_slice()),
+    ] {
+        let fixture = Fixture::new();
+        let source = fixture.source();
+        let candidate = fixture.candidate();
+        if let Some(bytes) = bytes {
+            std::fs::write(&source, bytes).unwrap();
+        }
+        assert!(
+            import::stage(
+                fixture.request(DatabaseKind::Bootstrap, &source, &candidate),
+                |_| ControlFlow::Continue(())
+            )
+            .is_err()
+        );
+        assert!(!candidate.exists());
+        assert!(import::sealed(&candidate, DatabaseKind::Bootstrap).is_err());
+        assert_eq!(std::fs::read(&source).ok().as_deref(), bytes);
+    }
+    let fixture = Fixture::new();
+    drop(fixture.create(DatabaseKind::Bootstrap));
+    let source = fixture.source();
+    let candidate = fixture.candidate();
+    let report = import::stage(
+        fixture.request(DatabaseKind::Bootstrap, &source, &candidate),
+        |_| ControlFlow::Continue(()),
+    )
+    .unwrap();
+    let before = std::fs::read(&candidate).unwrap();
+    Connection::open(&source)
+        .unwrap()
+        .execute("UPDATE database_format SET id='future-format'", [])
+        .unwrap();
+    let source_bytes = std::fs::read(&source).unwrap();
+    assert!(
+        import::stage(
+            fixture.request(DatabaseKind::Bootstrap, &source, &candidate),
+            |_| ControlFlow::Continue(())
+        )
+        .is_err()
+    );
+    assert_eq!(std::fs::read(&candidate).unwrap(), before);
+    assert_eq!(
+        import::sealed(&candidate, DatabaseKind::Bootstrap)
+            .unwrap()
+            .1,
+        report
+    );
+    assert_eq!(std::fs::read(source).unwrap(), source_bytes);
+}
+
+#[test]
 fn rejected_checks_and_foreign_keys_name_the_source_row_without_sealing_candidate() {
     for (sql, table, reason) in [
         (
