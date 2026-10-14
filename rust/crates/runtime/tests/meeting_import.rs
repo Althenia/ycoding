@@ -7,9 +7,7 @@ mod support;
 use launcher::{Directory, Runtime, read, string};
 use prost::Message;
 use std::{
-    io::BufRead,
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
     time::Duration,
 };
 use ycoding_core::meeting::{
@@ -25,7 +23,6 @@ struct Fixture {
     project: PathBuf,
     stable: PathBuf,
     beta: PathBuf,
-    writer: Option<Child>,
 }
 
 impl Fixture {
@@ -48,7 +45,6 @@ impl Fixture {
             project,
             stable,
             beta,
-            writer: None,
         }
     }
 
@@ -62,33 +58,20 @@ impl Fixture {
         self.beta.join("stable-import-v1.json")
     }
 
-    fn generate(&mut self, wal: bool) {
-        let mut command = Command::new("bun");
-        command
-            .args(["run", "test/fixture/stable-meeting.ts"])
-            .arg(self.source())
-            .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../extensions/meeting"));
-        if !wal {
-            let output = command.output().unwrap();
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            return;
+    fn materialize(&self, wal: bool) {
+        let baseline = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../extensions/meeting/test/fixture/stable-meeting")
+            .join(if wal { "wal" } else { "checkpointed" });
+        std::fs::create_dir_all(&self.stable).unwrap();
+        for name in [
+            "meetings.sqlite",
+            "meetings.sqlite-wal",
+            "meetings.sqlite-shm",
+        ] {
+            if wal || name == "meetings.sqlite" {
+                std::fs::copy(baseline.join(name), self.stable.join(name)).unwrap();
+            }
         }
-        let mut child = command
-            .arg("wal")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
-        let mut ready = String::new();
-        std::io::BufReader::new(child.stdout.take().unwrap())
-            .read_line(&mut ready)
-            .unwrap();
-        assert_eq!(ready.trim(), "ready");
-        self.writer = Some(child);
     }
 
     fn stable_files(&self) -> Vec<Option<Vec<u8>>> {
@@ -198,24 +181,16 @@ impl Fixture {
     }
 }
 
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        if let Some(writer) = &mut self.writer {
-            drop(writer.stdin.take());
-            assert!(writer.wait().unwrap().success());
-        }
-    }
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn beta_first_start_imports_the_ts_meeting_store_and_serves_retained_history() {
     tokio::time::timeout(Duration::from_secs(60), async {
         for wal in [false, true] {
-            let mut fixture = Fixture::new();
-            fixture.generate(wal);
+            let fixture = Fixture::new();
+            fixture.materialize(wal);
             let before = fixture.stable_files();
             if wal {
                 assert!(before[1].as_ref().is_some_and(|bytes| !bytes.is_empty()));
+                assert!(before[2].as_ref().is_some_and(|bytes| !bytes.is_empty()));
             }
             let runtime = fixture.start().await;
             assert!(
@@ -264,13 +239,13 @@ async fn beta_first_start_imports_the_ts_meeting_store_and_serves_retained_histo
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn absent_source_is_decided_once_and_does_not_import_later_stable_history() {
-    let mut fixture = Fixture::new();
+    let fixture = Fixture::new();
     fixture.finish(fixture.start().await);
     assert_eq!(
         std::fs::read_to_string(fixture.marker()).unwrap(),
         "{\"complete\":true,\"version\":1,\"imported\":false}\n"
     );
-    fixture.generate(false);
+    fixture.materialize(false);
     let before = fixture.stable_files();
     let runtime = fixture.start().await;
     let control = discovery::Control::connect(&fixture.beta).unwrap();
@@ -285,8 +260,8 @@ async fn absent_source_is_decided_once_and_does_not_import_later_stable_history(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn imported_history_and_beta_writes_survive_restart_and_missing_marker_recovery() {
-    let mut fixture = Fixture::new();
-    fixture.generate(false);
+    let fixture = Fixture::new();
+    fixture.materialize(false);
     let before = fixture.stable_files();
     fixture.finish(fixture.start().await);
     let report = fixture.report();
@@ -316,7 +291,7 @@ async fn imported_history_and_beta_writes_survive_restart_and_missing_marker_rec
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn corrupt_source_leaves_no_partial_store_logs_a_location_failure_and_can_retry() {
-    let mut fixture = Fixture::new();
+    let fixture = Fixture::new();
     std::fs::create_dir_all(&fixture.stable).unwrap();
     std::fs::write(fixture.source(), b"not SQLite").unwrap();
     let before = fixture.stable_files();
@@ -325,7 +300,7 @@ async fn corrupt_source_leaves_no_partial_store_logs_a_location_failure_and_can_
     fixture.no_partial_import();
     assert_eq!(fixture.stable_files(), before);
     std::fs::remove_file(fixture.source()).unwrap();
-    fixture.generate(false);
+    fixture.materialize(false);
     let before = fixture.stable_files();
     let runtime = fixture.start().await;
     fixture.history().await;
@@ -339,8 +314,8 @@ async fn invalid_completion_or_missing_imported_store_is_not_replaced() {
         "{}",
         "{\"complete\":true,\"version\":1,\"imported\":true}\n",
     ] {
-        let mut fixture = Fixture::new();
-        fixture.generate(false);
+        let fixture = Fixture::new();
+        fixture.materialize(false);
         let before = fixture.stable_files();
         std::fs::create_dir_all(&fixture.beta).unwrap();
         std::fs::write(fixture.marker(), marker).unwrap();
@@ -355,8 +330,8 @@ async fn invalid_completion_or_missing_imported_store_is_not_replaced() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_existing_unmarked_store_without_provenance_is_never_overwritten() {
-    let mut fixture = Fixture::new();
-    fixture.generate(false);
+    let fixture = Fixture::new();
+    fixture.materialize(false);
     let before = fixture.stable_files();
     let database = MeetingDatabase::open(&fixture.file()).unwrap();
     database
