@@ -1307,6 +1307,51 @@ describe("Config", () => {
     ),
   )
 
+  it.live("merges capability fields across layers and drops home ecosystem roots when disabled", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) => {
+        const global = path.join(tmp.path, "global")
+        const home = path.join(global, "home")
+        const root = path.join(home, "repo")
+        const directory = path.join(root, "app")
+        return Effect.gen(function* () {
+          yield* Effect.promise(async () => {
+            await fs.mkdir(path.join(home, ".agents", "skills"), { recursive: true })
+            await fs.mkdir(path.join(home, ".claude", "skills"), { recursive: true })
+            await fs.mkdir(path.join(root, ".agents"), { recursive: true })
+            await fs.mkdir(directory, { recursive: true })
+            await fs.writeFile(
+              path.join(global, "ycoding.json"),
+              JSON.stringify({ capabilities: { home_roots: false, tools: { deny: ["shell"] }, skills: { enabled: false } } }),
+            )
+          })
+          return yield* Effect.gen(function* () {
+            const config = yield* Config.Service
+            const entries = yield* config.entries()
+            expect(entries.filter((entry) => entry.type === "agents").map((entry) => entry.path)).toEqual([
+              AbsolutePath.make(path.join(root, ".agents")),
+            ])
+            expect(entries.filter((entry) => entry.type === "claude")).toEqual([])
+            expect(Config.capabilities(entries)).toEqual({
+              home_roots: false,
+              tools: { deny: ["shell"], allow: ["read"] },
+              skills: { enabled: true },
+            })
+          }).pipe(
+            Effect.provide(
+              testLayer(directory, global, root, undefined, undefined, emptyCredentialNode, emptyWellknownNode, {
+                content: JSON.stringify({ capabilities: { tools: { allow: ["read"] }, skills: { enabled: true } } }),
+              }),
+            ),
+          )
+        })
+      }),
+    ),
+  )
+
   it.live("loads global and ancestor configuration across the project boundary", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),

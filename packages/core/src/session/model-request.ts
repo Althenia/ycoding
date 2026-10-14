@@ -13,12 +13,10 @@ import { OpenAIOptions } from "@ycoding-ai/ai/protocols/utils/openai-options"
 import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy"
 import { SessionError } from "@ycoding-ai/schema/session-error"
 import { Context, Effect, Layer } from "effect"
-import type { Agent } from "../agent"
 import { Config } from "../config"
 import { ConfigEfficiency } from "../config/efficiency"
 import { Database } from "../database/database"
 import { makeLocationNode } from "../effect/app-node"
-import { Permission } from "../permission"
 import { PluginHooks } from "../plugin/hooks"
 import { OpenAICodex } from "../plugin/provider/openai-codex"
 import { ToolRegistry } from "../tool/registry"
@@ -92,21 +90,6 @@ export const baseSystem = (context: Pick<SessionContext.Loaded, "agent" | "initi
     .filter((part) => part.length > 0)
     .map(SystemPart.make)
 
-export function toolPermissions(agent: Pick<Agent.Info, "mode" | "permissions">, ceiling: Permission.Ruleset) {
-  return Permission.merge(
-    agent.permissions,
-    ceiling,
-    ...(agent.mode === "subagent"
-      ? [
-          [
-            { action: "subagent", resource: "*", effect: "deny" as const },
-            { action: "subagent_control", resource: "*", effect: "deny" as const },
-          ],
-        ]
-      : []),
-  )
-}
-
 /**
  * Builds an outbound model request and captures the tool-call capability that
  * must remain paired with it. It does not execute the request or mutate
@@ -143,13 +126,16 @@ export const layer = (options?: SessionModelHeaders.Options) =>
         const resolved = input.model ?? input.context.model
         const model = resolved.model
         const providerMetadataKey = model.route.providerMetadataKey ?? model.provider
-        const efficiencyInfo = Config.latest(yield* config.entries(), "efficiency")
+        const configEntries = yield* config.entries()
+        const efficiencyInfo = Config.latest(configEntries, "efficiency")
         const responsesState = ConfigEfficiency.openAIResponsesState(efficiencyInfo)
         const stepLimitReached = agent.info.steps !== undefined && input.step >= agent.info.steps
         const terminalResponseRecovery = input.terminalResponseRecovery === true
         const toolsDisabled = terminalResponseRecovery || stepLimitReached
-        const permissions = toolPermissions(agent.info, session.permissionCeiling ?? [])
-        const executableTools = toolsDisabled ? undefined : yield* registry.materialize(permissions)
+        const permissions = SessionContext.toolPermissions(agent.info, session.permissionCeiling ?? [])
+        const executableTools = toolsDisabled
+          ? undefined
+          : yield* registry.materialize(permissions, Config.capabilities(configEntries))
         const system = baseSystem(input.context)
         const directOpenAIResponses =
           model.provider === "openai" && SessionContinuation.isResponsesRoute(model.route.id)

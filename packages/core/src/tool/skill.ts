@@ -7,6 +7,8 @@ import { pathToFileURL } from "url"
 import { ToolFailure } from "@ycoding-ai/ai"
 import { McpSkill } from "@ycoding-ai/schema/mcp-skill"
 import { Effect, Option, Schema } from "effect"
+import { Config } from "../config"
+import { ConfigCapabilities } from "../config/capabilities"
 import { ConfigMarkdown } from "../config/markdown"
 import { FSUtil } from "../fs-util"
 import { LocationMutation } from "../location-mutation"
@@ -261,6 +263,7 @@ export const Plugin = {
     const reader = yield* ReadToolFileSystem.Service
     const projectArtifactSource = yield* Effect.serviceOption(ProjectArtifactSource.Service)
     const runtime = yield* PluginRuntime.Service
+    const config = yield* Config.Service
     yield* ctx.tool
       .transform((draft) =>
         draft.add(
@@ -272,6 +275,8 @@ export const Plugin = {
             toModelOutput: ({ output }) => [{ type: "text", text: output.output }],
             execute: (input, context) =>
               Effect.gen(function* () {
+                if (!ConfigCapabilities.allows(Config.capabilities(yield* config.entries()).skills, input.id))
+                  return yield* unableToLoad(input.id)
                 const messages = yield* runtime.session
                   .messages({ sessionID: context.sessionID, order: "asc" })
                   .pipe(Effect.mapError((error) => unableToLoad(input.id, error)))

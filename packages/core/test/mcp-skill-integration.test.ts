@@ -8,6 +8,7 @@ import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { LocationMutation } from "@ycoding-ai/core/location-mutation"
 import { Image } from "@ycoding-ai/core/image"
 import { Location } from "@ycoding-ai/core/location"
+import { Config } from "@ycoding-ai/core/config"
 import { ConfigMCP } from "@ycoding-ai/core/config/mcp"
 import { MCP } from "@ycoding-ai/core/mcp/index"
 import { MCPClient } from "@ycoding-ai/core/mcp/client"
@@ -60,6 +61,7 @@ const skillToolNode = makeLocationNode({
   layer: Layer.effectDiscard(registerToolPlugin(SkillTool.Plugin)),
   deps: [
     ToolRegistry.toolsNode,
+    Config.node,
     FSUtil.node,
     Skill.node,
     MCP.node,

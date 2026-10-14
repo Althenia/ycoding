@@ -121,6 +121,12 @@ export function make<A>(source: Source.Definition<A>): Instructions {
   ]
 }
 
+/** Keeps the sources' keys but observes them as removed while `enabled` is false. */
+export function when(enabled: boolean, value: Instructions): Instructions {
+  if (enabled) return value
+  return value.map((source) => ({ ...source, read: Effect.succeed(removed) }))
+}
+
 export function combine(values: ReadonlyArray<Instructions>): Instructions {
   const sources = values.flat()
   const keys = new Set<Key>()

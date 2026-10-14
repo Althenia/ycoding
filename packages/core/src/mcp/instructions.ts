@@ -3,6 +3,8 @@ export * as McpInstructions from "./instructions"
 import { makeLocationNode } from "../effect/app-node"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Agent } from "../agent"
+import { Config } from "../config"
+import { ConfigCapabilities } from "../config/capabilities"
 import { Permission } from "../permission"
 import { McpTool } from "../tool/mcp"
 import { MCP } from "./index"
@@ -82,6 +84,7 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const mcp = yield* MCP.Service
+    const config = yield* Config.Service
 
     return Service.of({
       load: Effect.fn("McpInstructions.load")(function* (selection) {
@@ -98,7 +101,11 @@ export const layer = Layer.effect(
               removed: () => "MCP server instructions are no longer available.",
             },
           })
-        if (Permission.evaluate("execute", "*", agent.permissions).effect === "deny")
+        const capabilities = Config.capabilities(yield* config.entries())
+        if (
+          Permission.evaluate("execute", "*", agent.permissions).effect === "deny" ||
+          !ConfigCapabilities.allowsTool(capabilities, "execute")
+        )
           return source(Instructions.removed)
         const [instructions, tools] = yield* Effect.all([mcp.instructions(), mcp.tools()], {
           concurrency: "unbounded",
@@ -109,6 +116,7 @@ export const layer = Layer.effect(
             const owned = tools.filter((tool) => tool.server === item.server)
             return owned.some(
               (tool) =>
+                ConfigCapabilities.allowsTool(capabilities, McpTool.name(tool.server, tool.name)) &&
                 Permission.evaluate(McpTool.name(tool.server, tool.name), "*", agent.permissions).effect !== "deny",
             )
           })
@@ -120,4 +128,4 @@ export const layer = Layer.effect(
   }),
 )
 
-export const node = makeLocationNode({ service: Service, layer, deps: [MCP.node] })
+export const node = makeLocationNode({ service: Service, layer, deps: [Config.node, MCP.node] })

@@ -7,6 +7,7 @@ import { DateTime, Effect, Layer, Schema } from "effect"
 import { TestClock } from "effect/testing"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Command } from "@ycoding-ai/core/command"
+import { Config } from "@ycoding-ai/core/config"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { Database } from "@ycoding-ai/core/database/database"
 import { EventRuntime } from "@ycoding-ai/core/event"
@@ -110,7 +111,7 @@ const locationLayer = Layer.succeed(
 )
 const sourceIt = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([ProjectArtifactSource.node, Skill.node, Command.node, Agent.node]),
+    LayerNode.group([ProjectArtifactSource.node, Skill.node, Command.node, Agent.node, Config.node]),
     [
     [ProjectArtifactStore.node, store],
     [ProjectArtifactAccounting.node, accounting],
@@ -283,6 +284,50 @@ describe("ProjectArtifactSource", () => {
           expect((yield* skills.list()).filter((skill) => skill.id === "review")).toMatchObject([
             { id: "review", content: "Updated guidance" },
           ])
+        }),
+      () => Effect.promise(() => fs.rm(dataRoot, { recursive: true, force: true })),
+    ),
+  )
+
+  sourceIt.effect("applies no managed artifacts while project artifacts are turned off", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(async () => {
+        await fs.rm(dataRoot, { recursive: true, force: true })
+        await fs.mkdir(path.join(dataRoot, "config"), { recursive: true })
+      }),
+      () =>
+        Effect.gen(function* () {
+          details.clear()
+          listFailure = false
+          yield* writeSkill("pav_source-off", "Managed guidance", 1)
+          yield* writeDefinition(
+            "review-agent",
+            "pav_source-agent-off",
+            {
+              kind: "agent",
+              name: "Review agent",
+              description: "Reusable agent",
+              system: "Review without editing.",
+              mode: "subagent",
+              permissions: [],
+            },
+            1,
+          )
+          yield* Effect.promise(() =>
+            fs.writeFile(
+              path.join(dataRoot, "config", "ycoding.json"),
+              JSON.stringify({ capabilities: { project_artifacts: false } }),
+            ),
+          )
+          const config = yield* Config.Service
+          yield* config.reload()
+          const source = yield* ProjectArtifactSource.Service
+          const skills = yield* Skill.Service
+          const agents = yield* Agent.Service
+          yield* source.refresh()
+          expect((yield* skills.list()).some((skill) => skill.id === "review")).toBe(false)
+          expect(yield* agents.get(Agent.ID.make("review-agent"))).toBeUndefined()
+          expect(yield* source.provenance("skill", "review")).toBeUndefined()
         }),
       () => Effect.promise(() => fs.rm(dataRoot, { recursive: true, force: true })),
     ),

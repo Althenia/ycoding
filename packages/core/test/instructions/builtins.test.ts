@@ -28,6 +28,13 @@ const humanInput =
   "When progress requires user input, a decision, or review, call question with the blocker and the minimum actionable request; do not end with a prose-only request for the user to act. Use options for decisions and an empty options array for free-text input. Continue after the reply; do not call task_complete while blocked. Keep permission and guardrail approvals on their native request paths. Do not ask for routine progress, optional acknowledgement, or information you can obtain yourself. Preserve autonomy and permission rules; if question is unavailable or denied, report that blocker without bypassing it."
 const decisionUse =
   'Use decision for a bounded typed judgment from a hidden helper model; confidence is self-reported and uncalibrated. Use it to choose a subagent model/variant among verified candidates, choose concrete options, classify risk, grade candidates or findings against a rubric, settle predicates tests cannot settle, or recommend an option before question. Use tests, grep, typecheck, and inventory for verifiable facts. Skip trivial or low-impact choices, unchanged judgments, and routine per-step classification. Supply self-contained authorized evidence and observable criteria; use neutral wording, distinct options with keep-current/other fallback, and distinct adjacent score levels. Batch independent questions; separate dependent ones. Example: {"provider":"agent","request":{"state":{"alternatives":"Two approaches have comparable cost; requirements are incomplete"},"questions":[{"type":"choice","name":"route","instructions":"Choose the better-supported approach","choices":[{"value":"keep-current","description":"Retain current approach"},{"value":"change","description":"Use the alternative"}]},{"type":"predicate","name":"ready","instructions":"Does the evidence support starting now?"}]}} Set the bar by the cost of being wrong. Treat refusal (including insufficient evidence), errors, low or close confidence, and disagreement with evidence as uncertainty; gather missing evidence, decide from evidence, or ask the user. Reuse settled judgments until evidence changes. Never treat judgments as permission, approval, the user’s answer, or completion proof. Preserve explicit owner choices and guardrails; report unavailable or denied evaluation without repeated probes.'
+const allTools = new Set(["subagent", "shell", "project_artifact", "question", "decision", "task_complete", "memory"])
+const input = (id: SessionSchema.ID, overrides: Partial<Omit<InstructionBuiltIns.Input, "sessionID">> = {}) => ({
+  sessionID: id,
+  capabilities: {},
+  tools: allTools,
+  ...overrides,
+})
 const locationLayer = Layer.succeed(
   Location.Service,
   Location.Service.of(
@@ -47,7 +54,7 @@ const it = testEffect(
 describe("InstructionBuiltIns", () => {
   it.effect("teaches compact explicit judgments with valid batched examples and no removed policies", () => Effect.gen(function* () {
     const builtins = yield* InstructionBuiltIns.Service
-    const source = (yield* builtins.load(sessionID)).find((item) => item.key === "core/decision-use")!
+    const source = (yield* builtins.load(input(sessionID))).find((item) => item.key === "core/decision-use")!
     const value = yield* source.read
     const text = typeof value === "string" ? value : ""
     expect(text.split(/\s+/).length).toBeLessThanOrEqual(220)
@@ -69,7 +76,7 @@ describe("InstructionBuiltIns", () => {
     Effect.gen(function* () {
       yield* TestClock.setTime(timestamp)
       const context = yield* InstructionBuiltIns.Service
-      const initialized = yield* readInitial(yield* context.load(sessionID))
+      const initialized = yield* readInitial(yield* context.load(input(sessionID)))
 
       expect(initialized.text).toBe(
         [
@@ -107,8 +114,8 @@ describe("InstructionBuiltIns", () => {
     Effect.gen(function* () {
       yield* TestClock.setTime(timestamp)
       const context = yield* InstructionBuiltIns.Service
-      const first = yield* readInitial(yield* context.load(sessionID))
-      const second = yield* readInitial(yield* context.load(otherSessionID))
+      const first = yield* readInitial(yield* context.load(input(sessionID)))
+      const second = yield* readInitial(yield* context.load(input(otherSessionID)))
 
       expect(second.text).toBe(first.text)
       expect(first.text).not.toContain(sessionID)
@@ -119,8 +126,8 @@ describe("InstructionBuiltIns", () => {
   it.effect("appends one stable explicit work-completion directive for every Session", () =>
     Effect.gen(function* () {
       const builtins = yield* InstructionBuiltIns.Service
-      const first = yield* builtins.load(sessionID)
-      const second = yield* builtins.load(otherSessionID)
+      const first = yield* builtins.load(input(sessionID))
+      const second = yield* builtins.load(input(otherSessionID))
       expect(first.at(-1)?.key).toBe(Instructions.Key.make("core/task-completion"))
       const source = first.at(-1)!
       const value = yield* source.read
@@ -134,8 +141,8 @@ describe("InstructionBuiltIns", () => {
   it.effect("routes required human input and review through question for every Session", () =>
     Effect.gen(function* () {
       const builtins = yield* InstructionBuiltIns.Service
-      const first = (yield* builtins.load(sessionID)).find((source) => source.key === "core/human-input")
-      const second = (yield* builtins.load(otherSessionID)).find((source) => source.key === "core/human-input")
+      const first = (yield* builtins.load(input(sessionID))).find((source) => source.key === "core/human-input")
+      const second = (yield* builtins.load(input(otherSessionID))).find((source) => source.key === "core/human-input")
       expect(first).toBeDefined()
       expect(second).toBeDefined()
       expect(yield* first!.read).toBe(humanInput)
@@ -149,10 +156,10 @@ describe("InstructionBuiltIns", () => {
     Effect.gen(function* () {
       yield* TestClock.setTime(timestamp)
       const context = yield* InstructionBuiltIns.Service
-      const initialized = yield* readInitial(yield* context.load(sessionID))
+      const initialized = yield* readInitial(yield* context.load(input(sessionID)))
 
       yield* TestClock.setTime(timestamp + 24 * 60 * 60 * 1000)
-      const refreshed = yield* readUpdate(yield* context.load(sessionID), initialized)
+      const refreshed = yield* readUpdate(yield* context.load(input(sessionID)), initialized)
 
       expect(refreshed.text).toBe(`Today's date is now: ${localDate(timestamp + 24 * 60 * 60 * 1000)}`)
     }),
@@ -161,15 +168,80 @@ describe("InstructionBuiltIns", () => {
   it.effect("admits decision-use guidance once into an existing Session's model-visible instructions", () =>
     Effect.gen(function* () {
       const builtins = yield* InstructionBuiltIns.Service
-      const initialized = yield* readInitial(yield* builtins.load(sessionID))
+      const initialized = yield* readInitial(yield* builtins.load(input(sessionID)))
       expect(initialized.values["core/decision-use"]).toBe(decisionUse)
       const previous = {
         values: Object.fromEntries(Object.entries(initialized.values).filter(([key]) => key !== "core/decision-use")),
       }
-      const updated = yield* readUpdate(yield* builtins.load(sessionID), previous)
+      const updated = yield* readUpdate(yield* builtins.load(input(sessionID)), previous)
       expect(updated.changed).toBe(true)
       expect(updated.text).toBe(decisionUse)
-      expect((yield* readUpdate(yield* builtins.load(sessionID), updated)).changed).toBe(false)
+      expect((yield* readUpdate(yield* builtins.load(input(sessionID)), updated)).changed).toBe(false)
+    }),
+  )
+
+  it.effect("omits built-in blocks disabled by capabilities by stable name", () =>
+    Effect.gen(function* () {
+      const builtins = yield* InstructionBuiltIns.Service
+      const initialized = yield* readInitial(
+        yield* builtins.load(
+          input(sessionID, {
+            capabilities: { builtin_instructions: { deny: ["environment", "date", "decision-use", "git-worktree"] } },
+          }),
+        ),
+      )
+      expect(Object.keys(initialized.values)).toEqual([
+        "core/subagent-reuse",
+        "core/shell-memory",
+        "core/project-artifact-authoring",
+        "core/git-attribution",
+        "core/human-input",
+        "core/task-completion",
+      ])
+      expect(initialized.text).not.toContain("<env>")
+      expect(initialized.text).not.toContain("Today's date")
+      expect(initialized.text).not.toContain(decisionUse)
+
+      const only = yield* readInitial(
+        yield* builtins.load(input(sessionID, { capabilities: { builtin_instructions: { allow: ["date"] } } })),
+      )
+      expect(Object.keys(only.values)).toEqual(["core/date"])
+      const none = yield* readInitial(
+        yield* builtins.load(input(sessionID, { capabilities: { builtin_instructions: { enabled: false } } })),
+      )
+      expect(none.values).toEqual({})
+      expect(none.text).toBe("")
+    }),
+  )
+
+  it.effect("omits blocks that describe tools the agent cannot call", () =>
+    Effect.gen(function* () {
+      const builtins = yield* InstructionBuiltIns.Service
+      const initialized = yield* readInitial(yield* builtins.load(input(sessionID, { tools: new Set(["shell"]) })))
+      expect(Object.keys(initialized.values)).toEqual([
+        "core/environment",
+        "core/date",
+        "core/shell-memory",
+        "core/git-worktree",
+        "core/git-attribution",
+      ])
+      expect(initialized.text).not.toContain(humanInput)
+      expect(initialized.text).not.toContain(decisionUse)
+      expect(initialized.text).not.toContain(taskCompletion)
+    }),
+  )
+
+  it.effect("removes a block from an existing Session when its capability is turned off", () =>
+    Effect.gen(function* () {
+      const builtins = yield* InstructionBuiltIns.Service
+      const initialized = yield* readInitial(yield* builtins.load(input(sessionID)))
+      const updated = yield* readUpdate(
+        yield* builtins.load(input(sessionID, { capabilities: { builtin_instructions: { deny: ["decision-use"] } } })),
+        initialized,
+      )
+      expect(updated.changed).toBe(true)
+      expect(updated.values["core/decision-use"]).toBeUndefined()
+      expect(updated.text).toBe("")
     }),
   )
 
@@ -177,10 +249,10 @@ describe("InstructionBuiltIns", () => {
     Effect.gen(function* () {
       yield* TestClock.setTime(timestamp)
       const context = yield* InstructionBuiltIns.Service
-      const initialized = yield* readInitial(yield* context.load(sessionID))
+      const initialized = yield* readInitial(yield* context.load(input(sessionID)))
 
       yield* TestClock.setTime(timestamp + 60 * 60 * 1000)
-      expect((yield* readUpdate(yield* context.load(sessionID), initialized)).changed).toBe(false)
+      expect((yield* readUpdate(yield* context.load(input(sessionID)), initialized)).changed).toBe(false)
     }),
   )
 })

@@ -4,6 +4,8 @@ import type { Context as PluginContext } from "@ycoding-ai/plugin/effect/plugin"
 import { dirname } from "path"
 import { ToolFailure } from "@ycoding-ai/ai"
 import { Effect, Schema } from "effect"
+import { Config } from "../config"
+import { ConfigCapabilities } from "../config/capabilities"
 import { FileSystem } from "../filesystem"
 import { FSUtil } from "../fs-util"
 import { Location } from "../location"
@@ -72,6 +74,7 @@ export const Plugin = {
     const mutation = yield* LocationMutation.Service
     const permission = yield* Permission.Service
     const sessionInstructions = yield* SessionInstructions.Service
+    const config = yield* Config.Service
     const fs = yield* FSUtil.Service
     const location = yield* Location.Service
 
@@ -115,6 +118,7 @@ export const Plugin = {
                 // skipped, and discovery failures never fail the read.
                 yield* Effect.gen(function* () {
                   if (target.externalDirectory !== undefined) return
+                  const capabilities = Config.capabilities(yield* config.entries())
                   const resolved = yield* fs.resolve(target.canonical)
                   const root = yield* fs.resolve(location.directory)
                   // up() searches its stop directory, so the Location-root AGENTS.md (already
@@ -125,7 +129,8 @@ export const Plugin = {
                     stop: root,
                   })
                   const candidates = (yield* Effect.forEach(discovered, fs.resolve)).filter(
-                    (file) => dirname(file) !== root,
+                    (file) =>
+                      dirname(file) !== root && ConfigCapabilities.allowsInstruction(capabilities, file, "project"),
                   )
                   if (candidates.length === 0) return
                   yield* sessionInstructions.load({ sessionID: context.sessionID, paths: candidates })

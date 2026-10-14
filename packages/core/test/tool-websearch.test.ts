@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, test } from "bun:test"
 import { Effect, Layer, Schema } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
+import { Config } from "@ycoding-ai/core/config"
+import { ConfigCapabilities } from "@ycoding-ai/core/config/capabilities"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { LayerNodePlatform } from "@ycoding-ai/core/effect/app-node-platform"
 import { Permission } from "@ycoding-ai/core/permission"
@@ -18,7 +20,7 @@ import { toolIdentity, executeTool, registerToolPlugin, settleTool, toolDefiniti
 const webSearchToolNode = makeLocationNode({
   name: "test/websearch-tool-plugin",
   layer: Layer.effectDiscard(registerToolPlugin(WebSearchTool.Plugin)),
-  deps: [ToolRegistry.toolsNode, Permission.node, LayerNodePlatform.httpClient, WebSearchTool.configNode],
+  deps: [ToolRegistry.toolsNode, Permission.node, LayerNodePlatform.httpClient, WebSearchTool.configNode, Config.node],
 })
 
 const sessionID = Session.ID.make("ses_websearch_test")
@@ -80,7 +82,7 @@ const requests: Request[] = []
 const assertions: Permission.AssertInput[] = []
 let responseBody = payload("search results")
 let makeResponse = () => new Response(responseBody, { status: 200 })
-let config: WebSearchTool.Config = { enableExa: false, enableParallel: false }
+let config: WebSearchTool.Settings = { enableExa: false, enableParallel: false }
 
 beforeEach(() => {
   responseBody = payload("search results")
@@ -133,6 +135,16 @@ const websearchConfig = Layer.succeed(
     },
   }),
 )
+let pinned: ConfigCapabilities.Info["websearch_provider"]
+const runtimeConfig = Layer.mock(Config.Service, {
+  entries: () =>
+    Effect.sync(() => [
+      new Config.Document({
+        type: "document",
+        info: new Config.Info({ capabilities: new ConfigCapabilities.Info({ websearch_provider: pinned }) }),
+      }),
+    ]),
+})
 const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([ToolRegistry.node, ToolRegistry.toolsNode, WebSearchTool.configNode, webSearchToolNode]),
@@ -140,6 +152,7 @@ const it = testEffect(
       [Permission.node, permission],
       [LayerNodePlatform.httpClient, http],
       [WebSearchTool.configNode, websearchConfig],
+      [Config.node, runtimeConfig],
       [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
       [Image.node, imagePassthrough],
     ],
@@ -251,6 +264,29 @@ describe("WebSearchTool registration", () => {
       })
       expect(JSON.stringify(settled)).not.toContain("parallel-secret")
     }),
+  )
+
+  it.effect("uses the configured provider pin for every Session over environment selection", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const search = (id: string) =>
+        settleTool(registry, {
+          sessionID: Session.ID.make(id),
+          ...toolIdentity,
+          call: { type: "tool-call", id: `call-${id}`, name: "websearch", input: { query: "pinned" } },
+        })
+      const sessions = ["ses_pin_a", "ses_pin_b", "ses_pin_c", "ses_pin_d"]
+      expect(new Set(sessions.map((id) => WebSearchTool.selectProvider(id))).size).toBe(2)
+      config = { provider: "exa", enableExa: true, enableParallel: true }
+      for (const provider of ["parallel", "exa"] as const) {
+        pinned = provider
+        requests.length = 0
+        for (const id of sessions) yield* search(id)
+        expect(requests.map((request) => request.url)).toEqual(
+          sessions.map(() => (provider === "exa" ? WebSearchTool.EXA_URL : WebSearchTool.PARALLEL_URL)),
+        )
+      }
+    }).pipe(Effect.ensuring(Effect.sync(() => (pinned = undefined)))),
   )
 
   it.effect("keeps an Exa credential in the transport URL and out of model output", () =>

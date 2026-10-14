@@ -3,6 +3,7 @@ import { Effect, Layer } from "effect"
 import fs from "fs/promises"
 import path from "path"
 import { Config } from "@ycoding-ai/core/config"
+import { ConfigCapabilities } from "@ycoding-ai/core/config/capabilities"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
@@ -23,6 +24,7 @@ const instructionLayer = (input: {
   filesystemLayer?: Layer.Layer<FSUtil.Service>
   instructionMaxBytes?: number
   project?: boolean
+  capabilities?: ConfigCapabilities.Info
 }) =>
   AppNodeBuilder.build(InstructionDiscovery.node, [
     [InstructionDiscovery.node, InstructionDiscovery.configured({ project: input.project })],
@@ -33,16 +35,15 @@ const instructionLayer = (input: {
         Config.Service.of({ diagnostics: () => Effect.succeed([]),
           reload: () => Effect.void,
           entries: () =>
-            Effect.succeed(
-              input.instructionMaxBytes === undefined
-                ? []
-                : [
-                    new Config.Document({
-                      type: "document",
-                      info: new Config.Info({ instruction_max_bytes: input.instructionMaxBytes }),
-                    }),
-                  ],
-            ),
+            Effect.succeed([
+              new Config.Document({
+                type: "document",
+                info: new Config.Info({
+                  instruction_max_bytes: input.instructionMaxBytes,
+                  capabilities: input.capabilities,
+                }),
+              }),
+            ]),
         }),
       ),
     ],
@@ -122,6 +123,61 @@ describe("InstructionDiscovery", () => {
           expect((yield* readUpdate(yield* load, initialized)).text).toBe(
             "Previously loaded instructions no longer apply.",
           )
+        }),
+      ),
+    ),
+  )
+
+  it.live("omits global, project, and excluded AGENTS.md files selected by capabilities", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const global = path.join(tmp.path, "global")
+          const project = path.join(tmp.path, "project")
+          const directory = path.join(project, "packages", "core")
+          const globalFile = path.join(global, "AGENTS.md")
+          const projectFile = path.join(project, "AGENTS.md")
+          const packageFile = path.join(directory, "AGENTS.md")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(global, { recursive: true })
+            await fs.mkdir(directory, { recursive: true })
+            await fs.writeFile(globalFile, "global")
+            await fs.writeFile(projectFile, "project")
+            await fs.writeFile(packageFile, "package")
+          })
+          const render = (instructions: ConfigCapabilities.Info["instructions"]) =>
+            InstructionDiscovery.Service.pipe(
+              Effect.flatMap((service) => service.load()),
+              Effect.flatMap(readInitial),
+              Effect.map((initialized) => initialized.text),
+              Effect.provide(
+                instructionLayer({
+                  config: global,
+                  capabilities: new ConfigCapabilities.Info({ instructions }),
+                  locationServiceLayer: Layer.succeed(
+                    Location.Service,
+                    Location.Service.of(
+                      location(
+                        { directory: AbsolutePath.make(directory) },
+                        { projectDirectory: AbsolutePath.make(project) },
+                      ),
+                    ),
+                  ),
+                }),
+              ),
+            )
+
+          expect(yield* render({ global: false })).toBe(
+            [`Instructions from: ${packageFile}\npackage`, `Instructions from: ${projectFile}\nproject`].join("\n\n"),
+          )
+          expect(yield* render({ project: false })).toBe(`Instructions from: ${globalFile}\nglobal`)
+          expect(yield* render({ exclude: ["*/packages/*/AGENTS.md"] })).toBe(
+            [`Instructions from: ${globalFile}\nglobal`, `Instructions from: ${projectFile}\nproject`].join("\n\n"),
+          )
+          expect(yield* render({ global: false, project: false })).toBe("")
         }),
       ),
     ),

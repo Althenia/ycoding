@@ -4,6 +4,8 @@ import { pathToFileURL } from "url"
 import { describe, expect } from "bun:test"
 import { DateTime, Effect, Layer } from "effect"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
+import { Config } from "@ycoding-ai/core/config"
+import { ConfigCapabilities } from "@ycoding-ai/core/config/capabilities"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Location } from "@ycoding-ai/core/location"
 import { MCP } from "@ycoding-ai/core/mcp/index"
@@ -33,6 +35,7 @@ const skillToolNode = makeLocationNode({
   layer: Layer.effectDiscard(registerToolPlugin(SkillTool.Plugin)),
   deps: [
     ToolRegistry.toolsNode,
+    Config.node,
     FSUtil.node,
     Skill.node,
     MCP.node,
@@ -91,6 +94,11 @@ describe("SkillTool", () => {
           }
           let current = [info]
           let active = false
+          let capabilities: ConfigCapabilities.Info | undefined
+          const config = Layer.mock(Config.Service, {
+            entries: () =>
+              Effect.sync(() => [new Config.Document({ type: "document", info: new Config.Info({ capabilities }) })]),
+          })
           const assertions: Permission.AssertInput[] = []
           const sourceActivations: Parameters<ProjectArtifactSource.Interface["activate"]>[0][] = []
           let permissionFailure: "denied" | "corrected" | "cancelled" | undefined
@@ -217,6 +225,7 @@ describe("SkillTool", () => {
             LayerNode.group([ToolRegistry.node, ToolRegistry.toolsNode, skillToolNode]),
             [
               [Permission.node, permission],
+              [Config.node, config],
               [Skill.node, skills],
               [MCP.node, Layer.mock(MCP.Service, {})],
               [
@@ -272,6 +281,16 @@ describe("SkillTool", () => {
               { sessionID, action: "skill", resources: ["effect"], save: ["effect"] },
               { sessionID, action: "skill", resources: ["effect"], save: ["effect"] },
             ])
+            capabilities = new ConfigCapabilities.Info({ skills: { deny: ["effect"] } })
+            expect(
+              yield* executeTool(registry, {
+                sessionID,
+                ...toolIdentity,
+                call: { type: "tool-call", id: "call-denied-skill", name: "skill", input: { id: "effect" } },
+              }),
+            ).toEqual({ type: "error", value: "Unable to load skill effect" })
+            expect(assertions).toHaveLength(2)
+            capabilities = undefined
             active = true
             expect(
               yield* executeTool(registry, {

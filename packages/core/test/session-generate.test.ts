@@ -203,7 +203,7 @@ const setup = Effect.gen(function* () {
     })
     .run()
     .pipe(Effect.orDie)
-  return { db, events, instructions: yield* instructionBuiltIns.load(sessionID) }
+  return { db, events, instructions: yield* instructionBuiltIns.load({ sessionID, capabilities: {}, tools: new Set() }) }
 })
 
 it.effect("executes the provider for transient generation without durable mutation", () =>

@@ -97,6 +97,39 @@ describe("PluginSupervisor config", () => {
     )
   })
 
+  for (const example of [
+    { name: "a denied plugin ID", capabilities: { plugins: { deny: ["config-promise-*"] } } },
+    { name: "an allow list without its ID", capabilities: { plugins: { allow: ["other-plugin"] } } },
+    { name: "disabled external plugins", capabilities: { plugins: { enabled: false } } },
+  ])
+    it.live(`never activates a configured plugin excluded by ${example.name}`, () => {
+      const plugin = path.join(import.meta.dir, "../plugin/fixtures/config-promise-plugin.ts")
+      return withLocation(
+        { plugins: [plugin], capabilities: example.capabilities },
+        Effect.gen(function* () {
+          yield* ready()
+          const plugins = yield* PluginRegistry.Service
+          const agents = yield* Agent.Service
+          const ids = (yield* plugins.list()).map((item) => String(item.id))
+          expect(ids).not.toContain("config-promise-plugin")
+          expect(ids).toContain("ycoding.tool.read")
+          expect(yield* agents.get(Agent.ID.make("configured"))).toBeUndefined()
+        }),
+      )
+    })
+
+  it.live("activates a configured plugin named by the capability allow list", () => {
+    const plugin = path.join(import.meta.dir, "../plugin/fixtures/config-promise-plugin.ts")
+    return withLocation(
+      { plugins: [plugin], capabilities: { plugins: { allow: ["config-promise-plugin"] } } },
+      Effect.gen(function* () {
+        yield* ready()
+        const plugins = yield* PluginRegistry.Service
+        expect((yield* plugins.list()).map((item) => String(item.id))).toContain("config-promise-plugin")
+      }),
+    )
+  })
+
   it.live("does not disable configured plugins by package target", () => {
     const plugin = path.join(import.meta.dir, "../plugin/fixtures/config-promise-plugin.ts")
     return withLocation(

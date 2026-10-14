@@ -4,6 +4,7 @@ import type { Context as PluginContext } from "@ycoding-ai/plugin/effect/plugin"
 import { ToolFailure } from "@ycoding-ai/ai"
 import { Context, Duration, Effect, Layer, Schema } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/unstable/http"
+import { Config } from "../config"
 import { makeLocationNode } from "../effect/app-node"
 import { InstallationVersion } from "../installation/version"
 import { PositiveInt } from "../schema"
@@ -56,7 +57,7 @@ export const Input = Schema.Struct({
 export const Provider = Schema.Literals(["exa", "parallel"])
 export type Provider = typeof Provider.Type
 
-export interface Config {
+export interface Settings {
   readonly provider?: Provider
   readonly enableExa: boolean
   readonly enableParallel: boolean
@@ -64,7 +65,7 @@ export interface Config {
   readonly parallelApiKey?: string
 }
 
-export class ConfigService extends Context.Service<ConfigService, Config>()("@ycoding/WebSearchConfig") {}
+export class ConfigService extends Context.Service<ConfigService, Settings>()("@ycoding/WebSearchConfig") {}
 
 /** Isolates the retained product environment contract from the generic tool implementation. */
 export const defaultConfigLayer = Layer.sync(ConfigService, () =>
@@ -89,7 +90,7 @@ export const configNode = makeLocationNode({ service: ConfigService, layer: defa
 
 export function selectProvider(
   sessionID: string,
-  flags: Pick<Config, "enableExa" | "enableParallel"> = { enableExa: false, enableParallel: false },
+  flags: Pick<Settings, "enableExa" | "enableParallel"> = { enableExa: false, enableParallel: false },
   override?: Provider,
 ): Provider {
   if (override) return override
@@ -195,7 +196,8 @@ export const Plugin = {
   id: "ycoding.tool.websearch",
   effect: Effect.fn("WebSearchTool.Plugin")(function* (ctx: PluginContext) {
     const http = yield* HttpClient.HttpClient
-    const config = yield* ConfigService
+    const settings = yield* ConfigService
+    const config = yield* Config.Service
     const permission = yield* Permission.Service
 
     yield* ctx.tool
@@ -207,9 +209,13 @@ export const Plugin = {
             input: Input,
             output: Output,
             toModelOutput: ({ output }) => [{ type: "text", text: output.text }],
-            execute: (input, context) => {
-              const provider = selectProvider(context.sessionID, config, config.provider)
-              return Effect.gen(function* () {
+            execute: (input, context) =>
+              Effect.gen(function* () {
+                const provider = selectProvider(
+                  context.sessionID,
+                  settings,
+                  Config.capabilities(yield* config.entries()).websearch_provider ?? settings.provider,
+                )
                 yield* permission.assert({
                   action: name,
                   resources: [input.query],
@@ -222,7 +228,7 @@ export const Plugin = {
 
                 const text =
                   provider === "exa"
-                    ? yield* callMcp(http, exaUrl(config.exaApiKey), "web_search_exa", ExaArgs, {
+                    ? yield* callMcp(http, exaUrl(settings.exaApiKey), "web_search_exa", ExaArgs, {
                         query: input.query,
                         type: input.type || "auto",
                         numResults: input.numResults || 8,
@@ -242,7 +248,7 @@ export const Plugin = {
                         },
                         {
                           "User-Agent": `ycoding/${InstallationVersion}`,
-                          ...(config.parallelApiKey ? { Authorization: `Bearer ${config.parallelApiKey}` } : {}),
+                          ...(settings.parallelApiKey ? { Authorization: `Bearer ${settings.parallelApiKey}` } : {}),
                         },
                       )
                 return {
@@ -253,8 +259,7 @@ export const Plugin = {
                 Effect.mapError(
                   (error) => new ToolFailure({ message: `Unable to search the web for ${input.query}`, error }),
                 ),
-              )
-            },
+              ),
           }),
           { codemode: false },
         ),

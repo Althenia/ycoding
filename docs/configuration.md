@@ -10,6 +10,7 @@ This document is the canonical configuration reference for the current YCoding r
 | Connect an account and choose a model     | [Providers and models](#providers-and-models), [profiles](#provider-profiles), [Claude Code accounts](#claude-code-account-profiles), [model selectors](#model-selectors). |
 | Control agent authority                   | [Permissions](#permissions), [agents](#agents), [guardrails](#guardrail-configuration-and-custom-files).                                                                   |
 | Extend repository behavior                | [Commands](#commands), [skills and instructions](#skills-and-ambient-instructions), [plugins](#plugins-and-hooks), [MCP](#mcp).                                            |
+| Turn capabilities off for an evaluation   | [Capability toggles](#capability-toggles), [isolated runs](#per-run-configuration-and-isolated-runs).                                                                      |
 | Manage context and knowledge              | [Compaction](#compaction-and-experimental-settings), [workspace memory](#workspace-memory), [provider efficiency](#provider-efficiency).                                   |
 | Adjust presentation and service operation | [CLI/TUI](#cli-tui-configuration), [managed service](#managed-service-configuration).                                                                                      |
 
@@ -132,11 +133,76 @@ After deployment, use the endpoint in `ycoding.jsonc` for editor validation:
 
 Use the generated YCoding schema endpoint rather than a different product's schema.
 
+## Capability toggles
+
+The `capabilities` object turns runtime capabilities off so a Session sees exactly the instructions, skills, tools, and integrations a run intends, for example an evaluation without `AGENTS.md`, with one skill, or without MCP. Every field is optional; an omitted field keeps the default behavior. It works in every configuration layer, including global and project files, `YCODING_CONFIG_CONTENT`, and `ycoding run --config`. Each leaf field is last-wins across layers in the normal [precedence](#runtime-configuration-discovery-and-precedence) order, and a list replaces the list from a lower layer instead of merging with it.
+
+```jsonc
+{
+  "capabilities": {
+    "instructions": { "global": false, "project": true, "exclude": ["*/vendor/*/AGENTS.md"] },
+    "builtin_instructions": { "deny": ["environment", "date"] },
+    "skills": { "allow": ["review"] },
+    "tools": { "deny": ["websearch", "webfetch", "browser", "computer"] },
+    "mcp": { "enabled": false },
+    "plugins": { "enabled": false },
+    "project_artifacts": false,
+    "home_roots": false,
+    "websearch_provider": "exa",
+  },
+}
+```
+
+`builtin_instructions`, `skills`, `tools`, `mcp`, and `plugins` share one selection shape:
+
+| Field     | Type     | Effect                                                                                                    |
+| --------- | -------- | --------------------------------------------------------------------------------------------------------- |
+| `enabled` | boolean  | `false` turns off every item; default `true`.                                                             |
+| `allow`   | string[] | When set, only matching items stay available; an empty list keeps none.                                   |
+| `deny`    | string[] | Matching items are unavailable; deny wins over allow.                                                     |
+
+Names in `skills`, `tools`, `mcp`, and `plugins` are wildcard patterns: `*` matches any characters and `?` matches one character. `builtin_instructions` accepts only the closed block names listed below.
+
+| Field                  | Effect                                                                                                                                                                                                                                                                                                                       |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `instructions.global`  | `false` skips `<global YCoding config>/AGENTS.md`.                                                                                                                                                                                                                                                                           |
+| `instructions.project` | `false` skips every project `AGENTS.md`: upward discovery from the project root and nested files the `read` tool would otherwise inject after a read.                                                                                                                                                                        |
+| `instructions.exclude` | Wildcard patterns matched against absolute `AGENTS.md` paths; a matching file is skipped by both upward discovery and `read` injection.                                                                                                                                                                                     |
+| `builtin_instructions` | Built-in blocks by name: `environment`, `date`, `subagent-reuse`, `shell-memory`, `project-artifact-authoring`, `git-worktree`, `git-attribution`, `human-input`, `decision-use`, `task-completion`, and `memory`.                                                                                                          |
+| `skills`               | Skills by ID from every source: global and ancestor `.ycoding`, `~/.agents` and `~/.claude` and their ancestor roots, the `skills` array, managed project artifacts, MCP-served skills (IDs as shown in the skill catalog), and the built-in `ycoding` and `report` skills. `enabled: false` also hides the `skill` tool. |
+| `tools`                | Tools by registered name (see below). A hidden tool is absent from the model's tool list and from CodeMode, and a call to it fails as an unknown tool.                                                                                                                                                                      |
+| `mcp`                  | MCP servers by configured name under `mcp.servers`. An excluded server never starts, so its tools, instructions, prompts, resources, and skills are absent; a server added at runtime under an excluded name stays `disabled`.                                                                                              |
+| `plugins`              | External plugins by plugin ID: configured packages and files and auto-discovered `plugin`/`plugins` files. `enabled: false` loads none of them. `allow`/`deny` match the plugin's exported ID, so a listed package or file is imported to read its ID but an excluded plugin never activates. Built-in `ycoding.*` plugins are unaffected. |
+| `project_artifacts`    | `false` applies no managed project artifacts (skills, commands, agents) to the Location and hides the `project_artifact` tool.                                                                                                                                                                                              |
+| `home_roots`           | `false` omits the `~/.agents` and `~/.claude` ecosystem roots, including their skills and global skill artifacts stored under `~/.agents/skills`. Project `.agents` and `.claude` directories below the home directory still load.                                                                                         |
+| `websearch_provider`   | `exa` or `parallel` pins the `websearch` provider for every Session. Without it the provider comes from `YCODING_WEBSEARCH_PROVIDER`, then `YCODING_ENABLE_PARALLEL`/`YCODING_ENABLE_EXA`, then a stable choice derived from the Session ID.                                                                              |
+
+Built-in tool names are `browser`, `computer`, `decision`, `edit`, `glob`, `goal`, `grep`, `memory`, `patch`, `project_artifact`, `question`, `read`, `shell`, `skill`, `subagent`, `subagent_control`, `subagent_report`, `task_complete`, `todowrite`, `webfetch`, `websearch`, `worktree`, and `write`. MCP tools are named `<server>_<tool>` with characters other than letters, digits, `_`, and `-` replaced by `_`, so `"deny": ["github_*"]` hides one server's tools; plugin tools use their registered name or `<namespace>_<tool>`. CodeMode's `execute` wrapper is shown whenever at least one CodeMode tool remains; it is hidden only by `enabled: false` or an explicit deny, and `allow` lists need not name it. Tool toggles filter the same catalog that permission rules filter: a tool also disappears when an effective permission wholly denies its action.
+
+A built-in instruction block that describes a tool is omitted while the selected agent cannot call that tool, whether a capability toggle hides it, a permission or Session ceiling wholly denies it, or the subagent mode removes it: `subagent-reuse` needs `subagent`, `shell-memory` needs `shell`, `project-artifact-authoring` needs `project_artifact`, `human-input` needs `question`, `decision-use` needs `decision`, `task-completion` needs `task_complete`, and `memory` needs `memory` and `memory.enabled`. `project-artifact-authoring` covers both project-artifact guidance blocks. MCP server instructions follow the same rule for the server's tools and `execute`.
+
+Toggles are evaluated per Location, so a main Session and its subagents in the same Location see the same capabilities, and `YCODING_CONFIG_CONTENT` or `--config` applies to every Location of that server. MCP toggles, like `mcp.servers`, are read when a Location's services boot; other toggles follow configuration reloads and apply from the next model step or tool call. A block that is turned off during a Session is removed from its instruction state. Toggles narrow capabilities only: they never grant a permission, and a skill or tool hidden by a toggle cannot be loaded or called by explicit ID.
+
+### Per-run configuration and isolated runs
+
+`ycoding run` accepts two flags for reproducible runs. Both start a private server for the run, like `--standalone`, and cannot be combined with `--server`:
+
+| Flag              | Effect                                                                                                                                                                                                                                                                                                                                                                                          |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--config <file>` | Reads a JSON/JSONC runtime configuration document (relative paths resolve from the current directory) and passes it to the private server as `YCODING_CONFIG_CONTENT`, so it is the highest-priority layer above global, `YCODING_CONFIG`, project, and well-known configuration. `{file:…}` references inside it resolve from the run directory. An unreadable or unparsable file fails the run before a server starts, and so does a `YCODING_CONFIG_CONTENT` already set in the environment. |
+| `--isolated`      | Gives the private server a new temporary data directory (`XDG_DATA_HOME`) and a database inside it, overriding `YCODING_DB`, and removes the directory after the server stops. The server's Sessions, logs, managed tool output, project-artifact store, and default workspace-memory location live there, so it never opens the user's database. Global configuration, cache, and state directories are unchanged.                       |
+
+Stored provider credentials live in the database, so an `--isolated` run cannot use them: supply provider keys through environment variables or providers declared in the configuration (for example in the `--config` document). Each `--isolated` run starts with no Sessions, so `--continue` and `--session` find nothing from earlier runs.
+
+```sh
+ycoding run --isolated --config eval.jsonc --model openai/gpt-5 "Fix the failing test"
+```
+
 ## Terminal installation and commands
 
 After the public site and a native release are published, `curl -fsSL https://ycoding.althenia.app/install.sh | sh` installs a checksum-verified release executable in `~/.local/bin`. Installation does not require a separate Bun runtime. The installer applies the same archive checks as `ycoding update`. It checks the shell configuration and adds the binary directory to PATH only when needed; unsupported shells receive manual PATH guidance.
 
-`ycoding` opens the interactive terminal interface. `ycoding --model <[profile#]provider/model[#variant]> "prompt"` executes a direct non-interactive run instead. `ycoding run --help` lists the explicit run command's options. These paths share the existing durable Session execution and permission handling.
+`ycoding` opens the interactive terminal interface. `ycoding --model <[profile#]provider/model[#variant]> "prompt"` executes a direct non-interactive run instead. `ycoding run --help` lists the explicit run command's options; `--config <file>` and `--isolated` give one run its own configuration document and data directory (see [per-run configuration and isolated runs](#per-run-configuration-and-isolated-runs)). These paths share the existing durable Session execution and permission handling.
 
 The installed executable includes `ycoding service start`, `restart`, `status`, `stop`, `get`, `set`, and `unset` for the managed background server. `ycoding service --help` lists these controls. `status` reports the running endpoint or `stopped` without starting a server. `restart` interrupts executing Sessions; let their work finish before restarting to apply an update.
 
@@ -252,6 +318,7 @@ The MCP shape where server names appear directly under `mcp` is also rejected. U
 | `skills`                | string array                          | Additional skill directories or HTTP(S) sources.                                            |
 | `commands`              | record                                | Named slash commands.                                                                       |
 | `instructions`          | string array                          | Accepted by Schema, but no current runtime consumer reads this field. Do not rely on it.    |
+| `capabilities`          | object                                | [Capability toggles](#capability-toggles) for instructions, skills, tools, MCP, plugins.    |
 | `instruction_max_bytes` | positive integer                      | Maximum bytes loaded from each ambient instruction file; default 51,200, maximum 1,048,576. |
 | `references`            | record                                | Named local or Git context sources.                                                         |
 | `plugins`               | array                                 | Ordered plugin additions, options, and removals.                                            |
@@ -305,6 +372,7 @@ The field reference below expands the overview. `unset` means the field is optio
 | `provider_usage`                                  | `Config.ProviderUsage`                                                         | unset           | Read-only provider-usage client bridge.                                                          |
 | `efficiency`                                      | `Config.Efficiency`                                                            | runtime-derived | Helper-model, cache, and continuation policy.                                                    |
 | `image_analyzer`                                  | `Config.ImageAnalyzer`                                                         | unset           | Vision fallback for text-only models: provider/model, prompt, and thresholds.                    |
+| `capabilities`                                    | `Config.Capabilities`                                                          | unset           | Capability toggles; each leaf is last-wins across layers. See [Capability toggles](#capability-toggles). |
 | `experimental`                                    | `Config.Experimental`                                                          | unset           | Experimental runtime policy.                                                                     |
 
 | Nested field path                                                                                                 | Exact type or closed values                                                                                     | Default                         | Operational remark                                                                                                                                                                |
@@ -705,12 +773,12 @@ Commands may be inline or Markdown resources. See [`repository-resources.md`](./
 Ambient instructions currently come from:
 
 - `AGENTS.md` in the global YCoding config directory;
-- `AGENTS.md` discovered from the project root toward the current directory;
+- `AGENTS.md` discovered from the project root toward the current directory, plus nested `AGENTS.md` files injected after a `read` below the current directory;
 - MCP server instructions;
 - activated skills;
 - explicit durable session instruction injection.
 
-The top-level `instructions` field is Schema-accepted but not connected to current instruction discovery.
+The top-level `instructions` field is Schema-accepted but not connected to current instruction discovery. [`capabilities.instructions`](#capability-toggles) turns off global or project `AGENTS.md` files or excludes individual files.
 
 ## References
 
@@ -1433,7 +1501,7 @@ Stable operator-facing variables:
 | `YCODING_FILEWATCHER_DISABLE`    | Disable filesystem watcher.                                |
 | `YCODING_DISABLE_FILEWATCHER`    | Alternate filesystem-watcher disable switch.               |
 | `YCODING_DISABLE_FFF`            | Disable the FFF filesystem backend.                        |
-| `YCODING_WEBSEARCH_PROVIDER`     | Select web-search provider.                                |
+| `YCODING_WEBSEARCH_PROVIDER`     | Select web-search provider unless `capabilities.websearch_provider` pins one. |
 | `YCODING_TERMINAL`               | Override terminal identity used by shell and PTY behavior. |
 | `YCODING_REMOTE_URL`             | Relay origin used by the `ycoding remote` commands.        |
 

@@ -9,6 +9,7 @@ import path from "node:path"
 import { Cause, Context, Deferred, Effect, Exit, FiberSet, Layer, Schema, Scope, Stream } from "effect"
 import { makeLocationNode } from "../effect/app-node"
 import { Config } from "../config"
+import { ConfigCapabilities } from "../config/capabilities"
 import { ConfigMCP } from "../config/mcp"
 import { Credential } from "../credential"
 import { EventRuntime } from "../event"
@@ -230,7 +231,10 @@ export const layer = Layer.effect(
     const fork = yield* FiberSet.makeRuntime<never, void, never>()
     yield* Effect.addFinalizer((exit) => Scope.close(root, exit))
 
-    const documents = (yield* config.entries()).filter((entry): entry is Config.Document => entry.type === "document")
+    const configEntries = yield* config.entries()
+    const documents = configEntries.filter((entry): entry is Config.Document => entry.type === "document")
+    // Capability toggles are read with the server definitions when the Location boots.
+    const allowed = (name: string) => ConfigCapabilities.allows(Config.capabilities(configEntries).mcp, name)
     // Global MCP timeout defaults, later config files overriding earlier ones.
     const timeout = Object.assign(
       {},
@@ -244,6 +248,7 @@ export const layer = Layer.effect(
     const urlElicitations = new Map<string, Form.ID>()
     for (const entry of documents) {
       for (const [name, server] of Object.entries(entry.info.mcp?.servers ?? {})) {
+        if (!allowed(name)) continue
         runtime.set(ServerName.make(name), {
           config: { ...server, timeout: { ...timeout, ...server.timeout } },
           status: { status: "pending" },
@@ -573,6 +578,11 @@ export const layer = Layer.effect(
 
     const startServer = (name: ServerName, entry: ServerEntry) =>
       Effect.gen(function* () {
+        if (!allowed(name)) {
+          entry.status = { status: "disabled" }
+          yield* events.publish(McpEvent.StatusChanged, { server: name }).pipe(Effect.ignore)
+          return
+        }
         // Announce the handshake so connect() and credential reconnects don't show a stale
         // disabled/failed status for the duration of the connection attempt.
         entry.status = { status: "pending" }

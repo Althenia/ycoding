@@ -3,6 +3,8 @@ import path from "path"
 import { describe, expect } from "bun:test"
 import { Deferred, Effect, Fiber, Layer, Stream } from "effect"
 import { Agent } from "@ycoding-ai/core/agent"
+import { Config } from "@ycoding-ai/core/config"
+import { ConfigCapabilities } from "@ycoding-ai/core/config/capabilities"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { EventRuntime } from "@ycoding-ai/core/event"
@@ -28,10 +30,38 @@ const discovery = Layer.succeed(
     },
   }),
 )
+let capabilities: ConfigCapabilities.Info | undefined
+const config = Layer.succeed(
+  Config.Service,
+  Config.Service.of({
+    diagnostics: () => Effect.succeed([]),
+    reload: () => Effect.void,
+    entries: () =>
+      Effect.sync(() => [new Config.Document({ type: "document", info: new Config.Info({ capabilities }) })]),
+  }),
+)
+const mcpSkill = (server: string, name: string) => ({
+  server,
+  uri: `skill://${name}/SKILL.md`,
+  frontmatter: { name, description: `${name} from ${server}` },
+  resources: [],
+})
+const servedMcpLayer = Layer.effect(
+  MCP.Service,
+  MCP.Service.pipe(
+    Effect.map((mcp) =>
+      MCP.Service.of({
+        ...mcp,
+        skillCatalog: () => Effect.succeed([mcpSkill("docs", "lookup"), mcpSkill("docs", "publish")]),
+      }),
+    ),
+  ),
+).pipe(Layer.provide(emptyMcpLayer))
 const it = testEffect(
   AppNodeBuilder.build(LayerNode.group([Skill.node, Agent.node, EventRuntime.node]), [
     [SkillDiscovery.node, discovery],
-    [MCP.node, emptyMcpLayer],
+    [MCP.node, servedMcpLayer],
+    [Config.node, config],
   ]),
 )
 
@@ -125,6 +155,55 @@ describe("Skill", () => {
               content: "# review",
             },
           ])
+        }),
+      ),
+    ),
+  )
+
+  it.live("filters directory, embedded, and MCP-served skills by capability toggles", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(async () => {
+            await fs.mkdir(path.join(tmp.path, "review"), { recursive: true })
+            await fs.mkdir(path.join(tmp.path, "deploy"), { recursive: true })
+            await write(tmp.path, "review", "Review")
+            await write(tmp.path, "deploy", "Deploy")
+          })
+          const skill = yield* Skill.Service
+          yield* skill.transform((editor) => {
+            editor.source({ type: "directory", path: AbsolutePath.make(tmp.path) })
+            editor.source(
+              Skill.EmbeddedSource.make({
+                type: "embedded",
+                skill: Skill.Info.make({
+                  id: Skill.ID.make("report"),
+                  name: Skill.Name.make("Report"),
+                  description: "Report",
+                  location: AbsolutePath.make("/builtin/report.md"),
+                  content: "report",
+                }),
+              }),
+            )
+          })
+          const ids = Effect.gen(function* () {
+            return [...(yield* skill.list()), ...(yield* skill.mcp())].map((item) => String(item.id)).toSorted()
+          })
+          const lookup = Skill.mcpSkillID("docs", "skill://lookup/SKILL.md")
+          const publish = Skill.mcpSkillID("docs", "skill://publish/SKILL.md")
+
+          capabilities = undefined
+          expect(yield* ids).toEqual([lookup, publish, "deploy", "report", "review"].toSorted())
+          capabilities = new ConfigCapabilities.Info({ skills: { allow: ["review", lookup] } })
+          expect(yield* ids).toEqual([lookup, "review"].toSorted())
+          capabilities = new ConfigCapabilities.Info({ skills: { deny: ["report", "deploy", publish] } })
+          expect(yield* ids).toEqual([lookup, "review"].toSorted())
+          capabilities = new ConfigCapabilities.Info({ skills: { enabled: false } })
+          expect(yield* ids).toEqual([])
+          capabilities = undefined
         }),
       ),
     ),

@@ -3,6 +3,7 @@ export * as InstructionDiscovery from "./instruction-discovery"
 import { Array, Context, Effect, Layer, Schema } from "effect"
 import { isAbsolute, join, relative, sep } from "path"
 import { Config } from "./config"
+import { ConfigCapabilities } from "./config/capabilities"
 import { FSUtil } from "./fs-util"
 import { Global } from "./global"
 import { renderInstructionContent } from "./instruction-content"
@@ -54,14 +55,14 @@ export const layer = (options?: Options) => Layer.effect(
         },
       })
 
-    const observe = Effect.fn("InstructionDiscovery.observe")(function* () {
+    const observe = Effect.fn("InstructionDiscovery.observe")(function* (capabilities: ConfigCapabilities.Resolved) {
       const start = yield* fs.resolve(location.directory)
       const stop = yield* fs.resolve(location.project.directory)
       const fromProject = relative(stop, start)
       const insideProject =
         fromProject === "" || (fromProject !== ".." && !fromProject.startsWith(`..${sep}`) && !isAbsolute(fromProject))
       const discovered = new Set(
-        yield* Effect.forEach(
+        (yield* Effect.forEach(
           options?.project === false || !insideProject
             ? []
             : yield* fs.up({
@@ -70,9 +71,13 @@ export const layer = (options?: Options) => Layer.effect(
                 stop,
               }),
           fs.resolve,
-        ),
+        )).filter((path) => ConfigCapabilities.allowsInstruction(capabilities, path, "project")),
       )
-      const paths = Array.dedupe([yield* fs.resolve(join(global.config, "AGENTS.md")), ...discovered])
+      const globalPath = yield* fs.resolve(join(global.config, "AGENTS.md"))
+      const paths = Array.dedupe([
+        ...(ConfigCapabilities.allowsInstruction(capabilities, globalPath, "global") ? [globalPath] : []),
+        ...discovered,
+      ])
       const files = yield* Effect.forEach(
         paths,
         (path) =>
@@ -92,8 +97,9 @@ export const layer = (options?: Options) => Layer.effect(
 
     return Service.of({
       load: Effect.fn("InstructionDiscovery.load")(function* () {
-        const maxBytes = Config.latest(yield* config.entries(), "instruction_max_bytes")
-        return yield* observe().pipe(
+        const entries = yield* config.entries()
+        const maxBytes = Config.latest(entries, "instruction_max_bytes")
+        return yield* observe(Config.capabilities(entries)).pipe(
           Effect.map((files) =>
             Array.isArray(files) && files.length === 0
               ? source(Instructions.removed, maxBytes)

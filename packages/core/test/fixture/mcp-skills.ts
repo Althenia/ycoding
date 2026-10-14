@@ -18,6 +18,7 @@ import { SkillDiscovery } from "@ycoding-ai/core/skill/discovery"
 import { Skill } from "@ycoding-ai/core/skill"
 import { Effect, Layer, Stream } from "effect"
 import { location } from "./location"
+import { emptyConfigLayer } from "./mcp"
 
 type SkillFile = {
   readonly name: string
@@ -267,6 +268,7 @@ export const skillBody = (frontmatter: Record<string, unknown>, body: string) =>
 export const skillsMcpReplacements = (url: string) =>
   [
     [MCP.node, skillsMcpLayer(url)],
+    [Config.node, emptyConfigLayer],
     [SkillDiscovery.node, Layer.mock(SkillDiscovery.Service, {})],
     [
       EventRuntime.node,

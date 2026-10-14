@@ -7,6 +7,7 @@ import { Agent } from "@ycoding-ai/core/agent"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Config } from "@ycoding-ai/core/config"
+import { ConfigCapabilities } from "@ycoding-ai/core/config/capabilities"
 import { Database } from "@ycoding-ai/core/database/database"
 import { EventRuntime } from "@ycoding-ai/core/event"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
@@ -48,6 +49,7 @@ const readToolNode = makeLocationNode({
     SessionInstructions.node,
     FSUtil.node,
     Location.node,
+    Config.node,
   ],
 })
 
@@ -73,10 +75,22 @@ const permission = Layer.succeed(
     list: () => Effect.die("unused"),
   }),
 )
+let configEntries: Config.Entry[] = []
 const config = Layer.succeed(
   Config.Service,
-  Config.Service.of({ diagnostics: () => Effect.succeed([]), reload: () => Effect.void, entries: () => Effect.succeed([]) }),
+  Config.Service.of({
+    diagnostics: () => Effect.succeed([]),
+    reload: () => Effect.void,
+    entries: () => Effect.sync(() => configEntries),
+  }),
 )
+const withCapabilities = (capabilities: ConfigCapabilities.Info) =>
+  Effect.acquireRelease(
+    Effect.sync(() => {
+      configEntries = [new Config.Document({ type: "document", info: new Config.Info({ capabilities }) })]
+    }),
+    () => Effect.sync(() => (configEntries = [])),
+  )
 const imageLayer = AppNodeBuilder.build(Image.node, [[Config.node, config]])
 
 const testLayer = AppNodeBuilder.build(
@@ -193,6 +207,46 @@ describe("SessionInstructions", () => {
       expect(secondInjected[1]!.metadata).toEqual({ instruction: { paths: [otherPath] } })
       expect(secondInjected.some((message) => message.text.includes("root-instructions"))).toBe(false)
     }),
+  )
+
+  it.effect("never injects nested AGENTS.md after a read when project instructions are turned off", () =>
+    Effect.gen(function* () {
+      yield* withCapabilities(new ConfigCapabilities.Info({ instructions: { project: false } }))
+      const location = yield* Location.Service
+      const dir = location.directory
+      yield* mkdir(path.resolve(dir, "nested", "deep"))
+      yield* writeAgents(path.resolve(dir, "nested", "AGENTS.md"), "nested-instructions")
+      yield* writeAgents(path.resolve(dir, "nested", "deep", "AGENTS.md"), "deep-instructions")
+      yield* Effect.promise(() => fs.writeFile(path.resolve(dir, "nested", "deep", "file.txt"), "file content"))
+
+      const session = yield* Session.Service
+      const registry = yield* ToolRegistry.Service
+      const sessionID = (yield* session.create({ location: Location.Ref.make({ directory: dir }) })).id
+      yield* settleTool(registry, readCall(sessionID, "call-off", "nested/deep/file.txt"))
+
+      expect(yield* synthetics(sessionID)).toEqual([])
+    }).pipe(Effect.scoped),
+  )
+
+  it.effect("injects only nested AGENTS.md files that capability exclusions keep", () =>
+    Effect.gen(function* () {
+      yield* withCapabilities(new ConfigCapabilities.Info({ instructions: { exclude: ["*/excluded/AGENTS.md"] } }))
+      const location = yield* Location.Service
+      const dir = location.directory
+      const keptPath = path.resolve(dir, "excluded", "kept", "AGENTS.md")
+      yield* mkdir(path.dirname(keptPath))
+      yield* writeAgents(path.resolve(dir, "excluded", "AGENTS.md"), "excluded-instructions")
+      yield* writeAgents(keptPath, "kept-instructions")
+      yield* Effect.promise(() => fs.writeFile(path.resolve(dir, "excluded", "kept", "file.txt"), "file content"))
+
+      const session = yield* Session.Service
+      const registry = yield* ToolRegistry.Service
+      const sessionID = (yield* session.create({ location: Location.Ref.make({ directory: dir }) })).id
+      yield* settleTool(registry, readCall(sessionID, "call-exclude", "excluded/kept/file.txt"))
+
+      const injected = yield* synthetics(sessionID)
+      expect(injected.map((message) => message.text)).toEqual([`Instructions from: ${keptPath}\nkept-instructions`])
+    }).pipe(Effect.scoped),
   )
 
   it.effect("does not re-inject paths already recorded in durable session history", () =>

@@ -6,6 +6,8 @@ import { Context, Effect, Layer, Schema, Stream, Types } from "effect"
 import { FileSystem } from "@ycoding-ai/schema/filesystem"
 import { Skill } from "@ycoding-ai/schema/skill"
 import { Agent } from "./agent"
+import { Config } from "./config"
+import { ConfigCapabilities } from "./config/capabilities"
 import { ConfigMarkdown } from "./config/markdown"
 import { EventRuntime } from "./event"
 import { FSUtil } from "./fs-util"
@@ -135,6 +137,11 @@ const layer = Layer.effect(
     const fs = yield* FSUtil.Service
     const events = yield* EventRuntime.Service
     const mcp = yield* MCP.Service
+    const config = yield* Config.Service
+    const permitted = Effect.fnUntraced(function* <A extends { readonly id: ID }>(skills: ReadonlyArray<A>) {
+      const capabilities = Config.capabilities(yield* config.entries())
+      return skills.filter((skill) => ConfigCapabilities.allows(capabilities.skills, skill.id))
+    })
 
     const state = State.create<Data, Draft>({
       name: "skill",
@@ -234,7 +241,7 @@ const layer = Layer.effect(
     const list = Effect.fn("Skill.list")(function* () {
       const skills = new Map<ID, Info>()
       for (const source of state.get().sources) for (const skill of yield* load(source)) skills.set(skill.id, skill)
-      return Array.from(skills.values())
+      return yield* permitted(Array.from(skills.values()))
     })
 
     return Service.of({
@@ -246,14 +253,14 @@ const layer = Layer.effect(
       list,
       mcp: Effect.fn("Skill.mcp")(function* () {
         const entries = yield* mcp.skillCatalog()
-        return entries.map((entry) => ({
+        return yield* permitted(entries.map((entry) => ({
           id: mcpSkillID(entry.server, entry.uri),
           server: entry.server,
           uri: entry.uri,
           name: Name.make(entry.frontmatter.name),
           description: entry.frontmatter.description,
           entry,
-        }))
+        })))
       }),
     })
   }),
@@ -262,5 +269,5 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [SkillDiscovery.node, FSUtil.node, EventRuntime.node, MCP.node],
+  deps: [Config.node, SkillDiscovery.node, FSUtil.node, EventRuntime.node, MCP.node],
 })

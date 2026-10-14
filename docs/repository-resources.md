@@ -75,7 +75,9 @@ YCoding discovers:
 - every ancestor `.ycoding` directory;
 - every ancestor `.claude` and `.agents` directory for skill compatibility;
 - the global YCoding config directory;
-- global `~/.claude` and `~/.agents` skill directories when present.
+- global `~/.claude` and `~/.agents` skill directories when present, unless `capabilities.home_roots` is `false`.
+
+[Capability toggles](./configuration.md#capability-toggles) narrow what discovery exposes: `capabilities.home_roots: false` omits `~/.claude` and `~/.agents` (including when the project lies below the home directory), and `capabilities.skills`, `tools`, `mcp`, `plugins`, `project_artifacts`, and `instructions` filter the discovered resources by ID, name, or path.
 
 Runtime config document order is documented in [`configuration.md`](./configuration.md#runtime-configuration-discovery-and-precedence).
 
@@ -262,6 +264,8 @@ YCoding adds skill sources from:
 
 `.claude` and `.agents` are compatibility skill roots only. They do not define YCoding agents or commands.
 
+`capabilities.skills` filters skills by ID after discovery from every source above, managed project-artifact skills, MCP-served skills, and the built-in `ycoding` and `report` skills; a filtered skill is absent from the catalog and cannot be loaded by explicit ID. `capabilities.skills.enabled: false` also hides the `skill` tool.
+
 ### Supported layouts
 
 A skill source supports either:
@@ -422,6 +426,8 @@ A remove selector can be an exact ID, `*`, or a prefix ending in `.*`.
 
 Explicit JSON plugin operations are applied after auto-discovered files, so configuration can disable an auto-discovered or built-in plugin.
 
+`capabilities.plugins` applies after these operations to external plugins only (configured packages and files and auto-discovered files): `enabled: false` loads none, and `allow`/`deny` match the exported plugin ID, so an excluded plugin is imported to read its ID but never activates. Built-in `ycoding.*` plugins are unaffected.
+
 Terminal-side plugins use global `cli.json`, separately from runtime plugin discovery. TUI startup first applies built-in enable/disable selectors in configuration order, then exposes the Home and Session shell before loading optional plugins. Disabled built-in UI is not mounted during startup. Optional directives retain their configuration order, including enable and remove operations on optional plugins; loading and failure states are available in Status.
 
 ## Hooks
@@ -447,6 +453,8 @@ The built-in `decision` tool accepts `{ provider: "agent", request }`. Requests 
 Only explicit agent calls invoke decision judgments. Main, child, and side-chat Sessions share the tool and its `core/decision-use` guidance; effective permission denies and inherited ceilings remain enforced. Predicates, choices, and scores can abstain with `type: refusal`, null answer values, and confidence `0`. Refusal means insufficient evidence or inability to judge, not a selected option or approval; gather missing evidence or ask the user.
 
 YCoding does not auto-load `.ycoding/tool/*.ts` or `.ycoding/tools/*.ts`.
+
+`capabilities.tools` allows or denies tools by registered name, including MCP tools named `<server>_<tool>`, through the same catalog filter that permission rules use; see [capability toggles](./configuration.md#capability-toggles) for the built-in tool names.
 
 Local selective compaction is runtime-owned rather than a model tool. At configured `consider` pressure, the context hook durably admits and starts or joins one process-global background worker without waiting for settlement. It admits once more only if the same pressure cycle rises to `advised`, and rearms after returning to `normal`; failed admission remains retryable, while successful or deduplicated admission latches. `mandatory` never starts this soft path. Explicit `/compact` and the mandatory hard-limit gate remain synchronous settlement paths, and all three paths share one per-Session admission gate. Local compaction resolves the configured `efficiency.helper_models.compaction.main` or `.subagent` model and reuses a deterministic taskless child Session with that model and the hidden built-in `compaction` agent, which remains `mode: primary`. The worker validates a bounded canonical TOON checkpoint containing objective, requirements, acceptance criteria, progress, pending work, decisions, blockers, skills, and a bounded fact capsule for every covered source item. Helper timeout or failure uses the local canonical fallback. Required semantic evidence that cannot fit fails closed; arbitrary covered bytes are not guaranteed to survive lossy compression. Codex remote compaction uses the owner model without a helper and falls back to local compaction if the remote request fails. Activation creates a new immutable context revision without deleting canonical messages or transcript events.
 
@@ -503,6 +511,8 @@ The current working directory can therefore add narrower instructions than an an
 
 Each instruction source is rendered with its source path. `instruction_max_bytes` controls per-file truncation.
 
+After a successful `read` inside the Location, `AGENTS.md` files between the read target and the Location root (exclusive) are injected once per Session as durable synthetic instructions. `capabilities.instructions.global: false` skips the global file; `capabilities.instructions.project: false` skips both project discovery and this nested injection; `capabilities.instructions.exclude` skips matching absolute paths in both.
+
 The Location-scoped instruction discovery reads the global file when assembling Session context before each model step. The initial value becomes durable instruction state; later file changes are observed at a subsequent step boundary and rendered as an instruction update rather than silently rewriting earlier history.
 
 The JSON `instructions` array is currently accepted by Schema but is not read by runtime instruction discovery. Use `AGENTS.md`, skills, MCP instructions, or explicit session instruction injection.
@@ -549,6 +559,8 @@ See [`configuration.md`](./configuration.md#mcp) for local and remote server sha
 YCoding's project-artifact system manages agents, commands, skills, and plugin drafts with validation, preview, confirmation, deletion, restore, and rollback. Project artifacts are durable managed records; filesystem resources are their deployed or imported representation.
 
 Use the TUI project-artifact manager for lifecycle operations when provenance and rollback matter. Direct file edits remain valid for repository-owned resources and are reloaded by the watcher.
+
+`capabilities.project_artifacts: false` applies no managed project artifacts to the Location and hides the `project_artifact` tool and its guidance.
 
 ## Reload behavior
 

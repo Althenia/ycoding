@@ -252,6 +252,7 @@ const table = sqliteTable("session", {
 - Keep EventRuntime replay owner claims separate from clustered Session execution ownership.
 - Keep the Instructions algebra and built-ins in `src/instructions`; keep instruction producers with their observed domains, and keep Session History selection plus `InstructionState` and `InstructionEntry` persistence Session-owned.
 - `InstructionDiscovery` observes ambient global and upward-project instructions. The runner composes built-ins, discovery, guidance, and entries explicitly in `loadInstructions`; there is no instruction registry.
+- `capabilities` configuration is the single source for turning capabilities off; gate each consumer through `ConfigCapabilities`, and keep tool visibility in the registry filter rather than a second hiding path. A built-in block that describes a tool is observed as removed while `ToolRegistry.available` for the selected agent lacks that tool.
 - `session.instructions.updated` stores only changed source keys and content hashes. Blob values live once in `instruction_blob`; `instruction_state` is a rebuildable fold cache, never primary state.
 - Render initial instructions and chronological updates from values during request assembly. Completed compaction moves the instruction epoch; Session movement and committed revert clear it.
 - Unavailable sources retain the last value and block only the initial complete delta.

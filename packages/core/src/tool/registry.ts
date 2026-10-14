@@ -3,6 +3,7 @@ export * as ToolRegistry from "./registry"
 import { ToolOutput, type ToolCall, type ToolDefinition, type ToolResultValue } from "@ycoding-ai/ai"
 import { Context, Effect, Layer, Scope, Semaphore } from "effect"
 import type { Agent } from "../agent"
+import { ConfigCapabilities } from "../config/capabilities"
 import { Image } from "../image"
 import { Permission } from "../permission"
 import { SessionMessage } from "../session/message"
@@ -39,7 +40,15 @@ export interface Progress {
 }
 
 export interface Interface {
-  readonly materialize: (permissions?: Permission.Ruleset) => Effect.Effect<Materialization>
+  readonly materialize: (
+    permissions?: Permission.Ruleset,
+    capabilities?: ConfigCapabilities.Resolved,
+  ) => Effect.Effect<Materialization>
+  /** Names of every tool a request with these rules would expose, including CodeMode tools behind `execute`. */
+  readonly available: (
+    permissions?: Permission.Ruleset,
+    capabilities?: ConfigCapabilities.Resolved,
+  ) => Effect.Effect<ReadonlySet<string>>
   /** Internal registration capability exposed publicly only through Tools.Service. */
   readonly register: (
     tools: Readonly<Record<string, AnyTool>>,
@@ -253,6 +262,24 @@ const registryLayer = Layer.effect(
       },
     )
 
+    // Catalog visibility: permission rules that wholly deny a tool's action and capability
+    // toggles that exclude its name both remove it from every request and from CodeMode.
+    const select = (rules: Permission.Ruleset, capabilities: ConfigCapabilities.Resolved) => {
+      const direct = new Map<string, Registration>()
+      const codemode = new Map<string, Registration>()
+      for (const [name, entries] of local) {
+        const registration = entries.at(-1)?.registration
+        if (!registration) continue
+        if (whollyDisabled(permission(registration.tool, name), rules)) continue
+        if (!ConfigCapabilities.allowsTool(capabilities, name)) continue
+        if (registration.codemode) codemode.set(name, registration)
+        else direct.set(name, registration)
+      }
+      const execute =
+        codemode.size > 0 && !whollyDisabled("execute", rules) && ConfigCapabilities.allowsTool(capabilities, "execute")
+      return { direct, codemode, execute }
+    }
+
     return Service.of({
       register: Effect.fn("ToolRegistry.register")((tools, options) =>
         registerBatch([
@@ -263,27 +290,23 @@ const registryLayer = Layer.effect(
         ]),
       ),
       registerBatch,
-      materialize: Effect.fn("ToolRegistry.materialize")((permissions) =>
+      available: Effect.fn("ToolRegistry.available")((permissions, capabilities) =>
         registrationLock.withPermit(
           Effect.sync(() => {
-            const direct = new Map<string, Registration>()
-            const codemode = new Map<string, Registration>()
-            const rules = permissions ?? []
-            for (const [name, entries] of local) {
-              const registration = entries.at(-1)?.registration
-              if (!registration) continue
-              if (whollyDisabled(permission(registration.tool, name), rules)) continue
-              if (registration.codemode) codemode.set(name, registration)
-              else direct.set(name, registration)
-            }
+            const visible = select(permissions ?? [], capabilities ?? {})
+            return new Set([...visible.direct.keys(), ...(visible.execute ? visible.codemode.keys() : [])])
+          }),
+        ),
+      ),
+      materialize: Effect.fn("ToolRegistry.materialize")((permissions, capabilities) =>
+        registrationLock.withPermit(
+          Effect.sync(() => {
+            const visible = select(permissions ?? [], capabilities ?? {})
             const ordered = (registrations: Map<string, Registration>) =>
               new Map([...registrations].toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)))
-            const orderedDirect = ordered(direct)
-            const orderedCodemode = ordered(codemode)
-            const execute =
-              orderedCodemode.size > 0 && !whollyDisabled("execute", rules)
-                ? ExecuteTool.create(orderedCodemode)
-                : undefined
+            const orderedDirect = ordered(visible.direct)
+            const orderedCodemode = ordered(visible.codemode)
+            const execute = visible.execute ? ExecuteTool.create(orderedCodemode) : undefined
             return {
               definitions: [
                 ...Array.from(orderedDirect, ([name, registration]) => definition(name, registration.tool)),

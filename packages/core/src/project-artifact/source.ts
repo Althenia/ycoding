@@ -11,6 +11,7 @@ import { Session } from "@ycoding-ai/schema/session"
 import { Context, DateTime, Effect, Exit, Layer, Option, Schema, Scope, Stream } from "effect"
 import { Agent } from "../agent"
 import { Command } from "../command"
+import { Config } from "../config"
 import { makeLocationNode } from "../effect/app-node"
 import { Global } from "../global"
 import { Location } from "../location"
@@ -76,6 +77,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const agents = yield* Agent.Service
+    const config = yield* Config.Service
     const accounting = yield* ProjectArtifactAccounting.Service
     const commands = yield* Command.Service
     const global = yield* Global.Service
@@ -98,7 +100,8 @@ const layer = Layer.effect(
     const refreshUnsafe = Effect.fn("ProjectArtifactSource.refresh")(function* () {
       const observed = yield* standardSources({ agents, commands, global, location, skills })
       const summaries =
-        location.project.id === Project.ID.global
+        location.project.id === Project.ID.global ||
+        Config.capabilities(yield* config.entries()).project_artifacts === false
           ? []
           : yield* Effect.all([
               store.list({ scope: { type: "project" }, projectID: location.project.id, stage: "trial" }),
@@ -468,6 +471,7 @@ export const node = makeLocationNode({
   deps: [
     Agent.node,
     Command.node,
+    Config.node,
     Global.node,
     Location.node,
     ProjectArtifactStore.node,

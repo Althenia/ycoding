@@ -83,6 +83,7 @@ import { QuestionTool } from "@ycoding-ai/core/tool/question"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
+import { ConfigCapabilities } from "@ycoding-ai/core/config/capabilities"
 import { ConfigCompaction } from "@ycoding-ai/core/config/compaction"
 import { ConfigEfficiency } from "@ycoding-ai/core/config/efficiency"
 import { ConfigImageAnalyzer } from "@ycoding-ai/core/config/image-analyzer"
@@ -502,6 +503,19 @@ const echo = Layer.effectDiscard(
               Effect.andThen(Effect.die("unexpected tool defect")),
             ),
         }),
+        // Built-in guidance for memory and project artifacts renders only while these tools are callable.
+        memory: Tool.make({
+          description: "Workspace memory",
+          input: Schema.Struct({}),
+          output: Schema.Struct({}),
+          execute: () => Effect.succeed({}),
+        }),
+        project_artifact: Tool.make({
+          description: "Project artifacts",
+          input: Schema.Struct({}),
+          output: Schema.Struct({}),
+          execute: () => Effect.succeed({}),
+        }),
         // BigInt output with no model content forces ToolOutputStore.bound onto its
         // JSON.stringify encode path, which fails with a typed StorageError.
         storefail: Tool.make({
@@ -622,6 +636,7 @@ const projects = Layer.mock(Project.Service, {
 })
 let efficiencyConfig: ConfigEfficiency.Info | undefined
 let imageAnalyzerConfig: ConfigImageAnalyzer.Info | undefined
+let capabilitiesConfig: ConfigCapabilities.Info | undefined
 let catalogModel: CatalogModel.Info | undefined
 let compactionWakeHook = Effect.void
 let compactionSummary = false
@@ -642,6 +657,7 @@ const config = Layer.succeed(
             }),
             ...(efficiencyConfig === undefined ? {} : { efficiency: efficiencyConfig }),
             ...(imageAnalyzerConfig === undefined ? {} : { image_analyzer: imageAnalyzerConfig }),
+            ...(capabilitiesConfig === undefined ? {} : { capabilities: capabilitiesConfig }),
           }),
         }),
       ]),
@@ -2316,7 +2332,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(2)
-      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect", "echo", "snapshot", "storefail"])
+      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect", "echo", "memory", "project_artifact", "snapshot", "storefail"])
       expect(requests[1]?.tools.map((tool) => tool.name)).toEqual(requests[0]?.tools.map((tool) => tool.name))
     }),
   )
@@ -2340,7 +2356,7 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests).toHaveLength(1)
       expect(requests[0]?.tools.map((tool) => tool.name)).not.toContain("echo")
-      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect", "snapshot", "storefail"])
+      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect", "memory", "project_artifact", "snapshot", "storefail"])
     }),
   )
 
@@ -3414,7 +3430,7 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests).toHaveLength(1)
       expect(requests[0]?.model).toBe(model)
-      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect", "echo", "snapshot", "storefail"])
+      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect", "echo", "memory", "project_artifact", "snapshot", "storefail"])
       expect(
         nonVolatileMessages(requests[0]).map((message) => ({ role: message.role, content: message.content })),
       ).toEqual([
@@ -3893,6 +3909,59 @@ describe("SessionRunnerLLM", () => {
       expect(requests.at(-1)?.system.map((part) => part.text)).toEqual([
         "Build agent instructions",
         withProjectArtifactGuidance("Initial context"),
+      ])
+    }),
+  )
+
+  it.effect("omits guidance and tools that capability toggles turn off", () =>
+    Effect.gen(function* () {
+      capabilitiesConfig = new ConfigCapabilities.Info({
+        tools: { deny: ["project_artifact"] },
+        builtin_instructions: { deny: ["memory"] },
+      })
+      const session = yield* setup
+      const agent = yield* Agent.Service
+      yield* agent.transform((editor) =>
+        editor.update(Agent.ID.make("build"), (agent) => {
+          agent.system = "Build agent instructions"
+          agent.mode = "primary"
+        }),
+      )
+      yield* admit(session, "First")
+
+      response = reply.text("Done", "text-build")
+      yield* session.resume(sessionID)
+
+      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(["Build agent instructions", "Initial context"])
+      expect(requests.at(-1)?.tools.map((tool) => tool.name)).toEqual([
+        "defect",
+        "echo",
+        "memory",
+        "snapshot",
+        "storefail",
+      ])
+    }).pipe(Effect.ensuring(Effect.sync(() => (capabilitiesConfig = undefined)))),
+  )
+
+  it.effect("omits memory guidance when the selected agent cannot call the memory tool", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const agent = yield* Agent.Service
+      yield* agent.transform((editor) =>
+        editor.update(Agent.ID.make("build"), (agent) => {
+          agent.system = "Build agent instructions"
+          agent.mode = "primary"
+          agent.permissions.push({ action: "memory", resource: "*", effect: "deny" })
+        }),
+      )
+      yield* admit(session, "First")
+
+      response = reply.text("Done", "text-build")
+      yield* session.resume(sessionID)
+
+      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual([
+        "Build agent instructions",
+        ["Initial context", ProjectArtifactInstructions.content].join("\n\n"),
       ])
     }),
   )
@@ -4465,7 +4534,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(2)
-      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect", "echo", "snapshot", "storefail"])
+      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect", "echo", "memory", "project_artifact", "snapshot", "storefail"])
       expect((yield* session.context(sessionID)).slice(0, 3)).toMatchObject([
         { type: "user", text: "Use tools" },
         sessionStateNotice,

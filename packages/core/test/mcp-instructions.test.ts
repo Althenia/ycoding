@@ -1,6 +1,8 @@
 import { describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { Agent } from "@ycoding-ai/core/agent"
+import { Config } from "@ycoding-ai/core/config"
+import { ConfigCapabilities } from "@ycoding-ai/core/config/capabilities"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { MCP } from "@ycoding-ai/core/mcp/index"
 import { McpInstructions } from "@ycoding-ai/core/mcp/instructions"
@@ -21,8 +23,19 @@ const instructions = (server: string, text: string) =>
 
 const tool = (server: string, name = "search") => new MCP.Tool({ server: MCP.ServerName.make(server), name })
 
-const layer = (catalog: () => MCP.ServerInstructions[], tools: () => MCP.Tool[]) =>
+const layer = (
+  catalog: () => MCP.ServerInstructions[],
+  tools: () => MCP.Tool[],
+  capabilities?: ConfigCapabilities.Info,
+) =>
   AppNodeBuilder.build(McpInstructions.node, [
+    [
+      Config.node,
+      Layer.mock(Config.Service, {
+        entries: () =>
+          Effect.succeed([new Config.Document({ type: "document", info: new Config.Info({ capabilities }) })]),
+      }),
+    ],
     [
       MCP.node,
       Layer.mock(MCP.Service, {
@@ -73,6 +86,35 @@ describe("McpInstructions", () => {
         ),
       ),
     ),
+  )
+
+  it.effect("omits server instructions when capability toggles hide every server tool or CodeMode", () =>
+    Effect.gen(function* () {
+      const render = (capabilities: ConfigCapabilities.Info) =>
+        McpInstructions.Service.pipe(
+          Effect.flatMap((service) => service.load(selection())),
+          Effect.flatMap(readInitial),
+          Effect.map((generation) => generation.text),
+          Effect.provide(
+            layer(
+              () => [instructions("alpha", "Alpha instructions"), instructions("beta", "Beta instructions")],
+              () => [tool("alpha"), tool("beta")],
+              capabilities,
+            ),
+          ),
+        )
+      expect(yield* render(new ConfigCapabilities.Info({ tools: { deny: ["alpha_*"] } }))).toBe(
+        [
+          "<mcp_instructions>",
+          '  <server name="beta">',
+          '    Use tools from this server through `execute` under `tools["beta"]`.',
+          "    Beta instructions",
+          "  </server>",
+          "</mcp_instructions>",
+        ].join("\n"),
+      )
+      expect(yield* render(new ConfigCapabilities.Info({ tools: { deny: ["execute"] } }))).toBe("")
+    }),
   )
 
   it.effect("normalizes and bounds each server instruction block deterministically", () =>

@@ -7,6 +7,7 @@ import {
   Server,
   WebStandardStreamableHTTPServerTransport,
 } from "@modelcontextprotocol/server"
+import { ConfigCapabilities } from "@ycoding-ai/core/config/capabilities"
 import { ConfigMCP } from "@ycoding-ai/core/config/mcp"
 import { Config } from "@ycoding-ai/core/config"
 import { Credential } from "@ycoding-ai/core/credential"
@@ -177,6 +178,7 @@ function resourceMcpLayer(
   server: string | typeof ConfigMCP.Server.Type,
   onFormCreated?: (form: Form.Info) => Effect.Effect<void>,
   locationDirectory = import.meta.dir,
+  capabilities?: ConfigCapabilities.Info,
 ) {
   const directory = AbsolutePath.make(locationDirectory)
   const unusedIntegration = () => Effect.die("unused integration service")
@@ -193,6 +195,7 @@ function resourceMcpLayer(
                 new Config.Document({
                   type: "document",
                   info: new Config.Info({
+                    capabilities,
                     mcp: new ConfigMCP.Info({
                       servers: {
                         resources:
@@ -817,6 +820,66 @@ test("checks local MCP working directories before spawning and connects from an 
     )
     expect(existing[0]?.status).toEqual({ status: "connected" })
     expect(await Bun.file(marker).text()).toBe("started")
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true })
+  }
+})
+
+test("never starts MCP servers excluded by capabilities, at boot or when added later", async () => {
+  await mkdir("/tmp/ycoding-mcp", { recursive: true })
+  const temporaryDirectory = await mkdtemp("/tmp/ycoding-mcp/mcp-capabilities-")
+  const marker = path.join(temporaryDirectory, "started")
+  const serverConfig = new ConfigMCP.Local({
+    type: "local",
+    command: [process.execPath, path.join(import.meta.dir, "fixture/mcp-spawn-marker.ts")],
+    environment: { MCP_TEST_START_MARKER: marker },
+  })
+  try {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* MCP.Service
+          expect(yield* service.servers()).toEqual([])
+          expect(yield* service.tools()).toEqual([])
+          expect(yield* service.instructions()).toEqual([])
+          expect(yield* service.skillCatalog()).toEqual([])
+
+          yield* service.add("denied-dynamic", serverConfig)
+          expect((yield* service.servers()).find((server) => server.name === "denied-dynamic")?.status).toEqual({
+            status: "disabled",
+          })
+          yield* service.connect("denied-dynamic")
+          expect((yield* service.servers()).find((server) => server.name === "denied-dynamic")?.status).toEqual({
+            status: "disabled",
+          })
+          expect(yield* service.tools()).toEqual([])
+        }).pipe(
+          Effect.provide(
+            resourceMcpLayer(
+              serverConfig,
+              undefined,
+              import.meta.dir,
+              new ConfigCapabilities.Info({ mcp: { deny: ["resources", "denied-*"] } }),
+            ),
+          ),
+        ),
+      ),
+    )
+    expect(await Bun.file(marker).exists()).toBe(false)
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* MCP.Service
+          expect(yield* service.servers()).toEqual([])
+        }).pipe(
+          Effect.provide(
+            resourceMcpLayer(serverConfig, undefined, import.meta.dir, new ConfigCapabilities.Info({ mcp: { enabled: false } })),
+          ),
+        ),
+      ),
+    )
+    expect(await Bun.file(marker).exists()).toBe(false)
   } finally {
     await rm(temporaryDirectory, { recursive: true, force: true })
   }

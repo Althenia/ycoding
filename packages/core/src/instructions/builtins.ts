@@ -2,12 +2,38 @@ export * as InstructionBuiltIns from "./builtins"
 
 import { makeLocationNode } from "../effect/app-node"
 import { Context, DateTime, Effect, Layer, Schema } from "effect"
+import { ConfigCapabilities } from "../config/capabilities"
 import { Location } from "../location"
 import { SessionSchema } from "../session/schema"
 import { Instructions } from "./index"
 
+export interface Input {
+  readonly sessionID: SessionSchema.ID
+  readonly capabilities: ConfigCapabilities.Resolved
+  /** Tool names the selected agent can call; a block describing an absent tool is omitted. */
+  readonly tools: ReadonlySet<string>
+}
+
 export interface Interface {
-  readonly load: (sessionID: SessionSchema.ID) => Effect.Effect<Instructions.Instructions>
+  readonly load: (input: Input) => Effect.Effect<Instructions.Instructions>
+}
+
+const requiredTool: Partial<Record<ConfigCapabilities.BuiltinInstruction, string>> = {
+  "subagent-reuse": "subagent",
+  "shell-memory": "shell",
+  "project-artifact-authoring": "project_artifact",
+  "human-input": "question",
+  "decision-use": "decision",
+  "task-completion": "task_complete",
+  memory: "memory",
+}
+
+export function enabled(name: ConfigCapabilities.BuiltinInstruction, input: Omit<Input, "sessionID">) {
+  const tool = requiredTool[name]
+  return (
+    ConfigCapabilities.allows(input.capabilities.builtin_instructions, name) &&
+    (tool === undefined || input.tools.has(tool))
+  )
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/InstructionBuiltIns") {}
@@ -16,8 +42,9 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const location = yield* Location.Service
+    const decodeName = Schema.decodeUnknownSync(ConfigCapabilities.BuiltinInstruction)
     return Service.of({
-      load: (_sessionID) =>
+      load: (input) =>
         Effect.succeed(
           Instructions.combine([
             Instructions.make({
@@ -119,7 +146,9 @@ const layer = Layer.effect(
               ),
               render: { initial: (instruction) => instruction, changed: (_previous, instruction) => instruction },
             }),
-          ]),
+          ]).flatMap((source) =>
+            Instructions.when(enabled(decodeName(source.key.slice("core/".length)), input), [source]),
+          ),
         ),
     })
   }),

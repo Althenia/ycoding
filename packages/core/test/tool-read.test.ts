@@ -38,6 +38,7 @@ const readToolNode = makeLocationNode({
     SessionInstructions.node,
     FSUtil.node,
     Location.node,
+    Config.node,
   ],
 })
 

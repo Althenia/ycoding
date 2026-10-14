@@ -46,6 +46,8 @@ The registry has no `Permission.Service` dependency and performs no execution au
 
 Definition filtering is catalog visibility, not execution authorization. A call still executes the captured leaf policy if it reaches settlement.
 
+`materialize` and `available` share one visibility filter: a wholly denied permission action or a name excluded by `capabilities` (`ConfigCapabilities.allowsTool`) hides the tool from the direct list and from CodeMode. Callers pass the resolved capabilities; the registry does not read configuration.
+
 ## Output
 
 Built-ins return complete validated domain output. `ToolRegistry.Materialization.settle` is the only execution and generic model-output bounding boundary and owns managed retention paths.

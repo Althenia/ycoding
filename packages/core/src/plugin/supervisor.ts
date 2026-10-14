@@ -13,6 +13,7 @@ import { Catalog } from "../catalog"
 import { Command } from "../command"
 import { Computer } from "../computer"
 import { Config } from "../config"
+import { ConfigCapabilities } from "../config/capabilities"
 import { ConfigPlugin } from "../config/plugin"
 import { Credential } from "../credential"
 import { Decision } from "../decision"
@@ -134,6 +135,7 @@ const resolve = Effect.fn("PluginSupervisor.resolve")(function* (
   pre: readonly PluginRegistry.Versioned[],
   post: readonly PluginRegistry.Versioned[],
   operations: readonly Operation[],
+  capabilities: ConfigCapabilities.Resolved,
 ) {
   const matches = (selector: string, target: string) =>
     selector === "*" || (selector.endsWith(".*") ? target.startsWith(selector.slice(0, -1)) : selector === target)
@@ -165,6 +167,7 @@ const resolve = Effect.fn("PluginSupervisor.resolve")(function* (
       continue
     }
 
+    if (capabilities.plugins?.enabled === false) continue
     const plugin = yield* load(operation).pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("failed to load plugin", {
@@ -174,6 +177,7 @@ const resolve = Effect.fn("PluginSupervisor.resolve")(function* (
       ),
     )
     if (!plugin) continue
+    if (!ConfigCapabilities.allows(capabilities.plugins, plugin.id)) continue
     const previous = packages.get(operation.target)
     if (previous) enabled.delete(previous.id)
     packages.set(operation.target, plugin)
@@ -275,9 +279,10 @@ const layer = Layer.effect(
             ...plugin,
             version: "internal",
           }))
-          const operations = yield* scan(yield* config.entries())
+          const entries = yield* config.entries()
+          const operations = yield* scan(entries)
           // Apply config operations and load enabled package plugins into one ordered generation.
-          const plugins = yield* resolve(pre, post, operations)
+          const plugins = yield* resolve(pre, post, operations, Config.capabilities(entries))
           // Replace the active generation in one scoped, batched activation.
           yield* registry.activate(plugins)
           applied = target

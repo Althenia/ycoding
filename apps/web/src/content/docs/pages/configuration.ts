@@ -254,6 +254,7 @@ export const configurationPages: readonly DocPage[] = [
               ["`provider_usage.codex_app_server`", "object", "unset", "Optional local Codex app-server quota source, displayed separately with unknown account attribution rather than as a stored profile."],
               ["`efficiency`", "object", "runtime-derived", "Helper models, title policy, prompt caching, Responses continuation."],
               ["`image_analyzer`", "object", "unset", "Image-to-text fallback for text-only models."],
+              ["`capabilities`", "object", "unset", "Turn off `AGENTS.md` files, built-in instruction blocks, skills, tools, MCP servers, external plugins, project artifacts, or `~/.agents` and `~/.claude` roots, and pin the `websearch` provider. Each field is last-wins across layers."],
               ["`experimental.subagent_depth`", "integer ≥ 0", "`1`", "Maximum subagent nesting depth."],
               ["`experimental.policies`", "array", "unset", "Ordered configured-resource policies."],
             ],
@@ -298,6 +299,30 @@ export const configurationPages: readonly DocPage[] = [
             language: "sh",
             label: "One-off override",
             code: `YCODING_CONFIG_CONTENT='{"model":"openai/gpt-5"}' ycoding run "Summarize the README"`,
+          },
+          {
+            kind: "paragraph",
+            text: "For a reproducible run, `ycoding run --config <file>` applies a JSON/JSONC document as the highest-priority layer of a private server, the same way as `YCODING_CONFIG_CONTENT`. `ycoding run --isolated` gives that private server a temporary data directory and database that are removed afterwards. Stored credentials are unavailable in an isolated run, so provide provider keys through environment variables or configuration. Neither flag combines with `--server`.",
+          },
+          {
+            kind: "code",
+            language: "jsonc",
+            label: "eval.jsonc",
+            code: `{
+  "capabilities": {
+    "instructions": { "global": false, "project": false },
+    "builtin_instructions": { "deny": ["environment", "date"] },
+    "skills": { "allow": ["review"] },
+    "mcp": { "enabled": false },
+    "websearch_provider": "exa"
+  }
+}`,
+          },
+          {
+            kind: "code",
+            language: "sh",
+            label: "Isolated evaluation run",
+            code: `ycoding run --isolated --config eval.jsonc --model openai/gpt-5 "Fix the failing test"`,
           },
         ],
       },

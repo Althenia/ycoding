@@ -11,6 +11,8 @@ const decodeReady = Schema.decodeUnknownPromise(Schema.fromJsonString(Ready))
 
 type Options = {
   readonly command?: ReadonlyArray<string>
+  /** Environment overrides for the private server, applied over the inherited environment. */
+  readonly env?: Readonly<Record<string, string>>
 }
 
 function command(password: string, options: Options) {
@@ -20,7 +22,7 @@ function command(password: string, options: Options) {
     cwd: process.cwd(),
     // Explicit entry wins over anything inherited, so a user-exported
     // YCODING_PASSWORD cannot shadow the child's lease credential.
-    env: { YCODING_PASSWORD: password },
+    env: { ...options.env, YCODING_PASSWORD: password },
     extendEnv: true,
     // The server treats EOF on this pipe as the end of its ownership lease.
     // The OS closes it even when the TUI is killed before Effect finalizers run.

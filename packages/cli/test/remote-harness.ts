@@ -107,7 +107,7 @@ const providerID = "isolated-stand-in"
 const modelID = "isolated-model"
 
 /** Declares the loopback provider in the isolated config document, never in user config. */
-function providerConfig(standIn: { readonly url: string }) {
+export function providerConfig(standIn: { readonly url: string }) {
   return JSON.stringify({
     providers: {
       [providerID]: {
@@ -120,7 +120,7 @@ function providerConfig(standIn: { readonly url: string }) {
   })
 }
 
-async function startProviderStandIn(fixture: ProviderFixture) {
+export async function startProviderStandIn(fixture: ProviderFixture) {
   const requests: unknown[] = []
   const held: Array<() => void> = []
   const server = Bun.serve({

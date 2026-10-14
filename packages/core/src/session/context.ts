@@ -3,6 +3,8 @@ export * as SessionContext from "./context"
 import { Context, Effect, Layer } from "effect"
 import { eq } from "drizzle-orm"
 import { Agent } from "../agent"
+import { Config } from "../config"
+import { ConfigMemory } from "../config/memory"
 import { Database } from "../database/database"
 import { makeLocationNode } from "../effect/app-node"
 import { InstructionDiscovery } from "../instruction-discovery"
@@ -11,10 +13,12 @@ import { InstructionBuiltIns } from "../instructions/builtins"
 import { ProjectArtifactInstructions } from "../project-artifact/instructions"
 import { Location } from "../location"
 import { McpInstructions } from "../mcp/instructions"
+import { Permission } from "../permission"
 import { MemoryInstructions } from "../memory/instructions"
 import { PluginSupervisor } from "../plugin/supervisor"
 import { ReferenceInstructions } from "../reference/instructions"
 import { SkillInstructions } from "../skill/instructions"
+import { ToolRegistry } from "../tool/registry"
 import { AgentNotFoundError } from "./error"
 import { SessionHistory } from "./history"
 import { InstructionEntry } from "./instruction-entry"
@@ -55,6 +59,22 @@ export interface Interface {
   readonly revision: (sessionID: SessionSchema.ID) => Effect.Effect<number>
 }
 
+/** Rules that decide which tools a Session's selected agent can see and call. */
+export function toolPermissions(agent: Pick<Agent.Info, "mode" | "permissions">, ceiling: Permission.Ruleset) {
+  return Permission.merge(
+    agent.permissions,
+    ceiling,
+    ...(agent.mode === "subagent"
+      ? [
+          [
+            { action: "subagent", resource: "*", effect: "deny" as const },
+            { action: "subagent_control", resource: "*", effect: "deny" as const },
+          ],
+        ]
+      : []),
+  )
+}
+
 /** Location-scoped model-context loader for durable Session Steps. */
 export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionContext") {}
 
@@ -63,6 +83,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const agents = yield* Agent.Service
     const builtins = yield* InstructionBuiltIns.Service
+    const config = yield* Config.Service
     const db = (yield* Database.Service).db
     const discovery = yield* InstructionDiscovery.Service
     const entries = yield* InstructionEntry.Service
@@ -76,6 +97,7 @@ const layer = Layer.effect(
     const projectArtifactInstructions = ProjectArtifactInstructions.make()
     const memoryInstructions = MemoryInstructions.make()
     const store = yield* SessionStore.Service
+    const registry = yield* ToolRegistry.Service
 
     const revision = Effect.fn("SessionContext.revision")(function* (sessionID: SessionSchema.ID) {
       const state = yield* db
@@ -97,15 +119,34 @@ const layer = Layer.effect(
       yield* plugins.flush
       const agent = yield* agents.select(session.agent)
       if (!agent.info) return yield* new AgentNotFoundError({ sessionID: session.id, agent: session.agent ?? agent.id })
+      const configEntries = yield* config.entries()
+      const capabilities = Config.capabilities(configEntries)
+      const tools = yield* registry.available(
+        toolPermissions(agent.info, session.permissionCeiling ?? []),
+        capabilities,
+      )
+      const memoryEnabled = ConfigMemory.resolve(
+        configEntries.flatMap((entry) => (entry.type === "document" && entry.info.memory ? [entry.info.memory] : [])),
+      ).enabled
       const instructions = yield* Effect.all(
         [
-          builtins.load(sessionID),
+          builtins.load({ sessionID, capabilities, tools }),
           discovery.load(),
           skillInstructions.load(agent),
           referenceInstructions.load(),
           mcpInstructions.load(agent),
-          Effect.succeed(projectArtifactInstructions),
-          Effect.succeed(memoryInstructions),
+          Effect.succeed(
+            Instructions.when(
+              InstructionBuiltIns.enabled("project-artifact-authoring", { capabilities, tools }),
+              projectArtifactInstructions,
+            ),
+          ),
+          Effect.succeed(
+            Instructions.when(
+              memoryEnabled && InstructionBuiltIns.enabled("memory", { capabilities, tools }),
+              memoryInstructions,
+            ),
+          ),
           entries.load(sessionID),
         ],
         { concurrency: "unbounded" },
@@ -144,6 +185,7 @@ export const node = makeLocationNode({
   layer,
   deps: [
     Agent.node,
+    Config.node,
     Database.node,
     InstructionBuiltIns.node,
     InstructionDiscovery.node,
@@ -156,5 +198,6 @@ export const node = makeLocationNode({
     SessionRunnerModel.node,
     SessionStore.node,
     SkillInstructions.node,
+    ToolRegistry.node,
   ],
 })

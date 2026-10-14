@@ -19,6 +19,7 @@ import { Policy } from "./policy"
 import { AbsolutePath, PositiveInt } from "./schema"
 import { ConfigAgent } from "./config/agent"
 import { ConfigAttachments } from "./config/attachments"
+import { ConfigCapabilities } from "./config/capabilities"
 import { ConfigCompaction } from "./config/compaction"
 import { ConfigCommand } from "./config/command"
 import { ConfigEfficiency } from "./config/efficiency"
@@ -150,6 +151,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   image_analyzer: ConfigImageAnalyzer.Info.pipe(Schema.optional).annotate({
     description: "Image analysis fallback for text-only models: vision provider/model, prompt, and thresholds",
   }),
+  capabilities: ConfigCapabilities.Info.pipe(Schema.optional).annotate({
+    description: "Capability toggles for instructions, built-in blocks, skills, tools, MCP, plugins, and discovery roots",
+  }),
   experimental: ConfigExperimental.Info.pipe(Schema.optional),
 }) {}
 
@@ -185,6 +189,12 @@ export function latest<K extends keyof Info>(entries: readonly Entry[], key: K):
   return entries
     .filter((entry): entry is Document => entry.type === "document")
     .findLast((entry) => entry.info[key] !== undefined)?.info[key]
+}
+
+export function capabilities(entries: readonly Entry[]) {
+  return ConfigCapabilities.resolve(
+    entries.flatMap((entry) => (entry.type === "document" ? [entry.info.capabilities] : [])),
+  )
 }
 
 export interface Interface {
@@ -370,15 +380,21 @@ export const layer = (options?: Options) =>
           : []
 
         const supplementary = yield* Effect.forEach(directories, loadDirectory).pipe(Effect.orDie)
-        const entries = [
-          ...claude,
-          ...agents,
+        const configured = [
           ...(supplementary[0] ?? []),
           ...explicit,
           ...direct,
           ...supplementary.slice(1).flat(),
           ...(yield* loadWellknown().pipe(Effect.orDie)),
           ...content,
+        ]
+        const homeRoots = capabilities(configured).home_roots !== false
+        const entries = [
+          ...[...claude, ...agents].filter(
+            (entry) =>
+              homeRoots || ![globalClaudeDirectory, globalAgentsDirectory].includes(AbsolutePath.make(path.resolve(entry.path))),
+          ),
+          ...configured,
         ]
         return { entries, diagnostics: discoveredDiagnostics }
       })

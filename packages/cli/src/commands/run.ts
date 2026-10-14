@@ -16,6 +16,18 @@ export const RunCommand = Spec.make("run", {
   description: "Run YCoding with a message",
   params: {
     ...ServerParams,
+    config: Flag.string("config").pipe(
+      Flag.withDescription(
+        "Apply a JSON/JSONC runtime config document as the highest-priority layer of a private server for this run",
+      ),
+      Flag.optional,
+    ),
+    isolated: Flag.boolean("isolated").pipe(
+      Flag.withDescription(
+        "Run on a private server with a temporary data directory and database removed afterwards; stored credentials are unavailable",
+      ),
+      Flag.withDefault(false),
+    ),
     message: Argument.string("message").pipe(
       Argument.withDescription("Message to send"),
       Argument.variadic({ min: 0 }),

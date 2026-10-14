@@ -1,4 +1,6 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test"
+import fs from "node:fs/promises"
+import os from "node:os"
 import path from "node:path"
 
 const cli = path.resolve(import.meta.dir, "../src/tui.ts")
@@ -25,6 +27,43 @@ describe("shipped TUI command surface", () => {
     expect(result.stdout).toContain("Set durable Session YOLO level")
     expect(result.stdout).toContain("omitted preserves it")
     expect(result.stdout).not.toContain("--auto")
+  })
+
+  test("run help exposes the per-run config document and isolated data directory flags", async () => {
+    const result = await spawnCli(["run", "--help"])
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain("--config")
+    expect(result.stdout).toContain("highest-priority layer of a private server")
+    expect(result.stdout).toContain("--isolated")
+    expect(result.stdout).toContain("stored credentials are unavailable")
+  })
+
+  test.each([
+    [["--config", "missing.json", "--server", "http://127.0.0.1:9"], "cannot be combined with --server"],
+    [["--isolated", "--server", "http://127.0.0.1:9"], "cannot be combined with --server"],
+    [["--config", "missing-run-config.json"], "Cannot read --config file"],
+  ])("run rejects %j before starting a server", async (args, message) => {
+    const result = await spawnCli(["run", "hello", ...args])
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stdout + result.stderr).toContain(message)
+  })
+
+  test("run rejects an unparsable --config document and a competing YCODING_CONFIG_CONTENT", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-run-config-"))
+    try {
+      const invalid = path.join(directory, "invalid.jsonc")
+      const valid = path.join(directory, "valid.jsonc")
+      await fs.writeFile(invalid, "{ \"capabilities\": ")
+      await fs.writeFile(valid, "{ // per-run\n \"capabilities\": { \"home_roots\": false, }, }")
+      const parsed = await spawnCli(["run", "hello", "--config", invalid])
+      expect(parsed.exitCode).not.toBe(0)
+      expect(parsed.stdout + parsed.stderr).toContain("is not valid JSON/JSONC")
+      const competing = await spawnCli(["run", "hello", "--config", valid], { YCODING_CONFIG_CONTENT: "{}" })
+      expect(competing.exitCode).not.toBe(0)
+      expect(competing.stdout + competing.stderr).toContain("--config cannot be combined with YCODING_CONFIG_CONTENT")
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true })
+    }
   })
 
   test.each(["4", "-1", "true"])("run rejects invalid --yolo level %s", async (level) => {
@@ -163,9 +202,10 @@ async function runTransport(args: string[], options: { autonomyStatus?: number }
   return { calls, ...result }
 }
 
-async function spawnCli(args: string[]) {
+async function spawnCli(args: string[], env: Record<string, string> = {}) {
   const child = Bun.spawn([process.execPath, cli, ...args], {
     cwd: path.resolve(import.meta.dir, ".."),
+    env: { ...process.env, ...env },
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",

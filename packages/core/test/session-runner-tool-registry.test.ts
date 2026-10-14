@@ -6,9 +6,10 @@ import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { Image } from "@ycoding-ai/core/image"
 import { Session } from "@ycoding-ai/core/session"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
-import { SessionModelRequest } from "@ycoding-ai/core/session/model-request"
+import { SessionContext } from "@ycoding-ai/core/session/context"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
+import type { ConfigCapabilities } from "@ycoding-ai/core/config/capabilities"
 import { executeTool, settleTool, toolDefinitions } from "./lib/tool"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, SchemaGetter, SchemaIssue, Scope } from "effect"
 import { testEffect } from "./lib/effect"
@@ -162,7 +163,7 @@ describe("ToolRegistry", () => {
         },
         { codemode: false },
       )
-      const permissions = SessionModelRequest.toolPermissions(
+      const permissions = SessionContext.toolPermissions(
         {
           mode: "subagent",
           permissions: [{ action: "*", resource: "*", effect: "allow" }],
@@ -171,6 +172,46 @@ describe("ToolRegistry", () => {
       )
 
       expect((yield* service.materialize(permissions)).definitions.map((tool) => tool.name)).toEqual(["read", "shell"])
+    }),
+  )
+
+  it.effect("hides tools excluded by capability toggles from direct and CodeMode catalogs", () =>
+    Effect.gen(function* () {
+      const service = yield* ToolRegistry.Service
+      yield* service.register({ read: make(), shell: make(), skill: make(), project_artifact: make() }, { codemode: false })
+      yield* service.register({ search: make(), fetch: make() }, { namespace: "web" })
+      const visible = (capabilities: ConfigCapabilities.Resolved) =>
+        Effect.gen(function* () {
+          const materialized = yield* service.materialize([], capabilities)
+          return {
+            direct: materialized.definitions.map((tool) => tool.name),
+            available: [...(yield* service.available([], capabilities))].toSorted(),
+          }
+        })
+
+      expect(yield* visible({})).toEqual({
+        direct: ["project_artifact", "read", "shell", "skill", "execute"],
+        available: ["project_artifact", "read", "shell", "skill", "web_fetch", "web_search"],
+      })
+      expect(yield* visible({ tools: { deny: ["shell", "web_*"] } })).toEqual({
+        direct: ["project_artifact", "read", "skill"],
+        available: ["project_artifact", "read", "skill"],
+      })
+      expect(yield* visible({ tools: { allow: ["read", "web_search"] } })).toEqual({
+        direct: ["read", "execute"],
+        available: ["read", "web_search"],
+      })
+      expect(yield* visible({ tools: { deny: ["execute"] } })).toEqual({
+        direct: ["project_artifact", "read", "shell", "skill"],
+        available: ["project_artifact", "read", "shell", "skill"],
+      })
+      expect(yield* visible({ tools: { enabled: false } })).toEqual({ direct: [], available: [] })
+      expect(yield* visible({ skills: { enabled: false }, project_artifacts: false })).toEqual({
+        direct: ["read", "shell", "execute"],
+        available: ["read", "shell", "web_fetch", "web_search"],
+      })
+      const settled = yield* (yield* service.materialize([], { tools: { deny: ["shell"] } })).settle(call("shell"))
+      expect(settled.error?.type).toBe("tool.unknown")
     }),
   )
 
