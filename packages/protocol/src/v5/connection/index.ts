@@ -161,6 +161,7 @@ export class Connection {
   private pingID = 0n
   private outstandingPing?: bigint
   private peerPing = 0n
+  private tinyReceiptSent = 0n
   private readyHanded = false
   private helloHanded = false
   private requestOrdinal = 0n
@@ -171,6 +172,7 @@ export class Connection {
   private transfers = new Map<string, Transfer>()
   private outgoingTransfers = new Map<string, Transfer>()
   private httpSending = new Map<string, { through: bigint; handed: { index: bigint; bytes: number; time: number }[] }>()
+  private httpCredits = new Map<string, bigint>()
   private subscriptions = new Map<string, Subscription>()
   private sendingSubscriptions = new Map<string, Subscription>()
   private dropped = { results: 0, transfers: 0, events: 0, oversizedInvalidations: 0 }
@@ -561,25 +563,54 @@ export class Connection {
   }
 
   private httpCredit(transfer: Transfer, now: number) {
-    return this.queueFrame(
-      {
-        case: "control",
-        value: create(ControlSchema, {
-          kind: {
-            case: "credit",
-            value: create(CreditSchema, {
-              ledger: LedgerClass.BULK,
-              transferId: transfer.start.transferId,
-              consumedThrough: BigInt(transfer.index),
+    this.httpCredits.set(transfer.start.transferId, BigInt(transfer.index))
+    return this.flushHttpCredits(now)
+  }
+
+  private flushHttpCredits(now: number) {
+    const decisions: Decision[] = []
+    for (const [transferID, through] of this.httpCredits) {
+      if (!this.transfers.has(transferID)) {
+        this.httpCredits.delete(transferID)
+        continue
+      }
+      const queued = this.queue.find(
+        (record) =>
+          record.frame.body.case === "control" &&
+          record.frame.body.value.kind.case === "credit" &&
+          record.frame.body.value.kind.value.transferId === transferID,
+      )?.frame.body
+      if (queued?.case === "control" && queued.value.kind.case === "credit") {
+        queued.value.kind.value.consumedThrough = through
+        this.httpCredits.delete(transferID)
+        continue
+      }
+      const before = this.queue.length
+      decisions.push(
+        ...this.queueFrame(
+          {
+            case: "control",
+            value: create(ControlSchema, {
+              kind: {
+                case: "credit",
+                value: create(CreditSchema, {
+                  ledger: LedgerClass.BULK,
+                  transferId: transferID,
+                  consumedThrough: through,
+                }),
+              },
             }),
           },
-        }),
-      },
-      this.budgets.tinyFrameBytes,
-      now,
-      false,
-      true,
-    )
+          this.budgets.tinyFrameBytes,
+          now,
+          false,
+          true,
+        ),
+      )
+      if (this.queue.length > before) this.httpCredits.delete(transferID)
+      if (this.phase === "closed") break
+    }
+    return decisions
   }
 
   attachHttpBulk(transferID: string, now: number): Decision[] {
@@ -1096,6 +1127,7 @@ export class Connection {
       return [...decisions, { type: "transferCancelled", transferID }]
     }
     if (incoming) {
+      this.httpCredits.delete(transferID)
       this.reservation.release((incoming.data?.length ?? 0) + (incoming.assetCharge ?? 0))
       this.transfers.delete(transferID)
       this.pending.delete(incoming.start.requestId)
@@ -1175,6 +1207,7 @@ export class Connection {
     if (kind && (!this.rate("send", kind, exactBytes, now) || exactBytes > this.frameCap(this.options.role)))
       return this.close(FailureCategory.LIMIT)
     if (kind) {
+      this.tinyReceiptSent = token.frame.tinyConsumedThrough
       const ledger = this.ledgers.get(kind)!
       ledger.sentOrdinal++
       ledger.sent.push({
@@ -1231,10 +1264,11 @@ export class Connection {
     const decisions = this.check(now)
     if (this.phase === "closed") return decisions
     if (this.phase === "established") {
+      const httpCredits = this.flushHttpCredits(now)
       const credits = this.flushCredits(now)
       const heartbeat =
         now - this.lastPing >= this.budgets.pingIntervalMs && this.outstandingPing === undefined ? this.ping(now) : []
-      return [...decisions, ...credits, ...heartbeat]
+      return [...decisions, ...httpCredits, ...credits, ...heartbeat]
     }
     return decisions
   }
@@ -1268,6 +1302,7 @@ export class Connection {
     const httpReleased = [...this.httpSending.keys()].flatMap((id) => this.releaseHttpBulk(id))
     this.reservation.release(this.assetMetadataRetainedBytes + this.relayInterestRetainedBytes)
     this.phase = "closed"
+    this.httpCredits.clear()
     this.incoming.forEach((token) => this.reservation.release(token.byteLength))
     this.incoming.clear()
     this.queue.forEach((record) => this.reservation.release(record.bytes))
@@ -1574,7 +1609,13 @@ export class Connection {
     if (kind === LedgerClass.TINY) {
       const bytes = ledger.consume(frame.deliveryOrdinal, now)!
       this.reservation.release(bytes)
-      return [...cancellations, ...forwarded]
+      const receipt =
+        forwarded.some((entry) => entry.type === "httpBulkReleased" && entry.consumed) &&
+        this.outstandingPing === undefined &&
+        ledger.consumed - this.tinyReceiptSent >= BigInt(Math.max(1, Math.floor(this.budgets.tinyCount / 2)))
+          ? this.ping(now)
+          : []
+      return [...cancellations, ...forwarded, ...receipt]
     }
     return [...forwarded, { type: "control", frame }]
   }

@@ -10,6 +10,44 @@ import {
   FailureCategory,
 } from "../src/v5/index.js"
 
+test("large HTTP bodies return tiny receipts without waiting for heartbeat or application traffic", () => {
+  const length = 40 * 65536 + 1
+  const h = httpFixture(length)
+  h.bind()
+  for (let offset = 0, index = 0; offset < length; offset += 65536, index++) {
+    const piece = h.piece(index, Math.min(65536, length - offset))
+    expect(h.relay.handoffHttpPiece(piece, 25).accepted).toBe(true)
+    h.client.receiveHttpPiece("http-transfer", piece.data, 25)
+    if (offset + piece.data.length === length) h.client.completeHttpBody("http-transfer", 25)
+    h.flush(h.client, h.relay, 25)
+    h.flush(h.relay, h.client, 25)
+    h.flush(h.client, h.relay, 25)
+  }
+  expect(h.relay.httpBulkConsumed("http-transfer")).toBe(true)
+  expect(h.relay.httpHandedBytes).toBe(0)
+  expect(h.client.state).toBe("established")
+  expect(h.relay.state).toBe("established")
+})
+
+test("a final HTTP Credit refused by a full tiny queue is retained until a real receipt frees capacity", () => {
+  const length = 36 * 65536 + 1
+  const h = httpFixture(length)
+  h.bind()
+  for (let offset = 0, index = 0; offset < length; offset += 65536, index++) {
+    const piece = h.piece(index, Math.min(65536, length - offset))
+    expect(h.relay.handoffHttpPiece(piece, 25).accepted).toBe(true)
+    h.client.receiveHttpPiece("http-transfer", piece.data, 25)
+    if (offset + piece.data.length === length) h.client.completeHttpBody("http-transfer", 25)
+    h.flush(h.client, h.relay, 25)
+  }
+  expect(h.relay.httpBulkConsumed("http-transfer")).toBe(false)
+  h.flush(h.relay, h.client, 25)
+  h.flush(h.client, h.relay, 25)
+  h.flush(h.relay, h.client, 25)
+  expect(h.relay.httpBulkConsumed("http-transfer")).toBe(true)
+  expect(h.relay.httpHandedBytes).toBe(0)
+})
+
 test.each([0, 65537])("HTTP assembly preserves a complete %s-byte asset through its canonical BulkEnd", (length) => {
   const h = httpFixture(length)
   h.bind()

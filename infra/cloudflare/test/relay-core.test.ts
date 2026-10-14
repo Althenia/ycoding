@@ -21,6 +21,46 @@ import {
 import type { Frame } from "../../../packages/protocol/src/v5"
 import { frameReservation } from "../../../packages/remote/src/index"
 import { harness } from "./support/relay"
+import { httpBulkFixture } from "./support/http-bulk"
+
+test.each(["message", "asset"] as const)("%s HTTP bulk settles exactly once on its owning socket", async (kind) => {
+  const f = await httpBulkFixture(kind)
+  expect(f.response.status).toBe(200)
+  for (let index = 0; index < Math.ceil(f.data.length / 65536); index++) await f.piece(index)
+  await f.end("success")
+  await expect(f.reading).resolves.toEqual({ transferID: expect.any(String), bytes: BigInt(f.data.length) })
+  f.h.receive("browser")
+  const incoming = f.h.collected.get("browser")!
+  const decisions = incoming.flatMap((entry) => entry.decisions)
+  expect(incoming.filter((entry) => entry.frame?.body.case === "bulkEnd")).toHaveLength(1)
+  expect(decisions.filter((entry) => entry.type === "settled")).toEqual([
+    expect.objectContaining({ requestID: f.requestID, status: "success" }),
+  ])
+  const completed = decisions.filter((entry) => entry.type === "bulkComplete")
+  expect(completed).toHaveLength(1)
+  expect(completed[0].data).toEqual(f.data)
+  expect(f.h.receive("unrelated").flatMap((entry) => entry.decisions)).toEqual([])
+  expect(f.h.close).toEqual([])
+  f.browser.releaseBulk(completed[0].transferID)
+  f.h.relay.closeDevice()
+  expect(f.h.relay.reservation.used).toBe(0)
+})
+
+test.each(["failure", "truncation"] as const)("message HTTP bulk %s cannot settle successfully", async (kind) => {
+  const f = await httpBulkFixture("message")
+  await f.piece(0)
+  if (kind === "failure") await f.end(f.failure, 65536)
+  if (kind === "truncation") f.h.relay.detach("agent")
+  await expect(f.reading).rejects.toThrow()
+  f.h.receive("browser")
+  const decisions = [...f.decisions, ...f.h.collected.get("browser")!.flatMap((entry) => entry.decisions)]
+  expect(decisions.filter((entry) => entry.type === "settled")).toEqual([
+    expect.objectContaining({ requestID: f.requestID, status: "unknown" }),
+  ])
+  expect(decisions.some((entry) => entry.type === "bulkComplete")).toBe(false)
+  f.h.relay.closeDevice()
+  expect(f.h.relay.reservation.used).toBe(0)
+})
 
 test("a subscription without an authenticated backend epoch fails closed instead of borrowing Ready", async () => {
   const h = await harness()

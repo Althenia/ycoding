@@ -16,10 +16,13 @@ import {
   session_todo_list_RequestSchema,
   session_snapshot_RequestSchema,
   session_snapshot_ResultSchema,
+  session_message_RequestSchema,
+  session_message_ResultSchema,
   PublicEventSchema,
   Connector_ErrorSchema,
 } from "../../../../packages/protocol/src/v5"
 import { TestPeer } from "../../../../packages/remote/test/peer"
+import { httpBulkQuery, readHttpBulk } from "../../../../packages/remote/src/index"
 import { sha256Hex, randomToken, base64UrlEncode } from "../../../../infra/cloudflare/src/auth/crypto"
 import { generateVapidKeys } from "../../../../infra/cloudflare/script/vapid-keys"
 import { deriveWebPushKeys } from "../../../../infra/cloudflare/src/push/crypto"
@@ -426,6 +429,64 @@ try {
     "Canonical recovery did not use typed bulk",
   )
   expect(decodeLossless(snapshot.sourceEpoch!) === owner.sourceEpoch, "Canonical snapshot changed backend epoch")
+  const httpRequest = peers[0]!.request(
+    "session.message",
+    session,
+    encodeStrict(
+      session_message_RequestSchema,
+      create(session_message_RequestSchema, {
+        params: { sessionID: encodeLossless("ses_real_connector"), messageID: encodeLossless("msg_real_oversized") },
+      }),
+    ),
+  )
+  peers[0]!.connection.expectHttpBulk(httpRequest)
+  const declaration = await peers[0]!.next("httpBulkStart")
+  const response = await fetch(
+    `${origin}/api/remote/devices/${owner.deviceID}/sessions/ses_real_connector/messages/msg_real_oversized?${httpBulkQuery(peers[0]!.connection, declaration).toString()}`,
+    { headers: { cookie: `yc_session=${cookie}`, origin }, signal: AbortSignal.timeout(30_000) },
+  )
+  expect(response.status === 200, "Typed HTTP message route did not return 200")
+  const consumed = await readHttpBulk(peers[0]!.connection, declaration, response, {
+    now: () => performance.now(),
+    apply(decisions) {
+      peers[0]!.queue.push(...decisions.map((decision) => ({ decision })))
+      peers[0]!.flush()
+    },
+  })
+  expect(consumed.bytes === declaration.start.byteCount, "Typed HTTP message body was truncated")
+  expect((await peers[0]!.next("settled", httpRequest)).status === "success", "Typed HTTP message did not settle")
+  await peers[0]!.wait(() =>
+    peers[0]!.queue.some(
+      (item) => item.decision.type === "bulkComplete" && item.decision.transferID === declaration.start.transferId,
+    ),
+  )
+  const completed = peers[0]!.queue.flatMap((item) =>
+    item.decision.type === "bulkComplete" && item.decision.transferID === declaration.start.transferId
+      ? [item.decision]
+      : [],
+  )
+  expect(completed.length === 1, "Typed HTTP message completion was not exactly once")
+  const fetched = decodeStrict(session_message_ResultSchema, completed[0]!.data).data!
+  expect(fetched.kind.case === "value8", "Typed HTTP message is not an assistant")
+  expect(
+    fetched.kind.value.content!.items.some(
+      (part) => part.kind.case === "value1" && decodeLossless(part.kind.value.text!) === "x".repeat(2_320_000),
+    ),
+    "Typed HTTP message did not preserve the full assistant reply",
+  )
+  expect(
+    peers[0]!.raw.filter(
+      (frame) => frame.body.case === "bulkEnd" && frame.body.value.transferId === declaration.start.transferId,
+    ).length === 1,
+    "Typed HTTP message did not receive exactly one canonical owning-socket BulkEnd",
+  )
+  expect(
+    !peers[1]!.raw.some(
+      (frame) => frame.body.case === "bulkEnd" && frame.body.value.transferId === declaration.start.transferId,
+    ),
+    "Typed HTTP message terminal reached another browser",
+  )
+  peers[0]!.connection.releaseBulk(declaration.start.transferId)
   expect(
     peers[0]!.connection.completeHydration(affected, owner.sourceEpoch, performance.now()).length === 0,
     "Canonical snapshot did not finish hydration",
@@ -456,7 +517,7 @@ try {
     "Remote client protocol failure",
   )
   console.error(
-    "PASS: real workerd enrollment, Rust AGENT connect, snapshot union, canonical epoch, ordered live/durable EVENTS, shared release, decrypted attention/completion pushes, oversized scoped resync and exact typed-bulk recovery with stable peer epochs",
+    "PASS: real workerd enrollment, Rust AGENT connect, snapshot union, canonical epoch, ordered live/durable EVENTS, shared release, decrypted attention/completion pushes, oversized scoped resync, exact typed-bulk and HTTP recovery with one owning-socket terminal and stable peer epochs",
   )
 } finally {
   clearTimeout(deadline)
