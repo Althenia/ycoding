@@ -2304,14 +2304,14 @@ async fn responses_continuation_reuses_the_stored_response_only_for_the_same_acc
     other.shutdown().await.unwrap();
 }
 
-fn azure_local(store: &ycoding_store::Store, endpoint: &str, api_key: &str) -> Local {
+fn stateless_local(store: &ycoding_store::Store, endpoint: &str, api_key: &str) -> Local {
     let mut catalog = Catalog::new(
         models_dev::normalize(
-            &parse_json(r#"{"azure":{"id":"azure","name":"Azure","env":["AZURE_API_KEY"],"npm":"@ai-sdk/azure","api":"https://resource.openai.azure.com/openai/v1","models":{"gpt-5.5":{"id":"gpt-5.5","name":"Responses Model","release_date":"2026-01-01","attachment":false,"reasoning":false,"temperature":true,"tool_call":true,"limit":{"context":128000,"output":8192}}}}}"#).unwrap(),
+            &parse_json(r#"{"llama":{"id":"llama","name":"Llama","env":["LLAMA_API_KEY"],"npm":"@ai-sdk/openai-compatible","api":"https://api.llama.com/v1","models":{"gpt-5.5":{"id":"gpt-5.5","name":"Responses Model","release_date":"2026-01-01","attachment":false,"reasoning":false,"temperature":true,"tool_call":true,"limit":{"context":128000,"output":8192}}}}}"#).unwrap(),
         )
         .unwrap(),
     );
-    catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"azure","model":"gpt-5.5"}},"providers":{{"azure":{{"package":"@ycoding-ai/ai/providers/azure/responses","settings":{{"apiKey":"{api_key}","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
+    catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"llama","model":"gpt-5.5"}},"providers":{{"llama":{{"package":"@ycoding-ai/ai/providers/openai-compatible/responses","settings":{{"apiKey":"{api_key}","baseURL":"{endpoint}"}}}}}}}}"#)).unwrap()]).unwrap();
     local_services(
         store,
         catalog,
@@ -2360,7 +2360,7 @@ async fn an_opaque_compaction_item_is_captured_redacted_and_replayed_only_for_th
     let (endpoint, mut requests, server) =
         server(vec![with_compaction_item(), RESPONSES, RESPONSES]).await;
     let id = session::Id::new("ses_one").unwrap();
-    let same = Coordinator::new(Arc::new(azure_local(&store, &endpoint, "fixture")));
+    let same = Coordinator::new(Arc::new(stateless_local(&store, &endpoint, "fixture")));
     same.run(&id).await.unwrap();
     let first = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
     assert!(!first.contains("OPAQUE-ENCRYPTED"));
@@ -2400,7 +2400,7 @@ async fn an_opaque_compaction_item_is_captured_redacted_and_replayed_only_for_th
     let link = &link.record;
     assert_eq!(link.part_ordinal, 0);
     assert_eq!(link.part_kind.as_str(), Some("reasoning"));
-    assert_eq!(link.provider.as_str(), Some("azure"));
+    assert_eq!(link.provider.as_str(), Some("llama"));
     assert_eq!(link.model_id.as_str(), Some("gpt-5.5"));
     assert_eq!(link.context_revision, 0);
     assert_eq!(
@@ -2438,7 +2438,7 @@ async fn an_opaque_compaction_item_is_captured_redacted_and_replayed_only_for_th
     ));
     same.shutdown().await.unwrap();
 
-    let other = Coordinator::new(Arc::new(azure_local(&store, &endpoint, "rotated")));
+    let other = Coordinator::new(Arc::new(stateless_local(&store, &endpoint, "rotated")));
     admit_input(&service, "third", "Once more", "steer").await;
     other.run(&id).await.unwrap();
     let refused = ycoding_schema::stringify_json(&requests.recv().await.unwrap());

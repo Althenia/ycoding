@@ -39,6 +39,9 @@ impl Preparation {
         claude: Option<&claude::Store>,
     ) -> Result<Secret, Error> {
         let stored = credentials.current_account(&stored)?;
+        if crate::resources::model::scope::dropped_provider_id(stored.integration_id()) {
+            return Err(Error::ProfileUnavailable);
+        }
         let integration = stored
             .integration_id()
             .as_str()

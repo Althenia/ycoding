@@ -16,11 +16,8 @@ pub use service::{Endpoints, Service};
 pub use ycoding_ai::muse::{normalize_usage, unreported};
 mod normalize;
 pub use normalize::{
-    normalize_claude, normalize_codex, normalize_copilot, normalize_grok, normalize_organization,
-    normalize_zai,
+    normalize_claude, normalize_codex, normalize_grok, normalize_organization, normalize_zai,
 };
-mod copilot;
-pub use copilot::{BillingResult, CopilotResult, load_copilot, normalize_copilot_billing};
 mod app_server;
 pub use app_server::{AppServerCommand, load_app_server};
 mod spend;

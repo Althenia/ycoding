@@ -31,7 +31,6 @@ impl Endpoints {
             ("xai".into(), "https://cli-chat-proxy.grok.com/v1".into()),
             ("zai".into(), "https://api.z.ai".into()),
             ("zai-coding-plan".into(), "https://api.z.ai".into()),
-            ("github-copilot".into(), "https://api.github.com".into()),
             (
                 "cursor".into(),
                 "https://api2.cursor.sh/aiserver.v1.DashboardService".into(),
@@ -46,7 +45,6 @@ pub struct Service {
     client: reqwest::Client,
     endpoints: Endpoints,
     observations: Arc<Mutex<Observations>>,
-    matched_orgs: Arc<Mutex<CopilotAccounts>>,
     user_agent: String,
     app_server: Option<super::AppServerCommand>,
     store: Option<ycoding_store::Client>,
@@ -55,7 +53,6 @@ pub struct Service {
     claude: Option<crate::resources::auth::claude::Store>,
 }
 type Observations = BTreeMap<(provider::Id, Option<LosslessString>), Snapshot>;
-type CopilotAccounts = BTreeMap<(provider::Id, LosslessString, i64), String>;
 impl Service {
     pub fn new(
         credentials: crate::resources::credential::Service,
@@ -72,7 +69,6 @@ impl Service {
                 .map_err(|_| Error::Request(None))?,
             endpoints,
             observations: Arc::new(Mutex::new(BTreeMap::new())),
-            matched_orgs: Arc::new(Mutex::new(BTreeMap::new())),
             user_agent: "ycoding".into(),
             app_server: None,
             store: None,
@@ -813,60 +809,6 @@ impl Service {
                     .await
                     .ok();
                 normalize_zai(provider, "Z.ai", now, &quota, plan.as_ref())
-            }
-            Some("github-copilot") => {
-                let credential::Value::OAuth(oauth) = &value else {
-                    return Err(Error::InvalidResponse);
-                };
-                if oauth
-                    .metadata
-                    .as_ref()
-                    .and_then(|m| m.get(&"enterpriseUrl".into()))
-                    .and_then(text)
-                    .is_some_and(|s| !s.is_empty())
-                {
-                    return Ok(unavailable(
-                        provider,
-                        label,
-                        now,
-                        "unsupported",
-                        "GitHub Copilot usage reporting supports github.com accounts",
-                    ));
-                }
-                let token = oauth
-                    .refresh
-                    .to_utf8()
-                    .map_err(|_| Error::InvalidResponse)?;
-                let account = (
-                    provider.clone(),
-                    credential.id().clone(),
-                    credential.account_generation(),
-                );
-                let remembered = self
-                    .matched_orgs
-                    .lock()
-                    .map_err(|_| Error::Worker)?
-                    .get(&account)
-                    .cloned();
-                let result =
-                    super::load_copilot(provider, label, now, remembered.as_deref(), |path| {
-                        self.response(
-                            self.client
-                                .get(format!("{base}{path}"))
-                                .header("Authorization", format!("token {token}"))
-                                .header("X-GitHub-Api-Version", "2025-04-01")
-                                .header("Editor-Version", &self.user_agent)
-                                .header("Editor-Plugin-Version", &self.user_agent),
-                        )
-                    })
-                    .await?;
-                let mut organizations = self.matched_orgs.lock().map_err(|_| Error::Worker)?;
-                if let Some(matched) = result.matched_org {
-                    organizations.insert(account, matched);
-                } else {
-                    organizations.remove(&account);
-                }
-                Ok(result.snapshot)
             }
             Some("openrouter") => {
                 if !matches!(value, credential::Value::Key(_)) {

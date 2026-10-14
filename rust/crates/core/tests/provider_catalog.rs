@@ -58,6 +58,48 @@ async fn dropped_saved_accounts_never_discover_or_reintroduce_providers() {
     store.shutdown().unwrap();
 }
 
+#[tokio::test]
+async fn dropped_unexpired_credentials_are_not_prepared_but_kept_keys_are() {
+    let (store, credentials) = store();
+    let dropped = credentials
+        .create(
+            "copilot-id".into(),
+            "github-copilot".into(),
+            None,
+            secret(
+                r#"{"type":"oauth","methodID":"device","access":"fixture-access","refresh":"fixture-refresh","expires":9007199254740991}"#,
+            ),
+            0,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        Preparation::default()
+            .prepare_value(&credentials, dropped, 100, None)
+            .await,
+        Err(ycoding_core::resources::credential::Error::ProfileUnavailable)
+    ));
+    let kept = credentials
+        .create(
+            "openrouter-id".into(),
+            "openrouter".into(),
+            None,
+            secret(r#"{"type":"key","key":"fixture-key"}"#),
+            1,
+        )
+        .await
+        .unwrap();
+    let prepared = Preparation::default()
+        .prepare_value(&credentials, kept, 100, None)
+        .await
+        .unwrap();
+    assert!(
+        matches!(prepared.domain().unwrap(), ycoding_schema::credential::Value::Key(value) if value.key.as_str() == Some("fixture-key"))
+    );
+    credentials.shutdown().await.unwrap();
+    store.shutdown().unwrap();
+}
+
 #[test]
 fn externally_registered_upstream_provider_retains_small_model_selection() {
     let mut record = Catalog::new(

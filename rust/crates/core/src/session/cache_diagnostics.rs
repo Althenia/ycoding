@@ -42,9 +42,6 @@ fn mechanism(route_id: &str, provider_id: &str, cached: bool) -> &'static str {
         | "muse-responses"
         | "openai-responses"
         | "openai-responses-websocket"
-        | "github-copilot-chat"
-        | "github-copilot-responses"
-        | "ai-sdk:@ai-sdk/github-copilot"
         | "openai-codex-responses"
         | "openai-codex-websocket-responses"
         | "openai-compatible-chat"
@@ -63,7 +60,7 @@ fn mechanism(route_id: &str, provider_id: &str, cached: bool) -> &'static str {
         | "ai-sdk:@ai-sdk/google-vertex" => "gemini-prefix-cache",
         "ai-sdk:cursor-opencode-provider" | "runpod-ollama" | "runpod-vllm" => "provider-reported",
         "unknown" => match provider_id {
-            "openai" | "azure" | "github-copilot" | "ycoding" | "meta" => "openai-prefix-cache",
+            "openai" | "azure" | "ycoding" | "meta" => "openai-prefix-cache",
             "openrouter" => "openrouter-cache-control",
             "anthropic" => "anthropic-cache-control",
             "amazon-bedrock" => "bedrock-cache-point",

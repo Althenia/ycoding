@@ -16,9 +16,7 @@ pub fn target_input_tokens(context_window_tokens: i64, policy: &Resolved) -> i64
 }
 
 pub fn estimated_provider_input_tokens(request: &llm::Request) -> i64 {
-    if !request.model.route.id.contains("responses")
-        && request.model.route.id != "ai-sdk:@ai-sdk/github-copilot"
-    {
+    if !request.model.route.id.contains("responses") {
         return estimated_input_tokens(Usage {
             system: &request.system,
             tools: &request.tools,

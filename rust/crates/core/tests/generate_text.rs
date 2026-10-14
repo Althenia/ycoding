@@ -25,7 +25,7 @@ fn service(catalog: Catalog) -> (Store, generate::Service) {
 
 fn catalog() -> Catalog {
     let mut catalog = Catalog::default();
-    catalog.configure(&[parse_json(r#"{"providers":{"fixture":{"package":"@ycoding-ai/ai/providers/openai-compatible","models":{"code":{"name":"Code","capabilities":{"input":["text"],"output":["text"]},"variants":[{"id":"high","body":{"temperature":0.2}}]}}}}}"#).unwrap()]).unwrap();
+    catalog.configure(&[parse_json(r#"{"providers":{"fixture":{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{"apiKey":"fixture-key"},"models":{"code":{"name":"Code","capabilities":{"input":["text"],"output":["text"]},"variants":[{"id":"high","body":{"temperature":0.2}}]}}}}}"#).unwrap()]).unwrap();
     catalog
 }
 

@@ -2450,11 +2450,7 @@ fn message_id(message: &session_message::Info) -> Option<ycoding_schema::Lossles
     }
 }
 fn stateless(request: &llm::Request) -> bool {
-    let key = if request.model.route.id == "ai-sdk:@ai-sdk/github-copilot" {
-        "copilot"
-    } else {
-        "openai"
-    };
+    let key = "openai";
     let Some(JsonValue::Object(options)) = request.resolved().provider_options else {
         return false;
     };

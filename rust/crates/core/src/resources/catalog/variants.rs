@@ -185,15 +185,12 @@ pub(crate) fn for_effort(npm: &str, id: &str, effort: &str) -> Option<JsonValue>
         "@ai-sdk/gateway" => gateway(id)
             .map(|npm| for_effort(npm, id, string(&effort).expect("effort string")))
             .unwrap_or(Some(direct)),
-        "@ai-sdk/github-copilot" if id.contains("gemini") => None,
-        "@ai-sdk/github-copilot" if id.contains("claude") => Some(direct),
-        "@ai-sdk/openai"
-        | "@ai-sdk/amazon-bedrock/mantle"
-        | "@ai-sdk/azure"
-        | "@ai-sdk/github-copilot" => Some(super::merge_json(
-            &direct,
-            &json(r#"{"reasoningSummary":"auto","include":["reasoning.encrypted_content"]}"#),
-        )),
+        "@ai-sdk/openai" | "@ai-sdk/amazon-bedrock/mantle" | "@ai-sdk/azure" => {
+            Some(super::merge_json(
+                &direct,
+                &json(r#"{"reasoningSummary":"auto","include":["reasoning.encrypted_content"]}"#),
+            ))
+        }
         "@jerome-benoit/sap-ai-provider-v2" => Some(object(&[(
             "modelParams",
             if id.contains("anthropic") {

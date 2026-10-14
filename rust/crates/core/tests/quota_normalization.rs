@@ -1,6 +1,6 @@
 use ycoding_core::resources::model::quota::{
-    normalize_claude, normalize_codex, normalize_copilot, normalize_cursor, normalize_go,
-    normalize_grok, normalize_openrouter, normalize_organization, normalize_zai,
+    normalize_claude, normalize_codex, normalize_cursor, normalize_go, normalize_grok,
+    normalize_openrouter, normalize_organization, normalize_zai,
 };
 use ycoding_schema::{parse_json, provider};
 
@@ -106,30 +106,6 @@ fn cursor_all_lanes_unknown_values_and_allowance_units_remain_separate() {
             100,
             &parse_json(r#"{"enabled":true}"#).unwrap(),
             None
-        )
-        .is_err()
-    );
-}
-
-#[test]
-fn copilot_personal_percent_count_overage_and_unlimited_lanes() {
-    let result = normalize_copilot(provider::Id("github-copilot".into()),"GitHub Copilot",100,&parse_json(r#"{"quota_reset_date":"2026-10-01","quota_snapshots":{"premium_interactions":{"entitlement":100,"remaining":75,"overage_count":2,"overage_permitted":true},"chat":{"unlimited":true},"completions":{"entitlement":1000,"percent_remaining":60,"quota_remaining":600}}}"#).unwrap()).unwrap();
-    assert_eq!(result.windows.len(), 3);
-    assert_eq!(result.windows[0].id, "credits".into());
-    assert_eq!(result.windows[0].used, Some(25.0));
-    assert_eq!(result.windows[0].reset_at.unwrap().get(), 1790812800000);
-    assert_eq!(result.windows[1].used, Some(2.0));
-    assert_eq!(result.windows[2].used, Some(40.0));
-    let count = normalize_copilot(provider::Id("github-copilot".into()),"Copilot",100,&parse_json(r#"{"token_based_billing":true,"quota_snapshots":{"premium_interactions":{"entitlement":0,"credits_used":12,"unlimited":true},"chat":{"entitlement":-1}}}"#).unwrap()).unwrap();
-    assert_eq!(count.windows[0].unit, "count".into());
-    assert_eq!(count.windows[0].used, Some(12.0));
-    assert!(
-        normalize_copilot(
-            provider::Id("github-copilot".into()),
-            "Copilot",
-            100,
-            &parse_json(r#"{"quota_snapshots":{"chat":{"entitlement":10,"remaining":11}}}"#)
-                .unwrap()
         )
         .is_err()
     );
@@ -353,24 +329,6 @@ fn zai_day_week_unit_unknown_type_and_reset_branches() {
             )
             .unwrap(),
             None
-        )
-        .is_err()
-    );
-}
-
-#[test]
-fn copilot_limited_user_aliases_and_missing_lanes_use_only_reported_data() {
-    let result = normalize_copilot(provider::Id("github-copilot".into()),"Copilot",100,&parse_json(r#"{"limited_user_quotas":{"chat_completion":50,"code_completion":200},"monthly_quotas":{"chat_completion":50,"code_completion":300},"limited_user_reset_date":"2026-08-01T00:00:00Z"}"#).unwrap()).unwrap();
-    assert_eq!(result.windows.len(), 2);
-    assert_eq!(result.windows[0].used, Some(0.0));
-    assert_eq!(result.windows[1].used, Some(33.33));
-    assert_eq!(result.windows[0].reset_at.unwrap().get(), 1785542400000);
-    assert!(
-        normalize_copilot(
-            provider::Id("github-copilot".into()),
-            "Copilot",
-            100,
-            &parse_json(r#"{"quota_snapshots":"not-a-record"}"#).unwrap()
         )
         .is_err()
     );

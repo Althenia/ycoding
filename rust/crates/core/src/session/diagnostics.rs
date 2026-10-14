@@ -314,7 +314,7 @@ fn count_i64(value: i64) -> Result<NonNegativeInt, Error> {
 
 fn unknown_route_mechanism(model: &model::Ref, cache_read: f64, cache_write: f64) -> &'static str {
     match model.provider_id.0.as_str() {
-        Some("openai" | "azure" | "github-copilot" | "ycoding" | "meta") => "openai-prefix-cache",
+        Some("openai" | "azure" | "ycoding" | "meta") => "openai-prefix-cache",
         Some("openrouter") => "openrouter-cache-control",
         Some("anthropic") => "anthropic-cache-control",
         Some("amazon-bedrock") => "bedrock-cache-point",

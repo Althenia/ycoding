@@ -298,13 +298,7 @@ pub fn provider_options(input: &OptionsInput) -> Options {
             .field("sessionID", provider_session.as_str())
             .finish()
     };
-    let copilot_key_only = matches!(route, "github-copilot-chat" | "github-copilot-responses")
-        && ycoding_ai::cache::supports_prompt_cache_breakpoints(
-            "openai-responses",
-            input.api_model_id,
-        );
-    let public = !copilot_key_only
-        && ycoding_ai::cache::supports_prompt_cache_breakpoints(route, input.api_model_id);
+    let public = ycoding_ai::cache::supports_prompt_cache_breakpoints(route, input.api_model_id);
     let controlled = public && input.settings.openai_mode != OpenAIMode::Implicit;
     let openai = ObjectEncoder::new().field("promptCacheKey", wire_key.as_str());
     let openai = if controlled {
@@ -325,13 +319,10 @@ pub fn provider_options(input: &OptionsInput) -> Options {
             )
             .finish()
     } else if !public
-        && !copilot_key_only
         && [
             "openai-chat",
             "openai-responses",
             "openai-responses-websocket",
-            "github-copilot-chat",
-            "github-copilot-responses",
             "openrouter",
             "openrouter-responses",
         ]
@@ -343,8 +334,6 @@ pub fn provider_options(input: &OptionsInput) -> Options {
     } else {
         openai.finish()
     };
-    let copilot_claude = route == "ai-sdk:@ai-sdk/github-copilot"
-        && input.api_model_id.to_lowercase().contains("claude");
     let profile = ycoding_ai::cache::profile(input.api_model_id);
     let anthropic_route = matches!(
         route,
@@ -377,13 +366,6 @@ pub fn provider_options(input: &OptionsInput) -> Options {
             messages: Some(ycoding_ai::cache::MessageStrategy::Tail(
                 PROMPT_CACHE_READ_CANDIDATE_LIMIT,
             )),
-            ttl_seconds: None,
-        })
-    } else if copilot_claude {
-        Some(ycoding_ai::cache::Policy::Explicit {
-            tools: false,
-            system: true,
-            messages: Some(ycoding_ai::cache::MessageStrategy::Tail(2)),
             ttl_seconds: None,
         })
     } else if anthropic_route
@@ -454,9 +436,6 @@ fn supports_prompt_cache_key(route: &str) -> bool {
             | "openai-codex-websocket-responses"
             | "openai-compatible-chat"
             | "openai-compatible-responses"
-            | "github-copilot-chat"
-            | "github-copilot-responses"
-            | "ai-sdk:@ai-sdk/github-copilot"
             | "ai-sdk:@openrouter/ai-sdk-provider"
             | "openrouter"
             | "openrouter-responses"
